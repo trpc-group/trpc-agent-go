@@ -11,120 +11,211 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+var (
+	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
+	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
+)
+
 func main() {
-	// Read configuration from command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	// Parse command line flags.
 	flag.Parse()
 
-	fmt.Printf("Creating LLMAgent with configuration:\n")
-	fmt.Printf("- Model Name: %s\n", *modelName)
-	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
-	fmt.Println()
+	fmt.Printf("🚀 Interactive Chat with LLMAgent\n")
+	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Printf("Streaming: %t\n", *streaming)
+	fmt.Println(strings.Repeat("=", 50))
 
+	// Create and run the chat.
+	chat := &llmAgentChat{
+		modelName: *modelName,
+		streaming: *streaming,
+	}
+
+	if err := chat.run(); err != nil {
+		log.Fatalf("Chat failed: %v", err)
+	}
+}
+
+// llmAgentChat manages the conversation.
+type llmAgentChat struct {
+	modelName string
+	streaming bool
+	llmAgent  agent.Agent
+	userID    string
+}
+
+// run starts the interactive chat session.
+func (c *llmAgentChat) run() error {
+	ctx := context.Background()
+
+	// Setup the agent.
+	if err := c.setup(ctx); err != nil {
+		return fmt.Errorf("setup failed: %w", err)
+	}
+
+	// Start interactive chat.
+	return c.startChat(ctx)
+}
+
+// setup creates the LLMAgent.
+func (c *llmAgentChat) setup(_ context.Context) error {
 	// Create a model instance.
-	// The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
-	modelInstance := openai.New(*modelName) // Larger buffer for agent use.
+	modelInstance := openai.New(c.modelName)
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(1000),
 		Temperature: floatPtr(0.7),
-		Stream:      true,
+		Stream:      c.streaming,
 	}
 
-	name := "demo-llm-agent"
 	// Create an LLMAgent with configuration.
-	llmAgent := llmagent.New(
-		name,
+	c.llmAgent = llmagent.New(
+		"demo-llm-agent",
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant for demonstrations"),
-		llmagent.WithInstruction("Be helpful, concise, and informative in your responses"),
+		llmagent.WithDescription("A helpful AI assistant for interactive demonstrations"),
+		llmagent.WithInstruction("You are a helpful AI assistant. Be conversational and engaging. "+
+			"Answer questions clearly and provide helpful information."),
 		llmagent.WithGenerationConfig(genConfig),
 	)
 
+	// Setup identifiers.
+	c.userID = "user"
+
+	fmt.Printf("✅ Chat ready!\n\n")
+
+	return nil
+}
+
+// startChat runs the interactive conversation loop.
+func (c *llmAgentChat) startChat(ctx context.Context) error {
+	scanner := bufio.NewScanner(os.Stdin)
+
+	fmt.Println("💡 Commands:")
+	fmt.Println("   /exit     - End the conversation")
+	fmt.Println()
+
+	for {
+		fmt.Print("👤 You: ")
+		if !scanner.Scan() {
+			break
+		}
+
+		userInput := strings.TrimSpace(scanner.Text())
+		if userInput == "" {
+			continue
+		}
+
+		// Handle special commands.
+		switch strings.ToLower(userInput) {
+		case "/exit":
+			fmt.Println("👋 Goodbye!")
+			return nil
+		}
+
+		// Process the user message.
+		if err := c.processMessage(ctx, userInput); err != nil {
+			fmt.Printf("❌ Error: %v\n", err)
+		}
+
+		fmt.Println() // Add spacing between turns.
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("input scanner error: %w", err)
+	}
+
+	return nil
+}
+
+// processMessage handles a single message exchange.
+func (c *llmAgentChat) processMessage(ctx context.Context, userMessage string) error {
 	// Create an invocation context.
 	invocation := agent.NewInvocation(
-		agent.WithInvocationAgent(llmAgent),
-		agent.WithInvocationSession(&session.Session{ID: "session-001"}),
-		agent.WithInvocationMessage(model.NewUserMessage("Hello! Can you tell me about yourself?")),
-		agent.WithInvocationModel(modelInstance),
+		agent.WithInvocationAgent(c.llmAgent),
+		agent.WithInvocationSession(&session.Session{ID: fmt.Sprintf("session-%d", time.Now().Unix())}),
+		agent.WithInvocationMessage(model.NewUserMessage(userMessage)),
+		agent.WithInvocationModel(openai.New(c.modelName)),
 	)
 
 	// Run the agent.
-	ctx := context.Background()
-	eventChan, err := llmAgent.Run(ctx, invocation)
+	eventChan, err := c.llmAgent.Run(ctx, invocation)
 	if err != nil {
-		log.Fatalf("Failed to run LLMAgent: %v", err)
+		return fmt.Errorf("failed to run LLMAgent: %w", err)
 	}
 
-	fmt.Println("\n=== LLMAgent Execution ===")
-	fmt.Println("Processing events from LLMAgent:")
+	// Process response.
+	return c.processResponse(eventChan)
+}
 
-	// Process events from the agent.
-	eventCount := 0
+// processResponse handles the streaming response.
+func (c *llmAgentChat) processResponse(eventChan <-chan *event.Event) error {
+	fmt.Print("🤖 Assistant: ")
+
+	var fullContent strings.Builder
+
 	for event := range eventChan {
-		eventCount++
-
-		fmt.Printf("\n--- Event %d ---\n", eventCount)
-		fmt.Printf("ID: %s\n", event.ID)
-		fmt.Printf("Author: %s\n", event.Author)
-		fmt.Printf("InvocationID: %s\n", event.InvocationID)
-
-		if event.Error != nil {
-			fmt.Printf("Error: %s (Type: %s)\n", event.Error.Message, event.Error.Type)
+		if err := c.handleEvent(event, &fullContent); err != nil {
+			return err
 		}
 
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
-
-			if choice.Message.Content != "" {
-				fmt.Printf("Message Content: %s\n", choice.Message.Content)
-			}
-			if choice.Delta.Content != "" {
-				fmt.Printf("Delta Content: %s\n", choice.Delta.Content)
-			}
-			if choice.FinishReason != nil {
-				fmt.Printf("Finish Reason: %s\n", *choice.FinishReason)
-			}
-		}
-
-		if event.Usage != nil {
-			fmt.Printf("Token Usage - Prompt: %d, Completion: %d, Total: %d\n",
-				event.Usage.PromptTokens,
-				event.Usage.CompletionTokens,
-				event.Usage.TotalTokens)
-		}
-
-		fmt.Printf("Done: %t\n", event.Done)
-
+		// Check if this is the final event.
 		if event.Done {
+			fmt.Printf("\n")
 			break
 		}
 	}
 
-	fmt.Printf("\n=== Execution Complete ===\n")
-	fmt.Printf("Total events processed: %d\n", eventCount)
+	return nil
+}
 
-	if eventCount == 0 {
-		fmt.Println("No events were generated. This might indicate:")
-		fmt.Println("- Model configuration issues")
-		fmt.Println("- Network connectivity problems")
-		fmt.Println("- Check the logs for more details")
+// handleEvent processes a single event from the event channel.
+func (c *llmAgentChat) handleEvent(event *event.Event, fullContent *strings.Builder) error {
+	// Handle errors.
+	if event.Error != nil {
+		fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+		return nil
 	}
 
-	fmt.Println("=== Demo Complete ===")
+	// Handle content.
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
+		content := c.extractContent(choice)
+
+		if content != "" {
+			fmt.Print(content)
+			fullContent.WriteString(content)
+		}
+	}
+
+	return nil
+}
+
+// extractContent extracts content based on streaming mode.
+func (c *llmAgentChat) extractContent(choice model.Choice) string {
+	// In streaming mode, use delta content for real-time display.
+	// In non-streaming mode, use full message content.
+	if c.streaming {
+		return choice.Delta.Content
+	}
+	return choice.Message.Content
 }
 
 // intPtr returns a pointer to the given int value.

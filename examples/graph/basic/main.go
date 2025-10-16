@@ -813,8 +813,8 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 			}
 		}
 		// Process streaming content from LLM nodes (events with model names as authors).
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
 				if !workflowStarted {
@@ -861,7 +861,7 @@ func formatJSON(jsonStr string) string {
 		return ""
 	}
 	// Try to pretty print the JSON.
-	var prettyJSON interface{}
+	var prettyJSON any
 	if err := json.Unmarshal([]byte(jsonStr), &prettyJSON); err == nil {
 		if prettyBytes, err := json.MarshalIndent(prettyJSON, "", "  "); err == nil {
 			return string(prettyBytes)

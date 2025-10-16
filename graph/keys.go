@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package graph
 
 // Config map keys (used under config["configurable"])
@@ -7,6 +16,11 @@ const (
 	CfgKeyCheckpointID = "checkpoint_id"
 	CfgKeyCheckpointNS = "checkpoint_ns"
 	CfgKeyResumeMap    = "resume_map"
+	// CfgKeyIncludeContents allows callers to control how the GraphAgent
+	// seeds model request messages from the session history for a run.
+	// Accepted values: "none", "filtered", "all". See
+	// internal/flow/processor.ContentRequestProcessor.IncludeContents.
+	CfgKeyIncludeContents = "include_contents"
 )
 
 // State map keys (stored into execution state)

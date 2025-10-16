@@ -14,6 +14,7 @@ require (
 	github.com/openai/openai-go v1.12.0
 	github.com/panjf2000/ants/v2 v2.9.0
 	github.com/rs/cors v1.11.1
+	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.10.0
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.69
 	github.com/yuin/goldmark v1.4.13
@@ -29,6 +30,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.29.0
 	go.opentelemetry.io/proto/otlp v1.3.1
 	go.uber.org/zap v1.27.0
+	golang.org/x/sync v0.10.0
 	golang.org/x/text v0.21.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2

@@ -13,10 +13,13 @@ package graphagent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -137,7 +140,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	ga.setupInvocation(invocation)
 
 	// Prepare initial state.
-	initialState := ga.createInitialState(invocation)
+	initialState := ga.createInitialState(ctx, invocation)
 
 	// Execute the graph.
 	if ga.agentCallbacks != nil {
@@ -165,7 +168,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	return eventChan, nil
 }
 
-func (ga *GraphAgent) createInitialState(invocation *agent.Invocation) graph.State {
+func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.Invocation) graph.State {
 	var initialState graph.State
 
 	if ga.initialState != nil {
@@ -179,6 +182,38 @@ func (ga *GraphAgent) createInitialState(invocation *agent.Invocation) graph.Sta
 	if invocation.RunOptions.RuntimeState != nil {
 		for key, value := range invocation.RunOptions.RuntimeState {
 			initialState[key] = value
+		}
+	}
+
+	// Seed messages from session events so multi‑turn runs share history.
+	// This mirrors ContentRequestProcessor behavior used by non-graph flows.
+	if invocation.Session != nil {
+		// Build a temporary request to reuse the processor logic.
+		req := &model.Request{}
+		// Default include mode is All for graphs unless overridden by runtime state.
+		// Docs note: If RuntimeState[CfgKeyIncludeContents] is not one of
+		// {none, filtered, all}, ignore it and fall back to the default (all)
+		// to avoid accidental context loss.
+		include := processor.IncludeContentsAll
+		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok && mode != "" {
+			switch strings.ToLower(mode) {
+			case processor.IncludeContentsNone:
+				include = processor.IncludeContentsNone
+			case processor.IncludeContentsFiltered:
+				include = processor.IncludeContentsFiltered
+			case processor.IncludeContentsAll:
+				include = processor.IncludeContentsAll
+			}
+		}
+		// Default processor: include (possibly overridden) + preserve same branch.
+		p := processor.NewContentRequestProcessor(
+			processor.WithIncludeContents(include),
+			processor.WithPreserveSameBranch(true),
+		)
+		// We only need messages side effect; no output channel needed.
+		p.ProcessRequest(ctx, invocation, req, nil)
+		if len(req.Messages) > 0 {
+			initialState[graph.StateKeyMessages] = req.Messages
 		}
 	}
 

@@ -13,6 +13,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -30,21 +31,55 @@ var (
 	ErrSessionIDRequired = errors.New("sessionID is required")
 )
 
+// SummaryFilterKeyAllContents is the filter key representing
+// the full-session summary with no filtering applied.
+const SummaryFilterKeyAllContents = ""
+
 // Session is the interface that all sessions must implement.
 type Session struct {
-	ID        string        `json:"id"`        // session id
-	AppName   string        `json:"appName"`   // app name
-	UserID    string        `json:"userID"`    // user id
-	State     StateMap      `json:"state"`     // session state with delta support
-	Events    []event.Event `json:"events"`    // session events
-	UpdatedAt time.Time     `json:"updatedAt"` // last update time
-	CreatedAt time.Time     `json:"createdAt"` // creation time
+	ID      string        `json:"id"`      // ID is the session id.
+	AppName string        `json:"appName"` // AppName is the app name.
+	UserID  string        `json:"userID"`  // UserID is the user id.
+	State   StateMap      `json:"state"`   // State is the session state with delta support.
+	Events  []event.Event `json:"events"`  // Events is the session events.
+	EventMu sync.RWMutex  `json:"-"`
+	// Summaries holds filter-aware summaries. The key is the event filter key.
+	SummariesMu sync.RWMutex        `json:"-"`                   // SummariesMu is the read-write mutex for Summaries.
+	Summaries   map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
+	UpdatedAt   time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
+	CreatedAt   time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
+}
+
+// GetEvents returns the session events.
+func (sess *Session) GetEvents() []event.Event {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	eventsCopy := make([]event.Event, len(sess.Events))
+	copy(eventsCopy, sess.Events)
+	return eventsCopy
+}
+
+// GetEventCount returns the session event count.
+func (sess *Session) GetEventCount() int {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	return len(sess.Events)
+}
+
+// Summary represents a concise, structured summary of a conversation branch.
+// It is stored on the session object rather than in the StateMap.
+type Summary struct {
+	Summary   string    `json:"summary"`          // Summary is the concise conversation summary.
+	Topics    []string  `json:"topics,omitempty"` // Topics is the optional topics list.
+	UpdatedAt time.Time `json:"updated_at"`       // UpdatedAt is the update timestamp in UTC.
 }
 
 // Options is the options for getting a session.
 type Options struct {
-	EventNum  int       // number of recent events
-	EventTime time.Time // after time
+	EventNum  int       // EventNum is the number of recent events.
+	EventTime time.Time // EventTime is the after time.
 }
 
 // Option is the option for a session.
@@ -98,6 +133,25 @@ type Service interface {
 
 	// AppendEvent appends an event to a session.
 	AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error
+
+	// CreateSessionSummary triggers summarization for the session.
+	// When filterKey is non-empty, implementations should limit work to the
+	// matching branch using hierarchical rules consistent with event.Filter.
+	// Implementations should preserve original events and store summaries on
+	// the session object. The operation should be non-blocking for the main
+	// flow where possible. Implementations may group deltas by branch internally.
+	CreateSessionSummary(ctx context.Context, sess *Session, filterKey string, force bool) error
+
+	// EnqueueSummaryJob enqueues a summary job for asynchronous processing.
+	// This method provides a non-blocking way to trigger summary generation.
+	// When async processing is enabled, the job will be processed by background workers.
+	// When async processing is disabled or unavailable, it falls back to synchronous processing.
+	// The method validates session parameters before enqueueing and returns appropriate errors.
+	EnqueueSummaryJob(ctx context.Context, sess *Session, filterKey string, force bool) error
+
+	// GetSessionSummaryText returns the latest summary text for the session if any.
+	// The boolean indicates whether a summary exists.
+	GetSessionSummaryText(ctx context.Context, sess *Session) (string, bool)
 
 	// Close closes the service.
 	Close() error

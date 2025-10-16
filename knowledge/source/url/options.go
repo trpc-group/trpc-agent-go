@@ -22,18 +22,26 @@ func WithName(name string) Option {
 	}
 }
 
+// WithContentFetchingURL sets the real content fetching URL for the source.
+// The real content fetching URL is used to fetch the actual content of the document.
+func WithContentFetchingURL(url []string) Option {
+	return func(s *Source) {
+		s.fetchURLs = url
+	}
+}
+
 // WithMetadata sets additional metadata for the source.
-func WithMetadata(metadata map[string]interface{}) Option {
+func WithMetadata(metadata map[string]any) Option {
 	return func(s *Source) {
 		s.metadata = metadata
 	}
 }
 
 // WithMetadataValue adds a single metadata key-value pair.
-func WithMetadataValue(key string, value interface{}) Option {
+func WithMetadataValue(key string, value any) Option {
 	return func(s *Source) {
 		if s.metadata == nil {
-			s.metadata = make(map[string]interface{})
+			s.metadata = make(map[string]any)
 		}
 		s.metadata[key] = value
 	}

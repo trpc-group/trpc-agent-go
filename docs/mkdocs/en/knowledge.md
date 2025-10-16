@@ -143,6 +143,98 @@ func main() {
 }
 ```
 
+### Manual Search Example
+FilterCondition currently only supports Elasticsearch and TCVector
+
+```go
+
+package main
+
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+)
+
+// Create Elasticsearch vector store with multi-version support (v7, v8, v9)
+esVS, err := vectorelasticsearch.New(
+    vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
+    vectorelasticsearch.WithUsername(os.Getenv("ELASTICSEARCH_USERNAME")),
+    vectorelasticsearch.WithPassword(os.Getenv("ELASTICSEARCH_PASSWORD")),
+    vectorelasticsearch.WithAPIKey(os.Getenv("ELASTICSEARCH_API_KEY")),
+    vectorelasticsearch.WithIndexName(getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")),
+    vectorelasticsearch.WithMaxRetries(3),
+    // Version options: "v7", "v8", "v9" (default "v9")
+    vectorelasticsearch.WithVersion("v9"),
+    // Optional custom method to build documents for retrieval. Falls back to the default if not provided.
+    vectorelasticsearch.WithDocBuilder(docBuilder),
+)
+if err != nil {
+    // Handle error.
+}
+
+// OpenAI Embedder configuration.
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"), // Embedding model, can also be set via OPENAI_EMBEDDING_MODEL environment variable.
+)
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(esVS),
+    knowledge.WithEmbedder(embedder),
+)
+
+filterCondition := &searchfilter.UniversalFilterCondition{
+    Operator: searchfilter.OperatorAnd,
+    Value: []*searchfilter.UniversalFilterCondition{
+        {
+            Field: "tag",
+            Operator: searchfilter.OperatorEqual,
+            Value: "tag",
+        },
+        {
+            Field: "age",
+            Operator: searchfilter.OperatorGreaterThanOrEqual,
+            Value: 18,
+        },
+        {
+            Field: "create_time",
+            Operator: searchfilter.OperatorBetween,
+            Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
+        },
+        {
+            Operator: searchfilter.OperatorOr,
+            Value: []*searchfilter.UniversalFilterCondition{
+                {
+                    Field: "login_time",
+                    Operator: searchfilter.OperatorLessThanOrEqual,
+                    Value: "2025-01-11 12:11:00",
+                },
+                {
+                    Field: "status",
+                    Operator: searchfilter.OperatorEqual,
+                    Value: "logout",
+                },
+            },
+        },
+    },
+}
+
+req := &knowledge.SearchRequest{
+    Query: "any text"
+    MaxResults: 5,
+    MinScore: 0.7,
+    SearchFilter: &knowledge.SearchFilter{
+        DocumentIDs: []string{"id1","id2"},
+        Metadata: map[string]any{
+            "title": "title test",
+        },
+        FilterCondition: filterCondition,
+    }
+}
+searchResult, err := kb.Search(ctx, req)
+```
+
 ## Core Concepts
 
 The [knowledge module](https://github.com/trpc-group/trpc-agent-go/tree/main/knowledge) is the knowledge management core of the tRPC-Agent-Go framework, providing complete RAG capabilities. The module adopts a modular design, supporting multiple document sources, vector storage backends, and embedding models.
@@ -165,6 +257,9 @@ knowledge/
 │   ├── embedder.go      # Embedder interface definition.
 │   ├── openai/          # OpenAI embedding model.
 │   └── local/           # Local embedding model.
+├── reranker/             # reranker layer.
+│   ├── reranker.go      # Reranker interface definition.
+│   ├── topk.go          # return topk result.
 ├── document/             # Document representation.
 │   └── document.go      # Document structure definition.
 ├── query/                # Query enhancer.
@@ -238,11 +333,17 @@ if err != nil {
     // Handle error.
 }
 
+docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+    return &document.Document{ID: tcDoc.Id}, nil, nil
+}
+
 // TcVector.
 tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    // Optional custom method to build documents for retrieval. Falls back to the default if not provided.
+    vectortcvector.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // Handle error.
@@ -257,6 +358,35 @@ kb := knowledge.New(
 #### Elasticsearch
 
 ```go
+docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+    var source struct {
+        ID        string    `json:"id"`
+        Title     string    `json:"title"`
+        Content   string    `json:"content"`
+        Page      int       `json:"page"`
+        Author    string    `json:"author"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Embedding []float64 `json:"embedding"`
+    }
+    if err := json.Unmarshal(hitSource, &source); err != nil {
+        return nil, nil, err
+    }
+    // Create document.
+    doc := &document.Document{
+        ID:        source.ID,
+        Name:      source.Title,
+        Content:   source.Content,
+        CreatedAt: source.CreatedAt,
+        UpdatedAt: source.UpdatedAt,
+        Metadata: map[string]any{
+            "page":   source.Page,
+            "author": source.Author,
+        },
+    }
+    return doc, source.Embedding, nil
+}
+
 // Create Elasticsearch vector store with multi-version support (v7, v8, v9)
 esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
@@ -267,6 +397,8 @@ esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithMaxRetries(3),
     // Version options: "v7", "v8", "v9" (default "v9")
     vectorelasticsearch.WithVersion("v9"),
+    // Optional custom method to build documents for retrieval. Falls back to the default if not provided.
+    vectorelasticsearch.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // Handle error.
@@ -294,6 +426,26 @@ embedder := openaiembedder.New(
 // Pass to Knowledge.
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
+)
+```
+
+### Reranker
+
+Reranker is responsible for the precise ranking of search results
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+)
+
+rerank := reranker.NewTopKReranker(
+    // Specify the number of results to be returned after precision sorting. 
+    // If not set, all results will be returned by default
+    reranker.WithK(1),
+)
+
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
 )
 ```
 
@@ -347,6 +499,17 @@ urlSrc := urlsource.New(
     urlsource.WithMaxContentLength(1024*1024),       // Maximum content length (1MB).
     urlsource.WithName("Web Content"),
 )
+
+// URL source advanced configuration: Separate content fetching and document identification
+urlSrcAlias := urlsource.New(
+    []string{"https://trpc-go.com/docs/api.md"},     // Identifier URL (for document ID and metadata)
+    urlsource.WithContentFetchingURL([]string{"https://github.com/trpc-group/trpc-go/raw/main/docs/api.md"}), // Actual content fetching URL
+    urlsource.WithName("TRPC API Docs"),
+    urlsource.WithMetadataValue("source", "github"),
+)
+// Note: When using WithContentFetchingURL, the identifier URL should preserve the file information from the content fetching URL, for example:
+// Correct: Identifier URL is https://trpc-go.com/docs/api.md, fetch URL is https://github.com/.../docs/api.md
+// Incorrect: Identifier URL is https://trpc-go.com, which loses document path information
 
 // Auto source: Intelligent type recognition, automatically select processor.
 autoSrc := autosource.New(

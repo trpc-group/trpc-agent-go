@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package processor
 
 import (
@@ -101,6 +110,44 @@ func TestProcessRequest_IncludeInvocationMessage_WhenNoBranchEvents(t *testing.T
 	require.True(t, model.MessagesEqual(inv.Message, req.Messages[0]))
 }
 
+func TestProcessRequest_PreserveSameBranchKeepsRoles(t *testing.T) {
+	makeInvocation := func(sess *session.Session) *agent.Invocation {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationMessage(model.NewUserMessage("latest request")),
+			agent.WithInvocationEventFilterKey("graph-agent"),
+		)
+		inv.AgentName = "graph-agent"
+		inv.Branch = "graph-agent"
+		return inv
+	}
+
+	assistantMsg := model.NewAssistantMessage("node produced answer")
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEventWithBranch("user", "graph-agent", "graph-agent", model.NewUserMessage("hi")),
+		newSessionEventWithBranch("graph-node", "graph-agent", "graph-agent/graph-node", assistantMsg),
+	)
+
+	// Default behavior rewrites same-branch assistant events as user context.
+	defaultReq := &model.Request{}
+	defaultProc := NewContentRequestProcessor()
+	defaultProc.ProcessRequest(context.Background(), makeInvocation(sess), defaultReq, nil)
+	require.Equal(t, 2, len(defaultReq.Messages))
+	require.Equal(t, model.RoleUser, defaultReq.Messages[0].Role)
+	require.Equal(t, model.RoleUser, defaultReq.Messages[1].Role)
+	require.Contains(t, defaultReq.Messages[1].Content, "For context")
+
+	// Enabling preserve option keeps assistant/tool roles intact for same-branch events.
+	preserveReq := &model.Request{}
+	preserveProc := NewContentRequestProcessor(WithPreserveSameBranch(true))
+	preserveProc.ProcessRequest(context.Background(), makeInvocation(sess), preserveReq, nil)
+	require.Equal(t, 2, len(preserveReq.Messages))
+	require.Equal(t, model.RoleUser, preserveReq.Messages[0].Role)
+	require.Equal(t, model.RoleAssistant, preserveReq.Messages[1].Role)
+	require.Equal(t, assistantMsg.Content, preserveReq.Messages[1].Content)
+}
+
 func newSessionEvent(author string, msg model.Message) event.Event {
 	return event.Event{
 		Response: &model.Response{
@@ -110,5 +157,20 @@ func newSessionEvent(author string, msg model.Message) event.Event {
 			},
 		},
 		Author: author,
+	}
+}
+
+func newSessionEventWithBranch(author, filterKey, branch string, msg model.Message) event.Event {
+	return event.Event{
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Index: 0, Message: msg},
+			},
+		},
+		Author:    author,
+		FilterKey: filterKey,
+		Branch:    branch,
+		Version:   event.CurrentVersion,
 	}
 }

@@ -167,22 +167,6 @@ func TestTransformSpan(t *testing.T) {
 			},
 			expectedAction: "transform_execute_tool",
 		},
-		{
-			name:          "run_runner operation",
-			operationName: itelemetry.OperationRunRunner,
-			inputSpan: &tracepb.Span{
-				Name: "test-span",
-				Attributes: []*commonpb.KeyValue{
-					{
-						Key: itelemetry.KeyGenAIOperationName,
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationRunRunner},
-						},
-					},
-				},
-			},
-			expectedAction: "transform_run_runner",
-		},
 	}
 
 	for _, tt := range tests {
@@ -345,13 +329,13 @@ func TestTransformExecuteTool(t *testing.T) {
 				Name: "tool-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key: itelemetry.KeyToolCallArgs,
+						Key: itelemetry.KeyGenAIToolCallArguments,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: `{"arg1": "value1"}`},
 						},
 					},
 					{
-						Key: itelemetry.KeyToolResponse,
+						Key: itelemetry.KeyGenAIToolCallResult,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: `{"result": "success"}`},
 						},
@@ -377,11 +361,11 @@ func TestTransformExecuteTool(t *testing.T) {
 				Name: "tool-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key:   itelemetry.KeyToolCallArgs,
+						Key:   itelemetry.KeyGenAIToolCallArguments,
 						Value: nil,
 					},
 					{
-						Key: itelemetry.KeyToolResponse,
+						Key: itelemetry.KeyGenAIToolCallResult,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: "response"},
 						},
@@ -414,115 +398,8 @@ func TestTransformExecuteTool(t *testing.T) {
 
 			// Check that tool-specific attributes are removed
 			for _, attr := range tt.input.Attributes {
-				assert.NotEqual(t, itelemetry.KeyToolCallArgs, attr.Key, "tool args attribute should be removed")
-				assert.NotEqual(t, itelemetry.KeyToolResponse, attr.Key, "tool response attribute should be removed")
-			}
-		})
-	}
-}
-
-func TestTransformRunRunner(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    *tracepb.Span
-		expected map[string]string
-	}{
-		{
-			name: "basic runner transformation",
-			input: &tracepb.Span{
-				Name: "runner",
-				Attributes: []*commonpb.KeyValue{
-					{
-						Key: itelemetry.KeyRunnerName,
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "test-runner"},
-						},
-					},
-					{
-						Key: itelemetry.KeyRunnerUserID,
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "user123"},
-						},
-					},
-					{
-						Key: itelemetry.KeyRunnerSessionID,
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "session456"},
-						},
-					},
-					{
-						Key: itelemetry.KeyRunnerInput,
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "input data"},
-						},
-					},
-					{
-						Key: itelemetry.KeyRunnerOutput,
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "output data"},
-						},
-					},
-					{
-						Key: "other.attribute",
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "keep-this"},
-						},
-					},
-				},
-			},
-			expected: map[string]string{
-				observationType:   "agent",
-				observationInput:  "input data",
-				observationOutput: "output data",
-				"other.attribute": "keep-this",
-			},
-		},
-		{
-			name: "runner with nil values",
-			input: &tracepb.Span{
-				Name: "runner",
-				Attributes: []*commonpb.KeyValue{
-					{
-						Key:   itelemetry.KeyRunnerName,
-						Value: nil,
-					},
-					{
-						Key:   itelemetry.KeyRunnerUserID,
-						Value: nil,
-					},
-					{
-						Key:   itelemetry.KeyRunnerInput,
-						Value: nil,
-					},
-				},
-			},
-			expected: map[string]string{
-				observationType:  "agent",
-				observationInput: "N/A",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			transformRunRunner(tt.input)
-
-			// Check that expected attributes are present
-			attrMap := make(map[string]string)
-			for _, attr := range tt.input.Attributes {
-				attrMap[attr.Key] = attr.Value.GetStringValue()
-			}
-
-			for key, expectedValue := range tt.expected {
-				actualValue, exists := attrMap[key]
-				assert.True(t, exists, "attribute %s should exist", key)
-				assert.Equal(t, expectedValue, actualValue, "attribute %s value mismatch", key)
-			}
-
-			// Check that runner input/output attributes are removed (transformed)
-			for _, attr := range tt.input.Attributes {
-				assert.NotEqual(t, itelemetry.KeyRunnerInput, attr.Key, "runner input attribute should be removed")
-				assert.NotEqual(t, itelemetry.KeyRunnerOutput, attr.Key, "runner output attribute should be removed")
+				assert.NotEqual(t, itelemetry.KeyGenAIToolCallArguments, attr.Key, "tool args attribute should be removed")
+				assert.NotEqual(t, itelemetry.KeyGenAIToolCallResult, attr.Key, "tool response attribute should be removed")
 			}
 		})
 	}

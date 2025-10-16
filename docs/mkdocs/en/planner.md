@@ -36,6 +36,75 @@ Planner workflow:
 1. Request processing phase: Before the LLM request is sent, the Planner adds planning instructions or configurations via `BuildPlanningInstruction`.
 2. Response processing phase: The Planner processes the LLM response and organizes the content structure via `ProcessPlanningResponse`.
 
+## Enable and Capture Thinking (without Planner)
+
+You can enable and read a model's internal reasoning ("thinking") even without using a Planner. 
+Configure GenerationConfig to request thinking, and then capture ReasoningContent from responses.
+
+### Enable via GenerationConfig
+```go
+genConfig := model.GenerationConfig{
+    Stream:      true,  // streaming or non-streaming
+    MaxTokens:   2000,
+    Temperature: 0.7,
+}
+
+// Enable thinking (if provider/model supports it).
+thinkingEnabled := true
+thinkingTokens := 2048
+genConfig.ThinkingEnabled = &thinkingEnabled
+genConfig.ThinkingTokens  = &thinkingTokens
+```
+
+Attach genConfig to your Agent when constructing it.
+
+### Capture reasoning from responses
+- Streaming: read `choice.Delta.ReasoningContent` (reasoning) and `choice.Delta.Content` (visible text).
+- Non-streaming: read `choice.Message.ReasoningContent` and `choice.Message.Content`.
+
+```go
+eventChan, err := runner.Run(ctx, userID, sessionID, model.NewUserMessage("Question"))
+if err != nil { /* handle */ }
+
+for e := range eventChan {
+    if e.Error != nil {
+        fmt.Printf("Error: %s\n", e.Error.Message)
+        continue
+    }
+    if len(e.Response.Choices) == 0 {
+        continue
+    }
+    ch := e.Response.Choices[0]
+
+    // Dim-print reasoning if present.
+    if genConfig.Stream {
+        if rc := ch.Delta.ReasoningContent; rc != "" {
+            fmt.Printf("\x1b[2m%s\x1b[0m", rc)
+        }
+        if content := ch.Delta.Content; content != "" {
+            fmt.Print(content)
+        }
+    } else {
+        if rc := ch.Message.ReasoningContent; rc != "" {
+            fmt.Printf("\x1b[2m%s\x1b[0m\n", rc)
+        }
+        if content := ch.Message.Content; content != "" {
+            fmt.Println(content)
+        }
+    }
+
+    if e.IsFinalResponse() {
+        fmt.Println()
+        break
+    }
+}
+```
+
+Notes:
+- The visibility of reasoning depends on the model and provider; enabling related parameters expresses intent and does not guarantee it will be returned.
+- In streaming mode, you may insert a blank line between reasoning and normal content to improve the reading experience.
+- Session history may aggregate segmented reasoning into the final message to aid later review and traceability.
+
 ## BuiltinPlanner
 
 BuiltinPlanner is suitable for models that support native reasoning. It does not generate explicit planning instructions, but instead configures the model to use its internal reasoning mechanisms to implement planning.
@@ -141,7 +210,7 @@ llmAgent := llmagent.New(
 )
 ```
 
-See the complete example at examples/react.
+For complete code examples, please refer to [examples/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/react).
 
 ## Custom Planner
 

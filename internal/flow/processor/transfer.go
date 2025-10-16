@@ -19,11 +19,18 @@ import (
 )
 
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
-type TransferResponseProcessor struct{}
+type TransferResponseProcessor struct {
+	// endInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
+	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
+	// when the transfer is complete. Defaults to true.
+	endInvocationAfterTransfer bool
+}
 
 // NewTransferResponseProcessor creates a new transfer response processor.
-func NewTransferResponseProcessor() *TransferResponseProcessor {
-	return &TransferResponseProcessor{}
+func NewTransferResponseProcessor(endInvocation bool) *TransferResponseProcessor {
+	return &TransferResponseProcessor{
+		endInvocationAfterTransfer: endInvocation,
+	}
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
@@ -115,6 +122,12 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			Role:    model.RoleUser,
 			Content: transferInfo.Message,
 		}
+		// emit transfer message event
+		agent.EmitEvent(ctx, targetInvocation, ch, event.NewResponseEvent(
+			targetInvocation.InvocationID,
+			targetAgent.Info().Name,
+			&model.Response{Choices: []model.Choice{{Message: targetInvocation.Message}}},
+		))
 	}
 
 	// Actually call the target agent's Run method with the target invocation in context
@@ -146,5 +159,5 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
 	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
 	invocation.TransferInfo = nil
-	invocation.EndInvocation = true
+	invocation.EndInvocation = p.endInvocationAfterTransfer
 }

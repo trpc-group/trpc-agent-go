@@ -119,7 +119,6 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 	require.NoError(t, json.Unmarshal(capturedArgs, &got))
 	assert.Equal(t, "weather-agent", got.AgentName)
 	assert.Equal(t, "What's the weather like in Tokyo?", got.Message)
-	assert.Equal(t, false, got.EndInvocation)
 }
 
 func TestExecuteToolCall(t *testing.T) {
@@ -712,9 +711,8 @@ func TestConvertToolArguments(t *testing.T) {
 			targetName:   transfer.TransferToolName,
 			expected: func() []byte {
 				req := &transfer.Request{
-					AgentName:     "weather-agent",
-					Message:       "What's the weather like in Tokyo?",
-					EndInvocation: false,
+					AgentName: "weather-agent",
+					Message:   "What's the weather like in Tokyo?",
 				}
 				b, _ := json.Marshal(req)
 				return b
@@ -728,9 +726,8 @@ func TestConvertToolArguments(t *testing.T) {
 			targetName:   transfer.TransferToolName,
 			expected: func() []byte {
 				req := &transfer.Request{
-					AgentName:     "research-agent",
-					Message:       "Task delegated from coordinator",
-					EndInvocation: false,
+					AgentName: "research-agent",
+					Message:   "Task delegated from coordinator",
 				}
 				b, _ := json.Marshal(req)
 				return b
@@ -752,9 +749,8 @@ func TestConvertToolArguments(t *testing.T) {
 			targetName:   transfer.TransferToolName,
 			expected: func() []byte {
 				req := &transfer.Request{
-					AgentName:     "weather-agent",
-					Message:       "Task delegated from coordinator",
-					EndInvocation: false,
+					AgentName: "weather-agent",
+					Message:   "Task delegated from coordinator",
 				}
 				b, _ := json.Marshal(req)
 				return b
@@ -784,7 +780,6 @@ func TestConvertToolArguments(t *testing.T) {
 
 			assert.Equal(t, expectedReq.AgentName, actualReq.AgentName, "agent_name should match")
 			assert.Equal(t, expectedReq.Message, actualReq.Message, "message should match")
-			assert.Equal(t, expectedReq.EndInvocation, actualReq.EndInvocation, "end_invocation should match")
 		})
 	}
 }
@@ -951,7 +946,6 @@ func TestHandleFunctionCalls_SkipSummarizationSequential_SetsEndInvocation(t *te
 	require.NotNil(t, evt.Actions)
 	require.True(t, evt.Actions.SkipSummarization)
 	require.True(t, inv.EndInvocation, "invocation should be marked to end when skipping summarization")
-	require.True(t, evt.RequiresCompletion)
 }
 
 // Verify SkipSummarization propagation in the no-child-events path (e.g., long-running returns nil).
@@ -1029,9 +1023,10 @@ func (s *finalOnlyInnerEventStreamTool) StreamableCall(ctx context.Context, _ []
 	go func() {
 		defer st.Writer.Close()
 		// Final full assistant message only, no deltas prior.
-		inner := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{
+		inner := event.New("inv-final", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{
 			Message: model.Message{Role: model.RoleAssistant, Content: "final"},
 		}}}))
+		inner.Branch = "br"
 		st.Writer.Send(tool.StreamChunk{Content: inner}, nil)
 	}()
 	return st.Reader, nil
@@ -1188,10 +1183,12 @@ func (s *innerEventStreamTool) StreamableCall(ctx context.Context, _ []byte) (*t
 	go func() {
 		defer st.Writer.Close()
 		// delta chunk
-		ev1 := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Delta: model.Message{Content: "abc"}}}}))
+		ev1 := event.New("inv-fwd", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Delta: model.Message{Content: "abc"}}}}))
+		ev1.Branch = "b"
 		st.Writer.Send(tool.StreamChunk{Content: ev1}, nil)
 		// final full assistant message
-		ev2 := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "def"}}}}))
+		ev2 := event.New("inv-fwd", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "def"}}}}))
+		ev2.Branch = "b"
 		st.Writer.Send(tool.StreamChunk{Content: ev2}, nil)
 	}()
 	return st.Reader, nil
@@ -1218,30 +1215,6 @@ func TestExecuteStreamableTool_ForwardsInnerEvents(t *testing.T) {
 		require.Equal(t, inv.InvocationID, e2.InvocationID)
 		require.Equal(t, inv.Branch, e2.Branch)
 	}
-}
-
-func TestWaitForCompletion_SignalReceived(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false, nil)
-	ctx := context.Background()
-	ch := make(chan string, 1)
-	inv := agent.NewInvocation()
-	evt := event.New("inv-comp", "author")
-	evt.RequiresCompletion = true
-	// send completion
-	ch <- "done-1"
-	err := f.waitForCompletion(ctx, inv, evt)
-	require.NoError(t, err)
-}
-
-func TestWaitForCompletion_ContextCancelled(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	inv := agent.NewInvocation()
-	evt := event.New("inv-comp2", "author")
-	evt.RequiresCompletion = true
-	err := f.waitForCompletion(ctx, inv, evt)
-	require.Error(t, err)
 }
 
 // Mock tool for transfer testing

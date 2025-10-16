@@ -68,7 +68,7 @@ func (t *StateAccessTool) Declaration() *tool.Declaration {
 
 // Call executes the tool to retrieve data from session state.
 func (t *StateAccessTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	var params map[string]interface{}
+	var params map[string]any
 	if err := json.Unmarshal(jsonArgs, &params); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal arguments: %w", err)
 	}
@@ -93,14 +93,14 @@ func (t *StateAccessTool) Call(ctx context.Context, jsonArgs []byte) (any, error
 
 	// Extract data from session state.
 	if sessionData.State == nil {
-		return map[string]interface{}{
+		return map[string]any{
 			"result": "No data found in session state",
 		}, nil
 	}
 
 	// Look for the specific key in the state.
 	if data, exists := sessionData.State[key]; exists {
-		return map[string]interface{}{
+		return map[string]any{
 			"result": fmt.Sprintf("Found data for key '%s': %s", key, string(data)),
 		}, nil
 	}
@@ -111,7 +111,7 @@ func (t *StateAccessTool) Call(ctx context.Context, jsonArgs []byte) (any, error
 		availableKeys = append(availableKeys, k)
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"result": fmt.Sprintf("Key '%s' not found. Available keys: %v", key, availableKeys),
 	}, nil
 }
@@ -340,8 +340,8 @@ func (c *outputKeyStateChainChat) displayAgentTransition(currentAgent string) {
 
 // handleStreamingContent processes streaming content from agents.
 func (c *outputKeyStateChainChat) handleStreamingContent(event *event.Event, currentAgent *string) {
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		if choice.Delta.Content != "" {
 			fmt.Print(choice.Delta.Content)
 		}

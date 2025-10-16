@@ -68,14 +68,14 @@ type Source interface {
 	Type() string
 
 	// GetMetadata returns the metadata that user set
-	GetMetadata() map[string]interface{}
+	GetMetadata() map[string]any
 }
 
 // GetAllMetadata returns all metadata collected from sources with deduplication.
-func GetAllMetadata(sources []Source) map[string][]interface{} {
+func GetAllMetadata(sources []Source) map[string][]any {
 	// Use temporary map for deduplication
 	tempMetadataMap := make(map[string]map[string]struct{})
-	allMetadata := make(map[string][]interface{})
+	allMetadata := make(map[string][]any)
 
 	// Iterate through all sources to collect metadata
 	for _, src := range sources {
@@ -84,7 +84,7 @@ func GetAllMetadata(sources []Source) map[string][]interface{} {
 			// Initialize key in temporary map
 			if _, exists := tempMetadataMap[key]; !exists {
 				tempMetadataMap[key] = make(map[string]struct{})
-				allMetadata[key] = make([]interface{}, 0)
+				allMetadata[key] = make([]any, 0)
 			}
 
 			// Create a unique key that includes type information to avoid conflicts
@@ -99,13 +99,13 @@ func GetAllMetadata(sources []Source) map[string][]interface{} {
 }
 
 // GetAllMetadataWithoutValues returns all metadata keys with their string values collected from sources with deduplication.
-func GetAllMetadataWithoutValues(sources []Source) map[string][]interface{} {
-	result := make(map[string][]interface{})
+func GetAllMetadataWithoutValues(sources []Source) map[string][]any {
+	result := make(map[string][]any)
 	for _, src := range sources {
 		metadata := src.GetMetadata()
 		for key := range metadata {
 			if _, exists := result[key]; !exists {
-				result[key] = []interface{}{}
+				result[key] = []any{}
 			}
 		}
 	}

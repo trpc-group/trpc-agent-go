@@ -16,6 +16,7 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -35,12 +36,12 @@ const (
 
 	SpanNameCallLLM           = "call_llm"
 	SpanNamePrefixExecuteTool = "execute_tool"
-	SpanNamePrefixAgentRun    = "agent_run"
-	SpanNameInvocation        = "invocation"
 
 	OperationExecuteTool = "execute_tool"
 	OperationCallLLM     = "call_llm"
-	OperationRunRunner   = "run_runner" // attribute of SpanNameInvocation
+	OperationInvokeAgent = "invoke_agent"
+	OperationCreateAgent = "create_agent"
+	OperationEmbeddings  = "embeddings"
 )
 
 const (
@@ -50,6 +51,7 @@ const (
 	ProtocolHTTP string = "http"
 )
 
+// https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-agent-spans.md#spans
 // telemetry attributes constants.
 var (
 	ResourceServiceNamespace = "trpc-go-agent"
@@ -69,17 +71,41 @@ var (
 	KeyRunnerInput     = "trpc.go.agent.runner.input"
 	KeyRunnerOutput    = "trpc.go.agent.runner.output"
 
-	// Tool-related attributes
-	KeyToolCallArgs = "trpc.go.agent.tool_call_args"
-	KeyToolResponse = "trpc.go.agent.tool_response"
-	KeyToolID       = "trpc.go.agent.tool_id"
-
 	// GenAI operation attributes
 	KeyGenAIOperationName = "gen_ai.operation.name"
 	KeyGenAISystem        = "gen_ai.system"
-	KeyGenAIToolName      = "gen_ai.tool.name"
-	KeyGenAIToolDesc      = "gen_ai.tool.description"
-	KeyGenAIRequestModel  = "gen_ai.request.model"
+
+	KeyGenAIRequestModel            = "gen_ai.request.model"
+	KeyGenAIInputMessages           = "gen_ai.input.messages"
+	KeyGenAIOutputMessages          = "gen_ai.output.messages"
+	KeyGenAIAgentName               = "gen_ai.agent.name"
+	KeyGenAIConversationID          = "gen_ai.conversation.id"
+	KeyGenAIUsageOutputTokens       = "gen_ai.usage.output_tokens" // #nosec G101 - this is a metric key name, not a credential.
+	KeyGenAIUsageInputTokens        = "gen_ai.usage.input_tokens"  // #nosec G101 - this is a metric key name, not a credential.
+	KeyGenAIProviderName            = "gen_ai.provider.name"
+	KeyGenAIAgentDescription        = "gen_ai.agent.description"
+	KeyGenAIResponseFinishReasons   = "gen_ai.response.finish_reasons"
+	KeyGenAIResponseID              = "gen_ai.response.id"
+	KeyGenAIResponseModel           = "gen_ai.response.model"
+	KeyGenAIRequestStopSequences    = "gen_ai.request.stop_sequences"
+	KeyGenAIRequestFrequencyPenalty = "gen_ai.request.frequency_penalty"
+	KeyGenAIRequestMaxTokens        = "gen_ai.request.max_tokens" // #nosec G101 - this is a metric key name, not a credential.
+	KeyGenAIRequestPresencePenalty  = "gen_ai.request.presence_penalty"
+	KeyGenAIRequestTemperature      = "gen_ai.request.temperature"
+	KeyGenAIRequestTopP             = "gen_ai.request.top_p"
+	KeyGenAISystemInstructions      = "gen_ai.system_instructions"
+
+	KeyGenAIToolName          = "gen_ai.tool.name"
+	KeyGenAIToolDescription   = "gen_ai.tool.description"
+	KeyGenAIToolCallID        = "gen_ai.tool.call.id"
+	KeyGenAIToolCallArguments = "gen_ai.tool.call.arguments"
+	KeyGenAIToolCallResult    = "gen_ai.tool.call.result"
+
+	KeyGenAIRequestEncodingFormats = "gen_ai.request.encoding_formats"
+
+	// https://github.com/open-telemetry/semantic-conventions/blob/main/docs/general/recording-errors.md#recording-errors-on-spans
+	KeyErrorType          = "error.type"
+	ValueDefaultErrorType = "_OTHER"
 
 	// System value
 	SystemTRPCGoAgent = "trpc.go.agent"
@@ -91,20 +117,28 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
 		attribute.String(KeyGenAIToolName, declaration.Name),
-		attribute.String(KeyGenAIToolDesc, declaration.Description),
+		attribute.String(KeyGenAIToolDescription, declaration.Description),
 	)
 	if rspEvent != nil {
 		span.SetAttributes(attribute.String(KeyEventID, rspEvent.ID))
 	}
 
 	// args is json-encoded.
-	span.SetAttributes(attribute.String(KeyToolCallArgs, string(args)))
+	span.SetAttributes(attribute.String(KeyGenAIToolCallArguments, string(args)))
 	if rspEvent != nil && rspEvent.Response != nil {
-		span.SetAttributes(attribute.String(KeyToolID, rspEvent.Response.ID))
+
+		if e := rspEvent.Response.Error; e != nil {
+			span.SetStatus(codes.Error, e.Message)
+			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+		}
+
+		if callIDs := rspEvent.Response.GetToolCallIDs(); len(callIDs) > 0 {
+			span.SetAttributes(attribute.String(KeyGenAIToolCallID, callIDs[0]))
+		}
 		if bts, err := json.Marshal(rspEvent.Response); err == nil {
-			span.SetAttributes(attribute.String(KeyToolResponse, string(bts)))
+			span.SetAttributes(attribute.String(KeyGenAIToolCallResult, string(bts)))
 		} else {
-			span.SetAttributes(attribute.String(KeyToolResponse, "<not json serializable>"))
+			span.SetAttributes(attribute.String(KeyGenAIToolCallResult, "<not json serializable>"))
 		}
 	}
 
@@ -122,16 +156,24 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
 		attribute.String(KeyGenAIToolName, "(merged tools)"),
-		attribute.String(KeyGenAIToolDesc, "(merged tools)"),
-		attribute.String(KeyEventID, rspEvent.ID),
-		attribute.String(KeyToolID, rspEvent.Response.ID),
-		attribute.String(KeyToolCallArgs, "N/A"),
+		attribute.String(KeyGenAIToolDescription, "(merged tools)"),
+		attribute.String(KeyGenAIToolCallArguments, "N/A"),
 	)
+	if rspEvent != nil && rspEvent.Response != nil {
+		if callIDs := rspEvent.Response.GetToolCallIDs(); len(callIDs) > 0 {
+			span.SetAttributes(attribute.String(KeyGenAIToolCallID, callIDs[0]))
+		}
+		if e := rspEvent.Response.Error; e != nil {
+			span.SetStatus(codes.Error, e.Message)
+			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+		}
+		span.SetAttributes(attribute.String(KeyEventID, rspEvent.ID))
+	}
 
 	if bts, err := json.Marshal(rspEvent.Response); err == nil {
-		span.SetAttributes(attribute.String(KeyToolResponse, string(bts)))
+		span.SetAttributes(attribute.String(KeyGenAIToolCallResult, string(bts)))
 	} else {
-		span.SetAttributes(attribute.String(KeyToolResponse, "<not json serializable>"))
+		span.SetAttributes(attribute.String(KeyGenAIToolCallResult, "<not json serializable>"))
 	}
 
 	// Setting empty llm request and response (as UI expect these) while not
@@ -142,24 +184,77 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	)
 }
 
-// TraceRunner traces the invocation of a runner.
-func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, message model.Message) {
-	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{message}}); err == nil {
+// TraceBeforeInvokeAgent traces the before invocation of an agent.
+func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDescription, instructions string, genConfig model.GenerationConfig) {
+	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{invoke.Message}}); err == nil {
 		span.SetAttributes(
-			attribute.String(KeyRunnerInput, string(bts)),
+			attribute.String(KeyGenAIInputMessages, string(bts)),
 		)
 	} else {
-		span.SetAttributes(attribute.String(KeyRunnerInput, "<not json serializable>"))
+		span.SetAttributes(attribute.String(KeyGenAIInputMessages, "<not json serializable>"))
 	}
-
 	span.SetAttributes(
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
-		attribute.String(KeyGenAIOperationName, OperationRunRunner),
-		attribute.String(KeyRunnerName, fmt.Sprintf("[trpc-go-agent]: %s/%s", appName, invoke.AgentName)),
+		attribute.String(KeyGenAIOperationName, OperationInvokeAgent),
+		attribute.String(KeyGenAIAgentName, invoke.AgentName),
 		attribute.String(KeyInvocationID, invoke.InvocationID),
-		attribute.String(KeyRunnerSessionID, invoke.Session.ID),
-		attribute.String(KeyRunnerUserID, invoke.Session.UserID),
+		attribute.String(KeyGenAIAgentDescription, agentDescription),
+		attribute.StringSlice(KeyGenAIRequestStopSequences, genConfig.Stop),
+		attribute.String(KeyGenAISystemInstructions, instructions),
 	)
+	if fp := genConfig.FrequencyPenalty; fp != nil {
+		span.SetAttributes(attribute.Float64(KeyGenAIRequestFrequencyPenalty, *fp))
+	}
+	if mt := genConfig.MaxTokens; mt != nil {
+		span.SetAttributes(attribute.Int(KeyGenAIRequestMaxTokens, *mt))
+	}
+	if pp := genConfig.PresencePenalty; pp != nil {
+		span.SetAttributes(attribute.Float64(KeyGenAIRequestPresencePenalty, *pp))
+	}
+	if tp := genConfig.Temperature; tp != nil {
+		span.SetAttributes(attribute.Float64(KeyGenAIRequestTemperature, *tp))
+	}
+	if tp := genConfig.TopP; tp != nil {
+		span.SetAttributes(attribute.Float64(KeyGenAIRequestTopP, *tp))
+	}
+	if invoke.Session != nil {
+		span.SetAttributes(
+			attribute.String(KeyRunnerUserID, invoke.Session.UserID),
+			attribute.String(KeyGenAIConversationID, invoke.Session.ID),
+		)
+	}
+}
+
+// TraceAfterInvokeAgent traces the after invocation of an agent.
+func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event) {
+	if rspEvent == nil {
+		return
+	}
+	rsp := rspEvent.Response
+	if rsp == nil {
+		return
+	}
+	if len(rsp.Choices) > 0 {
+		if bts, err := json.Marshal(rsp.Choices[0].Message); err == nil {
+			span.SetAttributes(
+				attribute.String(KeyGenAIOutputMessages, string(bts)),
+			)
+		}
+		if fr := rsp.Choices[0].FinishReason; fr != nil && *fr != "" {
+			span.SetAttributes(attribute.StringSlice(KeyGenAIResponseFinishReasons, []string{*fr}))
+		}
+	}
+	span.SetAttributes(attribute.String(KeyGenAIResponseModel, rsp.Model))
+	if rsp.Usage != nil {
+		span.SetAttributes(attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens))
+		span.SetAttributes(attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens))
+	}
+	span.SetAttributes(attribute.String(KeyGenAIResponseID, rsp.ID))
+
+	if e := rsp.Error; e != nil {
+		span.SetStatus(codes.Error, e.Message)
+		span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+	}
 }
 
 // TraceCallLLM traces the invocation of an LLM call.
@@ -201,6 +296,22 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 		)
 	} else {
 		span.SetAttributes(attribute.String(KeyLLMResponse, "<not json serializable>"))
+	}
+}
+
+// TraceEmbedding traces the invocation of an embedding call.
+func TraceEmbedding(span trace.Span, requestEncodingFormat, requestModel string, inputToken *int64, err error) {
+	span.SetAttributes(
+		attribute.String(KeyGenAIOperationName, OperationEmbeddings),
+		attribute.String(KeyGenAIRequestModel, requestModel),
+		attribute.StringSlice(KeyGenAIRequestEncodingFormats, []string{requestEncodingFormat}),
+	)
+	if err != nil {
+		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
+		span.SetStatus(codes.Error, err.Error())
+	}
+	if inputToken != nil {
+		span.SetAttributes(attribute.Int64(KeyGenAIUsageInputTokens, *inputToken))
 	}
 }
 

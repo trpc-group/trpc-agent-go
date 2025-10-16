@@ -108,38 +108,38 @@ func (c *outputSchemaChat) setup(_ context.Context) error {
 	}
 
 	// Define output schema for weather information.
-	weatherSchema := map[string]interface{}{
+	weatherSchema := map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"city": map[string]interface{}{
+		"properties": map[string]any{
+			"city": map[string]any{
 				"type":        "string",
 				"description": "The city name",
 			},
-			"temperature": map[string]interface{}{
+			"temperature": map[string]any{
 				"type":        "number",
 				"description": "Temperature in Celsius",
 			},
-			"condition": map[string]interface{}{
+			"condition": map[string]any{
 				"type":        "string",
 				"description": "Weather condition (sunny, cloudy, rainy, etc.)",
 				"enum":        []string{"sunny", "cloudy", "rainy", "snowy", "foggy", "windy"},
 			},
-			"humidity": map[string]interface{}{
+			"humidity": map[string]any{
 				"type":        "number",
 				"description": "Humidity percentage (0-100)",
 			},
-			"wind_speed": map[string]interface{}{
+			"wind_speed": map[string]any{
 				"type":        "number",
 				"description": "Wind speed in km/h",
 			},
-			"description": map[string]interface{}{
+			"description": map[string]any{
 				"type":        "string",
 				"description": "Human-readable weather description",
 			},
-			"recommendations": map[string]interface{}{
+			"recommendations": map[string]any{
 				"type":        "array",
 				"description": "List of recommendations based on weather",
-				"items": map[string]interface{}{
+				"items": map[string]any{
 					"type": "string",
 				},
 			},
@@ -256,8 +256,8 @@ func (c *outputSchemaChat) handleEvent(event *event.Event) error {
 	}
 
 	// Handle streaming content.
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		if choice.Delta.Content != "" {
 			fmt.Print(choice.Delta.Content)
 		}

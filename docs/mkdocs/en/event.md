@@ -16,8 +16,14 @@ Users obtain event streams through the `runner.Run()` method, then listen to eve
 type Event struct {
     // Response is the basic response structure of Event, carrying LLM responses.
     *model.Response
+    // RequestID The unique identifier for this request.
+    // It can be passed via runner.Run using agent.WithRequestID.
+	RequestID string `json:"requestID,omitempty"`
 
-    // InvocationID is the unique identifier for this invocation.
+	// ParentInvocationID is the parent invocation ID of the event.
+	ParentInvocationID string `json:"parentInvocationId,omitempty"`
+
+    // InvocationID is current invocation ID of the event.
     InvocationID string `json:"invocationId"`
 
     // Author is the initiator of the event.
@@ -324,9 +330,8 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
         if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
             return err
         }
-
         // Check if it's the final event.
-        if event.Done && !c.isToolEvent(event) {
+        if event.IsFinalResponse() {
             fmt.Printf("\n")
             break
         }
@@ -370,13 +375,13 @@ func (c *multiTurnChat) handleToolCalls(
     toolCallsDetected *bool,
     assistantStarted *bool,
 ) bool {
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+    if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
         *toolCallsDetected = true
         if *assistantStarted {
             fmt.Printf("\n")
         }
         fmt.Printf("🔧 Tool calls initiated:\n")
-        for _, toolCall := range event.Choices[0].Message.ToolCalls {
+        for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
             fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
             if len(toolCall.Function.Arguments) > 0 {
                 fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -410,8 +415,8 @@ func (c *multiTurnChat) handleContent(
     assistantStarted *bool,
     fullContent *string,
 ) {
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
         content := c.extractContent(choice)
 
         if content != "" {
@@ -446,30 +451,23 @@ func (c *multiTurnChat) displayContent(
     fmt.Print(content)
     *fullContent += content
 }
-
-// isToolEvent checks if event is a tool response.
-func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
-    if event.Response == nil {
-        return false
-    }
-    
-    // Check if there are tool calls.
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-        return true
-    }
-    
-    // Check if there's a tool ID.
-    if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-        return true
-    }
-
-    // Check if it's a tool role.
-    for _, choice := range event.Response.Choices {
-        if choice.Message.Role == model.RoleTool {
-            return true
-        }
-    }
-
-    return false
-}
 ```
+
+### Relationship and Usage Scenarios of RequestID, ParentInvocationID, and InvocationID
+- `RequestID string`​​: Used to identify and distinguish multiple user interaction requests within the same session. It can be bound to the business layer's own request ID via runner.Runu agent.WithRequestID. This ensures unique identification for each request cycle, similar to how request IDs are employed to guarantee idempotency and de-duplication in API interactions.
+- `​​ParentInvocationID string`​​: Used to associate the parent execution context. This ID can link to related events in the parent execution, enabling hierarchical tracking of nested operations. This mirrors concepts where a parent request ID groups multiple sub-requests, each with distinct identifiers but shared parent context for cohesive management.
+- `​​InvocationID string`​​: The current execution context ID. This ID associates related events within the same execution context, allowing precise correlation of actions and outcomes for a specific invocation. It functions similarly to child request IDs in systems where individual operations are tracked under a parent scope.
+
+Using these three IDs, the event flow can be organized in a hierarchical structure as follows:
+- requestID-1:
+  - invocationID-1:
+    - invocationID-2
+    - invocationID-3
+  - invocationID-1
+  - invocationID-4
+  - invocationID-5
+- requestID-2:
+  - invocationID-6
+    - invocationID-7
+  - invocationID-8
+  - invocationID-9

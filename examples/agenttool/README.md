@@ -49,14 +49,14 @@ Agent tools provide a way to wrap any agent as a tool that can be called by othe
 ```bash
 cd examples/agenttool
 export OPENAI_API_KEY="your-api-key-here"
-go run main.go
+go run .
 ```
 
 ### Custom Model
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model gpt-4o
+go run . -model gpt-4o
 ```
 
 ## Implemented Tools
@@ -77,6 +77,7 @@ The example includes two types of tools:
 - **Usage**: "Calculate 923476 \* 273472354" or "Solve this equation: 2x + 5 = 13"
 - **Arguments**: request (string) - the mathematical problem or question
 - **Internal Tools**: The math specialist agent has access to a calculator tool for basic operations
+- **Input Schema**: JSON schema with required "request" field for mathematical problems
 
 ## Agent Tool Architecture
 
@@ -121,28 +122,32 @@ The interface is simple and intuitive:
 ```
 🚀 Agent Tool Example
 Model: gpt-4o-mini
-Type 'exit' to end the conversation
+Available tools: current_time, math-specialist(agent_tool)
 ==================================================
 ✅ Chat ready! Session: chat-session-1703123456
 
+💡 Special commands:
+   /history  - Show conversation history
+   /new      - Start a new session
+   /exit     - End the conversation
+
 👤 You: Hello! Can you help me with math?
-🤖 Assistant: Hello! I'd be happy to help you with math. I have access to a specialized math agent that can handle both basic calculations and complex mathematical problems. What would you like to work on?
+🤖 Assistant: Of course! What math problem do you need help with?
 
 👤 You: Calculate 923476 * 273472354
-🤖 Assistant: I'll use the math specialist agent to calculate this for you.
-
-🔧 Tool calls initiated:
-   • math-specialist (ID: call_0_e53a77e9-c994-4421-bfc3-f63fe85678a1)
-     Args: {"request":"Calculate 923476 multiplied by 273472354"}
+🤖 Assistant: 🔧 Tool calls initiated:
+   • math-specialist (ID: call_k7LFMLReoHMT7Con94FEWolz)
+     Args: {"request":"923476 * 273472354"}
 
 🔄 Executing tools...
-✅ Tool response (ID: call_0_e53a77e9-c994-4421-bfc3-f63fe85678a1): {"request":"Calculate 923476 multiplied by 273472354"}
-"The result of multiplying \\( 923,\\!476 \\) by \\( 273,\\!472,\\!354 \\) is:\n\n\\[\n923,\\!476 \\times 273,\\!472,\\!354 = 252,\\!545,\\!155,\\!582,\\!504\n\\]"
-The result of multiplying 923,476 by 273,472,354 is:
+🔧 Tool calls initiated:
+   • calculator (ID: call_7e7mqv5VDpOLHvLoXpGurzZE)
+     Args: {"a":923476,"b":273472354,"operation":"multiply"}
 
-\[
-923,\!476 \times 273,\!472,\!354 = 252,\!545,\!155,\!582,\!504
-\]
+🔄 Executing tools...
+I calculated the product of 923,476 and 273,472,354. The result of this multiplication is 252,545,155,582,504.
+
+✅ Tool response (ID: call_k7LFMLReoHMT7Con94FEWolz): "I calculated the product of 923,476 and 273,472,354. The result of this multiplication is 252,545,155,582,504."
 
 ✅ Tool execution completed.
 
@@ -158,49 +163,47 @@ The result of multiplying 923,476 by 273,472,354 is:
 
 ## Agent Tool Implementation
 
-The agent tool implementation is located in `tool/agent/agent_tool.go`:
+The agent tool implementation follows the runner/ example structure with separate files:
+
+### main.go
+
+Contains the main chat logic and agent setup.
+
+### tools.go
+
+Contains all tool definitions and implementations with proper JSON schema:
 
 ```go
-// Create a specialized agent with its own calculator tool
-calculatorTool := function.NewFunctionTool(
-    calculate,
-    function.WithName("calculator"),
-    function.WithDescription("Perform basic mathematical calculations"),
-)
+// Tool arguments with JSON schema
+type calculatorArgs struct {
+    Operation string  `json:"operation" jsonschema:"description=The operation: add, subtract, multiply, divide,enum=add,enum=subtract,enum=multiply,enum=divide"`
+    A         float64 `json:"a" jsonschema:"description=First number"`
+    B         float64 `json:"b" jsonschema:"description=Second number"`
+}
 
+// Math agent with input schema
 mathAgent := llmagent.New(
     "math-specialist",
     llmagent.WithDescription("A specialized agent for mathematical operations"),
     llmagent.WithInstruction("You are a math specialist with access to a calculator tool..."),
     llmagent.WithTools([]tool.Tool{calculatorTool}),
-	// Use input schema to specify the input format of the agent.
-	llmagent.WithInputSchema(map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"operation": map[string]interface{}{
-				"type": "string",
-				"enum": []interface{}{"add", "subtract", "multiply", "divide"},
-			},
-			"a": map[string]interface{}{
-				"type": "number",
-			},
-			"b": map[string]interface{}{
-				"type": "number",
-			},
-		},
-	}),
+    llmagent.WithInputSchema(map[string]any{
+        "type": "object",
+        "properties": map[string]any{
+            "request": map[string]any{
+                "type":        "string",
+                "description": "The mathematical problem or question to solve",
+            },
+        },
+        "required": []any{"request"},
+    }),
 )
 
 // Wrap the agent as a tool
 agentTool := agent.NewTool(
     mathAgent,
-    agent.WithSkipSummarization(false),
-)
-
-// Add to main agent's tools
-llmAgent := llmagent.New(
-    "chat-assistant",
-    llmagent.WithTools([]tool.Tool{timeTool, agentTool}),
+    agent.WithSkipSummarization(true), // opt-in: skip parent summarization after the tool response
+    agent.WithStreamInner(true),
 )
 ```
 
@@ -245,24 +248,24 @@ This lets the agent tool stream results progressively while keeping the main con
 
 ### AgentTool Defaults and Flags
 
-- Default behavior: AgentTool skips summarization by default. The final `tool.response` is treated as the end of the turn (no extra outer summary). This reduces duplication.
+- Default behavior: AgentTool lets the outer agent run its follow-up turn after `tool.response`, allowing it to summarize or combine results.
 - Streaming inner transcript: By default, inner agent deltas are not forwarded. Pass `-show-inner` to see the inner agent’s streamed deltas in the parent transcript. Under the hood this enables `agenttool.WithStreamInner(true)`.
 - Tool output printing: The framework always emits a final non-partial `tool.response` with merged content for session history and provider compliance. To avoid printing the merged content again when you already saw deltas, the example hides it unless `-show-tool` is set.
 
 Examples:
 
 ```bash
-# Clean UX, no inner streaming, end turn at tool.response (default)
-go run main.go -model gpt-4o-mini
+# Clean UX, no inner streaming; outer agent summarizes after tool.response (default)
+go run . -model gpt-4o-mini
 
 # Stream inner agent deltas and show tool messages
-go run main.go -show-inner -show-tool
+go run . -show-inner -show-tool
 
 # Stream inner agent deltas but keep tool messages hidden (marker only)
-go run main.go -show-inner
+go run . -show-inner
 ```
 
 Notes:
 
 - Even when inner deltas are streamed, the example suppresses the inner agent’s final full content to avoid duplication. The final `tool.response` persists the merged content for history, but the UI prints only a completion marker unless `-show-tool` is used.
-- If you want an outer-agent summary after the tool finishes, you can construct the AgentTool with `agenttool.WithSkipSummarization(false)`.
+- The default configuration keeps the outer-agent summary after the tool finishes; pass `agenttool.WithSkipSummarization(true)` if you want the tool result to be surfaced directly instead.

@@ -26,6 +26,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -478,7 +479,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// For non-streaming, we might want to collect all events or just return the final one.
 	// ADK web might expect a list of events. Let's send all of them.
-	var events []map[string]interface{}
+	var events []map[string]any
 	for e := range out {
 		if e.Response != nil && e.Response.IsPartial {
 			continue // skip streaming chunks in non-streaming endpoint
@@ -559,8 +560,9 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 // convertSessionToADKFormat converts an internal session object to the
 // flattened structure the ADK Web UI expects.
 func convertSessionToADKFormat(s *session.Session) schema.ADKSession {
-	adkEvents := make([]map[string]interface{}, 0, len(s.Events))
-	for _, e := range s.Events {
+	events := s.GetEvents()
+	adkEvents := make([]map[string]any, 0, len(events))
+	for _, e := range events {
 		// Create a local copy to avoid implicit memory aliasing.
 		e := e
 		if ev := convertEventToADKFormat(&e, false); ev != nil {
@@ -579,14 +581,14 @@ func convertSessionToADKFormat(s *session.Session) schema.ADKSession {
 }
 
 // buildADKEventEnvelope creates the basic ADK event envelope.
-func buildADKEventEnvelope(e *event.Event) map[string]interface{} {
-	return map[string]interface{}{
+func buildADKEventEnvelope(e *event.Event) map[string]any {
+	return map[string]any{
 		"invocationId": e.InvocationID,
 		"author":       e.Author,
-		"actions": map[string]interface{}{
-			"stateDelta":           map[string]interface{}{},
-			"artifactDelta":        map[string]interface{}{},
-			"requestedAuthConfigs": map[string]interface{}{},
+		"actions": map[string]any{
+			"stateDelta":           map[string]any{},
+			"artifactDelta":        map[string]any{},
+			"requestedAuthConfigs": map[string]any{},
 		},
 		"id":        e.ID,
 		"timestamp": e.Timestamp.Unix(),
@@ -607,9 +609,15 @@ func determineEventRole(e *event.Event) string {
 }
 
 // buildEventParts constructs the parts array for the event content.
-func buildEventParts(e *event.Event) []map[string]interface{} {
-	var parts []map[string]interface{}
+func buildEventParts(e *event.Event) []map[string]any {
+	var parts []map[string]any
 
+	// Early separation: Handle Graph events completely separately
+	if isGraphEvent(e) {
+		return buildGraphEventParts(e) // Graph events use their own logic
+	}
+
+	// Handle LLM Agent events only (chat.completion, tool.response, etc.)
 	if e.Response == nil {
 		return parts
 	}
@@ -623,7 +631,7 @@ func buildEventParts(e *event.Event) []map[string]interface{} {
 			// information (both as plain text and as function_response). Keeping
 			// only the structured function_response part provides a cleaner view.
 			if e.Response.Object != model.ObjectTypeToolResponse {
-				parts = append(parts, map[string]interface{}{keyText: choice.Message.Content})
+				parts = append(parts, map[string]any{keyText: choice.Message.Content})
 			}
 		}
 
@@ -634,7 +642,7 @@ func buildEventParts(e *event.Event) []map[string]interface{} {
 
 		// Streaming delta text.
 		if choice.Delta.Content != "" {
-			parts = append(parts, map[string]interface{}{keyText: choice.Delta.Content})
+			parts = append(parts, map[string]any{keyText: choice.Delta.Content})
 		}
 		// Tool calls in streaming delta.
 		for _, tc := range choice.Delta.ToolCalls {
@@ -645,7 +653,7 @@ func buildEventParts(e *event.Event) []map[string]interface{} {
 	// Tool response events.
 	if e.Response.Object == model.ObjectTypeToolResponse {
 		for _, choice := range e.Response.Choices {
-			var respObj interface{}
+			var respObj any
 			if choice.Message.Content != "" {
 				if err := json.Unmarshal([]byte(choice.Message.Content), &respObj); err != nil {
 					respObj = choice.Message.Content // raw string fallback
@@ -659,9 +667,15 @@ func buildEventParts(e *event.Event) []map[string]interface{} {
 }
 
 // filterEventParts filters parts based on streaming mode and event type.
-func filterEventParts(e *event.Event, parts []map[string]interface{}, isStreaming bool) []map[string]interface{} {
+func filterEventParts(e *event.Event, parts []map[string]any, isStreaming bool) []map[string]any {
+	// Early separation: Handle Graph events completely separately
+	if isGraphEvent(e) {
+		return filterGraphEventParts(e, parts, isStreaming)
+	}
+
+	// Handle LLM Agent events only (chat.completion, tool.response, etc.)
 	if e.Response == nil {
-		return parts
+		return parts // Non-LLM events without Response, return as-is
 	}
 
 	if isStreaming {
@@ -688,7 +702,7 @@ func filterEventParts(e *event.Event, parts []map[string]interface{}, isStreamin
 }
 
 // addResponseMetadata adds response-level metadata to the ADK event.
-func addResponseMetadata(adkEvent map[string]interface{}, e *event.Event) {
+func addResponseMetadata(adkEvent map[string]any, e *event.Event) {
 	if e.Response == nil {
 		return
 	}
@@ -707,12 +721,12 @@ func addResponseMetadata(adkEvent map[string]interface{}, e *event.Event) {
 }
 
 // addUsageMetadata adds usage metadata to the ADK event.
-func addUsageMetadata(adkEvent map[string]interface{}, e *event.Event) {
+func addUsageMetadata(adkEvent map[string]any, e *event.Event) {
 	if e.Usage == nil {
 		return
 	}
 
-	adkEvent["usageMetadata"] = map[string]interface{}{
+	adkEvent["usageMetadata"] = map[string]any{
 		"promptTokenCount":     e.Usage.PromptTokens,
 		"candidatesTokenCount": e.Usage.CompletionTokens,
 		"totalTokenCount":      e.Usage.TotalTokens,
@@ -724,13 +738,13 @@ func addUsageMetadata(adkEvent map[string]interface{}, e *event.Event) {
 // displaying token-level streaming (true) or expecting a single complete
 // response (false). In streaming mode we suppress the final aggregated
 // "done" event content to avoid duplication.
-func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interface{} {
+func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]any {
 	// Build basic envelope.
 	adkEvent := buildADKEventEnvelope(e)
 
 	// Determine role and build content.
 	role := determineEventRole(e)
-	content := map[string]interface{}{
+	content := map[string]any{
 		"role": role,
 	}
 
@@ -806,14 +820,14 @@ func isToolResponse(e *event.Event) bool {
 
 // buildFunctionCallPart converts a model.ToolCall into the ADK Web part map.
 // The returned map follows the schema expected by the Web UI.
-func buildFunctionCallPart(tc model.ToolCall) map[string]interface{} {
-	var args interface{}
+func buildFunctionCallPart(tc model.ToolCall) map[string]any {
+	var args any
 	if err := json.Unmarshal(tc.Function.Arguments, &args); err != nil {
 		// Preserve raw string if not valid JSON.
-		args = map[string]interface{}{"raw": string(tc.Function.Arguments)}
+		args = map[string]any{"raw": string(tc.Function.Arguments)}
 	}
-	return map[string]interface{}{
-		keyFunctionCall: map[string]interface{}{
+	return map[string]any{
+		keyFunctionCall: map[string]any{
 			"name": tc.Function.Name,
 			"args": args,
 			"id":   tc.ID,
@@ -825,12 +839,165 @@ func buildFunctionCallPart(tc model.ToolCall) map[string]interface{} {
 // respObj can be either a structured object (decoded JSON) or the original
 // raw string when JSON decoding fails. The name field is currently unknown
 // from the upstream payload, so we intentionally leave it blank.
-func buildFunctionResponsePart(respObj interface{}, id string, name string) map[string]interface{} {
-	return map[string]interface{}{
-		keyFunctionResponse: map[string]interface{}{
+func buildFunctionResponsePart(respObj any, id string, name string) map[string]any {
+	return map[string]any{
+		keyFunctionResponse: map[string]any{
 			"name":     name,
 			"response": respObj,
 			"id":       id,
 		},
 	}
+}
+
+// ---------------------------------------------------------------------
+// Graph Agent Event Processing ----------------------------------------
+// ---------------------------------------------------------------------
+
+// buildGraphEventParts handles Graph events that store information in StateDelta.
+// Returns parts array for Graph tool execution events, or empty array if not a Graph tool event.
+func buildGraphEventParts(e *event.Event) []map[string]any {
+	var parts []map[string]any
+
+	// Handle graph.execution events (final results)
+	if e.Object == graph.ObjectTypeGraphExecution {
+		if e.Response != nil && len(e.Response.Choices) > 0 && e.Response.Choices[0].Message.Content != "" {
+			parts = append(parts, map[string]any{
+				"text": e.Response.Choices[0].Message.Content,
+			})
+		}
+		return parts
+	}
+
+	// Only process Graph node execution events for tool calls
+	if e.Object == graph.ObjectTypeGraphNodeExecution {
+		// Continue to tool execution processing below
+	} else if strings.HasPrefix(e.Object, "graph.") {
+		// Other graph events, return empty parts unless they have special handling
+		return parts
+	} else {
+		// Not a graph event
+		return parts
+	}
+
+	// Check for tool execution metadata in StateDelta
+	if e.StateDelta == nil {
+		return parts
+	}
+
+	toolMetadataBytes, exists := e.StateDelta[graph.MetadataKeyTool]
+	if !exists {
+		return parts
+	}
+
+	// Parse tool execution metadata
+	var toolMetadata struct {
+		ToolName string `json:"toolName"`
+		ToolID   string `json:"toolId"`
+		Phase    string `json:"phase"`
+		Input    string `json:"input,omitempty"`
+		Output   string `json:"output,omitempty"`
+	}
+
+	if err := json.Unmarshal(toolMetadataBytes, &toolMetadata); err != nil {
+		return parts
+	}
+
+	// Convert Graph tool events to ADK format
+	// Strategy: Only show tool responses (complete/error), skip tool calls (start)
+	// This avoids duplication with LLM Agent tool calls while still showing results
+	switch toolMetadata.Phase {
+	case "start":
+		// Skip tool execution start to avoid duplication with LLM chat.completion tool calls
+
+	case "complete":
+		// Tool execution complete -> functionResponse
+		parts = append(parts, buildGraphFunctionResponsePart(toolMetadata))
+
+	case "error":
+		// Tool execution error -> functionResponse with error
+		parts = append(parts, buildGraphFunctionErrorPart(toolMetadata))
+	}
+	return parts
+}
+
+// buildGraphFunctionResponsePart builds a functionResponse part from Graph tool metadata.
+func buildGraphFunctionResponsePart(toolMetadata struct {
+	ToolName string `json:"toolName"`
+	ToolID   string `json:"toolId"`
+	Phase    string `json:"phase"`
+	Input    string `json:"input,omitempty"`
+	Output   string `json:"output,omitempty"`
+}) map[string]any {
+	var respObj any
+	if toolMetadata.Output != "" {
+		if err := json.Unmarshal([]byte(toolMetadata.Output), &respObj); err != nil {
+			// Preserve raw string if not valid JSON
+			respObj = toolMetadata.Output
+		}
+	} else {
+		respObj = "No output"
+	}
+
+	return map[string]any{
+		keyFunctionResponse: map[string]any{
+			"name":     toolMetadata.ToolName,
+			"response": respObj,
+			"id":       toolMetadata.ToolID,
+		},
+	}
+}
+
+// buildGraphFunctionErrorPart builds a functionResponse part for Graph tool errors.
+func buildGraphFunctionErrorPart(toolMetadata struct {
+	ToolName string `json:"toolName"`
+	ToolID   string `json:"toolId"`
+	Phase    string `json:"phase"`
+	Input    string `json:"input,omitempty"`
+	Output   string `json:"output,omitempty"`
+}) map[string]any {
+	errorMsg := "Tool execution failed"
+	if toolMetadata.Output != "" {
+		errorMsg = toolMetadata.Output
+	}
+
+	return map[string]any{
+		keyFunctionResponse: map[string]any{
+			"name":     toolMetadata.ToolName,
+			"response": map[string]any{"error": errorMsg},
+			"id":       toolMetadata.ToolID,
+		},
+	}
+}
+
+// isGraphEvent checks if the event is a Graph-related event.
+func isGraphEvent(e *event.Event) bool {
+	return strings.HasPrefix(e.Object, "graph.")
+}
+
+// filterGraphEventParts handles filtering for Graph events only.
+func filterGraphEventParts(e *event.Event, parts []map[string]any, isStreaming bool) []map[string]any {
+	// For Graph tool execution events, always include them (they have functionCall/functionResponse)
+	if isGraphToolEvent(e) && len(parts) > 0 {
+		return parts
+	}
+
+	// For Graph execution completion events (final result), include in non-streaming mode
+	if !isStreaming && e.Object == graph.ObjectTypeGraphExecution && len(parts) > 0 {
+		return parts
+	}
+
+	// Skip all other Graph events to avoid duplicates
+	return nil
+}
+
+// isGraphToolEvent checks if the event is a Graph tool execution event.
+func isGraphToolEvent(e *event.Event) bool {
+	if e.Object != graph.ObjectTypeGraphNodeExecution {
+		return false
+	}
+	if e.StateDelta == nil {
+		return false
+	}
+	_, exists := e.StateDelta[graph.MetadataKeyTool]
+	return exists
 }

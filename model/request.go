@@ -10,6 +10,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -384,6 +385,36 @@ type FunctionDefinitionParam struct {
 	Arguments []byte `json:"arguments,omitempty"`
 }
 
+// MarshalJSON customizes JSON marshaling for FunctionDefinitionParam.
+// This prevents double-encoding of the Arguments field by treating it as a string.
+func (f FunctionDefinitionParam) MarshalJSON() ([]byte, error) {
+	type Alias FunctionDefinitionParam
+	return json.Marshal(&struct {
+		Arguments string `json:"arguments,omitempty"`
+		*Alias
+	}{
+		Arguments: string(f.Arguments),
+		Alias:     (*Alias)(&f),
+	})
+}
+
+// UnmarshalJSON customizes JSON unmarshaling for FunctionDefinitionParam.
+// This ensures the Arguments field is properly decoded from JSON string to []byte.
+func (f *FunctionDefinitionParam) UnmarshalJSON(data []byte) error {
+	type Alias FunctionDefinitionParam
+	aux := &struct {
+		Arguments string `json:"arguments,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(f),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	f.Arguments = []byte(aux.Arguments)
+	return nil
+}
+
 // toMIME maps file extensions to their corresponding MIME types.
 var toMIME = map[string]string{
 	".txt":  "text/plain",
@@ -431,7 +462,7 @@ type JSONSchemaConfig struct {
 	// Name is the name of the structured output format.
 	Name string `json:"name,omitempty"`
 	// Schema is the JSON schema definition.
-	Schema map[string]interface{} `json:"schema"`
+	Schema map[string]any `json:"schema"`
 	// Strict controls whether to enforce strict schema adherence.
 	Strict bool `json:"strict,omitempty"`
 	// Description provides context for the model about the structured output.

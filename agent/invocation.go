@@ -46,8 +46,6 @@ type TransferInfo struct {
 	TargetAgentName string
 	// Message is the message to send to the target agent.
 	Message string
-	// EndInvocation indicates whether to end the current invocation after transfer.
-	EndInvocation bool
 }
 
 // Invocation represents the context for a flow execution.
@@ -223,10 +221,14 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		opt(newInv)
 	}
 
-	if inv.Branch != "" && newInv.AgentName != "" {
+	if newInv.Branch != "" {
+		// seted by WithInvocationBranch
+	} else if inv.Branch != "" && newInv.AgentName != "" {
 		newInv.Branch = inv.Branch + BranchDelimiter + newInv.AgentName
 	} else if newInv.AgentName != "" {
 		newInv.Branch = newInv.AgentName
+	} else {
+		newInv.Branch = inv.Branch
 	}
 
 	if newInv.eventFilterKey == "" && newInv.AgentName != "" {
@@ -262,15 +264,30 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 // EmitEvent inject invocation information into event and emit it to channel.
 func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	e *event.Event) error {
+	if ch == nil || e == nil {
+		return nil
+	}
 	InjectIntoEvent(inv, e)
+	var agentName, requestID string
+	if inv != nil {
+		agentName = inv.AgentName
+		requestID = inv.RunOptions.RequestID
+	}
+	log.Debugf("[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: %d, current length: %d, branch: %s, agent name:%s",
+		requestID, cap(ch), len(ch), e.Branch, agentName)
 	return event.EmitEvent(ctx, ch, e)
+}
+
+// GetAppendEventNoticeKey get append event notice key.
+func GetAppendEventNoticeKey(eventID string) string {
+	return AppendEventNoticeKeyPrefix + eventID
 }
 
 // AddNoticeChannelAndWait add notice channel and wait it complete
 func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
 	ch := inv.AddNoticeChannel(ctx, key)
 	if ch == nil {
-		return fmt.Errorf("notice channel create failed. for %s.", key)
+		return fmt.Errorf("notice channel create failed for %s", key)
 	}
 	if timeout == WaitNoticeWithoutTimeout {
 		// no timeout, maybe wait for ever
@@ -292,20 +309,12 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	return nil
 }
 
-func panic_recover() {
-	nilPointerErr := "runtime error: invalid memory address or nil pointer dereference"
-	if r := recover(); r != nil {
-		if err, ok := r.(error); ok && err.Error() == nilPointerErr {
-			log.Error("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method to create Invocation.")
-			return
-		}
-		panic(r)
-	}
-}
-
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
-	defer panic_recover()
+	if inv == nil || inv.noticeMu == nil {
+		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		return nil
+	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
@@ -324,13 +333,16 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
-	defer panic_recover()
+	if inv == nil || inv.noticeMu == nil {
+		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		return fmt.Errorf("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation key:%s", key)
+	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
 	ch, ok := inv.noticeChanMap[key]
 	if !ok {
-		return fmt.Errorf("notice channel not found for %s.", key)
+		return fmt.Errorf("notice channel not found for %s", key)
 	}
 
 	close(ch)
@@ -343,6 +355,10 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 // The 'Invocation' instance created via the NewInvocation method ​​should be disposed​​
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
+	if inv == nil || inv.noticeMu == nil {
+		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		return
+	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 

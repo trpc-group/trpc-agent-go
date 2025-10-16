@@ -27,6 +27,7 @@ import (
 	geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
 
 	// Source.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -188,7 +189,7 @@ func (chat *knowledgeChat) addSourceMenu(scanner *bufio.Scanner) {
 	metadataInput := strings.TrimSpace(scanner.Text())
 
 	// Parse metadata
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	if metadataInput != "" {
 		parts := strings.Fields(metadataInput)
 		if len(parts)%2 != 0 {
@@ -338,9 +339,9 @@ func (chat *knowledgeChat) showCurrentSources() {
 
 	// Organize document info by source name
 	sourceStats := make(map[string]struct {
-		uriCounts map[string]int         // URI -> document count
-		metadata  map[string]interface{} // source-level metadata
-		uris      []string               // unique URIs for this source
+		uriCounts map[string]int // URI -> document count
+		metadata  map[string]any // source-level metadata
+		uris      []string       // unique URIs for this source
 	})
 
 	for _, docInfo := range docInfos {
@@ -352,11 +353,11 @@ func (chat *knowledgeChat) showCurrentSources() {
 			if _, exists := sourceStats[sourceName]; !exists {
 				sourceStats[sourceName] = struct {
 					uriCounts map[string]int
-					metadata  map[string]interface{}
+					metadata  map[string]any
 					uris      []string
 				}{
 					uriCounts: make(map[string]int),
-					metadata:  make(map[string]interface{}),
+					metadata:  make(map[string]any),
 					uris:      []string{},
 				}
 			}
@@ -439,21 +440,31 @@ func (chat *knowledgeChat) setupKnowledgeBase() error {
 	fileSource1 := file.New(
 		[]string{"../exampledata/file/llm.md"},
 		file.WithName("LLMDocSource"),
-		file.WithMetadata(map[string]interface{}{"tag": "llm"}),
+		file.WithMetadata(map[string]any{"tag": "llm"}),
 	)
 	fileSource2 := file.New(
 		[]string{"../exampledata/file/golang.md"},
 		file.WithName("GolangDocSource"),
-		file.WithMetadata(map[string]interface{}{"tag": "golang"}),
+		file.WithMetadata(map[string]any{"tag": "golang"}),
+	)
+	urlSource1 := url.New(
+		[]string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"},
+		url.WithName("Byte-pair"),
+		url.WithMetadataValue("tag", "wiki"),
+	)
+	urlSource2 := url.New(
+		[]string{"https://trpc-go.com/Byte-pair_encoding"}, // contentFetchURL is configured, this url will be used to generate meta data and docID
+		url.WithName("trpc-go"),
+		url.WithContentFetchingURL([]string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"}), // real url that fetching data
+		url.WithMetadataValue("tag", "wiki"),
 	)
 
-	chat.source = []source.Source{fileSource1, fileSource2}
-
+	chat.source = []source.Source{fileSource1, fileSource2, urlSource1, urlSource2}
 	// Create knowledge base
 	chat.knowledge = knowledge.New(
 		knowledge.WithEmbedder(embedder),
 		knowledge.WithVectorStore(vs),
-		knowledge.WithSources([]source.Source{fileSource1, fileSource2}),
+		knowledge.WithSources([]source.Source{fileSource1, fileSource2, urlSource1, urlSource2}),
 		knowledge.WithEnableSourceSync(*sourceSync),
 	)
 

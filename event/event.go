@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"trpc.group/trpc-go/trpc-a2a-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -230,6 +230,9 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	if e == nil || ch == nil {
 		return nil
 	}
+
+	log.Debugf("[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
+		e.RequestID, cap(ch), len(ch), e.Branch)
 
 	if timeout == EmitWithoutTimeout {
 		select {

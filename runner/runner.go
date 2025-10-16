@@ -20,13 +20,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Author types for events.
@@ -114,27 +112,19 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
-
+	// Resolve or create the session for this user and conversation.
 	sessionKey := session.Key{
 		AppName:   r.appName,
 		UserID:    userID,
 		SessionID: sessionID,
 	}
 
-	// Get session or create if it doesn't exist.
-	sess, err := r.sessionService.GetSession(ctx, sessionKey)
+	sess, err := r.getOrCreateSession(ctx, sessionKey)
 	if err != nil {
 		return nil, err
 	}
-	if sess == nil {
-		if sess, err = r.sessionService.CreateSession(
-			ctx, sessionKey, session.StateMap{},
-		); err != nil {
-			return nil, err
-		}
-	}
 
-	// Create invocation.
+	// Build run options with defaults and construct the invocation.
 	ro := agent.RunOptions{RequestID: uuid.NewString()}
 	for _, opt := range runOpts {
 		opt(&ro)
@@ -152,7 +142,7 @@ func (r *runner) Run(
 	// If caller provided a history via RunOptions and the session is empty,
 	// persist that history into the session exactly once, so subsequent turns
 	// and tool calls build on the same canonical transcript.
-	if len(ro.Messages) > 0 && (invocation.Session == nil || len(invocation.Session.Events) == 0) {
+	if len(ro.Messages) > 0 && sess.GetEventCount() == 0 {
 		for _, msg := range ro.Messages {
 			author := r.agent.Info().Name
 			if msg.Role == model.RoleUser {
@@ -182,7 +172,6 @@ func (r *runner) Run(
 		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return nil, err
 		}
-
 	}
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
@@ -190,8 +179,6 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameInvocation)
-	defer span.End()
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
@@ -199,13 +186,37 @@ func (r *runner) Run(
 		return nil, err
 	}
 
-	// Create a new channel for processed events.
-	processedEventCh := make(chan *event.Event)
+	// Process the agent events and emit them to the output channel.
+	return r.processAgentEvents(ctx, sess, invocation, agentEventCh), nil
+}
+
+// getOrCreateSession returns an existing session or creates a new one.
+func (r *runner) getOrCreateSession(
+	ctx context.Context, key session.Key,
+) (*session.Session, error) {
+	sess, err := r.sessionService.GetSession(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if sess != nil {
+		return sess, nil
+	}
+	return r.sessionService.CreateSession(ctx, key, session.StateMap{})
+}
+
+// processAgentEvents consumes agent events, persists to session, and emits.
+func (r *runner) processAgentEvents(
+	ctx context.Context,
+	sess *session.Session,
+	invocation *agent.Invocation,
+	agentEventCh <-chan *event.Event,
+) chan *event.Event {
+	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	// Start a goroutine to process and append events to session.
 	go func() {
 		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("panic in runner event loop: %v\n%s", r, string(debug.Stack()))
+			if rr := recover(); rr != nil {
+				log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 			}
 			close(processedEventCh)
 			invocation.CleanupNotice(ctx)
@@ -217,17 +228,28 @@ func (r *runner) Run(
 				continue
 			}
 			// Append event to session if it's complete (not partial).
-			if len(agentEvent.StateDelta) > 0 || (agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent()) {
+			if len(agentEvent.StateDelta) > 0 ||
+				(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent()) {
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
+
+				// Trigger summarization immediately after appending a qualifying event.
+				// Use EnqueueSummaryJob for true asynchronous processing.
+				// Prefer filter-specific summarization to avoid scanning all filters.
+				if err := r.sessionService.EnqueueSummaryJob(
+					context.Background(), sess, agentEvent.FilterKey, false,
+				); err != nil {
+					log.Debugf("Auto summarize after append skipped or failed: %v.", err)
+				}
+				// Do not enqueue full-session summary here. The worker will cascade
+				// a full-session summarization after a branch update when appropriate.
 			}
 
 			if agentEvent.RequiresCompletion {
-				completionID := agent.AppendEventNoticeKeyPrefix + agentEvent.ID
+				completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
 				invocation.NotifyCompletion(ctx, completionID)
 			}
-
 			if err := event.EmitEvent(ctx, processedEventCh, agentEvent); err != nil {
 				return
 			}
@@ -254,12 +276,10 @@ func (r *runner) Run(
 		// Send the runner completion event to output channel.
 		agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)
 	}()
-
-	itelemetry.TraceRunner(span, r.appName, invocation, message)
-
-	return processedEventCh, nil
+	return processedEventCh
 }
 
+// shouldAppendUserMessage checks if the incoming user message should be appended to the session.
 func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 	if len(seed) == 0 {
 		return true

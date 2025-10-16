@@ -108,8 +108,7 @@ func transformSpan(span *tracepb.Span) {
 		transformCallLLM(span)
 	case itelemetry.OperationExecuteTool:
 		transformExecuteTool(span)
-	case itelemetry.OperationRunRunner:
-		transformRunRunner(span)
+	default:
 	}
 }
 
@@ -139,7 +138,7 @@ func transformCallLLM(span *tracepb.Span) {
 				})
 
 				// Extract generation_config if exists
-				var req map[string]interface{}
+				var req map[string]any
 				if err := json.Unmarshal([]byte(request), &req); err == nil {
 					if genConfig, exists := req["generation_config"]; exists {
 						if jsonConfig, err := json.Marshal(genConfig); err == nil {
@@ -203,7 +202,7 @@ func transformExecuteTool(span *tracepb.Span) {
 	// Process existing attributes
 	for _, attr := range span.Attributes {
 		switch attr.Key {
-		case itelemetry.KeyToolCallArgs:
+		case itelemetry.KeyGenAIToolCallArguments:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationInput,
@@ -220,64 +219,7 @@ func transformExecuteTool(span *tracepb.Span) {
 				})
 			}
 			// Skip this attribute (delete it)
-		case itelemetry.KeyToolResponse:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationOutput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationOutput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
-		default:
-			// Keep other attributes
-			newAttributes = append(newAttributes, attr)
-		}
-	}
-
-	// Replace span attributes
-	span.Attributes = newAttributes
-}
-
-// transformRunRunner transforms runner spans for Langfuse
-func transformRunRunner(span *tracepb.Span) {
-	var newAttributes []*commonpb.KeyValue
-
-	newAttributes = append(newAttributes, &commonpb.KeyValue{
-		Key: observationType,
-		Value: &commonpb.AnyValue{
-			Value: &commonpb.AnyValue_StringValue{StringValue: "agent"},
-		},
-	})
-	// Process existing attributes
-	for _, attr := range span.Attributes {
-		switch attr.Key {
-		case itelemetry.KeyRunnerInput:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationInput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationInput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
-		case itelemetry.KeyRunnerOutput:
+		case itelemetry.KeyGenAIToolCallResult:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
@@ -340,7 +282,7 @@ func (e *exporter) Start(ctx context.Context) error {
 }
 
 // MarshalLog is the marshaling function used by the logging system to represent this exporter.
-func (e *exporter) MarshalLog() interface{} {
+func (e *exporter) MarshalLog() any {
 	return struct {
 		Type   string
 		Client otlptrace.Client

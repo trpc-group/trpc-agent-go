@@ -195,13 +195,13 @@ func (c *searchChat) processStreamingResponse(eventChan <-chan *event.Event) err
 		}
 
 		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			toolCallsDetected = true
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
 			fmt.Printf("🔍 DuckDuckGo search initiated:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
 					fmt.Printf("     Query: %s\n", string(toolCall.Function.Arguments))
@@ -227,8 +227,8 @@ func (c *searchChat) processStreamingResponse(eventChan <-chan *event.Event) err
 		}
 
 		// Process streaming content.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
@@ -245,27 +245,13 @@ func (c *searchChat) processStreamingResponse(eventChan <-chan *event.Event) err
 
 		// Check if this is the final event.
 		// Don't break on tool response events (Done=true but not final assistant response).
-		if event.Done && !c.isToolEvent(event) {
+		if event.IsFinalResponse() {
 			fmt.Printf("\n")
 			break
 		}
 	}
 
 	return nil
-}
-
-// isToolEvent checks if an event is a tool response (not a final response).
-func (c *searchChat) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-	return false
 }
 
 // intPtr returns a pointer to the given int.

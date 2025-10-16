@@ -555,6 +555,72 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 	})
 
+	t.Run("chat stream complete callback", func(t *testing.T) {
+		var capturedRequest *openaigo.ChatCompletionNewParams
+		var capturedAccumulator *openaigo.ChatCompletionAccumulator
+		var capturedStreamErr error
+		var capturedCtx context.Context
+		callbackCalled := make(chan struct{})
+
+		streamCompleteCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, acc *openaigo.ChatCompletionAccumulator, streamErr error) {
+			capturedCtx = ctx
+			capturedRequest = req
+			capturedAccumulator = acc
+			capturedStreamErr = streamErr
+			close(callbackCalled)
+		}
+
+		m := New("gpt-3.5-turbo",
+			WithAPIKey(apiKey),
+			WithChatStreamCompleteCallback(streamCompleteCallback),
+		)
+
+		ctx := context.Background()
+		request := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("hello"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: true, // Enable streaming for this test
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, request)
+		if err != nil {
+			t.Fatalf("failed to generate content: %v", err)
+		}
+
+		// Consume all responses
+		for response := range responseChan {
+			if response.Done {
+				break
+			}
+		}
+
+		// Wait for callback with timeout
+		select {
+		case <-callbackCalled:
+			// Success - callback was called
+		case <-time.After(30 * time.Second):
+			// Timeout - this is expected when API key is invalid
+			t.Skip("skipping stream complete callback test due to timeout - API might be slow or failing")
+		}
+
+		// Verify the callback was called with correct parameters (if it was called)
+		if capturedCtx != nil {
+			if capturedRequest == nil {
+				t.Fatal("expected request to be captured in callback")
+			}
+			if capturedRequest.Model != "gpt-3.5-turbo" {
+				t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
+			}
+			// Either accumulator should be non-nil (success) or streamErr should be non-nil (failure)
+			if capturedAccumulator == nil && capturedStreamErr == nil {
+				t.Fatal("expected either accumulator or streamErr to be set")
+			}
+		}
+	})
+
 	t.Run("multiple callbacks", func(t *testing.T) {
 		requestCalled := false
 		responseCalled := false
@@ -2176,5 +2242,88 @@ func TestDeleteFile_Success(t *testing.T) {
 	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
 	if err := m.DeleteFile(context.Background(), "file_z"); err != nil {
 		t.Fatalf("DeleteFile failed: %v", err)
+	}
+}
+
+// TestModel_GenerateContent_Streaming_FinalReasoningAggregated
+// ensures streaming reasoning deltas are aggregated into final response.Message.ReasoningContent.
+func TestModel_GenerateContent_Streaming_FinalReasoningAggregated(t *testing.T) {
+	// Mock SSE server that emits reasoning_content only in deltas (accumulator won't retain it)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		chunks := []string{
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"First"},"finish_reason":null}]}`,
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200001,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"reasoning_content":" second"},"finish_reason":null}]}`,
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200002,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"reasoning_content":" final"},"finish_reason":"stop"}]}`,
+		}
+		for _, c := range chunks {
+			fmt.Fprintf(w, "%s\n\n", c)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	m := New("deepseek-reasoner", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("Test streaming reasoning aggregation"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx := context.Background()
+	ch, err := m.GenerateContent(ctx, req)
+	if err != nil {
+		t.Fatalf("GenerateContent error: %v", err)
+	}
+
+	var final *model.Response
+	var partials int
+	for rsp := range ch {
+		if rsp.Error != nil {
+			t.Fatalf("response error: %v", rsp.Error)
+		}
+		if rsp.IsPartial {
+			partials++
+			continue
+		}
+		// capture final
+		if !rsp.IsPartial {
+			final = rsp
+		}
+	}
+
+	if partials == 0 {
+		t.Fatal("expected at least one partial delta with reasoning_content")
+	}
+	if final == nil {
+		t.Fatal("expected a final response")
+	}
+	if len(final.Choices) == 0 {
+		t.Fatal("expected choices in final response")
+	}
+	got := final.Choices[0].Message.ReasoningContent
+	want := "First second final"
+	if got != want {
+		t.Fatalf("final ReasoningContent mismatch: got %q want %q", got, want)
+	}
+	if !final.Done {
+		t.Error("expected final.Done == true")
+	}
+	if final.IsPartial {
+		t.Error("expected final.IsPartial == false")
 	}
 }

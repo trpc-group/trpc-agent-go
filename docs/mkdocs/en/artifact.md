@@ -10,6 +10,7 @@ This system enables agents to store, retrieve, and manage various types of conte
 ## What are Artifacts?
 
 Artifacts are data containers that hold:
+
 - Binary content (images, documents, files, etc.)
 - Metadata (MIME type, name, URL)
 - Version information
@@ -18,6 +19,7 @@ Artifacts are data containers that hold:
 ## What is the Artifact Service?
 
 The Artifact Service is the backend system that:
+
 - Stores and retrieves artifacts
 - Manages versioning
 - Handles namespace organization (session vs user scope)

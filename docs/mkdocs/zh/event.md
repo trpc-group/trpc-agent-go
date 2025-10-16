@@ -17,8 +17,14 @@ type Event struct {
     // Response 是 Event 的基础响应结构，承载 LLM 的响应
     *model.Response
 
-    // InvocationID 是本次调用的唯一标识
-    InvocationID string `json:"invocationId"`
+    // RequestID 记录关联本次请求的ID，可由runner.Run通过agent.WithRequestID("request-ID")传递.
+	RequestID string `json:"requestID,omitempty"`
+
+	// InvocationID 当前执行上下文的ID.
+	InvocationID string `json:"invocationId"`
+
+	// ParentInvocationID 上一级执行上下文ID.
+	ParentInvocationID string `json:"parentInvocationId,omitempty"`
 
     // Author 是事件的发起者
     Author string `json:"author"`
@@ -324,7 +330,7 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
         }
 
         // 检查是否为最终事件
-        if event.Done && !c.isToolEvent(event) {
+        if event.IsFinalResponse() {
             fmt.Printf("\n")
             break
         }
@@ -368,13 +374,13 @@ func (c *multiTurnChat) handleToolCalls(
     toolCallsDetected *bool,
     assistantStarted *bool,
 ) bool {
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+    if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
         *toolCallsDetected = true
         if *assistantStarted {
             fmt.Printf("\n")
         }
         fmt.Printf("🔧 Tool calls initiated:\n")
-        for _, toolCall := range event.Choices[0].Message.ToolCalls {
+        for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
             fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
             if len(toolCall.Function.Arguments) > 0 {
                 fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -408,8 +414,8 @@ func (c *multiTurnChat) handleContent(
     assistantStarted *bool,
     fullContent *string,
 ) {
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
         content := c.extractContent(choice)
 
         if content != "" {
@@ -444,30 +450,23 @@ func (c *multiTurnChat) displayContent(
     fmt.Print(content)
     *fullContent += content
 }
-
-// isToolEvent 检查事件是否为工具响应
-func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
-    if event.Response == nil {
-        return false
-    }
-    
-    // 检查是否有工具调用
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-        return true
-    }
-    
-    // 检查是否有工具 ID
-    if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-        return true
-    }
-
-    // 检查是否为工具角色
-    for _, choice := range event.Response.Choices {
-        if choice.Message.Role == model.RoleTool {
-            return true
-        }
-    }
-
-    return false
-}
 ```
+
+### RequestID,ParentInvocationID,InvocationID三者的关系与使用场景
+- `RequestID string`：用于标识区分同一session会话下的多次用户交互请求，可由runner.Run通过agent.WithRequestID绑定业务层自己的请求ID。
+- `ParentInvocationID string`：用于关联父级执行上下文，可通过此ID关联到父级执行中的相关事件
+- `InvocationID string`：当前执行上下文ID。可通过此ID关联同一个执行上下文中的相关事件
+
+可通过以上三个ID，将事件流按照层级结构组织，如下：
+- requestID-1:
+  - invocationID-1:
+    - invocationID-2
+    - invocationID-3
+  - invocationID-1
+  - invocationID-4
+  - invocationID-5
+- requestID-2:
+  - invocationID-6
+    - invocationID-7
+  - invocationID-8
+  - invocationID-9

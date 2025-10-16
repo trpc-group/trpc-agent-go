@@ -209,13 +209,13 @@ func (c *reactPlanningChat) processStreamingResponse(eventChan <-chan *event.Eve
 		}
 
 		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			toolCallsDetected = true
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
 			fmt.Printf("🔧 Executing tools:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s", toolCall.Function.Name)
 				if len(toolCall.Function.Arguments) > 0 {
 					fmt.Printf(" (%s)", string(toolCall.Function.Arguments))
@@ -226,12 +226,12 @@ func (c *reactPlanningChat) processStreamingResponse(eventChan <-chan *event.Eve
 		}
 
 		// Process text content with React planning awareness.
-		if len(event.Choices) > 0 {
+		if len(event.Response.Choices) > 0 {
 			var content string
-			if event.Choices[0].Message.Content != "" {
-				content = event.Choices[0].Message.Content
-			} else if event.Choices[0].Delta.Content != "" {
-				content = event.Choices[0].Delta.Content
+			if event.Response.Choices[0].Message.Content != "" {
+				content = event.Response.Choices[0].Message.Content
+			} else if event.Response.Choices[0].Delta.Content != "" {
+				content = event.Response.Choices[0].Delta.Content
 			}
 
 			if content != "" {
@@ -248,29 +248,13 @@ func (c *reactPlanningChat) processStreamingResponse(eventChan <-chan *event.Eve
 		}
 
 		// Handle tool responses.
-		if c.isToolEvent(event) {
+		if event.IsToolResultResponse() {
 			fmt.Printf("   ✅ Tool completed\n")
 		}
 	}
 
 	fmt.Println() // End the response
 	return nil
-}
-
-// isToolEvent checks if an event is a tool response.
-func (c *reactPlanningChat) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-
-	// Check for tool response indicators.
-	for _, choice := range event.Response.Choices {
-		if choice.Message.Role == model.RoleTool {
-			return true
-		}
-	}
-
-	return false
 }
 
 // Tool implementations for demonstration.

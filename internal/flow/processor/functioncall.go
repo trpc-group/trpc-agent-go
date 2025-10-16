@@ -12,7 +12,6 @@ package processor
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -39,9 +38,6 @@ const (
 	ErrorStreamableToolExecution = "Error: streamable tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
-
-	// Timeout for event completion signaling.
-	eventCompletionTimeout = 5 * time.Second
 )
 
 // summarizationSkipper is implemented by tools that can indicate whether
@@ -112,17 +108,6 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	// after this tool response so the flow does not perform an extra LLM call.
 	if functioncallResponseEvent.Actions != nil && functioncallResponseEvent.Actions.SkipSummarization {
 		invocation.EndInvocation = true
-		return
-	}
-
-	// Wait for completion if required.
-	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
-		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			model.ErrorTypeFlowError,
-			err.Error(),
-		))
 		return
 	}
 }
@@ -406,7 +391,6 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallEvents)
 	}
-	mergedEvent.RequiresCompletion = true
 	if len(toolCallEvents) > 1 {
 		_, span := trace.Tracer.Start(
 			ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool),
@@ -492,20 +476,6 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			ToolID:  toolCall.ID,
 		},
 	}, modifiedArgs, nil
-}
-
-// waitForCompletion waits for event completion if required.
-func (p *FunctionCallResponseProcessor) waitForCompletion(ctx context.Context, invocation *agent.Invocation, lastEvent *event.Event) error {
-	if !lastEvent.RequiresCompletion {
-		return nil
-	}
-
-	completionID := agent.AppendEventNoticeKeyPrefix + lastEvent.ID
-	err := invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
-	if errors.Is(err, context.Canceled) {
-		return err
-	}
-	return nil
 }
 
 // createErrorChoice creates an error choice for tool execution failures.
@@ -708,29 +678,6 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 	return contents, nil
 }
 
-// normalizeInnerEvent ensures invocation ID and branch are set for inner events.
-func (f *FunctionCallResponseProcessor) normalizeInnerEvent(ev *event.Event, inv *agent.Invocation) {
-	if ev.InvocationID == "" {
-		ev.InvocationID = inv.InvocationID
-	}
-	if ev.Branch == "" {
-		ev.Branch = inv.Branch
-	}
-}
-
-// shouldForwardInnerEvent suppresses forwarding of the inner agent's final full
-// content to avoid duplicate large blocks in the parent transcript. We still
-// aggregate its text from deltas for the final tool.response content.
-func (f *FunctionCallResponseProcessor) shouldForwardInnerEvent(ev *event.Event) bool {
-	if ev.Response != nil && len(ev.Response.Choices) > 0 {
-		ch := ev.Response.Choices[0]
-		if ch.Delta.Content == "" && ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" && !ev.Response.IsPartial {
-			return false
-		}
-	}
-	return true
-}
-
 // appendInnerEventContent extracts textual content from an inner event and appends it.
 func (f *FunctionCallResponseProcessor) appendInnerEventContent(ev *event.Event, contents *[]any) {
 	if ev.Response != nil && len(ev.Response.Choices) > 0 {
@@ -926,9 +873,8 @@ func convertToolArguments(originalName string, originalArgs []byte, targetName s
 	}
 
 	req := &transfer.Request{
-		AgentName:     originalName,
-		Message:       message,
-		EndInvocation: false,
+		AgentName: originalName,
+		Message:   message,
 	}
 
 	b, err := json.Marshal(req)
@@ -950,18 +896,10 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 ) error {
 	// Case 1: Raw sub-agent event passthrough.
 	if ev, ok := chunk.Content.(*event.Event); ok {
-		f.normalizeInnerEvent(ev, invocation)
-		// Default forwarding rule suppresses the final full assistant message to avoid
-		// duplication, but if we have not emitted any prior deltas/content from the
-		// inner stream, forward this final message so callers still see the sub-agent output.
-		shouldForward := f.shouldForwardInnerEvent(ev)
-		if !shouldForward && contents != nil && len(*contents) == 0 {
-			shouldForward = true
-		}
-		if shouldForward {
-			if err := agent.EmitEvent(ctx, invocation, eventChan, ev); err != nil {
-				return err
-			}
+		// With random FilterKey isolation, we can safely forward all inner events
+		// since they are properly isolated and won't pollute the parent session.
+		if err := event.EmitEvent(ctx, eventChan, ev); err != nil {
+			return err
 		}
 		f.appendInnerEventContent(ev, contents)
 		return nil

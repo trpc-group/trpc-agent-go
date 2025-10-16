@@ -50,6 +50,7 @@ import (
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -73,7 +74,7 @@ func main() {
     ctx := context.Background()
     userMessage := model.NewUserMessage("Hello!")
 
-    eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
+    eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
     if err != nil {
         panic(err)
     }
@@ -85,8 +86,8 @@ func main() {
             continue
         }
 
-        if len(event.Choices) > 0 {
-            fmt.Print(event.Choices[0].Delta.Content)
+        if len(event.Response.Choices) > 0 {
+            fmt.Print(event.Response.Choices[0].Delta.Content)
         }
     }
 }
@@ -174,7 +175,7 @@ msgs := []model.Message{
     model.NewUserMessage("What’s the next step?"),
 }
 
-ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
+ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
 Example: `examples/runwithmessages` (uses `RunWithMessages`; runner auto-seeds and
@@ -323,14 +324,14 @@ for event := range eventChan {
     }
 
     // Streaming content.
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
         fmt.Print(choice.Delta.Content)
     }
 
     // Tool invocation.
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-        for _, toolCall := range event.Choices[0].Message.ToolCalls {
+    if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+        for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
             fmt.Printf("Call tool: %s\n", toolCall.Function.Name)
         }
     }
@@ -360,9 +361,9 @@ func processEvents(eventChan <-chan *event.Event) error {
         }
 
         // Handle tool calls.
-        if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+        if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
             fmt.Println("🔧 Tool Call:")
-            for _, toolCall := range event.Choices[0].Message.ToolCalls {
+            for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
                 fmt.Printf("  • %s (ID: %s)\n",
                     toolCall.Function.Name, toolCall.ID)
                 fmt.Printf("    Params: %s\n",
@@ -381,8 +382,8 @@ func processEvents(eventChan <-chan *event.Event) error {
         }
 
         // Handle streaming content.
-        if len(event.Choices) > 0 {
-            content := event.Choices[0].Delta.Content
+        if len(event.Response.Choices) > 0 {
+            content := event.Response.Choices[0].Delta.Content
             if content != "" {
                 fmt.Print(content)
                 fullResponse.WriteString(content)
@@ -423,7 +424,7 @@ invocation := agent.NewInvocation(
 
 ```go
 // Handle errors from Runner.Run.
-eventChan, err := r.Run(ctx, userID, sessionID, message)
+eventChan, err := r.Run(ctx, userID, sessionID, message, agent.WithRequestID("request-ID"))
 if err != nil {
     log.Printf("Runner execution failed: %v", err)
     return err

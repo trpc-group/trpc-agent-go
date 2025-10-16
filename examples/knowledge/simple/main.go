@@ -13,14 +13,17 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
@@ -30,6 +33,7 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 
 	// Embedder.
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
@@ -224,6 +228,38 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 		}
 		return vs, nil
 	case "tcvector":
+		docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+			doc := &document.Document{
+				ID: tcDoc.Id,
+			}
+			if field, ok := tcDoc.Fields["name"]; ok {
+				doc.Name = field.String()
+			}
+			if field, ok := tcDoc.Fields["content"]; ok {
+				doc.Content = field.String()
+			}
+			if field, ok := tcDoc.Fields["created_at"]; ok {
+				u := min(field.Uint64(), uint64(math.MaxInt64))
+				//nolint:gosec // u is not overflowed and the conversion is safe.
+				doc.CreatedAt = time.Unix(int64(u), 0)
+			}
+			if field, ok := tcDoc.Fields["updated_at"]; ok {
+				u := min(field.Uint64(), uint64(math.MaxInt64))
+				//nolint:gosec // u is not overflowed and the conversion is safe.
+				doc.UpdatedAt = time.Unix(int64(u), 0)
+			}
+			if field, ok := tcDoc.Fields["metadata"]; ok {
+				if metadata, ok := field.Val.(map[string]any); ok {
+					doc.Metadata = metadata
+				}
+			}
+
+			embedding := make([]float64, len(tcDoc.Vector))
+			for i, v := range tcDoc.Vector {
+				embedding[i] = float64(v)
+			}
+			return doc, embedding, nil
+		}
 		vs, err := vectortcvector.New(
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
@@ -231,6 +267,8 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithCollection("tcvector-agent-go"),
 			// tcvector need build index for the filter fields
 			vectortcvector.WithFilterIndexFields(source.GetAllMetadataKeys(c.sources)),
+			// 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+			vectortcvector.WithDocBuilder(docBuilder),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
@@ -243,6 +281,31 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			hosts[i] = strings.TrimSpace(host)
 		}
 
+		docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+			var source struct {
+				ID        string         `json:"id"`
+				Name      string         `json:"name"`
+				Content   string         `json:"content"`
+				CreatedAt time.Time      `json:"created_at"`
+				UpdatedAt time.Time      `json:"updated_at"`
+				Embedding []float64      `json:"embedding"`
+				Metadata  map[string]any `json:"metadata"`
+			}
+			if err := json.Unmarshal(hitSource, &source); err != nil {
+				return nil, nil, err
+			}
+			// Create document.
+			doc := &document.Document{
+				ID:        source.ID,
+				Name:      source.Name,
+				Content:   source.Content,
+				CreatedAt: source.CreatedAt,
+				UpdatedAt: source.UpdatedAt,
+				Metadata:  source.Metadata,
+			}
+			return doc, source.Embedding, nil
+		}
+
 		vs, err := vectorelasticsearch.New(
 			vectorelasticsearch.WithAddresses(hosts),
 			vectorelasticsearch.WithUsername(elasticsearchUsername),
@@ -251,6 +314,8 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectorelasticsearch.WithIndexName(elasticsearchIndexName),
 			vectorelasticsearch.WithMaxRetries(3),
 			vectorelasticsearch.WithVersion(*esVersion),
+			// 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+			vectorelasticsearch.WithDocBuilder(docBuilder),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create elasticsearch store: %w", err)
@@ -484,12 +549,12 @@ func (c *knowledgeChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		}
 
 		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
 			fmt.Printf("🔧 Tool calls initiated:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
 					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -515,8 +580,8 @@ func (c *knowledgeChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		}
 
 		// Process streaming content.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
@@ -530,7 +595,7 @@ func (c *knowledgeChat) processStreamingResponse(eventChan <-chan *event.Event) 
 
 		// Check if this is the final event.
 		// Don't break on tool response events (Done=true but not final assistant response).
-		if event.Done && !c.isToolEvent(event) {
+		if event.IsFinalResponse() {
 			fmt.Printf("\n")
 			break
 		}
@@ -558,12 +623,12 @@ func (c *knowledgeChat) processNonStreamingResponse(eventChan <-chan *event.Even
 		}
 
 		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			if !hasToolCalls {
 				fmt.Printf("\n🔧 Tool calls initiated:\n")
 				hasToolCalls = true
 			}
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
 					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -589,10 +654,10 @@ func (c *knowledgeChat) processNonStreamingResponse(eventChan <-chan *event.Even
 		}
 
 		// Process final content from non-streaming response.
-		if event.Done && !c.isToolEvent(event) {
+		if event.IsFinalResponse() {
 			// In non-streaming mode, the final content should be in the Message.Content
-			if len(event.Choices) > 0 {
-				choice := event.Choices[0]
+			if len(event.Response.Choices) > 0 {
+				choice := event.Response.Choices[0]
 				if choice.Message.Content != "" {
 					fullContent = choice.Message.Content
 					fmt.Print(fullContent)
@@ -604,28 +669,6 @@ func (c *knowledgeChat) processNonStreamingResponse(eventChan <-chan *event.Even
 	}
 
 	return nil
-}
-
-// isToolEvent checks if an event is a tool response (not a final response).
-func (c *knowledgeChat) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-
-	// Check if this is a tool response by examining choices.
-	for _, choice := range event.Response.Choices {
-		if choice.Message.Role == model.RoleTool {
-			return true
-		}
-	}
-
-	return false
 }
 
 // startNewSession creates a new chat session.

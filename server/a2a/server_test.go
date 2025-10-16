@@ -158,6 +158,19 @@ func (m *mockSessionService) Close() error {
 	return nil
 }
 
+// Implement new session.Service summary methods.
+func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	return nil
+}
+
+func (m *mockSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	return nil
+}
+
+func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	return "", false
+}
+
 type mockA2AToAgentConverter struct{}
 
 func (m *mockA2AToAgentConverter) ConvertToAgentMessage(ctx context.Context, message protocol.Message) (*model.Message, error) {
@@ -212,7 +225,7 @@ type mockTaskHandler struct {
 	cleanTaskFunc         func(taskID *string) error
 	getMessageHistoryFunc func() []protocol.Message
 	getContextIDFunc      func() string
-	getMetadataFunc       func() (map[string]interface{}, error)
+	getMetadataFunc       func() (map[string]any, error)
 }
 
 func (m *mockTaskHandler) BuildTask(specificTaskID *string, contextID *string) (string, error) {
@@ -271,11 +284,11 @@ func (m *mockTaskHandler) GetContextID() string {
 	return "test-context-id"
 }
 
-func (m *mockTaskHandler) GetMetadata() (map[string]interface{}, error) {
+func (m *mockTaskHandler) GetMetadata() (map[string]any, error) {
 	if m.getMetadataFunc != nil {
 		return m.getMetadataFunc()
 	}
-	return map[string]interface{}{}, nil
+	return map[string]any{}, nil
 }
 
 // mockTaskSubscriber implements TaskSubscriber interface for testing

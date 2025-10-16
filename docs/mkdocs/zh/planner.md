@@ -21,8 +21,7 @@ type Planner interface {
         llmRequest *model.Request,
     ) string
 
-    // ProcessPlanningResponse 处理 LLM 的规划响应，返回处理后的响应
-    // 如果不需要处理则返回 nil
+    // ProcessPlanningResponse 处理 LLM 的规划响应
     ProcessPlanningResponse(
         ctx context.Context,
         invocation *agent.Invocation,
@@ -34,7 +33,75 @@ type Planner interface {
 Planner 的工作流程：
 
 1. 请求处理阶段：Planner 在 LLM 请求发送前通过 `BuildPlanningInstruction` 添加规划指令或配置
-2. 响应处理阶段：Planner 处理 LLM 响应，通过 `ProcessPlanningResponse` 组织内容结构
+2. 响应处理阶段：Planner 处理 LLM 响应，通过 `ProcessPlanningResponse` 处理内容
+
+## 不使用 Planner 的思维启用与抓取
+
+即使不使用 Planner，也可以启用并读取模型的内部推理（thinking）。通过 GenerationConfig 请求思维输出，并在响应中从 ReasoningContent 抓取推理内容。
+
+### 通过 GenerationConfig 启用
+```go
+genConfig := model.GenerationConfig{
+    Stream:      true,  // 流式或非流式
+    MaxTokens:   2000,
+    Temperature: 0.7,
+}
+
+// 启用思维（若提供方/模型支持）
+thinkingEnabled := true
+thinkingTokens := 2048
+genConfig.ThinkingEnabled = &thinkingEnabled
+genConfig.ThinkingTokens  = &thinkingTokens
+```
+
+在构建 Agent 时挂载该 genConfig。
+
+### 从响应中抓取推理
+- 流式：读取 `choice.Delta.ReasoningContent`（推理）与 `choice.Delta.Content`（可见文本）
+- 非流式：读取 `choice.Message.ReasoningContent` 与 `choice.Message.Content`
+
+```go
+eventChan, err := runner.Run(ctx, userID, sessionID, model.NewUserMessage("问题"))
+if err != nil { /* 处理错误 */ }
+
+for e := range eventChan {
+    if e.Error != nil {
+        fmt.Printf("错误: %s\n", e.Error.Message)
+        continue
+    }
+    if len(e.Response.Choices) == 0 {
+        continue
+    }
+    ch := e.Response.Choices[0]
+
+    // 若存在推理，以淡色打印
+    if genConfig.Stream {
+        if rc := ch.Delta.ReasoningContent; rc != "" {
+            fmt.Printf("\x1b[2m%s\x1b[0m", rc)
+        }
+        if content := ch.Delta.Content; content != "" {
+            fmt.Print(content)
+        }
+    } else {
+        if rc := ch.Message.ReasoningContent; rc != "" {
+            fmt.Printf("\x1b[2m%s\x1b[0m\n", rc)
+        }
+        if content := ch.Message.Content; content != "" {
+            fmt.Println(content)
+        }
+    }
+
+    if e.IsFinalResponse() {
+        fmt.Println()
+        break
+    }
+}
+```
+
+注意：
+- 推理内容的可见性取决于模型与服务提供方；启用相关参数仅代表期望，并不保证一定返回。
+- 在流式模式下，可在推理与正常内容之间适当插入空行，以提升阅读体验。
+- 会话历史可能会将分段推理汇总到最终消息，便于后续查看与回溯。
 
 ## BuiltinPlanner
 

@@ -60,16 +60,16 @@ func NewJSONChunking(opts ...JSONOption) *JSONChunking {
 // Chunk splits a JSON document into smaller chunks while preserving structure.
 func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
 	// Parse JSON content.
-	var jsonData interface{}
+	var jsonData any
 	if err := json.Unmarshal([]byte(doc.Content), &jsonData); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
 	// Convert to map for processing.
-	dataMap, ok := jsonData.(map[string]interface{})
+	dataMap, ok := jsonData.(map[string]any)
 	if !ok {
 		// If not a map, wrap it in a map for processing.
-		dataMap = map[string]interface{}{"content": jsonData}
+		dataMap = map[string]any{"content": jsonData}
 	}
 
 	// Split JSON into chunks.
@@ -92,17 +92,17 @@ func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, erro
 }
 
 // splitJSON recursively splits JSON data into chunks while preserving hierarchy.
-func (j *JSONChunking) splitJSON(data map[string]interface{}, convertLists bool) []map[string]interface{} {
+func (j *JSONChunking) splitJSON(data map[string]any, convertLists bool) []map[string]any {
 	// Preprocess data if convertLists is true.
 	if convertLists {
 		processed := j.listToDictPreprocessing(data)
-		if processedMap, ok := processed.(map[string]interface{}); ok {
+		if processedMap, ok := processed.(map[string]any); ok {
 			data = processedMap
 		}
 	}
 
 	// Split the JSON data.
-	chunks := j.jsonSplit(data, nil, []map[string]interface{}{{}})
+	chunks := j.jsonSplit(data, nil, []map[string]any{{}})
 
 	// Remove empty chunks.
 	if len(chunks) > 0 && len(chunks[len(chunks)-1]) == 0 {
@@ -114,10 +114,10 @@ func (j *JSONChunking) splitJSON(data map[string]interface{}, convertLists bool)
 
 // jsonSplit recursively splits JSON into maximum size dictionaries while preserving structure.
 func (j *JSONChunking) jsonSplit(
-	data map[string]interface{},
+	data map[string]any,
 	currentPath []string,
-	chunks []map[string]interface{},
-) []map[string]interface{} {
+	chunks []map[string]any,
+) []map[string]any {
 	if currentPath == nil {
 		currentPath = []string{}
 	}
@@ -125,7 +125,7 @@ func (j *JSONChunking) jsonSplit(
 	for key, value := range data {
 		newPath := append(currentPath, key)
 		chunkSize := j.jsonSize(chunks[len(chunks)-1])
-		size := j.jsonSize(map[string]interface{}{key: value})
+		size := j.jsonSize(map[string]any{key: value})
 		remaining := j.maxChunkSize - chunkSize
 
 		if size < remaining {
@@ -134,13 +134,13 @@ func (j *JSONChunking) jsonSplit(
 		} else {
 			if chunkSize >= j.minChunkSize {
 				// Chunk is big enough, start a new chunk.
-				chunks = append(chunks, map[string]interface{}{})
+				chunks = append(chunks, map[string]any{})
 			}
 
 			// Recursively process nested structures.
-			if nestedMap, ok := value.(map[string]interface{}); ok {
+			if nestedMap, ok := value.(map[string]any); ok {
 				chunks = j.jsonSplit(nestedMap, newPath, chunks)
-			} else if nestedSlice, ok := value.([]interface{}); ok {
+			} else if nestedSlice, ok := value.([]any); ok {
 				// Handle arrays by converting to map if needed.
 				chunks = j.jsonSplit(j.arrayToMap(nestedSlice), newPath, chunks)
 			} else {
@@ -154,7 +154,7 @@ func (j *JSONChunking) jsonSplit(
 }
 
 // jsonSize calculates the size of the serialized JSON object.
-func (j *JSONChunking) jsonSize(data map[string]interface{}) int {
+func (j *JSONChunking) jsonSize(data map[string]any) int {
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
 		return 0
@@ -163,20 +163,20 @@ func (j *JSONChunking) jsonSize(data map[string]interface{}) int {
 }
 
 // setNestedDict sets a value in a nested dictionary based on the given path.
-func (j *JSONChunking) setNestedDict(d map[string]interface{}, path []string, value interface{}) {
+func (j *JSONChunking) setNestedDict(d map[string]any, path []string, value any) {
 	current := d
 	for _, key := range path[:len(path)-1] {
 		if nested, exists := current[key]; exists {
-			if nestedMap, ok := nested.(map[string]interface{}); ok {
+			if nestedMap, ok := nested.(map[string]any); ok {
 				current = nestedMap
 			} else {
 				// Create new map if key exists but is not a map.
-				newMap := map[string]interface{}{}
+				newMap := map[string]any{}
 				current[key] = newMap
 				current = newMap
 			}
 		} else {
-			newMap := map[string]interface{}{}
+			newMap := map[string]any{}
 			current[key] = newMap
 			current = newMap
 		}
@@ -185,18 +185,18 @@ func (j *JSONChunking) setNestedDict(d map[string]interface{}, path []string, va
 }
 
 // listToDictPreprocessing converts lists to dictionaries for better chunking.
-func (j *JSONChunking) listToDictPreprocessing(data interface{}) interface{} {
+func (j *JSONChunking) listToDictPreprocessing(data any) any {
 	switch v := data.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		// Process each key-value pair in the dictionary.
-		result := make(map[string]interface{})
+		result := make(map[string]any)
 		for k, val := range v {
 			result[k] = j.listToDictPreprocessing(val)
 		}
 		return result
-	case []interface{}:
+	case []any:
 		// Convert the list to a dictionary with index-based keys.
-		result := make(map[string]interface{})
+		result := make(map[string]any)
 		for i, item := range v {
 			result[strconv.Itoa(i)] = j.listToDictPreprocessing(item)
 		}
@@ -208,8 +208,8 @@ func (j *JSONChunking) listToDictPreprocessing(data interface{}) interface{} {
 }
 
 // arrayToMap converts an array to a map with index-based keys.
-func (j *JSONChunking) arrayToMap(arr []interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
+func (j *JSONChunking) arrayToMap(arr []any) map[string]any {
+	result := make(map[string]any)
 	for i, item := range arr {
 		result[strconv.Itoa(i)] = item
 	}
@@ -217,7 +217,7 @@ func (j *JSONChunking) arrayToMap(arr []interface{}) map[string]interface{} {
 }
 
 // SplitJSON splits JSON data into chunks and returns them as strings.
-func (j *JSONChunking) SplitJSON(data map[string]interface{}, convertLists bool) ([]string, error) {
+func (j *JSONChunking) SplitJSON(data map[string]any, convertLists bool) ([]string, error) {
 	chunks := j.splitJSON(data, convertLists)
 
 	var result []string
@@ -234,7 +234,7 @@ func (j *JSONChunking) SplitJSON(data map[string]interface{}, convertLists bool)
 
 // SplitJSONString splits a JSON string into chunks.
 func (j *JSONChunking) SplitJSONString(jsonStr string, convertLists bool) ([]string, error) {
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON string: %w", err)
 	}

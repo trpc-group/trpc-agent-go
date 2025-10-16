@@ -32,7 +32,7 @@ const (
 type Source struct {
 	filePaths    []string
 	name         string
-	metadata     map[string]interface{}
+	metadata     map[string]any
 	readers      map[string]reader.Reader
 	chunkSize    int
 	chunkOverlap int
@@ -43,7 +43,7 @@ func New(filePaths []string, opts ...Option) *Source {
 	s := &Source{
 		filePaths:    filePaths,
 		name:         defaultFileSourceName,
-		metadata:     make(map[string]interface{}),
+		metadata:     make(map[string]any),
 		chunkSize:    0,
 		chunkOverlap: 0,
 	}
@@ -110,7 +110,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		return nil, fmt.Errorf("failed to read file with reader: %w", err)
 	}
 	// Create metadata for this file.
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
@@ -136,7 +136,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	chunkIndex := 0
 	for _, doc := range documents {
 		if doc.Metadata == nil {
-			doc.Metadata = make(map[string]interface{})
+			doc.Metadata = make(map[string]any)
 		}
 		for k, v := range metadata {
 			doc.Metadata[k] = v
@@ -152,16 +152,16 @@ func (s *Source) SetReader(fileType string, reader reader.Reader) {
 }
 
 // SetMetadata sets metadata for this source.
-func (s *Source) SetMetadata(key string, value interface{}) {
+func (s *Source) SetMetadata(key string, value any) {
 	if s.metadata == nil {
-		s.metadata = make(map[string]interface{})
+		s.metadata = make(map[string]any)
 	}
 	s.metadata[key] = value
 }
 
 // GetMetadata returns the metadata associated with this source.
-func (s *Source) GetMetadata() map[string]interface{} {
-	result := make(map[string]interface{})
+func (s *Source) GetMetadata() map[string]any {
+	result := make(map[string]any)
 	for k, v := range s.metadata {
 		result[k] = v
 	}

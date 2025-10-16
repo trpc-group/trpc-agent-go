@@ -405,7 +405,7 @@ func (w *checkpointWorkflow) getMessages(state graph.State) []string {
 	if v, ok := state[stateKeyMessages].([]string); ok {
 		return v
 	}
-	// Try to handle []interface{} case from JSON deserialization.
+	// Try to handle []any case from JSON deserialization.
 	if v, ok := state[stateKeyMessages].([]any); ok {
 		messages := make([]string, len(v))
 		for i, item := range v {

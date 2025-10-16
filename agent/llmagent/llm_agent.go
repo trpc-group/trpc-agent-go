@@ -16,6 +16,10 @@ import (
 	"reflect"
 	"sync"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -24,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -248,15 +253,31 @@ func WithAddContextPrefix(addPrefix bool) Option {
 	}
 }
 
+// WithAddSessionSummary controls whether to prepend the current-branch summary
+// as a system message in the request context when available.
+func WithAddSessionSummary(addSummary bool) Option {
+	return func(opts *Options) {
+		opts.AddSessionSummary = addSummary
+	}
+}
+
+// WithMaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+// When 0 (default), no limit is applied.
+func WithMaxHistoryRuns(maxRuns int) Option {
+	return func(opts *Options) {
+		opts.MaxHistoryRuns = maxRuns
+	}
+}
+
 // WithKnowledgeFilter sets the knowledge filter for the knowledge base.
-func WithKnowledgeFilter(filter map[string]interface{}) Option {
+func WithKnowledgeFilter(filter map[string]any) Option {
 	return func(opts *Options) {
 		opts.KnowledgeFilter = filter
 	}
 }
 
 // WithKnowledgeAgenticFilterInfo sets the knowledge agentic filter info for the knowledge base.
-func WithKnowledgeAgenticFilterInfo(filter map[string][]interface{}) Option {
+func WithKnowledgeAgenticFilterInfo(filter map[string][]any) Option {
 	return func(opts *Options) {
 		opts.AgenticFilterInfo = filter
 	}
@@ -266,6 +287,13 @@ func WithKnowledgeAgenticFilterInfo(filter map[string][]interface{}) Option {
 func WithEnableKnowledgeAgenticFilter(agenticFilter bool) Option {
 	return func(opts *Options) {
 		opts.EnableKnowledgeAgenticFilter = agenticFilter
+	}
+}
+
+// WithEndInvocationAfterTransfer sets whether end invocation after transfer.
+func WithEndInvocationAfterTransfer(end bool) Option {
+	return func(opts *Options) {
+		opts.EndInvocationAfterTransfer = end
 	}
 }
 
@@ -305,12 +333,12 @@ type Options struct {
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
 	// KnowledgeFilter is the filter for the knowledge search tool.
-	KnowledgeFilter map[string]interface{}
+	KnowledgeFilter map[string]any
 	// EnableKnowledgeAgenticFilter enables agentic filter mode for knowledge search.
 	// When true, allows the LLM to dynamically decide whether to pass filter parameters.
 	EnableKnowledgeAgenticFilter bool
 	// KnowledgeAgenticFilter is the knowledge agentic filter for the knowledge search tool.
-	AgenticFilterInfo map[string][]interface{}
+	AgenticFilterInfo map[string][]any
 	// AddNameToInstruction adds the agent name to the instruction if true.
 	AddNameToInstruction bool
 	// EnableParallelTools enables parallel tool execution if true.
@@ -335,10 +363,22 @@ type Options struct {
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
 
+	// AddSessionSummary controls whether to prepend the current branch summary
+	// as a system message when available (default: false).
+	AddSessionSummary bool
+
+	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+	// When 0 (default), no limit is applied.
+	MaxHistoryRuns int
+
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
 	StructuredOutputType reflect.Type
+	// EndInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
+	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
+	// when the transfer is complete. Defaults to true.
+	EndInvocationAfterTransfer bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -365,7 +405,10 @@ type LLMAgent struct {
 
 // New creates a new LLMAgent with the given options.
 func New(name string, opts ...Option) *LLMAgent {
-	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
+	var options Options = Options{
+		ChannelBufferSize:          defaultChannelBufferSize,
+		EndInvocationAfterTransfer: true,
+	}
 
 	// Apply function options.
 	for _, opt := range opts {
@@ -397,7 +440,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
-		transferResponseProcessor := processor.NewTransferResponseProcessor()
+		transferResponseProcessor := processor.NewTransferResponseProcessor(options.EndInvocationAfterTransfer)
 		responseProcessors = append(responseProcessors, transferResponseProcessor)
 	}
 
@@ -509,6 +552,8 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	// 6. Content processor - handles messages from invocation.
 	contentProcessor := processor.NewContentRequestProcessor(
 		processor.WithAddContextPrefix(options.AddContextPrefix),
+		processor.WithAddSessionSummary(options.AddSessionSummary),
+		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
@@ -520,10 +565,12 @@ func registerTools(options *Options) []tool.Tool {
 	allTools := make([]tool.Tool, 0, len(options.Tools))
 	allTools = append(allTools, options.Tools...)
 
-	// Add tools from each toolset.
+	// Add tools from each toolset with automatic namespacing.
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
-		setTools := toolSet.Tools(ctx)
+		// Create named toolset wrapper to avoid name conflicts
+		namedToolSet := itool.NewNamedToolSet(toolSet)
+		setTools := namedToolSet.Tools(ctx)
 		for _, t := range setTools {
 			allTools = append(allTools, t)
 		}
@@ -548,16 +595,24 @@ func registerTools(options *Options) []tool.Tool {
 
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
-func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s [%s]", itelemetry.SpanNamePrefixAgentRun, a.name))
-	defer span.End()
+func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, a.genConfig)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+			span.End()
+		}
+	}()
 
 	// Setup invocation
 	a.setupInvocation(invocation)
 
 	// Run before agent callbacks if they exist.
 	if a.agentCallbacks != nil {
-		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		var customResponse *model.Response
+		customResponse, err = a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
@@ -577,13 +632,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	if err != nil {
 		return nil, err
 	}
-
-	// If we have after agent callbacks, we need to wrap the event channel.
-	if a.agentCallbacks != nil {
-		return a.wrapEventChannel(ctx, invocation, flowEventChan), nil
-	}
-
-	return flowEventChan, nil
+	return a.wrapEventChannel(ctx, invocation, flowEventChan, span), nil
 }
 
 // setupInvocation sets up the invocation
@@ -607,14 +656,25 @@ func (a *LLMAgent) wrapEventChannel(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	originalChan <-chan *event.Event,
+	span sdktrace.Span,
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, 256) // Use default buffer size
 
 	go func() {
-		defer close(wrappedChan)
+		var fullRespEvent *event.Event
+		defer func() {
+			if fullRespEvent != nil {
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent)
+			}
+			span.End()
+			close(wrappedChan)
+		}()
 
 		// Forward all events from the original channel
 		for evt := range originalChan {
+			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+				fullRespEvent = evt
+			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
@@ -635,6 +695,9 @@ func (a *LLMAgent) wrapEventChannel(
 			} else if customResponse != nil {
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			}
+			if evt != nil {
+				fullRespEvent = evt
 			}
 
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)

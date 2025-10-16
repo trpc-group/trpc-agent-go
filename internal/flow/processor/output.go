@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -47,7 +46,8 @@ func (p *OutputResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if invocation == nil {
+	if invocation == nil ||
+		(invocation.StructuredOutputType == nil && p.outputKey == "" && p.outputSchema == nil) {
 		return
 	}
 	// Only process complete (non-partial) responses.
@@ -56,12 +56,15 @@ func (p *OutputResponseProcessor) ProcessResponse(
 	if !ok {
 		return
 	}
+	jsonObject, ok := extractFirstJSONObject(content)
 
-	// 1) Emit typed structured output payload if configured.
-	p.emitTypedStructuredOutput(ctx, invocation, content, ch)
+	if ok {
+		// 1) Emit typed structured output payload if configured.
+		p.emitTypedStructuredOutput(ctx, invocation, jsonObject, ch)
+	}
 
 	// 2) Handle output_key functionality (raw persistence, optional schema validation).
-	p.handleOutputKey(ctx, invocation, content, ch)
+	p.handleOutputKey(ctx, invocation, content, jsonObject, ch)
 }
 
 // extractFinalContent returns the final text content if response is complete.
@@ -77,20 +80,9 @@ func (p *OutputResponseProcessor) extractFinalContent(rsp *model.Response) (stri
 
 // emitTypedStructuredOutput emits a typed payload event when StructuredOutputType is set.
 func (p *OutputResponseProcessor) emitTypedStructuredOutput(
-	ctx context.Context, invocation *agent.Invocation, content string, ch chan<- *event.Event,
+	ctx context.Context, invocation *agent.Invocation, jsonObject string, ch chan<- *event.Event,
 ) {
-	if invocation == nil || invocation.StructuredOutputType == nil {
-		return
-	}
-	contentTrim := strings.TrimSpace(content)
-	candidate := contentTrim
-	if !strings.HasPrefix(contentTrim, "{") {
-		if obj, ok := extractFirstJSONObject(contentTrim); ok {
-			candidate = obj
-			log.Debugf("Extracted JSON object candidate for structured output.")
-		}
-	}
-	if !strings.HasPrefix(candidate, "{") {
+	if invocation.StructuredOutputType == nil {
 		return
 	}
 	var instance any
@@ -99,7 +91,7 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 	} else {
 		instance = reflect.New(invocation.StructuredOutputType).Interface()
 	}
-	if err := json.Unmarshal([]byte(candidate), instance); err != nil {
+	if err := json.Unmarshal([]byte(jsonObject), instance); err != nil {
 		log.Errorf("Structured output unmarshal failed: %v", err)
 		return
 	}
@@ -109,32 +101,30 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 		event.WithObject(model.ObjectTypeStateUpdate),
 		event.WithStructuredOutputPayload(instance),
 	)
-	typedEvt.RequiresCompletion = true
 
 	log.Debugf("Emitted typed structured output payload event.")
 	agent.EmitEvent(ctx, invocation, ch, typedEvt)
 }
 
 // handleOutputKey validates and emits state delta for output_key/output_schema cases.
-func (p *OutputResponseProcessor) handleOutputKey(
-	ctx context.Context, invocation *agent.Invocation, content string, ch chan<- *event.Event,
-) {
+func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocation *agent.Invocation, content string,
+	jsonObject string, ch chan<- *event.Event) {
 	if p.outputKey == "" && p.outputSchema == nil {
 		return
 	}
 	result := content
 	// If output_schema is present, ensure content is JSON.
 	if p.outputSchema != nil {
-		if strings.TrimSpace(content) == "" {
+		if jsonObject == "" {
 			return
 		}
 		var parsedJSON any
-		if err := json.Unmarshal([]byte(content), &parsedJSON); err != nil {
+		if err := json.Unmarshal([]byte(jsonObject), &parsedJSON); err != nil {
 			log.Warnf("Failed to parse output as JSON for output_schema validation: %v", err)
 			return
 		}
 		// Store the original JSON string.
-		result = content
+		result = jsonObject
 	}
 	// Create a state delta event instead of directly modifying session.
 	stateDelta := map[string][]byte{
@@ -152,51 +142,78 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		return
 	}
 
-	completionID := agent.AppendEventNoticeKeyPrefix + stateEvent.ID
+	// Ensure that the state delta is synchronized to the local session before executing the next agent.
+	// maybe the next agent need to use delta state before executing the flow.
+	completionID := agent.GetAppendEventNoticeKey(stateEvent.ID)
 	if err := invocation.AddNoticeChannelAndWait(ctx, completionID,
 		agent.WaitNoticeWithoutTimeout); err != nil {
-		log.Warnf("Failed to add notice channel for completion ID %s: %v", stateEvent.ID, err)
+		log.Warnf("Failed to add notice channel for completion ID %s: %v", completionID, err)
 	}
 }
 
 // extractFirstJSONObject tries to extract the first balanced top-level JSON object from s.
 func extractFirstJSONObject(s string) (string, bool) {
-	start := strings.IndexByte(s, '{')
+	start := findJSONStart(s)
 	if start == -1 {
 		return "", false
 	}
-	depth := 0
+	return scanBalancedJSON(s, start)
+}
+
+// findJSONStart finds the index of the first opening bracket in s.
+func findJSONStart(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '{' || s[i] == '[' {
+			return i
+		}
+	}
+	return -1
+}
+
+// scanBalancedJSON scans a string for a balanced JSON object.
+func scanBalancedJSON(s string, start int) (string, bool) {
+	stack := make([]byte, 0, 8)
 	inString := false
 	escaped := false
+
 	for i := start; i < len(s); i++ {
 		c := s[i]
+
+		if escaped {
+			escaped = false
+			continue
+		}
+
 		if inString {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if c == '\\' {
+			switch c {
+			case '\\':
 				escaped = true
-				continue
-			}
-			if c == '"' {
+			case '"':
 				inString = false
+			default:
 			}
 			continue
 		}
-		if c == '"' {
+
+		switch c {
+		case '"':
 			inString = true
-			continue
-		}
-		if c == '{' {
-			depth++
-			continue
-		}
-		if c == '}' {
-			depth--
-			if depth == 0 {
-				return s[start : i+1], true
+		case '{', '[':
+			stack = append(stack, c)
+		case '}', ']':
+			if len(stack) == 0 {
+				return "", false
 			}
+			top := stack[len(stack)-1]
+			if (top == '{' && c == '}') || (top == '[' && c == ']') {
+				stack = stack[:len(stack)-1]
+				if len(stack) == 0 {
+					return s[start : i+1], true
+				}
+			} else {
+				return "", false
+			}
+		default:
 		}
 	}
 	return "", false

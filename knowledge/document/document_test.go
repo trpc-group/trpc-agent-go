@@ -62,7 +62,7 @@ func TestDocument_Clone(t *testing.T) {
 		Content:   "This is test content.",
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"key1": "value1",
 			"key2": 42,
 		},

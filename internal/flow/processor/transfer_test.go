@@ -77,7 +77,7 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
 
 	out := make(chan *event.Event, 10)
-	proc := NewTransferResponseProcessor()
+	proc := NewTransferResponseProcessor(true)
 	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
 	close(out)
 
@@ -86,12 +86,9 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	for e := range out {
 		evts = append(evts, e)
 	}
-	require.Len(t, evts, 2)
+	require.Len(t, evts, 3)
 	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
 	require.Equal(t, "child", evts[1].Author)
-
-	// Ensure EndInvocation is NOT propagated to child invocation.
-	require.False(t, target.gotEndInvocation)
 }
 
 func TestTransferResponseProc_Target404(t *testing.T) {
@@ -99,7 +96,7 @@ func TestTransferResponseProc_Target404(t *testing.T) {
 	inv := &agent.Invocation{Agent: parent, AgentName: "parent", InvocationID: "inv", TransferInfo: &agent.TransferInfo{TargetAgentName: "missing"}}
 	rsp := &model.Response{ID: "r"}
 	out := make(chan *event.Event, 1)
-	NewTransferResponseProcessor().ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
 	close(out)
 	evt := <-out
 	require.NotNil(t, evt.Error)

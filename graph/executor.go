@@ -61,6 +61,9 @@ type Executor struct {
 	checkpointSaveTimeout time.Duration
 	checkpointSaver       CheckpointSaver
 	checkpointManager     *CheckpointManager
+	// defaultRetry holds executor-level retry policies used when a node
+	// does not have explicit retryPolicies configured.
+	defaultRetry []RetryPolicy
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -81,6 +84,8 @@ type ExecutorOptions struct {
 	CheckpointSaveTimeout time.Duration
 	// CheckpointSaver is the checkpoint saver for persisting graph state.
 	CheckpointSaver CheckpointSaver
+	// DefaultRetryPolicies are applied to nodes without explicit policies.
+	DefaultRetryPolicies []RetryPolicy
 }
 
 // WithChannelBufferSize sets the buffer size for event channels.
@@ -125,6 +130,17 @@ func WithCheckpointSaveTimeout(timeout time.Duration) ExecutorOption {
 	}
 }
 
+// WithDefaultRetryPolicy sets executor-level retry policies used by nodes
+// that do not define their own. Policies are evaluated in order.
+func WithDefaultRetryPolicy(policies ...RetryPolicy) ExecutorOption {
+	return func(opts *ExecutorOptions) {
+		if len(policies) == 0 {
+			return
+		}
+		opts.DefaultRetryPolicies = append(opts.DefaultRetryPolicies, policies...)
+	}
+}
+
 // NewExecutor creates a new graph executor.
 func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	if err := graph.validate(); err != nil {
@@ -143,10 +159,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	nodeTimeout := options.NodeTimeout
 	if nodeTimeout == 0 && options.StepTimeout > 0 {
 		// Only derive from step timeout if step timeout is explicitly set.
-		nodeTimeout = options.StepTimeout / 2
-		if nodeTimeout < time.Second {
-			nodeTimeout = time.Second
-		}
+		nodeTimeout = max(options.StepTimeout/2, time.Second)
 	}
 
 	executor := &Executor{
@@ -157,6 +170,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 		nodeTimeout:           nodeTimeout,
 		checkpointSaveTimeout: options.CheckpointSaveTimeout,
 		checkpointSaver:       options.CheckpointSaver,
+		defaultRetry:          append([]RetryPolicy(nil), options.DefaultRetryPolicies...),
 	}
 	// Create checkpoint manager if saver is provided.
 	if options.CheckpointSaver != nil {
@@ -182,168 +196,6 @@ type Step struct {
 	Tasks           []*Task         // Tasks is the tasks of the step.
 	State           State           // State is the state of the step.
 	UpdatedChannels map[string]bool // UpdatedChannels is the updated channels of the step.
-}
-
-// deepCopyAny performs a deep copy of common JSON-serializable Go types to
-// avoid sharing mutable references (maps/slices) across goroutines.
-func deepCopyAny(value any) any {
-	// Use a visited set keyed by underlying pointer to break reference cycles
-	// across pointers, maps, and slices. The values are the already-created
-	// copies to return when revisiting the same reference.
-	visited := make(map[uintptr]any)
-
-	var copyRecursive func(reflect.Value) any
-	copyRecursive = func(rv reflect.Value) any {
-		if !rv.IsValid() {
-			return nil
-		}
-
-		switch rv.Kind() {
-		case reflect.Interface:
-			if rv.IsNil() {
-				return nil
-			}
-			return copyRecursive(rv.Elem())
-
-		case reflect.Ptr:
-			if rv.IsNil() {
-				return nil
-			}
-			ptr := rv.Pointer()
-			if cached, ok := visited[ptr]; ok {
-				return cached
-			}
-			elem := rv.Elem()
-			newPtr := reflect.New(elem.Type())
-			// Cache before descending to handle self-referential structures.
-			visited[ptr] = newPtr.Interface()
-			newPtr.Elem().Set(reflect.ValueOf(copyRecursive(elem)))
-			return newPtr.Interface()
-
-		case reflect.Map:
-			if rv.IsNil() {
-				return reflect.Zero(rv.Type()).Interface()
-			}
-			ptr := rv.Pointer()
-			if cached, ok := visited[ptr]; ok {
-				return cached
-			}
-			newMap := reflect.MakeMapWithSize(rv.Type(), rv.Len())
-			visited[ptr] = newMap.Interface()
-			for _, mk := range rv.MapKeys() {
-				mv := rv.MapIndex(mk)
-				newMap.SetMapIndex(mk, reflect.ValueOf(copyRecursive(mv)))
-			}
-			return newMap.Interface()
-
-		case reflect.Slice:
-			if rv.IsNil() {
-				return reflect.Zero(rv.Type()).Interface()
-			}
-			ptr := rv.Pointer()
-			if cached, ok := visited[ptr]; ok {
-				return cached
-			}
-			l := rv.Len()
-			newSlice := reflect.MakeSlice(rv.Type(), l, l)
-			visited[ptr] = newSlice.Interface()
-			for i := 0; i < l; i++ {
-				newSlice.Index(i).Set(reflect.ValueOf(copyRecursive(rv.Index(i))))
-			}
-			return newSlice.Interface()
-
-		case reflect.Array:
-			l := rv.Len()
-			newArr := reflect.New(rv.Type()).Elem()
-			for i := 0; i < l; i++ {
-				newArr.Index(i).Set(reflect.ValueOf(copyRecursive(rv.Index(i))))
-			}
-			return newArr.Interface()
-
-		case reflect.Struct:
-			// Create a new struct and copy only exported fields to avoid
-			// touching unexported sync primitives, etc.
-			newStruct := reflect.New(rv.Type()).Elem()
-			for i := 0; i < rv.NumField(); i++ {
-				ft := rv.Type().Field(i)
-				if ft.PkgPath != "" { // unexported
-					continue
-				}
-				dstField := newStruct.Field(i)
-				if !dstField.CanSet() {
-					continue
-				}
-				srcField := rv.Field(i)
-				copied := copyRecursive(srcField)
-				// If copied is nil, Set with a typed zero value to avoid
-				// "reflect: call of reflect.Value.Set on zero Value".
-				if copied == nil {
-					dstField.Set(reflect.Zero(dstField.Type()))
-					continue
-				}
-				srcVal := reflect.ValueOf(copied)
-				// Align types as needed.
-				if srcVal.Type().AssignableTo(dstField.Type()) {
-					dstField.Set(srcVal)
-				} else if srcVal.Type().ConvertibleTo(dstField.Type()) {
-					dstField.Set(srcVal.Convert(dstField.Type()))
-				} else {
-					// Fallback: set zero value if types are incompatible.
-					dstField.Set(reflect.Zero(dstField.Type()))
-				}
-			}
-			return newStruct.Interface()
-
-		case reflect.Func, reflect.Chan, reflect.UnsafePointer:
-			// Not safely copyable/serializable; return zero value.
-			return reflect.Zero(rv.Type()).Interface()
-
-		default:
-			// Scalars and other immutable kinds – return as-is.
-			return rv.Interface()
-		}
-	}
-
-	// Fast-path for common JSON-compatible types without reflection.
-	switch v := value.(type) {
-	case map[string]any:
-		copied := make(map[string]any, len(v))
-		for k, vv := range v {
-			copied[k] = deepCopyAny(vv)
-		}
-		return copied
-	case []any:
-		copied := make([]any, len(v))
-		for i := range v {
-			copied[i] = deepCopyAny(v[i])
-		}
-		return copied
-	case []string:
-		copied := make([]string, len(v))
-		copy(copied, v)
-		return copied
-	case []int:
-		copied := make([]int, len(v))
-		copy(copied, v)
-		return copied
-	case []float64:
-		copied := make([]float64, len(v))
-		copy(copied, v)
-		return copied
-	case time.Time:
-		return v
-	}
-
-	return copyRecursive(reflect.ValueOf(value))
-}
-
-// deepCopyState clones the State, recursively copying nested maps/slices.
-func deepCopyState(s State) State {
-	out := make(State, len(s))
-	for k, v := range s {
-		out[k] = deepCopyAny(v)
-	}
-	return out
 }
 
 // Execute executes the graph with the given initial state using Pregel-style BSP execution.
@@ -419,7 +271,7 @@ func (e *Executor) executeGraph(
 
 	if e.checkpointSaver != nil && !resumed {
 		if err := e.createCheckpointAndSave(
-			ctx, &checkpointConfig, execCtx.State, CheckpointSourceInput, -1, execCtx,
+			ctx, &checkpointConfig, CheckpointSourceInput, -1, execCtx,
 		); err != nil {
 			log.Debugf("Failed to create initial checkpoint: %v", err)
 		}
@@ -667,7 +519,7 @@ func (e *Executor) runBspLoop(
 		if e.checkpointSaver != nil && *checkpointConfig != nil {
 			log.Debugf("Creating checkpoint at step %d", step)
 			if err := e.createCheckpointAndSave(
-				ctx, checkpointConfig, execCtx.State, CheckpointSourceLoop, step, execCtx,
+				ctx, checkpointConfig, CheckpointSourceLoop, step, execCtx,
 			); err != nil {
 				log.Debugf("Failed to create checkpoint at step %d: %v", step, err)
 			}
@@ -785,7 +637,6 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 func (e *Executor) createCheckpointAndSave(
 	ctx context.Context,
 	config *map[string]any,
-	state State,
 	source string,
 	step int,
 	execCtx *ExecutionContext,
@@ -795,9 +646,7 @@ func (e *Executor) createCheckpointAndSave(
 		return nil
 	}
 
-	// Creating checkpoint from state.
-
-	// IMPORTANT: Use the current state from execCtx which has all node updates,
+	// Use the current state from execCtx which has all node updates,
 	// not the state parameter which may be stale.
 	stateCopy := make(State)
 	execCtx.stateMutex.RLock()
@@ -856,10 +705,10 @@ func (e *Executor) createCheckpointAndSave(
 			checkpoint.NextNodes = []string{entryPoint}
 			log.Debugf("Initial checkpoint - setting NextNodes to entry point: %v", checkpoint.NextNodes)
 		}
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 	} else {
 		checkpoint.NextNodes = e.getNextNodes(execCtx.State)
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 	}
 
 	// Use PutFull for atomic storage.
@@ -1289,7 +1138,22 @@ func (e *Executor) executeStep(
 					results <- fmt.Errorf("task panic: %v", r)
 				}
 			}()
-			if err := e.executeSingleTask(ctx, invocation, execCtx, t, step); err != nil {
+			// create a new invocation for each task, if parent invocation is not nil.
+			taskInvocation, taskCtx := invocation, ctx
+			if invocation != nil {
+				branch := t.NodeID
+				if invocation.Branch != "" {
+					branch = invocation.Branch + agent.BranchDelimiter + t.NodeID
+				}
+				taskInvocation = invocation.Clone(
+					agent.WithInvocationAgent(invocation.Agent),
+					agent.WithInvocationBranch(branch),
+				)
+				// set new context for each task.
+				taskCtx = agent.NewInvocationContext(ctx, taskInvocation)
+			}
+
+			if err := e.executeSingleTask(taskCtx, taskInvocation, execCtx, t, step); err != nil {
 				results <- err
 			}
 		}(t)
@@ -1335,12 +1199,24 @@ func (e *Executor) executeSingleTask(
 	t *Task,
 	step int,
 ) error {
-	nodeCtx, nodeCancel := e.newNodeContext(ctx)
-	defer nodeCancel()
-	// Get node type and emit start event.
+	// Get node type and determine retry policies for metadata.
 	nodeType := e.getNodeType(t.NodeID)
 	nodeStart := time.Now()
-	e.emitNodeStartEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
+	var nodePolicies []RetryPolicy
+	if node, ok := e.graph.Node(t.NodeID); ok && node != nil && len(node.retryPolicies) > 0 {
+		nodePolicies = node.retryPolicies
+	} else if len(e.defaultRetry) > 0 {
+		nodePolicies = e.defaultRetry
+	}
+	// Best-effort max attempts hint for start event (first policy wins).
+	maxAttempts := 0
+	if len(nodePolicies) > 0 {
+		if nodePolicies[0].MaxAttempts > 0 {
+			maxAttempts = nodePolicies[0].MaxAttempts
+		}
+	}
+	e.emitNodeStartEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart,
+		WithNodeEventAttempt(1), WithNodeEventMaxAttempts(maxAttempts))
 
 	// Create callback context.
 	callbackCtx := e.newNodeCallbackContext(execCtx, t.NodeID, nodeType, step, nodeStart)
@@ -1366,58 +1242,236 @@ func (e *Executor) executeSingleTask(
 	// any in-place state changes made by before-node callbacks.
 	t.Input = stateCopy
 
-	// Execute the node function.
-	result, err := e.executeNodeFunction(nodeCtx, execCtx, t)
-	if err != nil {
-		// Check if this is an interrupt error
-		if IsInterruptError(err) {
-			// For interrupt errors, we need to set the node ID and task ID
-			if interrupt, ok := GetInterruptError(err); ok {
-				interrupt.NodeID = t.NodeID
-				interrupt.TaskID = t.NodeID // Use NodeID as TaskID for now
-				interrupt.Step = step
-			}
-			return err // Return interrupt error directly without wrapping
-		}
-
-		// Run on node error callbacks.
-		if mergedCallbacks != nil {
-			mergedCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
-		}
-		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, err)
-		return fmt.Errorf("node %s execution failed: %w", t.NodeID, err)
+	// Package execution context into a struct to reduce parameter count.
+	nodeCtx := &nodeExecutionContext{
+		nodeType:        nodeType,
+		nodeStart:       nodeStart,
+		nodePolicies:    nodePolicies,
+		callbackCtx:     callbackCtx,
+		stateCopy:       stateCopy,
+		mergedCallbacks: mergedCallbacks,
 	}
 
-	// Run after node callbacks.
-	if res, err := e.runAfterCallbacks(
-		ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, result,
-		execCtx, t.NodeID, nodeType, step,
-	); err != nil {
-		return err
+	// Execute with retry logic.
+	return e.executeTaskWithRetry(ctx, invocation, execCtx, t, step, nodeCtx)
+}
+
+// nodeExecutionContext holds node execution related state.
+type nodeExecutionContext struct {
+	nodeType        NodeType
+	nodeStart       time.Time
+	nodePolicies    []RetryPolicy
+	callbackCtx     *NodeCallbackContext
+	stateCopy       State
+	mergedCallbacks *NodeCallbacks
+}
+
+// executeTaskWithRetry executes the task with retry logic.
+func (e *Executor) executeTaskWithRetry(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	step int,
+	nodeCtx *nodeExecutionContext,
+) error {
+	attempt := 1
+	startWall := time.Now()
+	// Track total elapsed for optional policy.MaxElapsedTime evaluation.
+	var totalStart time.Time
+	if len(nodeCtx.nodePolicies) > 0 {
+		totalStart = time.Now()
+	}
+
+	for {
+		// Execute single attempt.
+		result, err := e.executeSingleAttempt(ctx, execCtx, t)
+		if err == nil {
+			// Handle successful execution.
+			return e.finalizeSuccessfulExecution(ctx, invocation, execCtx, t, result, step, nodeCtx)
+		}
+
+		// Check if should retry.
+		retryCtx := &retryContext{
+			attempt:    attempt,
+			totalStart: totalStart,
+			err:        err,
+		}
+		shouldRetry, retryErr := e.evaluateRetryDecision(ctx, invocation, execCtx, t, step, nodeCtx, retryCtx)
+		if !shouldRetry {
+			return retryErr
+		}
+
+		attempt++
+		_ = startWall // reserved for future metrics
+	}
+}
+
+// executeSingleAttempt executes a single attempt of the node function.
+func (e *Executor) executeSingleAttempt(ctx context.Context, execCtx *ExecutionContext, t *Task) (any, error) {
+	nodeCtx, nodeCancel := e.newNodeContext(ctx)
+	defer nodeCancel()
+	return e.executeNodeFunction(nodeCtx, execCtx, t)
+}
+
+// finalizeSuccessfulExecution handles all post-execution steps after successful node execution.
+func (e *Executor) finalizeSuccessfulExecution(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	result any,
+	step int,
+	nodeCtx *nodeExecutionContext,
+) error {
+	// Run after node callbacks on success.
+	if res, aerr := e.runAfterCallbacks(
+		ctx, invocation, nodeCtx.mergedCallbacks, nodeCtx.callbackCtx, nodeCtx.stateCopy, result,
+		execCtx, t.NodeID, nodeCtx.nodeType, step,
+	); aerr != nil {
+		return aerr
 	} else if res != nil {
 		result = res
 	}
 
 	// Handle result and process channel writes.
-	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, result)
-	if err != nil {
-		return err
+	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	if herr != nil {
+		return herr
 	}
 
 	// Update versions seen for this node after successful execution.
 	e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
 
 	// Process conditional edges after node execution.
-	// We need to skip intermediate nodes after routed.
 	if !routed {
-		if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
-			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
+		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); perr != nil {
+			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
 		}
 	}
-	// Emit node completion event.
-	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
 
+	// Emit node completion event for the overall node run.
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, nodeCtx.nodeStart)
 	return nil
+}
+
+// retryContext holds retry evaluation state.
+type retryContext struct {
+	attempt    int
+	totalStart time.Time
+	err        error
+}
+
+// evaluateRetryDecision determines if a retry should occur and handles error reporting.
+func (e *Executor) evaluateRetryDecision(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	step int,
+	nodeCtx *nodeExecutionContext,
+	retryCtx *retryContext,
+) (bool, error) {
+	// Interrupt errors should not be retried.
+	if IsInterruptError(retryCtx.err) {
+		if interrupt, ok := GetInterruptError(retryCtx.err); ok {
+			interrupt.NodeID = t.NodeID
+			interrupt.TaskID = t.NodeID
+			interrupt.Step = step
+		}
+		return false, retryCtx.err
+	}
+
+	// Run on-node-error callbacks for observability (both intermediate and final).
+	if nodeCtx.mergedCallbacks != nil {
+		nodeCtx.mergedCallbacks.RunOnNodeError(ctx, nodeCtx.callbackCtx, nodeCtx.stateCopy, retryCtx.err)
+	}
+
+	// Evaluate retry policy.
+	matched, pol, maxAttempts := e.selectRetryPolicy(retryCtx.err, nodeCtx.nodePolicies)
+	if !matched {
+		// No retry policy matched -> emit error and exit.
+		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, retryCtx.err)
+		return false, fmt.Errorf("node %s execution failed: %w", t.NodeID, retryCtx.err)
+	}
+
+	// Check if retry budget is exhausted.
+	if shouldStop, stopErr := e.checkRetryBudget(ctx, invocation, execCtx, t.NodeID, step, nodeCtx, retryCtx, pol, maxAttempts); shouldStop {
+		return false, stopErr
+	}
+
+	// Emit error event with retrying metadata and wait.
+	return e.waitBeforeRetry(ctx, invocation, execCtx, t.NodeID, step, nodeCtx, retryCtx, pol, maxAttempts)
+}
+
+// checkRetryBudget checks if retry attempts or time budget is exhausted.
+func (e *Executor) checkRetryBudget(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	nodeID string,
+	step int,
+	nodeCtx *nodeExecutionContext,
+	retryCtx *retryContext,
+	pol RetryPolicy,
+	maxAttempts int,
+) (bool, error) {
+	// Check attempt budget.
+	if retryCtx.attempt >= maxAttempts {
+		e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
+			WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+		return true, fmt.Errorf("node %s execution failed after %d attempts: %w", nodeID, retryCtx.attempt, retryCtx.err)
+	}
+
+	// Check elapsed time budget.
+	if pol.MaxElapsedTime > 0 && !retryCtx.totalStart.IsZero() {
+		if time.Since(retryCtx.totalStart) >= pol.MaxElapsedTime {
+			e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
+				WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+			return true, fmt.Errorf("node %s retry budget exhausted (elapsed): %w", nodeID, retryCtx.err)
+		}
+	}
+
+	return false, nil
+}
+
+// waitBeforeRetry handles the delay before retry and deadline checking.
+func (e *Executor) waitBeforeRetry(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	nodeID string,
+	step int,
+	nodeCtx *nodeExecutionContext,
+	retryCtx *retryContext,
+	pol RetryPolicy,
+	maxAttempts int,
+) (bool, error) {
+	// Compute delay and clamp to parent context deadline if present.
+	delay := pol.NextDelay(retryCtx.attempt)
+	if deadline, ok := ctx.Deadline(); ok {
+		remain := time.Until(deadline)
+		if remain <= 0 {
+			e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
+				WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+			return false, fmt.Errorf("node %s execution failed: step deadline exceeded before retry: %w", nodeID, retryCtx.err)
+		}
+		if delay > remain {
+			delay = remain
+		}
+	}
+
+	// Emit error event with retrying metadata.
+	e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
+		WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventNextDelay(delay), WithNodeEventRetrying(true))
+
+	// Sleep or abort if context canceled.
+	select {
+	case <-ctx.Done():
+		return false, fmt.Errorf("node %s execution canceled before retry: %w", nodeID, ctx.Err())
+	case <-time.After(delay):
+		return true, nil
+	}
 }
 
 // getNodeType retrieves the node type for a given node ID.
@@ -1653,6 +1707,7 @@ func (e *Executor) emitNodeStartEvent(
 	nodeType NodeType,
 	step int,
 	startTime time.Time,
+	extra ...NodeEventOption,
 ) {
 	if execCtx.EventChan == nil {
 		return
@@ -1673,7 +1728,8 @@ func (e *Executor) emitNodeStartEvent(
 
 	execCtx.stateMutex.RUnlock()
 
-	startEvent := NewNodeStartEvent(
+	// Build event with optional extra metadata (e.g., retries)
+	opts := []NodeEventOption{
 		WithNodeEventInvocationID(execCtx.InvocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(nodeType),
@@ -1681,7 +1737,11 @@ func (e *Executor) emitNodeStartEvent(
 		WithNodeEventStartTime(startTime),
 		WithNodeEventInputKeys(inputKeys),
 		WithNodeEventModelInput(modelInput),
-	)
+	}
+	if len(extra) > 0 {
+		opts = append(opts, extra...)
+	}
+	startEvent := NewNodeStartEvent(opts...)
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, startEvent)
 }
 
@@ -1751,52 +1811,63 @@ func (e *Executor) emitNodeErrorEvent(
 	nodeType NodeType,
 	step int,
 	err error,
+	extra ...NodeEventOption,
 ) {
 	if execCtx.EventChan == nil {
 		return
 	}
 
-	errorEvent := NewNodeErrorEvent(
+	opts := []NodeEventOption{
 		WithNodeEventInvocationID(execCtx.InvocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(nodeType),
 		WithNodeEventStepNumber(step),
 		WithNodeEventError(err.Error()),
-	)
+	}
+	if len(extra) > 0 {
+		opts = append(opts, extra...)
+	}
+	errorEvent := NewNodeErrorEvent(opts...)
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, errorEvent)
 }
 
 // handleNodeResult handles the result from node execution.
 func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invocation,
 	execCtx *ExecutionContext, t *Task, result any) (bool, error) {
-	if result == nil {
-		return false, nil
-	}
-	// Handle node result by concrete type.
+	// Even if result is nil, static edge writes should still occur so that
+	// downstream nodes can be triggered. Only skip static writes when we
+	// have explicit routing (Command with GoTo) or fan-out ([]*Command).
+
 	routed := false
-	switch v := result.(type) {
-	case State: // State update.
-		e.updateStateFromResult(execCtx, v)
-	case *Command: // Single command.
-		if v != nil {
-			if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
-				return false, err
+
+	if result != nil {
+		// Handle node result by concrete type.
+		switch v := result.(type) {
+		case State: // State update.
+			e.updateStateFromResult(execCtx, v)
+		case *Command: // Single command.
+			if v != nil {
+				if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
+					return false, err
+				}
+				// If the command explicitly routes via GoTo, avoid also writing to
+				// channels from static edges for this task to prevent double-triggering
+				// the downstream node (once via GoTo, once via edge writes).
+				if v.GoTo != "" {
+					routed = true
+				}
 			}
-			// If the command explicitly routes via GoTo, avoid also writing to
-			// channels from static edges for this task to prevent double-triggering
-			// the downstream node (once via GoTo, once via edge writes).
-			if v.GoTo != "" {
-				routed = true
-			}
+		case []*Command: // Fan-out commands.
+			// Fan-out: enqueue tasks with overlays.
+			routed = true
+			e.enqueueCommands(execCtx, t, v)
+		default:
 		}
-	case []*Command: // Fan-out commands.
-		// Fan-out: enqueue tasks with overlays.
-		routed = true
-		e.enqueueCommands(execCtx, t, v)
-	default:
 	}
 
-	// Process channel writes, unless this is a fan-out case to avoid double trigger.
+	// Process channel writes when not explicitly routed. This ensures that
+	// nodes with nil results (e.g., pure routing/start nodes) still trigger
+	// their outgoing static edges.
 	if !routed && len(t.Writes) > 0 {
 		e.processChannelWrites(ctx, invocation, execCtx, t.TaskID, t.Writes)
 	}
@@ -2068,6 +2139,22 @@ func (e *Executor) getUpdatedChannels() []string {
 	return updated
 }
 
+// selectRetryPolicy selects the first matching retry policy for the given error.
+// Returns whether a match was found, the chosen policy, and its MaxAttempts
+// (falling back to 1 when unspecified or invalid).
+func (e *Executor) selectRetryPolicy(err error, policies []RetryPolicy) (bool, RetryPolicy, int) {
+	for _, p := range policies {
+		if p.ShouldRetry(err) {
+			maxA := p.MaxAttempts
+			if maxA <= 0 {
+				maxA = 1
+			}
+			return true, p, maxA
+		}
+	}
+	return false, RetryPolicy{}, 0
+}
+
 // getUpdatedChannelsInStep returns a list of channels updated in the current step.
 func (e *Executor) getUpdatedChannelsInStep(step int) []string {
 	var updated []string
@@ -2208,7 +2295,7 @@ func (e *Executor) handleInterrupt(
 			nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
 		}
 		checkpoint.NextNodes = nextNodes
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 
 		// Store the interrupt checkpoint using PutFull for consistency
 		// Use a new context to ensure checkpoint saves even if main context is canceled.
@@ -2324,7 +2411,7 @@ func (e *Executor) getNextNodes(state State) []string {
 }
 
 // getNextChannels determines which channels should be triggered next.
-func (e *Executor) getNextChannels(state State) []string {
+func (e *Executor) getNextChannels() []string {
 	var nextChannels []string
 
 	// Get all channels that are available

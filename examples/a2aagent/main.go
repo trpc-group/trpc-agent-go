@@ -235,7 +235,7 @@ func processResponse(eventChan <-chan *event.Event) error {
 		}
 
 		// Check if this is the final event.
-		if event.Done && !isToolEvent(event) {
+		if event.IsFinalResponse() {
 			fmt.Printf("\n")
 			break
 		}
@@ -279,13 +279,13 @@ func handleToolCalls(
 	toolCallsDetected *bool,
 	assistantStarted *bool,
 ) bool {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsDetected = true
 		if *assistantStarted {
 			fmt.Printf("\n")
 		}
 		fmt.Printf("🔧 CallableTool calls initiated:\n")
-		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 			if len(toolCall.Function.Arguments) > 0 {
 				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -324,8 +324,8 @@ func handleContent(
 	assistantStarted *bool,
 	fullContent *string,
 ) {
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		content := extractContent(choice)
 
 		if content != "" {
@@ -359,28 +359,6 @@ func displayContent(
 	}
 	fmt.Print(content)
 	*fullContent += content
-}
-
-// isToolEvent checks if an event is a tool response (not a final response).
-func isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-
-	// Check if this is a tool response by examining choices.
-	for _, choice := range event.Response.Choices {
-		if choice.Message.Role == model.RoleTool {
-			return true
-		}
-	}
-
-	return false
 }
 
 func intPtr(i int) *int {

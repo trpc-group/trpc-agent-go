@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
@@ -127,7 +128,7 @@ func TestReadDocuments_InvalidURL(t *testing.T) {
 
 // TestWithMetadata verifies the WithMetadata option.
 func TestWithMetadata(t *testing.T) {
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		"source":   "test-source",
 		"priority": "high",
 		"category": "documentation",
@@ -172,7 +173,7 @@ func TestSetMetadata(t *testing.T) {
 func TestSetMetadataMultiple(t *testing.T) {
 	src := New([]string{"https://example.com"})
 
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"url_key1": "url_value1",
 		"url_key2": "url_value2",
 		"url_key3": 456,
@@ -187,5 +188,117 @@ func TestSetMetadataMultiple(t *testing.T) {
 		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
 			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
 		}
+	}
+}
+
+// TestWithContentFetchingURL verifies the WithContentFetchingURL option functionality.
+func TestWithContentFetchingURL(t *testing.T) {
+	ctx := context.Background()
+
+	// Content for different servers
+	identifierContent := "This is identifier content"
+	fetchContent := "This is fetch content"
+
+	// Create identifier server
+	identifierServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(identifierContent))
+	}))
+	defer identifierServer.Close()
+
+	// Create fetch server
+	fetchServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(fetchContent))
+	}))
+	defer fetchServer.Close()
+
+	tests := []struct {
+		name           string
+		setupSource    func() *Source
+		expectedError  bool
+		validateResult func(t *testing.T, docs []*document.Document)
+	}{
+		{
+			name: "basic_content_fetching_url",
+			setupSource: func() *Source {
+				return New(
+					[]string{identifierServer.URL + "/doc.txt"},
+					WithContentFetchingURL([]string{fetchServer.URL + "/doc.txt"}),
+				)
+			},
+			expectedError: false,
+			validateResult: func(t *testing.T, docs []*document.Document) {
+				if len(docs) == 0 {
+					t.Fatal("expected at least one document")
+				}
+				// Content should come from fetch server
+				if !strings.Contains(docs[0].Content, fetchContent) {
+					t.Errorf("expected content from fetch server, got: %s", docs[0].Content)
+				}
+				// Metadata should use identifier URL
+				if metaURL, ok := docs[0].Metadata[source.MetaURL].(string); !ok || !strings.Contains(metaURL, identifierServer.URL) {
+					t.Errorf("expected metadata URL to be identifier URL, got: %v", metaURL)
+				}
+			},
+		},
+		{
+			name: "mismatched_url_count",
+			setupSource: func() *Source {
+				return New(
+					[]string{identifierServer.URL + "/doc1.txt", identifierServer.URL + "/doc2.txt"},
+					WithContentFetchingURL([]string{fetchServer.URL + "/doc1.txt"}), // Only one fetch URL for two identifier URLs
+				)
+			},
+			expectedError: true,
+			validateResult: func(t *testing.T, docs []*document.Document) {
+				// Should not reach here due to error
+			},
+		},
+		{
+			name: "multiple_urls_with_fetching",
+			setupSource: func() *Source {
+				return New(
+					[]string{identifierServer.URL + "/doc1.txt", identifierServer.URL + "/doc2.txt"},
+					WithContentFetchingURL([]string{fetchServer.URL + "/doc1.txt", fetchServer.URL + "/doc2.txt"}),
+				)
+			},
+			expectedError: false,
+			validateResult: func(t *testing.T, docs []*document.Document) {
+				if len(docs) < 2 {
+					t.Fatal("expected at least two documents")
+				}
+				// All documents should have content from fetch server
+				for _, doc := range docs {
+					if !strings.Contains(doc.Content, fetchContent) {
+						t.Errorf("expected content from fetch server, got: %s", doc.Content)
+					}
+					// Metadata should use identifier URL
+					if metaURL, ok := doc.Metadata[source.MetaURL].(string); !ok || !strings.Contains(metaURL, identifierServer.URL) {
+						t.Errorf("expected metadata URL to be identifier URL, got: %v", metaURL)
+					}
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := tt.setupSource()
+			docs, err := src.ReadDocuments(ctx)
+
+			if tt.expectedError {
+				if err == nil {
+					t.Fatal("expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			tt.validateResult(t, docs)
+		})
 	}
 }

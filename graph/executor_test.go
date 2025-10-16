@@ -1068,6 +1068,63 @@ func TestAfterCallbackOverride(t *testing.T) {
 	require.Equal(t, "override", rv)
 }
 
+// TestNilResultStillTriggersStaticEdges verifies that a node returning nil
+// still triggers its outgoing static edges, so downstream nodes run.
+func TestNilResultStillTriggersStaticEdges(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("a", StateField{Type: reflect.TypeOf(false), Reducer: DefaultReducer}).
+		AddField("b", StateField{Type: reflect.TypeOf(false), Reducer: DefaultReducer})
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("start", func(ctx context.Context, s State) (any, error) {
+		// Return nil result intentionally; downstream edges must still trigger.
+		return nil, nil
+	})
+	sg.AddNode("A", func(ctx context.Context, s State) (any, error) {
+		return State{"a": true}, nil
+	})
+	sg.AddNode("B", func(ctx context.Context, s State) (any, error) {
+		return State{"b": true}, nil
+	})
+
+	sg.SetEntryPoint("start")
+	sg.AddEdge("start", "A")
+	sg.AddEdge("start", "B")
+	sg.SetFinishPoint("A")
+	sg.SetFinishPoint("B")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{}, &agent.Invocation{InvocationID: "inv-nil-edges"})
+	require.NoError(t, err)
+
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode || k == MetadataKeyPregel || k == MetadataKeyChannel || k == MetadataKeyState || k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	av, ok := final["a"].(bool)
+	require.True(t, ok, "expected key 'a' in final state")
+	require.True(t, av, "expected 'a' to be true")
+
+	bv, ok := final["b"].(bool)
+	require.True(t, ok, "expected key 'b' in final state")
+	require.True(t, bv, "expected 'b' to be true")
+}
+
 // TestShouldTriggerNode tests the shouldTriggerNode logic with various scenarios.
 func TestShouldTriggerNode(t *testing.T) {
 	exec := &Executor{}
@@ -1515,7 +1572,7 @@ func TestFanOutWithGlobalStateAccess(t *testing.T) {
 		}
 		assert.True(t, m["task1_global"], "Expected result to contain task1_global")
 		assert.True(t, m["task2_global"], "Expected result to contain task2_global")
-	} else if vals, ok := finalState["results"].([]interface{}); ok {
+	} else if vals, ok := finalState["results"].([]any); ok {
 		assert.GreaterOrEqual(t, len(vals), 2, "Expected at least 2 results")
 		m := map[string]bool{}
 		for _, v := range vals {
@@ -1682,7 +1739,7 @@ func TestFanOutWithNilCommandUpdate(t *testing.T) {
 		}
 		assert.True(t, m["nil_update"], "Expected result to contain nil_update")
 		assert.True(t, m["valid"], "Expected result to contain valid")
-	} else if vals, ok := finalState["results"].([]interface{}); ok {
+	} else if vals, ok := finalState["results"].([]any); ok {
 		assert.GreaterOrEqual(t, len(vals), 2, "Expected at least 2 results")
 		m := map[string]bool{}
 		for _, v := range vals {

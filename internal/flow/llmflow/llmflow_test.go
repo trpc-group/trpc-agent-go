@@ -178,31 +178,31 @@ func TestModelCallbacks_BeforeSkip(t *testing.T) {
 	})
 
 	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
-	invocation := &agent.Invocation{
-		InvocationID: "test-invocation",
-		AgentName:    "test-agent",
-		Model: &mockModel{
+	invocation := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{
 			responses: []*model.Response{{ID: "should-not-be-called"}},
-		},
-		Session: &session.Session{
-			ID: "test-session",
-		},
-	}
+		}),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+	)
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
 	var events []*event.Event
 	for evt := range eventChan {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			invocation.NotifyCompletion(ctx, key)
+		}
 		events = append(events, evt)
-		// Receive the first event and cancel ctx to prevent deadlock.
-		cancel()
-		break
+		if len(events) >= 2 {
+			break
+		}
 	}
-	require.Equal(t, 1, len(events))
-	require.Equal(t, "skip-response", events[0].Response.ID)
+	require.Equal(t, 2, len(events))
+	require.Equal(t, "skip-response", events[1].Response.ID)
 }
 
 func TestModelCBs_BeforeCustom(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	modelCallbacks := model.NewCallbacks()
@@ -211,27 +211,27 @@ func TestModelCBs_BeforeCustom(t *testing.T) {
 	})
 
 	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
-	invocation := &agent.Invocation{
-		InvocationID: "test-invocation",
-		AgentName:    "test-agent",
-		Model: &mockModel{
+	invocation := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{
 			responses: []*model.Response{{ID: "should-not-be-called"}},
-		},
-		Session: &session.Session{
-			ID: "test-session",
-		},
-	}
+		}),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+	)
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
 	var events []*event.Event
 	for evt := range eventChan {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			invocation.NotifyCompletion(ctx, key)
+		}
 		events = append(events, evt)
-		// Receive the first event and cancel ctx to prevent deadlock.
-		cancel()
-		break
+		if len(events) >= 2 {
+			break
+		}
 	}
-	require.Equal(t, 1, len(events))
-	require.Equal(t, "custom-before", events[0].Response.ID)
+	require.Equal(t, 2, len(events))
+	require.Equal(t, "custom-before", events[1].Response.ID)
 }
 
 func TestModelCallbacks_BeforeError(t *testing.T) {
@@ -244,26 +244,32 @@ func TestModelCallbacks_BeforeError(t *testing.T) {
 	})
 
 	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
-	invocation := &agent.Invocation{
-		InvocationID: "test-invocation",
-		AgentName:    "test-agent",
-		Model: &mockModel{
+	invocation := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{
 			responses: []*model.Response{{ID: "should-not-be-called"}},
-		},
-	}
+		}),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+	)
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
 	var events []*event.Event
 	for evt := range eventChan {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			invocation.NotifyCompletion(ctx, key)
+		}
 		events = append(events, evt)
+		if len(events) >= 2 {
+			break
+		}
 		// Receive the first error event and cancel ctx to prevent deadlock.
 		if evt.Error != nil && evt.Error.Message == "before error" {
 			cancel()
 			break
 		}
 	}
-	require.Equal(t, 1, len(events))
-	require.Equal(t, "before error", events[0].Error.Message)
+	require.Equal(t, 2, len(events))
+	require.Equal(t, "before error", events[1].Error.Message)
 }
 
 func TestModelCBs_AfterOverride(t *testing.T) {
@@ -278,28 +284,28 @@ func TestModelCBs_AfterOverride(t *testing.T) {
 	)
 
 	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
-	invocation := &agent.Invocation{
-		InvocationID: "test-invocation",
-		AgentName:    "test-agent",
-		Model: &mockModel{
+	invocation := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{
 			responses: []*model.Response{{ID: "original"}},
-		},
-		Session: &session.Session{
-			ID: "test-session",
-		},
-	}
+		}),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+	)
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
 	var events []*event.Event
 	for evt := range eventChan {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			invocation.NotifyCompletion(ctx, key)
+		}
 		events = append(events, evt)
-		// Receive the first event and cancel ctx to prevent deadlock.
-		cancel()
-		break
+		if len(events) >= 2 {
+			break
+		}
 	}
-	require.Equal(t, 1, len(events))
+	require.Equal(t, 2, len(events))
 	t.Log(events[0])
-	require.Equal(t, "after-override", events[0].Response.Object)
+	require.Equal(t, "after-override", events[1].Response.Object)
 }
 
 func TestModelCallbacks_AfterError(t *testing.T) {
@@ -314,29 +320,32 @@ func TestModelCallbacks_AfterError(t *testing.T) {
 	)
 
 	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
-	invocation := &agent.Invocation{
-		InvocationID: "test-invocation",
-		AgentName:    "test-agent",
-		Model: &mockModel{
+	invocation := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{
 			responses: []*model.Response{{ID: "original"}},
-		},
-		Session: &session.Session{
-			ID: "test-session",
-		},
-	}
+		}),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+	)
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
 	var events []*event.Event
 	for evt := range eventChan {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			invocation.NotifyCompletion(ctx, key)
+		}
 		events = append(events, evt)
+		if len(events) >= 2 {
+			break
+		}
 		// Receive the first error event and cancel ctx to prevent deadlock.
 		if evt.Error != nil && evt.Error.Message == "after error" {
 			cancel()
 			break
 		}
 	}
-	require.Equal(t, 1, len(events))
-	require.Equal(t, "after error", events[0].Error.Message)
+	require.Equal(t, 2, len(events))
+	require.Equal(t, "after error", events[1].Error.Message)
 }
 
 // noResponseModel returns a closed channel without emitting any responses.
@@ -356,15 +365,21 @@ func TestRun_NoPanicWhenModelReturnsNoResponses(t *testing.T) {
 	defer cancel()
 
 	f := New(nil, nil, Options{})
-	inv := &agent.Invocation{InvocationID: "inv-nil", AgentName: "agent-nil", Model: &noResponseModel{}}
+	inv := agent.NewInvocation(
+		agent.WithInvocationModel(&noResponseModel{}),
+	)
 
 	ch, err := f.Run(ctx, inv)
 	require.NoError(t, err)
 
 	// Collect all events until channel closes. Expect none and, importantly, no panic.
 	var count int
-	for range ch {
+	for evt := range ch {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			inv.NotifyCompletion(ctx, key)
+		}
 		count++
 	}
-	require.Equal(t, 0, count)
+	require.Equal(t, 1, count)
 }

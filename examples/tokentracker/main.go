@@ -242,13 +242,13 @@ func (c *tokenTrackerChat) processResponse(eventChan <-chan *event.Event, userMe
 		}
 
 		// Handle content for display.
-		if len(event.Choices) > 0 {
-			if event.Choices[0].Delta.Content != "" {
-				fmt.Print(event.Choices[0].Delta.Content)
-				fullContent += event.Choices[0].Delta.Content
-			} else if event.Choices[0].Message.Content != "" {
-				fmt.Print(event.Choices[0].Message.Content)
-				fullContent += event.Choices[0].Message.Content
+		if len(event.Response.Choices) > 0 {
+			if event.Response.Choices[0].Delta.Content != "" {
+				fmt.Print(event.Response.Choices[0].Delta.Content)
+				fullContent += event.Response.Choices[0].Delta.Content
+			} else if event.Response.Choices[0].Message.Content != "" {
+				fmt.Print(event.Response.Choices[0].Message.Content)
+				fullContent += event.Response.Choices[0].Message.Content
 			}
 		}
 

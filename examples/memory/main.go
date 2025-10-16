@@ -263,7 +263,7 @@ func (c *memoryChat) processResponse(eventChan <-chan *event.Event) error {
 		}
 
 		// Check if this is the final event.
-		if event.Done && !c.isToolEvent(event) {
+		if event.IsFinalResponse() {
 			fmt.Printf("\n")
 			break
 		}
@@ -274,7 +274,7 @@ func (c *memoryChat) processResponse(eventChan <-chan *event.Event) error {
 
 // hasToolCalls checks if the event contains tool calls.
 func (c *memoryChat) hasToolCalls(event *event.Event) bool {
-	return len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0
+	return len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0
 }
 
 // hasToolResponses checks if the event contains tool responses.
@@ -296,7 +296,7 @@ func (c *memoryChat) handleToolCalls(event *event.Event, assistantStarted bool) 
 		fmt.Printf("\n")
 	}
 	fmt.Printf("🔧 Memory tool calls initiated:\n")
-	for _, toolCall := range event.Choices[0].Message.ToolCalls {
+	for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 		fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 		if len(toolCall.Function.Arguments) > 0 {
 			fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -318,37 +318,15 @@ func (c *memoryChat) handleToolResponses(event *event.Event) {
 
 // extractContent extracts content from the event based on streaming mode.
 func (c *memoryChat) extractContent(event *event.Event) string {
-	if len(event.Choices) == 0 {
+	if len(event.Response.Choices) == 0 {
 		return ""
 	}
 
-	choice := event.Choices[0]
+	choice := event.Response.Choices[0]
 	if c.streaming {
 		return choice.Delta.Content
 	}
 	return choice.Message.Content
-}
-
-// isToolEvent checks if an event is a tool response (not a final response).
-func (c *memoryChat) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-
-	// Check if this is a tool response by examining choices.
-	for _, choice := range event.Response.Choices {
-		if choice.Message.Role == model.RoleTool {
-			return true
-		}
-	}
-
-	return false
 }
 
 // startNewSession creates a new session ID.

@@ -83,17 +83,12 @@ func (p *Planner) BuildPlanningInstruction(
 	return p.buildPlannerInstruction()
 }
 
-// ProcessPlanningResponse processes the LLM response to organize content
-// according to the React planning structure.
+// ProcessPlanningResponse processes the LLM response by filtering and cleaning
+// tool calls to ensure only valid function calls are preserved.
 //
 // This method:
-// - Identifies and preserves function calls while filtering empty ones
-// - Splits text content based on planning tags
-// - Marks planning, reasoning, and action content as thoughts
-// - Separates final answers from internal reasoning
-//
-// Returns a processed response with properly organized content, or nil
-// if no processing is needed.
+// - Filters out tool calls with empty function names
+// - Preserves all other response content unchanged
 func (p *Planner) ProcessPlanningResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -121,32 +116,10 @@ func (p *Planner) ProcessPlanningResponse(
 			}
 			processedChoice.Message.ToolCalls = filteredToolCalls
 		}
-
-		// Process text content if present.
-		if choice.Message.Content != "" {
-			processedChoice.Message.Content = p.processTextContent(choice.Message.Content)
-		}
-
-		// Process delta content for streaming responses.
-		if choice.Delta.Content != "" {
-			processedChoice.Delta.Content = p.processTextContent(choice.Delta.Content)
-		}
-
 		processedResponse.Choices[i] = processedChoice
 	}
 
 	return &processedResponse
-}
-
-// processTextContent handles the processing of text content according to
-// React planning structure, splitting content by tags and organizing it.
-func (p *Planner) processTextContent(content string) string {
-	// If content contains final answer tag, split it.
-	if strings.Contains(content, FinalAnswerTag) {
-		_, finalAnswer := p.splitByLastPattern(content, FinalAnswerTag)
-		return finalAnswer
-	}
-	return content
 }
 
 // splitByLastPattern splits text by the last occurrence of a separator.

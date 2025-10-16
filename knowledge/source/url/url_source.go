@@ -34,24 +34,25 @@ var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
 // Source represents a knowledge source for URL-based content.
 type Source struct {
-	urls         []string
-	name         string
-	metadata     map[string]interface{}
-	readers      map[string]reader.Reader
-	httpClient   *http.Client
-	chunkSize    int
-	chunkOverlap int
+	identifierURLs []string // url, used to generate document ID and check update of document.
+	fetchURLs      []string // fetching url , the actual used to fetch content.
+	name           string
+	metadata       map[string]any
+	readers        map[string]reader.Reader
+	httpClient     *http.Client
+	chunkSize      int
+	chunkOverlap   int
 }
 
 // New creates a new URL knowledge source.
 func New(urls []string, opts ...Option) *Source {
 	s := &Source{
-		urls:         urls,
-		name:         defaultURLSourceName,
-		metadata:     make(map[string]interface{}),
-		httpClient:   defaultClient,
-		chunkSize:    0,
-		chunkOverlap: 0,
+		identifierURLs: urls,
+		name:           defaultURLSourceName,
+		metadata:       make(map[string]any),
+		httpClient:     defaultClient,
+		chunkSize:      0,
+		chunkOverlap:   0,
 	}
 
 	// Apply options first (capture chunk config).
@@ -69,16 +70,24 @@ func New(urls []string, opts ...Option) *Source {
 
 // ReadDocuments downloads content from all URLs and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
-	if len(s.urls) == 0 {
+	if len(s.identifierURLs) == 0 {
 		return nil, nil // Skip if no URLs provided.
+	}
+
+	if len(s.fetchURLs) > 0 && len(s.identifierURLs) != len(s.fetchURLs) {
+		return nil, fmt.Errorf("fetchURLs and urls must have the same count")
 	}
 
 	var allDocuments []*document.Document
 
-	for _, urlStr := range s.urls {
-		documents, err := s.processURL(urlStr)
+	for i, identifierURL := range s.identifierURLs {
+		fetchingURL := identifierURL
+		if len(s.fetchURLs) > 0 {
+			fetchingURL = s.fetchURLs[i]
+		}
+		documents, err := s.processURL(fetchingURL, identifierURL)
 		if err != nil {
-			return nil, fmt.Errorf("failed to process URL %s: %w", urlStr, err)
+			return nil, fmt.Errorf("failed to process URL %s: %w", identifierURL, err)
 		}
 		allDocuments = append(allDocuments, documents...)
 	}
@@ -97,15 +106,21 @@ func (s *Source) Type() string {
 }
 
 // processURL downloads content from a URL and returns its documents.
-func (s *Source) processURL(urlStr string) ([]*document.Document, error) {
+func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*document.Document, error) {
 	// Parse the URL.
-	parsedURL, err := url.Parse(urlStr)
+	_, err := url.Parse(fetchingURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %w", err)
+		return nil, fmt.Errorf("failed to parse fetching URL: %w", err)
+	}
+
+	// Parse and validate the identifier URL.
+	parsedIdentifierURL, err := url.Parse(identifierURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse identifier URL: %w", err)
 	}
 
 	// Create HTTP request with context.
-	req, err := http.NewRequest("GET", urlStr, nil)
+	req, err := http.NewRequest("GET", fetchingURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -126,8 +141,7 @@ func (s *Source) processURL(urlStr string) ([]*document.Document, error) {
 
 	// Determine the content type and file name.
 	contentType := resp.Header.Get("Content-Type")
-	fileName := s.getFileName(parsedURL, contentType)
-
+	fileName := s.getFileName(parsedIdentifierURL, contentType)
 	// Determine file type and get appropriate reader.
 	fileType := isource.GetFileTypeFromContentType(contentType, fileName)
 	reader, exists := s.readers[fileType]
@@ -142,23 +156,22 @@ func (s *Source) processURL(urlStr string) ([]*document.Document, error) {
 	}
 
 	// Create metadata for this URL.
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
 	metadata[source.MetaSource] = source.TypeURL
-	metadata[source.MetaURL] = urlStr
-	metadata[source.MetaURLHost] = parsedURL.Host
-	metadata[source.MetaURLPath] = parsedURL.Path
-	metadata[source.MetaURLScheme] = parsedURL.Scheme
-
-	metadata[source.MetaURI] = urlStr
+	metadata[source.MetaURL] = identifierURL
+	metadata[source.MetaURLHost] = parsedIdentifierURL.Host
+	metadata[source.MetaURLPath] = parsedIdentifierURL.Path
+	metadata[source.MetaURLScheme] = parsedIdentifierURL.Scheme
+	metadata[source.MetaURI] = identifierURL
 	metadata[source.MetaSourceName] = s.name
 
 	// Add metadata to all documents.
 	for _, doc := range documents {
 		if doc.Metadata == nil {
-			doc.Metadata = make(map[string]interface{})
+			doc.Metadata = make(map[string]any)
 		}
 		for k, v := range metadata {
 			doc.Metadata[k] = v
@@ -205,16 +218,16 @@ func (s *Source) getFileName(parsedURL *url.URL, contentType string) string {
 }
 
 // SetMetadata sets metadata for this source.
-func (s *Source) SetMetadata(key string, value interface{}) {
+func (s *Source) SetMetadata(key string, value any) {
 	if s.metadata == nil {
-		s.metadata = make(map[string]interface{})
+		s.metadata = make(map[string]any)
 	}
 	s.metadata[key] = value
 }
 
 // GetMetadata returns the metadata associated with this source.
-func (s *Source) GetMetadata() map[string]interface{} {
-	result := make(map[string]interface{})
+func (s *Source) GetMetadata() map[string]any {
+	result := make(map[string]any)
 	for k, v := range s.metadata {
 		result[k] = v
 	}

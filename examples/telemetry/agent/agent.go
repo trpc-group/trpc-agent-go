@@ -135,7 +135,7 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 		}
 
 		// Detect and display tool calls
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			toolCallsDetected = true
 			if assistantStarted {
 				newline := "\n"
@@ -146,7 +146,7 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 			fmt.Print(toolCallsHeader)
 			output.WriteString(toolCallsHeader)
 
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				toolIcon := getToolIcon(toolCall.Function.Name)
 				toolCallMsg := fmt.Sprintf("   %s %s (ID: %s)\n", toolIcon, toolCall.Function.Name, toolCall.ID)
 				fmt.Print(toolCallMsg)
@@ -182,8 +182,8 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 		}
 
 		// Process streaming content
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 
 			// Process streaming delta content
 			if choice.Delta.Content != "" {
@@ -201,7 +201,7 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 		}
 
 		// Check if this is the final event
-		if event.Done && !c.isToolEvent(event) {
+		if event.IsFinalResponse() {
 			finalNewline := "\n"
 			fmt.Print(finalNewline)
 			output.WriteString(finalNewline)
@@ -210,20 +210,6 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 	}
 
 	return output.String(), nil
-}
-
-// isToolEvent checks if the event is a tool response (not a final response)
-func (c *MultiToolChatAgent) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-	return false
 }
 
 // getToolIcon returns the corresponding icon based on tool name
