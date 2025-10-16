@@ -16,8 +16,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -107,9 +109,8 @@ func (a *ChainAgent) createSubAgentInvocation(
 
 // Run implements the agent.Agent interface.
 // It executes sub-agents in sequence, passing events through as they are generated.
-func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	eventChan := make(chan *event.Event, a.channelBufferSize)
-
 	go func() {
 		defer close(eventChan)
 		a.executeChainRun(ctx, invocation, eventChan)
@@ -124,6 +125,11 @@ func (a *ChainAgent) executeChainRun(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", nil)
+	defer func() {
+		span.End()
+	}()
 	// Setup invocation.
 	a.setupInvocation(invocation)
 
@@ -133,10 +139,13 @@ func (a *ChainAgent) executeChainRun(
 	}
 
 	// Execute sub-agents in sequence.
-	a.executeSubAgents(ctx, invocation, eventChan)
-
+	e := a.executeSubAgents(ctx, invocation, eventChan)
 	// Handle after agent callbacks.
-	a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+	if a.agentCallbacks != nil {
+		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+	}
+	itelemetry.TraceAfterInvokeAgent(span, e)
+
 }
 
 // setupInvocation prepares the invocation for execution.
@@ -184,7 +193,8 @@ func (a *ChainAgent) executeSubAgents(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) {
+) *event.Event {
+	var fullRespEvent *event.Event
 	for _, subAgent := range a.subAgents {
 		// Create clean invocation for sub-agent - no shared state mutation.
 		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
@@ -196,27 +206,39 @@ func (a *ChainAgent) executeSubAgents(
 		subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 		if err != nil {
 			log.Warnf("subEventChan run failed. agent name: %s, err:%v", subInvocation.AgentName, err)
-			agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
+			e := event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
 				model.ErrorTypeFlowError,
 				err.Error(),
-			))
-			return
+			)
+			agent.EmitEvent(ctx, invocation, eventChan, e)
+			return e
 		}
 
 		// Forward all events from the sub-agent.
 		for subEvent := range subEventChan {
+			if subEvent != nil && subEvent.Response != nil && !subEvent.Response.IsPartial {
+				fullRespEvent = subEvent
+			}
 			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
-				return
+				return nil
 			}
 		}
 
 		if err := agent.CheckContextCancelled(ctx); err != nil {
 			log.Warnf("Chain agent %q cancelled execution of sub-agent %q", a.name, subAgent.Info().Name)
-			return
+			e := event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentContextCancelledError,
+				fmt.Sprintf("chain agent %q cancelled execution of sub-agent %q: %v", a.name, subAgent.Info().Name, err),
+			)
+			agent.EmitEvent(ctx, invocation, eventChan, e)
+			return e
 		}
 	}
+	return fullRespEvent
 }
 
 // handleAfterAgentCallbacks handles post-execution callbacks.
@@ -224,10 +246,7 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) {
-	if a.agentCallbacks == nil {
-		return
-	}
+) *event.Event {
 
 	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
 	var evt *event.Event
@@ -248,6 +267,7 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 		)
 	}
 	agent.EmitEvent(ctx, invocation, eventChan, evt)
+	return evt
 }
 
 // Tools implements the agent.Agent interface.

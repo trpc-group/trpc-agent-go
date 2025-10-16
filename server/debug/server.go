@@ -120,7 +120,7 @@ const (
 
 func setTraceInfo() {
 	itelemetry.KeyEventID = keyEventID
-	itelemetry.KeySessionID = keySessionID
+	itelemetry.KeyGenAIConversationID = keySessionID
 	itelemetry.KeyLLMRequest = keyLLMRequest
 	itelemetry.KeyLLMResponse = keyLLMResponse
 	itelemetry.KeyInvocationID = keyInvocationID
@@ -139,7 +139,7 @@ func newApiServerSpanExporter(ts map[string]attribute.Set) *apiServerSpanExporte
 
 func (e *apiServerSpanExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
 	for _, span := range spans {
-		if name := span.Name(); name != itelemetry.SpanNameCallLLM && !strings.HasPrefix(name, itelemetry.SpanNamePrefixExecuteTool) {
+		if name := span.Name(); !strings.HasPrefix(name, itelemetry.OperationChat) && !strings.HasPrefix(name, itelemetry.OperationExecuteTool) {
 			continue
 		}
 		baseAttrs := []attribute.KeyValue{
@@ -170,7 +170,7 @@ func newInMemoryExporter() *inMemoryExporter {
 }
 func (e *inMemoryExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
 	for _, span := range spans {
-		if span.Name() != itelemetry.SpanNameCallLLM {
+		if !strings.HasPrefix(span.Name(), itelemetry.OperationChat) {
 			continue
 		}
 		for _, attr := range span.Attributes() {

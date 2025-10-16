@@ -137,14 +137,14 @@ func TestTransformSpan(t *testing.T) {
 		},
 		{
 			name:          "call_llm operation",
-			operationName: itelemetry.OperationCallLLM,
+			operationName: itelemetry.OperationChat,
 			inputSpan: &tracepb.Span{
 				Name: "test-span",
 				Attributes: []*commonpb.KeyValue{
 					{
 						Key: itelemetry.KeyGenAIOperationName,
 						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationCallLLM},
+							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationChat},
 						},
 					},
 				},
@@ -519,7 +519,7 @@ func TestTransformationPipeline(t *testing.T) {
 								{
 									Key: itelemetry.KeyGenAIOperationName,
 									Value: &commonpb.AnyValue{
-										Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationCallLLM},
+										Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationChat},
 									},
 								},
 								{
@@ -612,7 +612,7 @@ func BenchmarkTransform(b *testing.B) {
 								{
 									Key: itelemetry.KeyGenAIOperationName,
 									Value: &commonpb.AnyValue{
-										Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationCallLLM},
+										Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationChat},
 									},
 								},
 								{
