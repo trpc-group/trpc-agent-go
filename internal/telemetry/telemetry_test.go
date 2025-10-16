@@ -84,7 +84,7 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	// Reset flag.
 	span.called = false
 
-	// 3. TraceCallLLM.
+	// 3. TraceChat.
 	inv := &agent.Invocation{
 		InvocationID: "inv1",
 		Session:      &session.Session{ID: "sess1"},
@@ -92,8 +92,8 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	}
 	req := &model.Request{}
 	resp := &model.Response{}
-	TraceCallLLM(span, inv, req, resp, "event1")
-	require.True(t, span.called, "expected SetAttributes in TraceCallLLM")
+	TraceChat(span, inv, req, resp, "event1")
+	require.True(t, span.called, "expected SetAttributes in TraceChat")
 }
 
 // TestNewConn_InvalidEndpoint ensures an error is returned for an

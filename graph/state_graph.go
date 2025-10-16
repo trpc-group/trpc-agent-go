@@ -513,7 +513,7 @@ func NewLLMNodeFunc(
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameCallLLM)
+		_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
@@ -795,7 +795,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 		}
 
 		// Trace the LLM call using the telemetry package.
-		itelemetry.TraceCallLLM(config.Span, invocation, config.Request, config.Response, llmEvent.ID)
+		itelemetry.TraceChat(config.Span, invocation, config.Request, config.Response, llmEvent.ID)
 		if err := agent.EmitEvent(ctx, invocation, config.EventChan, llmEvent); err != nil {
 			return err
 		}
@@ -1413,7 +1413,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	// Execute the tool with callbacks and get modified arguments.
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, config.ToolCall.Function.Name))
+	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
 	result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
 
 	// Emit tool execution start event with modified arguments.
