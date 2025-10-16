@@ -1045,6 +1045,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件翻译回调
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1200,6 +1209,15 @@
   <a href="#useridresolver" class="md-nav__link">
     <span class="md-ellipsis">
       自定义 UserIDResolver
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件翻译回调
     </span>
   </a>
   
@@ -1472,6 +1490,74 @@
 </span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
 </span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithUserIDResolver</span><span class="p">(</span><span class="nx">resolver</span><span class="p">)))</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="_4">事件翻译回调</h3>
+<p>AG-UI 提供了事件翻译的回调机制，便于在事件翻译流程的前后插入自定义逻辑。</p>
+<ul>
+<li><code>translator.BeforeTranslateCallback</code>：在内部事件被翻译为 AG-UI 事件之前触发。返回值约定：<ul>
+<li>返回 <code>(customEvent, nil)</code>：使用 <code>customEvent</code> 作为翻译的输入事件。</li>
+<li>返回 <code>(nil, nil)</code>：保留当前事件并继续执行后续回调；若所有回调都返回 <code>nil</code>，则最终使用原事件。</li>
+<li>返回错误：终止当前的执行流程，客户端将接收到 <code>RunError</code>。</li>
+</ul>
+</li>
+<li><code>translator.AfterTranslateCallback</code>：在 AG-UI 事件翻译完成，准备发送到客户端之前触发。返回值约定：<ul>
+<li>返回 <code>(customEvent, nil)</code>：使用 <code>customEvent</code> 作为最终发送给客户端的事件。</li>
+<li>返回 <code>(nil, nil)</code>：保留当前事件并继续执行后续回调；若所有回调都返回 <code>nil</code>，则最终发送原事件。</li>
+<li>返回错误：终止当前的执行流程，客户端将接收到 <code>RunError</code>。</li>
+</ul>
+</li>
+</ul>
+<p>使用示例：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-4-10">10</a></span>
+<span class="normal"><a href="#__codelineno-4-11">11</a></span>
+<span class="normal"><a href="#__codelineno-4-12">12</a></span>
+<span class="normal"><a href="#__codelineno-4-13">13</a></span>
+<span class="normal"><a href="#__codelineno-4-14">14</a></span>
+<span class="normal"><a href="#__codelineno-4-15">15</a></span>
+<span class="normal"><a href="#__codelineno-4-16">16</a></span>
+<span class="normal"><a href="#__codelineno-4-17">17</a></span>
+<span class="normal"><a href="#__codelineno-4-18">18</a></span>
+<span class="normal"><a href="#__codelineno-4-19">19</a></span>
+<span class="normal"><a href="#__codelineno-4-20">20</a></span>
+<span class="normal"><a href="#__codelineno-4-21">21</a></span>
+<span class="normal"><a href="#__codelineno-4-22">22</a></span>
+<span class="normal"><a href="#__codelineno-4-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="nx">aguievents</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events&quot;</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/event&quot;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/translator&quot;</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="p">)</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">translator</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="nx">RegisterBeforeTranslate</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">        </span><span class="c1">// 在事件翻译前执行的逻辑</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="w">    </span><span class="p">}).</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="w">    </span><span class="nx">RegisterAfterTranslate</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="w">        </span><span class="c1">// 在事件翻译后执行的逻辑</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">msg</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.(</span><span class="o">*</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">TextMessageContentEvent</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">            </span><span class="c1">// 在事件中修改消息内容</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">NewTextMessageContentEvent</span><span class="p">(</span><span class="nx">msg</span><span class="p">.</span><span class="nx">MessageID</span><span class="p">,</span><span class="w"> </span><span class="nx">msg</span><span class="p">.</span><span class="nx">Delta</span><span class="o">+</span><span class="s">&quot; [via callback]&quot;</span><span class="p">),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithTranslateCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">)))</span>
+</span></code></pre></div></td></tr></table></div>
+<p>事件翻译回调可以用于多种场景，比如：</p>
+<ul>
+<li>自定义事件处理：在事件翻译过程中修改事件数据，添加额外的业务逻辑。</li>
+<li>监控上报：在翻译前后插入监控上报逻辑，与 Langfuse 可观测平台的结合示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse">examples/agui/server/langfuse</a>。</li>
+</ul>
 
 
 
@@ -1494,7 +1580,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年10月14日 01:29:12 UTC">2025-10-14 01:29:12</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年10月16日 01:25:25 UTC">2025-10-16 01:25:25</span>
   </span>
 
     
