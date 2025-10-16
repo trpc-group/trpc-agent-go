@@ -12,6 +12,7 @@ package inmemory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -36,6 +37,12 @@ func New() metric.Manager {
 
 // List lists all metric names identified by the given app name and eval set ID.
 func (m *manager) List(_ context.Context, appName, evalSetID string) ([]string, error) {
+	if appName == "" {
+		return nil, errors.New("empty app name")
+	}
+	if evalSetID == "" {
+		return nil, errors.New("empty eval set id")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSets, ok := m.metrics[appName]
@@ -55,6 +62,12 @@ func (m *manager) List(_ context.Context, appName, evalSetID string) ([]string, 
 
 // Save stores the given metrics identified by the given app name and eval set ID.
 func (m *manager) Save(_ context.Context, appName, evalSetID string, metrics []*metric.EvalMetric) error {
+	if appName == "" {
+		return errors.New("empty app name")
+	}
+	if evalSetID == "" {
+		return errors.New("empty eval set id")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ensureEvalSetExist(appName, evalSetID)
@@ -72,6 +85,15 @@ func (m *manager) Save(_ context.Context, appName, evalSetID string, metrics []*
 
 // Get gets a metric identified by the given app name, eval set ID and metric name.
 func (m *manager) Get(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+	if appName == "" {
+		return nil, errors.New("empty app name")
+	}
+	if evalSetID == "" {
+		return nil, errors.New("empty eval set id")
+	}
+	if metricName == "" {
+		return nil, errors.New("empty metric name")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSets, ok := m.metrics[appName]

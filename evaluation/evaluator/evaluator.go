@@ -14,6 +14,7 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -24,7 +25,8 @@ type Evaluator interface {
 	// Description provides the description of the evaluator.
 	Description() string
 	// Evaluate evaluates the actual invocations against the expected invocations and returns a result.
-	Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation) (*EvaluateResult, error)
+	Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+		evalMetric *metric.EvalMetric) (*EvaluateResult, error)
 }
 
 // EvaluateResult represents the aggregated outcome of running an evaluator over a set of invocations.

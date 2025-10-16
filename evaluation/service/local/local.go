@@ -203,5 +203,5 @@ func (s *local) evaluateMetric(ctx context.Context, evalMetric *metric.EvalMetri
 		return nil, fmt.Errorf("get evaluator for metric %s: %w", evalMetric.MetricName, err)
 	}
 	// Run the evaluation on the actual and expected invocations and return the evaluation result.
-	return metricEvaluator.Evaluate(ctx, actualInvocations, expectedInvocations)
+	return metricEvaluator.Evaluate(ctx, actualInvocations, expectedInvocations, evalMetric)
 }

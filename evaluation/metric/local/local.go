@@ -44,6 +44,12 @@ func New(opts ...metric.Option) metric.Manager {
 }
 
 func (m *manager) List(_ context.Context, appName, evalSetID string) ([]string, error) {
+	if appName == "" {
+		return nil, errors.New("empty app name")
+	}
+	if evalSetID == "" {
+		return nil, errors.New("empty eval set id")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	metrics, err := m.load(appName, evalSetID)
@@ -61,6 +67,12 @@ func (m *manager) List(_ context.Context, appName, evalSetID string) ([]string, 
 }
 
 func (m *manager) Save(_ context.Context, appName, evalSetID string, metrics []*metric.EvalMetric) error {
+	if appName == "" {
+		return errors.New("empty app name")
+	}
+	if evalSetID == "" {
+		return errors.New("empty eval set id")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	err := m.store(appName, evalSetID, metrics)
@@ -71,6 +83,15 @@ func (m *manager) Save(_ context.Context, appName, evalSetID string, metrics []*
 }
 
 func (m *manager) Get(_ context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+	if appName == "" {
+		return nil, errors.New("empty app name")
+	}
+	if evalSetID == "" {
+		return nil, errors.New("empty eval set id")
+	}
+	if metricName == "" {
+		return nil, errors.New("empty metric name")
+	}
 	metrics, err := m.load(appName, evalSetID)
 	if err != nil {
 		return nil, err
@@ -105,10 +126,7 @@ func (m *manager) load(appName, evalSetID string) ([]*metric.EvalMetric, error) 
 
 func (m *manager) store(appName, evalSetID string, metrics []*metric.EvalMetric) error {
 	if metrics == nil {
-		return errors.New("metrics is nil")
-	}
-	if len(metrics) == 0 {
-		return errors.New("metrics is empty")
+		metrics = []*metric.EvalMetric{}
 	}
 	path := m.metricFilePath(appName, evalSetID)
 	dir := filepath.Dir(path)

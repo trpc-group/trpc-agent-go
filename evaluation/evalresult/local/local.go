@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
 )
 
 const (
@@ -57,9 +58,17 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	evalSetResultID, err := m.store(appName, evalSetResult)
+	evalSetResultID := evalSetResult.EvalSetResultID
+	if evalSetResultID == "" {
+		evalSetResultID = fmt.Sprintf("%s_%s", evalSetResult.EvalSetID, uuid.New().String())
+	}
+	cloned, err := clone.Clone(evalSetResult)
 	if err != nil {
-		return "", fmt.Errorf("store eval set result %s.%s: %w", appName, evalSetResult.EvalSetID, err)
+		return "", fmt.Errorf("clone eval set result: %w", err)
+	}
+	cloned.EvalSetResultID = evalSetResultID
+	if err := m.store(appName, cloned); err != nil {
+		return "", fmt.Errorf("store eval set result %s.%s: %w", appName, evalSetResultID, err)
 	}
 	return evalSetResultID, nil
 }
@@ -107,34 +116,33 @@ func (m *manager) load(appName, evalSetResultID string) (*evalresult.EvalSetResu
 }
 
 // store stores the EvalSetResult to the file system.
-func (m *manager) store(appName string, evalSetResult *evalresult.EvalSetResult) (string, error) {
+func (m *manager) store(appName string, evalSetResult *evalresult.EvalSetResult) error {
 	if evalSetResult == nil {
-		return "", errors.New("eval set result is nil")
+		return errors.New("eval set result is nil")
 	}
-	evalSetResultID := fmt.Sprintf("%s_%s", evalSetResult.EvalSetID, uuid.New().String())
-	path := m.evalSetResultPath(appName, evalSetResultID)
+	path := m.evalSetResultPath(appName, evalSetResult.EvalSetResultID)
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, defaultDirPermission); err != nil {
-		return "", fmt.Errorf("mkdir all %s: %w", dir, err)
+		return fmt.Errorf("mkdir all %s: %w", dir, err)
 	}
 	tmp := path + defaultTempFileSuffix
 	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, defaultFilePermission)
 	if err != nil {
-		return "", fmt.Errorf("open file %s: %w", tmp, err)
+		return fmt.Errorf("open file %s: %w", tmp, err)
 	}
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(evalSetResult); err != nil {
 		file.Close()
 		os.Remove(tmp)
-		return "", fmt.Errorf("encode file %s: %w", tmp, err)
+		return fmt.Errorf("encode file %s: %w", tmp, err)
 	}
 	if err := file.Close(); err != nil {
 		os.Remove(tmp)
-		return "", fmt.Errorf("close file %s: %w", tmp, err)
+		return fmt.Errorf("close file %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		return "", fmt.Errorf("rename file %s to %s: %w", tmp, path, err)
+		return fmt.Errorf("rename file %s to %s: %w", tmp, path, err)
 	}
-	return evalSetResultID, nil
+	return nil
 }
