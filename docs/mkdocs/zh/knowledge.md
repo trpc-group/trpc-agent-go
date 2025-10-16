@@ -142,7 +142,7 @@ func main() {
 ```
 
 ### 手动调用示例
-FilterCondition暂只支持Elasticsearch与TCVector
+inmemory暂不支持FilterCondition功能
 
 ```go
 

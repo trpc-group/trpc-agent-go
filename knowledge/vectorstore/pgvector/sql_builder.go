@@ -21,25 +21,96 @@ import (
 // Common field list for SELECT clauses.
 var commonFieldsStr = "*"
 
+// queryFilterBuilder is an interface for building query filters safely.
+type queryFilterBuilder interface {
+	// addIDFilter adds ID filter to the query.
+	addIDFilter(ids []string)
+	// addMetadataFilter adds metadata filter to the query.
+	addMetadataFilter(metadata map[string]any)
+	// addFilterCondition adds a custom filter condition to the query.
+	addFilterCondition(*condConvertResult)
+}
+
+type baseSQLBuilder struct {
+	o          options
+	conditions []string
+	args       []any
+	argIndex   int
+}
+
+func (b *baseSQLBuilder) addFilterCondition(cond *condConvertResult) {
+	if cond == nil || cond.cond == "" {
+		return
+	}
+
+	argNum := len(cond.args)
+	indexes := make([]any, argNum)
+	for i := 0; i < argNum; i++ {
+		indexes[i] = b.argIndex
+		b.argIndex++
+	}
+	c := fmt.Sprintf(cond.cond, indexes...)
+	if len(b.conditions) > 0 {
+		c = fmt.Sprintf("(%s)", c)
+	}
+	b.conditions = append(b.conditions, c)
+	b.args = append(b.args, cond.args...)
+}
+
+// addIDFilter adds ID filter to the query.
+func (b *baseSQLBuilder) addIDFilter(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+
+	placeholders := make([]string, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", b.argIndex)
+		b.args = append(b.args, id)
+		b.argIndex++
+	}
+
+	condition := fmt.Sprintf("%s IN (%s)", b.o.idFieldName, strings.Join(placeholders, ", "))
+	b.conditions = append(b.conditions, condition)
+}
+
+// addMetadataFilter uses @> operator for more efficient JSONB queries.
+// This method is more performant when you have GIN index on metadata column.
+func (b *baseSQLBuilder) addMetadataFilter(metadata map[string]any) {
+	if len(metadata) == 0 {
+		return
+	}
+
+	// Use @> operator for containment check, more efficient with GIN index.
+	// Cast the parameter to JSONB to ensure proper type matching.
+	condition := fmt.Sprintf("%s @> $%d::jsonb", b.o.metadataFieldName, b.argIndex)
+	b.conditions = append(b.conditions, condition)
+
+	// Convert map to JSON string for @> operator.
+	metadataJSON := mapToJSON(metadata)
+	b.args = append(b.args, metadataJSON)
+	b.argIndex++
+}
+
 // Use SearchMode from vectorstore package.
 
 // updateBuilder builds UPDATE SQL statements safely.
 type updateBuilder struct {
-	o        options
+	*baseSQLBuilder
 	table    string
 	id       string
 	setParts []string
-	args     []any
-	argIndex int
 }
 
 func newUpdateBuilder(o options, id string) *updateBuilder {
 	return &updateBuilder{
-		o:        o,
+		baseSQLBuilder: &baseSQLBuilder{
+			o:        o,
+			args:     []any{id, time.Now().Unix()},
+			argIndex: 3,
+		},
 		id:       id,
 		setParts: []string{o.updatedAtFieldName + " = $2"},
-		args:     []any{id, time.Now().Unix()},
-		argIndex: 3,
 	}
 }
 
@@ -58,10 +129,7 @@ func (ub *updateBuilder) build() (string, []any) {
 // It supports different search modes: vector, keyword, hybrid, and filter.
 type queryBuilder struct {
 	// Basic query components
-	o            options
-	conditions   []string
-	args         []any
-	argIndex     int
+	*baseSQLBuilder
 	orderClause  string
 	selectClause string
 
@@ -76,11 +144,13 @@ type queryBuilder struct {
 
 func newQueryBuilder(o options) *queryBuilder {
 	return &queryBuilder{
-		o:            o,
-		conditions:   []string{"1=1"},
-		args:         make([]any, 0),
-		argIndex:     1,
-		selectClause: commonFieldsStr,
+		baseSQLBuilder: &baseSQLBuilder{
+			o:          o,
+			conditions: []string{"1=1"},
+			args:       make([]any, 0),
+			argIndex:   1,
+		},
+		selectClause: fmt.Sprintf("%s, 0.0 as score", commonFieldsStr),
 	}
 }
 
@@ -106,53 +176,19 @@ func newFilterQueryBuilder(o options) *queryBuilder {
 
 // deleteSQLBuilder builds DELETE SQL statements safely with comprehensive filter support
 type deleteSQLBuilder struct {
-	o          options
-	conditions []string
-	args       []any
-	argIndex   int
+	*baseSQLBuilder
 }
 
 // newDeleteSQLBuilder creates a builder for DELETE operations
 func newDeleteSQLBuilder(o options) *deleteSQLBuilder {
 	return &deleteSQLBuilder{
-		o:          o,
-		conditions: []string{"1=1"},
-		args:       make([]any, 0),
-		argIndex:   1,
+		baseSQLBuilder: &baseSQLBuilder{
+			o:          o,
+			conditions: []string{"1=1"},
+			args:       make([]any, 0),
+			argIndex:   1,
+		},
 	}
-}
-
-// addIDFilter adds document ID filter conditions to the delete query
-func (dsb *deleteSQLBuilder) addIDFilter(ids []string) {
-	if len(ids) == 0 {
-		return
-	}
-
-	placeholders := make([]string, len(ids))
-	for i, id := range ids {
-		placeholders[i] = fmt.Sprintf("$%d", dsb.argIndex)
-		dsb.args = append(dsb.args, id)
-		dsb.argIndex++
-	}
-
-	condition := fmt.Sprintf("%s IN (%s)", dsb.o.idFieldName, strings.Join(placeholders, ", "))
-	dsb.conditions = append(dsb.conditions, condition)
-}
-
-// addMetadataFilter adds metadata filter conditions to the delete query
-// Uses @> operator for efficient JSONB queries, same as queryBuilder implementation
-func (dsb *deleteSQLBuilder) addMetadataFilter(metadata map[string]any) {
-	if len(metadata) == 0 {
-		return
-	}
-
-	condition := fmt.Sprintf("%s @> $%d::jsonb", dsb.o.metadataFieldName, dsb.argIndex)
-	dsb.conditions = append(dsb.conditions, condition)
-
-	// Convert map to JSON string for @> operator
-	metadataJSON := mapToJSON(metadata)
-	dsb.args = append(dsb.args, metadataJSON)
-	dsb.argIndex++
 }
 
 // build builds the DELETE query with all conditions
@@ -221,41 +257,6 @@ func (qb *queryBuilder) addSelectClause(scoreExpression string) {
 	qb.selectClause = fmt.Sprintf("%s, %s", commonFieldsStr, scoreExpression)
 }
 
-// addIDFilter adds ID filter to the query.
-func (qb *queryBuilder) addIDFilter(ids []string) {
-	if len(ids) == 0 {
-		return
-	}
-
-	placeholders := make([]string, len(ids))
-	for i, id := range ids {
-		placeholders[i] = fmt.Sprintf("$%d", qb.argIndex)
-		qb.args = append(qb.args, id)
-		qb.argIndex++
-	}
-
-	condition := fmt.Sprintf("%s IN (%s)", qb.o.idFieldName, strings.Join(placeholders, ","))
-	qb.conditions = append(qb.conditions, condition)
-}
-
-// addMetadataFilter uses @> operator for more efficient JSONB queries.
-// This method is more performant when you have GIN index on metadata column.
-func (qb *queryBuilder) addMetadataFilter(metadata map[string]any) {
-	if len(metadata) == 0 {
-		return
-	}
-
-	// Use @> operator for containment check, more efficient with GIN index.
-	// Cast the parameter to JSONB to ensure proper type matching.
-	condition := fmt.Sprintf("%s @> $%d::jsonb", qb.o.metadataFieldName, qb.argIndex)
-	qb.conditions = append(qb.conditions, condition)
-
-	// Convert map to JSON string for @> operator.
-	metadataJSON := mapToJSON(metadata)
-	qb.args = append(qb.args, metadataJSON)
-	qb.argIndex++
-}
-
 // addScoreFilter adds score filter to the query.
 func (qb *queryBuilder) addScoreFilter(minScore float64) {
 	condition := fmt.Sprintf("(1 - (%s <=> $1)) >= %f", qb.o.embeddingFieldName, minScore)
@@ -303,7 +304,7 @@ func (qb *queryBuilder) buildSelectClause() string {
 
 // buildVectorSelectClause generates SELECT clause for vector search.
 func (qb *queryBuilder) buildVectorSelectClause() string {
-	return fmt.Sprintf("%s, 1 - (embedding <=> $1) as score", commonFieldsStr)
+	return fmt.Sprintf("%s, 1 - (%s <=> $1) as score", commonFieldsStr, qb.o.embeddingFieldName)
 }
 
 // buildHybridSelectClause generates SELECT clause for hybrid search.
@@ -337,52 +338,19 @@ func (qb *queryBuilder) buildKeywordSelectClause() string {
 
 // metadataQueryBuilder builds SQL queries specifically for metadata retrieval
 type metadataQueryBuilder struct {
-	o          options
-	conditions []string
-	args       []any
-	argIndex   int
+	*baseSQLBuilder
 }
 
 // newMetadataQueryBuilder creates a builder for metadata queries
 func newMetadataQueryBuilder(o options) *metadataQueryBuilder {
 	return &metadataQueryBuilder{
-		o:          o,
-		conditions: []string{"1=1"},
-		args:       make([]any, 0),
-		argIndex:   1,
+		baseSQLBuilder: &baseSQLBuilder{
+			o:          o,
+			conditions: []string{"1=1"},
+			args:       make([]any, 0),
+			argIndex:   1,
+		},
 	}
-}
-
-// addIDFilter adds document ID filter conditions to the metadata query
-func (mqb *metadataQueryBuilder) addIDFilter(ids []string) {
-	if len(ids) == 0 {
-		return
-	}
-
-	placeholders := make([]string, len(ids))
-	for i, id := range ids {
-		placeholders[i] = fmt.Sprintf("$%d", mqb.argIndex)
-		mqb.args = append(mqb.args, id)
-		mqb.argIndex++
-	}
-
-	condition := fmt.Sprintf("%s IN (%s)", mqb.o.idFieldName, strings.Join(placeholders, ", "))
-	mqb.conditions = append(mqb.conditions, condition)
-}
-
-// addMetadataFilter adds metadata filter conditions to the metadata query
-func (mqb *metadataQueryBuilder) addMetadataFilter(metadata map[string]any) {
-	if len(metadata) == 0 {
-		return
-	}
-
-	condition := fmt.Sprintf("%s @> $%d::jsonb", mqb.o.metadataFieldName, mqb.argIndex)
-	mqb.conditions = append(mqb.conditions, condition)
-
-	// Convert map to JSON string for @> operator
-	metadataJSON := mapToJSON(metadata)
-	mqb.args = append(mqb.args, metadataJSON)
-	mqb.argIndex++
 }
 
 // buildWithPagination builds the metadata query with pagination support
@@ -410,35 +378,19 @@ func (mqb *metadataQueryBuilder) buildWithPagination(limit, offset int) (string,
 
 // countQueryBuilder builds SQL COUNT queries for document counting
 type countQueryBuilder struct {
-	o          options
-	conditions []string
-	args       []any
-	argIndex   int
+	*baseSQLBuilder
 }
 
 // newCountQueryBuilder creates a builder for count queries
 func newCountQueryBuilder(o options) *countQueryBuilder {
 	return &countQueryBuilder{
-		o:          o,
-		conditions: []string{"1=1"},
-		args:       make([]any, 0),
-		argIndex:   1,
+		baseSQLBuilder: &baseSQLBuilder{
+			o:          o,
+			conditions: []string{"1=1"},
+			args:       make([]any, 0),
+			argIndex:   1,
+		},
 	}
-}
-
-// addMetadataFilter adds metadata filter conditions to the count query
-func (cqb *countQueryBuilder) addMetadataFilter(metadata map[string]any) {
-	if len(metadata) == 0 {
-		return
-	}
-
-	condition := fmt.Sprintf("%s @> $%d::jsonb", cqb.o.metadataFieldName, cqb.argIndex)
-	cqb.conditions = append(cqb.conditions, condition)
-
-	// Convert map to JSON string for @> operator
-	metadataJSON := mapToJSON(metadata)
-	cqb.args = append(cqb.args, metadataJSON)
-	cqb.argIndex++
 }
 
 // build builds the COUNT query

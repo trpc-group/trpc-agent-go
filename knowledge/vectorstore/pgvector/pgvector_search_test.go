@@ -12,12 +12,15 @@ package pgvector
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
@@ -1122,4 +1125,117 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.T().Logf("MinScore edge cases: 0.0 returned %d results, 1.0 returned %d results",
 			len(result1.Results), len(result2.Results))
 	})
+}
+
+func Test_Vector_buildQueryFilter(t *testing.T) {
+	tests := []struct {
+		name      string
+		condition *vectorstore.SearchFilter
+		wantErr   bool
+		wantSql   string
+		wantArgs  []any
+	}{
+		{
+			name:     "Empty condition",
+			wantErr:  false,
+			wantSql:  "WHERE 1=1\n",
+			wantArgs: []any{},
+		},
+		{
+			name: "ids condition",
+			condition: &vectorstore.SearchFilter{
+				IDs: []string{"1", "2"},
+			},
+			wantErr:  false,
+			wantSql:  "WHERE 1=1 AND id IN ($1, $2)\n",
+			wantArgs: []any{"1", "2"},
+		},
+		{
+			name: "metadata condition",
+			condition: &vectorstore.SearchFilter{
+				Metadata: map[string]any{
+					"category": "test",
+				},
+			},
+			wantErr:  false,
+			wantSql:  "WHERE 1=1 AND metadata @> $1::jsonb\n",
+			wantArgs: []any{"{\"category\":\"test\"}"},
+		},
+		{
+			name: "filter condition",
+			condition: &vectorstore.SearchFilter{
+				FilterCondition: &searchfilter.UniversalFilterCondition{
+					Operator: searchfilter.OperatorAnd,
+					Value: []*searchfilter.UniversalFilterCondition{
+						{
+							Field:    "name",
+							Operator: searchfilter.OperatorEqual,
+							Value:    "test",
+						},
+						{
+							Field:    "age",
+							Operator: searchfilter.OperatorGreaterThan,
+							Value:    30,
+						},
+					},
+				},
+			},
+			wantErr:  false,
+			wantSql:  "WHERE 1=1 AND ((name = $1) AND (age > $2))\n",
+			wantArgs: []any{"test", 30},
+		},
+		{
+			name: "ids and filter condition",
+			condition: &vectorstore.SearchFilter{
+				IDs: []string{"1", "2"},
+				FilterCondition: &searchfilter.UniversalFilterCondition{
+					Operator: searchfilter.OperatorAnd,
+					Value: []*searchfilter.UniversalFilterCondition{
+						{
+							Field:    "name",
+							Operator: searchfilter.OperatorEqual,
+							Value:    "test",
+						},
+						{
+							Field:    "age",
+							Operator: searchfilter.OperatorGreaterThan,
+							Value:    30,
+						},
+					},
+				},
+			},
+			wantErr:  false,
+			wantSql:  "WHERE 1=1 AND id IN ($1, $2) AND ((name = $3) AND (age > $4))\n",
+			wantArgs: []any{"1", "2", "test", 30},
+		},
+	}
+
+	vs := &VectorStore{
+		option:          defaultOptions,
+		filterConverter: &pgVectorConverter{},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := newVectorQueryBuilder(vs.option)
+			err := vs.buildQueryFilter(qb, tt.condition)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("buildQueryFilter() expected error, but got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("buildQueryFilter() unexpected error = %v", err)
+				return
+			}
+			sql, args := qb.build(10)
+
+			assert.Contains(t, sql, tt.wantSql)
+			if !reflect.DeepEqual(args, tt.wantArgs) {
+				t.Errorf("buildQueryFilter() args = %v, want %v", args, tt.wantArgs)
+			}
+		})
+	}
 }
