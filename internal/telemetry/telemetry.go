@@ -58,6 +58,9 @@ func NewExecuteToolSpanName(toolName string) string {
 // inference operation name: "chat" for openai, "generate_content" for gemini.
 // For example, "chat gpt-4.0".
 func newInferenceSpanName(operationNames, requestModel string) string {
+	if requestModel == "" {
+		return operationNames
+	}
 	return fmt.Sprintf("%s %s", operationNames, requestModel)
 }
 
