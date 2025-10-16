@@ -10,6 +10,8 @@ replace (
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251010213829-13eb1f218b38
 	github.com/sirupsen/logrus v1.9.3
+	go.opentelemetry.io/otel v1.29.0
+	go.opentelemetry.io/otel/trace v1.29.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-00010101000000-000000000000
 )
@@ -27,13 +29,11 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	go.opentelemetry.io/otel v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.29.0 // indirect
 	go.opentelemetry.io/otel/metric v1.29.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.29.0 // indirect
-	go.opentelemetry.io/otel/trace v1.29.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect

@@ -1,14 +1,17 @@
 ## 回调（Callbacks）
 
-本文介绍项目中的回调系统，用于拦截、观测与定制模型推理、工具调用与 Agent 执行。
+本文介绍项目中的回调系统，用于拦截、观测与定制模型推理、工具调用、Agent 执行以及 AG-UI 事件翻译。
 
-回调分为三类：
+回调分为四类：
 
 - ModelCallbacks（模型回调）
 - ToolCallbacks（工具回调）
 - AgentCallbacks（Agent 回调）
+- TranslateCallbacks（AGUI 事件翻译回调）
 
 每类都有 Before 与 After 两种回调。Before 回调可以通过返回非空结果提前返回，跳过默认执行。
+
+所有回调将按照注册顺序依次执行，且一旦有回调返回非 `nil` 值，回调链路将立即停止。如果需要叠加多个回调效果，请在单一回调中实现相应的逻辑。
 
 ---
 
@@ -28,6 +31,7 @@ type AfterModelCallback  func(ctx context.Context, req *model.Request, resp *mod
 
 - Before 可返回非空响应以跳过模型调用
 - After 可获取原始请求 `req`，便于内容还原与后处理
+- Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 示例：
 
@@ -58,6 +62,8 @@ modelCallbacks := model.NewCallbacks().
 
 - BeforeToolCallback：工具调用前触发
 - AfterToolCallback：工具调用后触发
+
+注意：Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 签名：
 
@@ -140,6 +146,7 @@ type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr
 
 - Before 可返回自定义 `*model.Response` 以中止后续模型调用
 - After 可返回替换响应
+- Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 示例：
 
@@ -166,6 +173,57 @@ agentCallbacks := agent.NewCallbacks().
     return inv.Response, nil
   })
 ```
+
+---
+
+## TranslateCallbacks
+
+TranslateCallbacks 作为 AG-UI 事件 translate 的回调，分为两类：
+
+- BeforeTranslateCallback：内部事件翻译为 AG-UI 事件之前触发
+- AfterTranslateCallback：AG-UI 事件翻译完成，发往客户端前触发
+
+签名：
+
+```go
+import (
+    aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+)
+
+type BeforeTranslateCallback func(ctx context.Context, evt *event.Event) (*event.Event, error)
+type AfterTranslateCallback  func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error)
+```
+
+要点：
+
+- Before 回调返回非空自定义事件时，事件翻译的输入被替换为该自定义事件
+- After 回调返回非空自定义事件时，事件翻译的输出被替换为该自定义事件，最终发送给客户端
+- Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
+
+示例：
+
+```go
+import (
+    aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+)
+
+translateCallbacks := translator.NewCallbacks().
+  // 观测内部事件
+  RegisterBeforeTranslate(func(ctx context.Context, event *event.Event) (*event.Event, error) {
+    fmt.Println(event)
+    return nil, nil
+  }).
+  // 观测 AG-UI 事件
+  RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+    fmt.Println(event)
+    return nil, nil
+  })
+```
+
+TranslateCallbacks 的详细介绍参见 [agui](./agui.md)
 
 ---
 
