@@ -228,7 +228,14 @@ func (a *ChainAgent) executeSubAgents(
 
 		if err := agent.CheckContextCancelled(ctx); err != nil {
 			log.Warnf("Chain agent %q cancelled execution of sub-agent %q", a.name, subAgent.Info().Name)
-			return nil
+			e := event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentContextError,
+				fmt.Sprintf("chain agent %q cancelled execution of sub-agent %q: %v", a.name, subAgent.Info().Name, err),
+			)
+			agent.EmitEvent(ctx, invocation, eventChan, e)
+			return e
 		}
 	}
 	return fullRespEvent
