@@ -344,7 +344,7 @@ func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rs
 		} else {
 			span.SetAttributes(attribute.String(KeyLLMRequest, "<not json serializable>"))
 		}
-		span.SetAttributes(attribute.Int(KeyGenAIRequestChoiceCount, len(req.Messages)))
+		span.SetAttributes(attribute.Int(KeyGenAIRequestChoiceCount, 1))
 		if bts, err := json.Marshal(req.Messages); err == nil {
 			span.SetAttributes(
 				attribute.String(KeyGenAIInputMessages, string(bts)),
