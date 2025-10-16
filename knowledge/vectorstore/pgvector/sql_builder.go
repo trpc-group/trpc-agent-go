@@ -21,7 +21,7 @@ import (
 // Common field list for SELECT clauses.
 var commonFieldsStr = "*"
 
-type buildFilter interface {
+type queryFilterBuilder interface {
 	addIDFilter(ids []string)
 	addMetadataFilter(metadata map[string]any)
 	addFilterCondition(*condConvertResult)

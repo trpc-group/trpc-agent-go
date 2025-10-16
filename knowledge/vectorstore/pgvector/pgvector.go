@@ -651,7 +651,7 @@ func (vs *VectorStore) documentExists(ctx context.Context, id string) (bool, err
 	return true, nil
 }
 
-func (vs *VectorStore) buildQueryFilter(qb buildFilter, cond *vectorstore.SearchFilter) error {
+func (vs *VectorStore) buildQueryFilter(qb queryFilterBuilder, cond *vectorstore.SearchFilter) error {
 	if cond == nil {
 		return nil
 	}
