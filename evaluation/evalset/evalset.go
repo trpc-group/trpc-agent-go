@@ -12,35 +12,37 @@ package evalset
 
 import (
 	"context"
-	"time"
 )
 
 // EvalSet represents a collection of evaluation cases.
+// It mirrors the schema used by ADK Web, with field names in camel-case to align with the JSON format.
 type EvalSet struct {
 	// EvalSetID uniquely identifies this evaluation set.
-	EvalSetID string `json:"eval_set_id"`
+	EvalSetID string `json:"evalSetId"`
 	// Name of the evaluation set.
-	Name string `json:"name,omitempty"`
+	Name string `json:"name"`
 	// Description of the evaluation set.
-	Description string `json:"description,omitempty"`
+	Description string `json:"description"`
 	// EvalCases contains all the evaluation cases.
-	EvalCases []*EvalCase `json:"eval_cases"`
+	EvalCases []*EvalCase `json:"evalCases"`
 	// CreationTimestamp when this eval set was created.
-	CreationTimestamp time.Time `json:"creation_timestamp"`
+	CreationTimestamp *EpochTime `json:"creationTimestamp"`
 }
 
-// Manager defines the interface for managing evaluation sets.
+// Manager defines the interface that an evaluation set manager must satisfy.
 type Manager interface {
-	// Get returns an EvalSet identified by evalSetID.
+	// Get gets an EvalSet identified by evalSetID.
 	Get(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
-	// Create creates and returns an empty EvalSet given the evalSetID.
+	// Create creates an EvalSet identified by evalSetID.
 	Create(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
-	// GetCase returns an EvalCase if found, otherwise nil.
+	// List lists all EvalSet IDs for the given appName.
+	List(ctx context.Context, appName string) ([]string, error)
+	// GetCase gets an EvalCase identified by evalSetID and evalCaseID.
 	GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*EvalCase, error)
-	// AddCase adds the given EvalCase to an existing EvalSet identified by evalSetID.
+	// AddCase adds an EvalCase to an existing EvalSet identified by evalSetID.
 	AddCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
-	// UpdateCase updates an existing EvalCase given the evalSetID.
-	UpdateCase(ctx context.Context, appName, evalSetID string, updatedEvalCase *EvalCase) error
-	// DeleteCase deletes the given EvalCase identified by evalSetID and evalCaseID.
+	// UpdateCase updates an EvalCase identified by evalSetID and evalCaseID.
+	UpdateCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
+	// DeleteCase deletes an EvalCase identified by evalSetID and evalCaseID.
 	DeleteCase(ctx context.Context, appName, evalSetID, evalCaseID string) error
 }

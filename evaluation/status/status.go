@@ -24,16 +24,23 @@ const (
 	EvalStatusNotEvaluated
 )
 
+const (
+	statusUnknownStr      = "unknown"
+	statusPassedStr       = "passed"
+	statusFailedStr       = "failed"
+	statusNotEvaluatedStr = "not_evaluated"
+)
+
 // String returns the string representation of the evaluation status.
 func (s EvalStatus) String() string {
 	switch s {
 	case EvalStatusPassed:
-		return "passed"
+		return statusPassedStr
 	case EvalStatusFailed:
-		return "failed"
+		return statusFailedStr
 	case EvalStatusNotEvaluated:
-		return "not_evaluated"
+		return statusNotEvaluatedStr
 	default:
-		return "unknown"
+		return statusUnknownStr
 	}
 }

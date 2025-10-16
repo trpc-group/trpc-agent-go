@@ -13,12 +13,12 @@ import (
 	"context"
 )
 
-// Manager administers evaluation metrics used when running agent evaluations.
+// Manager defines the interface for managing evaluation metrics.
 type Manager interface {
-	// List returns all metrics configured for the given app + eval set.
-	List(ctx context.Context, appName, evalSetID string) ([]*EvalMetric, error)
-	// Save replaces the metrics configured for the given app + eval set.
+	// List returns all metric names identified by the given app name and eval set ID.
+	List(ctx context.Context, appName, evalSetID string) ([]string, error)
+	// Save stores the given metrics identified by the given app name and eval set ID.
 	Save(ctx context.Context, appName, evalSetID string, metrics []*EvalMetric) error
-	// Get fetches a single metric by name.
+	// Get gets a metric identified by the given app name, eval set ID and metric name.
 	Get(ctx context.Context, appName, evalSetID, metricName string) (*EvalMetric, error)
 }

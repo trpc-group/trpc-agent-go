@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -57,7 +58,7 @@ func (e *toolTrajectoryEvaluator) Description() string {
 
 // Evaluate compares tool usage trajectories between actual and expected invocations.
 func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context,
-	actuals, expecteds []*evalset.Invocation) (*evaluator.EvaluationResult, error) {
+	actuals, expecteds []*evalset.Invocation) (*evaluator.EvaluateResult, error) {
 	if len(actuals) != len(expecteds) {
 		return nil, fmt.Errorf("tooltrajectory: actual invocations (%d) and expected invocations (%d) count mismatch",
 			len(actuals), len(expecteds))
@@ -83,12 +84,12 @@ func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context,
 		totalScore += score
 	}
 	if len(perInvocation) == 0 {
-		return &evaluator.EvaluationResult{
+		return &evaluator.EvaluateResult{
 			OverallStatus: status.EvalStatusNotEvaluated,
 		}, nil
 	}
 	overallScore := totalScore / float64(len(perInvocation))
-	return &evaluator.EvaluationResult{
+	return &evaluator.EvaluateResult{
 		OverallScore:         overallScore,
 		OverallStatus:        e.statusForScore(overallScore),
 		PerInvocationResults: perInvocation,
@@ -102,14 +103,14 @@ func (e *toolTrajectoryEvaluator) statusForScore(score float64) status.EvalStatu
 	return status.EvalStatusFailed
 }
 
-func getToolCalls(invocation *evalset.Invocation) []*evalset.FunctionCall {
+func getToolCalls(invocation *evalset.Invocation) []*genai.FunctionCall {
 	if invocation == nil || invocation.IntermediateData == nil {
 		return nil
 	}
 	return invocation.IntermediateData.ToolUses
 }
 
-func toolCallsEqual(actual, expected []*evalset.FunctionCall) bool {
+func toolCallsEqual(actual, expected []*genai.FunctionCall) bool {
 	if len(actual) != len(expected) {
 		return false
 	}

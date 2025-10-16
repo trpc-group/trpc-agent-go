@@ -7,7 +7,7 @@
 //
 //
 
-// Package inmemory provides a in-memory storage implementation for evaluation sets.
+// Package inmemory provides a in-memory manager implementation for evaluation sets.
 package inmemory
 
 import (
@@ -19,20 +19,18 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/internal/clone"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
 )
 
-// Manager implements the evalset.Manager interface using in-memory storage.
-//
-// The manager keeps an in-memory copy of all eval sets. Each API returns
-// deep-cloned objects to avoid accidental mutation by callers.
+// Manager implements the evalset.Manager interface using in-memory manager.
+// Each API returns deep-copied objects to avoid accidental mutation.
 type manager struct {
 	mu        sync.RWMutex
-	evalSets  map[string]map[string]*evalset.EvalSet
-	evalCases map[string]map[string]map[string]*evalset.EvalCase
+	evalSets  map[string]map[string]*evalset.EvalSet             // appName -> evalID -> EvalSet.
+	evalCases map[string]map[string]map[string]*evalset.EvalCase // appName -> evalID -> evalCaseID -> EvalCase.
 }
 
-// New creates a new in-memory evaluation set manager.
+// New creates a in-memory evaluation set manager.
 func New() evalset.Manager {
 	return &manager{
 		evalSets:  make(map[string]map[string]*evalset.EvalSet),
@@ -40,89 +38,80 @@ func New() evalset.Manager {
 	}
 }
 
-func (m *manager) ensureApp(appName string) {
-	if _, ok := m.evalSets[appName]; !ok {
-		m.evalSets[appName] = make(map[string]*evalset.EvalSet)
-		m.evalCases[appName] = make(map[string]map[string]*evalset.EvalCase)
-	}
-}
-
-// Get returns an EvalSet identified by evalSetID. If the set does not exist,
-// os.ErrNotExist is returned.
-func (m *manager) Get(ctx context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
-	_ = ctx
+// Get gets an EvalSet identified by evalSetID.
+// Returns an error if the EvalSet does not exist.
+func (m *manager) Get(_ context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	setsByApp, ok := m.evalSets[appName]
-	if !ok {
-		return nil, fmt.Errorf("%w: eval set %s", os.ErrNotExist, evalSetID)
-	}
-	es, ok := setsByApp[evalSetID]
-	if !ok {
-		return nil, fmt.Errorf("%w: eval set %s", os.ErrNotExist, evalSetID)
-	}
-	cloned, err := clone.CloneEvalSet(es)
+	evalSet, err := m.loadEvalSet(appName, evalSetID)
 	if err != nil {
-		return nil, fmt.Errorf("clone eval set %s: %w", evalSetID, err)
+		return nil, fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
+	}
+	cloned, err := clone.Clone(evalSet)
+	if err != nil {
+		return nil, fmt.Errorf("clone eval set %s.%s: %w", appName, evalSetID, err)
 	}
 	return cloned, nil
 }
 
-// Create creates and returns an empty EvalSet given the evalSetID. If the set
-// already exists, a cloned copy is returned.
-func (m *manager) Create(ctx context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
-	_ = ctx
+// Create creates an EvalSet.
+// Returns an error if the EvalSet already exists.
+func (m *manager) Create(_ context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ensureApp(appName)
-	if es, ok := m.evalSets[appName][evalSetID]; ok {
-		cloned, err := clone.CloneEvalSet(es)
-		if err != nil {
-			return nil, fmt.Errorf("clone eval set %s: %w", evalSetID, err)
-		}
-		return cloned, nil
+	m.ensureAppExist(appName)
+	if _, ok := m.evalSets[appName][evalSetID]; ok {
+		return nil, fmt.Errorf("eval set %s.%s already exists", appName, evalSetID)
 	}
-	es := &evalset.EvalSet{
+	evalSet := &evalset.EvalSet{
 		EvalSetID:         evalSetID,
+		Name:              evalSetID,
 		EvalCases:         []*evalset.EvalCase{},
-		CreationTimestamp: time.Now().UTC(),
+		CreationTimestamp: &evalset.EpochTime{Time: time.Now()},
 	}
-	m.evalSets[appName][evalSetID] = es
+	m.evalSets[appName][evalSetID] = evalSet
 	m.evalCases[appName][evalSetID] = make(map[string]*evalset.EvalCase)
-	cloned, err := clone.CloneEvalSet(es)
+	cloned, err := clone.Clone(evalSet)
 	if err != nil {
-		return nil, fmt.Errorf("clone eval set %s: %w", evalSetID, err)
+		return nil, fmt.Errorf("clone eval set %s.%s: %w", appName, evalSetID, err)
 	}
 	return cloned, nil
 }
 
-// GetCase returns an EvalCase if found, otherwise an error.
-func (m *manager) GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*evalset.EvalCase, error) {
-	_ = ctx
+// List lists all EvalSet IDs for the given appName.
+// Returns an error if the appName does not exist.
+func (m *manager) List(_ context.Context, appName string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	casesByApp, ok := m.evalCases[appName]
-	if !ok {
-		return nil, fmt.Errorf("%w: eval set %s", os.ErrNotExist, evalSetID)
+	if _, ok := m.evalSets[appName]; !ok {
+		return []string{}, nil
 	}
-	casesBySet, ok := casesByApp[evalSetID]
-	if !ok {
-		return nil, fmt.Errorf("%w: eval set %s", os.ErrNotExist, evalSetID)
+	evalSetIDs := make([]string, 0, len(m.evalSets[appName]))
+	for evalSetID := range m.evalSets[appName] {
+		evalSetIDs = append(evalSetIDs, evalSetID)
 	}
-	casePtr, ok := casesBySet[evalCaseID]
-	if !ok {
-		return nil, fmt.Errorf("%w: eval case %s", os.ErrNotExist, evalCaseID)
-	}
-	cloned, err := clone.CloneEvalCase(casePtr)
+	return evalSetIDs, nil
+}
+
+// GetCase gets an EvalCase.
+// Returns an error if the EvalCase does not exist.
+func (m *manager) GetCase(_ context.Context, appName, evalSetID, evalCaseID string) (*evalset.EvalCase, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	evalCase, err := m.loadEvalCase(appName, evalSetID, evalCaseID)
 	if err != nil {
-		return nil, fmt.Errorf("clone eval case %s: %w", evalCaseID, err)
+		return nil, fmt.Errorf("load eval case %s.%s.%s: %w", appName, evalSetID, evalCaseID, err)
+	}
+	cloned, err := clone.Clone(evalCase)
+	if err != nil {
+		return nil, fmt.Errorf("clone eval case %s.%s.%s: %w", appName, evalSetID, evalCaseID, err)
 	}
 	return cloned, nil
 }
 
 // AddCase adds the given EvalCase to an existing EvalSet identified by evalSetID.
-func (m *manager) AddCase(ctx context.Context, appName, evalSetID string, evalCase *evalset.EvalCase) error {
-	_ = ctx
+// Returns an error if the EvalSet does not exist or the EvalCase already exists.
+func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase *evalset.EvalCase) error {
 	if evalCase == nil {
 		return errors.New("evalCase is nil")
 	}
@@ -131,76 +120,114 @@ func (m *manager) AddCase(ctx context.Context, appName, evalSetID string, evalCa
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ensureApp(appName)
-	es, ok := m.evalSets[appName][evalSetID]
-	if !ok {
-		return fmt.Errorf("%w: eval set %s", os.ErrNotExist, evalSetID)
+	m.ensureAppExist(appName)
+	evalSet, err := m.loadEvalSet(appName, evalSetID)
+	if err != nil {
+		return fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
 	if _, exists := m.evalCases[appName][evalSetID][evalCase.EvalID]; exists {
 		return fmt.Errorf("eval case %s.%s.%s already exists", appName, evalSetID, evalCase.EvalID)
 	}
-	cloned, err := clone.CloneEvalCase(evalCase)
+	cloned, err := clone.Clone(evalCase)
 	if err != nil {
-		return fmt.Errorf("clone eval case %s: %w", evalCase.EvalID, err)
+		return fmt.Errorf("clone eval case %s.%s.%s: %w", appName, evalSetID, evalCase.EvalID, err)
 	}
 	m.evalCases[appName][evalSetID][evalCase.EvalID] = cloned
-	es.EvalCases = append(es.EvalCases, cloned)
+	evalSet.EvalCases = append(evalSet.EvalCases, cloned)
 	return nil
 }
 
-// UpdateCase updates an existing EvalCase given the evalSetID.
-func (m *manager) UpdateCase(ctx context.Context, appName, evalSetID string, updatedEvalCase *evalset.EvalCase) error {
-	_ = ctx
-	if updatedEvalCase == nil {
-		return errors.New("updatedEvalCase is nil")
+// UpdateCase updates an existing EvalCase.
+// Returns an error if the EvalSet does not exist or the EvalCase does not exist.
+func (m *manager) UpdateCase(_ context.Context, appName, evalSetID string, evalCase *evalset.EvalCase) error {
+	if evalCase == nil {
+		return errors.New("evalCase is nil")
 	}
-	if updatedEvalCase.EvalID == "" {
-		return errors.New("updatedEvalCase.EvalID is empty")
+	if evalCase.EvalID == "" {
+		return errors.New("evalCase.EvalID is empty")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ensureApp(appName)
-	es, ok := m.evalSets[appName][evalSetID]
-	if !ok {
-		return fmt.Errorf("%w: eval set %s", os.ErrNotExist, evalSetID)
-	}
-	if _, exists := m.evalCases[appName][evalSetID][updatedEvalCase.EvalID]; !exists {
-		return fmt.Errorf("%w: eval case %s", os.ErrNotExist, updatedEvalCase.EvalID)
-	}
-	cloned, err := clone.CloneEvalCase(updatedEvalCase)
+	m.ensureAppExist(appName)
+	evalSet, err := m.loadEvalSet(appName, evalSetID)
 	if err != nil {
-		return fmt.Errorf("clone eval case %s: %w", updatedEvalCase.EvalID, err)
+		return fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
-	m.evalCases[appName][evalSetID][updatedEvalCase.EvalID] = cloned
-	for i, c := range es.EvalCases {
-		if c != nil && c.EvalID == updatedEvalCase.EvalID {
-			es.EvalCases[i] = cloned
+	if _, exists := m.evalCases[appName][evalSetID][evalCase.EvalID]; !exists {
+		return fmt.Errorf("eval case %s.%s.%s not found: %w", appName, evalSetID, evalCase.EvalID, os.ErrNotExist)
+	}
+	cloned, err := clone.Clone(evalCase)
+	if err != nil {
+		return fmt.Errorf("clone eval case %s.%s.%s: %w", appName, evalSetID, evalCase.EvalID, err)
+	}
+	m.evalCases[appName][evalSetID][evalCase.EvalID] = cloned
+	for i, c := range evalSet.EvalCases {
+		if c.EvalID == evalCase.EvalID {
+			evalSet.EvalCases[i] = cloned
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: eval case %s", os.ErrNotExist, updatedEvalCase.EvalID)
+	return fmt.Errorf("eval case %s.%s.%s not found: %w", appName, evalSetID, evalCase.EvalID, os.ErrNotExist)
 }
 
-// DeleteCase deletes the given EvalCase identified by evalSetID and evalCaseID.
-func (m *manager) DeleteCase(ctx context.Context, appName, evalSetID, evalCaseID string) error {
-	_ = ctx
+// DeleteCase deletes the given EvalCase.
+// Returns an error if the EvalSet does not exist or the EvalCase does not exist.
+func (m *manager) DeleteCase(_ context.Context, appName, evalSetID, evalCaseID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ensureApp(appName)
-	es, ok := m.evalSets[appName][evalSetID]
-	if !ok {
-		return fmt.Errorf("%w: eval set %s", os.ErrNotExist, evalSetID)
+	m.ensureAppExist(appName)
+	evalSet, err := m.loadEvalSet(appName, evalSetID)
+	if err != nil {
+		return fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
 	if _, exists := m.evalCases[appName][evalSetID][evalCaseID]; !exists {
-		return fmt.Errorf("%w: eval case %s", os.ErrNotExist, evalCaseID)
+		return fmt.Errorf("eval case %s.%s.%s not found: %w", appName, evalSetID, evalCaseID, os.ErrNotExist)
 	}
 	delete(m.evalCases[appName][evalSetID], evalCaseID)
-	filtered := es.EvalCases[:0]
-	for _, c := range es.EvalCases {
-		if c != nil && c.EvalID != evalCaseID {
+	filtered := evalSet.EvalCases[:0]
+	for _, c := range evalSet.EvalCases {
+		if c.EvalID != evalCaseID {
 			filtered = append(filtered, c)
 		}
 	}
-	es.EvalCases = filtered
+	evalSet.EvalCases = filtered
 	return nil
+}
+
+// ensureAppExist ensures the app exists.
+func (m *manager) ensureAppExist(appName string) {
+	if _, ok := m.evalSets[appName]; !ok {
+		m.evalSets[appName] = make(map[string]*evalset.EvalSet)
+		m.evalCases[appName] = make(map[string]map[string]*evalset.EvalCase)
+	}
+}
+
+// loadEvalSet loads the EvalSet.
+func (m *manager) loadEvalSet(appName, evalSetID string) (*evalset.EvalSet, error) {
+	evalSets, ok := m.evalSets[appName]
+	if !ok {
+		return nil, fmt.Errorf("app %s not found: %w", appName, os.ErrNotExist)
+	}
+	evalSet, ok := evalSets[evalSetID]
+	if !ok {
+		return nil, fmt.Errorf("eval set %s.%s not found: %w", appName, evalSetID, os.ErrNotExist)
+	}
+	return evalSet, nil
+}
+
+// loadEvalCase loads the EvalCase.
+func (m *manager) loadEvalCase(appName, evalSetID, evalCaseID string) (*evalset.EvalCase, error) {
+	evalCasesBySet, ok := m.evalCases[appName]
+	if !ok {
+		return nil, fmt.Errorf("app %s not found: %w", appName, os.ErrNotExist)
+	}
+	cases, ok := evalCasesBySet[evalSetID]
+	if !ok {
+		return nil, fmt.Errorf("eval set %s.%s not found: %w", appName, evalSetID, os.ErrNotExist)
+	}
+	evalCase, ok := cases[evalCaseID]
+	if !ok {
+		return nil, fmt.Errorf("eval case %s.%s.%s not found: %w", appName, evalSetID, evalCaseID, os.ErrNotExist)
+	}
+	return evalCase, nil
 }

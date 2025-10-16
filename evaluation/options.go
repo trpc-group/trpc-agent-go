@@ -30,9 +30,9 @@ func newOptions(opt ...Option) *options {
 	opts := &options{
 		numRuns:           defaultNumRuns,
 		evalSetManager:    evalsetinmemory.New(),
-		evalResultManager: evalresultinmemory.NewManager(),
+		evalResultManager: evalresultinmemory.New(),
 		metricManager:     metricinmemory.New(),
-		evaluatorRegistry: registry.NewRegistry(),
+		evaluatorRegistry: registry.New(),
 	}
 	// Apply user options.
 	for _, o := range opt {

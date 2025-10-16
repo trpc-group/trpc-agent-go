@@ -5,36 +5,25 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
-// Package metric provides options for the metric manager.
 package metric
 
-import "path/filepath"
+// defaultBaseDir is the default base directory for metric files.
+const defaultBaseDir = "."
 
-const (
-	// DefaultBaseDir is the default base directory for metric files.
-	DefaultBaseDir = "metrics"
-	// DefaultMetricsExtension is the default extension for metric files.
-	DefaultMetricsExtension = ".metrics.json"
-)
-
-// PathBuilder builds the absolute path where metric configurations should be stored.
-type PathBuilder func(baseDir, appName, evalSetID string) string
-
-// Options configure the local metric manager.
+// Options holds the configuration for the metric manager.
 type Options struct {
 	// BaseDir is the base directory for metric files.
 	BaseDir string
-	// PathBuilder is the function to build the absolute path where metric configurations should be stored.
-	PathBuilder PathBuilder
+	// Locator is the locator for metric files.
+	Locator Locator
 }
 
-// NewOptions constructs Options with defaults mirroring the eval set manager layout.
+// NewOptions creates a Options with the default values.
 func NewOptions(opts ...Option) *Options {
 	options := &Options{
-		BaseDir:     DefaultBaseDir,
-		PathBuilder: defaultPathBuilder,
+		BaseDir: defaultBaseDir,
+		Locator: &locator{},
 	}
 	for _, o := range opts {
 		o(options)
@@ -42,23 +31,19 @@ func NewOptions(opts ...Option) *Options {
 	return options
 }
 
-// Option configures Options.
+// Option defines a function type for configuring the metric manager.
 type Option func(*Options)
 
-// WithBaseDir sets the root directory for storing metric JSON files.
+// WithBaseDir sets the base directory.
 func WithBaseDir(dir string) Option {
 	return func(o *Options) {
 		o.BaseDir = dir
 	}
 }
 
-// WithPathBuilder overrides how metric file paths are generated.
-func WithPathBuilder(p PathBuilder) Option {
+// WithLocator sets the locator.
+func WithLocator(l Locator) Option {
 	return func(o *Options) {
-		o.PathBuilder = p
+		o.Locator = l
 	}
-}
-
-func defaultPathBuilder(baseDir, appName, evalSetID string) string {
-	return filepath.Join(baseDir, appName, evalSetID+DefaultMetricsExtension)
 }

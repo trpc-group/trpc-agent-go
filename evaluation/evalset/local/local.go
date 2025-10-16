@@ -7,7 +7,7 @@
 //
 //
 
-// Package local provides a local file storage implementation for evaluation sets.
+// Package local provides a local file storage manager implementation for evaluation sets.
 package local
 
 import (
@@ -21,67 +21,76 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/internal/clone"
+)
+
+const (
+	defaultTempFileSuffix = ".tmp"
+	defaultDirPermission  = 0o755
+	defaultFilePermission = 0o644
 )
 
 // manager implements evalset.Manager backed by the local filesystem.
 type manager struct {
-	mu          sync.RWMutex
-	baseDir     string
-	pathBuilder evalset.PathBuilder
+	mu      sync.RWMutex
+	baseDir string
+	locator evalset.Locator
 }
 
-// NewManager creates a new local file evaluation set manager.
-// Use functional options defined in option.go; defaults mirror the Python implementation.
-func NewManager(opt ...evalset.Option) evalset.Manager {
+// New creates a local file evaluation set manager.
+func New(opt ...evalset.Option) evalset.Manager {
 	opts := evalset.NewOptions(opt...)
 	return &manager{
-		baseDir:     opts.BaseDir,
-		pathBuilder: opts.PathBuilder,
+		baseDir: opts.BaseDir,
+		locator: opts.Locator,
 	}
 }
 
-// Get returns an EvalSet identified by evalSetID.
+// Get gets an EvalSet identified by evalSetID.
+// Returns an error if the EvalSet does not exist.
 func (m *manager) Get(_ context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSet, err := m.load(appName, evalSetID)
 	if err != nil {
-		return nil, fmt.Errorf("load eval set %s for app %s: %w", evalSetID, appName, err)
+		return nil, fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
-	clonedEvalSet, err := clone.CloneEvalSet(evalSet)
-	if err != nil {
-		return nil, fmt.Errorf("clone eval set %s: %w", evalSetID, err)
-	}
-	return clonedEvalSet, nil
+	return evalSet, nil
 }
 
-// Create creates and returns an empty EvalSet given the evalSetID.
+// Create creates an EvalSet.
+// Returns an error if the EvalSet already exists.
 func (m *manager) Create(_ context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, err := m.load(appName, evalSetID); err == nil {
-		return nil, fmt.Errorf("eval set %s already exists for app %s", evalSetID, appName)
+		return nil, fmt.Errorf("eval set %s.%s already exists", appName, evalSetID)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("load eval set %s for app %s: %w", evalSetID, appName, err)
+		return nil, fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
 	evalSet := &evalset.EvalSet{
 		EvalSetID:         evalSetID,
 		Name:              evalSetID,
 		EvalCases:         []*evalset.EvalCase{},
-		CreationTimestamp: time.Now().UTC(),
+		CreationTimestamp: &evalset.EpochTime{Time: time.Now()},
 	}
 	if err := m.store(appName, evalSet); err != nil {
-		return nil, fmt.Errorf("store eval set %s for app %s: %w", evalSetID, appName, err)
+		return nil, fmt.Errorf("store eval set %s.%s: %w", appName, evalSetID, err)
 	}
-	clonedEvalSet, err := clone.CloneEvalSet(evalSet)
-	if err != nil {
-		return nil, fmt.Errorf("clone eval set %s: %w", evalSetID, err)
-	}
-	return clonedEvalSet, nil
+	return evalSet, nil
 }
 
-// GetCase returns an EvalCase if found, otherwise nil.
+// List lists all EvalSet ID for the given appName.
+// Returns an error if the appName does not exist.
+func (m *manager) List(_ context.Context, appName string) ([]string, error) {
+	evalSetIDs, err := m.locator.List(m.baseDir, appName)
+	if err != nil {
+		return nil, fmt.Errorf("list eval sets for app %s: %w", appName, err)
+	}
+	return evalSetIDs, nil
+}
+
+// GetCase gets an EvalCase.
+// Returns an error if the EvalCase does not exist.
 func (m *manager) GetCase(_ context.Context, appName, evalSetID, evalCaseID string) (*evalset.EvalCase, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -90,18 +99,15 @@ func (m *manager) GetCase(_ context.Context, appName, evalSetID, evalCaseID stri
 		return nil, fmt.Errorf("load eval set %s for app %s: %w", evalSetID, appName, err)
 	}
 	for _, c := range evalSet.EvalCases {
-		if c != nil && c.EvalID == evalCaseID {
-			clonedEvalCase, err := clone.CloneEvalCase(c)
-			if err != nil {
-				return nil, fmt.Errorf("clone eval case %s: %w", evalCaseID, err)
-			}
-			return clonedEvalCase, nil
+		if c.EvalID == evalCaseID {
+			return c, nil
 		}
 	}
-	return nil, fmt.Errorf("eval case %s.%s.%s not found", appName, evalSetID, evalCaseID)
+	return nil, fmt.Errorf("%w: eval case %s.%s.%s not found", os.ErrNotExist, appName, evalSetID, evalCaseID)
 }
 
 // AddCase adds the given EvalCase to an existing EvalSet identified by evalSetID.
+// If the EvalSet does not exist or the EvalCase already exists, returns an error.
 func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase *evalset.EvalCase) error {
 	if evalCase == nil {
 		return errors.New("evalCase is nil")
@@ -113,63 +119,74 @@ func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase
 	defer m.mu.Unlock()
 	evalSet, err := m.load(appName, evalSetID)
 	if err != nil {
-		return fmt.Errorf("load eval set %s for app %s: %w", evalSetID, appName, err)
+		return fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
 	for _, c := range evalSet.EvalCases {
-		if c != nil && c.EvalID == evalCase.EvalID {
+		if c.EvalID == evalCase.EvalID {
 			return fmt.Errorf("eval case %s.%s.%s already exists", appName, evalSetID, evalCase.EvalID)
 		}
 	}
-	clonedEvalCase, err := clone.CloneEvalCase(evalCase)
-	if err != nil {
-		return fmt.Errorf("clone eval case %s: %w", evalCase.EvalID, err)
+	evalSet.EvalCases = append(evalSet.EvalCases, evalCase)
+	if err := m.store(appName, evalSet); err != nil {
+		return fmt.Errorf("store eval set %s.%s: %w", appName, evalSetID, err)
 	}
-	evalSet.EvalCases = append(evalSet.EvalCases, clonedEvalCase)
-	return m.store(appName, evalSet)
+	return nil
 }
 
-// UpdateCase updates an existing EvalCase given the evalSetID.
-func (m *manager) UpdateCase(_ context.Context, appName, evalSetID string, updatedEvalCase *evalset.EvalCase) error {
+// UpdateCase updates an existing EvalCase.
+// If the EvalSet does not exist or the EvalCase does not exist, returns an error.
+func (m *manager) UpdateCase(_ context.Context, appName, evalSetID string, evalCase *evalset.EvalCase) error {
+	if evalCase == nil {
+		return errors.New("evalCase is nil")
+	}
+	if evalCase.EvalID == "" {
+		return errors.New("evalCase.EvalID is empty")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	evalSet, err := m.load(appName, evalSetID)
 	if err != nil {
-		return fmt.Errorf("load eval set %s for app %s: %w", evalSetID, appName, err)
+		return fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
 	for i, c := range evalSet.EvalCases {
-		if c != nil && c.EvalID == updatedEvalCase.EvalID {
-			clonedEvalCase, err := clone.CloneEvalCase(updatedEvalCase)
-			if err != nil {
-				return fmt.Errorf("clone eval case %s: %w", updatedEvalCase.EvalID, err)
+		if c.EvalID == evalCase.EvalID {
+			evalSet.EvalCases[i] = evalCase
+			if err := m.store(appName, evalSet); err != nil {
+				return fmt.Errorf("store eval set %s.%s: %w", appName, evalSetID, err)
 			}
-			evalSet.EvalCases[i] = clonedEvalCase
-			return m.store(appName, evalSet)
+			return nil
 		}
 	}
-	return fmt.Errorf("eval case %s.%s.%s not found", appName, evalSetID, updatedEvalCase.EvalID)
+	return fmt.Errorf("eval case %s.%s.%s not found: %w", appName, evalSetID, evalCase.EvalID, os.ErrNotExist)
 }
 
-// DeleteCase deletes the given EvalCase identified by evalSetID and evalCaseID.
+// DeleteCase deletes the given EvalCase.
+// If the EvalSet does not exist or the EvalCase does not exist, returns an error.
 func (m *manager) DeleteCase(_ context.Context, appName, evalSetID, evalCaseID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	evalSet, err := m.load(appName, evalSetID)
 	if err != nil {
-		return fmt.Errorf("load eval set %s for app %s: %w", evalSetID, appName, err)
+		return fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
 	for i, c := range evalSet.EvalCases {
-		if c != nil && c.EvalID == evalCaseID {
+		if c.EvalID == evalCaseID {
 			evalSet.EvalCases = append(evalSet.EvalCases[:i], evalSet.EvalCases[i+1:]...)
-			return m.store(appName, evalSet)
+			if err := m.store(appName, evalSet); err != nil {
+				return fmt.Errorf("store eval set %s.%s: %w", appName, evalSetID, err)
+			}
+			return nil
 		}
 	}
-	return fmt.Errorf("eval case %s.%s.%s not found", appName, evalSetID, evalCaseID)
+	return fmt.Errorf("eval case %s.%s.%s not found: %w", appName, evalSetID, evalCaseID, os.ErrNotExist)
 }
 
+// evalSetPath builds the path to the EvalSet file.
 func (m *manager) evalSetPath(appName, evalSetID string) string {
-	return m.pathBuilder(m.baseDir, appName, evalSetID)
+	return m.locator.Build(m.baseDir, appName, evalSetID)
 }
 
+// load loads the EvalSet from the file system.
 func (m *manager) load(appName, evalSetID string) (*evalset.EvalSet, error) {
 	path := m.evalSetPath(appName, evalSetID)
 	data, err := os.ReadFile(path)
@@ -186,16 +203,18 @@ func (m *manager) load(appName, evalSetID string) (*evalset.EvalSet, error) {
 	return &evalSet, nil
 }
 
+// store stores the EvalSet to the file system.
 func (m *manager) store(appName string, evalSet *evalset.EvalSet) error {
 	if evalSet == nil {
-		return errors.New("evalset is nil")
+		return errors.New("evalSet is nil")
 	}
 	path := m.evalSetPath(appName, evalSet.EvalSetID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("mkdir all %s: %w", filepath.Dir(path), err)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, defaultDirPermission); err != nil {
+		return fmt.Errorf("mkdir all %s: %w", dir, err)
 	}
-	tmp := path + ".tmp"
-	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	tmp := path + defaultTempFileSuffix
+	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, defaultFilePermission)
 	if err != nil {
 		return fmt.Errorf("open file %s: %w", tmp, err)
 	}
@@ -203,11 +222,11 @@ func (m *manager) store(appName string, evalSet *evalset.EvalSet) error {
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(evalSet); err != nil {
 		file.Close()
-		_ = os.Remove(tmp)
+		os.Remove(tmp)
 		return fmt.Errorf("encode file %s: %w", tmp, err)
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(tmp)
+		os.Remove(tmp)
 		return fmt.Errorf("close file %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {

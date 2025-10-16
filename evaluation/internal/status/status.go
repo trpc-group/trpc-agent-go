@@ -13,12 +13,12 @@ package status
 import (
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
 // SummarizeMetricsStatus summarizes the metric statuses into a single value.
-func SummarizeMetricsStatus(metrics []*metric.EvalMetricResult) (status.EvalStatus, error) {
+func SummarizeMetricsStatus(metrics []*evalresult.EvalMetricResult) (status.EvalStatus, error) {
 	evalStatuses := make([]status.EvalStatus, 0, len(metrics))
 	for _, evalMetricResult := range metrics {
 		if evalMetricResult == nil {

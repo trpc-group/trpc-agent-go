@@ -12,29 +12,30 @@ package registry
 
 import (
 	"errors"
-	"sort"
+	"fmt"
+	"os"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/tooltrajectory"
 )
 
-// Registry manages the registration and retrieval of evaluators
+// Registry defines the interface for evaluators registry.
 type Registry interface {
+	// Register registers an evaluator to the registry.
 	Register(name string, e evaluator.Evaluator) error
-	Unregister(name string) error
+	// Get retrieves an evaluator by name.
 	Get(name string) (evaluator.Evaluator, error)
-	List() []string
 }
 
-// Registry manages the registration and retrieval of evaluators
+// registry is the default implementation of Registry.
 type registry struct {
 	mu         sync.RWMutex
 	evaluators map[string]evaluator.Evaluator
 }
 
-// NewRegistry creates a new evaluator registry
-func NewRegistry() Registry {
+// New creates a evaluator registry
+func New() Registry {
 	r := &registry{
 		evaluators: make(map[string]evaluator.Evaluator),
 	}
@@ -43,8 +44,8 @@ func NewRegistry() Registry {
 	return r
 }
 
-// Register adds an evaluator to the registry
-// If an evaluator with the same name exists, returns an error.
+// Register registers an evaluator to the registry.
+// Same name evaluator will be overwritten.
 func (r *registry) Register(name string, e evaluator.Evaluator) error {
 	if e == nil {
 		return errors.New("evaluator is nil")
@@ -57,42 +58,17 @@ func (r *registry) Register(name string, e evaluator.Evaluator) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.evaluators[name]; ok {
-		return errors.New("evaluator already registered: " + name)
-	}
 	r.evaluators[name] = e
 	return nil
 }
 
-// Get retrieves an evaluator by name
+// Get gets an evaluator by name.
+// Returns os.ErrNotExist if the evaluator is not found.
 func (r *registry) Get(name string) (evaluator.Evaluator, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if e, ok := r.evaluators[name]; ok {
 		return e, nil
 	}
-	return nil, errors.New("evaluator not found: " + name)
-}
-
-// List returns all registered evaluator names in sorted order
-func (r *registry) List() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.evaluators))
-	for n := range r.evaluators {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// Unregister removes an evaluator from the registry
-func (r *registry) Unregister(name string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.evaluators[name]; !ok {
-		return errors.New("evaluator not found: " + name)
-	}
-	delete(r.evaluators, name)
-	return nil
+	return nil, fmt.Errorf("get evaluator %s: %w", name, os.ErrNotExist)
 }

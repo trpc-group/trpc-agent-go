@@ -7,100 +7,96 @@
 //
 //
 
-// Package inmemory provides an in-memory storage implementation for evaluation results.
+// Package inmemory provides an in-memory storage evaluation result manager implementation.
 package inmemory
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"sync"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
 )
 
-// manager implements evalresult.Manager backed by process memory.
+// manager implements evalresult.Manager backed by in-memory.
+// Each API returns deep-copied objects to avoid accidental mutation.
 type manager struct {
-	mu      sync.RWMutex
-	results map[string]*evalresult.EvalSetResult
+	mu             sync.RWMutex
+	evalSetResults map[string]map[string]*evalresult.EvalSetResult // appName -> evalSetResultID -> EvalSetResult.
 }
 
-// NewManager creates a new in-memory evaluation result manager.
-func NewManager() evalresult.Manager {
+// New creates a in-memory evaluation result manager.
+func New() evalresult.Manager {
 	return &manager{
-		results: make(map[string]*evalresult.EvalSetResult),
+		evalSetResults: make(map[string]map[string]*evalresult.EvalSetResult),
 	}
 }
 
-// Save stores a deep-copied evaluation result keyed by EvalSetResultID.
-func (m *manager) Save(ctx context.Context, result *evalresult.EvalSetResult) error {
-	_ = ctx
-	if result == nil {
-		return errors.New("result is nil")
+// Save stores a evaluation result keyed by EvalSetResultID.
+// If the eval set result id is empty, it will be generated.
+// Returns an error if the app name is empty or the eval set result is nil or the eval set id is empty.
+func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalresult.EvalSetResult) (string, error) {
+	if appName == "" {
+		return "", errors.New("app name is empty")
 	}
-	if result.EvalSetResultID == "" {
-		return errors.New("result id is empty")
+	if evalSetResult == nil {
+		return "", errors.New("eval set result is nil")
 	}
-
-	cloned, err := cloneEvalSetResult(result)
+	if evalSetResult.EvalSetID == "" {
+		return "", errors.New("eval set id is empty")
+	}
+	evalSetResultID := evalSetResult.EvalSetResultID
+	if evalSetResultID == "" {
+		evalSetResultID = fmt.Sprintf("%s_%s", evalSetResult.EvalSetID, uuid.New().String())
+	}
+	cloned, err := clone.Clone(evalSetResult)
 	if err != nil {
-		return fmt.Errorf("clone result: %w", err)
+		return "", fmt.Errorf("clone result: %w", err)
 	}
-
+	cloned.EvalSetResultID = evalSetResultID
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.results[result.EvalSetResultID] = cloned
-	return nil
+	if _, ok := m.evalSetResults[appName]; !ok {
+		m.evalSetResults[appName] = make(map[string]*evalresult.EvalSetResult)
+	}
+	m.evalSetResults[appName][evalSetResultID] = cloned
+	return evalSetResultID, nil
 }
 
-// Get retrieves a copied evaluation result by its identifier.
-func (m *manager) Get(ctx context.Context, evalSetResultID string) (*evalresult.EvalSetResult, error) {
-	_ = ctx
+// Get retrieves evaluation result by evalSetResultID.
+func (m *manager) Get(_ context.Context, appName, evalSetResultID string) (*evalresult.EvalSetResult, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	stored, ok := m.results[evalSetResultID]
+	evalSetResults, ok := m.evalSetResults[appName]
 	if !ok {
-		return nil, fmt.Errorf("%w: eval set result %s", os.ErrNotExist, evalSetResultID)
+		return nil, fmt.Errorf("app %s not found: %w", appName, os.ErrNotExist)
 	}
-	cloned, err := cloneEvalSetResult(stored)
+	evalSetResult, ok := evalSetResults[evalSetResultID]
+	if !ok {
+		return nil, fmt.Errorf("eval set result %s.%s not found: %w", appName, evalSetResultID, os.ErrNotExist)
+	}
+	cloned, err := clone.Clone(evalSetResult)
 	if err != nil {
-		return nil, fmt.Errorf("clone result: %w", err)
+		return nil, fmt.Errorf("clone eval set result %s.%s: %w", appName, evalSetResultID, err)
 	}
 	return cloned, nil
 }
 
-// List returns copies of all stored evaluation results.
-func (m *manager) List(ctx context.Context) ([]*evalresult.EvalSetResult, error) {
-	_ = ctx
+// List returns all stored evaluation results.
+func (m *manager) List(_ context.Context, appName string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	results := make([]*evalresult.EvalSetResult, 0, len(m.results))
-	for _, stored := range m.results {
-		cloned, err := cloneEvalSetResult(stored)
-		if err != nil {
-			return nil, fmt.Errorf("clone result: %w", err)
-		}
-		results = append(results, cloned)
+	evalSetResults, ok := m.evalSetResults[appName]
+	if !ok {
+		return []string{}, nil
 	}
-	return results, nil
-}
-
-// cloneEvalSetResult performs a deep copy using JSON round-tripping to avoid shared references.
-func cloneEvalSetResult(result *evalresult.EvalSetResult) (*evalresult.EvalSetResult, error) {
-	if result == nil {
-		return nil, errors.New("result is nil")
+	evalSetResultIDs := make([]string, 0, len(evalSetResults))
+	for id := range evalSetResults {
+		evalSetResultIDs = append(evalSetResultIDs, id)
 	}
-	data, err := json.Marshal(result)
-	if err != nil {
-		return nil, err
-	}
-	var cloned evalresult.EvalSetResult
-	if err := json.Unmarshal(data, &cloned); err != nil {
-		return nil, err
-	}
-	return &cloned, nil
+	return evalSetResultIDs, nil
 }

@@ -7,7 +7,7 @@
 //
 //
 
-// Package inmemory provides an in-memory metric manager.
+// Package inmemory provides an in-memory metric manager implementation.
 package inmemory
 
 import (
@@ -16,59 +16,89 @@ import (
 	"os"
 	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/internal/clone"
 )
 
+// manager implements metric.Manager backed by in-memory.
+// Each API returns deep-copied objects to avoid accidental mutation.
 type manager struct {
 	mu      sync.RWMutex
-	metrics map[string]map[string][]*metric.EvalMetric // app -> evalSet -> metrics
+	metrics map[string]map[string][]*metric.EvalMetric // appName -> evalSetID -> []*metric.EvalMetric.
 }
 
-// New creates a new in-memory metric manager.
+// New creates a in-memory metric manager.
 func New() metric.Manager {
 	return &manager{
 		metrics: make(map[string]map[string][]*metric.EvalMetric),
 	}
 }
 
-func (m *manager) ensure(appName, evalSetID string) {
+// List lists all metric names identified by the given app name and eval set ID.
+func (m *manager) List(_ context.Context, appName, evalSetID string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	evalSets, ok := m.metrics[appName]
+	if !ok {
+		return []string{}, nil
+	}
+	metrics, ok := evalSets[evalSetID]
+	if !ok {
+		return []string{}, nil
+	}
+	metricNames := make([]string, 0, len(metrics))
+	for _, metric := range metrics {
+		metricNames = append(metricNames, metric.MetricName)
+	}
+	return metricNames, nil
+}
+
+// Save stores the given metrics identified by the given app name and eval set ID.
+func (m *manager) Save(_ context.Context, appName, evalSetID string, metrics []*metric.EvalMetric) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureEvalSetExist(appName, evalSetID)
+	clonedMetrics := make([]*metric.EvalMetric, 0, len(metrics))
+	for _, metric := range metrics {
+		cloned, err := clone.Clone(metric)
+		if err != nil {
+			return fmt.Errorf("clone metric: %w", err)
+		}
+		clonedMetrics = append(clonedMetrics, cloned)
+	}
+	m.metrics[appName][evalSetID] = clonedMetrics
+	return nil
+}
+
+// Get gets a metric identified by the given app name, eval set ID and metric name.
+func (m *manager) Get(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	evalSets, ok := m.metrics[appName]
+	if !ok {
+		return nil, fmt.Errorf("app %s not found: %w", appName, os.ErrNotExist)
+	}
+	metrics, ok := evalSets[evalSetID]
+	if !ok {
+		return nil, fmt.Errorf("eval set %s.%s not found: %w", appName, evalSetID, os.ErrNotExist)
+	}
+	for _, metric := range metrics {
+		if metric != nil && metric.MetricName == metricName {
+			cloned, err := clone.Clone(metric)
+			if err != nil {
+				return nil, fmt.Errorf("clone metric: %w", err)
+			}
+			return cloned, nil
+		}
+	}
+	return nil, fmt.Errorf("metric %s.%s.%s not found: %w", appName, evalSetID, metricName, os.ErrNotExist)
+}
+
+func (m *manager) ensureEvalSetExist(appName, evalSetID string) {
 	if _, ok := m.metrics[appName]; !ok {
 		m.metrics[appName] = make(map[string][]*metric.EvalMetric)
 	}
 	if _, ok := m.metrics[appName][evalSetID]; !ok {
 		m.metrics[appName][evalSetID] = []*metric.EvalMetric{}
 	}
-}
-
-func (m *manager) List(_ context.Context, appName, evalSetID string) ([]*metric.EvalMetric, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if sets, ok := m.metrics[appName]; ok {
-		if metrics, ok := sets[evalSetID]; ok {
-			return clone.CloneMetrics(metrics), nil
-		}
-	}
-	return []*metric.EvalMetric{}, nil
-}
-
-func (m *manager) Save(_ context.Context, appName, evalSetID string, metrics []*metric.EvalMetric) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensure(appName, evalSetID)
-	m.metrics[appName][evalSetID] = clone.CloneMetrics(metrics)
-	return nil
-}
-
-func (m *manager) Get(ctx context.Context, appName, evalSetID, metricName string) (*metric.EvalMetric, error) {
-	metrics, err := m.List(ctx, appName, evalSetID)
-	if err != nil {
-		return nil, err
-	}
-	for _, metric := range metrics {
-		if metric != nil && metric.MetricName == metricName {
-			return metric, nil
-		}
-	}
-	return nil, fmt.Errorf("%w: metric %s", os.ErrNotExist, metricName)
 }
