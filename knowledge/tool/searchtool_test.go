@@ -83,14 +83,41 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		require.Contains(t, rsp.Message, "Found relevant content")
 	})
 
-	// Verify Declaration metadata is populated.
-	kb := stubKnowledge{}
-	ttool := NewKnowledgeSearchTool(kb)
-	decl := ttool.Declaration()
-	require.NotEmpty(t, decl.Name)
-	require.NotEmpty(t, decl.Description)
-	require.NotNil(t, decl.InputSchema)
-	require.NotNil(t, decl.OutputSchema)
+	t.Run("verify options", func(t *testing.T) {
+		kb := stubKnowledge{}
+
+		// Verify Declaration metadata is populated.
+		ttool := NewKnowledgeSearchTool(kb)
+		decl := ttool.Declaration()
+		require.NotEmpty(t, decl.Name)
+		require.NotEmpty(t, decl.Description)
+		require.NotNil(t, decl.InputSchema)
+		require.NotNil(t, decl.OutputSchema)
+
+		// Verify WithToolName option
+		customName := "custom_search_tool"
+		ttool = NewKnowledgeSearchTool(kb, WithToolName(customName))
+		decl = ttool.Declaration()
+		require.Equal(t, customName, decl.Name)
+
+		// Verify WithToolDescription option
+		customDesc := "Custom search description"
+		ttool = NewKnowledgeSearchTool(kb, WithToolDescription(customDesc))
+		decl = ttool.Declaration()
+		require.Equal(t, customDesc, decl.Description)
+
+		// Verify WithFilter option
+		customFilter := map[string]any{"source": "internal"}
+		ttool = NewKnowledgeSearchTool(kb, WithFilter(customFilter))
+		decl = ttool.Declaration()
+		require.NotEmpty(t, decl.Name)
+
+		// Verify all options together
+		ttool = NewKnowledgeSearchTool(kb, WithToolName(customName), WithToolDescription(customDesc), WithFilter(customFilter))
+		decl = ttool.Declaration()
+		require.Equal(t, customName, decl.Name)
+		require.Equal(t, customDesc, decl.Description)
+	})
 }
 
 func TestAgenticFilterSearchTool(t *testing.T) {
@@ -186,6 +213,35 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 		decl := searchTool.Declaration()
 		require.Contains(t, decl.Description, "helpful assistant")
 		require.NotContains(t, decl.Description, "Available filters")
+	})
+
+	t.Run("verify options", func(t *testing.T) {
+		kb := stubKnowledge{}
+
+		// Verify WithToolName option
+		customName := "custom_agentic_search"
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo, WithToolName(customName))
+		decl := searchTool.Declaration()
+		require.Equal(t, customName, decl.Name)
+
+		// Verify WithToolDescription option
+		customDesc := "Custom agentic description"
+		searchTool = NewAgenticFilterSearchTool(kb, agenticFilterInfo, WithToolDescription(customDesc))
+		decl = searchTool.Declaration()
+		require.Contains(t, decl.Description, "tool description:"+customDesc)
+		require.Contains(t, decl.Description, "filter info:")
+
+		// Verify WithFilter option
+		customFilter := map[string]any{"source": "internal"}
+		searchTool = NewAgenticFilterSearchTool(kb, agenticFilterInfo, WithFilter(customFilter))
+		decl = searchTool.Declaration()
+		require.NotEmpty(t, decl.Name)
+
+		// Verify all options together
+		searchTool = NewAgenticFilterSearchTool(kb, agenticFilterInfo, WithToolName(customName), WithToolDescription(customDesc), WithFilter(customFilter))
+		decl = searchTool.Declaration()
+		require.Equal(t, customName, decl.Name)
+		require.Contains(t, decl.Description, "tool description:"+customDesc)
 	})
 }
 
