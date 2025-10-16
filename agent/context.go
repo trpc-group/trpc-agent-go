@@ -10,5 +10,5 @@
 // Package agent provides the core agent functionality.
 package agent
 
-// ErrorTypeContextError is used for errors from context operations.
-const ErrorTypeAgentContextError = "agent_context_cancelled_error"
+// ErrorTypeAgentContextCancelledError is the error type for context cancelled error.
+const ErrorTypeAgentContextCancelledError = "agent_context_cancelled_error"
