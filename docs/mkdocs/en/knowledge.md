@@ -144,7 +144,6 @@ func main() {
 ```
 
 ### Manual Search Example
-The FilterCondition feature is currently not supported in the inmemory vector store.
 
 ```go
 
