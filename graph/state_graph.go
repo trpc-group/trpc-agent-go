@@ -94,6 +94,37 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithCacheKeyFields sets a cache key selector that derives the cache key
+// input from a subset of fields in the sanitized input map. This helps avoid
+// including unrelated or volatile keys in the cache key.
+func WithCacheKeyFields(fields ...string) Option {
+	// copy fields to avoid external mutation
+	fcopy := append([]string(nil), fields...)
+	return func(node *Node) {
+		node.cacheKeySelector = func(m map[string]any) any {
+			if m == nil {
+				return nil
+			}
+			out := make(map[string]any, len(fcopy))
+			for _, k := range fcopy {
+				if v, ok := m[k]; ok {
+					out[k] = v
+				}
+			}
+			return out
+		}
+	}
+}
+
+// WithCacheKeySelector sets a custom selector for deriving the cache key input
+// from the sanitized input map. The returned value will be passed to the
+// CachePolicy.KeyFunc.
+func WithCacheKeySelector(selector func(map[string]any) any) Option {
+	return func(node *Node) {
+		node.cacheKeySelector = selector
+	}
+}
+
 // WithNodeCachePolicy sets a cache policy for this node.
 // When set, the executor will attempt to cache the node's final result using this policy.
 func WithNodeCachePolicy(policy *CachePolicy) Option {
@@ -469,6 +500,13 @@ func (sg *StateGraph) WithCache(cache Cache) *StateGraph {
 // WithCachePolicy sets the default cache policy for all nodes (can be overridden per-node).
 func (sg *StateGraph) WithCachePolicy(policy *CachePolicy) *StateGraph {
 	sg.graph.setCachePolicy(policy)
+	return sg
+}
+
+// WithGraphVersion sets an optional version string used for cache namespacing.
+// This helps avoid stale cache collisions across graph code changes or deployments.
+func (sg *StateGraph) WithGraphVersion(version string) *StateGraph {
+	sg.graph.setGraphVersion(version)
 	return sg
 }
 

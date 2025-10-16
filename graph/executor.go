@@ -1251,8 +1251,14 @@ func (e *Executor) executeSingleTask(
 	if c := e.graph.Cache(); c != nil {
 		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
 			sanitized := sanitizeForCacheKey(t.Input)
+			// Apply optional cache key selector (node-level) to focus on relevant inputs.
+			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
+				if m, ok2 := sanitized.(map[string]any); ok2 {
+					sanitized = node.cacheKeySelector(m)
+				}
+			}
 			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
-				ns := buildCacheNamespace(t.NodeID)
+				ns := e.graph.cacheNamespace(t.NodeID)
 				if cached, ok := c.Get(ns, string(keyBytes)); ok {
 					// Cache hit: skip node execution; use cached result.
 					result = cached
@@ -1390,6 +1396,23 @@ func (e *Executor) finalizeSuccessfulExecution(
 	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
 	if herr != nil {
 		return herr
+	}
+
+	// After successful writes, persist cache entry if cache policy exists.
+	if c := e.graph.Cache(); c != nil {
+		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
+			// Use the same sanitized input used for lookup (post-callback state copy).
+			sanitized := sanitizeForCacheKey(nodeCtx.stateCopy)
+			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
+				if m, ok2 := sanitized.(map[string]any); ok2 {
+					sanitized = node.cacheKeySelector(m)
+				}
+			}
+			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
+				ns := e.graph.cacheNamespace(t.NodeID)
+				c.Set(ns, string(keyBytes), result, pol.TTL)
+			}
+		}
 	}
 
 	// Update versions seen for this node after successful execution.
@@ -2150,7 +2173,7 @@ func (e *Executor) emitNodeCompleteEvent(
 			completeEvent.StateDelta = make(map[string][]byte)
 		}
 		// Best-effort hint: add a virtual output key for observability.
-		completeEvent.StateDelta["_cache_hit"] = []byte("true")
+		completeEvent.StateDelta[MetadataKeyCacheHit] = []byte("true")
 	}
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, completeEvent)
 }

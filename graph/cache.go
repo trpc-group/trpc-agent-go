@@ -18,6 +18,12 @@ import (
 	"time"
 )
 
+// Cache-related string constants.
+const (
+	// CacheNamespacePrefix is the prefix for per-node cache namespaces.
+	CacheNamespacePrefix = "__writes__"
+)
+
 // Cache is a minimal interface for storing and retrieving node results.
 // Implementations must be concurrency-safe.
 type Cache interface {
@@ -131,5 +137,5 @@ func (c *InMemoryCache) Clear(ns string) {
 // buildCacheNamespace builds a per-node namespace for cache entries.
 // We scope by node ID only to align with the executor's node semantics.
 func buildCacheNamespace(nodeID string) string {
-	return fmt.Sprintf("__writes__:%s", nodeID)
+	return fmt.Sprintf("%s:%s", CacheNamespacePrefix, nodeID)
 }
