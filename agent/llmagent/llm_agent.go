@@ -623,7 +623,6 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 // executeAgentFlow executes the agent flow with before agent callbacks.
 // Returns the event channel and any error that occurred.
 func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	// Run before agent callbacks if they exist.
 	if a.agentCallbacks != nil {
 		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
