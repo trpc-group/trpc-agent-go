@@ -149,11 +149,11 @@ func (c *esConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCo
 		return nil, fmt.Errorf("field is empty")
 	}
 	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("between operator value must be slice with two elements: %v", cond.Value)
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 	value := reflect.ValueOf(cond.Value)
 	if value.Len() != 2 {
-		return nil, fmt.Errorf("between operator value must be slice with two elements: %v", cond.Value)
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 
 	return &types.Query{
@@ -171,7 +171,7 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 		return nil, fmt.Errorf("field is empty")
 	}
 	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice || reflect.ValueOf(cond.Value).Len() == 0 {
-		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
+		return nil, fmt.Errorf("in operator value must be a slice with at least one elememt: %v", cond.Value)
 	}
 
 	termsQuery := types.Query{
@@ -199,7 +199,7 @@ func (c *esConverter) buildLikeCondition(cond *searchfilter.UniversalFilterCondi
 	}
 	valueStr, ok := cond.Value.(string)
 	if !ok {
-		return nil, fmt.Errorf("like operator value must be string: %v", cond.Value)
+		return nil, fmt.Errorf("like operator value must be a string: %v", cond.Value)
 	}
 
 	wildcardPattern := strings.ReplaceAll(valueStr, "%", "*")
