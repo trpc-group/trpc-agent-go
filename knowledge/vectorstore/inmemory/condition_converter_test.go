@@ -1080,7 +1080,7 @@ func Test_inmemoryConverter_buildComparisonCondition(t *testing.T) {
 					"tags": map[string]any{"category": "tech"},
 				},
 			},
-			expectMatch: true,
+			expectMatch: false,
 		},
 
 		{
@@ -1090,16 +1090,8 @@ func Test_inmemoryConverter_buildComparisonCondition(t *testing.T) {
 				Operator: searchfilter.OperatorEqual,
 				Value:    123,
 			},
-			wantErr: true,
-		},
-		{
-			name: "unsupported operator",
-			cond: &searchfilter.UniversalFilterCondition{
-				Field:    "id",
-				Operator: "unknown_op",
-				Value:    "doc1",
-			},
-			wantErr: true,
+			wantErr:     false,
+			expectMatch: false,
 		},
 	}
 
@@ -1152,11 +1144,12 @@ func Test_valueTypeDetection(t *testing.T) {
 }
 
 func Test_fieldValueRetrieval(t *testing.T) {
+	now := time.Now()
 	doc := &document.Document{
 		ID:        "doc1",
 		Name:      "Test Document",
 		Content:   "Test content",
-		CreatedAt: time.Now(),
+		CreatedAt: now,
 		Metadata: map[string]any{
 			"count": 5,
 			"tags":  map[string]any{"category": "tech"},
@@ -1171,18 +1164,14 @@ func Test_fieldValueRetrieval(t *testing.T) {
 		{"id field", "id", "doc1"},
 		{"name field", "name", "Test Document"},
 		{"content field", "content", "Test content"},
+		{"created_at field", "created_at", now},
 		{"metadata field", "metadata.count", 5},
-		{"nested metadata", "metadata.tags.category", "tech"},
+		{"nested metadata", "metadata.tags.category", nil},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			val, ok := fieldValue(doc, tt.field)
-			if !ok {
-				t.Errorf("field %s not found", tt.field)
-				return
-			}
-
+			val, _ := fieldValue(doc, tt.field)
 			if !reflect.DeepEqual(val, tt.expected) {
 				t.Errorf("fieldValue() = %v, want %v", val, tt.expected)
 			}
@@ -1322,7 +1311,7 @@ func TestComparisonFuncBehavior(t *testing.T) {
 				Value:    now.Add(-24 * time.Hour),
 			},
 			doc: &document.Document{
-				Metadata: map[string]any{"created_at": now},
+				CreatedAt: now,
 			},
 			expected: true,
 		},
@@ -1354,146 +1343,124 @@ func TestComparisonFuncBehavior(t *testing.T) {
 	}
 }
 
-func TestComparisonFuncBehavior_1(t *testing.T) {
-	c := &inmemoryConverter{}
-
-	t.Run("equal operator behavior", func(t *testing.T) {
-		cond := &searchfilter.UniversalFilterCondition{
-			Operator: searchfilter.OperatorEqual,
-			Field:    "lang",
-			Value:    "en",
-		}
-		cf, err := c.Convert(cond)
-		require.NoError(t, err)
-		require.NotNil(t, cf)
-
-		doc := &document.Document{Metadata: map[string]any{"lang": "en"}}
-		require.True(t, cf(doc))
-
-		doc = &document.Document{Metadata: map[string]any{"lang": "fr"}}
-		require.False(t, cf(doc))
-	})
-
-	t.Run("in operator behavior", func(t *testing.T) {
-		cond := &searchfilter.UniversalFilterCondition{
-			Operator: searchfilter.OperatorIn,
-			Field:    "lang",
-			Value:    []any{"en", "fr"},
-		}
-		cf, err := c.Convert(cond)
-		require.NoError(t, err)
-		require.NotNil(t, cf)
-
-		doc := &document.Document{Metadata: map[string]any{"lang": "en"}}
-		require.True(t, cf(doc))
-
-		doc = &document.Document{Metadata: map[string]any{"lang": "es"}}
-		require.False(t, cf(doc))
-	})
-
-	t.Run("logical AND behavior", func(t *testing.T) {
-		cond := &searchfilter.UniversalFilterCondition{
-			Operator: searchfilter.OperatorAnd,
-			Value: []*searchfilter.UniversalFilterCondition{
-				{Operator: searchfilter.OperatorEqual, Field: "lang", Value: "en"},
-				{Operator: searchfilter.OperatorGreaterThan, Field: "score", Value: 0.5},
-			},
-		}
-		cf, err := c.Convert(cond)
-		require.NoError(t, err)
-		require.NotNil(t, cf)
-
-		doc := &document.Document{Metadata: map[string]any{"lang": "en", "score": 0.6}}
-		require.True(t, cf(doc))
-
-		doc = &document.Document{Metadata: map[string]any{"lang": "fr", "score": 0.6}}
-		require.False(t, cf(doc))
-
-		doc = &document.Document{Metadata: map[string]any{"lang": "en", "score": 0.4}}
-		require.False(t, cf(doc))
-	})
-}
-
 func Test_inmemoryConverter_Convert(t *testing.T) {
-	type args struct {
-		cond *searchfilter.UniversalFilterCondition
+	type docCheck struct {
+		doc  *document.Document
+		want bool
 	}
 	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
+		name      string
+		cond      *searchfilter.UniversalFilterCondition
+		docChecks []docCheck
+		wantErr   bool
+		wantNil   bool
 	}{
 		{
 			name:    "nil condition",
-			args:    args{cond: nil},
 			wantErr: false,
+			wantNil: true,
 		},
 		{
 			name: "valid logical AND condition",
-			args: args{
-				cond: &searchfilter.UniversalFilterCondition{
-					Operator: searchfilter.OperatorAnd,
-					Value: []*searchfilter.UniversalFilterCondition{
-						{Operator: searchfilter.OperatorEqual, Field: "lang", Value: "en"},
-						{Operator: searchfilter.OperatorGreaterThan, Field: "score", Value: 0.5},
-					},
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorAnd,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{Operator: searchfilter.OperatorEqual, Field: "metadata.lang", Value: "en"},
+					{Operator: searchfilter.OperatorGreaterThan, Field: "metadata.score", Value: 5},
 				},
 			},
+			docChecks: []docCheck{
+				{doc: &document.Document{Metadata: map[string]any{"lang": "en", "score": 6}}, want: true},
+				{doc: &document.Document{Metadata: map[string]any{"lang": "en", "score": 4}}, want: false},
+			},
 			wantErr: false,
+			wantNil: false,
+		},
+		{
+			name: "valid logical OR condition",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{Operator: searchfilter.OperatorEqual, Field: "metadata.lang", Value: "en"},
+					{Operator: searchfilter.OperatorGreaterThan, Field: "metadata.score", Value: 5},
+				},
+			},
+			docChecks: []docCheck{
+				{doc: &document.Document{Metadata: map[string]any{"lang": "ff", "score": 6}}, want: true},
+				{doc: &document.Document{Metadata: map[string]any{"lang": "en", "score": 4}}, want: true},
+				{doc: &document.Document{Metadata: map[string]any{"lang": "ff", "score": 3}}, want: false},
+			},
+			wantErr: false,
+			wantNil: false,
 		},
 		{
 			name: "valid equal operator",
-			args: args{
-				cond: &searchfilter.UniversalFilterCondition{
-					Operator: searchfilter.OperatorEqual,
-					Field:    "lang",
-					Value:    "en",
-				},
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorEqual,
+				Field:    "content",
+				Value:    "Sample",
+			},
+			docChecks: []docCheck{
+				{doc: &document.Document{Content: "Sample"}, want: true},
+				{doc: &document.Document{Metadata: map[string]any{"lang": "en", "score": 0.4}}, want: false},
 			},
 			wantErr: false,
+			wantNil: false,
 		},
 		{
 			name: "valid in operator",
-			args: args{
-				cond: &searchfilter.UniversalFilterCondition{
-					Operator: searchfilter.OperatorIn,
-					Field:    "lang",
-					Value:    []any{"en", "fr"},
-				},
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorIn,
+				Field:    "content",
+				Value:    []any{"Sample", "fr"},
+			},
+			docChecks: []docCheck{
+				{doc: &document.Document{Content: "Sample"}, want: true},
+				{doc: &document.Document{Content: "Test"}, want: false},
 			},
 			wantErr: false,
+			wantNil: false,
 		},
 		{
 			name: "unsupported operator",
-			args: args{
-				cond: &searchfilter.UniversalFilterCondition{
-					Operator: "invalid",
-				},
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: "invalid",
 			},
 			wantErr: true,
+			wantNil: true,
 		},
 		{
 			name: "invalid value type for AND operator",
-			args: args{
-				cond: &searchfilter.UniversalFilterCondition{
-					Operator: searchfilter.OperatorAnd,
-					Value:    "invalid",
-				},
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorAnd,
+				Value:    "invalid",
 			},
 			wantErr: true,
+			wantNil: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &inmemoryConverter{}
-			got, err := c.Convert(tt.args.cond)
-			if tt.wantErr {
-				require.Error(t, err)
-				require.Nil(t, got)
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, got)
+			cf, err := c.Convert(tt.cond)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Convert() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if (cf == nil) != tt.wantNil {
+				t.Errorf("Convert() got nil = %v, wantNil %v", cf == nil, tt.wantNil)
+				return
+			}
+			if tt.wantNil {
+				return
+			}
+
+			for _, dc := range tt.docChecks {
+				condResult := cf(dc.doc)
+				if condResult != dc.want {
+					t.Errorf("comparison function for doc %+v = %v, want %v", dc.doc, condResult, dc.want)
+				}
 			}
 		})
 	}

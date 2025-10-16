@@ -551,7 +551,7 @@ func (vs *VectorStore) matchesFilter(docID string, filter *vectorstore.SearchFil
 		if err != nil {
 			return false
 		}
-		if !condFunc(doc) {
+		if condFunc != nil && !condFunc(doc) {
 			return false
 		}
 	}

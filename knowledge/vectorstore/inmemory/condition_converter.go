@@ -85,31 +85,38 @@ func (c *inmemoryConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 	if !ok {
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
-	var condFunc comparisonFunc
+	var condFuncs []comparisonFunc
 	for _, child := range conds {
 		childFunc, err := c.convertCondition(child)
 		if err != nil {
 			return nil, err
 		}
-		if childFunc == nil {
-			continue
+		if childFunc != nil {
+			condFuncs = append(condFuncs, childFunc)
 		}
-		if condFunc == nil {
-			condFunc = childFunc
-			continue
-		}
+	}
 
-		condFunc = func(doc *document.Document) bool {
-			preCheck := condFunc(doc)
-			// short circuit
-			if cond.Operator == searchfilter.OperatorOr || preCheck {
+	if len(condFuncs) == 0 {
+		return nil, fmt.Errorf("no valid sub-conditions in logical condition")
+	}
+
+	condFunc := func(doc *document.Document) bool {
+		isAndConditon := cond.Operator == searchfilter.OperatorAnd
+		// evaluate each child condition
+		for _, childFunc := range condFuncs {
+			preCondResult := childFunc(doc)
+			// or condition short circuit
+			if !isAndConditon && preCondResult {
 				return true
-			} else if cond.Operator == searchfilter.OperatorAnd && !preCheck {
-				return false
 			}
 
-			return childFunc(doc)
+			// and condition short circuit
+			if isAndConditon && !preCondResult {
+				return false
+			}
 		}
+
+		return isAndConditon
 	}
 
 	return condFunc, nil
@@ -161,7 +168,7 @@ func (c *inmemoryConverter) buildComparisonCondition(cond *searchfilter.Universa
 		case valueTypeString:
 			return compareString(docValue, cond.Value, cond.Operator)
 		case valueTypeNumber:
-			compareNumber(docValue, cond.Value, cond.Operator)
+			return compareNumber(docValue, cond.Value, cond.Operator)
 		case valueTypeTime:
 			return compareTime(docValue, cond.Value, cond.Operator)
 		case valueTypeBool:
@@ -214,8 +221,8 @@ func compareString(docValue any, condValue any, operator string) bool {
 		return docStr <= condStr
 	default:
 		log.Errorf("this string comparison operator is unsupported: %s", operator)
-		return false
 	}
+	return false
 }
 
 func compareBool(docValue any, condValue any, operator string) bool {
@@ -233,8 +240,8 @@ func compareBool(docValue any, condValue any, operator string) bool {
 		return docBool != condBool
 	default:
 		log.Errorf("this bool comparison operator is unsupported: %s", operator)
-		return false
 	}
+	return false
 }
 
 func compareTime(docValue any, condValue any, operator string) bool {
@@ -256,8 +263,8 @@ func compareTime(docValue any, condValue any, operator string) bool {
 		return docTime.Before(condTime) || docTime.Equal(condTime)
 	default:
 		log.Errorf("this time comparison operator is unsupported: %s", operator)
-		return false
 	}
+	return false
 }
 
 func compareNumber(docValue any, condValue any, operator string) bool {
@@ -283,8 +290,8 @@ func compareNumber(docValue any, condValue any, operator string) bool {
 		return docNum <= condNum
 	default:
 		log.Errorf("this number comparison operator is unsupported: %s", operator)
-		return false
 	}
+	return false
 }
 
 func toFloat64(value any) (float64, bool) {
@@ -297,8 +304,9 @@ func toFloat64(value any) (float64, bool) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return float64(v.Uint()), true
 	default:
-		return 0, false
+		log.Errorf("unsupported value type: %v", value)
 	}
+	return 0, false
 }
 
 func isValidField(field string) bool {
