@@ -106,22 +106,22 @@ func (c *inmemoryConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 	}
 
 	condFunc := func(doc *document.Document) bool {
-		isAndConditon := cond.Operator == searchfilter.OperatorAnd
+		isAndCondition := cond.Operator == searchfilter.OperatorAnd
 		// evaluate each child condition
 		for _, childFunc := range condFuncs {
 			preCondResult := childFunc(doc)
 			// or condition short circuit
-			if !isAndConditon && preCondResult {
+			if !isAndCondition && preCondResult {
 				return true
 			}
 
 			// and condition short circuit
-			if isAndConditon && !preCondResult {
+			if isAndCondition && !preCondResult {
 				return false
 			}
 		}
 
-		return isAndConditon
+		return isAndCondition
 	}
 
 	return condFunc, nil
