@@ -21,9 +21,13 @@ import (
 // Common field list for SELECT clauses.
 var commonFieldsStr = "*"
 
+// queryFilterBuilder is an interface for building query filters safely.
 type queryFilterBuilder interface {
+	// addIDFilter adds ID filter to the query.
 	addIDFilter(ids []string)
+	// addMetadataFilter adds metadata filter to the query.
 	addMetadataFilter(metadata map[string]any)
+	// addFilterCondition adds a custom filter condition to the query.
 	addFilterCondition(*condConvertResult)
 }
 
