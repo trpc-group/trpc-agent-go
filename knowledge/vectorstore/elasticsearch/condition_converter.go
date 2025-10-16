@@ -171,7 +171,7 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 		return nil, fmt.Errorf("field is empty")
 	}
 	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice || reflect.ValueOf(cond.Value).Len() == 0 {
-		return nil, fmt.Errorf("in operator value must be a slice with at least one elememt: %v", cond.Value)
+		return nil, fmt.Errorf("in operator value must be a slice with at least one element: %v", cond.Value)
 	}
 
 	termsQuery := types.Query{
