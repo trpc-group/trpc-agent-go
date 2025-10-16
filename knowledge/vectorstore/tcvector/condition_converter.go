@@ -126,11 +126,11 @@ func (c *tcVectorConverter) buildBetweenCondition(cond *searchfilter.UniversalFi
 		return nil, fmt.Errorf("field is empty")
 	}
 	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("in operator requires an array of values")
+		return nil, fmt.Errorf("between operator value must be slice with two elements: %v", cond.Value)
 	}
 	value := reflect.ValueOf(cond.Value)
 	if value.Len() != 2 {
-		return nil, fmt.Errorf("between operator requires an array with exactly two values")
+		return nil, fmt.Errorf("between operator value must be slice with two elements: %v", cond.Value)
 	}
 
 	isString := value.Index(0).Kind() == reflect.String

@@ -149,11 +149,11 @@ func (c *esConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCo
 		return nil, fmt.Errorf("field is empty")
 	}
 	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("between operator requires an array with two items: %v", cond.Value)
+		return nil, fmt.Errorf("between operator value must be slice with two elements: %v", cond.Value)
 	}
 	value := reflect.ValueOf(cond.Value)
 	if value.Len() != 2 {
-		return nil, fmt.Errorf("between operator requires an array with two items: %v", cond.Value)
+		return nil, fmt.Errorf("between operator value must be slice with two elements: %v", cond.Value)
 	}
 
 	return &types.Query{
