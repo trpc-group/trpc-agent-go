@@ -231,7 +231,7 @@ func (a *ChainAgent) executeSubAgents(
 			e := event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
-				agent.ErrorTypeAgentContextError,
+				agent.ErrorTypeAgentContextCancelledError,
 				fmt.Sprintf("chain agent %q cancelled execution of sub-agent %q: %v", a.name, subAgent.Info().Name, err),
 			)
 			agent.EmitEvent(ctx, invocation, eventChan, e)
