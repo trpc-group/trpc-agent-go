@@ -2095,6 +2095,79 @@ for ev := range events {
 }
 ```
 
+#### 在节点回调中携带业务值
+
+默认情况下，中途事件（如 `graph.state.update`）只会上报“更新了哪些键”，不携带值；最终完成事件（`graph.execution`）的 `StateDelta` 才包含“最终状态快照”。如果仅需在“某个节点”完成后，将其返回的部分键值即时发给上游服务，可在该节点的 After 回调中构造并发送一条自定义事件：
+
+实现步骤：
+- 在节点上注册 `WithPostNodeCallback`；
+- 在回调的 `result any` 中读取该节点返回的 `graph.State`（state delta）；
+- 选择需要的键值，序列化后放入自定义事件的 `StateDelta`；
+- 通过 `agent.EmitEvent` 发送到事件通道。
+
+示例：
+
+```go
+import (
+    "context"
+    "encoding/json"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    nodeParse   = "parse"
+    stateKeyOut = "parsed_value" // 仅输出所需键
+)
+
+func parseNode(ctx context.Context, s graph.State) (any, error) {
+    // ...业务处理...
+    val := map[string]any{"ok": true, "score": 0.97}
+    return graph.State{stateKeyOut: val}, nil
+}
+
+func buildGraph() (*graph.Graph, error) {
+    sg := graph.NewStateGraph(graph.MessagesStateSchema())
+    sg.AddNode(nodeParse, parseNode,
+        graph.WithPostNodeCallback(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            st graph.State,
+            result any,
+            nodeErr error,
+        ) (any, error) {
+            if nodeErr != nil { return nil, nil }
+            inv, _ := agent.InvocationFromContext(ctx)
+            execCtx, _ := st[graph.StateKeyExecContext].(*graph.ExecutionContext)
+            if delta, ok := result.(graph.State); ok {
+                if v, exists := delta[stateKeyOut]; exists && execCtx != nil {
+                    evt := graph.NewGraphEvent(
+                        inv.InvocationID,
+                        cb.NodeID,
+                        graph.ObjectTypeGraphNodeExecution,
+                    )
+                    if evt.StateDelta == nil { evt.StateDelta = make(map[string][]byte) }
+                    if b, err := json.Marshal(v); err == nil {
+                        evt.StateDelta[stateKeyOut] = b
+                        _ = agent.EmitEvent(ctx, inv, execCtx.EventChan, evt)
+                    }
+                }
+            }
+            return nil, nil
+        }),
+    ).
+        SetEntryPoint(nodeParse).
+        SetFinishPoint(nodeParse)
+    return sg.Compile()
+}
+```
+
+建议：
+- 仅输出必要键，控制负载与敏感信息；
+- 内部/易变键不会被序列化到最终快照，亦不建议外发（参考 [graph/internal_keys.go:16](graph/internal_keys.go:16)）；
+- 文本类中间结果优先复用模型流式事件（`choice.Delta.Content`）。
+
 也可以在 Agent 级别配置回调：
 
 ```go
