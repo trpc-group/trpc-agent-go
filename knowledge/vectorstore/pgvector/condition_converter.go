@@ -74,17 +74,17 @@ func (c *pgVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
+
 	value := reflect.ValueOf(cond.Value)
-	itemNum := value.Len()
-	if value.Kind() != reflect.Slice || itemNum <= 0 {
+	if value.Kind() != reflect.Slice || value.Len() <= 0 {
 		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
+	itemNum := value.Len()
 	condResult := condConvertResult{args: make([]any, 0, itemNum)}
 	args := make([]string, 0, itemNum)
 	for i := 0; i < itemNum; i++ {
-		val := value.Index(i).Interface()
-		condResult.args = append(condResult.args, val)
+		condResult.args = append(condResult.args, value.Index(i).Interface())
 		args = append(args, "$%d")
 	}
 	condResult.cond = fmt.Sprintf(`%s %s (%s)`, cond.Field, strings.ToUpper(cond.Operator), strings.Join(args, ", "))
@@ -137,7 +137,7 @@ func (c *pgVectorConverter) buildLikeCondition(cond *searchfilter.UniversalFilte
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.String {
+	if cond.Value == nil || reflect.TypeOf(cond.Value).Kind() != reflect.String {
 		return nil, fmt.Errorf("like operator value must be a string: %v", cond.Value)
 	}
 

@@ -68,7 +68,8 @@ func (c *tcVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice || reflect.ValueOf(cond.Value).Len() == 0 {
+	s := reflect.ValueOf(cond.Value)
+	if s.Kind() != reflect.Slice || s.Len() <= 0 {
 		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
@@ -113,7 +114,7 @@ func (c *tcVectorConverter) buildComparisonCondition(cond *searchfilter.Universa
 	}
 
 	var filter string
-	if reflect.TypeOf(cond.Value).Kind() == reflect.String {
+	if cond.Value != nil && reflect.TypeOf(cond.Value).Kind() == reflect.String {
 		filter = fmt.Sprintf(`%s %s "%v"`, cond.Field, operator, cond.Value)
 	} else {
 		filter = fmt.Sprintf(`%s %s %v`, cond.Field, operator, cond.Value)
