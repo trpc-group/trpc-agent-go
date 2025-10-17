@@ -142,7 +142,6 @@ func main() {
 ```
 
 ### 手动调用示例
-inmemory暂不支持FilterCondition功能
 
 ```go
 

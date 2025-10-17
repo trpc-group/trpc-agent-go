@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
@@ -132,6 +133,30 @@ func TestMatchesFilter(t *testing.T) {
 	// Non-matching metadata
 	filterWrongMeta := &vectorstore.SearchFilter{Metadata: map[string]any{"type": "prod"}}
 	require.False(t, store.matchesFilter("doc1", filterWrongMeta))
+
+	// Combined filter (AND logic)
+	combinedFilter := &vectorstore.SearchFilter{
+		IDs:      []string{"doc1"},
+		Metadata: map[string]any{"type": "test"},
+		FilterCondition: &searchfilter.UniversalFilterCondition{
+			Field:    "metadata.type",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "test",
+		},
+	}
+	require.True(t, store.matchesFilter("doc1", combinedFilter))
+
+	// Combined filter non-match
+	combinedFilterNonMatch := &vectorstore.SearchFilter{
+		IDs:      []string{"doc1"},
+		Metadata: map[string]any{"type": "prod"},
+		FilterCondition: &searchfilter.UniversalFilterCondition{
+			Field:    "metadata.type",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "no-test",
+		},
+	}
+	require.False(t, store.matchesFilter("doc1", combinedFilterNonMatch))
 }
 
 func TestVectorStore_ErrorPathsAndClose(t *testing.T) {
