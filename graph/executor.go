@@ -380,7 +380,7 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 	for key, value := range restored {
 		if field, exists := e.graph.Schema().Fields[key]; exists {
 			converted := e.restoreCheckpointValueWithSchema(value, field)
-			if reflect.TypeOf(converted) != reflect.TypeOf(value) {
+			if converted == nil || value == nil || reflect.TypeOf(converted) != reflect.TypeOf(value) {
 				restored[key] = converted
 			}
 		}
@@ -2005,13 +2005,13 @@ func (e *Executor) processChannelWrites(ctx context.Context, invocation *agent.I
 // restoreCheckpointValueWithSchema restores a checkpoint value to its proper type using schema information.
 func (e *Executor) restoreCheckpointValueWithSchema(value any, field StateField) any {
 	// Skip if already the correct type.
-	if reflect.TypeOf(value) == field.Type {
+	if value == nil || reflect.TypeOf(value) == field.Type {
 		return value
 	}
 	// Approach 1: Use Default as template if available.
 	if field.Default != nil {
 		template := field.Default()
-		if jsonBytes, err := json.Marshal(value); err == nil {
+		if jsonBytes, err := json.Marshal(value); err == nil && template != nil {
 			// Use a pointer to the template for unmarshaling.
 			templatePtr := reflect.New(reflect.TypeOf(template))
 			templatePtr.Elem().Set(reflect.ValueOf(template))
