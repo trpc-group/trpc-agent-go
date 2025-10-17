@@ -341,6 +341,8 @@ sources := []source.Source{
 
 ### 3. LLM Agent Configuration
 
+#### Method 1: Automatic Integration (Used in This Example)
+
 The agent is configured with the knowledge base using the `WithKnowledge()` option:
 
 ```go
@@ -357,6 +359,46 @@ llmAgent := llmagent.New(
     llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata), // Provide metadata for filtering
 )
 ```
+
+#### Method 2: Manual Tool Construction (Alternative)
+
+You can also manually create knowledge search tools for more control:
+
+```go
+import (
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
+
+// Option A: Basic search tool
+searchTool := knowledgetool.NewKnowledgeSearchTool(
+    kb,                    // Knowledge instance
+    knowledgetool.WithToolName("knowledge_search"),
+    knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
+)
+
+// Option B: Intelligent filter search tool
+sourcesMetadata := source.GetAllMetadata(c.sources)
+filterSearchTool := knowledgetool.NewAgenticFilterSearchTool(
+    kb,                    // Knowledge instance
+    sourcesMetadata,       // Metadata information
+    knowledgetool.WithToolName("knowledge_search_with_filter"),
+    knowledgetool.WithToolDescription("Search the knowledge base with intelligent metadata filtering."),
+)
+
+// Create agent with manually constructed tools
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{searchTool}), // or filterSearchTool
+    llmagent.WithDescription("A helpful AI assistant with knowledge base access."),
+    llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base."),
+)
+```
+
+**When to use manual tool construction:**
+- Multiple knowledge bases: Create separate tools for different knowledge bases
+- Custom tool names: Use descriptive names like `search_api_docs`, `search_tutorials`
+- Fine-grained control: Configure different filters for each tool
 
 ### 4. Automatic Tool Registration
 
