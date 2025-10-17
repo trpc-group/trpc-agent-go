@@ -80,44 +80,45 @@ func (f *fileToolSet) readFiles(files []string) []*fileReadResult {
 	for i := 0; i < n; i++ {
 		relativePath := files[i]
 		wg.Add(1)
-		go func(idx int) {
+		// Capture the per-iteration path to avoid data race on the loop variable.
+		go func(idx int, rp string) {
 			defer func() {
 				wg.Done()
 			}()
-			results[idx] = &fileReadResult{FileName: relativePath}
-			fullPath, err := f.resolvePath(relativePath)
+			results[idx] = &fileReadResult{FileName: rp}
+			fullPath, err := f.resolvePath(rp)
 			if err != nil {
-				results[idx].Message = fmt.Sprintf("Error: cannot resolve path %s: %v", relativePath, err)
+				results[idx].Message = fmt.Sprintf("Error: cannot resolve path %s: %v", rp, err)
 				return
 			}
 			stats, err := os.Stat(fullPath)
 			if err != nil {
-				results[idx].Message = fmt.Sprintf("Error: cannot stat file %s: %v", relativePath, err)
+				results[idx].Message = fmt.Sprintf("Error: cannot stat file %s: %v", rp, err)
 				return
 			}
 			if stats.IsDir() {
-				results[idx].Message = fmt.Sprintf("Error: %s is a directory", relativePath)
+				results[idx].Message = fmt.Sprintf("Error: %s is a directory", rp)
 				return
 			}
 			if stats.Size() > f.maxFileSize {
 				results[idx].Message = fmt.Sprintf("Error: %s is too large, file size: %d, max file size: %d",
-					relativePath, stats.Size(), f.maxFileSize)
+					rp, stats.Size(), f.maxFileSize)
 				return
 			}
 			data, err := os.ReadFile(fullPath)
 			if err != nil {
-				results[idx].Message = fmt.Sprintf("Error: cannot read file %s: %v", relativePath, err)
+				results[idx].Message = fmt.Sprintf("Error: cannot read file %s: %v", rp, err)
 				return
 			}
 			if len(data) == 0 {
 				results[idx].Contents = ""
-				results[idx].Message = fmt.Sprintf("Successfully read %s, but file is empty", relativePath)
+				results[idx].Message = fmt.Sprintf("Successfully read %s, but file is empty", rp)
 				return
 			}
 			lines := strings.Count(string(data), "\n") + 1
 			results[idx].Contents = string(data)
-			results[idx].Message = fmt.Sprintf("Successfully read %s, total lines: %d", relativePath, lines)
-		}(i)
+			results[idx].Message = fmt.Sprintf("Successfully read %s, total lines: %d", rp, lines)
+		}(i, relativePath)
 	}
 	wg.Wait()
 	return results
