@@ -46,50 +46,50 @@ Runner 提供了运行 Agent 的接口，负责会话管理和事件流处理。
 package main
 
 import (
-    "context"
-    "fmt"
+	"context"
+	"fmt"
 
-    "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/agent"
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-    "trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 func main() {
-    // 1. 创建模型
-    llmModel := openai.New("DeepSeek-V3-Online-64K")
+	// 1. 创建模型
+	llmModel := openai.New("DeepSeek-V3-Online-64K")
 
-    // 2. 创建 Agent
-    agent := llmagent.New("assistant",
-        llmagent.WithModel(llmModel),
-        llmagent.WithInstruction("你是一个有帮助的AI助手"),
-        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // 启用流式输出
-    )
+	// 2. 创建 Agent
+	a := llmagent.New("assistant",
+		llmagent.WithModel(llmModel),
+		llmagent.WithInstruction("你是一个有帮助的AI助手"),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // 启用流式输出
+	)
 
-    // 3. 创建 Runner
-    r := runner.NewRunner("my-app", agent)
+	// 3. 创建 Runner
+	r := runner.NewRunner("my-app", a)
 
-    // 4. 运行对话
-    ctx := context.Background()
-    userMessage := model.NewUserMessage("你好！")
+	// 4. 运行对话
+	ctx := context.Background()
+	userMessage := model.NewUserMessage("你好！")
 
-    eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
-    if err != nil {
-        panic(err)
-    }
+	eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
+	if err != nil {
+		panic(err)
+	}
 
-    // 5. 处理响应
-    for event := range eventChan {
-        if event.Error != nil {
-            fmt.Printf("错误: %s\n", event.Error.Message)
-            continue
-        }
+	// 5. 处理响应
+	for event := range eventChan {
+		if event.Error != nil {
+			fmt.Printf("错误: %s\n", event.Error.Message)
+			continue
+		}
 
-        if len(event.Response.Choices) > 0 {
-            fmt.Print(event.Response.Choices[0].Delta.Content)
-        }
-    }
+		if len(event.Response.Choices) > 0 {
+			fmt.Print(event.Response.Choices[0].Delta.Content)
+		}
+	}
 }
 ```
 

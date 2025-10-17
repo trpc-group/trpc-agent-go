@@ -46,50 +46,50 @@ Runner provides the interface to run Agents, responsible for session management 
 package main
 
 import (
-    "context"
-    "fmt"
+	"context"
+	"fmt"
 
-    "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/agent"
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-    "trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 func main() {
-    // 1. Create model.
-    llmModel := openai.New("DeepSeek-V3-Online-64K")
+	// 1. Create model.
+	llmModel := openai.New("DeepSeek-V3-Online-64K")
 
-    // 2. Create Agent.
-    agent := llmagent.New("assistant",
-        llmagent.WithModel(llmModel),
-        llmagent.WithInstruction("You are a helpful AI assistant."),
-        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
-    )
+	// 2. Create Agent.
+	a := llmagent.New("assistant",
+		llmagent.WithModel(llmModel),
+		llmagent.WithInstruction("You are a helpful AI assistant."),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
+	)
 
-    // 3. Create Runner.
-    r := runner.NewRunner("my-app", agent)
+	// 3. Create Runner.
+	r := runner.NewRunner("my-app", a)
 
-    // 4. Run conversation.
-    ctx := context.Background()
-    userMessage := model.NewUserMessage("Hello!")
+	// 4. Run conversation.
+	ctx := context.Background()
+	userMessage := model.NewUserMessage("Hello!")
 
-    eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
-    if err != nil {
-        panic(err)
-    }
+	eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
+	if err != nil {
+		panic(err)
+	}
 
-    // 5. Handle responses.
-    for event := range eventChan {
-        if event.Error != nil {
-            fmt.Printf("Error: %s\n", event.Error.Message)
-            continue
-        }
+	// 5. Handle responses.
+	for event := range eventChan {
+		if event.Error != nil {
+			fmt.Printf("Error: %s\n", event.Error.Message)
+			continue
+		}
 
-        if len(event.Response.Choices) > 0 {
-            fmt.Print(event.Response.Choices[0].Delta.Content)
-        }
-    }
+		if len(event.Response.Choices) > 0 {
+			fmt.Print(event.Response.Choices[0].Delta.Content)
+		}
+	}
 }
 ```
 
