@@ -18,9 +18,11 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	openai "github.com/openai/openai-go"
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -905,6 +907,224 @@ func TestModel_CallbackAssignment(t *testing.T) {
 			t.Error("expected chat chunk callback to be nil")
 		}
 	})
+}
+
+// testStubCounter implements model.TokenCounter for unit tests.
+type testStubCounter struct{}
+
+func (testStubCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+	return 1, nil
+}
+
+func (testStubCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+	}
+	return end - start, nil
+}
+
+// testStubStrategy implements model.TailoringStrategy for unit tests.
+type testStubStrategy struct{}
+
+func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Message, maxTokens int) ([]model.Message, error) {
+	if len(messages) <= 1 {
+		return messages, nil
+	}
+	// Drop the second message to make tailoring observable.
+	return append([]model.Message{messages[0]}, messages[2:]...), nil
+}
+
+// TestWithTokenTailoring ensures messages are tailored before request is built.
+func TestWithTokenTailoring(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("test-model",
+		WithEnableTokenTailoring(true), // Enable token tailoring.
+		WithMaxInputTokens(100),
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; strategy will drop the second one.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring, OpenAI messages should be 1 user message (system omitted in this test).
+	if got := len(captured.Messages); got != 1 {
+		t.Fatalf("expected 1 message after tailoring, got %d", got)
+	}
+}
+
+// TestWithEnableTokenTailoring_SimpleMode tests the simple mode of token tailoring.
+func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini", // Known model with 200000 context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 100; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 100))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring, messages should be reduced.
+	if got := len(captured.Messages); got >= len(messages) {
+		t.Fatalf("expected messages to be tailored, got %d (original: %d)", got, len(messages))
+	}
+}
+
+// TestWithEnableTokenTailoring_AdvancedMode tests the advanced mode with custom parameters.
+func TestWithEnableTokenTailoring_AdvancedMode(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1000), // Custom max input tokens
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; strategy will drop the second one.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring, OpenAI messages should be 1 user message.
+	if got := len(captured.Messages); got != 1 {
+		t.Fatalf("expected 1 message after tailoring, got %d", got)
+	}
+}
+
+// TestWithEnableTokenTailoring_Disabled tests that token tailoring is disabled when flag is false.
+func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(false),
+		WithMaxInputTokens(100), // This should be ignored when tailoring is disabled
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; should NOT be tailored when disabled.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring disabled, OpenAI messages should be unchanged (2 messages).
+	if got := len(captured.Messages); got != 2 {
+		t.Fatalf("expected 2 messages when tailoring disabled, got %d", got)
+	}
+}
+
+// TestWithEnableTokenTailoring_UnknownModel tests behavior with unknown model.
+func TestWithEnableTokenTailoring_UnknownModel(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("unknown-model-xyz", // Unknown model should fallback to default context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 50; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 50))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring, messages should be reduced even with unknown model.
+	if got := len(captured.Messages); got >= len(messages) {
+		t.Fatalf("expected messages to be tailored with unknown model, got %d (original: %d)", got, len(messages))
+	}
 }
 
 // TestModel_CallbackSignature tests that the callback function signatures
@@ -2325,5 +2545,298 @@ func TestModel_GenerateContent_Streaming_FinalReasoningAggregated(t *testing.T) 
 	}
 	if final.IsPartial {
 		t.Error("expected final.IsPartial == false")
+	}
+}
+
+func TestOpenAI_TokenCounterInitialization(t *testing.T) {
+	tests := []struct {
+		name                 string
+		initialTokenCounter  model.TokenCounter
+		expectedTokenCounter bool // true if should be set, false if should be nil initially
+	}{
+		{
+			name:                 "with user provided token counter",
+			initialTokenCounter:  model.NewSimpleTokenCounter(),
+			expectedTokenCounter: true,
+		},
+		{
+			name:                 "without user provided token counter",
+			initialTokenCounter:  nil,
+			expectedTokenCounter: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create OpenAI client
+			client := &Model{
+				name:                 "gpt-3.5-turbo",
+				apiKey:               "test-api-key",
+				enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+				tokenCounter:         tt.initialTokenCounter,
+			}
+
+			// Create a simple conversation to trigger the initialization logic
+			conv := []model.Message{
+				model.NewUserMessage("test message"),
+			}
+
+			// Create a mock HTTP server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := `{
+					"id": "chatcmpl-123",
+					"object": "chat.completion",
+					"created": 1677652288,
+					"model": "gpt-3.5-turbo",
+					"choices": [{
+						"index": 0,
+						"message": {
+							"role": "assistant",
+							"content": "test response"
+						},
+						"finish_reason": "stop"
+					}],
+					"usage": {
+						"prompt_tokens": 10,
+						"completion_tokens": 5,
+						"total_tokens": 15
+					}
+				}`
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, response)
+			}))
+			defer server.Close()
+
+			client.baseURL = server.URL
+			client.client = openai.NewClient(openaiopt.WithBaseURL(server.URL), openaiopt.WithAPIKey("test-key"))
+
+			// Create request to trigger initialization
+			request := &model.Request{
+				Messages: conv,
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			}
+
+			// Apply token tailoring to trigger initialization
+			client.applyTokenTailoring(context.Background(), request)
+
+			// Verify token counter initialization
+			if tt.expectedTokenCounter {
+				if client.tokenCounter != tt.initialTokenCounter {
+					t.Errorf("expected tokenCounter to remain as provided, got different instance")
+				}
+			} else {
+				if client.tokenCounter == nil {
+					t.Error("expected tokenCounter to be initialized with default, got nil")
+				}
+				// Should be initialized with default SimpleTokenCounter
+				if _, ok := client.tokenCounter.(*model.SimpleTokenCounter); !ok {
+					t.Errorf("expected SimpleTokenCounter, got %T", client.tokenCounter)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenAI_TailoringStrategyInitialization(t *testing.T) {
+	tests := []struct {
+		name                      string
+		initialTailoringStrategy  model.TailoringStrategy
+		expectedTailoringStrategy bool // true if should be set, false if should be nil initially
+	}{
+		{
+			name:                      "with user provided tailoring strategy",
+			initialTailoringStrategy:  model.NewMiddleOutStrategy(model.NewSimpleTokenCounter()),
+			expectedTailoringStrategy: true,
+		},
+		{
+			name:                      "without user provided tailoring strategy",
+			initialTailoringStrategy:  nil,
+			expectedTailoringStrategy: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create OpenAI client
+			client := &Model{
+				name:                 "gpt-3.5-turbo",
+				apiKey:               "test-api-key",
+				enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+				tailoringStrategy:    tt.initialTailoringStrategy,
+			}
+
+			// Create a simple conversation to trigger the initialization logic
+			conv := []model.Message{
+				model.NewUserMessage("test message"),
+			}
+
+			// Create a mock HTTP server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := `{
+					"id": "chatcmpl-123",
+					"object": "chat.completion",
+					"created": 1677652288,
+					"model": "gpt-3.5-turbo",
+					"choices": [{
+						"index": 0,
+						"message": {
+							"role": "assistant",
+							"content": "test response"
+						},
+						"finish_reason": "stop"
+					}],
+					"usage": {
+						"prompt_tokens": 10,
+						"completion_tokens": 5,
+						"total_tokens": 15
+					}
+				}`
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, response)
+			}))
+			defer server.Close()
+
+			client.baseURL = server.URL
+			client.client = openai.NewClient(openaiopt.WithBaseURL(server.URL), openaiopt.WithAPIKey("test-key"))
+
+			// Create request to trigger initialization
+			request := &model.Request{
+				Messages: conv,
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			}
+
+			// Apply token tailoring to trigger initialization
+			client.applyTokenTailoring(context.Background(), request)
+
+			// Verify tailoring strategy initialization
+			if tt.expectedTailoringStrategy {
+				if client.tailoringStrategy != tt.initialTailoringStrategy {
+					t.Errorf("expected tailoringStrategy to remain as provided, got different instance")
+				}
+			} else {
+				if client.tailoringStrategy == nil {
+					t.Error("expected tailoringStrategy to be initialized with default, got nil")
+				}
+				// Should be initialized with default MiddleOutStrategy
+				if _, ok := client.tailoringStrategy.(*model.MiddleOutStrategy); !ok {
+					t.Errorf("expected MiddleOutStrategy, got %T", client.tailoringStrategy)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenAI_ConcurrentInitialization(t *testing.T) {
+	// Test concurrent access to ensure sync.Once works correctly
+	client := &Model{
+		name:                 "gpt-3.5-turbo",
+		apiKey:               "test-api-key",
+		enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+		// Don't set tokenCounter or tailoringStrategy to test default initialization
+	}
+
+	// Create a mock HTTP server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := `{
+			"id": "chatcmpl-123",
+			"object": "chat.completion",
+			"created": 1677652288,
+			"model": "gpt-3.5-turbo",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "test response"
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {
+				"prompt_tokens": 10,
+				"completion_tokens": 5,
+				"total_tokens": 15
+			}
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	client.baseURL = server.URL
+	client.client = openai.NewClient(openaiopt.WithBaseURL(server.URL), openaiopt.WithAPIKey("test-key"))
+
+	// Run multiple goroutines concurrently
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			conv := []model.Message{
+				model.NewUserMessage("test message"),
+			}
+			request := &model.Request{
+				Messages: conv,
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			}
+			client.applyTokenTailoring(context.Background(), request)
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify that initialization happened only once and both are set
+	if client.tokenCounter == nil {
+		t.Error("expected tokenCounter to be initialized")
+	}
+	if client.tailoringStrategy == nil {
+		t.Error("expected tailoringStrategy to be initialized")
+	}
+	if _, ok := client.tokenCounter.(*model.SimpleTokenCounter); !ok {
+		t.Errorf("expected SimpleTokenCounter, got %T", client.tokenCounter)
+	}
+	if _, ok := client.tailoringStrategy.(*model.MiddleOutStrategy); !ok {
+		t.Errorf("expected MiddleOutStrategy, got %T", client.tailoringStrategy)
+	}
+}
+
+func TestOpenAI_InitializationPriority(t *testing.T) {
+	// Test that user-provided components take priority over defaults
+	userTokenCounter := model.NewSimpleTokenCounter()
+	userTailoringStrategy := model.NewMiddleOutStrategy(userTokenCounter)
+
+	client := &Model{
+		name:                 "gpt-3.5-turbo",
+		apiKey:               "test-api-key",
+		enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+		tokenCounter:         userTokenCounter,
+		tailoringStrategy:    userTailoringStrategy,
+	}
+
+	// Create request
+	request := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("test message"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	}
+
+	// Apply token tailoring
+	client.applyTokenTailoring(context.Background(), request)
+
+	// Verify that user-provided components are preserved
+	if client.tokenCounter != userTokenCounter {
+		t.Error("expected user-provided tokenCounter to be preserved")
+	}
+	if client.tailoringStrategy != userTailoringStrategy {
+		t.Error("expected user-provided tailoringStrategy to be preserved")
 	}
 }

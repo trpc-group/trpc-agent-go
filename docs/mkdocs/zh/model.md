@@ -424,9 +424,201 @@ model := openai.New("deepseek-chat",
         if streamErr != nil {
             log.Printf("流式响应失败: %v", streamErr)
         } else {
-            log.Printf("流式响应完成: 原因=%s", 
+            log.Printf("流式响应完成: 原因=%s",
                 acc.Choices[0].FinishReason)
         }
     }),
 )
 ```
+
+### 2. Token 裁剪（Token Tailoring）
+
+Token Tailoring 是一种智能的消息管理技术，用于在消息超出模型上下文窗口限制时自动裁剪消息，确保请求能够成功发送到 LLM API。该功能特别适用于长对话场景，能够在保留关键上下文的同时，将消息列表控制在模型的 token 限制内。
+
+#### 核心特性
+
+- **双模式配置**：支持自动模式（automatic）和高级模式（advanced）
+- **智能保留**：自动保留系统消息和最后一轮对话
+- **多种策略**：提供 MiddleOut、HeadOut、TailOut 三种裁剪策略
+- **高效算法**：使用前缀和与二分查找，时间复杂度 O(n)
+- **实时统计**：显示裁剪前后的消息数和 token 数
+
+#### 快速开始
+
+**自动模式（推荐）**：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// 只需启用 token tailoring，其他参数自动配置
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+)
+```
+
+自动模式会：
+
+- 自动检测模型的上下文窗口大小
+- 计算最佳的 `maxInputTokens`（扣除协议开销和输出预留）
+- 使用默认的 `SimpleTokenCounter` 和 `MiddleOutStrategy`
+
+**高级模式**：
+
+```go
+// 自定义 token 限制和策略
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),               // 必需：启用 token tailoring
+    openai.WithMaxInputTokens(10000),                    // 自定义 token 限制
+    openai.WithTokenCounter(customCounter),              // 可选：自定义计数器
+    openai.WithTailoringStrategy(customStrategy),        // 可选：自定义策略
+)
+```
+
+#### 裁剪策略
+
+框架提供三种内置策略，适用于不同场景：
+
+**MiddleOutStrategy（默认）**：
+
+从中间移除消息，保留头部和尾部：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+counter := model.NewSimpleTokenCounter()
+strategy := model.NewMiddleOutStrategy(counter)
+
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithMaxInputTokens(10000),
+    openai.WithTailoringStrategy(strategy),
+)
+```
+
+- **适用场景**：需要保留对话开始和最近上下文的场景
+- **保留内容**：系统消息 + 早期消息 + 最近消息 + 最后一轮对话
+
+**HeadOutStrategy**：
+
+从头部移除消息，优先保留最近的消息：
+
+```go
+strategy := model.NewHeadOutStrategy(counter)
+
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithMaxInputTokens(10000),
+    openai.WithTailoringStrategy(strategy),
+)
+```
+
+- **适用场景**：聊天应用，最近的上下文更重要
+- **保留内容**：系统消息 + 最近消息 + 最后一轮对话
+
+**TailOutStrategy**：
+
+从尾部移除消息，优先保留早期的消息：
+
+```go
+strategy := model.NewTailOutStrategy(counter)
+
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithMaxInputTokens(10000),
+    openai.WithTailoringStrategy(strategy),
+)
+```
+
+- **适用场景**：RAG 应用，初始指令和上下文更重要
+- **保留内容**：系统消息 + 早期消息 + 最后一轮对话
+
+#### Token 计数器
+
+**SimpleTokenCounter（默认）**：
+
+基于字符数的快速估算：
+
+```go
+counter := model.NewSimpleTokenCounter()
+```
+
+- **优点**：快速，无外部依赖，适合大多数场景
+- **缺点**：准确度略低于 tiktoken
+
+**TikToken Counter（可选）**：
+
+使用 OpenAI 官方 tokenizer 精确计数：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
+
+tkCounter, err := tiktoken.New("gpt-4o")
+if err != nil {
+    // 处理错误
+}
+
+model := openai.New("gpt-4o-mini",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenCounter(tkCounter),
+)
+```
+
+- **优点**：准确匹配 OpenAI API 的 token 计数
+- **缺点**：需要额外依赖，性能略低
+
+#### 工作原理
+
+Token Tailoring 的执行流程：
+
+```
+1. 检查是否通过 WithEnableTokenTailoring(true) 启用 token tailoring
+2. 计算当前消息的总 token 数
+3. 如果超出限制：
+   a. 标记必须保留的消息（系统消息 + 最后一轮对话）
+   b. 应用选定的策略裁剪中间消息
+   c. 确保结果在 token 限制内
+4. 返回裁剪后的消息列表
+```
+
+**重要说明**：Token tailoring 只有在设置 `WithEnableTokenTailoring(true)` 时才会激活。`WithMaxInputTokens()` 选项仅设置 token 限制，但本身不会启用 tailoring 功能。
+
+关键设计：
+
+- **不修改原始消息**：原始消息列表保持不变
+- **智能保留**：自动保留系统消息和最后完整的用户-助手对话对
+- **高效算法**：使用前缀和（O(n)）+ 二分查找（O(log n)）
+
+#### 模型上下文注册
+
+对于框架不认识的自定义模型，可以注册其上下文窗口大小以启用自动模式：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// 注册单个模型
+model.RegisterModelContextWindow("my-custom-model", 8192)
+
+// 批量注册多个模型
+model.RegisterModelContextWindows(map[string]int{
+    "my-model-1": 4096,
+    "my-model-2": 16384,
+    "my-model-3": 32768,
+})
+
+// 之后可以使用自动模式
+m := openai.New("my-custom-model",
+    openai.WithEnableTokenTailoring(true), // 自动检测 context window
+)
+```
+
+**使用场景**：
+
+- 使用私有部署或自定义模型
+- 覆盖框架内置的 context window 配置
+- 适配新发布的模型版本
+
+#### 使用示例
+
+完整的交互式示例请参考 [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor)。
