@@ -46,6 +46,11 @@ type TransferInfo struct {
 	TargetAgentName string
 	// Message is the message to send to the target agent.
 	Message string
+	// EndInvocation indicates whether to end the current (parent) invocation after transfer.
+	// This flag MUST NOT be applied to the target agent's invocation.
+	// When nil, it means the value is unspecified by the tool and the processor
+	// should fall back to its configured default (e.g., agent-level option).
+	EndInvocation *bool
 }
 
 // Invocation represents the context for a flow execution.

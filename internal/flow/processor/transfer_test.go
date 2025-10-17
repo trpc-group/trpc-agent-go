@@ -102,3 +102,97 @@ func TestTransferResponseProc_Target404(t *testing.T) {
 	require.NotNil(t, evt.Error)
 	require.Equal(t, model.ErrorTypeFlowError, evt.Error.Type)
 }
+
+func TestTransferResponseProc_TargetInvocationNotEnded(t *testing.T) {
+	target := &mockAgent{name: "child", emit: true}
+	parent := &parentAgent{child: target}
+
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv",
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "hi", EndInvocation: boolPtr(true)},
+	}
+
+	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	proc := NewTransferResponseProcessor(true)
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+
+	// Target agent's invocation.EndInvocation must remain false
+	require.False(t, target.gotEndInvocation)
+}
+
+func TestTransferResponseProc_EndInvocationFlagTrueEndsParent(t *testing.T) {
+	target := &mockAgent{name: "child", emit: false}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv",
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", EndInvocation: boolPtr(true)},
+	}
+	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	proc := NewTransferResponseProcessor(false) // default false, but tool flag is true and should win
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	require.True(t, inv.EndInvocation)
+}
+
+func TestTransferResponseProc_EndInvocationFlagFalseDoesNotEndParent(t *testing.T) {
+	target := &mockAgent{name: "child", emit: false}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv",
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", EndInvocation: boolPtr(false)},
+	}
+	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	proc := NewTransferResponseProcessor(true) // default true, but tool flag is false and should win
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	require.False(t, inv.EndInvocation)
+}
+
+func TestTransferResponseProc_EndInvocationDefaultFallsBackTrue(t *testing.T) {
+	target := &mockAgent{name: "child", emit: false}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv",
+		// EndInvocation omitted (nil)
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	proc := NewTransferResponseProcessor(true) // default true should apply
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	require.True(t, inv.EndInvocation)
+}
+
+func TestTransferResponseProc_EndInvocationDefaultFallsBackFalse(t *testing.T) {
+	target := &mockAgent{name: "child", emit: false}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv",
+		// EndInvocation omitted (nil)
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	proc := NewTransferResponseProcessor(false) // default false should apply
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	require.False(t, inv.EndInvocation)
+}
+
+// boolPtr is a helper to get a *bool from a bool literal.
+func boolPtr(b bool) *bool { return &b }

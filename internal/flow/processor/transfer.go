@@ -77,6 +77,8 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			model.ErrorTypeFlowError,
 			"Transfer failed: target agent '"+targetAgentName+"' not found",
 		))
+		// Clear stale TransferInfo to avoid affecting subsequent steps.
+		invocation.TransferInfo = nil
 		return
 	}
 
@@ -144,6 +146,8 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			model.ErrorTypeFlowError,
 			"Transfer failed: "+err.Error(),
 		))
+		// Clear stale TransferInfo to avoid affecting subsequent steps.
+		invocation.TransferInfo = nil
 		return
 	}
 
@@ -155,9 +159,16 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
 	}
 
-	// Clear the transfer info and end the original invocation to stop further LLM calls.
+	// Clear the transfer info and handle end_invocation semantics:
+	// - end_invocation only applies to the current (parent) invocation
+	// - the target invocation must never be prematurely ended here
 	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
-	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
+	log.Debugf("Transfer response processor: target agent '%s' completed; handling end_invocation on parent", targetAgent.Info().Name)
+	// Prefer tool-provided flag when available; fallback to processor option otherwise.
+	if transferInfo != nil && transferInfo.EndInvocation != nil {
+		invocation.EndInvocation = *transferInfo.EndInvocation
+	} else {
+		invocation.EndInvocation = p.endInvocationAfterTransfer
+	}
 	invocation.TransferInfo = nil
-	invocation.EndInvocation = p.endInvocationAfterTransfer
 }
