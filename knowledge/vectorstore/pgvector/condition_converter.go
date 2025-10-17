@@ -84,8 +84,7 @@ func (c *pgVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 	condResult := condConvertResult{args: make([]any, 0, itemNum)}
 	args := make([]string, 0, itemNum)
 	for i := 0; i < itemNum; i++ {
-		val := value.Index(i).Interface()
-		condResult.args = append(condResult.args, val)
+		condResult.args = append(condResult.args, value.Index(i).Interface())
 		args = append(args, "$%d")
 	}
 	condResult.cond = fmt.Sprintf(`%s %s (%s)`, cond.Field, strings.ToUpper(cond.Operator), strings.Join(args, ", "))

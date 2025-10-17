@@ -389,7 +389,7 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 		if _, exists := restored[key]; !exists {
 			if field.Default != nil {
 				restored[key] = field.Default()
-			} else {
+			} else if field.Type != nil {
 				restored[key] = reflect.Zero(field.Type).Interface()
 			}
 		}
@@ -852,7 +852,7 @@ func (e *Executor) initializeState(initialState State) State {
 				// Use default function if available, otherwise provide zero value.
 				if field.Default != nil {
 					execState[key] = field.Default()
-				} else {
+				} else if field.Type != nil {
 					execState[key] = reflect.Zero(field.Type).Interface()
 				}
 			}
