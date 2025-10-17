@@ -220,10 +220,6 @@ func (g *Graph) validate() error {
 			}
 		}
 	}
-
-	if g.schema == nil {
-		return nil
-	}
 	return g.schema.validateSchema()
 }
 

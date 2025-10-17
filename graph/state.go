@@ -134,6 +134,10 @@ func (s *StateSchema) ApplyUpdate(currentState State, update State) State {
 
 // Validate validates a state against the schema.
 func (s *StateSchema) Validate(state State) error {
+	if s == nil {
+		return fmt.Errorf("graph must have a state schema")
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
