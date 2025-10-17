@@ -51,12 +51,12 @@ type comparisonFunc func(doc *document.Document) bool
 // inmemoryConverter converts a filter condition to a in-memory vector query.
 type inmemoryConverter struct{}
 
-// Convert converts a filter condition to a postgres vector query filter.
+// Convert converts a filter condition to a in-memory vector query filter.
 func (c *inmemoryConverter) Convert(cond *searchfilter.UniversalFilterCondition) (comparisonFunc, error) {
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
-			log.Errorf("panic in pgVectorConverter Convert: %v\n%s", r, string(stack))
+			log.Errorf("panic in inmemoryConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
 	if cond == nil {
