@@ -148,11 +148,8 @@ func (c *esConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCo
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
-	}
 	value := reflect.ValueOf(cond.Value)
-	if value.Len() != 2 {
+	if value.Kind() != reflect.Slice || value.Len() != 2 {
 		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 
@@ -170,7 +167,8 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice || reflect.ValueOf(cond.Value).Len() == 0 {
+	value := reflect.ValueOf(cond.Value)
+	if value.Kind() != reflect.Slice || value.Len() <= 0 {
 		return nil, fmt.Errorf("in operator value must be a slice with at least one element: %v", cond.Value)
 	}
 

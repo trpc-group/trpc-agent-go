@@ -147,12 +147,9 @@ func (c *inmemoryConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 		return nil, fmt.Errorf(`field name only be in ["id", "name", "content", "created_at", "updated_at", "metadata.*"]: %s`, cond.Field)
 	}
 	s := reflect.ValueOf(cond.Value)
-	if s.Kind() != reflect.Slice {
-		return nil, fmt.Errorf("in operator requires an array of values")
-	}
 	itemNum := s.Len()
-	if itemNum <= 0 {
-		return nil, fmt.Errorf("in operator requires an array with at least one value")
+	if s.Kind() != reflect.Slice || itemNum <= 0 {
+		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
 	condFunc := func(doc *document.Document) bool {
@@ -183,10 +180,7 @@ func (c *inmemoryConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 
 func (c *inmemoryConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCondition) (comparisonFunc, error) {
 	value := reflect.ValueOf(cond.Value)
-	if value.Kind() != reflect.Slice {
-		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
-	}
-	if value.Len() != 2 {
+	if value.Kind() != reflect.Slice || value.Len() != 2 {
 		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 
