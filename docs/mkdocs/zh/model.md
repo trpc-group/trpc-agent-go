@@ -469,7 +469,7 @@ model := openai.New("deepseek-chat",
 ```go
 // 自定义 token 限制和策略
 model := openai.New("deepseek-chat",
-    openai.WithEnableTokenTailoring(true),
+    openai.WithEnableTokenTailoring(true),               // 必需：启用 token tailoring
     openai.WithMaxInputTokens(10000),                    // 自定义 token 限制
     openai.WithTokenCounter(customCounter),              // 可选：自定义计数器
     openai.WithTailoringStrategy(customStrategy),        // 可选：自定义策略
@@ -573,7 +573,7 @@ model := openai.New("gpt-4o-mini",
 Token Tailoring 的执行流程：
 
 ```
-1. 检查是否启用 token tailoring
+1. 检查是否通过 WithEnableTokenTailoring(true) 启用 token tailoring
 2. 计算当前消息的总 token 数
 3. 如果超出限制：
    a. 标记必须保留的消息（系统消息 + 最后一轮对话）
@@ -581,6 +581,8 @@ Token Tailoring 的执行流程：
    c. 确保结果在 token 限制内
 4. 返回裁剪后的消息列表
 ```
+
+**重要说明**：Token tailoring 只有在设置 `WithEnableTokenTailoring(true)` 时才会激活。`WithMaxInputTokens()` 选项仅设置 token 限制，但本身不会启用 tailoring 功能。
 
 关键设计：
 

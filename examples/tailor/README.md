@@ -303,7 +303,7 @@ if err != nil {
 
 // Use with model
 m := openai.New(modelName,
-    openai.WithEnableTokenTailoring(true),
+    openai.WithEnableTokenTailoring(true), // Required: enable token tailoring
     openai.WithTokenCounter(tkCounter),
 )
 ```
@@ -328,7 +328,7 @@ Minimal setup requires only the enable flag:
 
 ```go
 m := openai.New("deepseek-chat",
-    openai.WithEnableTokenTailoring(true),
+    openai.WithEnableTokenTailoring(true), // Required: enable token tailoring
 )
 ```
 
@@ -342,7 +342,7 @@ Optionally override components:
 
 ```go
 m := openai.New("deepseek-chat",
-    openai.WithEnableTokenTailoring(true),
+    openai.WithEnableTokenTailoring(true),             // Required: enable token tailoring
     openai.WithMaxInputTokens(10000),                  // Custom limit
     openai.WithTokenCounter(customCounter),            // Custom counter
     openai.WithTailoringStrategy(customStrategy),      // Custom strategy

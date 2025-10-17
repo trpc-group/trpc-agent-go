@@ -415,9 +415,18 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
-// WithMaxInputTokens sets only the input token limit for prompt tailoring.
-// When limit > 0, tailoring is enabled. The counter/strategy will be lazily
-// defaulted to SimpleTokenCounter(limit) and MiddleOutStrategy if not provided.
+// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
+// When enabled, the system will automatically calculate max input tokens using the model's
+// context window minus reserved tokens and protocol overhead.
+func WithEnableTokenTailoring(enabled bool) Option {
+	return func(opts *options) {
+		opts.EnableTokenTailoring = enabled
+	}
+}
+
+// WithMaxInputTokens sets only the input token limit for token tailoring.
+// The counter/strategy will be lazily initialized if not provided.
+// Defaults to SimpleTokenCounter and MiddleOutStrategy.
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.MaxInputTokens = limit
@@ -437,15 +446,6 @@ func WithTokenCounter(counter model.TokenCounter) Option {
 func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 	return func(opts *options) {
 		opts.TailoringStrategy = strategy
-	}
-}
-
-// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
-// When enabled, the system will automatically calculate max input tokens using the model's
-// context window minus reserved tokens and protocol overhead.
-func WithEnableTokenTailoring(enabled bool) Option {
-	return func(opts *options) {
-		opts.EnableTokenTailoring = enabled
 	}
 }
 

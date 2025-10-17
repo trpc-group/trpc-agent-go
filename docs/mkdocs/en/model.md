@@ -469,7 +469,7 @@ Automatic mode will:
 ```go
 // Custom token limit and strategy
 model := openai.New("deepseek-chat",
-    openai.WithEnableTokenTailoring(true),
+    openai.WithEnableTokenTailoring(true),               // Required: enable token tailoring
     openai.WithMaxInputTokens(10000),                    // Custom token limit
     openai.WithTokenCounter(customCounter),              // Optional: custom counter
     openai.WithTailoringStrategy(customStrategy),        // Optional: custom strategy
@@ -573,7 +573,7 @@ model := openai.New("gpt-4o-mini",
 Token Tailoring execution flow:
 
 ```
-1. Check if token tailoring is enabled
+1. Check if token tailoring is enabled via WithEnableTokenTailoring(true)
 2. Calculate total tokens for current messages
 3. If exceeds limit:
    a. Mark messages that must be preserved (system message + last turn)
@@ -581,6 +581,8 @@ Token Tailoring execution flow:
    c. Ensure result is within token limit
 4. Return trimmed message list
 ```
+
+**Important**: Token tailoring is only activated when `WithEnableTokenTailoring(true)` is set. The `WithMaxInputTokens()` option only sets the token limit but does not enable tailoring by itself.
 
 Key design principles:
 

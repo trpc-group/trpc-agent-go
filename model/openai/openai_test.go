@@ -2572,8 +2572,8 @@ func TestOpenAI_TokenCounterInitialization(t *testing.T) {
 			client := &Model{
 				name:                 "gpt-3.5-turbo",
 				apiKey:               "test-api-key",
-				tokenCounter:         tt.initialTokenCounter,
 				enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+				tokenCounter:         tt.initialTokenCounter,
 			}
 
 			// Create a simple conversation to trigger the initialization logic
@@ -2663,8 +2663,8 @@ func TestOpenAI_TailoringStrategyInitialization(t *testing.T) {
 			client := &Model{
 				name:                 "gpt-3.5-turbo",
 				apiKey:               "test-api-key",
-				tailoringStrategy:    tt.initialTailoringStrategy,
 				enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+				tailoringStrategy:    tt.initialTailoringStrategy,
 			}
 
 			// Create a simple conversation to trigger the initialization logic
@@ -2814,9 +2814,9 @@ func TestOpenAI_InitializationPriority(t *testing.T) {
 	client := &Model{
 		name:                 "gpt-3.5-turbo",
 		apiKey:               "test-api-key",
+		enableTokenTailoring: true, // Enable token tailoring to trigger initialization
 		tokenCounter:         userTokenCounter,
 		tailoringStrategy:    userTailoringStrategy,
-		enableTokenTailoring: true, // Enable token tailoring to trigger initialization
 	}
 
 	// Create request
