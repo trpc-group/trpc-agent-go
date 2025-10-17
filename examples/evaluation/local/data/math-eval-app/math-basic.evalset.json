@@ -1,0 +1,90 @@
+{
+  "evalSetId": "math-basic",
+  "name": "math-basic",
+  "description": "Basic arithmetic evaluation cases for the deterministic math agent.",
+  "evalCases": [
+    {
+      "evalId": "calc_add",
+      "conversation": [
+        {
+          "invocationId": "calc_add-1",
+          "userContent": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "calc add 2 3"
+              }
+            ]
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "parts": [
+              {
+                "text": "calc result: 5"
+              }
+            ]
+          },
+          "intermediateData": {
+            "toolUses": [
+              {
+                "name": "calculator",
+                "args": {
+                  "operation": "add",
+                  "a": 2,
+                  "b": 3
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "demo-user",
+        "state": {}
+      }
+    },
+    {
+      "evalId": "calc_multiply",
+      "conversation": [
+        {
+          "invocationId": "calc_multiply-1",
+          "userContent": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "calc multiply 6 7"
+              }
+            ]
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "parts": [
+              {
+                "text": "calc result: 42"
+              }
+            ]
+          },
+          "intermediateData": {
+            "toolUses": [
+              {
+                "name": "calculator",
+                "args": {
+                  "operation": "multiply",
+                  "a": 6,
+                  "b": 7
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "demo-user",
+        "state": {}
+      }
+    }
+  ],
+  "creationTimestamp": 1760590952.8265657
+}

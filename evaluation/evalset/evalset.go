@@ -1,0 +1,48 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package evalset provides evaluation set for evaluation.
+package evalset
+
+import (
+	"context"
+)
+
+// EvalSet represents a collection of evaluation cases.
+// It mirrors the schema used by ADK Web, with field names in camel-case to align with the JSON format.
+type EvalSet struct {
+	// EvalSetID uniquely identifies this evaluation set.
+	EvalSetID string `json:"evalSetId"`
+	// Name of the evaluation set.
+	Name string `json:"name"`
+	// Description of the evaluation set.
+	Description string `json:"description"`
+	// EvalCases contains all the evaluation cases.
+	EvalCases []*EvalCase `json:"evalCases"`
+	// CreationTimestamp when this eval set was created.
+	CreationTimestamp *EpochTime `json:"creationTimestamp"`
+}
+
+// Manager defines the interface that an evaluation set manager must satisfy.
+type Manager interface {
+	// Get gets an EvalSet identified by evalSetID.
+	Get(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
+	// Create creates an EvalSet identified by evalSetID.
+	Create(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
+	// List lists all EvalSet IDs for the given appName.
+	List(ctx context.Context, appName string) ([]string, error)
+	// GetCase gets an EvalCase identified by evalSetID and evalCaseID.
+	GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*EvalCase, error)
+	// AddCase adds an EvalCase to an existing EvalSet identified by evalSetID.
+	AddCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
+	// UpdateCase updates an EvalCase identified by evalSetID and evalCaseID.
+	UpdateCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
+	// DeleteCase deletes an EvalCase identified by evalSetID and evalCaseID.
+	DeleteCase(ctx context.Context, appName, evalSetID, evalCaseID string) error
+}
