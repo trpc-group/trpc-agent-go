@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -574,7 +575,7 @@ func TestStateSchema_validateSchema(t *testing.T) {
 				}
 
 				errorMsg := err.Error()
-				if tt.errContains != "" && !contains(errorMsg, tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(errorMsg, tt.errContains) {
 					t.Errorf("StateSchema.validateSchema() error = %v, should contain %v", errorMsg, tt.errContains)
 				}
 			}
@@ -584,19 +585,6 @@ func TestStateSchema_validateSchema(t *testing.T) {
 			}
 		})
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && len(substr) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestStateSchema_validateSchema_Concurrent(t *testing.T) {
@@ -656,7 +644,7 @@ func TestStateSchema_validateSchema_FieldNameInError(t *testing.T) {
 		return
 	}
 
-	if !contains(err.Error(), fieldName) {
+	if !strings.Contains(err.Error(), fieldName) {
 		t.Errorf("Error message should contain field name '%s', got: %s", fieldName, err.Error())
 	}
 }
