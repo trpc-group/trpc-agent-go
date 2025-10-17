@@ -282,7 +282,7 @@ Fast estimation based on character count:
 
 ```go
 // Automatically used in simple mode
-counter := model.NewSimpleTokenCounter(maxInputTokens)
+counter := model.NewSimpleTokenCounter()
 ```
 
 **Pros**: Fast, no external dependencies, good enough for most cases.

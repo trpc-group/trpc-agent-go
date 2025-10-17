@@ -487,7 +487,7 @@ model := openai.New("deepseek-chat",
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
-counter := model.NewSimpleTokenCounter(10000)
+counter := model.NewSimpleTokenCounter()
 strategy := model.NewMiddleOutStrategy(counter)
 
 model := openai.New("deepseek-chat",
@@ -541,7 +541,7 @@ model := openai.New("deepseek-chat",
 基于字符数的快速估算：
 
 ```go
-counter := model.NewSimpleTokenCounter(maxInputTokens)
+counter := model.NewSimpleTokenCounter()
 ```
 
 - **优点**：快速，无外部依赖，适合大多数场景

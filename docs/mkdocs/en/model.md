@@ -487,7 +487,7 @@ Removes messages from the middle, preserving head and tail:
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
-counter := model.NewSimpleTokenCounter(10000)
+counter := model.NewSimpleTokenCounter()
 strategy := model.NewMiddleOutStrategy(counter)
 
 model := openai.New("deepseek-chat",
@@ -541,7 +541,7 @@ model := openai.New("deepseek-chat",
 Fast estimation based on character count:
 
 ```go
-counter := model.NewSimpleTokenCounter(maxInputTokens)
+counter := model.NewSimpleTokenCounter()
 ```
 
 - **Pros**: Fast, no external dependencies, suitable for most scenarios
