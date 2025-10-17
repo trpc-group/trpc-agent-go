@@ -185,6 +185,27 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata),
 	)
 
+	// You can also create the knowledge search tool manually.
+	// It's equal with set knowledgeBase to the agent.
+	// And you can set more than one knowledge search tool to the agent.
+
+	// knowledgeTool := knowledgetool.NewAgenticFilterSearchTool(
+	// 	c.kb,
+	// 	sourcesMetadata,
+	// 	knowledgetool.WithToolName("knowledge_search"),
+	// 	knowledgetool.WithFilter(map[string]any{
+	// 		"topic": "programming",
+	// 	}),
+	// 	knowledgetool.WithToolDescription("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."))
+	// llmAgent := llmagent.New(
+	// 	agentName,
+	// 	llmagent.WithModel(modelInstance),
+	// 	llmagent.WithDescription("A helpful AI assistant."),
+	// 	llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."),
+	// 	llmagent.WithGenerationConfig(genConfig),
+	// 	llmagent.WithTools([]tool.Tool{knowledgeTool}),
+	// )
+
 	// Create session service.
 	sessionService := sessioninmemory.NewSessionService()
 

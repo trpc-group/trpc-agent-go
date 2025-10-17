@@ -259,6 +259,7 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 	// Now try to enqueue another job - should fall back to sync
 	err = s.EnqueueSummaryJob(context.Background(), sess, "branch", false)
 	require.NoError(t, err)
+	time.Sleep(time.Millisecond * 100)
 
 	// Verify summary was created immediately (sync fallback)
 	got, err := s.GetSession(context.Background(), key)

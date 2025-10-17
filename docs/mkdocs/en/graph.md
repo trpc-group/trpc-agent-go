@@ -12,6 +12,7 @@ Highlights:
 - Deterministic parallelism with BSP style (Plan / Execute / Update).
 - Built‑in node types wrap LLM, Tools, and Agent to reduce boilerplate.
 - Streaming events, checkpoints, and interrupts for observability and recovery.
+- Node‑level retry/backoff with exponential delay and jitter, plus executor‑level defaults and rich retry metadata in events.
 
 ## Quick Start
 
@@ -238,6 +239,7 @@ See examples:
 
 - `examples/graph/io_conventions` — Function + LLM + Agent I/O
 - `examples/graph/io_conventions_tools` — Adds a Tools node path and shows how to capture tool JSON
+- `examples/graph/retry` — Node-level retry/backoff demonstration
 
 #### Constant references (import and keys)
 
@@ -282,6 +284,7 @@ func myNode(ctx context.Context, state graph.State) (any, error) {
 
 - Model metadata: `_model_metadata` → `graph.MetadataKeyModel` (struct `graph.ModelExecutionMetadata`)
 - Tool metadata: `_tool_metadata` → `graph.MetadataKeyTool` (struct `graph.ToolExecutionMetadata`)
+- Node metadata: `_node_metadata` → `graph.MetadataKeyNode` (struct `graph.NodeExecutionMetadata`). Includes retry info: `Attempt`, `MaxAttempts`, `NextDelay`, `Retrying` and timing fields.
 
 Snippet:
 
@@ -585,7 +588,60 @@ stateGraph.AddLLMNode(
 
 See the runnable example: `examples/graph/placeholder`.
 
-### 6. Runner Configuration
+### 6. Node Retry & Backoff
+
+Configure per‑node retry with exponential backoff and optional jitter. Failed attempts do not produce writes; only a successful attempt applies its state delta and routing.
+
+- Per‑node policy via `WithRetryPolicy`:
+
+```go
+// Simple convenience policy (attempts include the first try)
+sg.AddNode("unstable", unstableFunc,
+    graph.WithRetryPolicy(graph.WithSimpleRetry(3)))
+
+// Full policy
+policy := graph.RetryPolicy{
+    MaxAttempts:     3,                      // 1 initial + up to 2 retries
+    InitialInterval: 200 * time.Millisecond, // base delay
+    BackoffFactor:   2.0,                    // exponential backoff
+    MaxInterval:     2 * time.Second,        // clamp
+    Jitter:          true,                   // randomize delay
+    RetryOn: []graph.RetryCondition{
+        graph.DefaultTransientCondition(),   // deadline/net timeouts
+        graph.RetryOnErrors(context.DeadlineExceeded),
+        graph.RetryOnPredicate(func(err error) bool { return true }),
+    },
+    MaxElapsedTime:  5 * time.Second,        // total retry budget (optional)
+    // PerAttemptTimeout: 0,                 // reserved; node timeout comes from executor
+}
+sg.AddNode("unstable", unstableFunc, graph.WithRetryPolicy(policy))
+```
+
+- Default policy via Executor (applies when a node has none):
+
+```go
+exec, _ := graph.NewExecutor(compiled,
+    graph.WithDefaultRetryPolicy(graph.WithSimpleRetry(2)))
+```
+
+Notes
+- Interrupts are never retried.
+- Backoff delay is clamped by the current step deadline when set (`WithStepTimeout`).
+- Events carry retry metadata so UIs/CLIs can display progress:
+
+```go
+if b, ok := ev.StateDelta[graph.MetadataKeyNode]; ok {
+    var md graph.NodeExecutionMetadata
+    _ = json.Unmarshal(b, &md)
+    if md.Phase == graph.ExecutionPhaseError && md.Retrying {
+        // md.Attempt, md.MaxAttempts, md.NextDelay
+    }
+}
+```
+
+Example: `examples/graph/retry` shows an unstable node that retries before a final LLM answer.
+
+### 7. Runner Configuration
 
 Runner provides session management and execution environment:
 
@@ -609,7 +665,7 @@ message := model.NewUserMessage("User input")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
 
-### 7. Message State Schema
+### 8. Message State Schema
 
 For conversational applications, you can use predefined message state schema:
 
@@ -625,7 +681,7 @@ schema := graph.MessagesStateSchema()
 // - metadata: Metadata (StateKeyMetadata).
 ```
 
-### 8. State Key Usage Scenarios
+### 9. State Key Usage Scenarios
 
 **User-defined State Keys**: Used to store business logic data.
 
@@ -2006,6 +2062,80 @@ for ev := range events {
     }
 }
 ```
+
+#### Emit selected values from node callbacks
+
+By default, mid‑run events like `graph.state.update` report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final `graph.execution` event’s `StateDelta` carries the serialized final snapshot of allowed keys (see implementations in [graph/executor.go:2001](graph/executor.go:2001), [graph/events.go:1276](graph/events.go:1276), [graph/events.go:1330](graph/events.go:1330)).
+
+If you only need to surface a few values from the result of a specific node right after it completes, register an After‑node callback and emit a small custom event containing just those values:
+
+Steps:
+- Register `WithPostNodeCallback` on the target node.
+- In the callback, read `result any`; when the node returns `graph.State`, this is the node’s state delta.
+- Pick the needed keys, serialize to JSON, attach to a new event’s `StateDelta`.
+- Send via `agent.EmitEvent`.
+
+Example:
+
+```go
+import (
+    "context"
+    "encoding/json"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    nodeParse   = "parse"
+    stateKeyOut = "parsed_value" // emit only what upstream needs
+)
+
+func parseNode(ctx context.Context, s graph.State) (any, error) {
+    val := map[string]any{"ok": true, "score": 0.97}
+    return graph.State{stateKeyOut: val}, nil
+}
+
+func buildGraph() (*graph.Graph, error) {
+    sg := graph.NewStateGraph(graph.MessagesStateSchema())
+    sg.AddNode(nodeParse, parseNode,
+        graph.WithPostNodeCallback(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            st graph.State,
+            result any,
+            nodeErr error,
+        ) (any, error) {
+            if nodeErr != nil { return nil, nil }
+            inv, _ := agent.InvocationFromContext(ctx)
+            execCtx, _ := st[graph.StateKeyExecContext].(*graph.ExecutionContext)
+            if delta, ok := result.(graph.State); ok {
+                if v, exists := delta[stateKeyOut]; exists && execCtx != nil {
+                    evt := graph.NewGraphEvent(
+                        inv.InvocationID,
+                        cb.NodeID, // author = node id for easy filtering
+                        graph.ObjectTypeGraphNodeExecution,
+                    )
+                    if evt.StateDelta == nil { evt.StateDelta = make(map[string][]byte) }
+                    if b, err := json.Marshal(v); err == nil {
+                        evt.StateDelta[stateKeyOut] = b
+                        _ = agent.EmitEvent(ctx, inv, execCtx.EventChan, evt)
+                    }
+                }
+            }
+            return nil, nil
+        }),
+    ).
+        SetEntryPoint(nodeParse).
+        SetFinishPoint(nodeParse)
+    return sg.Compile()
+}
+```
+
+Recommendations:
+- Emit only necessary keys to control bandwidth and avoid leaking sensitive data.
+- Internal/volatile keys are filtered from final snapshots and should not be emitted (see [graph/internal_keys.go:16](graph/internal_keys.go:16)).
+- For textual intermediate outputs, prefer existing model streaming events (`choice.Delta.Content`).
 
 You can also configure agent‑level callbacks:
 

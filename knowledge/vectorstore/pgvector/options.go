@@ -9,8 +9,47 @@
 
 package pgvector
 
+import (
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/pgvector/pgvector-go"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+)
+
 // defaultMaxResults is the default maximum number of search results.
 const defaultMaxResults = 10
+
+type DocBuilderFunc func(row pgx.Row) (*vectorstore.ScoredDocument, []float64, error)
+
+func defaultDocBuilder(row pgx.Row) (*vectorstore.ScoredDocument, []float64, error) {
+	var id, name, content, metadataJSON string
+	var vector pgvector.Vector
+	var createdAt, updatedAt int64
+	var score float64
+
+	if err := row.Scan(&id, &name, &content, &vector, &metadataJSON, &createdAt, &updatedAt, &score); err != nil {
+		return nil, nil, err
+	}
+	metadata, err := jsonToMap(metadataJSON)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pgvector parse metadata: %w", err)
+	}
+	doc := &document.Document{
+		ID:        id,
+		Name:      name,
+		Content:   content,
+		Metadata:  metadata,
+		CreatedAt: time.Unix(createdAt, 0),
+		UpdatedAt: time.Unix(updatedAt, 0),
+	}
+	return &vectorstore.ScoredDocument{
+		Document: doc,
+		Score:    score,
+	}, convertToFloat64Vector(vector.Slice()), nil
+}
 
 // options contains the options for pgvector.
 type options struct {
@@ -29,7 +68,25 @@ type options struct {
 	textWeight   float64 // Weight for text relevance (0.0-1.0)
 	language     string  // Default: english, if you install zhparser or jieba, you can set it to your configuration
 
+	docBuilder DocBuilderFunc
+
 	maxResults int // Maximum number of search results
+
+	//field
+	// idFieldName is the PostgreSQL field name for ID.
+	idFieldName string
+	// nameFieldName is the PostgreSQL field name for name/title.
+	nameFieldName string
+	// contentFieldName is the PostgreSQL field name for content.
+	contentFieldName string
+	// embeddingFieldName is the PostgreSQL field name for embedding.
+	embeddingFieldName string
+	// metadataFieldName is the PostgreSQL field name for metadata.
+	metadataFieldName string
+	// createdAtFieldName is the PostgreSQL field name for created at timestamp.
+	createdAtFieldName string
+	// updatedAtFieldName is the PostgreSQL field name for updated at timestamp.
+	updatedAtFieldName string
 }
 
 // defaultOptions is the default options for pgvector.
@@ -45,6 +102,15 @@ var defaultOptions = options{
 	textWeight:     0.3, // Default: Text relevance weight 30%
 	language:       "english",
 	maxResults:     defaultMaxResults,
+	docBuilder:     defaultDocBuilder,
+
+	idFieldName:        "id",
+	nameFieldName:      "name",
+	contentFieldName:   "content",
+	embeddingFieldName: "embedding",
+	metadataFieldName:  "metadata",
+	createdAtFieldName: "created_at",
+	updatedAtFieldName: "updated_at",
 }
 
 // Option is the option for pgvector.
@@ -146,5 +212,61 @@ func WithMaxResults(maxResults int) Option {
 			maxResults = defaultMaxResults
 		}
 		o.maxResults = maxResults
+	}
+}
+
+// WithIDField sets the PostgreSQL field name for ID.
+func WithIDField(field string) Option {
+	return func(o *options) {
+		o.idFieldName = field
+	}
+}
+
+// WithNameField sets the PostgreSQL field name for name/title.
+func WithNameField(field string) Option {
+	return func(o *options) {
+		o.nameFieldName = field
+	}
+}
+
+// WithContentField sets the PostgreSQL field name for content.
+func WithContentField(field string) Option {
+	return func(o *options) {
+		o.contentFieldName = field
+	}
+}
+
+// WithEmbeddingField sets the PostgreSQL field name for embedding.
+func WithEmbeddingField(field string) Option {
+	return func(o *options) {
+		o.embeddingFieldName = field
+	}
+}
+
+// WithMetadataField sets the PostgreSQL field name for metadata.
+func WithMetadataField(field string) Option {
+	return func(o *options) {
+		o.metadataFieldName = field
+	}
+}
+
+// WithCreatedAtField sets the PostgreSQL field name for created_at.
+func WithCreatedAtField(field string) Option {
+	return func(o *options) {
+		o.createdAtFieldName = field
+	}
+}
+
+// WithUpdatedAtField sets the PostgreSQL field name for updated_at.
+func WithUpdatedAtField(field string) Option {
+	return func(o *options) {
+		o.updatedAtFieldName = field
+	}
+}
+
+// WithDocBuilder sets the document builder function.
+func WithDocBuilder(builder DocBuilderFunc) Option {
+	return func(o *options) {
+		o.docBuilder = builder
 	}
 }

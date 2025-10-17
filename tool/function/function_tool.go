@@ -45,6 +45,14 @@ type functionToolOptions struct {
 }
 
 // WithName sets the name of the function tool.
+//
+// Note: Tool names must comply with LLM API requirements for compatibility.
+// Some APIs (e.g., Kimi, DeepSeek) enforce strict naming patterns:
+// - Must match pattern: ^[a-zA-Z0-9_-]+$
+// - Cannot contain Chinese characters, parentheses, or special symbols
+// - Use only English letters, numbers, underscores, and hyphens
+//
+// Best practice: Use ^[a-zA-Z0-9_-]+ only to ensure maximum compatibility.
 func WithName(name string) Option {
 	return func(opts *functionToolOptions) {
 		opts.name = name
@@ -129,6 +137,13 @@ func (ft *FunctionTool[I, O]) LongRunning() bool {
 // Declaration returns the tool's declaration information.
 // It provides metadata about the tool including its name, description,
 // and JSON schema for the expected input arguments.
+//
+// Note: The tool name must comply with LLM API requirements.
+// Some APIs (e.g., Kimi, DeepSeek) enforce strict naming patterns:
+// - Must match pattern: ^[a-zA-Z0-9_-]+$
+// - Cannot contain Chinese characters, parentheses, or special symbols
+//
+// Best practice: Use ^[a-zA-Z0-9_-]+ only to ensure maximum compatibility.
 //
 // Returns:
 //   - A Declaration struct containing the tool's metadata.
@@ -217,6 +232,13 @@ func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonA
 // Declaration returns the tool's declaration information.
 // It provides metadata about the streamable tool including its name, description,
 // and JSON schema for the expected input arguments.
+//
+// Note: The tool name must comply with LLM API requirements.
+// Some APIs (e.g., Kimi, DeepSeek) enforce strict naming patterns:
+// - Must match pattern: ^[a-zA-Z0-9_-]+$
+// - Cannot contain Chinese characters, parentheses, or special symbols
+//
+// Best practice: Use ^[a-zA-Z0-9_-]+ only to ensure maximum compatibility.
 //
 // Returns:
 //   - A Declaration struct containing the tool's metadata.

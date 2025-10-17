@@ -14,11 +14,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
