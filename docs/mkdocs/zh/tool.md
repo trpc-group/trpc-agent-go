@@ -404,6 +404,21 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
   - true：把子 Agent 的事件直接转发到父流程（强烈建议父/子 Agent 都开启 `GenerationConfig{Stream: true}`）
   - false：按“仅可调用工具”处理，不做内部事件转发
 
+- WithHistoryScope(HistoryScope)：
+  - `HistoryScopeIsolated`（默认）：保持子调用完全隔离，只读取本次工具参数（不继承父历史）。
+  - `HistoryScopeParentBranch`：通过分层过滤键 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 继承父会话历史；内容处理器会基于前缀匹配纳入父事件，同时子事件仍写入独立子分支。典型场景：基于上一轮产出进行“编辑/优化/续写”。
+
+示例：
+
+```go
+child := agenttool.NewTool(
+    childAgent,
+    agenttool.WithSkipSummarization(false),
+    agenttool.WithStreamInner(true),
+    agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
+)
+```
+
 ### 注意事项
 
 - 事件完成信号：工具响应事件会被标记 `RequiresCompletion=true`，Runner 会自动发送完成信号，无需手工处理
