@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -541,7 +542,7 @@ func (vs *VectorStore) matchesFilter(docID string, filter *vectorstore.SearchFil
 			return false
 		}
 		for key, value := range filter.Metadata {
-			if docValue, exists := doc.Metadata[key]; !exists || docValue != value {
+			if docValue, exists := doc.Metadata[key]; !exists || !reflect.DeepEqual(docValue, value) {
 				return false
 			}
 		}
