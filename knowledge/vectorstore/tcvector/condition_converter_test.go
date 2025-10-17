@@ -181,6 +181,26 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 			wantErr:    false,
 		},
 		{
+			name: "string between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "date",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []string{"2020-01-01", "2020-01-31"},
+			},
+			wantFilter: `date >= "2020-01-01" and (date <= "2020-01-31")`,
+			wantErr:    false,
+		},
+		{
+			name: "number between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []int{20, 30},
+			},
+			wantFilter: `age >= 20 and (age <= 30)`,
+			wantErr:    false,
+		},
+		{
 			name: "composite condition with nested operators",
 			condition: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorAnd,

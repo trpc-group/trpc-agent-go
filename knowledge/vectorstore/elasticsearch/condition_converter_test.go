@@ -55,6 +55,16 @@ func Test_esConverter_convertCondition(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "like condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "active",
+				Operator: searchfilter.OperatorLike,
+				Value:    "*test*",
+			},
+			want:    `{"wildcard":{"active":{"value":"*test*"}}}`,
+			wantErr: false,
+		},
+		{
 			name: "test1",
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "name",

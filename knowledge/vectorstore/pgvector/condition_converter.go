@@ -61,6 +61,10 @@ func (c *pgVectorConverter) convertCondition(cond *searchfilter.UniversalFilterC
 		return c.buildComparisonCondition(cond)
 	case searchfilter.OperatorIn, searchfilter.OperatorNotIn:
 		return c.buildInCondition(cond)
+	case searchfilter.OperatorLike, searchfilter.OperatorNotLike:
+		return c.buildLikeCondition(cond)
+	case searchfilter.OperatorBetween:
+		return c.buildBetweenCondition(cond)
 	default:
 		return nil, fmt.Errorf("unsupported operation: %s", cond.Operator)
 	}
@@ -71,12 +75,12 @@ func (c *pgVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 		return nil, fmt.Errorf("field is empty")
 	}
 	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("in operator requires an array of values")
+		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 	value := reflect.ValueOf(cond.Value)
 	itemNum := value.Len()
 	if itemNum <= 0 {
-		return nil, fmt.Errorf("in operator requires an array with at least one value")
+		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
 	condResult := condConvertResult{args: make([]any, 0, itemNum)}
@@ -129,5 +133,37 @@ func (c *pgVectorConverter) buildComparisonCondition(cond *searchfilter.Universa
 	return &condConvertResult{
 		cond: fmt.Sprintf(`%s %s `, cond.Field, operator) + "$%d",
 		args: []any{cond.Value},
+	}, nil
+}
+
+func (c *pgVectorConverter) buildLikeCondition(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
+	if reflect.TypeOf(cond.Value).Kind() != reflect.String {
+		return nil, fmt.Errorf("like operator value must be a string: %v", cond.Value)
+	}
+
+	return &condConvertResult{
+		cond: fmt.Sprintf(`%s %s `, cond.Field, strings.ToUpper(cond.Operator)) + "$%d",
+		args: []any{cond.Value},
+	}, nil
+}
+
+func (c *pgVectorConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
+	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
+	}
+	value := reflect.ValueOf(cond.Value)
+	if value.Len() != 2 {
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
+	}
+
+	return &condConvertResult{
+		cond: cond.Field + " >= $%d AND " + cond.Field + " <= $%d",
+		args: []any{value.Index(0).Interface(), value.Index(1).Interface()},
 	}, nil
 }

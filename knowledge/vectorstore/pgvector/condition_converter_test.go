@@ -150,6 +150,32 @@ func Test_pgVectorConverter_convertCondition(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "like operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorLike,
+				Value:    `%name%`,
+			},
+			wantFilter: condConvertResult{
+				cond: "name LIKE $%d",
+				args: []any{`%name%`},
+			},
+			wantErr: false,
+		},
+		{
+			name: "between operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []int{18, 30},
+			},
+			wantFilter: condConvertResult{
+				cond: "age >= $%d AND age <= $%d",
+				args: []any{18, 30},
+			},
+			wantErr: false,
+		},
+		{
 			name: "not in operator with numeric values",
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
