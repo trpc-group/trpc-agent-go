@@ -65,9 +65,10 @@ func WithMaxResults(maxResults int) Option {
 // New creates a new in-memory vector store instance with options.
 func New(opts ...Option) *VectorStore {
 	vs := &VectorStore{
-		documents:  make(map[string]*document.Document),
-		embeddings: make(map[string][]float64),
-		maxResults: defaultMaxResults,
+		documents:       make(map[string]*document.Document),
+		embeddings:      make(map[string][]float64),
+		maxResults:      defaultMaxResults,
+		filterConverter: &inmemoryConverter{},
 	}
 
 	// Apply options.
