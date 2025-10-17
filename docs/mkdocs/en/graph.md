@@ -2063,6 +2063,80 @@ for ev := range events {
 }
 ```
 
+#### Emit selected values from node callbacks
+
+By default, mid‑run events like `graph.state.update` report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final `graph.execution` event’s `StateDelta` carries the serialized final snapshot of allowed keys (see implementations in [graph/executor.go:2001](graph/executor.go:2001), [graph/events.go:1276](graph/events.go:1276), [graph/events.go:1330](graph/events.go:1330)).
+
+If you only need to surface a few values from the result of a specific node right after it completes, register an After‑node callback and emit a small custom event containing just those values:
+
+Steps:
+- Register `WithPostNodeCallback` on the target node.
+- In the callback, read `result any`; when the node returns `graph.State`, this is the node’s state delta.
+- Pick the needed keys, serialize to JSON, attach to a new event’s `StateDelta`.
+- Send via `agent.EmitEvent`.
+
+Example:
+
+```go
+import (
+    "context"
+    "encoding/json"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    nodeParse   = "parse"
+    stateKeyOut = "parsed_value" // emit only what upstream needs
+)
+
+func parseNode(ctx context.Context, s graph.State) (any, error) {
+    val := map[string]any{"ok": true, "score": 0.97}
+    return graph.State{stateKeyOut: val}, nil
+}
+
+func buildGraph() (*graph.Graph, error) {
+    sg := graph.NewStateGraph(graph.MessagesStateSchema())
+    sg.AddNode(nodeParse, parseNode,
+        graph.WithPostNodeCallback(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            st graph.State,
+            result any,
+            nodeErr error,
+        ) (any, error) {
+            if nodeErr != nil { return nil, nil }
+            inv, _ := agent.InvocationFromContext(ctx)
+            execCtx, _ := st[graph.StateKeyExecContext].(*graph.ExecutionContext)
+            if delta, ok := result.(graph.State); ok {
+                if v, exists := delta[stateKeyOut]; exists && execCtx != nil {
+                    evt := graph.NewGraphEvent(
+                        inv.InvocationID,
+                        cb.NodeID, // author = node id for easy filtering
+                        graph.ObjectTypeGraphNodeExecution,
+                    )
+                    if evt.StateDelta == nil { evt.StateDelta = make(map[string][]byte) }
+                    if b, err := json.Marshal(v); err == nil {
+                        evt.StateDelta[stateKeyOut] = b
+                        _ = agent.EmitEvent(ctx, inv, execCtx.EventChan, evt)
+                    }
+                }
+            }
+            return nil, nil
+        }),
+    ).
+        SetEntryPoint(nodeParse).
+        SetFinishPoint(nodeParse)
+    return sg.Compile()
+}
+```
+
+Recommendations:
+- Emit only necessary keys to control bandwidth and avoid leaking sensitive data.
+- Internal/volatile keys are filtered from final snapshots and should not be emitted (see [graph/internal_keys.go:16](graph/internal_keys.go:16)).
+- For textual intermediate outputs, prefer existing model streaming events (`choice.Delta.Content`).
+
 You can also configure agent‑level callbacks:
 
 ```go
