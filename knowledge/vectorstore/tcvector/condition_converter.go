@@ -84,11 +84,14 @@ func (c *tcVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 
 func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
 	conds, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
-	if !ok {
+	if !ok || len(conds) <= 0 {
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 	filter := tcvectordb.NewFilter("")
 	for _, child := range conds {
+		if child == nil {
+			return nil, fmt.Errorf("nil condition in logical operation %+v", cond.Value)
+		}
 		childFilter, err := c.convertCondition(child)
 		if err != nil {
 			return nil, err

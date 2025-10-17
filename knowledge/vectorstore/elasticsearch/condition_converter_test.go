@@ -756,6 +756,7 @@ func Test_esConverter_buildLogicalCondition(t *testing.T) {
 			name: "nil value",
 			condition: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorOr,
+				Field:    "status",
 				Value:    nil,
 			},
 			wantErr: true,
@@ -764,6 +765,7 @@ func Test_esConverter_buildLogicalCondition(t *testing.T) {
 			name: "empty slice",
 			condition: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorOr,
+				Field:    "status",
 				Value:    []*searchfilter.UniversalFilterCondition{},
 			},
 			wantErr: true,
@@ -772,6 +774,7 @@ func Test_esConverter_buildLogicalCondition(t *testing.T) {
 			name: "nil element slice",
 			condition: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorOr,
+				Field:    "status",
 				Value:    []*searchfilter.UniversalFilterCondition{nil, nil},
 			},
 			wantErr: true,
