@@ -7,20 +7,21 @@
 //
 //
 
-package tcvector
+package pgvector
 
 import (
+	"reflect"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 )
 
-func Test_tcVectorConverter_convertCondition(t *testing.T) {
+func Test_pgVectorConverter_convertCondition(t *testing.T) {
 	tests := []struct {
 		name       string
 		condition  *searchfilter.UniversalFilterCondition
 		wantErr    bool
-		wantFilter string
+		wantFilter condConvertResult
 	}{
 		{
 			name: "equal operator with string value",
@@ -29,8 +30,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorEqual,
 				Value:    "test",
 			},
-			wantErr:    false,
-			wantFilter: `name = "test"`,
+			wantErr: false,
+			wantFilter: condConvertResult{
+				cond: "name = $%d",
+				args: []any{"test"},
+			},
 		},
 		{
 			name: "equal operator with numeric value",
@@ -39,8 +43,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorEqual,
 				Value:    25,
 			},
-			wantErr:    false,
-			wantFilter: `age = 25`,
+			wantErr: false,
+			wantFilter: condConvertResult{
+				cond: "age = $%d",
+				args: []any{25},
+			},
 		},
 		{
 			name: "not equal operator with string value",
@@ -49,8 +56,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorNotEqual,
 				Value:    "active",
 			},
-			wantErr:    false,
-			wantFilter: `status != "active"`,
+			wantErr: false,
+			wantFilter: condConvertResult{
+				cond: "status != $%d",
+				args: []any{"active"},
+			},
 		},
 		{
 			name: "greater than operator",
@@ -59,8 +69,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorGreaterThan,
 				Value:    90,
 			},
-			wantErr:    false,
-			wantFilter: `score > 90`,
+			wantErr: false,
+			wantFilter: condConvertResult{
+				cond: "score > $%d",
+				args: []any{90},
+			},
 		},
 		{
 			name: "greater than or equal operator",
@@ -69,8 +82,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorGreaterThanOrEqual,
 				Value:    80,
 			},
-			wantErr:    false,
-			wantFilter: `score >= 80`,
+			wantErr: false,
+			wantFilter: condConvertResult{
+				cond: "score >= $%d",
+				args: []any{80},
+			},
 		},
 		{
 			name: "less than operator",
@@ -79,8 +95,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorLessThan,
 				Value:    100,
 			},
-			wantErr:    false,
-			wantFilter: `price < 100`,
+			wantErr: false,
+			wantFilter: condConvertResult{
+				cond: "price < $%d",
+				args: []any{100},
+			},
 		},
 		{
 			name: "less than or equal operator",
@@ -89,8 +108,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorLessThanOrEqual,
 				Value:    50,
 			},
-			wantErr:    false,
-			wantFilter: `price <= 50`,
+			wantErr: false,
+			wantFilter: condConvertResult{
+				cond: "price <= $%d",
+				args: []any{50},
+			},
 		},
 		{
 			name: "boolean value",
@@ -99,8 +121,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorEqual,
 				Value:    true,
 			},
-			wantErr:    false,
-			wantFilter: `active = true`,
+			wantErr: false,
+			wantFilter: condConvertResult{
+				cond: "active = $%d",
+				args: []any{true},
+			},
 		},
 		{
 			name: "invalid operator",
@@ -118,8 +143,37 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorIn,
 				Value:    []string{"Alice", "Bob", "Charlie"},
 			},
-			wantFilter: `name in ("Alice","Bob","Charlie")`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "name IN ($%d, $%d, $%d)",
+				args: []any{"Alice", "Bob", "Charlie"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "like operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorLike,
+				Value:    `%name%`,
+			},
+			wantFilter: condConvertResult{
+				cond: "name LIKE $%d",
+				args: []any{`%name%`},
+			},
+			wantErr: false,
+		},
+		{
+			name: "between operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []int{18, 30},
+			},
+			wantFilter: condConvertResult{
+				cond: "age >= $%d AND age <= $%d",
+				args: []any{18, 30},
+			},
+			wantErr: false,
 		},
 		{
 			name: "not in operator with numeric values",
@@ -128,8 +182,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				Operator: searchfilter.OperatorNotIn,
 				Value:    []int{18, 25, 30},
 			},
-			wantFilter: "age not in (18,25,30)",
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "age NOT IN ($%d, $%d, $%d)",
+				args: []any{18, 25, 30},
+			},
+			wantErr: false,
 		},
 		{
 			name: "empty field",
@@ -157,8 +214,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `name = "test" and (age > 25)`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "(name = $%d) AND (age > $%d)",
+				args: []any{"test", 25},
+			},
+			wantErr: false,
 		},
 		{
 			name: "logical OR operator",
@@ -177,28 +237,11 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `status = "active" or (score < 80)`,
-			wantErr:    false,
-		},
-		{
-			name: "string between condition",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "date",
-				Operator: searchfilter.OperatorBetween,
-				Value:    []string{"2020-01-01", "2020-01-31"},
+			wantFilter: condConvertResult{
+				cond: "(status = $%d) OR (score < $%d)",
+				args: []any{"active", 80},
 			},
-			wantFilter: `date >= "2020-01-01" and (date <= "2020-01-31")`,
-			wantErr:    false,
-		},
-		{
-			name: "number between condition",
-			condition: &searchfilter.UniversalFilterCondition{
-				Field:    "age",
-				Operator: searchfilter.OperatorBetween,
-				Value:    []int{20, 30},
-			},
-			wantFilter: `age >= 20 and (age <= 30)`,
-			wantErr:    false,
+			wantErr: false,
 		},
 		{
 			name: "composite condition with nested operators",
@@ -227,12 +270,15 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `name = "test" and (status = "active" or (score < 80))`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "(name = $%d) AND ((status = $%d) OR (score < $%d))",
+				args: []any{"test", "active", 80},
+			},
+			wantErr: false,
 		},
 	}
 
-	c := &tcVectorConverter{}
+	c := &pgVectorConverter{}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -255,19 +301,19 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				return
 			}
 
-			if filter.Cond() != tt.wantFilter {
-				t.Errorf("convertCondition() filter = %v, want %v", filter.Cond(), tt.wantFilter)
+			if !reflect.DeepEqual(*filter, tt.wantFilter) {
+				t.Errorf("convertCondition() args = %v, want %v", *filter, tt.wantFilter)
 			}
 		})
 	}
 }
 
-func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
+func Test_pgVectorConverter_buildLogicalCondition(t *testing.T) {
 	tests := []struct {
 		name       string
 		condition  *searchfilter.UniversalFilterCondition
 		wantErr    bool
-		wantFilter string
+		wantFilter condConvertResult
 	}{
 		{
 			name: "logical AND operator",
@@ -286,8 +332,11 @@ func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `name = "test" and (age > 25)`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "(name = $%d) AND (age > $%d)",
+				args: []any{"test", 25},
+			},
+			wantErr: false,
 		},
 		{
 			name: "logical OR operator",
@@ -306,8 +355,11 @@ func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `status = "active" or (score < 80)`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "(status = $%d) OR (score < $%d)",
+				args: []any{"active", 80},
+			},
+			wantErr: false,
 		},
 		{
 			name: "composite condition with nested operators",
@@ -336,12 +388,15 @@ func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `name = "test" and (status = "active" or (score < 80))`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "(name = $%d) AND ((status = $%d) OR (score < $%d))",
+				args: []any{"test", "active", 80},
+			},
+			wantErr: false,
 		},
 	}
 
-	converter := &tcVectorConverter{}
+	converter := &pgVectorConverter{}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -364,19 +419,19 @@ func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
 				return
 			}
 
-			if filter.Cond() != tc.wantFilter {
-				t.Errorf("buildLogicalCondition() filter = %v, want %v", filter.Cond(), tc.wantFilter)
+			if !reflect.DeepEqual(*filter, tc.wantFilter) {
+				t.Errorf("buildLogicalCondition() args = %v, want %v", *filter, tc.wantFilter)
 			}
 		})
 	}
 }
 
-func TestTcVectorConverter_buildInCondition(t *testing.T) {
+func Test_pgVectorConverter_buildInCondition(t *testing.T) {
 	tests := []struct {
 		name       string
 		condition  *searchfilter.UniversalFilterCondition
 		wantErr    bool
-		wantFilter string
+		wantFilter condConvertResult
 	}{
 		{
 			name: "in operator with string values",
@@ -385,8 +440,11 @@ func TestTcVectorConverter_buildInCondition(t *testing.T) {
 				Operator: searchfilter.OperatorIn,
 				Value:    []string{"Alice", "Bob", "Charlie"},
 			},
-			wantFilter: `name in ("Alice","Bob","Charlie")`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "name IN ($%d, $%d, $%d)",
+				args: []any{"Alice", "Bob", "Charlie"},
+			},
+			wantErr: false,
 		},
 		{
 			name: "not in operator with numeric values",
@@ -395,8 +453,11 @@ func TestTcVectorConverter_buildInCondition(t *testing.T) {
 				Operator: searchfilter.OperatorNotIn,
 				Value:    []int{18, 25, 30},
 			},
-			wantFilter: "age not in (18,25,30)",
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "age NOT IN ($%d, $%d, $%d)",
+				args: []any{18, 25, 30},
+			},
+			wantErr: false,
 		},
 		{
 			name: "empty field",
@@ -409,7 +470,7 @@ func TestTcVectorConverter_buildInCondition(t *testing.T) {
 		},
 	}
 
-	converter := &tcVectorConverter{}
+	converter := &pgVectorConverter{}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -432,19 +493,19 @@ func TestTcVectorConverter_buildInCondition(t *testing.T) {
 				return
 			}
 
-			if filter.Cond() != tc.wantFilter {
-				t.Errorf("buildInCondition() filter = %v, want %v", filter.Cond(), tc.wantFilter)
+			if !reflect.DeepEqual(*filter, tc.wantFilter) {
+				t.Errorf("buildInCondition() args = %v, want %v", *filter, tc.wantFilter)
 			}
 		})
 	}
 }
 
-func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
+func Test_pgVectorConverter_buildComparisonCondition(t *testing.T) {
 	tests := []struct {
 		name       string
 		condition  *searchfilter.UniversalFilterCondition
 		wantErr    bool
-		wantFilter string
+		wantFilter condConvertResult
 	}{
 		{
 			name: "equal operator with string value",
@@ -453,8 +514,11 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				Operator: searchfilter.OperatorEqual,
 				Value:    "test",
 			},
-			wantFilter: `name = "test"`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "name = $%d",
+				args: []any{"test"},
+			},
+			wantErr: false,
 		},
 		{
 			name: "equal operator with numeric value",
@@ -463,8 +527,11 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				Operator: searchfilter.OperatorEqual,
 				Value:    25,
 			},
-			wantFilter: "age = 25",
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "age = $%d",
+				args: []any{25},
+			},
+			wantErr: false,
 		},
 		{
 			name: "not equal operator with string value",
@@ -473,8 +540,11 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				Operator: searchfilter.OperatorNotEqual,
 				Value:    "active",
 			},
-			wantFilter: `status != "active"`,
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "status != $%d",
+				args: []any{"active"},
+			},
+			wantErr: false,
 		},
 		{
 			name: "greater than operator",
@@ -483,8 +553,11 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				Operator: searchfilter.OperatorGreaterThan,
 				Value:    90,
 			},
-			wantFilter: "score > 90",
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "score > $%d",
+				args: []any{90},
+			},
+			wantErr: false,
 		},
 		{
 			name: "greater than or equal operator",
@@ -493,8 +566,11 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				Operator: searchfilter.OperatorGreaterThanOrEqual,
 				Value:    80,
 			},
-			wantFilter: "score >= 80",
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "score >= $%d",
+				args: []any{80},
+			},
+			wantErr: false,
 		},
 		{
 			name: "less than operator",
@@ -503,18 +579,24 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				Operator: searchfilter.OperatorLessThan,
 				Value:    100,
 			},
-			wantFilter: "price < 100",
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "price < $%d",
+				args: []any{100},
+			},
+			wantErr: false,
 		},
 		{
 			name: "less than or equal operator",
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "price",
 				Operator: searchfilter.OperatorLessThanOrEqual,
-				Value:    50.0,
+				Value:    50,
 			},
-			wantFilter: "price <= 50",
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "price <= $%d",
+				args: []any{50},
+			},
+			wantErr: false,
 		},
 		{
 			name: "boolean value",
@@ -523,12 +605,15 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				Operator: searchfilter.OperatorEqual,
 				Value:    true,
 			},
-			wantFilter: "active = true",
-			wantErr:    false,
+			wantFilter: condConvertResult{
+				cond: "active = $%d",
+				args: []any{true},
+			},
+			wantErr: false,
 		},
 	}
 
-	converter := &tcVectorConverter{}
+	converter := &pgVectorConverter{}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -551,8 +636,12 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				return
 			}
 
-			if filter.Cond() != tc.wantFilter {
-				t.Errorf("buildComparisonCondition() filter = %v, want %v", filter.Cond(), tc.wantFilter)
+			if filter.cond != tc.wantFilter.cond {
+				t.Errorf("buildComparisonCondition() cond = %v, want %v", filter.cond, tc.wantFilter.cond)
+			}
+
+			if !reflect.DeepEqual(*filter, tc.wantFilter) {
+				t.Errorf("buildComparisonCondition() args = %v, want %v", *filter, tc.wantFilter)
 			}
 		})
 	}

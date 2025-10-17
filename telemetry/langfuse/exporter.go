@@ -104,7 +104,7 @@ func transformSpan(span *tracepb.Span) {
 	}
 
 	switch operationName {
-	case itelemetry.OperationCallLLM:
+	case itelemetry.OperationChat:
 		transformCallLLM(span)
 	case itelemetry.OperationExecuteTool:
 		transformExecuteTool(span)

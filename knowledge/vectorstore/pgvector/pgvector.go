@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -81,8 +82,9 @@ const (
 
 // VectorStore is the vector store for pgvector.
 type VectorStore struct {
-	pool   *pgxpool.Pool
-	option options
+	pool            *pgxpool.Pool
+	option          options
+	filterConverter searchfilter.Converter[*condConvertResult]
 }
 
 // New creates a new pgvector vector store.
@@ -109,8 +111,9 @@ func New(opts ...Option) (*VectorStore, error) {
 	}
 
 	vs := &VectorStore{
-		pool:   pool,
-		option: option,
+		pool:            pool,
+		option:          option,
+		filterConverter: &pgVectorConverter{},
 	}
 
 	if err := vs.initDB(context.Background()); err != nil {
@@ -328,17 +331,12 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	// add vector arg, used above
 	qb.addVectorArg(pgvector.NewVector(convertToFloat32Vector(query.Vector)))
 
-	// Add filters
-	if query.Filter != nil && len(query.Filter.IDs) > 0 {
-		qb.addIDFilter(query.Filter.IDs)
-	}
-
-	if query.Filter != nil && len(query.Filter.Metadata) > 0 {
-		qb.addMetadataFilter(query.Filter.Metadata)
-	}
-
 	if query.MinScore > 0 {
 		qb.addScoreFilter(query.MinScore)
+	}
+	// Add filters
+	if err := vs.buildQueryFilter(qb, query.Filter); err != nil {
+		return nil, err
 	}
 
 	sql, args := qb.build(vs.getMaxResult(query.Limit))
@@ -358,12 +356,8 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	qb.addKeywordSearchConditions(query.Query, query.MinScore)
 
 	// Add filters
-	if query.Filter != nil && len(query.Filter.IDs) > 0 {
-		qb.addIDFilter(query.Filter.IDs)
-	}
-
-	if query.Filter != nil && len(query.Filter.Metadata) > 0 {
-		qb.addMetadataFilter(query.Filter.Metadata)
+	if err := vs.buildQueryFilter(qb, query.Filter); err != nil {
+		return nil, err
 	}
 
 	sql, args := qb.build(vs.getMaxResult(query.Limit))
@@ -396,17 +390,13 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		qb.addHybridFtsCondition(query.Query)
 	}
 
-	// Add filters.
-	if query.Filter != nil && len(query.Filter.IDs) > 0 {
-		qb.addIDFilter(query.Filter.IDs)
-	}
-
-	if query.Filter != nil && len(query.Filter.Metadata) > 0 {
-		qb.addMetadataFilter(query.Filter.Metadata)
-	}
-
 	if query.MinScore > 0 {
 		qb.addScoreFilter(query.MinScore)
+	}
+
+	// Add filters
+	if err := vs.buildQueryFilter(qb, query.Filter); err != nil {
+		return nil, err
 	}
 
 	sql, args := qb.build(vs.getMaxResult(query.Limit))
@@ -418,13 +408,9 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 	// Build filter-only search query.
 	qb := newFilterQueryBuilder(vs.option)
 
-	// Add filters.
-	if query.Filter != nil && len(query.Filter.IDs) > 0 {
-		qb.addIDFilter(query.Filter.IDs)
-	}
-
-	if query.Filter != nil && len(query.Filter.Metadata) > 0 {
-		qb.addMetadataFilter(query.Filter.Metadata)
+	// Add filters
+	if err := vs.buildQueryFilter(qb, query.Filter); err != nil {
+		return nil, err
 	}
 
 	sql, args := qb.build(vs.getMaxResult(query.Limit))
@@ -503,12 +489,11 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 
 func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.DeleteConfig) error {
 	dsb := newDeleteSQLBuilder(vs.option)
-
-	if len(config.DocumentIDs) > 0 {
-		dsb.addIDFilter(config.DocumentIDs)
-	}
-	if len(config.Filter) > 0 {
-		dsb.addMetadataFilter(config.Filter)
+	if err := vs.buildQueryFilter(dsb, &vectorstore.SearchFilter{
+		Metadata: config.Filter,
+		IDs:      config.DocumentIDs,
+	}); err != nil {
+		return fmt.Errorf("pgvector delete by filter: %w", err)
 	}
 
 	deleteSQL, args := dsb.build()
@@ -531,10 +516,10 @@ func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOptio
 
 	// Create a count query builder
 	cqb := newCountQueryBuilder(vs.option)
-
-	// Add metadata filter if provided
-	if len(config.Filter) > 0 {
-		cqb.addMetadataFilter(config.Filter)
+	if err := vs.buildQueryFilter(cqb, &vectorstore.SearchFilter{
+		Metadata: config.Filter,
+	}); err != nil {
+		return 0, fmt.Errorf("pgvector count documents: %w", err)
 	}
 
 	// Build and execute the count query
@@ -598,15 +583,11 @@ func (vs *VectorStore) queryMetadataBatch(
 ) (map[string]vectorstore.DocumentMetadata, error) {
 	// Create a metadata query builder
 	qb := newMetadataQueryBuilder(vs.option)
-
-	// Add ID filter if provided
-	if len(docIDs) > 0 {
-		qb.addIDFilter(docIDs)
-	}
-
-	// Add metadata filter if provided
-	if len(filters) > 0 {
-		qb.addMetadataFilter(filters)
+	if err := vs.buildQueryFilter(qb, &vectorstore.SearchFilter{
+		Metadata: filters,
+		IDs:      docIDs,
+	}); err != nil {
+		return nil, fmt.Errorf("pgvector delete by filter: %w", err)
 	}
 
 	// Build the query with pagination
@@ -668,6 +649,31 @@ func (vs *VectorStore) documentExists(ctx context.Context, id string) (bool, err
 		return false, err
 	}
 	return true, nil
+}
+
+func (vs *VectorStore) buildQueryFilter(qb queryFilterBuilder, cond *vectorstore.SearchFilter) error {
+	if cond == nil {
+		return nil
+	}
+
+	if len(cond.IDs) > 0 {
+		qb.addIDFilter(cond.IDs)
+	}
+	if len(cond.Metadata) > 0 {
+		qb.addMetadataFilter(cond.Metadata)
+	}
+
+	if cond.FilterCondition == nil {
+		return nil
+	}
+	filter, err := vs.filterConverter.Convert(cond.FilterCondition)
+	if err != nil {
+		return err
+	}
+
+	qb.addFilterCondition(filter)
+
+	return nil
 }
 
 func convertToFloat32Vector(embedding []float64) []float32 {

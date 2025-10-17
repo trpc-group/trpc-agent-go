@@ -142,7 +142,6 @@ func main() {
 ```
 
 ### 手动调用示例
-FilterCondition暂只支持Elasticsearch与TCVector
 
 ```go
 
@@ -271,6 +270,10 @@ knowledge/
 
 ### 与 Agent 集成
 
+Knowledge 系统提供了两种与 Agent 集成的方式：自动集成和手动构建工具。
+
+#### 方式一：自动集成（推荐）
+
 使用 `llmagent.WithKnowledge(kb)` 将 Knowledge 集成到 Agent，框架会自动注册 `knowledge_search` 工具，无需手动创建自定义工具。
 
 ```go
@@ -291,6 +294,61 @@ llmAgent := llmagent.New(
     llmagent.WithInstruction("使用 knowledge_search 工具从 Knowledge 检索相关信息，并基于检索内容回答问题。"),
     llmagent.WithKnowledge(kb), // 自动添加 knowledge_search 工具
     // llmagent.WithTools([]tool.Tool{otherTool}), // 可选：附加其他工具
+)
+```
+
+#### 方式二：手动构建工具
+
+使用手动构建SearchTool的方法来配置知识库，通过这个方法可以构建多个知识库
+
+**使用 NewKnowledgeSearchTool 创建基础搜索工具：**
+
+```go
+import (
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
+
+// 创建 Knowledge
+// kb := ...
+
+// 创建基础搜索工具
+searchTool := knowledgetool.NewKnowledgeSearchTool(
+    kb,                    // Knowledge 实例
+    knowledgetool.WithToolName("knowledge_search"),
+    knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
+)
+
+// 创建 Agent 并手动添加工具
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{searchTool}),
+)
+```
+
+**使用 NewAgenticFilterSearchTool 创建智能过滤搜索工具：**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
+
+// 获取源的元数据信息（用于智能过滤）
+sourcesMetadata := source.GetAllMetadata(sources)
+
+// 创建智能过滤搜索工具
+filterSearchTool := knowledgetool.NewAgenticFilterSearchTool(
+    kb,                    // Knowledge 实例
+    sourcesMetadata,       // 元数据信息
+    knowledgetool.WithToolName("knowledge_search_with_filter"),
+    knowledgetool.WithToolDescription("Search the knowledge base with intelligent metadata filtering."),
+)
+
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{filterSearchTool}),
 )
 ```
 

@@ -144,7 +144,6 @@ func main() {
 ```
 
 ### Manual Search Example
-FilterCondition currently only supports Elasticsearch and TCVector
 
 ```go
 
@@ -273,6 +272,10 @@ knowledge/
 
 ### Integration with Agent
 
+The Knowledge system provides two ways to integrate with Agent: automatic integration and manual tool construction.
+
+#### Method 1: Automatic Integration (Recommended)
+
 Use `llmagent.WithKnowledge(kb)` to integrate Knowledge into Agent. The framework automatically registers the `knowledge_search` tool without needing to manually create custom tools.
 
 ```go
@@ -293,6 +296,61 @@ llmAgent := llmagent.New(
     llmagent.WithInstruction("Use the knowledge_search tool to retrieve relevant information from Knowledge and answer questions based on retrieved content."),
     llmagent.WithKnowledge(kb), // Automatically add knowledge_search tool.
     // llmagent.WithTools([]tool.Tool{otherTool}), // Optional: add other tools.
+)
+```
+
+#### Method 2: Manual Tool Construction
+
+Use the manual construction method to configure knowledge base, which allows building multiple knowledge bases.
+
+**Using NewKnowledgeSearchTool to create basic search tool:**
+
+```go
+import (
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
+
+// Create Knowledge.
+// kb := ...
+
+// Create basic search tool.
+searchTool := knowledgetool.NewKnowledgeSearchTool(
+    kb,                    // Knowledge instance
+    knowledgetool.WithToolName("knowledge_search"),
+    knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
+)
+
+// Create Agent and manually add tool.
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{searchTool}),
+)
+```
+
+**Using NewAgenticFilterSearchTool to create intelligent filter search tool:**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
+
+// Get metadata information from sources (for intelligent filtering).
+sourcesMetadata := source.GetAllMetadata(sources)
+
+// Create intelligent filter search tool.
+filterSearchTool := knowledgetool.NewAgenticFilterSearchTool(
+    kb,                    // Knowledge instance
+    sourcesMetadata,       // Metadata information
+    knowledgetool.WithToolName("knowledge_search_with_filter"),
+    knowledgetool.WithToolDescription("Search the knowledge base with intelligent metadata filtering."),
+)
+
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{filterSearchTool}),
 )
 ```
 
