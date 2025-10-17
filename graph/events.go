@@ -79,6 +79,9 @@ const (
 	MetadataKeyModel = "_model_metadata"
 	// MetadataKeyCheckpoint is the key for checkpoint metadata.
 	MetadataKeyCheckpoint = "_checkpoint_metadata"
+	// MetadataKeyCacheHit is a synthetic key set on node completion events when
+	// a cache hit occurs for the node's output.
+	MetadataKeyCacheHit = "_cache_hit"
 )
 
 // NodeType represents the type of a graph node.
