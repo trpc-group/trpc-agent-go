@@ -147,11 +147,11 @@ func (c *inmemoryConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 		return nil, fmt.Errorf(`field name only be in ["id", "name", "content", "created_at", "updated_at", "metadata.*"]: %s`, cond.Field)
 	}
 	s := reflect.ValueOf(cond.Value)
-	itemNum := s.Len()
-	if s.Kind() != reflect.Slice || itemNum <= 0 {
+	if s.Kind() != reflect.Slice || s.Len() <= 0 {
 		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
+	itemNum := s.Len()
 	condFunc := func(doc *document.Document) bool {
 		docValue, ok := fieldValue(doc, cond.Field)
 		if !ok {

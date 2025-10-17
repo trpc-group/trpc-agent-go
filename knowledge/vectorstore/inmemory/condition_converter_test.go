@@ -1422,6 +1422,20 @@ func Test_inmemoryConverter_Convert(t *testing.T) {
 			wantNil: false,
 		},
 		{
+			name: "invalid between operator",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorBetween,
+				Field:    "metadata.score",
+				Value:    nil,
+			},
+			docChecks: []docCheck{
+				{doc: &document.Document{Metadata: map[string]any{"lang": "en", "score": 4}}, want: false},
+				{doc: &document.Document{Metadata: map[string]any{"lang": "en", "score": 2}}, want: false},
+			},
+			wantErr: true,
+			wantNil: true,
+		},
+		{
 			name: "valid in operator",
 			cond: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorIn,
