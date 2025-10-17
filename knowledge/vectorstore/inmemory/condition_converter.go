@@ -102,11 +102,14 @@ func (c *inmemoryConverter) convertCondition(cond *searchfilter.UniversalFilterC
 
 func (c *inmemoryConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (comparisonFunc, error) {
 	conds, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
-	if !ok {
+	if !ok || len(conds) == 0 {
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 	var condFuncs []comparisonFunc
 	for _, child := range conds {
+		if child == nil {
+			return nil, fmt.Errorf("nil condition in logical operation %+v", cond.Value)
+		}
 		childFunc, err := c.convertCondition(child)
 		if err != nil {
 			return nil, err
