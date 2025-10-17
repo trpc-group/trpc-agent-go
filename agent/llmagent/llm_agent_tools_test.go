@@ -33,7 +33,7 @@ type dummyToolSet struct {
 
 func (d dummyToolSet) Tools(ctx context.Context) []tool.Tool {
 	// Wrap the tool to a CallableTool by asserting to the known concrete type.
-	kt := knowledgetool.NewKnowledgeSearchTool(&minimalKnowledge{}, nil)
+	kt := knowledgetool.NewKnowledgeSearchTool(&minimalKnowledge{})
 	type callable interface{ tool.CallableTool }
 	if c, ok := any(kt).(callable); ok {
 		return []tool.Tool{c}

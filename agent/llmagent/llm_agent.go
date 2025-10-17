@@ -580,13 +580,13 @@ func registerTools(options *Options) []tool.Tool {
 	// Add knowledge search tool if knowledge base is provided.
 	if options.Knowledge != nil {
 		if options.EnableKnowledgeAgenticFilter {
-			agentticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
-				options.Knowledge, options.KnowledgeFilter, options.AgenticFilterInfo,
+			agenticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
+				options.Knowledge, options.AgenticFilterInfo, knowledgetool.WithFilter(options.KnowledgeFilter),
 			)
-			allTools = append(allTools, agentticKnowledge)
+			allTools = append(allTools, agenticKnowledge)
 		} else {
 			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(
-				options.Knowledge, options.KnowledgeFilter,
+				options.Knowledge, knowledgetool.WithFilter(options.KnowledgeFilter),
 			))
 		}
 	}
