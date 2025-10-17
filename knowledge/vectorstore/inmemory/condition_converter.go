@@ -285,8 +285,7 @@ func (c *inmemoryConverter) buildComparisonCondition(cond *searchfilter.Universa
 }
 
 func valueType(value any) string {
-	vKind := reflect.ValueOf(value).Kind()
-	switch vKind {
+	switch reflect.ValueOf(value).Kind() {
 	case reflect.String:
 		return valueTypeString
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
