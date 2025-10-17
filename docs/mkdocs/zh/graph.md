@@ -12,6 +12,7 @@ Graph 将可控的工作流编排与可扩展的 Agent 能力结合，适用于�
 - BSP 风格（计划/执行/合并）的确定性并行；
 - 内置节点类型封装 LLM、工具与 Agent，减少重复代码；
 - 流式事件、检查点与中断，便于观测与恢复。
+- 节点级重试/退避（指数退避与抖动），支持执行器默认重试策略与带重试元数据的事件观测。
 
 ## 快速开始
 
@@ -238,6 +239,7 @@ schema.AddField("counter", graph.StateField{
 
 - `examples/graph/io_conventions`：函数 + LLM + Agent 的 I/O 演示
 - `examples/graph/io_conventions_tools`：加入 Tools 节点，展示如何获取工具 JSON 并落入 State
+- `examples/graph/retry`：节点级重试/退避演示
 
 #### 状态键常量与来源（可直接引用）
 
@@ -284,6 +286,7 @@ func myNode(ctx context.Context, state graph.State) (any, error) {
 
 - 模型元数据：`_model_metadata` → `graph.MetadataKeyModel`（结构体 `graph.ModelExecutionMetadata`）
 - 工具元数据：`_tool_metadata` → `graph.MetadataKeyTool`（结构体 `graph.ToolExecutionMetadata`）
+- 节点元数据：`_node_metadata` → `graph.MetadataKeyNode`（结构体 `graph.NodeExecutionMetadata`）。包含重试字段：`Attempt`、`MaxAttempts`、`NextDelay`、`Retrying` 及时间相关信息。
 
 使用示例：
 
@@ -601,7 +604,60 @@ stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 - 当工具节点完成后返回到 LLM 节点时，`user_input` 已被清空，LLM 将走
   “Messages only” 分支，以历史中的 tool 响应继续推理。
 
-### 6. Runner 配置
+### 6. 节点重试与退避
+
+为节点配置指数退避的重试策略（可选抖动）。失败的尝试不会产生写入；只有成功的一次才会落库并触发路由。
+
+- 节点级策略（`WithRetryPolicy`）：
+
+```go
+// 便捷策略（attempts 含首次尝试）
+sg.AddNode("unstable", unstableFunc,
+    graph.WithRetryPolicy(graph.WithSimpleRetry(3)))
+
+// 完整策略
+policy := graph.RetryPolicy{
+    MaxAttempts:     3,                      // 1 次首试 + 最多 2 次重试
+    InitialInterval: 200 * time.Millisecond, // 基础等待
+    BackoffFactor:   2.0,                    // 指数增长
+    MaxInterval:     2 * time.Second,        // 上限
+    Jitter:          true,                   // 抖动
+    RetryOn: []graph.RetryCondition{
+        graph.DefaultTransientCondition(),   // 截止/网络超时等瞬时错误
+        graph.RetryOnErrors(context.DeadlineExceeded),
+        graph.RetryOnPredicate(func(error) bool { return true }),
+    },
+    MaxElapsedTime:  5 * time.Second,        // 总重试预算（可选）
+    // PerAttemptTimeout: 0,                 // 预留；节点超时由执行器控制
+}
+sg.AddNode("unstable", unstableFunc, graph.WithRetryPolicy(policy))
+```
+
+- 执行器默认策略（当节点未配置时生效）：
+
+```go
+exec, _ := graph.NewExecutor(compiled,
+    graph.WithDefaultRetryPolicy(graph.WithSimpleRetry(2)))
+```
+
+注意事项
+- 中断（interrupt）不参与重试。
+- 当设置了步骤超时（`WithStepTimeout`）时，退避时间会被当前步骤的截止时间钳制。
+- 事件会携带重试元数据，便于 CLI/UI 展示进度：
+
+```go
+if b, ok := ev.StateDelta[graph.MetadataKeyNode]; ok {
+    var md graph.NodeExecutionMetadata
+    _ = json.Unmarshal(b, &md)
+    if md.Phase == graph.ExecutionPhaseError && md.Retrying {
+        // md.Attempt, md.MaxAttempts, md.NextDelay
+    }
+}
+```
+
+示例：`examples/graph/retry` 展示了一个会先失败后成功的节点，并在成功后进入下游 LLM 输出最终答案。
+
+### 7. Runner 配置
 
 Runner 提供了会话管理和执行环境：
 
@@ -625,7 +681,7 @@ message := model.NewUserMessage("用户输入")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
 
-### 7. 消息状态模式
+### 8. 消息状态模式
 
 对于对话式应用，可以使用预定义的消息状态模式：
 
@@ -641,7 +697,7 @@ schema := graph.MessagesStateSchema()
 // - metadata: 元数据（StateKeyMetadata）
 ```
 
-### 8. 状态键使用场景
+### 9. 状态键使用场景
 
 **用户自定义状态键**：用于存储业务逻辑数据
 
