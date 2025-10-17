@@ -63,7 +63,7 @@ type Declaration struct {
 // and to validate that incoming data conforms to the expected structure.
 type Schema struct {
 	//  Type Specifies the data type (e.g., "object", "array", "string", "number")
-	Type        string   `json:"type"`
+	Type        string   `json:"type,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Required    []string `json:"required,omitempty"`
 	// Properties of the arguments, each with its own schema
@@ -76,4 +76,8 @@ type Schema struct {
 	Default any `json:"default,omitempty"`
 	// Enum contains the list of allowed values for the parameter
 	Enum []any `json:"enum,omitempty"`
+	// Ref is used for JSON Schema references to avoid infinite recursion
+	Ref string `json:"$ref,omitempty"`
+	// Defs contains reusable schema definitions
+	Defs map[string]*Schema `json:"$defs,omitempty"`
 }
