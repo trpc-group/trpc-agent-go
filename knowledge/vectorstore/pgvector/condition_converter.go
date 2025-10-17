@@ -74,12 +74,9 @@ func (c *pgVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
-	}
 	value := reflect.ValueOf(cond.Value)
 	itemNum := value.Len()
-	if itemNum <= 0 {
+	if value.Kind() != reflect.Slice || itemNum <= 0 {
 		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
@@ -154,11 +151,8 @@ func (c *pgVectorConverter) buildBetweenCondition(cond *searchfilter.UniversalFi
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
-	}
 	value := reflect.ValueOf(cond.Value)
-	if value.Len() != 2 {
+	if value.Kind() != reflect.Slice || value.Len() != 2 {
 		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 

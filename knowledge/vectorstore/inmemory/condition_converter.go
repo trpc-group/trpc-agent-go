@@ -63,7 +63,22 @@ func (c *inmemoryConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 		return nil, nil
 	}
 
-	return c.convertCondition(cond)
+	condFunc, err := c.convertCondition(cond)
+	if err != nil || condFunc == nil {
+		return condFunc, err
+	}
+
+	wrapperFunc := func(doc *document.Document) bool {
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				log.Errorf("panic in condition function: %v\n%s", r, string(stack))
+			}
+		}()
+		return condFunc(doc)
+	}
+
+	return wrapperFunc, nil
 }
 
 func (c *inmemoryConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (comparisonFunc, error) {
@@ -132,12 +147,9 @@ func (c *inmemoryConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 		return nil, fmt.Errorf(`field name only be in ["id", "name", "content", "created_at", "updated_at", "metadata.*"]: %s`, cond.Field)
 	}
 	s := reflect.ValueOf(cond.Value)
-	if s.Kind() != reflect.Slice {
-		return nil, fmt.Errorf("in operator requires an array of values")
-	}
 	itemNum := s.Len()
-	if itemNum <= 0 {
-		return nil, fmt.Errorf("in operator requires an array with at least one value")
+	if s.Kind() != reflect.Slice || itemNum <= 0 {
+		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
 	condFunc := func(doc *document.Document) bool {
@@ -167,14 +179,8 @@ func (c *inmemoryConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 }
 
 func (c *inmemoryConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCondition) (comparisonFunc, error) {
-	if !isValidField(cond.Field) {
-		return nil, fmt.Errorf(`field name only be in ["id", "name", "content", "created_at", "updated_at", "metadata.*"]: %s`, cond.Field)
-	}
 	value := reflect.ValueOf(cond.Value)
-	if value.Kind() != reflect.Slice {
-		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
-	}
-	if value.Len() != 2 {
+	if value.Kind() != reflect.Slice || value.Len() != 2 {
 		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 
@@ -184,7 +190,7 @@ func (c *inmemoryConverter) buildBetweenCondition(cond *searchfilter.UniversalFi
 		if i == 1 {
 			op = searchfilter.OperatorLessThanOrEqual
 		}
-		fn, err := c.convertCondition(&searchfilter.UniversalFilterCondition{
+		fn, err := c.buildComparisonCondition(&searchfilter.UniversalFilterCondition{
 			Field:    cond.Field,
 			Operator: op,
 			Value:    value.Index(i).Interface(),
@@ -273,11 +279,12 @@ func (c *inmemoryConverter) buildComparisonCondition(cond *searchfilter.Universa
 }
 
 func valueType(value any) string {
-	vKind := reflect.ValueOf(value).Kind()
-	switch vKind {
+	switch reflect.ValueOf(value).Kind() {
 	case reflect.String:
 		return valueTypeString
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Float32, reflect.Float64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
 		return valueTypeNumber
 	case reflect.Bool:
 		return valueTypeBool
@@ -429,13 +436,14 @@ func fieldValue(doc *document.Document, field string) (any, bool) {
 	case updatedAtField:
 		return doc.UpdatedAt, true
 	default:
-		if strings.HasPrefix(field, "metadata.") {
-			if doc.Metadata == nil {
-				return nil, false
-			}
-			metaKey := strings.TrimPrefix(field, "metadata.")
-			val, ok := doc.Metadata[metaKey]
-			return val, ok
+		if !strings.HasPrefix(field, "metadata.") {
+			return nil, false
+		}
+
+		// metadata fields
+		elementKey := strings.TrimPrefix(field, "metadata.")
+		if val, ok := doc.Metadata[elementKey]; ok {
+			return val, true
 		}
 	}
 	return nil, false
