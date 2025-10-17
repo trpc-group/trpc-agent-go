@@ -60,12 +60,15 @@ func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterConditi
 
 func (c *esConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	conditions, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
-	if !ok {
+	if !ok || len(conditions) <= 0 {
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 
 	var queries []types.Query
 	for _, condition := range conditions {
+		if condition == nil {
+			return nil, fmt.Errorf("nil condition in logical operation %+v", cond.Value)
+		}
 		query, err := c.convertCondition(condition)
 		if err != nil {
 			return nil, err
