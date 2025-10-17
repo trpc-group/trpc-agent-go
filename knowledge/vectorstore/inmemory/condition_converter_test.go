@@ -1381,7 +1381,7 @@ func Test_inmemoryConverter_Convert(t *testing.T) {
 	}{
 		{
 			name:    "nil condition",
-			wantErr: false,
+			wantErr: true,
 			wantNil: true,
 		},
 		{

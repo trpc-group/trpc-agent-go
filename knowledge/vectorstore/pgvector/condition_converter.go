@@ -44,14 +44,15 @@ func (c *pgVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 			log.Errorf("panic in pgVectorConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
-	if cond == nil {
-		return nil, nil
-	}
 
 	return c.convertCondition(cond)
 }
 
 func (c *pgVectorConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("nil condition")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
 		return c.buildLogicalCondition(cond)
@@ -93,14 +94,11 @@ func (c *pgVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 
 func (c *pgVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
 	conds, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
-	if !ok || len(conds) <= 0 {
+	if !ok {
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 	var condResult *condConvertResult
 	for _, child := range conds {
-		if child == nil {
-			return nil, fmt.Errorf("nil condition in logical operation %+v", cond.Value)
-		}
 		childFilter, err := c.convertCondition(child)
 		if err != nil {
 			return nil, err
@@ -115,6 +113,10 @@ func (c *pgVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 
 		condResult.cond = fmt.Sprintf("(%s) %s (%s)", condResult.cond, strings.ToUpper(cond.Operator), childFilter.cond)
 		condResult.args = append(condResult.args, childFilter.args...)
+	}
+
+	if condResult == nil {
+		return nil, fmt.Errorf("empty logical condition")
 	}
 
 	return condResult, nil

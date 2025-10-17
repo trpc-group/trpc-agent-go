@@ -32,14 +32,15 @@ func (c *esConverter) Convert(cond *searchfilter.UniversalFilterCondition) (type
 			log.Errorf("panic in esConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
-	if cond == nil {
-		return nil, nil
-	}
 
 	return c.convertCondition(cond)
 }
 
 func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("nil condition")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
 		return c.buildLogicalCondition(cond)
@@ -60,15 +61,12 @@ func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterConditi
 
 func (c *esConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	conditions, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
-	if !ok || len(conditions) <= 0 {
+	if !ok {
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 
 	var queries []types.Query
 	for _, condition := range conditions {
-		if condition == nil {
-			return nil, fmt.Errorf("nil condition in logical operation %+v", cond.Value)
-		}
 		query, err := c.convertCondition(condition)
 		if err != nil {
 			return nil, err
@@ -76,6 +74,10 @@ func (c *esConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCo
 		if query != nil {
 			queries = append(queries, *query.QueryCaster())
 		}
+	}
+
+	if len(queries) == 0 {
+		return nil, fmt.Errorf("empty logical condition")
 	}
 
 	if cond.Operator == searchfilter.OperatorAnd {

@@ -40,14 +40,15 @@ func (c *tcVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 			log.Errorf("panic in tcVectorConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
-	if cond == nil {
-		return nil, nil
-	}
 
 	return c.convertCondition(cond)
 }
 
 func (c *tcVectorConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("nil condition")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
 		return c.buildLogicalCondition(cond)
@@ -84,14 +85,11 @@ func (c *tcVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 
 func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
 	conds, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
-	if !ok || len(conds) <= 0 {
+	if !ok {
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 	filter := tcvectordb.NewFilter("")
 	for _, child := range conds {
-		if child == nil {
-			return nil, fmt.Errorf("nil condition in logical operation %+v", cond.Value)
-		}
 		childFilter, err := c.convertCondition(child)
 		if err != nil {
 			return nil, err
@@ -101,6 +99,10 @@ func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 		} else {
 			filter.Or(childFilter.Cond())
 		}
+	}
+
+	if filter.Cond() == "" {
+		return nil, fmt.Errorf("empty logical condition")
 	}
 
 	return filter, nil
