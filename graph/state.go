@@ -177,8 +177,7 @@ func (s *StateSchema) validateSchema() error {
 		if field.Default != nil {
 			defaultValue := field.Default()
 			if defaultValue == nil {
-				kind := field.Type.Kind()
-				switch kind {
+				switch field.Type.Kind() {
 				case reflect.Ptr, reflect.Interface, reflect.Slice, reflect.Map, reflect.Chan, reflect.Func:
 				default:
 					return fmt.Errorf("field %s has incompatible default value: nil is not assignable to type %v", name, field.Type)
