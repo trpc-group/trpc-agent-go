@@ -59,9 +59,6 @@ func (c *inmemoryConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 			log.Errorf("panic in inmemoryConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
-	if cond == nil {
-		return nil, nil
-	}
 
 	condFunc, err := c.convertCondition(cond)
 	if err != nil || condFunc == nil {
@@ -82,6 +79,10 @@ func (c *inmemoryConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 }
 
 func (c *inmemoryConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (comparisonFunc, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("nil condition")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
 		return c.buildLogicalCondition(cond)

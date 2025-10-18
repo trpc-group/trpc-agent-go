@@ -276,6 +276,64 @@ func Test_pgVectorConverter_convertCondition(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "age",
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty slice",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "age",
+				Value:    []*searchfilter.UniversalFilterCondition{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element slice",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "age",
+				Value:    []*searchfilter.UniversalFilterCondition{nil, nil},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil value between operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorBetween,
+				Field:    "age",
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty value between operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorBetween,
+				Field:    "age",
+				Value:    []any{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element value between operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorBetween,
+				Field:    "age",
+				Value:    []any{nil, nil},
+			},
+			wantFilter: condConvertResult{
+				cond: "age >= $%d AND age <= $%d",
+				args: []any{nil, nil},
+			},
+			wantErr: false,
+		},
 	}
 
 	c := &pgVectorConverter{}
@@ -468,6 +526,37 @@ func Test_pgVectorConverter_buildInCondition(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    []any{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    []any{nil, nil},
+			},
+			wantFilter: condConvertResult{
+				cond: "age IN ($%d, $%d)",
+				args: []any{nil, nil},
+			},
+			wantErr: false,
+		},
 	}
 
 	converter := &pgVectorConverter{}
@@ -608,6 +697,19 @@ func Test_pgVectorConverter_buildComparisonCondition(t *testing.T) {
 			wantFilter: condConvertResult{
 				cond: "active = $%d",
 				args: []any{true},
+			},
+			wantErr: false,
+		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "active",
+				Operator: searchfilter.OperatorEqual,
+				Value:    nil,
+			},
+			wantFilter: condConvertResult{
+				cond: "active = $%d",
+				args: []any{nil},
 			},
 			wantErr: false,
 		},
