@@ -88,12 +88,19 @@ func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 	if !ok {
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
-	filter := tcvectordb.NewFilter("")
+
+	var filter *tcvectordb.Filter
 	for _, child := range conds {
 		childFilter, err := c.convertCondition(child)
 		if err != nil {
 			return nil, err
 		}
+
+		if filter == nil {
+			filter = childFilter
+			continue
+		}
+
 		if cond.Operator == searchfilter.OperatorAnd {
 			filter.And(childFilter.Cond())
 		} else {
@@ -101,7 +108,7 @@ func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 		}
 	}
 
-	if filter.Cond() == "" {
+	if filter == nil {
 		return nil, fmt.Errorf("empty logical condition")
 	}
 
