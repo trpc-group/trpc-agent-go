@@ -205,12 +205,12 @@ func writeNodes(b *strings.Builder, g *Graph, nodeIDs []string) {
 
 // writeRuntimeEdges emits solid edges (optionally skipping Start/End).
 func writeRuntimeEdges(b *strings.Builder, edges map[string][]*Edge, o *VizOptions) {
-	var froms []string
+	var fromIDs []string
 	for from := range edges {
-		froms = append(froms, from)
+		fromIDs = append(fromIDs, from)
 	}
-	sort.Strings(froms)
-	for _, from := range froms {
+	sort.Strings(fromIDs)
+	for _, from := range fromIDs {
 		es := edges[from]
 		for _, e := range es {
 			if !o.IncludeStartEnd && (e.From == Start || e.To == End) {
@@ -223,12 +223,12 @@ func writeRuntimeEdges(b *strings.Builder, edges map[string][]*Edge, o *VizOptio
 
 // writeConditionalEdges emits dashed edges with branch labels.
 func writeConditionalEdges(b *strings.Builder, cond map[string]*ConditionalEdge, o *VizOptions) {
-	var froms []string
+	var fromIDs []string
 	for from := range cond {
-		froms = append(froms, from)
+		fromIDs = append(fromIDs, from)
 	}
-	sort.Strings(froms)
-	for _, from := range froms {
+	sort.Strings(fromIDs)
+	for _, from := range fromIDs {
 		ce := cond[from]
 		keys := make([]string, 0, len(ce.PathMap))
 		for k := range ce.PathMap {
