@@ -1074,28 +1074,37 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	return true
 }
 
-// skipEmptyChunk returns true when the chunk contains no meaningful delta
+// skipEmptyChunk returns true when the chunk contains no meaningful delta.
+// This is a defensive check against malformed responses from certain providers
+// that may return chunks with valid JSON fields but empty actual content.
+//
+// The order of checks matters:
+// 1. Check content first - if valid, don't skip (even if empty string)
+// 2. Check refusal - if valid, don't skip
+// 3. Check toolcalls - if valid but array is empty, skip (defensive against panic)
+// 4. Otherwise, don't skip (let it be processed normally)
 func (m *Model) skipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
-	// If no choices, it's an empty chunk.
+	// No choices available, don't skip (let it be processed normally).
 	if len(chunk.Choices) == 0 {
-		return true
+		return false
 	}
-
 	delta := chunk.Choices[0].Delta
-	// Check for meaningful or refusal content.
-	if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
+	// Check for meaningful delta content in priority order.
+	switch {
+	case delta.JSON.Content.Valid():
+		// Content field is present, chunk is not empty.
+		return false
+	case delta.JSON.Refusal.Valid():
+		// Refusal field is present, chunk is not empty.
+		return false
+	case delta.JSON.ToolCalls.Valid():
+		// ToolCalls field is valid, but check if the array is empty.
+		// Empty toolcalls array would cause panic when accessing the first element.
+		return len(delta.ToolCalls) <= 0
+	default:
+		// No valid fields, but it can be processed normally.
 		return false
 	}
-	// Check for reasoning content (think model reasoning content).
-	if _, ok := delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
-		return false
-	}
-	// Check for tool calls - only meaningful if it contains actual tool calls.
-	if delta.JSON.ToolCalls.Valid() && len(delta.ToolCalls) > 0 {
-		return false
-	}
-	// No meaningful content found.
-	return true
 }
 
 // createPartialResponse creates a partial response from a chunk.
