@@ -503,15 +503,19 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	toolCallsCount int,
 ) ([]*event.Event, error) {
 	results := make([]*event.Event, toolCallsCount)
+	var err error
 	for {
 		select {
 		case result, ok := <-resultChan:
 			if !ok {
 				// Channel closed, all results received.
-				return p.filterNilEvents(results), result.err
+				return p.filterNilEvents(results), err
 			}
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result.event
+				if err == nil && result.err != nil {
+					err = result.err
+				}
 			} else {
 				log.Errorf("Tool result index %d out of range [0, %d)", result.index, len(results))
 			}
