@@ -1076,21 +1076,26 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 
 // skipEmptyChunk returns true when the chunk contains no meaningful delta
 func (m *Model) skipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
-	if len(chunk.Choices) > 0 {
-		delta := chunk.Choices[0].Delta
-		// if Content or
-		switch {
-		case delta.JSON.Content.Valid():
-		case delta.JSON.Refusal.Valid():
-		case delta.JSON.ToolCalls.Valid():
-			/// if toolCalls is empty, it's a empty chunk too
-			if len(delta.ToolCalls) <= 0 {
-				return true
-			}
-		default:
-		}
+	// If no choices, it's an empty chunk.
+	if len(chunk.Choices) == 0 {
+		return true
 	}
-	return false
+
+	delta := chunk.Choices[0].Delta
+	// Check for meaningful or refusal content.
+	if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
+		return false
+	}
+	// Check for reasoning content (think model reasoning content).
+	if _, ok := delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
+		return false
+	}
+	// Check for tool calls - only meaningful if it contains actual tool calls.
+	if delta.JSON.ToolCalls.Valid() && len(delta.ToolCalls) > 0 {
+		return false
+	}
+	// No meaningful content found.
+	return true
 }
 
 // createPartialResponse creates a partial response from a chunk.
