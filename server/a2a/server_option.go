@@ -69,7 +69,7 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 	userID := r.Header.Get(d.userIDHeader)
 	if userID == "" {
 		log.Warnf("UserID(Header %s) not set, you will use anonymous user, "+
-			"you can use WithUserIDHeader in A2AAgent and A2AServerto specific the header that transfer user info.",
+			"you can use WithUserIDHeader in A2AAgent and A2AServer to specified the header that transfer user info.",
 			d.userIDHeader)
 		userID = uuid.New().String()
 	}

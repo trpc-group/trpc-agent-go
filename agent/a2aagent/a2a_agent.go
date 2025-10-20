@@ -52,7 +52,7 @@ type A2AAgent struct {
 	extraA2AOptions      []client.Option        // Additional A2A client options
 	streamingBufSize     int                    // Buffer size for streaming responses
 	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
-	transferStateKey     []string               // Keysa in session state to transfer to the A2A agent message by metadata
+	transferStateKey     []string               // Keys in session state to transfer to the A2A agent message by metadata
 	userIDHeader         string                 // HTTP header name to send UserID to A2A server
 
 	httpClient *http.Client
