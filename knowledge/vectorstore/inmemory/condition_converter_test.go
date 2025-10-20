@@ -1270,6 +1270,30 @@ func Test_inmemoryConverter_convertCondition(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "nil value",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty slice",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Value:    []*searchfilter.UniversalFilterCondition{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element slice",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Value:    []*searchfilter.UniversalFilterCondition{nil, nil},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1357,7 +1381,7 @@ func Test_inmemoryConverter_Convert(t *testing.T) {
 	}{
 		{
 			name:    "nil condition",
-			wantErr: false,
+			wantErr: true,
 			wantNil: true,
 		},
 		{
@@ -1466,6 +1490,72 @@ func Test_inmemoryConverter_Convert(t *testing.T) {
 			wantErr: true,
 			wantNil: true,
 		},
+		{
+			name: "nil value in condition",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorIn,
+				Field:    "metadata.score",
+				Value:    nil,
+			},
+			wantErr: true,
+			wantNil: true,
+		},
+		{
+			name: "empty value in condition",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorIn,
+				Field:    "metadata.score",
+				Value:    []any{},
+			},
+			wantErr: true,
+			wantNil: true,
+		},
+		{
+			name: "nil element value in condition",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorIn,
+				Field:    "content",
+				Value:    []any{nil, nil},
+			},
+			docChecks: []docCheck{
+				{doc: &document.Document{Content: "Sample"}, want: false},
+			},
+			wantErr: false,
+			wantNil: false,
+		},
+		{
+			name: "nil value between condition",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorBetween,
+				Field:    "metadata.score",
+				Value:    nil,
+			},
+			wantErr: true,
+			wantNil: true,
+		},
+		{
+			name: "empty value between condition",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorBetween,
+				Field:    "metadata.score",
+				Value:    []any{},
+			},
+			wantErr: true,
+			wantNil: true,
+		},
+		{
+			name: "nil element value between condition",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorBetween,
+				Field:    "content",
+				Value:    []any{nil, nil},
+			},
+			docChecks: []docCheck{
+				{doc: &document.Document{Content: "Sample"}, want: false},
+			},
+			wantErr: false,
+			wantNil: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1553,6 +1643,41 @@ func TestInmemoryConverter_buildBetweenCondition(t *testing.T) {
 				Field:    "metadata.id",
 				Operator: searchfilter.OperatorBetween,
 				Value:    []string{"a", "b"},
+			},
+			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
+			wantErr:    false,
+			wantResult: false,
+		},
+		{
+			name: "nil value",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.id",
+				Operator: searchfilter.OperatorBetween,
+				Value:    nil,
+			},
+			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
+			wantErr:    true,
+			wantResult: false,
+			wantErrMsg: "between operator value must be a slice with two elements",
+		},
+		{
+			name: "empty slice value",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.id",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []any{},
+			},
+			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
+			wantErr:    true,
+			wantResult: false,
+			wantErrMsg: "between operator value must be a slice with two elements",
+		},
+		{
+			name: "nil element slice value",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.id",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []any{nil, nil},
 			},
 			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
 			wantErr:    false,
@@ -1775,6 +1900,31 @@ func TestBuildLikeCondition(t *testing.T) {
 			},
 			wantErr:  false,
 			expected: true,
+		},
+		{
+			name: "nil value",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "content",
+				Operator: searchfilter.OperatorLike,
+				Value:    nil,
+			},
+			doc: &document.Document{
+				Content: "100%_complete",
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty value",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "content",
+				Operator: searchfilter.OperatorLike,
+				Value:    "",
+			},
+			doc: &document.Document{
+				Content: "100%_complete",
+			},
+			wantErr:  false,
+			expected: false,
 		},
 	}
 

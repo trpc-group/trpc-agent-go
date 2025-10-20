@@ -32,14 +32,15 @@ func (c *esConverter) Convert(cond *searchfilter.UniversalFilterCondition) (type
 			log.Errorf("panic in esConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
-	if cond == nil {
-		return nil, nil
-	}
 
 	return c.convertCondition(cond)
 }
 
 func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("nil condition")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
 		return c.buildLogicalCondition(cond)
@@ -73,6 +74,10 @@ func (c *esConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCo
 		if query != nil {
 			queries = append(queries, *query.QueryCaster())
 		}
+	}
+
+	if len(queries) == 0 {
+		return nil, fmt.Errorf("empty logical condition")
 	}
 
 	if cond.Operator == searchfilter.OperatorAnd {

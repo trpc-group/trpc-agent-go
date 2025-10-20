@@ -44,14 +44,15 @@ func (c *pgVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 			log.Errorf("panic in pgVectorConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
-	if cond == nil {
-		return nil, nil
-	}
 
 	return c.convertCondition(cond)
 }
 
 func (c *pgVectorConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("nil condition")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
 		return c.buildLogicalCondition(cond)
@@ -112,6 +113,10 @@ func (c *pgVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 
 		condResult.cond = fmt.Sprintf("(%s) %s (%s)", condResult.cond, strings.ToUpper(cond.Operator), childFilter.cond)
 		condResult.args = append(condResult.args, childFilter.args...)
+	}
+
+	if condResult == nil {
+		return nil, fmt.Errorf("empty logical condition")
 	}
 
 	return condResult, nil
