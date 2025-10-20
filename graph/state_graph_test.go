@@ -12,6 +12,8 @@ package graph
 import (
 	"context"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -360,4 +362,289 @@ func TestConditionalEdgeWithTools(t *testing.T) {
 	}
 
 	t.Log("Tools conditional edge test completed")
+}
+
+func dummyReducer(existing, update any) any {
+	return update
+}
+
+func intDefault() any {
+	return 42
+}
+
+func stringDefault() any {
+	return "default"
+}
+
+func nilDefault() any {
+	return nil
+}
+
+func TestStateSchema_validateSchema(t *testing.T) {
+	tests := []struct {
+		name        string
+		fields      map[string]StateField
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "valid schema with all required fields",
+			fields: map[string]StateField{
+				"testField": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  dummyReducer,
+					Required: true,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid schema with default value matching type",
+			fields: map[string]StateField{
+				"intField": {
+					Type:     reflect.TypeOf(0),
+					Reducer:  dummyReducer,
+					Default:  intDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid schema with string default value matching type",
+			fields: map[string]StateField{
+				"intField": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  dummyReducer,
+					Default:  stringDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "field with nil type should error",
+			fields: map[string]StateField{
+				"invalidField": {
+					Type:     nil,
+					Reducer:  dummyReducer,
+					Required: true,
+				},
+			},
+			wantErr:     true,
+			errContains: "has nil type",
+		},
+		{
+			name: "field with nil reducer should error",
+			fields: map[string]StateField{
+				"invalidField": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  nil,
+					Required: true,
+				},
+			},
+			wantErr:     true,
+			errContains: "has nil reducer",
+		},
+		{
+			name: "field with incompatible default value type",
+			fields: map[string]StateField{
+				"stringField": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  dummyReducer,
+					Default:  intDefault,
+					Required: false,
+				},
+			},
+			wantErr:     true,
+			errContains: "has incompatible default value",
+		},
+		{
+			name: "field with nil default for pointer type (should pass)",
+			fields: map[string]StateField{
+				"pointerField": {
+					Type:     reflect.TypeOf((*int)(nil)),
+					Reducer:  dummyReducer,
+					Default:  nilDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "field with nil default for interface type (should pass)",
+			fields: map[string]StateField{
+				"interfaceField": {
+					Type:     reflect.TypeOf((*any)(nil)).Elem(),
+					Reducer:  dummyReducer,
+					Default:  nilDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "field with nil default for slice type (should pass)",
+			fields: map[string]StateField{
+				"sliceField": {
+					Type:     reflect.TypeOf([]int{}),
+					Reducer:  dummyReducer,
+					Default:  nilDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "field with nil default for non-nillable type (should error)",
+			fields: map[string]StateField{
+				"intField": {
+					Type:     reflect.TypeOf(0),
+					Reducer:  dummyReducer,
+					Default:  nilDefault,
+					Required: false,
+				},
+			},
+			wantErr:     true,
+			errContains: "nil is not assignable",
+		},
+		{
+			name: "multiple fields with one invalid",
+			fields: map[string]StateField{
+				"validField1": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  dummyReducer,
+					Required: true,
+				},
+				"invalidField": {
+					Type:     nil,
+					Reducer:  dummyReducer,
+					Required: true,
+				},
+				"validField2": {
+					Type:     reflect.TypeOf(0),
+					Reducer:  dummyReducer,
+					Required: false,
+				},
+			},
+			wantErr:     true,
+			errContains: "has nil type",
+		},
+		{
+			name: "complex type with valid default",
+			fields: map[string]StateField{
+				"structField": {
+					Type: reflect.TypeOf(struct {
+						Name string
+						Age  int
+					}{}),
+					Reducer: dummyReducer,
+					Default: func() any {
+						return struct {
+							Name string
+							Age  int
+						}{
+							Name: "default",
+							Age:  25,
+						}
+					},
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &StateSchema{
+				Fields: tt.fields,
+			}
+
+			err := s.validateSchema()
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("StateSchema.validateSchema() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && tt.errContains != "" {
+				if err == nil || err.Error() == "" {
+					t.Errorf("Expected error containing '%s', but got nil error", tt.errContains)
+					return
+				}
+
+				errorMsg := err.Error()
+				if tt.errContains != "" && !strings.Contains(errorMsg, tt.errContains) {
+					t.Errorf("StateSchema.validateSchema() error = %v, should contain %v", errorMsg, tt.errContains)
+				}
+			}
+
+			if !tt.wantErr && err != nil {
+				t.Errorf("StateSchema.validateSchema() unexpected error = %v", err)
+			}
+		})
+	}
+}
+
+func TestStateSchema_validateSchema_Concurrent(t *testing.T) {
+	schema := &StateSchema{
+		Fields: map[string]StateField{
+			"testField": {
+				Type:     reflect.TypeOf(""),
+				Reducer:  dummyReducer,
+				Required: true,
+			},
+		},
+	}
+
+	var wg sync.WaitGroup
+	iterations := 100
+
+	for i := 0; i < iterations; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+
+			err := schema.validateSchema()
+			if err != nil {
+				t.Errorf("Concurrent test %d failed: %v", index, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestStateSchema_validateSchema_Empty(t *testing.T) {
+	schema := &StateSchema{
+		Fields: map[string]StateField{},
+	}
+
+	err := schema.validateSchema()
+	if err != nil {
+		t.Errorf("Empty schema should be valid, got error: %v", err)
+	}
+}
+
+func TestStateSchema_validateSchema_FieldNameInError(t *testing.T) {
+	fieldName := "mySpecialField"
+	schema := &StateSchema{
+		Fields: map[string]StateField{
+			fieldName: {
+				Type:    nil,
+				Reducer: dummyReducer,
+			},
+		},
+	}
+
+	err := schema.validateSchema()
+	if err == nil {
+		t.Error("Expected error for nil type, got nil")
+		return
+	}
+
+	if !strings.Contains(err.Error(), fieldName) {
+		t.Errorf("Error message should contain field name '%s', got: %s", fieldName, err.Error())
+	}
 }

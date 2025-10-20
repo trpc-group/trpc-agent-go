@@ -220,7 +220,7 @@ func (g *Graph) validate() error {
 			}
 		}
 	}
-	return nil
+	return g.schema.validateSchema()
 }
 
 // ExecutionContext contains context for graph execution.

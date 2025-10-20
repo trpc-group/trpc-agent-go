@@ -155,6 +155,45 @@ func (s *StateSchema) Validate(state State) error {
 	return nil
 }
 
+// validateSchema validates the schema struct.
+func (s *StateSchema) validateSchema() error {
+	if s == nil {
+		return fmt.Errorf("graph must have a state schema")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for name, field := range s.Fields {
+		// Validate that Type and Reducer are not nil.
+		if field.Type == nil {
+			return fmt.Errorf("field %s has nil type", name)
+		}
+		if field.Reducer == nil {
+			return fmt.Errorf("field %s has nil reducer", name)
+		}
+
+		// Validate that Default is assignable to Type.
+		if field.Default != nil {
+			defaultValue := field.Default()
+			if defaultValue == nil {
+				switch field.Type.Kind() {
+				case reflect.Ptr, reflect.Interface, reflect.Slice, reflect.Map, reflect.Chan, reflect.Func:
+				default:
+					return fmt.Errorf("field %s has incompatible default value: nil is not assignable to type %v", name, field.Type)
+				}
+			} else {
+				defaultType := reflect.TypeOf(defaultValue)
+				if !defaultType.AssignableTo(field.Type) {
+					return fmt.Errorf("field %s has incompatible default value: expected %v, got %v",
+						name, field.Type, defaultType)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // Common reducer functions.
 
 // DefaultReducer overwrites the existing value with the update.
