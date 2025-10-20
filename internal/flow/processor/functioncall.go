@@ -545,12 +545,15 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// Execute the actual tool.
 	result, err := p.executeTool(ctx, invocation, toolCall, tl, eventChan)
 	if err != nil {
-		return nil, toolCall.Function.Arguments, err
+		log.Warnf("tool execute failed, function name: %v, arguments: %s, result: %v, err: %v",
+			toolCall.Function.Name, string(toolCall.Function.Arguments), result, err)
 	}
 
 	// Run after tool callbacks if they exist.
+	// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
 	if p.toolCallbacks != nil {
-		customResult, callbackErr := p.toolCallbacks.RunAfterTool(
+		var customResult any
+		customResult, err = p.toolCallbacks.RunAfterTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
@@ -558,15 +561,15 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			result,
 			err,
 		)
-		if callbackErr != nil {
-			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
-			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
-		}
 		if customResult != nil {
 			result = customResult
 		}
+		if err != nil {
+			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, err)
+			return result, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", err)
+		}
 	}
-	return result, toolCall.Function.Arguments, nil
+	return result, toolCall.Function.Arguments, err
 }
 
 // isStreamable returns true if the tool supports streaming and its stream
