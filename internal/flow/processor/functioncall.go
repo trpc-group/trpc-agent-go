@@ -60,6 +60,7 @@ type streamInnerPreference interface {
 type toolResult struct {
 	index int
 	event *event.Event
+	err   error
 }
 
 // subAgentCall defines the input format for direct sub-agent tool calls.
@@ -101,6 +102,12 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	// Option one: set invocation.EndInvocation is true, and stop next step.
 	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice completion.
 	// maybe the Option two is better.
+	// Allow users to intervene in error handling through callbacks.
+	if _, ok := agent.AsStopError(err); ok {
+		invocation.EndInvocation = true
+		return
+	}
+
 	if err != nil || functioncallResponseEvent == nil {
 		return
 	}
@@ -237,13 +244,13 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		close(done)
 	}()
 
-	toolCallResponsesEvents := p.collectParallelToolResults(
+	toolCallResponsesEvents, err := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
 	mergedEvent := p.buildMergedParallelEvent(
 		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
 	)
-	return mergedEvent, nil
+	return mergedEvent, err
 }
 
 // runParallelToolCall executes one tool call and reports the result.
@@ -285,6 +292,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	choice, modifiedArgs, err := p.executeToolCall(
 		ctx, invocation, tc, tools, index, eventChan,
 	)
+	// If error is not nil, it must be a stopError, so we need to return this error.
 	if err != nil {
 		log.Errorf(
 			"Tool execution error for %s (index: %d, ID: %s, agent: %s): %v",
@@ -297,12 +305,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		errorEvent := newToolCallResponseEvent(
 			invocation, llmResponse, []model.Choice{*errorChoice},
 		)
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
+		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: err})
 		return
 	}
 	// Long-running tools may return nil to indicate no immediate event.
 	if choice == nil {
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: nil})
+		p.sendToolResult(ctx, resultChan, toolResult{index: index})
 		return
 	}
 
@@ -441,6 +449,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 
 	// Execute the tool with callbacks.
 	result, modifiedArgs, err := p.executeToolWithCallbacks(ctx, invocation, toolCall, tl, eventChan)
+	// Only return error when it's a stop error
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, modifiedArgs, err
@@ -492,14 +501,14 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
 	toolCallsCount int,
-) []*event.Event {
+) ([]*event.Event, error) {
 	results := make([]*event.Event, toolCallsCount)
 	for {
 		select {
 		case result, ok := <-resultChan:
 			if !ok {
 				// Channel closed, all results received.
-				return p.filterNilEvents(results)
+				return p.filterNilEvents(results), result.err
 			}
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result.event
@@ -509,7 +518,7 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 		case <-ctx.Done():
 			// Context cancelled, return what we have.
 			log.Warnf("Context cancelled while waiting for tool results")
-			return p.filterNilEvents(results)
+			return p.filterNilEvents(results), nil
 		}
 	}
 }
