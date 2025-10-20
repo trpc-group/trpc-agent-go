@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -587,8 +588,15 @@ func (f *FunctionCallResponseProcessor) executeTool(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (any, error) {
+	// originalTool refers to the actual underlying tool used to determine
+	// whether streaming is supported. If tl is a NamedTool, use its
+	// inner original tool instead of the wrapper itself.
+	originalTool := tl
+	if nameTool, ok := tl.(*itool.NamedTool); ok {
+		originalTool = nameTool.Original()
+	}
 	// Prefer streaming execution if the tool supports it.
-	if isStreamable(tl) {
+	if isStreamable(originalTool) {
 		// Safe to cast since isStreamable checks for StreamableTool.
 		return f.executeStreamableTool(
 			ctx, invocation, toolCall, tl.(tool.StreamableTool), eventChan,
