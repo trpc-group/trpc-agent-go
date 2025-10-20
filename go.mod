@@ -2,7 +2,7 @@ module trpc.group/trpc-go/trpc-agent-go
 
 go 1.21
 
-replace trpc.group/trpc-go/trpc-a2a-go => /data/home/homerpan/workspace/trpc-a2a-go
+replace trpc.group/trpc-go/trpc-a2a-go => github.com/hyprh/trpc-a2a-go v0.2.1-0.20251020061821-2692bbd03af9
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1

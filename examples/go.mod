@@ -3,7 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go/examples
 go 1.21
 
 replace (
-	trpc.group/trpc-go/trpc-a2a-go => /data/home/homerpan/workspace/trpc-a2a-go
+	trpc.group/trpc-go/trpc-a2a-go => github.com/hyprh/trpc-a2a-go v0.2.1-0.20251020061821-2692bbd03af9
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
@@ -11,7 +11,6 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
-
 )
 
 require (
