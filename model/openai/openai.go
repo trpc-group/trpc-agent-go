@@ -1074,23 +1074,37 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	return true
 }
 
-// skipEmptyChunk returns true when the chunk contains no meaningful delta
+// skipEmptyChunk returns true when the chunk contains no meaningful delta.
+// This is a defensive check against malformed responses from certain providers
+// that may return chunks with valid JSON fields but empty actual content.
+//
+// The order of checks matters:
+// 1. Check content first - if valid, don't skip (even if empty string)
+// 2. Check refusal - if valid, don't skip
+// 3. Check toolcalls - if valid but array is empty, skip (defensive against panic)
+// 4. Otherwise, don't skip (let it be processed normally)
 func (m *Model) skipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
-	if len(chunk.Choices) > 0 {
-		delta := chunk.Choices[0].Delta
-		// if Content or
-		switch {
-		case delta.JSON.Content.Valid():
-		case delta.JSON.Refusal.Valid():
-		case delta.JSON.ToolCalls.Valid():
-			/// if toolCalls is empty, it's a empty chunk too
-			if len(delta.ToolCalls) <= 0 {
-				return true
-			}
-		default:
-		}
+	// No choices available, don't skip (let it be processed normally).
+	if len(chunk.Choices) == 0 {
+		return false
 	}
-	return false
+	delta := chunk.Choices[0].Delta
+	// Check for meaningful delta content in priority order.
+	switch {
+	case delta.JSON.Content.Valid():
+		// Content field is present, chunk is not empty.
+		return false
+	case delta.JSON.Refusal.Valid():
+		// Refusal field is present, chunk is not empty.
+		return false
+	case delta.JSON.ToolCalls.Valid():
+		// ToolCalls field is valid, but check if the array is empty.
+		// Empty toolcalls array would cause panic when accessing the first element.
+		return len(delta.ToolCalls) <= 0
+	default:
+		// No valid fields, but it can be processed normally.
+		return false
+	}
 }
 
 // createPartialResponse creates a partial response from a chunk.
