@@ -1056,6 +1056,290 @@ sg.AddLLMNode(llmNodeAssistant, model, llmSystemPrompt, tools)
 // 输出: graph.StateKeyLastResponse、graph.StateKeyMessages(原子更新)、graph.StateKeyNodeResponses（包含当前节点输出，便于并行汇总）
 ```
 
+## 节点缓存（Cache）
+
+为“纯函数型”节点开启缓存可以显著减少重复计算开销。Graph 支持图级与节点级缓存策略：
+
+- 图级设置缓存实现与默认策略：
+  - `WithCache(cache Cache)` 设置缓存后端（默认示例提供内存实现 InMemoryCache）
+  - `WithCachePolicy(policy *CachePolicy)` 设置默认缓存策略（键函数 KeyFunc + 生存时间 Time To Live, TTL）
+- 节点级覆盖策略：`WithNodeCachePolicy(policy *CachePolicy)`（优先于图级）
+- 清理：`ClearCache(nodes ...string)` 按节点清理缓存命名空间
+
+参考：
+- Graph 接口（缓存与策略的访问/设置）：[graph/graph.go](graph/graph.go)
+- 默认策略与内存后端实现：
+  - 接口/策略与默认键函数（规范化 JSON + SHA‑256）：[graph/cache.go](graph/cache.go)
+  - 内存缓存（InMemoryCache）并发安全实现（读写锁 + 深拷贝）：[graph/cache.go](graph/cache.go)
+- 执行器：
+  - 节点执行前尝试 Get，命中则跳过节点函数执行，仅触发 after 回调与写出（Writes）：[graph/executor.go](graph/executor.go)
+  - 正常执行成功后写入缓存（Set）：[graph/executor.go](graph/executor.go)
+  - 节点完成事件中附带 `_cache_hit` 观察标记（命中时插入 `StateDelta["_cache_hit"]=true`）：[graph/executor.go](graph/executor.go)
+
+最小用法：
+
+```go
+schema := graph.NewStateSchema()
+sg := graph.NewStateGraph(schema).
+  WithCache(graph.NewInMemoryCache()).
+  WithCachePolicy(graph.DefaultCachePolicy())
+
+// 对某个节点单独设置 TTL 10 分钟
+nodePolicy := &graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 10*time.Minute}
+sg.AddNode("compute", computeFunc, graph.WithNodeCachePolicy(nodePolicy)).
+  SetEntryPoint("compute").
+  SetFinishPoint("compute")
+
+compiled, _ := sg.Compile()
+```
+
+进阶用法：
+- 仅使用部分字段作为键（推荐）
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) {
+        // your logic here
+        return graph.State{"out": s["n"].(int) * 2}, nil
+    }
+
+    // 仅使用 n 与 user_id 两个字段参与键计算（其余字段不会影响命中）
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 30*time.Minute}),
+        graph.WithCacheKeyFields("n", "user_id"),
+    )
+
+    return sg.Compile()
+}
+```
+
+- 自定义选择器（当字段映射更复杂时）
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) { return graph.State{"out": 42}, nil }
+
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 5*time.Minute}),
+        graph.WithCacheKeySelector(func(m map[string]any) any {
+            // 仅从净化后的输入中选择 n 与 uid 作为键来源
+            return map[string]any{"n": m["n"], "uid": m["uid"]}
+        }),
+    )
+    return sg.Compile()
+}
+```
+
+- 版本化命名空间（跨版本防脏缓存）
+
+```go
+package main
+
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithGraphVersion("v2025.03"). // 命名空间变为 __writes__:v2025.03:<node>
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    // ... AddNode(...)
+    return sg.Compile()
+}
+```
+
+- 节点级 TTL（Time To Live）
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) { return graph.State{"out": 42}, nil }
+
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{
+            KeyFunc: graph.DefaultCachePolicy().KeyFunc,
+            TTL:     10 * time.Minute,
+        }),
+    )
+    return sg.Compile()
+}
+```
+
+- 清理缓存（按节点）
+
+```go
+package main
+
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func clear(sg *graph.StateGraph) {
+    // 清理指定节点
+    sg.ClearCache("compute", "format")
+
+    // 清理图内所有节点（不传参）
+    sg.ClearCache()
+}
+```
+
+- 读取缓存命中标记（_cache_hit）
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func runAndReadHits(executor *graph.Executor, initial graph.State) error {
+    inv := &agent.Invocation{InvocationID: "demo"}
+    ch, err := executor.Execute(context.Background(), initial, inv)
+    if err != nil { return err }
+    for e := range ch {
+        if e.Response != nil && e.Response.Object == graph.ObjectTypeGraphNodeComplete {
+            if e.StateDelta != nil {
+                if _, ok := e.StateDelta["_cache_hit"]; ok {
+                    fmt.Println("cache hit: skipped node function")
+                }
+            }
+        }
+        if e.Done { break }
+    }
+    return nil
+}
+```
+
+注意事项：
+- 仅对“纯函数（相同输入→相同输出，无外部副作用）”节点开启缓存，避免语义错误。
+- TTL（Time To Live）为 0 表示不过期，需防止内存增长；生产建议使用持久化后端（如 Redis/SQLite）与定期清理。
+- 键函数会“净化输入”后再规范化序列化，避免把会话、执行上下文等“易变/不可序列化”值纳入键，提升命中率、避免错误（见 [graph/cache_key.go](graph/cache_key.go)）。
+- 代码更新后可调用 `ClearCache("nodeID")` 清理旧缓存，或在键/命名空间中引入“函数标识符/版本”维度。
+
+Runner + GraphAgent 环境使用示例：
+
+```go
+package main
+
+import (
+    "bufio"
+    "context"
+    "flag"
+    "fmt"
+    "os"
+    "strings"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func main() {
+    ttl := flag.Duration("ttl", 1*time.Minute, "cache ttl")
+    flag.Parse()
+
+    // Build graph with cache
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) {
+        n, _ := s["n"].(int)
+        time.Sleep(200 * time.Millisecond)
+        return graph.State{"out": n * 2}, nil
+    }
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: *ttl}),
+        graph.WithCacheKeyFields("n"),
+    ).
+        SetEntryPoint("compute").
+        SetFinishPoint("compute")
+    g, _ := sg.Compile()
+
+    // GraphAgent + Runner
+    ga, _ := graphagent.New("cache-demo", g, graphagent.WithInitialState(graph.State{}))
+    app := runner.NewRunner("app", ga, runner.WithSessionService(inmemory.NewSessionService()))
+
+    // Interactive
+    sc := bufio.NewScanner(os.Stdin)
+    fmt.Println("Enter integers; repeated inputs should hit cache. type 'exit' to quit")
+    for {
+        fmt.Print("> ")
+        if !sc.Scan() { break }
+        txt := strings.TrimSpace(sc.Text())
+        if txt == "exit" { break }
+        if txt == "" { continue }
+        msg := model.NewUserMessage(fmt.Sprintf("compute %s", txt))
+        evts, err := app.Run(context.Background(), "user", fmt.Sprintf("s-%d", time.Now().UnixNano()), msg, agent.WithRuntimeState(graph.State{"n": atoi(txt)}))
+        if err != nil { fmt.Println("run error:", err); continue }
+        for e := range evts {
+            if e.Response != nil && e.Response.Object == graph.ObjectTypeGraphNodeComplete {
+                if e.StateDelta != nil { if _, ok := e.StateDelta["_cache_hit"]; ok { fmt.Println("cache hit") } }
+            }
+            if e.Done { break }
+        }
+    }
+}
+
+func atoi(s string) int { var n int; fmt.Sscanf(s, "%d", &n); return n }
+```
+
+示例：
+- 交互式（Interactive）+ Runner + GraphAgent 演示：`examples/graph/nodecache`，入口 [examples/graph/nodecache/main.go](examples/graph/nodecache/main.go)
+
 #### Tools 节点
 执行工具调用，注意是**顺序执行**：
 

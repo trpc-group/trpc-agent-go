@@ -94,6 +94,45 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithCacheKeyFields sets a cache key selector that derives the cache key
+// input from a subset of fields in the sanitized input map. This helps avoid
+// including unrelated or volatile keys in the cache key.
+func WithCacheKeyFields(fields ...string) Option {
+	// copy fields to avoid external mutation
+	fcopy := append([]string(nil), fields...)
+	return func(node *Node) {
+		node.cacheKeySelector = func(m map[string]any) any {
+			if m == nil {
+				return nil
+			}
+			out := make(map[string]any, len(fcopy))
+			for _, k := range fcopy {
+				if v, ok := m[k]; ok {
+					out[k] = v
+				}
+			}
+			return out
+		}
+	}
+}
+
+// WithCacheKeySelector sets a custom selector for deriving the cache key input
+// from the sanitized input map. The returned value will be passed to the
+// CachePolicy.KeyFunc.
+func WithCacheKeySelector(selector func(map[string]any) any) Option {
+	return func(node *Node) {
+		node.cacheKeySelector = selector
+	}
+}
+
+// WithNodeCachePolicy sets a cache policy for this node.
+// When set, the executor will attempt to cache the node's final result using this policy.
+func WithNodeCachePolicy(policy *CachePolicy) Option {
+	return func(node *Node) {
+		node.cachePolicy = policy
+	}
+}
+
 // WithRetryPolicy sets retry policies for the node. Policies are evaluated
 // in order when an error occurs to determine whether to retry and what
 // backoff to apply. Passing multiple policies allows matching by different
@@ -447,6 +486,44 @@ func (sg *StateGraph) WithNodeCallbacks(callbacks *NodeCallbacks) *StateGraph {
 		Reducer: DefaultReducer,
 		Default: func() any { return callbacks },
 	})
+	return sg
+}
+
+// WithCache sets the graph-level cache implementation.
+func (sg *StateGraph) WithCache(cache Cache) *StateGraph {
+	if cache != nil {
+		sg.graph.setCache(cache)
+	}
+	return sg
+}
+
+// WithCachePolicy sets the default cache policy for all nodes (can be overridden per-node).
+func (sg *StateGraph) WithCachePolicy(policy *CachePolicy) *StateGraph {
+	sg.graph.setCachePolicy(policy)
+	return sg
+}
+
+// WithGraphVersion sets an optional version string used for cache namespacing.
+// This helps avoid stale cache collisions across graph code changes or deployments.
+func (sg *StateGraph) WithGraphVersion(version string) *StateGraph {
+	sg.graph.setGraphVersion(version)
+	return sg
+}
+
+// ClearCache clears caches for the specified nodes. If nodes is empty, it clears all nodes currently in the graph.
+func (sg *StateGraph) ClearCache(nodes ...string) *StateGraph {
+	if len(nodes) == 0 {
+		// collect all nodes
+		var all []string
+		sg.graph.mu.RLock()
+		for id := range sg.graph.nodes {
+			all = append(all, id)
+		}
+		sg.graph.mu.RUnlock()
+		sg.graph.clearCacheForNodes(all)
+		return sg
+	}
+	sg.graph.clearCacheForNodes(nodes)
 	return sg
 }
 
