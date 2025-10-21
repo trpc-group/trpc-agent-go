@@ -2,8 +2,6 @@ module trpc.group/trpc-go/trpc-agent-go/examples
 
 go 1.21.0
 
-toolchain go1.24.4
-
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
