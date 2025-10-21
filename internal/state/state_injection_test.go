@@ -195,3 +195,56 @@ func TestIsValidStateName(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizePlaceholders_MustacheToNative(t *testing.T) {
+	cases := map[string]string{
+		"{{key}}":             "{key}",
+		"{{ key }}":           "{key}",
+		"{{key?}}":            "{key?}",
+		"{{ user:name }}":     "{user:name}",
+		"{{app:setting}}":     "{app:setting}",
+		"x {{temp:value?}} y": "x {temp:value?} y",
+		// invalid names should remain untouched
+		"{{invalid-name}}": "{{invalid-name}}",
+		"{{ 123abc }}":     "{{ 123abc }}",
+	}
+	for in, want := range cases {
+		got := normalizePlaceholders(in)
+		if got != want {
+			t.Fatalf("normalizePlaceholders(%q)=%q, want=%q", in, got, want)
+		}
+	}
+}
+
+func TestInjectSessionState_MustachePlaceholders(t *testing.T) {
+	// Prepare invocation session state
+	sm := make(session.StateMap)
+	sm["key"] = []byte(`"v"`)
+	sm["user:name"] = []byte(`"alice"`)
+	sm["temp:value"] = []byte(`"ctx"`)
+	inv := &agent.Invocation{Session: &session.Session{State: sm}}
+
+	// Simple mustache
+	s, err := InjectSessionState("hi {{key}}", inv)
+	if err != nil || s != "hi v" {
+		t.Fatalf("InjectSessionState simple: got %q err=%v", s, err)
+	}
+
+	// Namespaced and optional + spaces
+	s, err = InjectSessionState("U={{ user:name }}, C={{ temp:value? }}", inv)
+	if err != nil || s != "U=alice, C=ctx" {
+		t.Fatalf("InjectSessionState ns: got %q err=%v", s, err)
+	}
+
+	// Optional missing
+	s, err = InjectSessionState("X={{missing?}}.", inv)
+	if err != nil || s != "X=." {
+		t.Fatalf("InjectSessionState missing optional: got %q err=%v", s, err)
+	}
+
+	// Invalid name stays
+	s, err = InjectSessionState("bad {{invalid-name}}", inv)
+	if err != nil || s != "bad {{invalid-name}}" {
+		t.Fatalf("InjectSessionState invalid mustache: got %q err=%v", s, err)
+	}
+}
