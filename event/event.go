@@ -35,6 +35,8 @@ const (
 
 	// FilterKeyDelimiter is the delimiter for hierarchical event filtering.
 	FilterKeyDelimiter = "/"
+
+	TagDelimiter = ";"
 )
 
 // Event represents an event in conversation between agents and users.
