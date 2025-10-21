@@ -207,6 +207,9 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	toolEvent := newToolCallResponseEvent(
 		invocation, llmResponse, []model.Choice{*choice},
 	)
+	if toolCall.Function.Name == transfer.TransferToolName {
+		toolEvent.Tag = TransferTag
+	}
 	if tl, ok := tools[toolCall.Function.Name]; ok {
 		p.annotateSkipSummarization(toolEvent, tl)
 	}
@@ -280,6 +283,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			errorEvent := newToolCallResponseEvent(
 				invocation, llmResponse, []model.Choice{*errorChoice},
 			)
+			if tc.Function.Name == transfer.TransferToolName {
+				errorEvent.Tag = TransferTag
+			}
 			p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
 		}
 	}()
@@ -305,6 +311,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		errorEvent := newToolCallResponseEvent(
 			invocation, llmResponse, []model.Choice{*errorChoice},
 		)
+		if tc.Function.Name == transfer.TransferToolName {
+			errorEvent.Tag = TransferTag
+		}
 		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: err})
 		return
 	}
@@ -318,6 +327,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	toolCallResponseEvent := newToolCallResponseEvent(
 		invocation, llmResponse, []model.Choice{*choice},
 	)
+	if tc.Function.Name == transfer.TransferToolName {
+		toolCallResponseEvent.Tag = TransferTag
+	}
 	// Respect tool preference to skip outer summarization when present.
 	if tl, ok := tools[tc.Function.Name]; ok {
 		p.annotateSkipSummarization(toolCallResponseEvent, tl)

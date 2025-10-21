@@ -62,3 +62,14 @@ func WithSkipSummarization() Option {
 		e.Actions.SkipSummarization = true
 	}
 }
+
+// WithTag sets the tag for the event.
+func WithTag(tag string) Option {
+	return func(e *Event) {
+		if e.Tag == "" {
+			e.Tag = tag
+			return
+		}
+		e.Tag += TagDelimiter + tag
+	}
+}
