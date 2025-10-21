@@ -60,6 +60,7 @@ type streamInnerPreference interface {
 type toolResult struct {
 	index int
 	event *event.Event
+	err   error
 }
 
 // subAgentCall defines the input format for direct sub-agent tool calls.
@@ -101,6 +102,12 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	// Option one: set invocation.EndInvocation is true, and stop next step.
 	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice completion.
 	// maybe the Option two is better.
+	// Allow users to intervene in error handling through callbacks.
+	if _, ok := agent.AsStopError(err); ok {
+		invocation.EndInvocation = true
+		return
+	}
+
 	if err != nil || functioncallResponseEvent == nil {
 		return
 	}
@@ -237,13 +244,13 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		close(done)
 	}()
 
-	toolCallResponsesEvents := p.collectParallelToolResults(
+	toolCallResponsesEvents, err := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
 	mergedEvent := p.buildMergedParallelEvent(
 		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
 	)
-	return mergedEvent, nil
+	return mergedEvent, err
 }
 
 // runParallelToolCall executes one tool call and reports the result.
@@ -285,6 +292,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	choice, modifiedArgs, err := p.executeToolCall(
 		ctx, invocation, tc, tools, index, eventChan,
 	)
+	// If error is not nil, it must be a stopError, so we need to return this error.
 	if err != nil {
 		log.Errorf(
 			"Tool execution error for %s (index: %d, ID: %s, agent: %s): %v",
@@ -297,12 +305,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		errorEvent := newToolCallResponseEvent(
 			invocation, llmResponse, []model.Choice{*errorChoice},
 		)
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
+		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: err})
 		return
 	}
 	// Long-running tools may return nil to indicate no immediate event.
 	if choice == nil {
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: nil})
+		p.sendToolResult(ctx, resultChan, toolResult{index: index})
 		return
 	}
 
@@ -441,6 +449,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 
 	// Execute the tool with callbacks.
 	result, modifiedArgs, err := p.executeToolWithCallbacks(ctx, invocation, toolCall, tl, eventChan)
+	// Only return error when it's a stop error
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, modifiedArgs, err
@@ -492,24 +501,28 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
 	toolCallsCount int,
-) []*event.Event {
+) ([]*event.Event, error) {
 	results := make([]*event.Event, toolCallsCount)
+	var err error
 	for {
 		select {
 		case result, ok := <-resultChan:
 			if !ok {
 				// Channel closed, all results received.
-				return p.filterNilEvents(results)
+				return p.filterNilEvents(results), err
 			}
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result.event
+				if err == nil && result.err != nil {
+					err = result.err
+				}
 			} else {
 				log.Errorf("Tool result index %d out of range [0, %d)", result.index, len(results))
 			}
 		case <-ctx.Done():
 			// Context cancelled, return what we have.
 			log.Warnf("Context cancelled while waiting for tool results")
-			return p.filterNilEvents(results)
+			return p.filterNilEvents(results), nil
 		}
 	}
 }
@@ -545,12 +558,15 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// Execute the actual tool.
 	result, err := p.executeTool(ctx, invocation, toolCall, tl, eventChan)
 	if err != nil {
-		return nil, toolCall.Function.Arguments, err
+		log.Warnf("tool execute failed, function name: %v, arguments: %s, result: %v, err: %v",
+			toolCall.Function.Name, string(toolCall.Function.Arguments), result, err)
 	}
 
 	// Run after tool callbacks if they exist.
+	// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
 	if p.toolCallbacks != nil {
-		customResult, callbackErr := p.toolCallbacks.RunAfterTool(
+		var customResult any
+		customResult, err = p.toolCallbacks.RunAfterTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
@@ -558,15 +574,15 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			result,
 			err,
 		)
-		if callbackErr != nil {
-			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
-			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
-		}
 		if customResult != nil {
 			result = customResult
 		}
+		if err != nil {
+			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, err)
+			return result, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", err)
+		}
 	}
-	return result, toolCall.Function.Arguments, nil
+	return result, toolCall.Function.Arguments, err
 }
 
 // isStreamable returns true if the tool supports streaming and its stream

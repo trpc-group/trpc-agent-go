@@ -83,6 +83,11 @@ func (c *Callbacks) RunAfterTool(
 	result any,
 	runErr error,
 ) (any, error) {
+	// If there are no after tool callbacks, return the result directly.
+	if len(c.AfterTool) == 0 {
+		return result, runErr
+	}
+
 	for _, cb := range c.AfterTool {
 		customResult, err := cb(ctx, toolName, toolDeclaration, jsonArgs, result, runErr)
 		if err != nil {
