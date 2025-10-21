@@ -2115,6 +2115,44 @@ Good practice:
 
 See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/tools/placeholder).
 
+## Visualization (DOT/Image)
+
+Graph can export a Graphviz DOT (Directed Graph Language) description and render images via the `dot` (Graph Visualization layout engine) executable.
+
+- `WithDestinations` draws dotted gray edges for declared dynamic routes (visualization + static checks only; it does not affect runtime).
+- Conditional edges render as dashed gray edges with branch labels.
+- Regular edges render as solid lines.
+- Virtual `Start`/`End` nodes can be shown or hidden via an option.
+
+Example:
+
+```go
+g := sg.MustCompile()
+
+// Build DOT text
+dot := g.DOT(
+    graph.WithRankDir(graph.RankDirLR),  // left→right (or graph.RankDirTB)
+    graph.WithIncludeDestinations(true), // show declared WithDestinations
+    graph.WithGraphLabel("My Workflow"),
+)
+
+// Render PNG (requires Graphviz's dot)
+if err := g.RenderImage(context.Background(), graph.ImageFormatPNG, "workflow.png",
+    graph.WithRankDir(graph.RankDirLR),
+    graph.WithIncludeDestinations(true),
+); err != nil {
+    // If Graphviz is not installed, this returns an error — ignore or instruct the user to install dot
+}
+```
+
+API reference:
+
+- `g.DOT(...)` / `g.WriteDOT(w, ...)` on a compiled `*graph.Graph`
+- `g.RenderImage(ctx, format, outputPath, ...)` (e.g., `png`/`svg`)
+- Options: `WithRankDir(graph.RankDirLR|graph.RankDirTB)`, `WithIncludeDestinations(bool)`, `WithIncludeStartEnd(bool)`, `WithGraphLabel(string)`
+
+Full example: `examples/graph/visualization`
+
 ## Advanced Features
 
 ### Checkpoints and Recovery
