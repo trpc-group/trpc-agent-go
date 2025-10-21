@@ -767,6 +767,8 @@ b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error)
         "message": "Please approve this action (yes/no):",
         "data":    s["some_data"],
     }
+}
+```
  
 
 Turn the diagram into a runnable workflow:
@@ -880,7 +882,6 @@ func main() {
         }
         if ev.Author == nodeAsk && !ev.Response.IsPartial && len(ev.Response.Choices) > 0 {
             fmt.Println("LLM:", ev.Response.Choices[0].Message.Content)
-        }
         }
     }
 }

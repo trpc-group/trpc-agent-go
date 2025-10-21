@@ -782,6 +782,8 @@ b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error)
         "message": "请审批此操作 (yes/no):",
         "data":    s["some_data"],
     }
+})
+```
  
 
 用代码把这个图变成可运行的工作流：
@@ -895,7 +897,6 @@ func main() {
         }
         if ev.Author == nodeAsk && !ev.Response.IsPartial && len(ev.Response.Choices) > 0 {
             fmt.Println("LLM:", ev.Response.Choices[0].Message.Content)
-        }
         }
     }
 }
