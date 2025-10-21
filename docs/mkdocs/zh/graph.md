@@ -495,6 +495,42 @@ stateGraph.AddLLMNode(
 
 可参考可运行示例：`examples/graph/placeholder`。
 
+将检索结果与用户输入注入指令
+
+- 在进入 LLM 节点前的任意节点，将临时值写入会话的 `temp:` 命名空间，LLM 指令即可用占位符读取。
+- 示例模式：
+
+```go
+// 在 LLM 节点之前
+stateGraph.AddNode("retrieve", func(ctx context.Context, s graph.State) (any, error) {
+    // 假设你已经得到检索内容 retrieved，并希望连同当前用户输入一起注入
+    retrieved := "• 文档A...\n• 文档B..."
+    var input string
+    if v, ok := s[graph.StateKeyUserInput].(string); ok { input = v }
+    if sess, _ := s[graph.StateKeySession].(*session.Session); sess != nil {
+        if sess.State == nil { sess.State = make(session.StateMap) }
+        sess.State[session.StateTempPrefix+"retrieved_context"] = []byte(retrieved)
+        sess.State[session.StateTempPrefix+"user_input"] = []byte(input)
+    }
+    return graph.State{}, nil
+})
+
+// LLM 节点的指令引用 {temp:retrieved_context} 和 {temp:user_input}
+stateGraph.AddLLMNode("answer", mdl,
+    "请结合上下文回答。\n\n上下文：\n{temp:retrieved_context}\n\n问题：{temp:user_input}",
+    nil)
+```
+
+示例：`examples/graph/retrieval_placeholder`。
+
+占位符与会话状态的最佳实践
+
+- 短期 vs 持久：只用于本轮提示词组装的数据写到 `session.State` 的 `temp:*`；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 `user:*`/`app:*`。
+- 为什么可以直接写：LLM 节点从图状态里的会话对象读取并展开占位符，见 [graph/state_graph.go](graph/state_graph.go)；GraphAgent 在启动时把会话对象放入图状态，见 [agent/graphagent/graph_agent.go](agent/graphagent/graph_agent.go)。
+- 服务侧护栏：内存实现禁止通过“更新用户态”的接口写 `temp:*`（以及 `app:*` via user updater），见 [session/inmemory/service.go](session/inmemory/service.go)。
+- 并发建议：并行分支不要同时改同一批 `session.State` 键；建议汇总到单节点合并后一次写入，或先放图状态再一次写到 `temp:*`。
+- 可观测性：若希望在完成事件中看到摘要，可额外把精简信息放入图状态（如 `metadata`）；最终事件会序列化非内部的最终状态，见 [graph/events.go](graph/events.go)。
+
 #### 通过 Reducer 与 MessageOp 实现的原子更新
 
 Graph 包的消息状态支持 `MessageOp` 补丁操作（如 `ReplaceLastUser`、
