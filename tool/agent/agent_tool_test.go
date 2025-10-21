@@ -265,6 +265,121 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	}
 }
 
+func TestTool_HistoryScope_ParentBranch_Streamable_FilterKeyPrefix(t *testing.T) {
+	sa := &streamingMockAgent{name: "stream-agent"}
+	at := NewTool(sa, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
+
+	// Parent invocation with base filter key.
+	sess := &session.Session{}
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	r, err := at.StreamableCall(ctx, []byte(`{"request":"hi"}`))
+	if err != nil {
+		t.Fatalf("StreamableCall error: %v", err)
+	}
+	defer r.Close()
+	// Drain stream
+	for i := 0; i < 4; i++ {
+		if _, err := r.Recv(); err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+	}
+
+	// Expect child filter key prefixed by parent key.
+	if !strings.HasPrefix(sa.seenFilterKey, "parent-agent/"+sa.name+"-") {
+		t.Fatalf("expected child filter key to start with %q, got %q", "parent-agent/"+sa.name+"-", sa.seenFilterKey)
+	}
+}
+
+// inspectAgent collects matched contents from session using the invocation's filter key
+// and returns them joined by '|'.
+type inspectAgent struct{ name string }
+
+func (m *inspectAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	fk := inv.GetEventFilterKey()
+	var matched []string
+	if inv.Session != nil {
+		for i := range inv.Session.Events {
+			evt := inv.Session.Events[i]
+			if evt.Filter(fk) && evt.Response != nil && len(evt.Response.Choices) > 0 {
+				msg := evt.Response.Choices[0].Message
+				if msg.Content != "" {
+					matched = append(matched, msg.Content)
+				}
+			}
+		}
+	}
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage(strings.Join(matched, "|"))}}}}
+	close(ch)
+	return ch, nil
+}
+
+func (m *inspectAgent) Tools() []tool.Tool              { return nil }
+func (m *inspectAgent) Info() agent.Info                { return agent.Info{Name: m.name, Description: "inspect"} }
+func (m *inspectAgent) SubAgents() []agent.Agent        { return nil }
+func (m *inspectAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func TestTool_HistoryScope_ParentBranch_Call_InheritsParentHistory(t *testing.T) {
+	ia := &inspectAgent{name: "child"}
+	at := NewTool(ia, WithHistoryScope(HistoryScopeParentBranch))
+
+	// Build parent session with a prior assistant event under parent branch.
+	sess := &session.Session{}
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-branch"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	// Append a parent assistant event (author parent, content "PARENT").
+	parentEvt := event.NewResponseEvent(parent.InvocationID, "parent", &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("PARENT")}}})
+	agent.InjectIntoEvent(parent, parentEvt)
+	sess.Events = append(sess.Events, *parentEvt)
+
+	// Call the tool with child input.
+	out, err := at.Call(ctx, []byte(`{"request":"CHILD"}`))
+	if err != nil {
+		t.Fatalf("call error: %v", err)
+	}
+	s, _ := out.(string)
+	// Expect both parent content and tool input to be visible via filter inheritance.
+	if !strings.Contains(s, "PARENT") || !strings.Contains(s, `{"request":"CHILD"}`) {
+		t.Fatalf("expected output to contain both parent and child contents, got: %q", s)
+	}
+}
+
+func TestTool_HistoryScope_Isolated_Streamable_NoParentPrefix(t *testing.T) {
+	sa := &streamingMockAgent{name: "stream-agent"}
+	at := NewTool(sa, WithStreamInner(true), WithHistoryScope(HistoryScopeIsolated))
+
+	sess := &session.Session{}
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	r, err := at.StreamableCall(ctx, []byte(`{"request":"hi"}`))
+	if err != nil {
+		t.Fatalf("StreamableCall error: %v", err)
+	}
+	defer r.Close()
+	for i := 0; i < 4; i++ { // drain
+		if _, err := r.Recv(); err != nil {
+			t.Fatalf("stream read error: %v", err)
+		}
+	}
+	// Expect isolated (no parent prefix)
+	if !strings.HasPrefix(sa.seenFilterKey, sa.name+"-") || strings.HasPrefix(sa.seenFilterKey, "parent-agent/") {
+		t.Fatalf("expected isolated child key starting with %q, got %q", sa.name+"-", sa.seenFilterKey)
+	}
+}
+
 func TestTool_StreamInner_FlagFalse(t *testing.T) {
 	a := &mockAgent{name: "agent-x", description: "d"}
 	at := NewTool(a, WithStreamInner(false))
