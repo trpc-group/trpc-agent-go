@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 // Manager implements the evalset.Manager interface using in-memory manager.
@@ -67,7 +68,7 @@ func (m *manager) Create(_ context.Context, appName, evalSetID string) (*evalset
 		EvalSetID:         evalSetID,
 		Name:              evalSetID,
 		EvalCases:         []*evalset.EvalCase{},
-		CreationTimestamp: &evalset.EpochTime{Time: time.Now()},
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
 	}
 	m.evalSets[appName][evalSetID] = evalSet
 	m.evalCases[appName][evalSetID] = make(map[string]*evalset.EvalCase)

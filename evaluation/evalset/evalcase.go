@@ -10,17 +10,8 @@
 package evalset
 
 import (
-	"encoding/json"
-	"time"
-
 	"google.golang.org/genai"
-)
-
-const (
-	// zeroEpochLiteral is the literal for zero epoch.
-	zeroEpochLiteral = "0"
-	// nanosecondsPerSecond is the number of nanoseconds per second.
-	nanosecondsPerSecond = float64(time.Second)
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 // EvalCase represents a single evaluation case.
@@ -33,7 +24,7 @@ type EvalCase struct {
 	// SessionInput contains initialization data for the session.
 	SessionInput *SessionInput `json:"sessionInput"`
 	// CreationTimestamp when this eval case was created.
-	CreationTimestamp *EpochTime `json:"creationTimestamp"`
+	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp"`
 }
 
 // Invocation represents a single invocation in a conversation.
@@ -48,7 +39,7 @@ type Invocation struct {
 	// IntermediateData contains intermediate steps during execution.
 	IntermediateData *IntermediateData `json:"intermediateData"`
 	// CreationTimestamp when this invocation was created.
-	CreationTimestamp *EpochTime `json:"creationTimestamp"`
+	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp"`
 }
 
 // IntermediateData contains intermediate execution data.
@@ -73,26 +64,4 @@ type SessionInput struct {
 	UserID string `json:"userId"`
 	// State contains the initial state of the session.
 	State map[string]interface{} `json:"state"`
-}
-
-// EpochTime wraps time.Time to (un)marshal as unix seconds (float) like ADK.
-type EpochTime struct{ time.Time }
-
-// MarshalJSON implements json.Marshaler to encode time as unix seconds (float).
-func (t EpochTime) MarshalJSON() ([]byte, error) {
-	if t.Time.IsZero() {
-		return []byte(zeroEpochLiteral), nil
-	}
-	unixSeconds := float64(t.Time.UnixNano()) / nanosecondsPerSecond
-	return json.Marshal(unixSeconds)
-}
-
-// UnmarshalJSON implements json.Unmarshaler to decode unix seconds (float).
-func (t *EpochTime) UnmarshalJSON(b []byte) error {
-	var unixSeconds float64
-	if err := json.Unmarshal(b, &unixSeconds); err != nil {
-		return err
-	}
-	t.Time = time.Unix(0, int64(unixSeconds*nanosecondsPerSecond)).UTC()
-	return nil
 }

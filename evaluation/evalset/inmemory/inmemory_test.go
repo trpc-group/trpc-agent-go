@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 func TestManager(t *testing.T) {
@@ -57,7 +58,7 @@ func TestManager(t *testing.T) {
 		Conversation: []*evalset.Invocation{
 			{InvocationID: "inv1"},
 		},
-		CreationTimestamp: &evalset.EpochTime{Time: time.Unix(1700, 0).UTC()},
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1700, 0).UTC()},
 	}
 	err = mgr.AddCase(ctx, "app", "set1", caseInput)
 	assert.NoError(t, err)

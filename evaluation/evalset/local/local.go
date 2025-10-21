@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 const (
@@ -71,7 +72,7 @@ func (m *manager) Create(_ context.Context, appName, evalSetID string) (*evalset
 		EvalSetID:         evalSetID,
 		Name:              evalSetID,
 		EvalCases:         []*evalset.EvalCase{},
-		CreationTimestamp: &evalset.EpochTime{Time: time.Now()},
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
 	}
 	if err := m.store(appName, evalSet); err != nil {
 		return nil, fmt.Errorf("store eval set %s.%s: %w", appName, evalSetID, err)

@@ -14,6 +14,7 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -29,7 +30,7 @@ type EvalSetResult struct {
 	// EvalCaseResults contains results for each eval case.
 	EvalCaseResults []*EvalCaseResult `json:"evalCaseResults"`
 	// CreationTimestamp when this result was created.
-	CreationTimestamp *evalset.EpochTime `json:"creationTimestamp"`
+	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp"`
 }
 
 // EvalCaseResult represents the result of a single evaluation case.

@@ -12,6 +12,8 @@ package evalset
 
 import (
 	"context"
+
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 // EvalSet represents a collection of evaluation cases.
@@ -26,7 +28,7 @@ type EvalSet struct {
 	// EvalCases contains all the evaluation cases.
 	EvalCases []*EvalCase `json:"evalCases"`
 	// CreationTimestamp when this eval set was created.
-	CreationTimestamp *EpochTime `json:"creationTimestamp"`
+	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp"`
 }
 
 // Manager defines the interface that an evaluation set manager must satisfy.

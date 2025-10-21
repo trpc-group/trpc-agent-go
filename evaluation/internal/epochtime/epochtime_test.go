@@ -7,7 +7,7 @@
 //
 //
 
-package evalset
+package epochtime
 
 import (
 	"encoding/json"
@@ -18,7 +18,6 @@ import (
 )
 
 func TestEpochTimeMarshalJSONZero(t *testing.T) {
-
 	timestamp := EpochTime{}
 	data, err := timestamp.MarshalJSON()
 	assert.NoError(t, err)
@@ -26,7 +25,6 @@ func TestEpochTimeMarshalJSONZero(t *testing.T) {
 }
 
 func TestEpochTimeMarshalJSONNonZero(t *testing.T) {
-
 	now := time.Unix(123, 456789000).UTC()
 	timestamp := EpochTime{Time: now}
 	data, err := timestamp.MarshalJSON()
@@ -39,7 +37,6 @@ func TestEpochTimeMarshalJSONNonZero(t *testing.T) {
 }
 
 func TestEpochTimeUnmarshalJSON(t *testing.T) {
-
 	input := 321.654
 	payload, err := json.Marshal(input)
 	assert.NoError(t, err)

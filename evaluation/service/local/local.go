@@ -12,6 +12,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
@@ -125,7 +126,7 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 	evalSetResult := &evalresult.EvalSetResult{
 		EvalSetID:         req.EvalSetID,
 		EvalCaseResults:   evalCaseResults,
-		CreationTimestamp: &evalset.EpochTime{Time: time.Now()},
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
 	}
 	evalSetResultID, err := s.evalResultManager.Save(ctx, req.AppName, evalSetResult)
 	if err != nil {
