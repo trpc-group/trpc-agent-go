@@ -1242,6 +1242,64 @@ func (e *Executor) executeSingleTask(
 	// any in-place state changes made by before-node callbacks.
 	t.Input = stateCopy
 
+	// Optional: attempt cache lookup based on sanitized task input.
+	var (
+		result   any
+		cacheHit bool
+	)
+
+	if c := e.graph.Cache(); c != nil {
+		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
+			sanitized := sanitizeForCacheKey(t.Input)
+			// Apply optional cache key selector (node-level) to focus on relevant inputs.
+			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
+				if m, ok2 := sanitized.(map[string]any); ok2 {
+					sanitized = node.cacheKeySelector(m)
+				}
+			}
+			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
+				ns := e.graph.cacheNamespace(t.NodeID)
+				if cached, ok := c.Get(ns, string(keyBytes)); ok {
+					// Cache hit: skip node execution; use cached result.
+					result = cached
+					cacheHit = true
+				}
+			}
+		}
+	}
+
+	if cacheHit {
+		// Run after node callbacks on cache hit.
+		if res, err := e.runAfterCallbacks(
+			ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, result,
+			execCtx, t.NodeID, nodeType, step,
+		); err != nil {
+			return err
+		} else if res != nil {
+			result = res
+		}
+
+		// Handle result and process channel writes.
+		routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+		if herr != nil {
+			return herr
+		}
+
+		// Update versions seen for this node after successful execution.
+		e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
+
+		// Process conditional edges after node execution.
+		if !routed {
+			if perr := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); perr != nil {
+				return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
+			}
+		}
+
+		// Emit node completion event with cache-hit metadata.
+		e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, true)
+		return nil
+	}
+
 	// Package execution context into a struct to reduce parameter count.
 	nodeCtx := &nodeExecutionContext{
 		nodeType:        nodeType,
@@ -1252,7 +1310,7 @@ func (e *Executor) executeSingleTask(
 		mergedCallbacks: mergedCallbacks,
 	}
 
-	// Execute with retry logic.
+	// Execute with retry logic (emits completion event downstream on success).
 	return e.executeTaskWithRetry(ctx, invocation, execCtx, t, step, nodeCtx)
 }
 
@@ -1340,6 +1398,23 @@ func (e *Executor) finalizeSuccessfulExecution(
 		return herr
 	}
 
+	// After successful writes, persist cache entry if cache policy exists.
+	if c := e.graph.Cache(); c != nil {
+		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
+			// Use the same sanitized input used for lookup (post-callback state copy).
+			sanitized := sanitizeForCacheKey(nodeCtx.stateCopy)
+			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
+				if m, ok2 := sanitized.(map[string]any); ok2 {
+					sanitized = node.cacheKeySelector(m)
+				}
+			}
+			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
+				ns := e.graph.cacheNamespace(t.NodeID)
+				c.Set(ns, string(keyBytes), result, pol.TTL)
+			}
+		}
+	}
+
 	// Update versions seen for this node after successful execution.
 	e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
 
@@ -1350,8 +1425,8 @@ func (e *Executor) finalizeSuccessfulExecution(
 		}
 	}
 
-	// Emit node completion event for the overall node run.
-	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, nodeCtx.nodeStart)
+	// Emit node completion event for the overall node run (no cache hit).
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, nodeCtx.nodeStart, false)
 	return nil
 }
 
@@ -1637,7 +1712,7 @@ func (e *Executor) runBeforeCallbacks(
 		}
 	}
 
-	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, false)
 	return true, nil
 }
 
@@ -2066,6 +2141,7 @@ func (e *Executor) emitNodeCompleteEvent(
 	nodeType NodeType,
 	step int,
 	startTime time.Time,
+	cacheHit bool,
 ) {
 	if execCtx.EventChan == nil {
 		return
@@ -2085,7 +2161,30 @@ func (e *Executor) emitNodeCompleteEvent(
 		WithNodeEventEndTime(execEndTime),
 		WithNodeEventOutputKeys(outputKeys),
 	)
+	// Attach cache-hit metadata if supported by the event schema.
+	// We piggyback on node metadata extension by encoding a boolean marker inside
+	// the existing Node metadata via StateDelta in NewNodeCompleteEvent.
+	// Here we cannot mutate the event payload directly, so we re-emit a separate
+	// event that carries cache info is not strictly necessary. As a lightweight
+	// approach, when cacheHit=true we append a synthetic key in OutputKeys to
+	// aid debugging without breaking compatibility.
+	if cacheHit {
+		if completeEvent.StateDelta == nil {
+			completeEvent.StateDelta = make(map[string][]byte)
+		}
+		// Best-effort hint: add a virtual output key for observability.
+		completeEvent.StateDelta[MetadataKeyCacheHit] = []byte("true")
+	}
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, completeEvent)
+}
+
+// getEffectiveCachePolicy returns the node-level cache policy if set, otherwise the graph-level policy.
+func (e *Executor) getEffectiveCachePolicy(nodeID string) *CachePolicy {
+	node, exists := e.graph.Node(nodeID)
+	if exists && node != nil && node.cachePolicy != nil {
+		return node.cachePolicy
+	}
+	return e.graph.CachePolicy()
 }
 
 // updateChannels processes channel updates and emits events.
