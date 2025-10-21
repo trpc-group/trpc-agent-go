@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// TransferTag is the tag for transfer events.
 const TransferTag = "transfer"
 
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
