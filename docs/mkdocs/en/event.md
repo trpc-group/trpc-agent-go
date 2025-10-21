@@ -193,6 +193,17 @@ const (
 )
 ```
 
+#### Helper: Detect Runner Completion
+
+Use the convenience method to detect when the whole run has finished regardless of Agent type:
+
+```go
+// e.IsRunnerCompletion() returns true for the terminal runner-completion event.
+if e.IsRunnerCompletion() {
+    // Safe point to stop reading the channel
+}
+```
+
 ### Event Creation
 
 When developing custom Agent types or Processors, you need to create Events.
