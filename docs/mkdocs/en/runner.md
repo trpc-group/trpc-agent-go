@@ -89,6 +89,11 @@ func main() {
 		if len(event.Response.Choices) > 0 {
 			fmt.Print(event.Response.Choices[0].Delta.Content)
 		}
+
+		// Recommended: stop when Runner emits its completion event.
+		if event.IsRunnerCompletion() {
+			break
+		}
 	}
 }
 ```
@@ -194,6 +199,43 @@ option; it only derives messages from session events (or falls back to the
 single `invocation.Message` if the session has no events). `RunWithMessages`
 still sets `invocation.Message` to the latest user turn so graph/flow agents
 that inspect it continue to work.
+
+### ✅ Detecting End-of-Run and Reading Final Output (Graph-friendly)
+
+When driving a GraphAgent workflow, the LLM’s “final response” is not the end of
+the workflow—nodes like `output` may still be pending. Instead of checking
+`Response.IsFinalResponse()`, always stop on the Runner’s terminal completion
+event:
+
+```go
+for e := range eventChan {
+    // ... print streaming chunks, etc.
+    if e.IsRunnerCompletion() {
+        break
+    }
+}
+```
+
+For convenience, Runner now propagates the graph’s final snapshot into this last
+event. You can extract the final textual output via `graph.StateKeyLastResponse`:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/graph"
+
+for e := range eventChan {
+    if e.IsRunnerCompletion() {
+        if b, ok := e.StateDelta[graph.StateKeyLastResponse]; ok {
+            var final string
+            _ = json.Unmarshal(b, &final)
+            fmt.Println("\nFINAL:", final)
+        }
+        break
+    }
+}
+```
+
+This keeps application code simple and consistent across Agent types while still
+preserving detailed graph events for advanced use.
 
 ## 💾 Session Management
 

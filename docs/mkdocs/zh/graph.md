@@ -390,7 +390,8 @@ func main() {
             }
         }
 
-        if event.Done {
+        // 推荐：使用 Runner 完成事件作为“流程结束”的信号。
+        if event.IsRunnerCompletion() {
             break
         }
     }

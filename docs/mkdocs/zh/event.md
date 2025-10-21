@@ -192,6 +192,17 @@ const (
 )
 ```
 
+#### 辅助方法：检测 Runner 完成
+
+使用便捷方法来判断整次运行是否已完成，无论 Agent 类型如何：
+
+```go
+// e.IsRunnerCompletion() 会在终止的 runner-completion 事件上返回 true。
+if e.IsRunnerCompletion() {
+    // 可安全停止读取事件通道的时机
+}
+```
+
 ### Event 创建
 
 在开发自定义 Agent 类型或 Processor 时，需要创建 Event。

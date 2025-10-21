@@ -12,6 +12,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"runtime/debug"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -212,6 +214,12 @@ func (r *runner) processAgentEvents(
 	agentEventCh <-chan *event.Event,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
+	// Capture the graph-level final snapshot if present so we can propagate it
+	// to the terminal runner-completion event. This makes “final output”
+	// discoverable from the very last event without requiring graph-specific
+	// branching in user code.
+	var finalStateDelta map[string][]byte
+	var finalChoices []model.Choice
 	// Start a goroutine to process and append events to session.
 	go func() {
 		defer func() {
@@ -246,6 +254,23 @@ func (r *runner) processAgentEvents(
 				// a full-session summarization after a branch update when appropriate.
 			}
 
+			// Record graph-level completion snapshot if present.
+			if agentEvent.Done && agentEvent.Object == graph.ObjectTypeGraphExecution {
+				// Shallow copy map (values are immutable []byte owned by event stream).
+				finalStateDelta = make(map[string][]byte, len(agentEvent.StateDelta))
+				for k, v := range agentEvent.StateDelta {
+					// Copy bytes to avoid accidental mutation downstream.
+					if v != nil {
+						vv := make([]byte, len(v))
+						copy(vv, v)
+						finalStateDelta[k] = vv
+					}
+				}
+				if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 {
+					finalChoices = agentEvent.Response.Choices
+				}
+			}
+
 			if agentEvent.RequiresCompletion {
 				completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
 				invocation.NotifyCompletion(ctx, completionID)
@@ -267,6 +292,33 @@ func (r *runner) processAgentEvents(
 				IsPartial: false,
 			},
 		)
+
+		// If we observed a graph-level completion, propagate its snapshot
+		// (and, if available, the final assistant message) so clients can
+		// consistently fetch the final output from the last event in the stream.
+		if len(finalStateDelta) > 0 {
+			if runnerCompletionEvent.StateDelta == nil {
+				runnerCompletionEvent.StateDelta = make(map[string][]byte, len(finalStateDelta))
+			}
+			for k, v := range finalStateDelta {
+				// Ensure we own the bytes in case downstream mutates.
+				if v != nil {
+					vv := make([]byte, len(v))
+					copy(vv, v)
+					runnerCompletionEvent.StateDelta[k] = vv
+				} else {
+					runnerCompletionEvent.StateDelta[k] = nil
+				}
+			}
+			// Optionally echo the final text as a non-streaming assistant message
+			// if graph provided it in its completion.
+			if runnerCompletionEvent.Response != nil && len(runnerCompletionEvent.Response.Choices) == 0 && len(finalChoices) > 0 {
+				// Keep only content to avoid carrying tool deltas etc.
+				// Use JSON marshal/unmarshal to deep-copy minimal fields safely.
+				b, _ := json.Marshal(finalChoices)
+				_ = json.Unmarshal(b, &runnerCompletionEvent.Response.Choices)
+			}
+		}
 
 		// Append runner completion event to session.
 		if err := r.sessionService.AppendEvent(ctx, sess, runnerCompletionEvent); err != nil {
