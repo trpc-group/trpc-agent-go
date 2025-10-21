@@ -89,6 +89,10 @@ func main() {
 		if len(event.Response.Choices) > 0 {
 			fmt.Print(event.Response.Choices[0].Delta.Content)
 		}
+		// Recommended: stop when Runner emits its completion event.
+		if event.IsRunnerCompletion() {
+			break
+		}
 	}
 }
 ```
@@ -190,6 +194,44 @@ ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msg
 Session。内容处理器不会读取这个选项，它只会从 Session 事件中派生消息（或在 Session
 没有事件时回退到单条 `invocation.Message`）。`RunWithMessages` 仍会把最新的用户消息写入
 `invocation.Message`。
+
+## ✅ 图式流程的“优雅结束”与最终结果读取
+
+很多同学在使用 GraphAgent（图式智能体）时，会误把 `Response.IsFinalResponse()` 当作“流程完成”的信号。请注意：`IsFinalResponse()` 只是“大模型本轮回复已结束”，但图上后续节点（例如 `output` 汇总节点）仍可能在继续执行。
+
+最稳妥、统一的做法是：以 Runner 的“完成事件”作为运行结束的唯一判据：
+
+```go
+for e := range eventChan {
+    // ... 处理流式分片、工具可视化等
+    if e.IsRunnerCompletion() { // Runner 的终止事件
+        break
+    }
+}
+```
+
+此外，Runner 会把图在完成时的最终快照传递到这条“最后事件”里，因此你可以直接从该事件的 `StateDelta` 里读取图的最终输出（例如 `graph.StateKeyLastResponse` 对应的文本）：
+
+```go
+import (
+    "encoding/json"
+    "fmt"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+for e := range eventChan {
+    if e.IsRunnerCompletion() {
+        if b, ok := e.StateDelta[graph.StateKeyLastResponse]; ok {
+            var final string
+            _ = json.Unmarshal(b, &final)
+            fmt.Println("\nFINAL:", final)
+        }
+        break
+    }
+}
+```
+
+这样应用层可以始终“看最后一条事件”来判断流程结束并读取最终结果，避免因为提前退出而错过 `output` 等后续节点。
 
 ## 💾 会话管理
 
