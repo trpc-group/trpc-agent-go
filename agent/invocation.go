@@ -162,6 +162,15 @@ func WithA2ARequestOptions(opts ...any) RunOption {
 	return func(runOpts *RunOptions) {
 		runOpts.A2ARequestOptions = append(runOpts.A2ARequestOptions, opts...)
 	}
+
+}
+
+// WithThirdPartyAgentConfigs sets third-party agent configurations.
+// Key is agent type (e.g., "custom-llm"), value is agent-specific config.
+func WithThirdPartyAgentConfigs(configs map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		opts.ThirdPartyAgentConfigs = configs
+	}
 }
 
 // RunOptions is the options for the Run method.
@@ -192,6 +201,9 @@ type RunOptions struct {
 	// Users should pass client.RequestOption values (e.g., client.WithRequestHeader).
 	// The a2aagent package will validate the option types at runtime.
 	A2ARequestOptions []any
+	// ThirdPartyAgentConfigs stores configurations for third-party agents.
+	// Key: agent type, Value: agent-specific config.
+	ThirdPartyAgentConfigs map[string]any
 }
 
 // NewInvocation create a new invocation
@@ -384,4 +396,13 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 		close(ch)
 	}
 	inv.noticeChanMap = nil
+}
+
+// GetThirdPartyAgentConfig retrieves configuration for a specific third-party agent type from the invocation.
+// Returns nil if no configuration exists for the given agent type.
+func (inv *Invocation) GetThirdPartyAgentConfig(agentKey string) any {
+	if inv == nil || inv.RunOptions.ThirdPartyAgentConfigs == nil {
+		return nil
+	}
+	return inv.RunOptions.ThirdPartyAgentConfigs[agentKey]
 }
