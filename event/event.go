@@ -36,6 +36,7 @@ const (
 	// FilterKeyDelimiter is the delimiter for hierarchical event filtering.
 	FilterKeyDelimiter = "/"
 
+	// TagDelimiter is the delimiter for event tags.
 	TagDelimiter = ";"
 )
 
