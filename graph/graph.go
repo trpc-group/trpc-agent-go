@@ -103,6 +103,13 @@ type Node struct {
 	// Keys are target node IDs; values are optional labels.
 	destinations map[string]string
 
+	// ends holds per-node named ends mapping for stronger branch semantics.
+	// Keys are symbolic branch names returned by node logic (e.g. "approved",
+	// "rejected"). Values are destination node IDs (or the special End).
+	// This allows nodes to route via Command.GoTo using symbolic names and for
+	// conditional branches to resolve results with clearer, local semantics.
+	ends map[string]string
+
 	// It's effect just for LLM node
 	modelCallbacks *model.Callbacks
 	// just for tool node.
@@ -282,14 +289,27 @@ func (g *Graph) validate() error {
 	// Validate declared destinations exist.
 	for _, n := range g.nodes {
 		if n == nil || n.destinations == nil || len(n.destinations) == 0 {
-			continue
+			// fallthrough to ends check
 		}
-		for to := range n.destinations {
-			if to == End {
-				continue
+		if n != nil && n.destinations != nil {
+			for to := range n.destinations {
+				if to == End {
+					continue
+				}
+				if _, ok := g.nodes[to]; !ok {
+					return fmt.Errorf("node %s declares destination %s which does not exist", n.ID, to)
+				}
 			}
-			if _, ok := g.nodes[to]; !ok {
-				return fmt.Errorf("node %s declares destination %s which does not exist", n.ID, to)
+		}
+		// Validate per-node ends mapping targets exist.
+		if n != nil && n.ends != nil {
+			for _, target := range n.ends {
+				if target == End {
+					continue
+				}
+				if _, ok := g.nodes[target]; !ok {
+					return fmt.Errorf("node %s declares end target %s which does not exist", n.ID, target)
+				}
 			}
 		}
 	}

@@ -23,6 +23,23 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
+// ensureDockerImage makes sure the required image exists locally. If pulling the
+// image fails (for example due to a transient network or registry outage), the
+// test is skipped to avoid flakiness unrelated to our logic.
+func ensureDockerImage(t *testing.T, image string) {
+	t.Helper()
+	// If image exists locally, nothing to do.
+	if err := exec.Command("docker", "image", "inspect", image).Run(); err == nil {
+		return
+	}
+	// Try to pull; if it fails, skip tests gracefully.
+	cmd := exec.Command("docker", "pull", image)
+	output, pullErr := cmd.CombinedOutput()
+	if pullErr != nil {
+		t.Skipf("Skipping container tests: cannot pull image %s: %v\n%s", image, pullErr, string(output))
+	}
+}
+
 func dockerHost() (string, error) {
 	// Check if docker command exists
 	cmd := exec.Command("docker", "--version")
@@ -58,6 +75,7 @@ func TestContainerCodeExecutor_Basic(t *testing.T) {
 	if err != nil {
 		t.Skipf("Skipping container tests: %s", err)
 	}
+	ensureDockerImage(t, "python:3.9-slim")
 
 	// Test with python:3.9-slim image (commonly available)
 	executor, err := New(
@@ -127,6 +145,7 @@ func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
 	if err != nil {
 		t.Skipf("Skipping container tests: %s", err)
 	}
+	ensureDockerImage(t, "python:3.9-slim")
 
 	tests := []struct {
 		name     string
@@ -264,6 +283,7 @@ func TestContainerCodeExecutor_CodeBlockDelimiter(t *testing.T) {
 		t.Skipf("Skipping container tests: %s", err)
 
 	}
+	ensureDockerImage(t, "python:3.9-slim")
 	executor, err := New(
 		WithContainerConfig(tcontainer.Config{
 			Image: "python:3.9-slim",
@@ -287,6 +307,7 @@ func TestContainerCodeExecutor_IntegrationTest(t *testing.T) {
 	if err != nil {
 		t.Skipf("Skipping container integration tests: %s", err)
 	}
+	ensureDockerImage(t, "python:3.9-slim")
 
 	input := `Let's test container execution with multiple languages:
 
