@@ -15,13 +15,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -810,11 +814,301 @@ func TestWithStreamingRespHandler(t *testing.T) {
 	})
 }
 
+func TestA2ARequestOptions(t *testing.T) {
+	t.Run("invocation can store A2A request options", func(t *testing.T) {
+		// Create invocation
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "test message",
+			},
+			RunOptions: agent.RunOptions{},
+		}
+
+		// Verify A2ARequestOptions can be set
+		invocation.RunOptions.A2ARequestOptions = []any{
+			"option1",
+			"option2",
+		}
+
+		if len(invocation.RunOptions.A2ARequestOptions) != 2 {
+			t.Errorf("Expected 2 options, got %d", len(invocation.RunOptions.A2ARequestOptions))
+		}
+	})
+
+	t.Run("WithA2ARequestOptions sets options correctly", func(t *testing.T) {
+		opts := agent.RunOptions{}
+
+		// Apply the option
+		agent.WithA2ARequestOptions("opt1", "opt2")(&opts)
+
+		if len(opts.A2ARequestOptions) != 2 {
+			t.Errorf("Expected 2 options, got %d", len(opts.A2ARequestOptions))
+		}
+	})
+
+	t.Run("can use client.RequestOption", func(t *testing.T) {
+		// Create invocation with actual client.RequestOption
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "test message",
+			},
+			RunOptions: agent.RunOptions{},
+		}
+
+		// Use client.RequestOption directly
+		invocation.RunOptions.A2ARequestOptions = []any{
+			client.WithRequestHeader("X-Custom-Header", "test-value"),
+			client.WithRequestHeaders(map[string]string{
+				"X-User-ID": "user-123",
+			}),
+		}
+
+		if len(invocation.RunOptions.A2ARequestOptions) != 2 {
+			t.Errorf("Expected 2 options, got %d", len(invocation.RunOptions.A2ARequestOptions))
+		}
+
+		// Verify type assertion works in a2aagent
+		for _, opt := range invocation.RunOptions.A2ARequestOptions {
+			if _, ok := opt.(client.RequestOption); !ok {
+				t.Errorf("Option is not a client.RequestOption")
+			}
+		}
+	})
+
+	t.Run("validates option types and returns error for invalid types", func(t *testing.T) {
+		// Create test server
+		testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == AgentCardWellKnownPath {
+				agentCard := server.AgentCard{
+					Name:        "test-agent",
+					Description: "A test agent",
+					URL:         "http://test.com",
+					Capabilities: server.AgentCapabilities{
+						Streaming: boolPtr(false),
+					},
+				}
+				json.NewEncoder(w).Encode(agentCard)
+				return
+			}
+		}))
+		defer testServer.Close()
+
+		// Create A2A agent
+		a2aAgent, err := New(WithAgentCardURL(testServer.URL))
+		if err != nil {
+			t.Fatalf("Failed to create A2A agent: %v", err)
+		}
+
+		// Create invocation with invalid option type
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "test message",
+			},
+			RunOptions: agent.RunOptions{
+				A2ARequestOptions: []any{
+					"invalid-string-option", // This is not a client.RequestOption
+				},
+			},
+		}
+
+		// Run the agent - should return error immediately
+		eventChan, err := a2aAgent.Run(context.Background(), invocation)
+		if err == nil {
+			t.Fatal("Expected error for invalid option type, but got none")
+		}
+
+		// Verify error message contains type information
+		if !strings.Contains(err.Error(), "A2ARequestOptions[0]") ||
+			!strings.Contains(err.Error(), "not a valid client.RequestOption") {
+			t.Errorf("Error message doesn't contain expected information: %s", err.Error())
+		}
+
+		// Event channel should be nil
+		if eventChan != nil {
+			t.Error("Expected nil event channel when validation fails")
+		}
+	})
+}
+
 // Mock converter that always fails
 type mockFailingConverter struct{}
 
 func (m *mockFailingConverter) ConvertToA2AMessage(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error) {
 	return nil, fmt.Errorf("mock converter error")
+}
+
+func TestWithUserIDHeader(t *testing.T) {
+	tests := []struct {
+		name           string
+		header         string
+		expectedHeader string
+	}{
+		{
+			name:           "set custom header",
+			header:         "X-Custom-User-ID",
+			expectedHeader: "X-Custom-User-ID",
+		},
+		{
+			name:           "empty header not set",
+			header:         "",
+			expectedHeader: "",
+		},
+		{
+			name:           "another custom header",
+			header:         "X-User-Identifier",
+			expectedHeader: "X-User-Identifier",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a2aAgent := &A2AAgent{}
+			option := WithUserIDHeader(tt.header)
+			option(a2aAgent)
+
+			if tt.expectedHeader == "" {
+				// Empty header should not be set
+				if a2aAgent.userIDHeader != "" {
+					t.Errorf("WithUserIDHeader() with empty string should not set header, got %v", a2aAgent.userIDHeader)
+				}
+			} else {
+				if a2aAgent.userIDHeader != tt.expectedHeader {
+					t.Errorf("WithUserIDHeader() userIDHeader = %v, want %v", a2aAgent.userIDHeader, tt.expectedHeader)
+				}
+			}
+		})
+	}
+}
+
+func TestUserIDHeaderInRequest(t *testing.T) {
+	tests := []struct {
+		name               string
+		userIDHeader       string
+		sessionUserID      string
+		expectedHeaderName string
+		shouldSendHeader   bool
+	}{
+		{
+			name:               "default header with UserID",
+			userIDHeader:       "",
+			sessionUserID:      "user-123",
+			expectedHeaderName: defaultUserIDHeader,
+			shouldSendHeader:   true,
+		},
+		{
+			name:               "custom header with UserID",
+			userIDHeader:       "X-Custom-User-ID",
+			sessionUserID:      "user-456",
+			expectedHeaderName: "X-Custom-User-ID",
+			shouldSendHeader:   true,
+		},
+		{
+			name:               "no UserID in session",
+			userIDHeader:       "X-Custom-User-ID",
+			sessionUserID:      "",
+			expectedHeaderName: "",
+			shouldSendHeader:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Track received headers for message requests (not agent card requests)
+			var receivedHeaders http.Header
+			var headersMu sync.Mutex
+			var serverURL string
+
+			// Create mock A2A server
+			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == AgentCardWellKnownPath {
+					// Return agent card with the mock server's URL
+					agentCard := server.AgentCard{
+						Name:        "test-agent",
+						Description: "A test agent",
+						URL:         serverURL, // Use mock server URL
+						Capabilities: server.AgentCapabilities{
+							Streaming: boolPtr(false),
+						},
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(agentCard)
+					return
+				}
+
+				// Capture headers for message requests
+				headersMu.Lock()
+				receivedHeaders = r.Header.Clone()
+				headersMu.Unlock()
+
+				// Return a simple response
+				response := protocol.Message{
+					Role: protocol.MessageRoleAgent,
+					Parts: []protocol.Part{
+						protocol.NewTextPart("test response"),
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			}))
+			defer mockServer.Close()
+			serverURL = mockServer.URL
+
+			// Create A2A agent
+			opts := []Option{
+				WithAgentCardURL(mockServer.URL),
+			}
+			if tt.userIDHeader != "" {
+				opts = append(opts, WithUserIDHeader(tt.userIDHeader))
+			}
+
+			a2aAgent, err := New(opts...)
+			if err != nil {
+				t.Fatalf("Failed to create A2A agent: %v", err)
+			}
+
+			// Create invocation with session
+			invocation := &agent.Invocation{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "test message",
+				},
+			}
+			if tt.sessionUserID != "" {
+				invocation.Session = &session.Session{
+					UserID: tt.sessionUserID,
+				}
+			}
+
+			// Run the agent
+			eventChan, err := a2aAgent.Run(context.Background(), invocation)
+			if err != nil {
+				t.Fatalf("Run() failed: %v", err)
+			}
+
+			// Consume events
+			for range eventChan {
+			}
+
+			// Verify headers
+			if tt.shouldSendHeader {
+				actualUserID := receivedHeaders.Get(tt.expectedHeaderName)
+				if actualUserID != tt.sessionUserID {
+					t.Errorf("Expected UserID header %s = %v, got %v", tt.expectedHeaderName, tt.sessionUserID, actualUserID)
+				}
+			} else {
+				// Should not send any UserID header
+				if tt.expectedHeaderName != "" {
+					actualUserID := receivedHeaders.Get(tt.expectedHeaderName)
+					if actualUserID != "" {
+						t.Errorf("Expected no UserID header, but got %s = %v", tt.expectedHeaderName, actualUserID)
+					}
+				}
+			}
+		})
+	}
 }
 
 // Helper function to create bool pointer

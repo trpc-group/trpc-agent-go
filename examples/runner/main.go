@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -216,8 +218,9 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) error {
 	message := model.NewUserMessage(userMessage)
 
+	requestID := uuid.New().String()
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.WithRequestID(requestID))
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
@@ -287,13 +290,13 @@ func (c *multiTurnChat) handleToolCalls(
 	toolCallsDetected *bool,
 	assistantStarted *bool,
 ) bool {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsDetected = true
 		if *assistantStarted {
 			fmt.Printf("\n")
 		}
 		fmt.Printf("🔧 CallableTool calls initiated:\n")
-		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 			if len(toolCall.Function.Arguments) > 0 {
 				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -331,8 +334,8 @@ func (c *multiTurnChat) handleContent(
 	assistantStarted *bool,
 	fullContent *string,
 ) {
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		content := c.extractContent(choice)
 
 		if content != "" {

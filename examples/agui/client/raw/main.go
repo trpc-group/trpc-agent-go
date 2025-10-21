@@ -1,3 +1,4 @@
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -11,6 +12,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -170,6 +172,12 @@ func formatEvent(evt events.Event) []string {
 		return []string{fmt.Sprintf("Agent> %s tool call completed, id: %s", label, e.ToolCallID)}
 	case *events.ToolCallResultEvent:
 		return []string{fmt.Sprintf("Agent> %s tool result: %s", label, e.Content)}
+	case *events.CustomEvent:
+		data, err := json.Marshal(e.Value)
+		if err != nil {
+			return nil
+		}
+		return []string{fmt.Sprintf("Agent> %s '%s': %s", label, e.Name, string(data))}
 	default:
 		return []string{fmt.Sprintf("Agent> %s", label)}
 	}

@@ -104,7 +104,7 @@ func transformSpan(span *tracepb.Span) {
 	}
 
 	switch operationName {
-	case itelemetry.OperationCallLLM:
+	case itelemetry.OperationChat:
 		transformCallLLM(span)
 	case itelemetry.OperationExecuteTool:
 		transformExecuteTool(span)
@@ -202,7 +202,7 @@ func transformExecuteTool(span *tracepb.Span) {
 	// Process existing attributes
 	for _, attr := range span.Attributes {
 		switch attr.Key {
-		case itelemetry.KeyToolCallArgs:
+		case itelemetry.KeyGenAIToolCallArguments:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationInput,
@@ -219,7 +219,7 @@ func transformExecuteTool(span *tracepb.Span) {
 				})
 			}
 			// Skip this attribute (delete it)
-		case itelemetry.KeyToolResponse:
+		case itelemetry.KeyGenAIToolCallResult:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,

@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -59,6 +60,7 @@ type streamInnerPreference interface {
 type toolResult struct {
 	index int
 	event *event.Event
+	err   error
 }
 
 // subAgentCall defines the input format for direct sub-agent tool calls.
@@ -100,6 +102,12 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	// Option one: set invocation.EndInvocation is true, and stop next step.
 	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice completion.
 	// maybe the Option two is better.
+	// Allow users to intervene in error handling through callbacks.
+	if _, ok := agent.AsStopError(err); ok {
+		invocation.EndInvocation = true
+		return
+	}
+
 	if err != nil || functioncallResponseEvent == nil {
 		return
 	}
@@ -184,12 +192,10 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	index int,
 	toolCall model.ToolCall,
 ) (*event.Event, error) {
-	ctxWithInvocation, span := trace.Tracer.Start(
-		ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, toolCall.Function.Name),
-	)
+	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	defer span.End()
 	choice, modifiedArgs, err := p.executeToolCall(
-		ctxWithInvocation, invocation, toolCall, tools, index, eventChan,
+		ctx, invocation, toolCall, tools, index, eventChan,
 	)
 	if err != nil {
 		return nil, err
@@ -201,6 +207,9 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	toolEvent := newToolCallResponseEvent(
 		invocation, llmResponse, []model.Choice{*choice},
 	)
+	if toolCall.Function.Name == transfer.TransferToolName {
+		toolEvent.Tag = TransferTag
+	}
 	if tl, ok := tools[toolCall.Function.Name]; ok {
 		p.annotateSkipSummarization(toolEvent, tl)
 	}
@@ -238,13 +247,13 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		close(done)
 	}()
 
-	toolCallResponsesEvents := p.collectParallelToolResults(
+	toolCallResponsesEvents, err := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
 	mergedEvent := p.buildMergedParallelEvent(
 		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
 	)
-	return mergedEvent, nil
+	return mergedEvent, err
 }
 
 // runParallelToolCall executes one tool call and reports the result.
@@ -274,20 +283,22 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			errorEvent := newToolCallResponseEvent(
 				invocation, llmResponse, []model.Choice{*errorChoice},
 			)
+			if tc.Function.Name == transfer.TransferToolName {
+				errorEvent.Tag = TransferTag
+			}
 			p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
 		}
 	}()
 
 	// Trace the tool execution for observability.
-	ctxWithInvocation, span := trace.Tracer.Start(
-		ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, tc.Function.Name),
-	)
+	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
 	defer span.End()
 
 	// Execute the tool (streamable or callable) with callbacks.
 	choice, modifiedArgs, err := p.executeToolCall(
-		ctxWithInvocation, invocation, tc, tools, index, eventChan,
+		ctx, invocation, tc, tools, index, eventChan,
 	)
+	// If error is not nil, it must be a stopError, so we need to return this error.
 	if err != nil {
 		log.Errorf(
 			"Tool execution error for %s (index: %d, ID: %s, agent: %s): %v",
@@ -300,12 +311,15 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		errorEvent := newToolCallResponseEvent(
 			invocation, llmResponse, []model.Choice{*errorChoice},
 		)
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
+		if tc.Function.Name == transfer.TransferToolName {
+			errorEvent.Tag = TransferTag
+		}
+		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: err})
 		return
 	}
 	// Long-running tools may return nil to indicate no immediate event.
 	if choice == nil {
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: nil})
+		p.sendToolResult(ctx, resultChan, toolResult{index: index})
 		return
 	}
 
@@ -313,6 +327,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	toolCallResponseEvent := newToolCallResponseEvent(
 		invocation, llmResponse, []model.Choice{*choice},
 	)
+	if tc.Function.Name == transfer.TransferToolName {
+		toolCallResponseEvent.Tag = TransferTag
+	}
 	// Respect tool preference to skip outer summarization when present.
 	if tl, ok := tools[tc.Function.Name]; ok {
 		p.annotateSkipSummarization(toolCallResponseEvent, tl)
@@ -392,9 +409,7 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallEvents)
 	}
 	if len(toolCallEvents) > 1 {
-		_, span := trace.Tracer.Start(
-			ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool),
-		)
+		_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(itelemetry.ToolNameMergedTools))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
 		span.End()
 	}
@@ -446,6 +461,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 
 	// Execute the tool with callbacks.
 	result, modifiedArgs, err := p.executeToolWithCallbacks(ctx, invocation, toolCall, tl, eventChan)
+	// Only return error when it's a stop error
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, modifiedArgs, err
@@ -497,24 +513,28 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
 	toolCallsCount int,
-) []*event.Event {
+) ([]*event.Event, error) {
 	results := make([]*event.Event, toolCallsCount)
+	var err error
 	for {
 		select {
 		case result, ok := <-resultChan:
 			if !ok {
 				// Channel closed, all results received.
-				return p.filterNilEvents(results)
+				return p.filterNilEvents(results), err
 			}
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result.event
+				if err == nil && result.err != nil {
+					err = result.err
+				}
 			} else {
 				log.Errorf("Tool result index %d out of range [0, %d)", result.index, len(results))
 			}
 		case <-ctx.Done():
 			// Context cancelled, return what we have.
 			log.Warnf("Context cancelled while waiting for tool results")
-			return p.filterNilEvents(results)
+			return p.filterNilEvents(results), nil
 		}
 	}
 }
@@ -550,12 +570,15 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// Execute the actual tool.
 	result, err := p.executeTool(ctx, invocation, toolCall, tl, eventChan)
 	if err != nil {
-		return nil, toolCall.Function.Arguments, err
+		log.Warnf("tool execute failed, function name: %v, arguments: %s, result: %v, err: %v",
+			toolCall.Function.Name, string(toolCall.Function.Arguments), result, err)
 	}
 
 	// Run after tool callbacks if they exist.
+	// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
 	if p.toolCallbacks != nil {
-		customResult, callbackErr := p.toolCallbacks.RunAfterTool(
+		var customResult any
+		customResult, err = p.toolCallbacks.RunAfterTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
@@ -563,15 +586,15 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			result,
 			err,
 		)
-		if callbackErr != nil {
-			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
-			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
-		}
 		if customResult != nil {
 			result = customResult
 		}
+		if err != nil {
+			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, err)
+			return result, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", err)
+		}
 	}
-	return result, toolCall.Function.Arguments, nil
+	return result, toolCall.Function.Arguments, err
 }
 
 // isStreamable returns true if the tool supports streaming and its stream
@@ -593,8 +616,15 @@ func (f *FunctionCallResponseProcessor) executeTool(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (any, error) {
+	// originalTool refers to the actual underlying tool used to determine
+	// whether streaming is supported. If tl is a NamedTool, use its
+	// inner original tool instead of the wrapper itself.
+	originalTool := tl
+	if nameTool, ok := tl.(*itool.NamedTool); ok {
+		originalTool = nameTool.Original()
+	}
 	// Prefer streaming execution if the tool supports it.
-	if isStreamable(tl) {
+	if isStreamable(originalTool) {
 		// Safe to cast since isStreamable checks for StreamableTool.
 		return f.executeStreamableTool(
 			ctx, invocation, toolCall, tl.(tool.StreamableTool), eventChan,

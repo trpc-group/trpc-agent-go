@@ -212,13 +212,13 @@ func handleToolCalls(
 	toolCallsDetected *bool,
 	assistantStarted *bool,
 ) bool {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsDetected = true
 		if *assistantStarted {
 			fmt.Printf("\n")
 		}
 
-		if isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
+		if isTransferTool(event.Response.Choices[0].Message.ToolCalls[0]) {
 			fmt.Printf("🔄 Initiating transfer...\n")
 		} else {
 			displayToolCalls(event)
@@ -230,8 +230,8 @@ func handleToolCalls(
 
 // handleToolResponses processes tool response completion.
 func handleToolResponses(event *event.Event) {
-	if event.IsToolResultResponse() && len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 &&
-		!isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
+	if event.IsToolResultResponse() && len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 &&
+		!isTransferTool(event.Response.Choices[0].Message.ToolCalls[0]) {
 		fmt.Printf("   ✅ Tool completed\n")
 	}
 }
@@ -244,8 +244,8 @@ func handleContent(
 	assistantStarted *bool,
 	currentAgent *string,
 ) {
-	if len(event.Choices) > 0 {
-		content := extractContent(event.Choices[0])
+	if len(event.Response.Choices) > 0 {
+		content := extractContent(event.Response.Choices[0])
 
 		if content != "" {
 			displayContent(event, content, fullContent, toolCallsDetected, assistantStarted, currentAgent)
@@ -305,7 +305,7 @@ func handleTransfer(event *event.Event, currentAgent *string, assistantStarted *
 // displayToolCalls shows tool call information.
 func displayToolCalls(event *event.Event) {
 	fmt.Printf("🔧 %s executing tools:\n", getAgentIcon(event.Author))
-	for _, toolCall := range event.Choices[0].Message.ToolCalls {
+	for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 		fmt.Printf("   • %s", toolCall.Function.Name)
 		if len(toolCall.Function.Arguments) > 0 {
 			fmt.Printf(" (%s)", string(toolCall.Function.Arguments))
@@ -367,5 +367,5 @@ func isTransferTool(toolCall model.ToolCall) bool {
 }
 
 func isTransferResponse(event *event.Event) bool {
-	return len(event.Choices) > 0 && event.Choices[0].Message.ToolID != ""
+	return len(event.Response.Choices) > 0 && event.Response.Choices[0].Message.ToolID != ""
 }

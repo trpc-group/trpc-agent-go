@@ -34,14 +34,9 @@ func TestDefaultA2AMessageToAgentMessage_ConvertToAgentMessage(t *testing.T) {
 				},
 			},
 			expected: &model.Message{
-				Role:    model.RoleUser,
-				Content: "Hello world",
-				ContentParts: []model.ContentPart{
-					{
-						Type: model.ContentTypeText,
-						Text: stringPtr("Hello world"),
-					},
-				},
+				Role:         model.RoleUser,
+				Content:      "Hello world",
+				ContentParts: []model.ContentPart{},
 			},
 			wantErr: false,
 		},
@@ -54,18 +49,9 @@ func TestDefaultA2AMessageToAgentMessage_ConvertToAgentMessage(t *testing.T) {
 				},
 			},
 			expected: &model.Message{
-				Role:    model.RoleUser,
-				Content: "Hello world",
-				ContentParts: []model.ContentPart{
-					{
-						Type: model.ContentTypeText,
-						Text: stringPtr("Hello "),
-					},
-					{
-						Type: model.ContentTypeText,
-						Text: stringPtr("world"),
-					},
-				},
+				Role:         model.RoleUser,
+				Content:      "Hello world",
+				ContentParts: []model.ContentPart{},
 			},
 			wantErr: false,
 		},
@@ -160,10 +146,6 @@ func TestDefaultA2AMessageToAgentMessage_ConvertToAgentMessage(t *testing.T) {
 				Role:    model.RoleUser,
 				Content: "Text: ",
 				ContentParts: []model.ContentPart{
-					{
-						Type: model.ContentTypeText,
-						Text: stringPtr("Text: "),
-					},
 					{
 						Type: model.ContentTypeText,
 						Text: stringPtr("data"),

@@ -89,17 +89,22 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, er
 	}
 
 	// Step 2: Generate embedding.
-	embedding, err := dr.embedder.GetEmbedding(ctx, finalQuery)
-	if err != nil {
-		return nil, err
+	var embedding []float64
+	if dr.embedder != nil {
+		var err error
+		embedding, err = dr.embedder.GetEmbedding(ctx, finalQuery)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Step 3: Search vector store.
 	searchResults, err := dr.vectorStore.Search(ctx, &vectorstore.SearchQuery{
-		Vector:   embedding,
-		Limit:    q.Limit,
-		MinScore: q.MinScore,
-		Filter:   convertQueryFilter(q.Filter),
+		Vector:     embedding,
+		Limit:      q.Limit,
+		MinScore:   q.MinScore,
+		Filter:     convertQueryFilter(q.Filter),
+		SearchMode: q.SearchMode,
 	})
 	if err != nil {
 		return nil, err
@@ -149,7 +154,8 @@ func convertQueryFilter(qf *QueryFilter) *vectorstore.SearchFilter {
 	}
 
 	return &vectorstore.SearchFilter{
-		IDs:      qf.DocumentIDs,
-		Metadata: qf.Metadata,
+		IDs:             qf.DocumentIDs,
+		Metadata:        qf.Metadata,
+		FilterCondition: qf.FilterCondition,
 	}
 }

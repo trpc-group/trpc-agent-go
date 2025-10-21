@@ -15,19 +15,13 @@ import (
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	irunner "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/runner"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/service/sse"
 )
-
-// DefaultNewService is the default function to create a new service.
-var DefaultNewService = sse.New
 
 // Server provides AG-UI server.
 type Server struct {
 	path    string
-	runner  runner.Runner
-	service service.Service
 	handler http.Handler
 }
 
@@ -37,15 +31,13 @@ func New(runner runner.Runner, opt ...Option) (*Server, error) {
 		return nil, errors.New("agui: runner must not be nil")
 	}
 	opts := newOptions(opt...)
-	aguiService := opts.service
-	if aguiService == nil {
-		aguiRunner := irunner.New(runner, opts.aguiRunnerOptions...)
-		aguiService = DefaultNewService(aguiRunner, service.WithPath(opts.path))
+	if opts.serviceFactory == nil {
+		return nil, errors.New("agui: serviceFactory must not be nil")
 	}
+	aguiRunner := aguirunner.New(runner, opts.aguiRunnerOptions...)
+	aguiService := opts.serviceFactory(aguiRunner, service.WithPath(opts.path))
 	return &Server{
 		path:    opts.path,
-		runner:  runner,
-		service: aguiService,
 		handler: aguiService.Handler(),
 	}, nil
 }
@@ -53,4 +45,9 @@ func New(runner runner.Runner, opt ...Option) (*Server, error) {
 // Handler returns the http.Handler serving AG-UI requests.
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+// Path returns the route path for HTTP.
+func (s *Server) Path() string {
+	return s.path
 }

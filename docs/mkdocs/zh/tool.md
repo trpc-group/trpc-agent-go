@@ -306,6 +306,28 @@ mcpToolSet := mcp.NewMCPToolSet(
 )
 ```
 
+### 会话重连支持
+
+MCP ToolSet 支持自动会话重连，当服务器重启或会话过期时自动恢复连接。
+
+```go
+// SSE/Streamable HTTP 传输支持会话重连
+sseToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "sse",
+        ServerURL: "http://localhost:8080/sse",
+        Timeout:   10 * time.Second,
+    },
+    mcp.WithSessionReconnect(3), // 启用会话重连，最多尝试3次
+)
+```
+
+**重连特性：**
+
+- 🔄 **自动重连**：检测到连接断开或会话过期时自动重建会话
+- 🎯 **独立重试**：每次工具调用独立计数，不会因早期失败影响后续调用
+- 🛡️ **保守策略**：仅针对明确的连接/会话错误触发重连，避免配置错误导致的无限循环
+
 ## Agent 工具 (AgentTool)
 
 AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：
@@ -335,7 +357,7 @@ mathAgent := llmagent.New(
 // 2) 包装为 Agent 工具
 mathTool := agenttool.NewTool(
     mathAgent,
-    agenttool.WithSkipSummarization(true), // 默认 true：工具后不再让外层模型总结
+    agenttool.WithSkipSummarization(true), // 可选：工具响应后跳过外层模型总结
     agenttool.WithStreamInner(true),       // 开启：把子 Agent 的流式事件转发给父流程
 )
 
@@ -375,12 +397,27 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
 ### 选项说明
 
 - WithSkipSummarization(bool)：
-  - true（默认）：外层 Flow 在 `tool.response` 后直接结束本轮（不再额外总结）
-  - false：允许在工具结果后继续一次 LLM 调用进行总结/回答
+  - false（默认）：允许在工具结果后继续一次 LLM 调用进行总结/回答
+  - true：外层 Flow 在 `tool.response` 后直接结束本轮（不再额外总结）
 
 - WithStreamInner(bool)：
   - true：把子 Agent 的事件直接转发到父流程（强烈建议父/子 Agent 都开启 `GenerationConfig{Stream: true}`）
   - false：按“仅可调用工具”处理，不做内部事件转发
+
+- WithHistoryScope(HistoryScope)：
+  - `HistoryScopeIsolated`（默认）：保持子调用完全隔离，只读取本次工具参数（不继承父历史）。
+  - `HistoryScopeParentBranch`：通过分层过滤键 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 继承父会话历史；内容处理器会基于前缀匹配纳入父事件，同时子事件仍写入独立子分支。典型场景：基于上一轮产出进行“编辑/优化/续写”。
+
+示例：
+
+```go
+child := agenttool.NewTool(
+    childAgent,
+    agenttool.WithSkipSummarization(false),
+    agenttool.WithStreamInner(true),
+    agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
+)
+```
 
 ### 注意事项
 
@@ -571,16 +608,16 @@ func main() {
         }
         
         // 显示工具调用
-        if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-            for _, toolCall := range event.Choices[0].Message.ToolCalls {
+        if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+            for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
                 fmt.Printf("🔧 调用工具: %s\n", toolCall.Function.Name)
                 fmt.Printf("   参数: %s\n", string(toolCall.Function.Arguments))
             }
         }
         
         // 显示流式内容
-        if len(event.Choices) > 0 {
-            fmt.Print(event.Choices[0].Delta.Content)
+        if len(event.Response.Choices) > 0 {
+            fmt.Print(event.Response.Choices[0].Delta.Content)
         }
         
         if event.Done {

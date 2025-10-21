@@ -135,7 +135,7 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 		}
 
 		// Detect and display tool calls
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			toolCallsDetected = true
 			if assistantStarted {
 				newline := "\n"
@@ -146,7 +146,7 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 			fmt.Print(toolCallsHeader)
 			output.WriteString(toolCallsHeader)
 
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				toolIcon := getToolIcon(toolCall.Function.Name)
 				toolCallMsg := fmt.Sprintf("   %s %s (ID: %s)\n", toolIcon, toolCall.Function.Name, toolCall.ID)
 				fmt.Print(toolCallMsg)
@@ -182,8 +182,8 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 		}
 
 		// Process streaming content
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 
 			// Process streaming delta content
 			if choice.Delta.Content != "" {

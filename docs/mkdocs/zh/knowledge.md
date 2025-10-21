@@ -141,6 +141,97 @@ func main() {
 }
 ```
 
+### 手动调用示例
+
+```go
+
+package main
+
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+)
+
+// 创建支持多版本 (v7, v8, v9) 的 Elasticsearch 向量存储
+esVS, err := vectorelasticsearch.New(
+    vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
+    vectorelasticsearch.WithUsername(os.Getenv("ELASTICSEARCH_USERNAME")),
+    vectorelasticsearch.WithPassword(os.Getenv("ELASTICSEARCH_PASSWORD")),
+    vectorelasticsearch.WithAPIKey(os.Getenv("ELASTICSEARCH_API_KEY")),
+    vectorelasticsearch.WithIndexName(getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")),
+    vectorelasticsearch.WithMaxRetries(3),
+    // 版本可选："v7"、"v8"、"v9"（默认 "v9"）
+    vectorelasticsearch.WithVersion("v9"),
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    vectorelasticsearch.WithDocBuilder(docBuilder),
+)
+if err != nil {
+    // 处理 error
+}
+
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"), // embedding 模型，也可通过 OPENAI_EMBEDDING_MODEL 环境变量设置
+)
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(esVS),
+    knowledge.WithEmbedder(embedder),
+)
+
+filterCondition := &searchfilter.UniversalFilterCondition{
+    Operator: searchfilter.OperatorAnd,
+    Value: []*searchfilter.UniversalFilterCondition{
+        {
+            Field: "tag",
+            Operator: searchfilter.OperatorEqual,
+            Value: "tag",
+        },
+        {
+            Field: "age",
+            Operator: searchfilter.OperatorGreaterThanOrEqual,
+            Value: 18,
+        },
+        {
+            Field: "create_time",
+            Operator: searchfilter.OperatorBetween,
+            Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
+        },
+        {
+            Operator: searchfilter.OperatorOr,
+            Value: []*searchfilter.UniversalFilterCondition{
+                {
+                    Field: "login_time",
+                    Operator: searchfilter.OperatorLessThanOrEqual,
+                    Value: "2025-01-11 12:11:00",
+                },
+                {
+                    Field: "status",
+                    Operator: searchfilter.OperatorEqual,
+                    Value: "logout",
+                },
+            },
+        },
+    },
+}
+
+req := &knowledge.SearchRequest{
+    Query: "any text"
+    MaxResults: 5,
+    MinScore: 0.7,
+    SearchFilter: &knowledge.SearchFilter{
+        DocumentIDs: []string{"id1","id2"},
+        Metadata: map[string]any{
+            "title": "title test",
+        },
+        FilterCondition: filterCondition,
+    }
+}
+searchResult, err := kb.Search(ctx, req)
+```
+
+
 ## 核心概念
 
 [knowledge 模块](https://github.com/trpc-group/trpc-agent-go/tree/main/knowledge) 是 tRPC-Agent-Go 框架的知识管理核心，提供了完整的 RAG 能力。该模块采用模块化设计，支持多种文档源、向量存储后端和 embedding 模型。
@@ -163,6 +254,9 @@ knowledge/
 │   ├── embedder.go      # Embedder 接口定义
 │   ├── openai/          # OpenAI embedding 模型
 │   └── local/           # 本地 embedding 模型
+├── reranker/             # 结果重排
+│   ├── reranker.go      # Reranker 接口定义
+│   ├── topk.go          # 返回topK的检索结果
 ├── document/             # 文档表示
 │   └── document.go      # Document 结构定义
 ├── query/                # 查询增强器
@@ -175,6 +269,10 @@ knowledge/
 ## 使用指南
 
 ### 与 Agent 集成
+
+Knowledge 系统提供了两种与 Agent 集成的方式：自动集成和手动构建工具。
+
+#### 方式一：自动集成（推荐）
 
 使用 `llmagent.WithKnowledge(kb)` 将 Knowledge 集成到 Agent，框架会自动注册 `knowledge_search` 工具，无需手动创建自定义工具。
 
@@ -196,6 +294,61 @@ llmAgent := llmagent.New(
     llmagent.WithInstruction("使用 knowledge_search 工具从 Knowledge 检索相关信息，并基于检索内容回答问题。"),
     llmagent.WithKnowledge(kb), // 自动添加 knowledge_search 工具
     // llmagent.WithTools([]tool.Tool{otherTool}), // 可选：附加其他工具
+)
+```
+
+#### 方式二：手动构建工具
+
+使用手动构建SearchTool的方法来配置知识库，通过这个方法可以构建多个知识库
+
+**使用 NewKnowledgeSearchTool 创建基础搜索工具：**
+
+```go
+import (
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
+
+// 创建 Knowledge
+// kb := ...
+
+// 创建基础搜索工具
+searchTool := knowledgetool.NewKnowledgeSearchTool(
+    kb,                    // Knowledge 实例
+    knowledgetool.WithToolName("knowledge_search"),
+    knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
+)
+
+// 创建 Agent 并手动添加工具
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{searchTool}),
+)
+```
+
+**使用 NewAgenticFilterSearchTool 创建智能过滤搜索工具：**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
+
+// 获取源的元数据信息（用于智能过滤）
+sourcesMetadata := source.GetAllMetadata(sources)
+
+// 创建智能过滤搜索工具
+filterSearchTool := knowledgetool.NewAgenticFilterSearchTool(
+    kb,                    // Knowledge 实例
+    sourcesMetadata,       // 元数据信息
+    knowledgetool.WithToolName("knowledge_search_with_filter"),
+    knowledgetool.WithToolDescription("Search the knowledge base with intelligent metadata filtering."),
+)
+
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{filterSearchTool}),
 )
 ```
 
@@ -236,11 +389,17 @@ if err != nil {
     // 处理 error
 }
 
+docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+    return &document.Document{ID: tcDoc.Id}, nil, nil
+}
+
 // TcVector
 tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    vectortcvector.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // 处理 error
@@ -255,6 +414,36 @@ kb := knowledge.New(
 #### Elasticsearch
 
 ```go
+
+docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+    var source struct {
+        ID        string    `json:"id"`
+        Title     string    `json:"title"`
+        Content   string    `json:"content"`
+        Page      int       `json:"page"`
+        Author    string    `json:"author"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Embedding []float64 `json:"embedding"`
+    }
+    if err := json.Unmarshal(hitSource, &source); err != nil {
+        return nil, nil, err
+    }
+    // Create document.
+    doc := &document.Document{
+        ID:        source.ID,
+        Name:      source.Title,
+        Content:   source.Content,
+        CreatedAt: source.CreatedAt,
+        UpdatedAt: source.UpdatedAt,
+        Metadata: map[string]any{
+            "page":   source.Page,
+            "author": source.Author,
+        },
+    }
+    return doc, source.Embedding, nil
+}
+
 // 创建支持多版本 (v7, v8, v9) 的 Elasticsearch 向量存储
 esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
@@ -265,6 +454,8 @@ esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithMaxRetries(3),
     // 版本可选："v7"、"v8"、"v9"（默认 "v9"）
     vectorelasticsearch.WithVersion("v9"),
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    vectorelasticsearch.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // 处理 error
@@ -292,6 +483,25 @@ embedder := openaiembedder.New(
 // 传递给 Knowledge
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
+)
+```
+
+### Reranker
+
+Reranker 负责对检索结果的精排：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+)
+
+rerank := reranker.NewTopKReranker(
+    reranker.WithK(1), // 指定精排后的返回结果数，不设置的情况下默认返回所有结果
+)
+
+// 传递给 Knowledge
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
 )
 ```
 

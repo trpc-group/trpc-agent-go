@@ -42,7 +42,7 @@ func main() {
 	fmt.Printf("🔄 Agent Transfer Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Type 'exit' to end the conversation\n")
-	fmt.Printf("Available sub-agents: math-agent, weather-agent, research-agent\n")
+	fmt.Printf("Available sub-agents: math-agent, weather-agent, research-agent, time-agent\n")
 	fmt.Printf("Use natural language to request tasks - the coordinator will transfer to appropriate agents\n")
 	fmt.Println(strings.Repeat("=", 70))
 
@@ -96,12 +96,14 @@ func (c *transferChat) setup(_ context.Context) error {
 	mathAgent := c.createMathAgent(modelInstance)
 	weatherAgent := c.createWeatherAgent(modelInstance)
 	researchAgent := c.createResearchAgent(modelInstance)
+	timeAgent := c.createTimeAgent(modelInstance)
 
 	// Create coordinator agent with sub-agents.
 	coordinatorAgent := c.createCoordinatorAgent(modelInstance, []agent.Agent{
 		mathAgent,
 		weatherAgent,
 		researchAgent,
+		timeAgent,
 	})
 
 	// Create runner.
@@ -134,8 +136,9 @@ func (c *transferChat) createCoordinatorAgent(modelInstance model.Model, subAgen
 		llmagent.WithInstruction(`You are a coordinator agent that helps users by delegating tasks to specialized sub-agents.
 Available sub-agents:
 - math-agent: For mathematical calculations, equations, and numerical problems
-- weather-agent: For weather information, forecasts, and weather-related recommendations  
+- weather-agent: For weather information, forecasts, and weather-related recommendations
 - research-agent: For research, information gathering, and general knowledge questions
+- time-agent: For time calculations, duration differences, and temporal analysis
 
 When a user asks a question:
 1. Analyze what type of task it is
@@ -157,6 +160,7 @@ func (c *transferChat) startChat(ctx context.Context) error {
 	fmt.Println("   • Math: 'Calculate the power of 2 to 10'")
 	fmt.Println("   • Weather: 'What's the weather like in Tokyo?'")
 	fmt.Println("   • Research: 'Tell me about renewable energy trends'")
+	fmt.Println("   • Time: 'Calculate time difference between 2023-01-01T00:00:00Z and 2023-01-02T12:30:45Z'")
 	fmt.Println("   • General: 'Hello, what can you help me with?'")
 	fmt.Println()
 
@@ -231,9 +235,9 @@ func (c *transferChat) processStreamingResponse(eventChan <-chan *event.Event) e
 				done = event.Response.Done
 			}
 			fmt.Printf("\n[DBG] event id=%s obj=%s author=%s partial=%t done=%t branch=%s\n", event.ID, obj, author, partial, done, event.Branch)
-			if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+			if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 				fmt.Printf("[DBG]  tool_calls: ")
-				for _, tc := range event.Choices[0].Message.ToolCalls {
+				for _, tc := range event.Response.Choices[0].Message.ToolCalls {
 					fmt.Printf("%s ", tc.Function.Name)
 				}
 				fmt.Println()
@@ -312,13 +316,13 @@ func (c *transferChat) handleToolCalls(
 	toolCallsDetected *bool,
 	assistantStarted *bool,
 ) bool {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsDetected = true
 		if *assistantStarted {
 			fmt.Printf("\n")
 		}
 
-		if c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
+		if c.isTransferTool(event.Response.Choices[0].Message.ToolCalls[0]) {
 			fmt.Printf("🔄 Initiating transfer...\n")
 		} else {
 			c.displayToolCalls(event)
@@ -331,7 +335,7 @@ func (c *transferChat) handleToolCalls(
 // displayToolCalls shows tool call information.
 func (c *transferChat) displayToolCalls(event *event.Event) {
 	fmt.Printf("🔧 %s executing tools:\n", c.getAgentIcon(event.Author))
-	for _, toolCall := range event.Choices[0].Message.ToolCalls {
+	for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 		fmt.Printf("   • %s", toolCall.Function.Name)
 		if len(toolCall.Function.Arguments) > 0 {
 			fmt.Printf(" (%s)", string(toolCall.Function.Arguments))
@@ -348,8 +352,8 @@ func (c *transferChat) handleContent(
 	assistantStarted *bool,
 	currentAgent *string,
 ) {
-	if len(event.Choices) > 0 {
-		content := c.extractContent(event.Choices[0])
+	if len(event.Response.Choices) > 0 {
+		content := c.extractContent(event.Response.Choices[0])
 
 		if content != "" {
 			c.displayContent(event, content, fullContent, toolCallsDetected, assistantStarted, currentAgent)
@@ -401,8 +405,8 @@ func (c *transferChat) displayAgentHeader(event *event.Event, currentAgent *stri
 
 // handleToolResponses processes tool response completion.
 func (c *transferChat) handleToolResponses(event *event.Event) {
-	if event.IsToolResultResponse() && len(event.Choices[0].Message.ToolCalls) > 0 &&
-		!c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
+	if event.IsToolResultResponse() && len(event.Response.Choices[0].Message.ToolCalls) > 0 &&
+		!c.isTransferTool(event.Response.Choices[0].Message.ToolCalls[0]) {
 		fmt.Printf("   ✅ Tool completed\n")
 	}
 }
@@ -418,6 +422,8 @@ func (c *transferChat) getAgentIcon(agentName string) string {
 		return "🌤️"
 	case "research-agent":
 		return "🔍"
+	case "time-agent":
+		return "⏰"
 	default:
 		return "🤖"
 	}
@@ -433,6 +439,8 @@ func (c *transferChat) getAgentDisplayName(agentName string) string {
 		return "Weather Specialist"
 	case "research-agent":
 		return "Research Specialist"
+	case "time-agent":
+		return "Time Specialist"
 	default:
 		return agentName
 	}
@@ -448,6 +456,8 @@ func (c *transferChat) getAgentFromTransfer(event *event.Event) string {
 			return "weather-agent"
 		} else if strings.Contains(content, "research-agent") {
 			return "research-agent"
+		} else if strings.Contains(content, "time-agent") {
+			return "time-agent"
 		}
 	}
 	return "coordinator-agent"
@@ -458,7 +468,7 @@ func (c *transferChat) isTransferTool(toolCall model.ToolCall) bool {
 }
 
 func (c *transferChat) isTransferResponse(event *event.Event) bool {
-	return len(event.Choices) > 0 && event.Choices[0].Message.ToolID != ""
+	return len(event.Response.Choices) > 0 && event.Response.Choices[0].Message.ToolID != ""
 }
 
 // Helper functions.

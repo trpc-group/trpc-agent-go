@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	openai "github.com/openai/openai-go"
@@ -30,6 +31,7 @@ import (
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -42,6 +44,11 @@ const (
 	defaultBatchCompletionWindow = "24h"
 	// defaultBatchEndpoint is the default batch endpoint.
 	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
+	// Default budget constants for token tailoring.
+	defaultProtocolOverheadTokens = 128  // Protocol overhead tokens for request/response formatting.
+	defaultReserveOutputTokens    = 1024 // Reserved tokens for output generation.
+	defaultInputTokensFloor       = 1024 // Minimum input tokens to ensure reasonable processing.
+	defaultOutputTokensFloor      = 256  // Minimum output tokens to ensure meaningful response.
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -192,6 +199,12 @@ type Model struct {
 	batchCompletionWindow      openai.BatchNewParamsCompletionWindow
 	batchMetadata              map[string]string
 	batchBaseURL               string
+	enableTokenTailoring       bool                    // Enable automatic token tailoring.
+	maxInputTokens             int                     // Max input tokens for token tailoring.
+	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
+	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
+	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
+	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -253,6 +266,14 @@ type options struct {
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
+	// EnableTokenTailoring enables automatic token tailoring based on model context window.
+	EnableTokenTailoring bool
+	// TokenCounter count tokens for token tailoring.
+	TokenCounter model.TokenCounter
+	// TailoringStrategy defines the strategy for token tailoring.
+	TailoringStrategy model.TailoringStrategy
+	// MaxInputTokens is the max input tokens for token tailoring.
+	MaxInputTokens int
 }
 
 // Option is a function that configures an OpenAI model.
@@ -394,6 +415,40 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
+// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
+// When enabled, the system will automatically calculate max input tokens using the model's
+// context window minus reserved tokens and protocol overhead.
+func WithEnableTokenTailoring(enabled bool) Option {
+	return func(opts *options) {
+		opts.EnableTokenTailoring = enabled
+	}
+}
+
+// WithMaxInputTokens sets only the input token limit for token tailoring.
+// The counter/strategy will be lazily initialized if not provided.
+// Defaults to SimpleTokenCounter and MiddleOutStrategy.
+func WithMaxInputTokens(limit int) Option {
+	return func(opts *options) {
+		opts.MaxInputTokens = limit
+	}
+}
+
+// WithTokenCounter sets the TokenCounter used for token tailoring.
+// If not provided and token limit is enabled, a SimpleTokenCounter will be used.
+func WithTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *options) {
+		opts.TokenCounter = counter
+	}
+}
+
+// WithTailoringStrategy sets the TailoringStrategy used for token tailoring.
+// If not provided and token limit is enabled, a MiddleOutStrategy will be used.
+func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
+	return func(opts *options) {
+		opts.TailoringStrategy = strategy
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -424,6 +479,17 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow = defaultBatchCompletionWindow
 	}
 
+	// Provide defaults at construction time when token tailoring is enabled.
+	// These are best-effort defaults; user-provided counter/strategy always take priority.
+	if o.MaxInputTokens > 0 {
+		if o.TokenCounter == nil {
+			o.TokenCounter = model.NewSimpleTokenCounter()
+		}
+		if o.TailoringStrategy == nil {
+			o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
+		}
+	}
+
 	return &Model{
 		client:                     client,
 		name:                       name,
@@ -440,6 +506,10 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow:      batchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
+		enableTokenTailoring:       o.EnableTokenTailoring,
+		tokenCounter:               o.TokenCounter,
+		tailoringStrategy:          o.TailoringStrategy,
+		maxInputTokens:             o.MaxInputTokens,
 	}
 }
 
@@ -459,9 +529,98 @@ func (m *Model) GenerateContent(
 		return nil, errors.New("request cannot be nil")
 	}
 
+	// Apply token tailoring if configured.
+	m.applyTokenTailoring(ctx, request)
+
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 
-	// Convert our request format to OpenAI format.
+	chatRequest, opts := m.buildChatRequest(request)
+
+	go func() {
+		defer close(responseChan)
+
+		if m.chatRequestCallback != nil {
+			m.chatRequestCallback(ctx, &chatRequest)
+		}
+
+		if request.Stream {
+			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
+		} else {
+			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
+		}
+	}()
+
+	return responseChan, nil
+}
+
+// applyTokenTailoring performs best-effort token tailoring if configured.
+func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
+	// Early return if token tailoring is disabled or no messages to process.
+	if !m.enableTokenTailoring || len(request.Messages) == 0 {
+		return
+	}
+
+	// Determine max input tokens using priority: user config > auto calculation > default.
+	maxInputTokens := m.maxInputTokens
+	if maxInputTokens <= 0 {
+		// Auto-calculate based on model context window.
+		contextWindow := imodel.ResolveContextWindow(m.name)
+		maxInputTokens = max(contextWindow-defaultReserveOutputTokens-defaultProtocolOverheadTokens, defaultInputTokensFloor)
+		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d", m.name, contextWindow, maxInputTokens)
+	}
+
+	// Determine token counter using priority: user config > default.
+	tokenCounter := m.tokenCounter
+	if tokenCounter == nil {
+		m.tokenCounterOnce.Do(func() {
+			if m.tokenCounter == nil {
+				m.tokenCounter = model.NewSimpleTokenCounter()
+			}
+		})
+		tokenCounter = m.tokenCounter
+	}
+
+	// Determine tailoring strategy using priority: user config > default.
+	tailoringStrategy := m.tailoringStrategy
+	if tailoringStrategy == nil {
+		m.tailoringStrategyOnce.Do(func() {
+			if m.tailoringStrategy == nil {
+				m.tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
+			}
+		})
+		tailoringStrategy = m.tailoringStrategy
+	}
+
+	// Apply token tailoring.
+	tailored, err := tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	if err != nil {
+		log.Warn("token tailoring failed in openai.Model", err)
+		return
+	}
+
+	request.Messages = tailored
+
+	// Calculate remaining tokens for output and set max output tokens.
+	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	if err != nil {
+		log.Warn("failed to count tokens after tailoring", err)
+		return
+	}
+
+	remainingTokens := maxInputTokens - usedTokens
+	if remainingTokens <= 0 {
+		return
+	}
+
+	// Set max output tokens to remaining tokens, with a minimum threshold.
+	maxOutputTokens := max(remainingTokens, defaultOutputTokensFloor)
+	if request.GenerationConfig.MaxTokens == nil {
+		request.GenerationConfig.MaxTokens = &maxOutputTokens
+	}
+}
+
+// buildChatRequest converts our Request to OpenAI request params and options.
+func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
 	chatRequest := openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
@@ -530,22 +689,7 @@ func (m *Model) GenerateContent(
 			IncludeUsage: openai.Bool(true),
 		}
 	}
-
-	go func() {
-		defer close(responseChan)
-
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, &chatRequest)
-		}
-
-		if request.Stream {
-			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
-		} else {
-			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
-		}
-	}()
-
-	return responseChan, nil
+	return chatRequest, opts
 }
 
 // convertMessages converts our Message format to OpenAI's format.
@@ -830,6 +974,8 @@ func (m *Model) handleStreamingResponse(
 	acc := openai.ChatCompletionAccumulator{}
 	// Track ID -> Index mapping.
 	idToIndexMap := make(map[string]int)
+	// Aggregate reasoning deltas for final message fallback (some providers don't retain it in accumulator).
+	var reasoningBuf bytes.Buffer
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -855,6 +1001,15 @@ func (m *Model) handleStreamingResponse(
 			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
 
+		// Aggregate reasoning delta (if any) for final response fallback.
+		if len(chunk.Choices) > 0 {
+			if raw, ok := chunk.Choices[0].Delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
+				if s, err := strconv.Unquote(raw.Raw()); err == nil && s != "" {
+					reasoningBuf.WriteString(s)
+				}
+			}
+		}
+
 		response := m.createPartialResponse(chunk)
 
 		select {
@@ -865,7 +1020,7 @@ func (m *Model) handleStreamingResponse(
 	}
 
 	// Send final response with usage information if available.
-	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, responseChan)
+	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, reasoningBuf.String(), responseChan)
 
 	// Call the stream complete callback after final response is sent
 	if m.chatStreamCompleteCallback != nil {
@@ -919,23 +1074,37 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	return true
 }
 
-// skipEmptyChunk returns true when the chunk contains no meaningful delta
+// skipEmptyChunk returns true when the chunk contains no meaningful delta.
+// This is a defensive check against malformed responses from certain providers
+// that may return chunks with valid JSON fields but empty actual content.
+//
+// The order of checks matters:
+// 1. Check content first - if valid, don't skip (even if empty string)
+// 2. Check refusal - if valid, don't skip
+// 3. Check toolcalls - if valid but array is empty, skip (defensive against panic)
+// 4. Otherwise, don't skip (let it be processed normally)
 func (m *Model) skipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
-	if len(chunk.Choices) > 0 {
-		delta := chunk.Choices[0].Delta
-		// if Content or
-		switch {
-		case delta.JSON.Content.Valid():
-		case delta.JSON.Refusal.Valid():
-		case delta.JSON.ToolCalls.Valid():
-			/// if toolCalls is empty, it's a empty chunk too
-			if len(delta.ToolCalls) <= 0 {
-				return true
-			}
-		default:
-		}
+	// No choices available, don't skip (let it be processed normally).
+	if len(chunk.Choices) == 0 {
+		return false
 	}
-	return false
+	delta := chunk.Choices[0].Delta
+	// Check for meaningful delta content in priority order.
+	switch {
+	case delta.JSON.Content.Valid():
+		// Content field is present, chunk is not empty.
+		return false
+	case delta.JSON.Refusal.Valid():
+		// Refusal field is present, chunk is not empty.
+		return false
+	case delta.JSON.ToolCalls.Valid():
+		// ToolCalls field is valid, but check if the array is empty.
+		// Empty toolcalls array would cause panic when accessing the first element.
+		return len(delta.ToolCalls) <= 0
+	default:
+		// No valid fields, but it can be processed normally.
+		return false
+	}
 }
 
 // createPartialResponse creates a partial response from a chunk.
@@ -989,6 +1158,7 @@ func (m *Model) sendFinalResponse(
 	stream *ssestream.Stream[openai.ChatCompletionChunk],
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
+	aggregatedReasoning string,
 	responseChan chan<- *model.Response,
 ) {
 	if stream.Err() == nil {
@@ -1001,7 +1171,7 @@ func (m *Model) sendFinalResponse(
 			accumulatedToolCalls = m.processAccumulatedToolCalls(acc, idToIndexMap)
 		}
 
-		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls)
+		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls, aggregatedReasoning)
 
 		select {
 		case responseChan <- finalResponse:
@@ -1073,6 +1243,7 @@ func (m *Model) createFinalResponse(
 	acc openai.ChatCompletionAccumulator,
 	hasToolCall bool,
 	accumulatedToolCalls []model.ToolCall,
+	aggregatedReasoning string,
 ) *model.Response {
 	finalResponse := &model.Response{
 		Object:  model.ObjectTypeChatCompletion,
@@ -1099,6 +1270,10 @@ func (m *Model) createFinalResponse(
 					reasoningContent = reasoningStr
 				}
 			}
+		}
+		// Fallback to aggregated streaming deltas if accumulator didn't retain reasoning.
+		if reasoningContent == "" && i == 0 && aggregatedReasoning != "" {
+			reasoningContent = aggregatedReasoning
 		}
 
 		finalResponse.Choices[i] = model.Choice{

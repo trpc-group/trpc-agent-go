@@ -27,3 +27,6 @@ CLAUDE.md
 *.db
 .codex
 pnpm-lock.yaml
+.gocache
+!.github/scripts/run-go-tests.sh
+.DS_Store

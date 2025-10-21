@@ -12,10 +12,13 @@ package llmagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -26,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -562,10 +566,12 @@ func registerTools(options *Options) []tool.Tool {
 	allTools := make([]tool.Tool, 0, len(options.Tools))
 	allTools = append(allTools, options.Tools...)
 
-	// Add tools from each toolset.
+	// Add tools from each toolset with automatic namespacing.
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
-		setTools := toolSet.Tools(ctx)
+		// Create named toolset wrapper to avoid name conflicts
+		namedToolSet := itool.NewNamedToolSet(toolSet)
+		setTools := namedToolSet.Tools(ctx)
 		for _, t := range setTools {
 			allTools = append(allTools, t)
 		}
@@ -574,13 +580,13 @@ func registerTools(options *Options) []tool.Tool {
 	// Add knowledge search tool if knowledge base is provided.
 	if options.Knowledge != nil {
 		if options.EnableKnowledgeAgenticFilter {
-			agentticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
-				options.Knowledge, options.KnowledgeFilter, options.AgenticFilterInfo,
+			agenticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
+				options.Knowledge, options.AgenticFilterInfo, knowledgetool.WithFilter(options.KnowledgeFilter),
 			)
-			allTools = append(allTools, agentticKnowledge)
+			allTools = append(allTools, agenticKnowledge)
 		} else {
 			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(
-				options.Knowledge, options.KnowledgeFilter,
+				options.Knowledge, knowledgetool.WithFilter(options.KnowledgeFilter),
 			))
 		}
 	}
@@ -591,21 +597,34 @@ func registerTools(options *Options) []tool.Tool {
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("invoke_agent {%s}", a.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation)
-	defer func() {
-		if err != nil {
-			span.End()
-		}
-	}()
-
-	// Setup invocation
 	a.setupInvocation(invocation)
 
-	// Run before agent callbacks if they exist.
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, &a.genConfig)
+
+	flowEventChan, err := a.executeAgentFlow(ctx, invocation)
+	if err != nil {
+		// Check if this is a custom response error (early return)
+		var customErr *haveCustomResponseError
+		if errors.As(err, &customErr) {
+			span.End()
+			return customErr.EventChan, nil
+		}
+		// Handle actual errors
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.End()
+		return nil, err
+	}
+
+	return a.wrapEventChannel(ctx, invocation, flowEventChan, span), nil
+}
+
+// executeAgentFlow executes the agent flow with before agent callbacks.
+// Returns the event channel and any error that occurred.
+func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if a.agentCallbacks != nil {
-		var customResponse *model.Response
-		customResponse, err = a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
@@ -616,7 +635,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
-			return eventChan, nil
+			return nil, &haveCustomResponseError{EventChan: eventChan}
 		}
 	}
 
@@ -625,7 +644,19 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	if err != nil {
 		return nil, err
 	}
-	return a.wrapEventChannel(ctx, invocation, flowEventChan, span), nil
+
+	return flowEventChan, nil
+
+}
+
+// haveCustomResponseError represents an early return due to a custom response from before agent callbacks.
+// This is not an actual error but a signal to return early with the custom response.
+type haveCustomResponseError struct {
+	EventChan <-chan *event.Event
+}
+
+func (e *haveCustomResponseError) Error() string {
+	return "custom response provided, returning early"
 }
 
 // setupInvocation sets up the invocation
@@ -654,10 +685,10 @@ func (a *LLMAgent) wrapEventChannel(
 	wrappedChan := make(chan *event.Event, 256) // Use default buffer size
 
 	go func() {
-		var fullResponse *model.Response
+		var fullRespEvent *event.Event
 		defer func() {
-			if fullResponse != nil {
-				itelemetry.TraceAfterInvokeAgent(span, fullResponse)
+			if fullRespEvent != nil {
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent)
 			}
 			span.End()
 			close(wrappedChan)
@@ -666,7 +697,7 @@ func (a *LLMAgent) wrapEventChannel(
 		// Forward all events from the original channel
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
-				fullResponse = evt.Response
+				fullRespEvent = evt
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
@@ -686,9 +717,11 @@ func (a *LLMAgent) wrapEventChannel(
 					err.Error(),
 				)
 			} else if customResponse != nil {
-				fullResponse = customResponse
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			}
+			if evt != nil {
+				fullRespEvent = evt
 			}
 
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)

@@ -122,7 +122,7 @@ func New(opts ...Option) *BuiltinKnowledge {
 			dk.queryEnhancer = query.NewPassthroughEnhancer()
 		}
 		if dk.reranker == nil {
-			dk.reranker = reranker.NewTopKReranker(reranker.WithK(1))
+			dk.reranker = reranker.NewTopKReranker()
 		}
 
 		dk.retriever = retriever.New(
@@ -951,12 +951,6 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		return nil, fmt.Errorf("retriever not configured")
 	}
 
-	// Set defaults for search parameters.
-	limit := req.MaxResults
-	if limit <= 0 {
-		limit = 1 // Return only the best result by default.
-	}
-
 	minScore := req.MinScore
 	if minScore < 0 {
 		minScore = 0.0
@@ -965,13 +959,14 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 	// Use built-in retriever for RAG pipeline with full context.
 	// The retriever will handle query enhancement if configured.
 	retrieverReq := &retriever.Query{
-		Text:      req.Query,
-		History:   req.History, // Same type now, no conversion needed
-		UserID:    req.UserID,
-		SessionID: req.SessionID,
-		Filter:    convertQueryFilter(req.SearchFilter),
-		Limit:     limit,
-		MinScore:  minScore,
+		Text:       req.Query,
+		History:    req.History, // Same type now, no conversion needed
+		UserID:     req.UserID,
+		SessionID:  req.SessionID,
+		Filter:     convertQueryFilter(req.SearchFilter),
+		Limit:      req.MaxResults,
+		MinScore:   minScore,
+		SearchMode: req.SearchMode,
 	}
 
 	result, err := dk.retriever.Retrieve(ctx, retrieverReq)
@@ -986,11 +981,19 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 	// Return the best result.
 	bestDoc := result.Documents[0]
 	content := bestDoc.Document.Content
+	documents := make([]*Result, 0, len(result.Documents))
+	for _, doc := range result.Documents {
+		documents = append(documents, &Result{
+			Document: doc.Document,
+			Score:    doc.Score,
+		})
+	}
 
 	return &SearchResult{
-		Document: bestDoc.Document,
-		Score:    bestDoc.Score,
-		Text:     content,
+		Document:  bestDoc.Document,
+		Score:     bestDoc.Score,
+		Text:      content,
+		Documents: documents,
 	}, nil
 }
 
@@ -1020,8 +1023,9 @@ func convertQueryFilter(qf *SearchFilter) *retriever.QueryFilter {
 	}
 
 	return &retriever.QueryFilter{
-		DocumentIDs: qf.DocumentIDs,
-		Metadata:    qf.Metadata,
+		DocumentIDs:     qf.DocumentIDs,
+		Metadata:        qf.Metadata,
+		FilterCondition: qf.FilterCondition,
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 )
 
 // VectorStore defines the interface for vector storage and similarity search operations.
@@ -199,7 +200,7 @@ type SearchQuery struct {
 }
 
 // SearchMode specifies the search mode.
-type SearchMode int
+type SearchMode = int
 
 const (
 	// SearchModeHybrid is the default search mode.
@@ -216,9 +217,11 @@ const (
 type SearchFilter struct {
 	// IDs filters results to specific document IDs.
 	IDs []string
-
 	// Metadata filters results by metadata key-value pairs.
 	Metadata map[string]any
+
+	// FilterCondition filters documents by universal filter conditions.
+	FilterCondition *searchfilter.UniversalFilterCondition
 }
 
 // SearchResult represents the result of a vector similarity search.

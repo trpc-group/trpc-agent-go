@@ -307,6 +307,28 @@ mcpToolSet := mcp.NewMCPToolSet(
 )
 ```
 
+### Session Reconnection Support
+
+MCP ToolSet supports automatic session reconnection to recover from server restarts or session expiration.
+
+```go
+// SSE/Streamable HTTP transports support session reconnection
+sseToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "sse",
+        ServerURL: "http://localhost:8080/sse",
+        Timeout:   10 * time.Second,
+    },
+    mcp.WithSessionReconnect(3), // Enable session reconnection with max 3 attempts
+)
+```
+
+**Reconnection Features:**
+
+- 🔄 **Auto Reconnect**: Automatically recreates session when connection loss or expiration is detected
+- 🎯 **Independent Retries**: Each tool call gets independent reconnection attempts
+- 🛡️ **Conservative Strategy**: Only triggers reconnection for clear connection/session errors to avoid infinite loops
+
 ## Agent Tool (AgentTool)
 
 AgentTool lets you expose an existing Agent as a tool to be used by a parent Agent. Compared with a plain function tool, AgentTool provides:
@@ -336,7 +358,7 @@ mathAgent := llmagent.New(
 // 2) Wrap as an Agent tool
 mathTool := agenttool.NewTool(
     mathAgent,
-    agenttool.WithSkipSummarization(true), // default true: no extra outer summarization after tool.response
+    agenttool.WithSkipSummarization(true), // opt-in: skip the outer summarization after tool.response
     agenttool.WithStreamInner(true),       // forward child Agent streaming events to parent flow
 )
 
@@ -375,12 +397,27 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
 ### Options
 
 - WithSkipSummarization(bool):
-  - true (default): The outer flow does not run an extra summarization LLM call after `tool.response`
-  - false: Allow an additional summarization/answer call after the tool result
+  - false (default): Allow an additional summarization/answer call after the tool result
+  - true: Skip the outer summarization LLM call once the tool returns
 
 - WithStreamInner(bool):
   - true: Forward child Agent events to the parent flow (recommended: enable `GenerationConfig{Stream: true}` for both parent and child Agents)
   - false: Treat as a callable-only tool, without inner event forwarding
+
+- WithHistoryScope(HistoryScope):
+  - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
+  - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
+
+Example:
+
+```go
+child := agenttool.NewTool(
+    childAgent,
+    agenttool.WithSkipSummarization(false),
+    agenttool.WithStreamInner(true),
+    agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
+)
+```
 
 ### Notes
 
@@ -571,16 +608,16 @@ func main() {
         }
         
         // Display tool calls.
-        if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-            for _, toolCall := range event.Choices[0].Message.ToolCalls {
+        if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+            for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
                 fmt.Printf("🔧 Call tool: %s\n", toolCall.Function.Name)
                 fmt.Printf("   Params: %s\n", string(toolCall.Function.Arguments))
             }
         }
         
         // Display streaming content.
-        if len(event.Choices) > 0 {
-            fmt.Print(event.Choices[0].Delta.Content)
+        if len(event.Response.Choices) > 0 {
+            fmt.Print(event.Response.Choices[0].Delta.Content)
         }
         
         if event.Done {
