@@ -388,7 +388,9 @@ func main() {
             }
         }
 
-        if event.Done {
+        // Prefer Runner completion as the end-of-run signal.
+        // LLM final response is not equal to graph completion.
+        if event.IsRunnerCompletion() {
             break
         }
     }
@@ -588,6 +590,42 @@ stateGraph.AddLLMNode(
 
 See the runnable example: `examples/graph/placeholder`.
 
+Injecting retrieval output and user input
+
+- Upstream nodes can place ephemeral values into the session's `temp:` namespace so the LLM instruction can read them with placeholders.
+- Pattern:
+
+```go
+// In a node before the LLM node
+sg.AddNode("retrieve", func(ctx context.Context, s graph.State) (any, error) {
+    // Suppose you computed `retrieved` and want to include current user input.
+    retrieved := "• doc A...\n• doc B..."
+    var input string
+    if v, ok := s[graph.StateKeyUserInput].(string); ok { input = v }
+    if sess, _ := s[graph.StateKeySession].(*session.Session); sess != nil {
+        if sess.State == nil { sess.State = make(session.StateMap) }
+        sess.State[session.StateTempPrefix+"retrieved_context"] = []byte(retrieved)
+        sess.State[session.StateTempPrefix+"user_input"] = []byte(input)
+    }
+    return graph.State{}, nil
+})
+
+// LLM node instruction can reference {temp:retrieved_context} and {temp:user_input}
+sg.AddLLMNode("answer", mdl,
+    "Use context to answer.\n\nContext:\n{temp:retrieved_context}\n\nQuestion: {temp:user_input}",
+    nil)
+```
+
+Example: `examples/graph/retrieval_placeholder`.
+
+Best practices for placeholders and session state
+
+- Ephemeral vs persistent: write per‑turn values to `temp:*` on `session.State` (session state). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
+- Why direct write is OK: LLM nodes expand placeholders from the session object present in graph state; see [graph/state_graph.go](graph/state_graph.go). GraphAgent puts the session into state; see [agent/graphagent/graph_agent.go](agent/graphagent/graph_agent.go).
+- Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](session/inmemory/service.go).
+- Concurrency: when multiple branches run in parallel, avoid multiple nodes mutating the same `session.State` keys. Prefer composing in a single node before the LLM, or store intermediate values in graph state then write once to `temp:*`.
+- Observability: if you want parts of the prompt to appear in completion events, also store a compact summary in graph state (e.g., under `metadata`). The final event serializes non‑internal final state; see [graph/events.go](graph/events.go).
+
 ### 6. Node Retry & Backoff
 
 Configure per‑node retry with exponential backoff and optional jitter. Failed attempts do not produce writes; only a successful attempt applies its state delta and routing.
@@ -767,6 +805,8 @@ b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error)
         "message": "Please approve this action (yes/no):",
         "data":    s["some_data"],
     }
+}
+```
  
 
 Turn the diagram into a runnable workflow:
@@ -880,7 +920,6 @@ func main() {
         }
         if ev.Author == nodeAsk && !ev.Response.IsPartial && len(ev.Response.Choices) > 0 {
             fmt.Println("LLM:", ev.Response.Choices[0].Message.Content)
-        }
         }
     }
 }
@@ -2113,6 +2152,44 @@ Good practice:
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
 
 See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/tools/placeholder).
+
+## Visualization (DOT/Image)
+
+Graph can export a Graphviz DOT (Directed Graph Language) description and render images via the `dot` (Graph Visualization layout engine) executable.
+
+- `WithDestinations` draws dotted gray edges for declared dynamic routes (visualization + static checks only; it does not affect runtime).
+- Conditional edges render as dashed gray edges with branch labels.
+- Regular edges render as solid lines.
+- Virtual `Start`/`End` nodes can be shown or hidden via an option.
+
+Example:
+
+```go
+g := sg.MustCompile()
+
+// Build DOT text
+dot := g.DOT(
+    graph.WithRankDir(graph.RankDirLR),  // left→right (or graph.RankDirTB)
+    graph.WithIncludeDestinations(true), // show declared WithDestinations
+    graph.WithGraphLabel("My Workflow"),
+)
+
+// Render PNG (requires Graphviz's dot)
+if err := g.RenderImage(context.Background(), graph.ImageFormatPNG, "workflow.png",
+    graph.WithRankDir(graph.RankDirLR),
+    graph.WithIncludeDestinations(true),
+); err != nil {
+    // If Graphviz is not installed, this returns an error — ignore or instruct the user to install dot
+}
+```
+
+API reference:
+
+- `g.DOT(...)` / `g.WriteDOT(w, ...)` on a compiled `*graph.Graph`
+- `g.RenderImage(ctx, format, outputPath, ...)` (e.g., `png`/`svg`)
+- Options: `WithRankDir(graph.RankDirLR|graph.RankDirTB)`, `WithIncludeDestinations(bool)`, `WithIncludeStartEnd(bool)`, `WithGraphLabel(string)`
+
+Full example: `examples/graph/visualization`
 
 ## Advanced Features
 
