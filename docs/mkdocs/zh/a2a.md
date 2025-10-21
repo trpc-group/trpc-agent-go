@@ -366,6 +366,67 @@ events, _ := runner.Run(ctx, userID, sessionID, message,
 )
 ```
 
+### 自定义 HTTP Headers
+
+你可以使用 `WithA2ARequestOptions` 为每次请求传递自定义的 HTTP headers：
+
+```go
+import "trpc.group/trpc-go/trpc-a2a-go/client"
+
+events, err := runner.Run(
+	context.Background(),
+	userID,
+	sessionID,
+	model.NewUserMessage("你的问题"),
+	// 为本次请求传递自定义 HTTP headers
+	agent.WithA2ARequestOptions(
+		client.WithRequestHeader("X-Custom-Header", "custom-value"),
+		client.WithRequestHeader("X-Request-ID", fmt.Sprintf("req-%d", time.Now().UnixNano())),
+		client.WithRequestHeader("Authorization", "Bearer your-token"),
+	),
+)
+```
+
+**常见使用场景：**
+
+1. **身份认证**：传递认证 token
+   ```go
+   agent.WithA2ARequestOptions(
+       client.WithRequestHeader("Authorization", "Bearer "+token),
+   )
+   ```
+
+2. **分布式追踪**：添加请求/追踪 ID
+   ```go
+   agent.WithA2ARequestOptions(
+       client.WithRequestHeader("X-Request-ID", requestID),
+       client.WithRequestHeader("X-Trace-ID", traceID),
+   )
+   ```
+
+**配置 UserID Header：**
+
+客户端和服务端都支持配置使用哪个 HTTP header 来传递 UserID，默认使用 X-User-ID：
+
+```go
+// 客户端：配置通过哪个 header 发送 UserID
+a2aAgent, _ := a2aagent.New(
+	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
+	// 默认是 "X-User-ID"，可以自定义
+	a2aagent.WithUserIDHeader("X-Custom-User-ID"),
+)
+
+// 服务端：配置从哪个 header 读取 UserID
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8888"),
+	a2a.WithAgent(agent, true),
+	// 默认是 "X-User-ID"，可以自定义
+	a2a.WithUserIDHeader("X-Custom-User-ID"),
+)
+```
+
+来自 `invocation.Session.UserID` 的 UserID 会自动通过配置的 header 发送给 A2A server。
+
 ### 自定义转换器
 
 对于特殊需求，可以自定义消息和事件转换器：

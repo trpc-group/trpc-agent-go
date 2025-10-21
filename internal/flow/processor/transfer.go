@@ -18,6 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// TransferTag is the tag for transfer events.
+const TransferTag = "transfer"
+
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
 type TransferResponseProcessor struct {
 	// endInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
@@ -101,6 +104,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypeTransfer),
+		event.WithTag(TransferTag),
 	)
 	transferEvent.Response = &model.Response{
 		ID:        "transfer-" + rsp.ID,
@@ -142,11 +146,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		}
 		// Emit a transfer message echo for visibility unless announcements are disabled.
 		if p.emitTransferAnnouncements {
-			agent.EmitEvent(ctx, targetInvocation, ch, event.New(
+			agent.EmitEvent(ctx, targetInvocation, ch, event.NewResponseEvent(
 				targetInvocation.InvocationID,
 				targetAgent.Info().Name,
-				event.WithObject(model.ObjectTypeTransfer),
-				event.WithResponse(&model.Response{Choices: []model.Choice{{Message: targetInvocation.Message}}}),
+				&model.Response{Choices: []model.Choice{{Message: targetInvocation.Message}}},
+				event.WithTag(TransferTag),
 			))
 		}
 	}

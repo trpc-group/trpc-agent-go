@@ -201,6 +201,17 @@ This typically appears as a handoff notice: "Transferring control to agent: <nam
 
 If your UI should not display these system-level notices, filter out Events with this object type at the rendering/service layer. To disable the texts at the source, see the “Suppress Transfer Announcements (Optional)” section in Multi‑Agent docs.
 
+#### Helper: Detect Runner Completion
+
+Use the convenience method to detect when the whole run has finished regardless of Agent type:
+
+```go
+// e.IsRunnerCompletion() returns true for the terminal runner-completion event.
+if e.IsRunnerCompletion() {
+    // Safe point to stop reading the channel
+}
+```
+
 ### Event Creation
 
 When developing custom Agent types or Processors, you need to create Events.

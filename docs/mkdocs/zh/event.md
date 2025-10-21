@@ -201,6 +201,16 @@ const (
 
 如需在 UI 层隐藏这些系统级提示，可直接过滤该对象类型的事件。若希望从源头关闭对话可见的提示文本，请参见 Multi‑Agent 文档中的“静默委托（可选）”。
 
+#### 辅助方法：检测 Runner 完成
+
+使用便捷方法来判断整次运行是否已完成，无论 Agent 类型如何：
+
+```go
+// e.IsRunnerCompletion() 会在终止的 runner-completion 事件上返回 true。
+if e.IsRunnerCompletion() {
+    // 可安全停止读取事件通道的时机
+}
+```
 
 ### Event 创建
 

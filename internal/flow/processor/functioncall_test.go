@@ -1346,8 +1346,9 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(true, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
+	res, err := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
 	require.NotNil(t, res)
+	require.NoError(t, err)
 }
 
 func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
