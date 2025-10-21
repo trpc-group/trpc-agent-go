@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -23,6 +24,7 @@ import (
 type local struct {
 	runner            runner.Runner
 	evalSetManager    evalset.Manager
+	evalResultManager evalresult.Manager
 	evaluatorRegistry registry.Registry
 	sessionIDSupplier func(ctx context.Context) string
 }
@@ -34,6 +36,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	service := &local{
 		runner:            runner,
 		evalSetManager:    opts.EvalSetManager,
+		evalResultManager: opts.EvalResultManager,
 		evaluatorRegistry: opts.EvaluatorRegistry,
 		sessionIDSupplier: opts.SessionIDSupplier,
 	}
@@ -99,10 +102,16 @@ func (s *local) inferenceEvalCase(ctx context.Context, appName, evalSetID string
 	return inferenceResult, nil
 }
 
-// Evaluate runs the evaluation on the inference results and returns the case evaluation results.
-func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) ([]*evalresult.EvalCaseResult, error) {
+// Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
+func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*evalresult.EvalSetResult, error) {
 	if req == nil {
 		return nil, errors.New("evaluate request is nil")
+	}
+	if req.AppName == "" {
+		return nil, errors.New("app name is empty")
+	}
+	if req.EvalSetID == "" {
+		return nil, errors.New("eval set id is empty")
 	}
 	evalCaseResults := make([]*evalresult.EvalCaseResult, 0, len(req.InferenceResults))
 	for _, inferenceResult := range req.InferenceResults {
@@ -113,7 +122,18 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) ([]*
 		}
 		evalCaseResults = append(evalCaseResults, result)
 	}
-	return evalCaseResults, nil
+	evalSetResult := &evalresult.EvalSetResult{
+		EvalSetID:         req.EvalSetID,
+		EvalCaseResults:   evalCaseResults,
+		CreationTimestamp: &evalset.EpochTime{Time: time.Now()},
+	}
+	evalSetResultID, err := s.evalResultManager.Save(ctx, req.AppName, evalSetResult)
+	if err != nil {
+		return nil, fmt.Errorf("save eval set result: %w", err)
+	}
+	evalSetResult.EvalSetResultID = evalSetResultID
+	evalSetResult.EvalSetResultName = evalSetResultID
+	return evalSetResult, nil
 }
 
 // evaluatePerCase runs the evaluation on the inference result and returns the case evaluation result.

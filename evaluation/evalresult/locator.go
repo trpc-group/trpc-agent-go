@@ -21,8 +21,8 @@ const defaultResultFileSuffix = ".evalset_result.json"
 
 // Locator provides Build and List methods for locating eval set result files.
 type Locator interface {
-	// Build builds the path of an eval set result file for the given appName and evalSetID.
-	Build(baseDir, appName, evalSetID string) string
+	// Build builds the path of an eval set result file for the given appName and evalSetResultID.
+	Build(baseDir, appName, evalSetResultID string) string
 	// List lists all eval set result IDs for the given appName.
 	List(baseDir, appName string) ([]string, error)
 }
@@ -32,8 +32,8 @@ type locator struct {
 }
 
 // Build builds the path of an eval set result file.
-func (l *locator) Build(baseDir, appName, evalSetID string) string {
-	return filepath.Join(baseDir, appName, evalSetID+defaultResultFileSuffix)
+func (l *locator) Build(baseDir, appName, evalSetResultID string) string {
+	return filepath.Join(baseDir, appName, evalSetResultID+defaultResultFileSuffix)
 }
 
 // List lists all eval set result IDs for the given appName.

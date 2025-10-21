@@ -46,6 +46,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		evalService, err := local.New(
 			a.runner,
 			service.WithEvalSetManager(a.evalSetManager),
+			service.WithEvalResultManager(a.evalResultManager),
 			service.WithEvaluatorRegistry(a.evaluatorRegistry),
 		)
 		if err != nil {
@@ -164,27 +165,18 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*
 		evalMetrics = append(evalMetrics, metric)
 	}
 	evaluateRequest := &service.EvaluateRequest{
+		AppName:          a.appName,
+		EvalSetID:        evalSetID,
 		InferenceResults: inferenceResults,
 		EvaluateConfig: &service.EvaluateConfig{
 			EvalMetrics: evalMetrics,
 		},
 	}
 	// Run evaluation on the specified eval set.
-	caseResults, err := a.evalService.Evaluate(ctx, evaluateRequest)
+	evalSetResult, err := a.evalService.Evaluate(ctx, evaluateRequest)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate: %w", err)
 	}
-	evalSetResult := &evalresult.EvalSetResult{
-		EvalSetID:         evalSetID,
-		EvalCaseResults:   caseResults,
-		CreationTimestamp: &evalset.EpochTime{Time: time.Now()},
-	}
-	evalSetResultID, err := a.evalResultManager.Save(ctx, a.appName, evalSetResult)
-	if err != nil {
-		return nil, fmt.Errorf("save eval set result: %w", err)
-	}
-	evalSetResult.EvalSetResultID = evalSetResultID
-	evalSetResult.EvalSetResultName = evalSetResultID
 	return evalSetResult, nil
 }
 

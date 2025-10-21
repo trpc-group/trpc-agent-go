@@ -10,6 +10,8 @@
 // Package metric provides evaluation metrics.
 package metric
 
+import "context"
+
 // EvalMetric represents a metric used to evaluate a particular aspect of an eval case.
 // It mirrors the schema used by ADK Web, with field names in camel-case to align with the JSON format.
 type EvalMetric struct {
@@ -36,4 +38,14 @@ type JudgeModelOptions struct {
 	NumSamples *int `json:"numSamples,omitempty"`
 	// CustomPrompt is the custom prompt template.
 	CustomPrompt string `json:"customPrompt,omitempty"`
+}
+
+// Manager defines the interface for managing evaluation metrics.
+type Manager interface {
+	// List returns all metric names identified by the given app name and eval set ID.
+	List(ctx context.Context, appName, evalSetID string) ([]string, error)
+	// Save stores the given metrics identified by the given app name and eval set ID.
+	Save(ctx context.Context, appName, evalSetID string, metrics []*EvalMetric) error
+	// Get gets a metric identified by the given app name, eval set ID and metric name.
+	Get(ctx context.Context, appName, evalSetID, metricName string) (*EvalMetric, error)
 }

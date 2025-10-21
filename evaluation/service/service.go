@@ -25,8 +25,8 @@ import (
 type Service interface {
 	// Inference runs the agent for the requested eval cases and returns the inference results for each case.
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate runs the evaluation on the inference results and returns the case evaluation results.
-	Evaluate(ctx context.Context, request *EvaluateRequest) ([]*evalresult.EvalCaseResult, error)
+	// Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
 }
 
 // InferenceRequest represents a request for running the agent inference on an eval set.
@@ -63,6 +63,10 @@ type InferenceResult struct {
 // EvaluateRequest represents a request for running the evaluation on the inference results.
 // It mirrors the schema used by ADK Web, with field names in camel-case to align with the JSON format.
 type EvaluateRequest struct {
+	// AppName is the name of the app.
+	AppName string `json:"appName"`
+	// EvalSetID is the ID of the eval set.
+	EvalSetID string `json:"evalSetID"`
 	// InferenceResults are the inference results to be evaluated.
 	InferenceResults []*InferenceResult `json:"inferenceResults"`
 	// EvaluateConfig contains the evaluation configuration used during evaluation.

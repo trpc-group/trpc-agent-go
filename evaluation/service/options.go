@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -12,6 +14,7 @@ import (
 // Options holds the options for the evaluation service.
 type Options struct {
 	EvalSetManager    evalset.Manager                  // EvalSetManager is used to store and retrieve eval set.
+	EvalResultManager evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
 	EvaluatorRegistry registry.Registry                // EvaluatorRegistry is used to store and retrieve evaluator.
 	SessionIDSupplier func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
 }
@@ -23,6 +26,7 @@ type Option func(*Options)
 func NewOptions(opt ...Option) *Options {
 	opts := &Options{
 		EvalSetManager:    evalsetinmemory.New(),
+		EvalResultManager: evalresultinmemory.New(),
 		EvaluatorRegistry: registry.New(),
 		SessionIDSupplier: func(ctx context.Context) string {
 			return uuid.New().String()
@@ -39,6 +43,14 @@ func NewOptions(opt ...Option) *Options {
 func WithEvalSetManager(m evalset.Manager) Option {
 	return func(o *Options) {
 		o.EvalSetManager = m
+	}
+}
+
+// WithEvalResultManager sets the eval result manager.
+// InMemory eval result manager is used by default.
+func WithEvalResultManager(m evalresult.Manager) Option {
+	return func(o *Options) {
+		o.EvalResultManager = m
 	}
 }
 

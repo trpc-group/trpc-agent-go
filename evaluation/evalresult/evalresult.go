@@ -52,6 +52,7 @@ type EvalCaseResult struct {
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.
+// It mirrors the schema used by ADK Web, with field names in camel-case to align with the JSON format.
 type EvalMetricResult struct {
 	// MetricName identifies the metric.
 	MetricName string `json:"metricName"`
@@ -66,6 +67,7 @@ type EvalMetricResult struct {
 }
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
+// It mirrors the schema used by ADK Web, with field names in camel-case to align with the JSON format.
 type EvalMetricResultPerInvocation struct {
 	ActualInvocation   *evalset.Invocation `json:"actualInvocation"`
 	ExpectedInvocation *evalset.Invocation `json:"expectedInvocation"`
