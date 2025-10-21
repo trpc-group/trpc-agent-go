@@ -278,7 +278,7 @@ func TestRunAfterTool_Empty(t *testing.T) {
 	customResult, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, result, nil)
 
 	require.NoError(t, err)
-	require.Nil(t, customResult)
+	require.Equal(t, customResult, result)
 }
 
 func TestRunAfterTool_Override(t *testing.T) {
