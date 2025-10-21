@@ -388,7 +388,9 @@ func main() {
             }
         }
 
-        if event.Done {
+        // Prefer Runner completion as the end-of-run signal.
+        // LLM final response is not equal to graph completion.
+        if event.IsRunnerCompletion() {
             break
         }
     }
