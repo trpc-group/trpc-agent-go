@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -33,9 +34,10 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model to use")
-	host      = flag.String("host", "0.0.0.0:8888", "Host to use")
-	streaming = flag.Bool("streaming", true, "Streaming to use")
+	modelName  = flag.String("model", "deepseek-chat", "Model to use")
+	host       = flag.String("host", "0.0.0.0:8888", "Host to use")
+	streaming  = flag.Bool("streaming", true, "Streaming to use")
+	remoteOnly = flag.Bool("remote-only", false, "Only output remote agent responses")
 )
 
 const (
@@ -45,30 +47,25 @@ const (
 func main() {
 	flag.Parse()
 
-	// runRemoteAgent will start a a2a server that build with the agent it returns
-	localAgent := runRemoteAgent("agent_joker", "i am a remote agent, i can tell a joke", *host)
-
+	// runRemoteAgent will start a a2a server that build with a remote agent
+	runRemoteAgent("agent_remote_joker", "I am a remote agent, I can tell a joke", *host)
 	time.Sleep(1 * time.Second)
-	startChat(localAgent)
+
+	httpURL := fmt.Sprintf("http://%s", *host)
+	a2aAgent := buildA2AAgent(httpURL)
+
+	// Build a different local agent
+	localAgent := buildAgent("agent_local_joker", "I am a local agent, I can tell a joke")
+	startChat(localAgent, a2aAgent)
 }
 
-func startChat(localAgent agent.Agent) {
-	httpURL := fmt.Sprintf("http://%s", *host)
-	a2aAgent, err := a2aagent.New(
-		a2aagent.WithAgentCardURL(httpURL),
+func startChat(localAgent agent.Agent, a2aAgent *a2aagent.A2AAgent) {
 
-		// optional: specify the state key that transferred to the remote agent by metadata
-		a2aagent.WithTransferStateKey(optionalStateKey),
-	)
-	if err != nil {
-		fmt.Printf("Failed to create a2a agent: %v", err)
-		return
-	}
 	card := a2aAgent.GetAgentCard()
 	fmt.Printf("\n------- Agent Card -------\n")
 	fmt.Printf("Name: %s\n", card.Name)
 	fmt.Printf("Description: %s\n", card.Description)
-	fmt.Printf("URL: %s\n", httpURL)
+	fmt.Printf("URL: %s\n", card.URL)
 	fmt.Printf("------------------------\n")
 
 	localSessionService := inmemory.NewSessionService()
@@ -77,13 +74,16 @@ func startChat(localAgent agent.Agent) {
 	remoteRunner := runner.NewRunner("test", a2aAgent, runner.WithSessionService(remoteSessionService))
 	localRunner := runner.NewRunner("test", localAgent, runner.WithSessionService(localSessionService))
 
-	userID := "user1"
-	sessionID := "session1"
+	// Use different userIDs and sessionIDs for remote and local agents
+	remoteUserID := "remote_user"
+	remoteSessionID := "remote_session1"
+	localUserID := "local_user"
+	localSessionID := "local_session1"
 
 	fmt.Println("Chat with the agent. Type 'new' for a new session, or 'exit' to quit.")
 
 	for {
-		if err := processMessage(remoteRunner, localRunner, userID, &sessionID); err != nil {
+		if err := processMessage(remoteRunner, localRunner, remoteUserID, &remoteSessionID, localUserID, &localSessionID); err != nil {
 			if err.Error() == "exit" {
 				fmt.Println("👋 Goodbye!")
 				return
@@ -95,7 +95,14 @@ func startChat(localAgent agent.Agent) {
 	}
 }
 
-func processMessage(remoteRunner runner.Runner, localRunner runner.Runner, userID string, sessionID *string) error {
+func processMessage(
+	remoteRunner runner.Runner,
+	localRunner runner.Runner,
+	remoteUserID string,
+	remoteSessionID *string,
+	localUserID string,
+	localSessionID *string,
+) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Print("User: ")
 	if !scanner.Scan() {
@@ -111,17 +118,24 @@ func processMessage(remoteRunner runner.Runner, localRunner runner.Runner, userI
 	case "exit":
 		return fmt.Errorf("exit")
 	case "new":
-		*sessionID = startNewSession()
+		*remoteSessionID = startNewSession("remote")
+		*localSessionID = startNewSession("local")
 		return nil
 	}
 
 	fmt.Printf("%s remote agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
 	events, err := remoteRunner.Run(
 		context.Background(),
-		userID,
-		*sessionID,
+		remoteUserID,
+		*remoteSessionID,
 		model.NewUserMessage(userInput),
 		agent.WithRuntimeState(map[string]any{optionalStateKey: "test"}),
+		// Example: Pass custom HTTP headers to A2A agent using WithA2ARequestOptions
+		// This allows you to add authentication tokens, tracing IDs, or other custom headers
+		agent.WithA2ARequestOptions(
+			client.WithRequestHeader("X-Custom-Header", "custom-value"),
+			client.WithRequestHeader("X-Request-ID", fmt.Sprintf("req-%d", time.Now().UnixNano())),
+		),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
@@ -130,26 +144,29 @@ func processMessage(remoteRunner runner.Runner, localRunner runner.Runner, userI
 		return fmt.Errorf("failed to process response: %w", err)
 	}
 
-	fmt.Printf("\n%s local agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
-	events, err = localRunner.Run(
-		context.Background(),
-		userID,
-		*sessionID,
-		model.NewUserMessage(userInput),
-		agent.WithRuntimeState(map[string]any{optionalStateKey: "test"}),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to run agent: %w", err)
-	}
-	if err := processResponse(events); err != nil {
-		return fmt.Errorf("failed to process response: %w", err)
+	// Only run local agent if remote-only flag is not set
+	if !*remoteOnly {
+		fmt.Printf("\n%s local agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
+		events, err = localRunner.Run(
+			context.Background(),
+			localUserID,
+			*localSessionID,
+			model.NewUserMessage(userInput),
+			agent.WithRuntimeState(map[string]any{optionalStateKey: "test"}),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to run agent: %w", err)
+		}
+		if err := processResponse(events); err != nil {
+			return fmt.Errorf("failed to process response: %w", err)
+		}
 	}
 	return nil
 }
 
-func startNewSession() string {
-	newSessionID := fmt.Sprintf("session_%d", time.Now().UnixNano())
-	fmt.Printf("🆕 Started new session: %s\n", newSessionID)
+func startNewSession(prefix string) string {
+	newSessionID := fmt.Sprintf("%s_session_%d", prefix, time.Now().UnixNano())
+	fmt.Printf("🆕 Started new %s session: %s\n", prefix, newSessionID)
 	fmt.Printf("   (Conversation history has been reset)\n")
 	fmt.Println()
 	return newSessionID
@@ -170,8 +187,8 @@ func (h *hookProcessor) ProcessMessage(
 	return h.next.ProcessMessage(ctx, message, options, handler)
 }
 
-func runRemoteAgent(agentName, desc, host string) agent.Agent {
-	remoteAgent := buildRemoteAgent(agentName, desc)
+func runRemoteAgent(agentName, desc, host string) {
+	remoteAgent := buildAgent(agentName, desc)
 	server, err := a2a.New(
 		a2a.WithDebugLogging(false),
 		a2a.WithErrorHandler(func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
@@ -197,14 +214,13 @@ func runRemoteAgent(agentName, desc, host string) agent.Agent {
 	go func() {
 		server.Start(host)
 	}()
-	return remoteAgent
 }
 
-func buildRemoteAgent(agentName, desc string) agent.Agent {
+func buildAgent(agentName, desc string) agent.Agent {
 	// Create OpenAI model.
 	modelInstance := openai.New(*modelName)
 
-	// Create LLM agent with tools.
+	// Create LLM agent.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
@@ -219,6 +235,19 @@ func buildRemoteAgent(agentName, desc string) agent.Agent {
 	)
 
 	return llmAgent
+}
+
+func buildA2AAgent(httpURL string) *a2aagent.A2AAgent {
+	a2aAgent, err := a2aagent.New(
+		a2aagent.WithAgentCardURL(httpURL),
+
+		// optional: specify the state key that transferred to the remote agent by metadata
+		a2aagent.WithTransferStateKey(optionalStateKey),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create a2a agent: %v", err)
+	}
+	return a2aAgent
 }
 
 // processResponse handles both streaming and non-streaming responses with tool call visualization.

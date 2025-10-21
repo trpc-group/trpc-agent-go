@@ -155,6 +155,15 @@ func WithRequestID(requestID string) RunOption {
 	}
 }
 
+// WithA2ARequestOptions sets the A2A request options for the RunOptions.
+// These options will be passed to A2A agent's SendMessage and StreamMessage calls.
+// This allows passing dynamic HTTP headers or other request-specific options for each run.
+func WithA2ARequestOptions(opts ...any) RunOption {
+	return func(runOpts *RunOptions) {
+		runOpts.A2ARequestOptions = append(runOpts.A2ARequestOptions, opts...)
+	}
+}
+
 // RunOptions is the options for the Run method.
 type RunOptions struct {
 	// RuntimeState contains key-value pairs that will be merged into the initial state
@@ -174,6 +183,15 @@ type RunOptions struct {
 
 	// RequestID is the request id of the request.
 	RequestID string
+
+	// A2ARequestOptions contains A2A client request options that will be passed to
+	// A2A agent's SendMessage and StreamMessage calls. This allows callers to pass
+	// dynamic HTTP headers or other request-specific options for each run.
+	//
+	// Note: This field uses any type to avoid direct dependency on trpc-a2a-go/client package.
+	// Users should pass client.RequestOption values (e.g., client.WithRequestHeader).
+	// The a2aagent package will validate the option types at runtime.
+	A2ARequestOptions []any
 }
 
 // NewInvocation create a new invocation

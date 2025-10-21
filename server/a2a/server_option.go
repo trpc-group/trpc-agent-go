@@ -25,7 +25,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const userIDHeader = "X-User-ID"
+// serverUserIDHeader is the default header that a2a server get UserID of invocation.
+var serverUserIDHeader = "X-User-ID"
 
 // UserIDFromContext returns the user ID from the context.
 func UserIDFromContext(ctx context.Context) (string, bool) {
@@ -57,15 +58,19 @@ type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.Mess
 // TaskManagerBuilder returns a task manager for the given agent.
 type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
 
-type defaultAuthProvider struct{}
+type defaultAuthProvider struct {
+	userIDHeader string
+}
 
 func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
 	if r == nil {
 		return nil, errors.New("request is nil")
 	}
-	userID := r.Header.Get(userIDHeader)
+	userID := r.Header.Get(d.userIDHeader)
 	if userID == "" {
-		log.Warnf("UserID(Header X-User-ID) not set, you will use anonymous user")
+		log.Warnf("UserID(Header %s) not set, you will use anonymous user, "+
+			"you can use WithUserIDHeader in A2AAgent and A2AServer to specified the header that transfer user info.",
+			d.userIDHeader)
 		userID = uuid.New().String()
 	}
 	return &auth.User{ID: userID}, nil
@@ -85,6 +90,7 @@ type options struct {
 	extraOptions        []a2a.Option
 	errorHandler        ErrorHandler
 	debugLogging        bool
+	userIDHeader        string
 }
 
 // Option is a function that configures a Server.
@@ -131,6 +137,16 @@ func WithProcessMessageHook(hook ProcessMessageHook) Option {
 func WithHost(host string) Option {
 	return func(opts *options) {
 		opts.host = host
+	}
+}
+
+// WithUserIDHeader sets the HTTP header name to extract UserID from requests.
+// If not set, defaults to "X-User-ID".
+func WithUserIDHeader(header string) Option {
+	return func(opts *options) {
+		if header != "" {
+			opts.userIDHeader = header
+		}
 	}
 }
 

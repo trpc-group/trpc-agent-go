@@ -94,3 +94,14 @@ func WithTransferStateKey(key ...string) Option {
 		a.transferStateKey = append(a.transferStateKey, key...)
 	}
 }
+
+// WithUserIDHeader sets the HTTP header name to send UserID to the A2A server.
+// If not set, defaults to "X-User-ID".
+// The UserID will be extracted from invocation.Session.UserID and sent via the specified header.
+func WithUserIDHeader(header string) Option {
+	return func(a *A2AAgent) {
+		if header != "" {
+			a.userIDHeader = header
+		}
+	}
+}

@@ -182,6 +182,10 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 		parts = append(parts, protocol.NewTextPart(""))
 	}
 	message := protocol.NewMessage(protocol.MessageRoleUser, parts)
+	sess := invocation.Session
+	if sess != nil {
+		message.ContextID = &sess.ID
+	}
 	return &message, nil
 }
 

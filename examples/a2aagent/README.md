@@ -184,12 +184,69 @@ Because he didn't get arrays! (a raise) 😄
 - `-model`: Model name (default: "deepseek-chat")
 - `-host`: Server host and port (default: "0.0.0.0:8888")
 - `-streaming`: Enable streaming mode (default: true)
+- `-remote-only`: Only output remote agent responses (default: false)
 
 ### A2A Agent Options
 - `WithAgentCard()`: Use pre-configured agent card
 - `WithAgentCardURL()`: Auto-discover from URL
 - `WithHTTPClient()`: Custom HTTP client
 - `WithTimeout()`: Request timeout
+- `WithUserIDHeader()`: Custom HTTP header name for sending UserID to server (default: "X-User-ID")
+
+### A2A Server Options
+- `WithHost()`: Server host and port binding
+- `WithAgent()`: The agent to expose and streaming mode
+- `WithUserIDHeader()`: Custom HTTP header name for reading UserID from client (default: "X-User-ID")
+- `WithDebugLogging()`: Enable debug logging
+- `WithErrorHandler()`: Custom error handler
+
+### Custom HTTP Headers
+
+You can pass custom HTTP headers to A2A agent for each request using `WithA2ARequestOptions`:
+
+```go
+import "trpc.group/trpc-go/trpc-a2a-go/client"
+
+events, err := runner.Run(
+    context.Background(),
+    userID,
+    sessionID,
+    model.NewUserMessage("your question"),
+    // Pass custom HTTP headers for this request
+    agent.WithA2ARequestOptions(
+        client.WithRequestHeader("X-Custom-Header", "custom-value"),
+        client.WithRequestHeader("X-Request-ID", "req-12345"),
+        client.WithRequestHeader("Authorization", "Bearer token"),
+    ),
+)
+```
+
+**Use Cases:**
+- **Authentication**: Pass authentication tokens via `Authorization` header
+- **Tracing**: Add request IDs for distributed tracing
+
+**Configuring UserID Header:**
+
+Both A2A Agent (client) and A2A Server support configuring which HTTP header to use for UserID. The default is `X-User-ID`.
+
+```go
+// Client side: Configure which header to send UserID in
+a2aAgent, err := a2aagent.New(
+    a2aagent.WithAgentCardURL("http://localhost:8888"),
+    // Default is "X-User-ID", can be customized
+    a2aagent.WithUserIDHeader("X-Custom-User-ID"),
+)
+
+// Server side: Configure which header to read UserID from
+server, err := a2a.New(
+    a2a.WithHost("localhost:8888"),
+    a2a.WithAgent(agent, true),
+    // Default is "X-User-ID", can be customized
+    a2a.WithUserIDHeader("X-Custom-User-ID"),
+)
+```
+
+The UserID from `invocation.Session.UserID` will be automatically sent via the configured header to the A2A server.
 
 ## Future Enhancements
 

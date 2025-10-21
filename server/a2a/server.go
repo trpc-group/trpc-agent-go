@@ -131,8 +131,14 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		}
 	}
 
+	// Set default UserID header if not configured
+	userIDHeader := options.userIDHeader
+	if userIDHeader == "" {
+		userIDHeader = serverUserIDHeader
+	}
+
 	opts := []a2a.Option{
-		a2a.WithAuthProvider(&defaultAuthProvider{}),
+		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 	}
 
 	// if other AuthProvider is set, user info should be covered

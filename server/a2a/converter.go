@@ -72,11 +72,9 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 			if !ok {
 				continue
 			}
+			// Only add to content string, not to contentParts
+			// to avoid duplication when converting back to A2A message
 			content += p.Text
-			contentParts = append(contentParts, model.ContentPart{
-				Type: model.ContentTypeText,
-				Text: &p.Text,
-			})
 		case protocol.KindFile:
 			f, ok := part.(*protocol.FilePart)
 			if !ok {
