@@ -43,7 +43,7 @@ func TestNew(t *testing.T) {
 			opts: []Option{},
 			setupFunc: func(tc *testCase) *httptest.Server {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == AgentCardWellKnownPath {
+					if r.URL.Path == "/.well-known/agent-card.json" {
 						agentCard := server.AgentCard{
 							Name:        "test-agent",
 							Description: "A test agent",
@@ -154,7 +154,7 @@ func TestNew(t *testing.T) {
 			},
 			setupFunc: func(tc *testCase) *httptest.Server {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == AgentCardWellKnownPath {
+					if r.URL.Path == "/.well-known/agent-card.json" {
 						agentCard := server.AgentCard{
 							Name:        "test-agent",
 							Description: "Test agent",

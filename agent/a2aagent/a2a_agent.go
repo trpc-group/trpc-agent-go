@@ -29,11 +29,6 @@ import (
 var defaultStreamingChannelSize = 1024
 var defaultNonStreamingChannelSize = 10
 
-const (
-	// AgentCardWellKnownPath is the standard path for agent card discovery
-	AgentCardWellKnownPath = "/.well-known/agent-card.json"
-)
-
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
 type A2AAgent struct {
 	// options
