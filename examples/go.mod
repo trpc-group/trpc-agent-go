@@ -1,13 +1,17 @@
 module trpc.group/trpc-go/trpc-agent-go/examples
 
-go 1.21
+go 1.21.0
+
+toolchain go1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../memory/mysql
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
 )
@@ -22,12 +26,14 @@ require (
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.2.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.5
 )
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -38,6 +44,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.20.2 // indirect
 	github.com/go-openapi/swag v0.22.8 // indirect
+	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.3 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
@@ -86,5 +93,6 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.0.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
 )
