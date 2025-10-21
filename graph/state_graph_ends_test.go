@@ -28,6 +28,21 @@ func TestEndsValidation(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestEndsValidation_InvalidTarget ensures compile fails if ends map refers to a non-existent node.
+func TestEndsValidation_InvalidTarget(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("ok", StateField{Type: reflect.TypeOf(false), Reducer: DefaultReducer})
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("A", func(ctx context.Context, s State) (any, error) { return nil, nil }, WithEndsMap(map[string]string{
+		"bad": "NOPE", // NOPE is not declared in graph
+	}))
+	sg.SetEntryPoint("A")
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+}
+
 // TestCommandGoToWithEnds ensures Command.GoTo resolves via per-node ends.
 func TestCommandGoToWithEnds(t *testing.T) {
 	schema := NewStateSchema().
