@@ -29,3 +29,4 @@ CLAUDE.md
 pnpm-lock.yaml
 .gocache
 !.github/scripts/run-go-tests.sh
+.DS_Store

@@ -2103,6 +2103,44 @@ stateGraph.
 
 更多端到端用法见 `examples/graph`（基础/并行/多轮/中断/工具/占位符）。
 
+## 可视化导出（DOT/图片）
+
+Graph 支持直接导出 Graphviz（图形可视化软件，Graph Visualization）`DOT`（Graphviz 的描述语言，Directed Graph Language）文本，以及通过系统安装的 `dot`（Graphviz 命令行工具 `dot` 是 Graphviz 的布局引擎之一，用于渲染 DOT 文件）渲染 `PNG`（Portable Network Graphics，便携式网络图形格式）/`SVG`（Scalable Vector Graphics，可缩放矢量图形）。
+
+- `WithDestinations`（在节点上声明潜在动态去向）会以虚线（dotted、灰色）显示，仅用于静态检查与可视化，不影响运行时路由。
+- 条件边（Conditional edges）会以虚线（dashed、灰色）并标注分支键值。
+- 常规边（AddEdge）为实线。
+- 虚拟 `Start`/`End` 节点可通过选项打开/隐藏。
+
+示例：
+
+```go
+g := sg.MustCompile()
+
+// 生成 DOT 文本
+dot := g.DOT(
+    graph.WithRankDir(graph.RankDirLR),     // 左→右布局（或 graph.RankDirTB）
+    graph.WithIncludeDestinations(true),    // 显示 WithDestinations 声明
+    graph.WithGraphLabel("My Workflow"),   // 图标题
+)
+
+// 渲染 PNG （需要已安装 Graphviz 的 dot）
+if err := g.RenderImage(context.Background(), graph.ImageFormatPNG, "workflow.png",
+    graph.WithRankDir(graph.RankDirLR),
+    graph.WithIncludeDestinations(true),
+); err != nil {
+    // 未安装 Graphviz 时这里会返回错误，可忽略或提示安装
+}
+```
+
+API 参考：
+
+- `g.DOT(...)` / `g.WriteDOT(w, ...)`：导出 DOT 文本
+- `g.RenderImage(ctx, format, outputPath, ...)`：调用 `dot` 渲染图片（`png`/`svg` 等）
+- 选项：`WithRankDir(graph.RankDirLR|graph.RankDirTB)`、`WithIncludeDestinations(bool)`、`WithIncludeStartEnd(bool)`、`WithGraphLabel(string)`
+
+完整示例见：`examples/graph/visualization`
+
 ## 高级特性
 
 ### 检查点与恢复

@@ -1,0 +1,129 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package graph
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+const (
+	testNodePrepare  = "prepare"
+	testNodeAsk      = "ask"
+	testNodeTools    = "tools"
+	testNodeFallback = "fallback"
+)
+
+// buildSampleGraph constructs a small graph with runtime edges,
+// a conditional edge, and declared destinations for visualization tests.
+func buildSampleGraph(t *testing.T) *Graph {
+	t.Helper()
+
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+
+	// Prepare node (function)
+	sg.AddNode(testNodePrepare, func(ctx context.Context, s State) (any, error) { return s, nil })
+	// LLM node for styling
+	sg.AddNode(testNodeAsk, func(ctx context.Context, s State) (any, error) { return s, nil }, WithNodeType(NodeTypeLLM))
+	// Tool node for styling
+	sg.AddNode(testNodeTools, func(ctx context.Context, s State) (any, error) { return s, nil }, WithNodeType(NodeTypeTool))
+	// Fallback node (function)
+	sg.AddNode(testNodeFallback, func(ctx context.Context, s State) (any, error) { return s, nil })
+
+	// Runtime edges and conditional edges
+	sg.AddEdge(testNodePrepare, testNodeAsk)
+	sg.AddToolsConditionalEdges(testNodeAsk, testNodeTools, testNodeFallback)
+	sg.SetEntryPoint(testNodePrepare).SetFinishPoint(testNodeFallback)
+
+	// Declared destination for visualization only
+	sg.AddNode("noop", func(ctx context.Context, s State) (any, error) { return s, nil },
+		WithDestinations(map[string]string{End: "finish early"}))
+
+	g, err := sg.Compile()
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	return g
+}
+
+func TestDOT_IncludesNodesEdgesAndStyles(t *testing.T) {
+	g := buildSampleGraph(t)
+	dot := g.DOT(WithRankDir(RankDirLR), WithIncludeDestinations(true), WithGraphLabel("Test"))
+
+	// Basic header
+	if !strings.Contains(dot, "digraph G {") {
+		t.Fatalf("expected DOT header, got: %s", dot)
+	}
+	if !strings.Contains(dot, "rankdir=LR;") {
+		t.Fatalf("expected rankdir LR, got: %s", dot)
+	}
+	if !strings.Contains(dot, "label=\"Test\";") {
+		t.Fatalf("expected graph label, got: %s", dot)
+	}
+
+	// Node declarations by ID
+	for _, id := range []string{testNodePrepare, testNodeAsk, testNodeTools, testNodeFallback} {
+		if !strings.Contains(dot, "\""+id+"\"") {
+			t.Fatalf("expected node %s in DOT, got: %s", id, dot)
+		}
+	}
+
+	// Solid runtime edges
+	if !strings.Contains(dot, "\""+testNodePrepare+"\" -> \""+testNodeAsk+"\"") {
+		t.Fatalf("expected runtime edge prepare->ask, got: %s", dot)
+	}
+
+	// Conditional edges are dashed and labeled
+	// Branch keys are node IDs in AddToolsConditionalEdges path map
+	if !strings.Contains(dot, "style=dashed") {
+		t.Fatalf("expected dashed conditional edge in DOT, got: %s", dot)
+	}
+
+	// Destinations appear as dotted edges
+	if !strings.Contains(dot, "style=dotted") {
+		t.Fatalf("expected dotted destination edge in DOT, got: %s", dot)
+	}
+
+	// Start/End default to included
+	if !strings.Contains(dot, "\"__start__\"") || !strings.Contains(dot, "\"__end__\"") {
+		t.Fatalf("expected virtual Start/End in DOT, got: %s", dot)
+	}
+}
+
+func TestDOT_HideStartEnd(t *testing.T) {
+	g := buildSampleGraph(t)
+	dot := g.DOT(WithIncludeStartEnd(false))
+	if strings.Contains(dot, "\"__start__\"") || strings.Contains(dot, "\"__end__\"") {
+		t.Fatalf("expected Start/End hidden, got: %s", dot)
+	}
+}
+
+func TestRenderImage_SkipWhenNoDot(t *testing.T) {
+	g := buildSampleGraph(t)
+
+	// Skip if Graphviz's dot is not installed
+	if _, err := exec.LookPath("dot"); err != nil {
+		t.Skip("dot not found in PATH; skipping render test")
+	}
+
+	tmp, err := os.CreateTemp(t.TempDir(), "graphviz-*.png")
+	if err != nil {
+		t.Fatalf("temp file: %v", err)
+	}
+	_ = tmp.Close()
+
+	if err := g.RenderImage(context.Background(), ImageFormatPNG, tmp.Name()); err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+}
