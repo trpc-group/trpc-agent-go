@@ -133,7 +133,26 @@ func WithProcessMessageHook(hook ProcessMessageHook) Option {
 	}
 }
 
-// WithHost sets the host to use.
+// WithHost sets the host address for the A2A server's agent card URL.
+// This URL will be used by other agents to discover and communicate with this agent.
+//
+// The host parameter can be in one of the following formats:
+//   - Host with port: "localhost:8080" (will be normalized to "http://localhost:8080")
+//   - Complete HTTP URL: "http://example.com:8080" (used as-is)
+//   - Complete HTTPS URL: "https://example.com" (used as-is)
+//   - Custom scheme URL: "custom://service.namespace" (used as-is, supports any scheme like grpc://, custom://, etc.)
+//   - Domain only: "example.com" (will be normalized to "http://example.com")
+//   - IP address: "192.168.1.1:9999" (will be normalized to "http://192.168.1.1:9999")
+//
+// The normalized URL will be set as the agent card's URL field, which is returned
+// when other agents query this agent's capabilities via the /.well-known/agent-card.json endpoint.
+//
+// Example:
+//
+//	server, _ := a2a.New(
+//	    a2a.WithAgent(myAgent),
+//	    a2a.WithHost("localhost:8080"),  // Agent card URL will be "http://localhost:8080"
+//	)
 func WithHost(host string) Option {
 	return func(opts *options) {
 		opts.host = host

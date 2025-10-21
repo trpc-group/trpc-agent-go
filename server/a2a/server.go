@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
@@ -29,6 +30,23 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
+
+// normalizeURL ensures the URL has a scheme.
+// If the input already has a scheme (e.g., http://, https://, custom://), it returns it as-is.
+// Otherwise, it prepends "http://"
+func normalizeURL(urlOrHost string) string {
+	if urlOrHost == "" {
+		return ""
+	}
+	// Parse the URL to check if it has a valid scheme
+	u, err := url.Parse(urlOrHost)
+	if err == nil && u.Scheme != "" && u.Host != "" {
+		// Has both scheme and host (e.g., http://example.com, custom://service)
+		return urlOrHost
+	}
+	// No valid scheme, add http:// prefix
+	return "http://" + urlOrHost
+}
 
 // New creates a new a2a server.
 func New(opts ...Option) (*a2a.A2AServer, error) {
@@ -61,7 +79,9 @@ func buildAgentCard(options *options) a2a.AgentCard {
 	agent := options.agent
 	desc := agent.Info().Description
 	name := agent.Info().Name
-	url := fmt.Sprintf("http://%s", options.host)
+
+	// Normalize the host to ensure it has a proper URL scheme
+	url := normalizeURL(options.host)
 
 	// Build skills from agent tools
 	skills := buildSkillsFromTools(agent, name, desc)
