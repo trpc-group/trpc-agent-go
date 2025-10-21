@@ -190,6 +190,25 @@ func WithEnableParallelTools(enable bool) Option {
 	}
 }
 
+// WithEnableDelegationFallback controls whether to inject a fallback message when
+// the model directly calls a sub-agent without providing a message. When enabled
+// (default), the framework will provide a default delegation message; when disabled,
+// no fallback message will be injected.
+func WithEnableDelegationFallback(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableDelegationFallback = enable
+	}
+}
+
+// WithDelegationFallbackMessage overrides the default fallback message injected
+// when delegating without an explicit message. Has effect only when delegation
+// fallback is enabled.
+func WithDelegationFallbackMessage(msg string) Option {
+	return func(opts *Options) {
+		opts.DelegationFallbackMessage = msg
+	}
+}
+
 // WithStructuredOutputJSON sets a JSON schema structured output for normal runs.
 // The schema is constructed automatically from the provided example type.
 // Provide a typed zero-value pointer like: new(MyStruct) or (*MyStruct)(nil) and we infer the type.
@@ -298,6 +317,17 @@ func WithEndInvocationAfterTransfer(end bool) Option {
 	}
 }
 
+// WithEmitTransferAnnouncements controls whether the agent will emit
+// user-facing textual announcements for agent transfer actions.
+// When set to false, transfer events are still produced (tagged with
+// object type "agent.transfer") but the readable texts are suppressed
+// so typical front-ends can avoid showing them.
+func WithEmitTransferAnnouncements(emit bool) Option {
+	return func(opts *Options) {
+		opts.EmitTransferAnnouncements = emit
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -380,6 +410,16 @@ type Options struct {
 	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
 	// when the transfer is complete. Defaults to true.
 	EndInvocationAfterTransfer bool
+
+	// EmitTransferAnnouncements controls whether to emit textual announcements for transfer events.
+	// Default is true to preserve current behavior.
+	EmitTransferAnnouncements bool
+
+	// EnableDelegationFallback controls whether to inject a fallback message when the model
+	// directly calls a sub-agent without providing a message. Default: true (backward compatible).
+	EnableDelegationFallback bool
+	// DelegationFallbackMessage overrides the default fallback message when enabled.
+	DelegationFallbackMessage string
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -409,6 +449,8 @@ func New(name string, opts ...Option) *LLMAgent {
 	var options Options = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
 		EndInvocationAfterTransfer: true,
+		EmitTransferAnnouncements:  true,
+		EnableDelegationFallback:   true,
 	}
 
 	// Apply function options.
@@ -437,11 +479,14 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
+	// Configure delegation fallback for direct sub-agent calls.
+	processor.SetDelegationFallback(options.EnableDelegationFallback, options.DelegationFallbackMessage)
 	responseProcessors = append(responseProcessors, toolcallProcessor)
 
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
 		transferResponseProcessor := processor.NewTransferResponseProcessor(options.EndInvocationAfterTransfer)
+		transferResponseProcessor.SetEmitTransferAnnouncement(options.EmitTransferAnnouncements)
 		responseProcessors = append(responseProcessors, transferResponseProcessor)
 	}
 

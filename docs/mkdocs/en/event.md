@@ -193,6 +193,14 @@ const (
 )
 ```
 
+### Filtering Transfer Announcements
+
+Transfer announcements (Agent delegation notices) are emitted as Events with `Response.Object == "agent.transfer"`.
+
+This typically appears as a handoff notice: "Transferring control to agent: <name>".
+
+If your UI should not display these system-level notices, filter out Events with this object type at the rendering/service layer. To disable the texts at the source, see the “Suppress Transfer Announcements (Optional)” section in Multi‑Agent docs.
+
 ### Event Creation
 
 When developing custom Agent types or Processors, you need to create Events.
@@ -244,6 +252,7 @@ response := &model.Response{
 }
 evt := event.NewResponseEvent("invoke-123", "agent", response)
 ```
+
 
 ### Tool Response Streaming (including AgentTool forwarding)
 

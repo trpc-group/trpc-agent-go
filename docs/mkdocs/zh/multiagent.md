@@ -442,6 +442,31 @@ coordinatorAgent := llmagent.New(
     └── 研究 SubAgent (信息搜索)
 ```
 
+### 静默委托（可选）
+
+在很多产品形态中，希望“Agent 委托（transfer_to_agent）”对最终用户是“静默”的：仍然完成委托，但不展示提示文案，例如：
+- 交接提示：`Transferring control to agent: <name>`
+
+- 源头关闭（推荐）：
+
+```go
+coordinatorAgent := llmagent.New(
+    "coordinator-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
+    // 关闭对话可见的转移提示文本，事件仍会产生，便于日志与编排
+    llmagent.WithEmitTransferAnnouncements(false),
+)
+```
+
+- 渲染/服务层过滤：
+  - 委托提示以 `Response.Object == "agent.transfer"` 的事件形式产生；
+  - 在 UI/服务层对该对象类型的事件进行过滤即可实现“不对外展示”。
+
+说明：
+- 关闭提示不会影响真正的委托流程与子 Agent 的输入，仅移除“对外展示”的文本；
+- 即便关闭提示，框架仍会输出 `agent.transfer` 类型事件，以便日志与可观测性。
+
 #### 示例会话
 
 ```

@@ -62,6 +62,36 @@ type toolResult struct {
 	event *event.Event
 }
 
+// Default fallback message used when delegating to a sub-agent without an explicit message.
+// This keeps backward compatibility while allowing users to override or disable it via SetDelegationFallback.
+const defaultDelegationFallbackMessage = "Task delegated from coordinator"
+
+// delegationFallback holds runtime configuration for delegation message fallback.
+// When enabled and no message is provided, we inject a fallback so the target agent
+// receives a clear user instruction.
+var delegationFallback = struct {
+	enabled bool
+	message string
+}{
+	enabled: true,
+	message: defaultDelegationFallbackMessage,
+}
+
+// SetDelegationFallback configures whether and what message to inject when a sub-agent
+// is called without an explicit message (model directly calls the sub-agent name).
+// If enabled is false, no fallback message will be injected.
+// If enabled is true and message is empty, the defaultDelegationFallbackMessage is used.
+func SetDelegationFallback(enabled bool, message string) {
+	delegationFallback.enabled = enabled
+	if enabled {
+		if message == "" {
+			delegationFallback.message = defaultDelegationFallbackMessage
+		} else {
+			delegationFallback.message = message
+		}
+	}
+}
+
 // subAgentCall defines the input format for direct sub-agent tool calls.
 // This handles cases where models call sub-agent names directly instead of using transfer_to_agent.
 type subAgentCall struct {
@@ -870,8 +900,8 @@ func convertToolArguments(originalName string, originalArgs []byte, targetName s
 	}
 
 	message := input.Message
-	if message == "" {
-		message = "Task delegated from coordinator"
+	if message == "" && delegationFallback.enabled {
+		message = delegationFallback.message
 	}
 
 	req := &transfer.Request{

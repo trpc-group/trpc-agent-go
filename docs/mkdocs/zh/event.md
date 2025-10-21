@@ -192,6 +192,16 @@ const (
 )
 ```
 
+### 过滤委托提示（Transfer Announcements）
+
+委托提示（Agent 委托/转移说明）统一以 `Response.Object == "agent.transfer"` 的事件输出。
+
+常见形式为：
+- 交接提示：`Transferring control to agent: <name>`
+
+如需在 UI 层隐藏这些系统级提示，可直接过滤该对象类型的事件。若希望从源头关闭对话可见的提示文本，请参见 Multi‑Agent 文档中的“静默委托（可选）”。
+
+
 ### Event 创建
 
 在开发自定义 Agent 类型或 Processor 时，需要创建 Event。
