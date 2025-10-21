@@ -39,6 +39,8 @@ type Manager interface {
 	Create(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
 	// List lists all EvalSet IDs for the given appName.
 	List(ctx context.Context, appName string) ([]string, error)
+	// Delete deletes EvalSet identified by evalSetID.
+	Delete(ctx context.Context, appName, evalSetID string) error
 	// GetCase gets an EvalCase identified by evalSetID and evalCaseID.
 	GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*EvalCase, error)
 	// AddCase adds an EvalCase to an existing EvalSet identified by evalSetID.

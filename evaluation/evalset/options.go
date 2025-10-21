@@ -30,7 +30,7 @@ func NewOptions(opts ...Option) *Options {
 	return options
 }
 
-// Option configures Options.
+// Option is a functional option for configuring the eval set manager.
 type Option func(*Options)
 
 // WithBaseDir sets the root directory for storing eval set JSON files.

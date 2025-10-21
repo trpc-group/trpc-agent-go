@@ -15,7 +15,7 @@ import (
 type Options struct {
 	EvalSetManager    evalset.Manager                  // EvalSetManager is used to store and retrieve eval set.
 	EvalResultManager evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
-	EvaluatorRegistry registry.Registry                // EvaluatorRegistry is used to store and retrieve evaluator.
+	Registry          registry.Registry                // Registry is used to store and retrieve evaluator.
 	SessionIDSupplier func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
 }
 
@@ -27,7 +27,7 @@ func NewOptions(opt ...Option) *Options {
 	opts := &Options{
 		EvalSetManager:    evalsetinmemory.New(),
 		EvalResultManager: evalresultinmemory.New(),
-		EvaluatorRegistry: registry.New(),
+		Registry:          registry.New(),
 		SessionIDSupplier: func(ctx context.Context) string {
 			return uuid.New().String()
 		},
@@ -54,11 +54,11 @@ func WithEvalResultManager(m evalresult.Manager) Option {
 	}
 }
 
-// WithEvaluatorRegistry sets the evaluator registry.
+// WithRegistry sets the evaluator registry.
 // Default evaluator registry is used by default.
-func WithEvaluatorRegistry(r registry.Registry) Option {
+func WithRegistry(r registry.Registry) Option {
 	return func(o *Options) {
-		o.EvaluatorRegistry = r
+		o.Registry = r
 	}
 }
 

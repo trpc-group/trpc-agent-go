@@ -26,7 +26,7 @@ type local struct {
 	runner            runner.Runner
 	evalSetManager    evalset.Manager
 	evalResultManager evalresult.Manager
-	evaluatorRegistry registry.Registry
+	registry          registry.Registry
 	sessionIDSupplier func(ctx context.Context) string
 }
 
@@ -38,7 +38,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		runner:            runner,
 		evalSetManager:    opts.EvalSetManager,
 		evalResultManager: opts.EvalResultManager,
-		evaluatorRegistry: opts.EvaluatorRegistry,
+		registry:          opts.Registry,
 		sessionIDSupplier: opts.SessionIDSupplier,
 	}
 	return service, nil
@@ -48,6 +48,12 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
 	if req == nil {
 		return nil, errors.New("inference request is nil")
+	}
+	if req.AppName == "" {
+		return nil, errors.New("app name is empty")
+	}
+	if req.EvalSetID == "" {
+		return nil, errors.New("eval set id is empty")
 	}
 	// Get the eval set.
 	evalSet, err := s.evalSetManager.Get(ctx, req.AppName, req.EvalSetID)
@@ -167,7 +173,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	// perInvocation collects the metric results for each invocation.
 	perInvocation := make([]*evalresult.EvalMetricResultPerInvocation, 0, len(inferenceResult.Inferences))
 	// Prepare a per-invocation container to hold metric results for each step of the conversation.
-	for i := 0; i < len(inferenceResult.Inferences); i++ {
+	for i := range len(inferenceResult.Inferences) {
 		perInvocation = append(perInvocation, &evalresult.EvalMetricResultPerInvocation{
 			ActualInvocation:   inferenceResult.Inferences[i],
 			ExpectedInvocation: evalCase.Conversation[i],
@@ -219,7 +225,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 // evaluateMetric locates the evaluator registered for the metric and runs the evaluation.
 func (s *local) evaluateMetric(ctx context.Context, evalMetric *metric.EvalMetric,
 	actualInvocations, expectedInvocations []*evalset.Invocation) (*evaluator.EvaluateResult, error) {
-	metricEvaluator, err := s.evaluatorRegistry.Get(evalMetric.MetricName)
+	metricEvaluator, err := s.registry.Get(evalMetric.MetricName)
 	if err != nil {
 		return nil, fmt.Errorf("get evaluator for metric %s: %w", evalMetric.MetricName, err)
 	}

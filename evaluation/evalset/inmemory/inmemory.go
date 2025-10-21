@@ -27,8 +27,8 @@ import (
 // Each API returns deep-copied objects to avoid accidental mutation.
 type manager struct {
 	mu        sync.RWMutex
-	evalSets  map[string]map[string]*evalset.EvalSet             // appName -> evalID -> EvalSet.
-	evalCases map[string]map[string]map[string]*evalset.EvalCase // appName -> evalID -> evalCaseID -> EvalCase.
+	evalSets  map[string]map[string]*evalset.EvalSet             // appName -> evalSetID -> EvalSet.
+	evalCases map[string]map[string]map[string]*evalset.EvalCase // appName -> evalSetID -> evalCaseID -> EvalCase.
 }
 
 // New creates a in-memory evaluation set manager.
@@ -92,6 +92,22 @@ func (m *manager) List(_ context.Context, appName string) ([]string, error) {
 		evalSetIDs = append(evalSetIDs, evalSetID)
 	}
 	return evalSetIDs, nil
+}
+
+// Delete deletes EvalSet identified by evalSetID.
+// Returns an error if the EvalSet does not exist.
+func (m *manager) Delete(_ context.Context, appName, evalSetID string) error {
+	if appName == "" {
+		return errors.New("app name is empty")
+	}
+	if evalSetID == "" {
+		return errors.New("eval set id is empty")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.evalSets[appName], evalSetID)
+	delete(m.evalCases[appName], evalSetID)
+	return nil
 }
 
 // GetCase gets an EvalCase.

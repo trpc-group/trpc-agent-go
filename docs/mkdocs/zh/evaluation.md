@@ -392,35 +392,35 @@ import (
 
 // EvalSet 表示一个评估集
 type EvalSet struct {
-	EvalSetID         string      // 评估集唯一标识
-	Name              string      // 评估集名称
-	Description       string      // 评估集描述
-	EvalCases         []*EvalCase // 所有评估用例
-	CreationTimestamp *epochtime.EpochTime  // 创建时间
+	EvalSetID         string               // 评估集唯一标识
+	Name              string               // 评估集名称
+	Description       string               // 评估集描述
+	EvalCases         []*EvalCase          // 所有评估用例
+	CreationTimestamp *epochtime.EpochTime // 创建时间
 }
 
 // EvalCase 表示单个评估用例
 type EvalCase struct {
-	EvalID            string        // 用例唯一标识
-	Conversation      []*Invocation // 对话序列
-	SessionInput      *SessionInput // Session 初始化数据
-	CreationTimestamp *epochtime.EpochTime    // 创建时间
+	EvalID            string               // 用例唯一标识
+	Conversation      []*Invocation        // 对话序列
+	SessionInput      *SessionInput        // Session 初始化数据
+	CreationTimestamp *epochtime.EpochTime // 创建时间
 }
 
 // Invocation 表示一次用户与 Agent 的交互
 type Invocation struct {
 	InvocationID      string
-	UserContent       *genai.Content    // 用户输入
-	FinalResponse     *genai.Content    // Agent 最终响应
-	IntermediateData  *IntermediateData // Agent 中间响应数据
-	CreationTimestamp *epochtime.EpochTime        // 创建时间
+	UserContent       *genai.Content       // 用户输入
+	FinalResponse     *genai.Content       // Agent 最终响应
+	IntermediateData  *IntermediateData    // Agent 中间响应数据
+	CreationTimestamp *epochtime.EpochTime // 创建时间
 }
 
 // IntermediateData 表示执行过程中的中间数据
 type IntermediateData struct {
 	ToolUses              []*genai.FunctionCall     // 工具调用
 	ToolResponses         []*genai.FunctionResponse // 工具响应
-	IntermediateResponses [][]interface{}           // 中间响应，包含来源与内容
+	IntermediateResponses [][]any                   // 中间响应，包含来源与内容
 }
 
 // SessionInput 表示 Session 初始化输入
@@ -438,6 +438,7 @@ type Manager interface {
 	Get(ctx context.Context, appName, evalSetID string) (*EvalSet, error)                  // 获取指定 EvalSet
 	Create(ctx context.Context, appName, evalSetID string) (*EvalSet, error)               // 创建新 EvalSet
 	List(ctx context.Context, appName string) ([]string, error)                            // 列出所有 EvalSet ID
+	Delete(ctx context.Context, appName, evalSetID string) error                           // 删除指定 EvalSet
 	GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*EvalCase, error) // 获取指定用例
 	AddCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error      // 向评估集添加用例
 	UpdateCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error   // 更新用例
@@ -477,9 +478,11 @@ Metric Manager 负责管理评估指标。
 
 ```go
 type Manager interface {
-	List(ctx context.Context, appName, evalSetID string) ([]string, error)               // 返回指定 EvalSet 下所有指标名称
-	Save(ctx context.Context, appName, evalSetID string, metrics []*EvalMetric) error    // 保存指定 EvalSet 的指标列表
-	Get(ctx context.Context, appName, evalSetID, metricName string) (*EvalMetric, error) // 获取指定 EvalSet 中的单个指标
+	List(ctx context.Context, appName, evalSetID string) ([]string, error)               // 返回指定 EvalSet 下所有的 Metric Name
+	Get(ctx context.Context, appName, evalSetID, metricName string) (*EvalMetric, error) // 获取指定 EvalSet 中的单个 Metric
+	Add(ctx context.Context, appName, evalSetID string, metric *EvalMetric) error        // 为指定 EvalSet 添加 Metric
+	Delete(ctx context.Context, appName, evalSetID, metricName string) error             // 删除指定 Metric
+	Update(ctx context.Context, appName, evalSetID string, metric *EvalMetric) error     // 更新指定 Metric
 }
 ```
 

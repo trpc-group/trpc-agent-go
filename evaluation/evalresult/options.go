@@ -32,7 +32,7 @@ func NewOptions(opt ...Option) *Options {
 	return opts
 }
 
-// Option is a functional option for configuring the evaluation result manager.
+// Option is a functional option for configuring the eval result manager.
 type Option func(*Options)
 
 // WithBaseDir overrides the default base directory used to store results.

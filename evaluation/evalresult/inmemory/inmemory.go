@@ -47,7 +47,7 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 		return "", errors.New("eval set result is nil")
 	}
 	if evalSetResult.EvalSetID == "" {
-		return "", errors.New("eval set id is empty")
+		return "", errors.New("the eval set id of eval set result is empty")
 	}
 	evalSetResultID := evalSetResult.EvalSetResultID
 	if evalSetResultID == "" {
@@ -69,6 +69,12 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 
 // Get retrieves evaluation result by evalSetResultID.
 func (m *manager) Get(_ context.Context, appName, evalSetResultID string) (*evalresult.EvalSetResult, error) {
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
+	if evalSetResultID == "" {
+		return nil, errors.New("eval set result id is empty")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSetResults, ok := m.evalSetResults[appName]
@@ -88,6 +94,9 @@ func (m *manager) Get(_ context.Context, appName, evalSetResultID string) (*eval
 
 // List returns all stored evaluation results.
 func (m *manager) List(_ context.Context, appName string) ([]string, error) {
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSetResults, ok := m.evalSetResults[appName]

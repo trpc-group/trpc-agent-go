@@ -392,35 +392,35 @@ import (
 
 // EvalSet represents an evaluation set.
 type EvalSet struct {
-	EvalSetID         string      // Unique identifier of the evaluation set.
-	Name              string      // Evaluation set name.
-	Description       string      // Evaluation set description.
-	EvalCases         []*EvalCase // All evaluation cases.
-	CreationTimestamp *epochtime.EpochTime  // Creation time.
+	EvalSetID         string               // Unique identifier of the evaluation set.
+	Name              string               // Evaluation set name.
+	Description       string               // Evaluation set description.
+	EvalCases         []*EvalCase          // All evaluation cases.
+	CreationTimestamp *epochtime.EpochTime // Creation time.
 }
 
 // EvalCase represents a single evaluation case.
 type EvalCase struct {
-	EvalID            string        // Unique identifier of the case.
-	Conversation      []*Invocation // Conversation sequence.
-	SessionInput      *SessionInput // Session initialization data.
-	CreationTimestamp *epochtime.EpochTime    // Creation time.
+	EvalID            string               // Unique identifier of the case.
+	Conversation      []*Invocation        // Conversation sequence.
+	SessionInput      *SessionInput        // Session initialization data.
+	CreationTimestamp *epochtime.EpochTime // Creation time.
 }
 
 // Invocation represents a user-agent interaction.
 type Invocation struct {
 	InvocationID      string
-	UserContent       *genai.Content    // User input.
-	FinalResponse     *genai.Content    // Agent final response.
-	IntermediateData  *IntermediateData // Agent intermediate response data.
-	CreationTimestamp *epochtime.EpochTime        // Creation time.
+	UserContent       *genai.Content       // User input.
+	FinalResponse     *genai.Content       // Agent final response.
+	IntermediateData  *IntermediateData    // Agent intermediate response data.
+	CreationTimestamp *epochtime.EpochTime // Creation time.
 }
 
 // IntermediateData represents intermediate data during execution.
 type IntermediateData struct {
 	ToolUses              []*genai.FunctionCall     // Tool call.
 	ToolResponses         []*genai.FunctionResponse // Tool response.
-	IntermediateResponses [][]interface{}           // Intermediate response, including source and content.
+	IntermediateResponses [][]any                   // Intermediate response, including source and content.
 }
 
 // SessionInput represents session initialization input.
@@ -441,6 +441,8 @@ type Manager interface {
 	Create(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
 	// List all EvalSet IDs.
 	List(ctx context.Context, appName string) ([]string, error)
+	// Delete the specified EvalSet.
+	Delete(ctx context.Context, appName, evalSetID string) error
 	// Get the specified case.
 	GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*EvalCase, error)
 	// Add a case to the evaluation set.
@@ -483,12 +485,16 @@ The interface definition is as follows:
 
 ```go
 type Manager interface {
-	// Returns the names of all metrics in the specified EvalSet.
+	// Returns all metric names for a specified EvalSet.
 	List(ctx context.Context, appName, evalSetID string) ([]string, error)
-	// Saves the metrics list for the specified EvalSet.
-	Save(ctx context.Context, appName, evalSetID string, metrics []*EvalMetric) error
-	// Gets a single metric in the specified EvalSet.
+	// Gets a single metric from a specified EvalSet.
 	Get(ctx context.Context, appName, evalSetID, metricName string) (*EvalMetric, error)
+	// Adds the metric to a specified EvalSet.
+	Add(ctx context.Context, appName, evalSetID string, metric *EvalMetric) error
+	// Deletes the specified metric.
+	Delete(ctx context.Context, appName, evalSetID, metricName string) error
+	// Updates the specified metric.
+	Update(ctx context.Context, appName, evalSetID string, metric *EvalMetric) error
 }
 ```
 

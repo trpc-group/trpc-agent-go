@@ -35,7 +35,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		evalSetManager:    opts.evalSetManager,
 		evalResultManager: opts.evalResultManager,
 		metricManager:     opts.metricManager,
-		evaluatorRegistry: opts.evaluatorRegistry,
+		registry:          opts.registry,
 		evalService:       opts.evalService,
 		numRuns:           opts.numRuns,
 	}
@@ -47,7 +47,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 			a.runner,
 			service.WithEvalSetManager(a.evalSetManager),
 			service.WithEvalResultManager(a.evalResultManager),
-			service.WithEvaluatorRegistry(a.evaluatorRegistry),
+			service.WithRegistry(a.registry),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("create eval service: %w", err)
@@ -64,7 +64,7 @@ type agentEvaluator struct {
 	evalSetManager    evalset.Manager
 	evalResultManager evalresult.Manager
 	metricManager     metric.Manager
-	evaluatorRegistry registry.Registry
+	registry          registry.Registry
 	evalService       service.Service
 	numRuns           int
 }
@@ -117,7 +117,7 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 	// case results. So EvalCaseResult need to be grouped by case ID.
 	// caseResultsByID is a map from case ID to a list of eval case results.
 	caseResultsByID := make(map[string][]*evalresult.EvalCaseResult)
-	for i := 0; i < a.numRuns; i++ {
+	for range a.numRuns {
 		// Run evaluation on the specified eval set.
 		evalSetResult, err := a.runEvaluation(ctx, evalSetID)
 		if err != nil {

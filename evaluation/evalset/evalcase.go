@@ -52,7 +52,7 @@ type IntermediateData struct {
 	// IntermediateResponses represents intermediate responses, including text responses and tool responses.
 	// For each intermediate response, the first element is the author string,
 	// and the second element is the genai.Part slice.
-	IntermediateResponses [][]interface{} `json:"intermediateResponses"`
+	IntermediateResponses [][]any `json:"intermediateResponses"`
 }
 
 // SessionInput represents values that help initialize a session.
@@ -63,5 +63,5 @@ type SessionInput struct {
 	// UserID identifies the user.
 	UserID string `json:"userId"`
 	// State contains the initial state of the session.
-	State map[string]interface{} `json:"state"`
+	State map[string]any `json:"state"`
 }

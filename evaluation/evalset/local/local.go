@@ -49,6 +49,12 @@ func New(opt ...evalset.Option) evalset.Manager {
 // Get gets an EvalSet identified by evalSetID.
 // Returns an error if the EvalSet does not exist.
 func (m *manager) Get(_ context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
+	if evalSetID == "" {
+		return nil, errors.New("eval set id is empty")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSet, err := m.load(appName, evalSetID)
@@ -61,6 +67,12 @@ func (m *manager) Get(_ context.Context, appName, evalSetID string) (*evalset.Ev
 // Create creates an EvalSet.
 // Returns an error if the EvalSet already exists.
 func (m *manager) Create(_ context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
+	if evalSetID == "" {
+		return nil, errors.New("eval set id is empty")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, err := m.load(appName, evalSetID); err == nil {
@@ -83,6 +95,9 @@ func (m *manager) Create(_ context.Context, appName, evalSetID string) (*evalset
 // List lists all EvalSet ID for the given appName.
 // Returns an error if the appName does not exist.
 func (m *manager) List(_ context.Context, appName string) ([]string, error) {
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
 	evalSetIDs, err := m.locator.List(m.baseDir, appName)
 	if err != nil {
 		return nil, fmt.Errorf("list eval sets for app %s: %w", appName, err)
@@ -90,9 +105,38 @@ func (m *manager) List(_ context.Context, appName string) ([]string, error) {
 	return evalSetIDs, nil
 }
 
+// Delete deletes EvalSet identified by evalSetID.
+// Returns an error if the EvalSet does not exist.
+func (m *manager) Delete(_ context.Context, appName, evalSetID string) error {
+	if appName == "" {
+		return errors.New("app name is empty")
+	}
+	if evalSetID == "" {
+		return errors.New("eval set id is empty")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, err := m.load(appName, evalSetID); err != nil {
+		return fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
+	}
+	if err := m.remove(appName, evalSetID); err != nil {
+		return fmt.Errorf("remove eval set %s.%s: %w", appName, evalSetID, err)
+	}
+	return nil
+}
+
 // GetCase gets an EvalCase.
 // Returns an error if the EvalCase does not exist.
 func (m *manager) GetCase(_ context.Context, appName, evalSetID, evalCaseID string) (*evalset.EvalCase, error) {
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
+	if evalSetID == "" {
+		return nil, errors.New("eval set id is empty")
+	}
+	if evalCaseID == "" {
+		return nil, errors.New("eval case id is empty")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSet, err := m.load(appName, evalSetID)
@@ -104,12 +148,18 @@ func (m *manager) GetCase(_ context.Context, appName, evalSetID, evalCaseID stri
 			return c, nil
 		}
 	}
-	return nil, fmt.Errorf("%w: eval case %s.%s.%s not found", os.ErrNotExist, appName, evalSetID, evalCaseID)
+	return nil, fmt.Errorf("eval case %s.%s.%s not found: %w", appName, evalSetID, evalCaseID, os.ErrNotExist)
 }
 
 // AddCase adds the given EvalCase to an existing EvalSet identified by evalSetID.
 // If the EvalSet does not exist or the EvalCase already exists, returns an error.
 func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase *evalset.EvalCase) error {
+	if appName == "" {
+		return errors.New("app name is empty")
+	}
+	if evalSetID == "" {
+		return errors.New("eval set id is empty")
+	}
 	if evalCase == nil {
 		return errors.New("evalCase is nil")
 	}
@@ -137,6 +187,12 @@ func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase
 // UpdateCase updates an existing EvalCase.
 // If the EvalSet does not exist or the EvalCase does not exist, returns an error.
 func (m *manager) UpdateCase(_ context.Context, appName, evalSetID string, evalCase *evalset.EvalCase) error {
+	if appName == "" {
+		return errors.New("app name is empty")
+	}
+	if evalSetID == "" {
+		return errors.New("eval set id is empty")
+	}
 	if evalCase == nil {
 		return errors.New("evalCase is nil")
 	}
@@ -164,6 +220,15 @@ func (m *manager) UpdateCase(_ context.Context, appName, evalSetID string, evalC
 // DeleteCase deletes the given EvalCase.
 // If the EvalSet does not exist or the EvalCase does not exist, returns an error.
 func (m *manager) DeleteCase(_ context.Context, appName, evalSetID, evalCaseID string) error {
+	if appName == "" {
+		return errors.New("app name is empty")
+	}
+	if evalSetID == "" {
+		return errors.New("eval set id is empty")
+	}
+	if evalCaseID == "" {
+		return errors.New("eval case id is empty")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	evalSet, err := m.load(appName, evalSetID)
@@ -232,6 +297,15 @@ func (m *manager) store(appName string, evalSet *evalset.EvalSet) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("rename file %s to %s: %w", tmp, path, err)
+	}
+	return nil
+}
+
+// remove removes the EvalSet from the file system.
+func (m *manager) remove(appName string, evalSetID string) error {
+	path := m.evalSetPath(appName, evalSetID)
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove file %s: %w", path, err)
 	}
 	return nil
 }

@@ -50,11 +50,14 @@ func New(opt ...evalresult.Option) evalresult.Manager {
 // Save stores an evaluation result.
 // Returns an error if the eval set result is nil or the eval set id is empty.
 func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalresult.EvalSetResult) (string, error) {
+	if appName == "" {
+		return "", errors.New("app name is empty")
+	}
 	if evalSetResult == nil {
 		return "", errors.New("eval set result is nil")
 	}
 	if evalSetResult.EvalSetID == "" {
-		return "", errors.New("eval set result id is empty")
+		return "", errors.New("the eval set id of eval set result is empty")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -75,6 +78,12 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 
 // Get retrieves an evaluation result by evalSetResultID.
 func (m *manager) Get(_ context.Context, appName, evalSetResultID string) (*evalresult.EvalSetResult, error) {
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
+	if evalSetResultID == "" {
+		return nil, errors.New("eval set result id is empty")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSetResult, err := m.load(appName, evalSetResultID)
@@ -86,6 +95,9 @@ func (m *manager) Get(_ context.Context, appName, evalSetResultID string) (*eval
 
 // List returns all available evaluation results.
 func (m *manager) List(_ context.Context, appName string) ([]string, error) {
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	evalSetResultIDs, err := m.locator.List(m.baseDir, appName)

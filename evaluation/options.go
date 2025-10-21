@@ -19,7 +19,7 @@ type options struct {
 	evalSetManager    evalset.Manager
 	evalResultManager evalresult.Manager
 	metricManager     metric.Manager
-	evaluatorRegistry registry.Registry
+	registry          registry.Registry
 	evalService       service.Service
 	numRuns           int
 }
@@ -32,7 +32,7 @@ func newOptions(opt ...Option) *options {
 		evalSetManager:    evalsetinmemory.New(),
 		evalResultManager: evalresultinmemory.New(),
 		metricManager:     metricinmemory.New(),
-		evaluatorRegistry: registry.New(),
+		registry:          registry.New(),
 	}
 	// Apply user options.
 	for _, o := range opt {
@@ -65,10 +65,10 @@ func WithMetricManager(m metric.Manager) Option {
 	}
 }
 
-// WithEvaluatorRegistry sets the evaluator registry.
-func WithEvaluatorRegistry(r registry.Registry) Option {
+// WithRegistry sets the evaluator registry.
+func WithRegistry(r registry.Registry) Option {
 	return func(o *options) {
-		o.evaluatorRegistry = r
+		o.registry = r
 	}
 }
 

@@ -7,7 +7,7 @@
 //
 //
 
-// Package evalresult provides evaluation result for evaluation set.
+// Package evalresult provides evaluation result for evaluation.
 package evalresult
 
 import (
@@ -24,7 +24,7 @@ type EvalSetResult struct {
 	// EvalSetResultID uniquely identifies this result.
 	EvalSetResultID string `json:"evalSetResultId"`
 	// EvalSetResultName is the name of this result.
-	EvalSetResultName string `json:"evalSetResultName,omitempty"`
+	EvalSetResultName string `json:"evalSetResultName"`
 	// EvalSetID identifies the eval set.
 	EvalSetID string `json:"evalSetId"`
 	// EvalCaseResults contains results for each eval case.
@@ -49,7 +49,7 @@ type EvalCaseResult struct {
 	// SessionID is the session id of the session generated as result of inferencing stage of the eval.
 	SessionID string `json:"sessionId"`
 	// UserID is the user id used during inferencing stage of the eval.
-	UserID string `json:"userId,omitempty"`
+	UserID string `json:"userId"`
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.
@@ -58,19 +58,21 @@ type EvalMetricResult struct {
 	// MetricName identifies the metric.
 	MetricName string `json:"metricName"`
 	// Score obtained for this metric.
-	Score float64 `json:"score,omitempty"`
+	Score float64 `json:"score"`
 	// Status of this metric evaluation.
 	Status status.EvalStatus `json:"status"`
 	// Threshold that was used.
 	Threshold float64 `json:"threshold"`
 	// Details contains additional metric-specific information.
-	Details map[string]any `json:"details,omitempty"`
+	Details map[string]any `json:"details"`
 }
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
 // It mirrors the schema used by ADK Web, with field names in camel-case to align with the JSON format.
 type EvalMetricResultPerInvocation struct {
-	ActualInvocation   *evalset.Invocation `json:"actualInvocation"`
+	// ActualInvocation is the actual invocation, captureed from agent run.
+	ActualInvocation *evalset.Invocation `json:"actualInvocation"`
+	// ExpectedInvocation is the expected invocation.
 	ExpectedInvocation *evalset.Invocation `json:"expectedInvocation"`
 	// MetricResults contains results for each metric for this invocation.
 	MetricResults []*EvalMetricResult `json:"metricResults"`

@@ -50,7 +50,7 @@ func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context, actuals, expecte
 	}
 	perInvocation := make([]evaluator.PerInvocationResult, 0, len(actuals))
 	var totalScore float64
-	for i := 0; i < len(actuals); i++ {
+	for i := range len(actuals) {
 		actual := actuals[i]
 		expected := expecteds[i]
 		actualCalls := getToolCalls(actual)

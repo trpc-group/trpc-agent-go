@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"google.golang.org/genai"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -30,7 +31,7 @@ func Inference(
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	for _, invocation := range invocations {
-		responseInvocation, err := inferencePerInvocation(ctx, runner, initialSession.UserID, sessionID, invocation)
+		responseInvocation, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation)
 		if err != nil {
 			return nil, err
 		}
@@ -39,12 +40,12 @@ func Inference(
 	return responseInvocations, nil
 }
 
-// inferencePerInvocation executes the agent for a single invocation.
-func inferencePerInvocation(
+// inferenceInvocation executes the agent for a single invocation.
+func inferenceInvocation(
 	ctx context.Context,
 	r runner.Runner,
-	userID string,
 	sessionID string,
+	initialSession *evalset.SessionInput,
 	invocation *evalset.Invocation,
 ) (*evalset.Invocation, error) {
 	if invocation.UserContent == nil {
@@ -58,7 +59,7 @@ func inferencePerInvocation(
 	if err != nil {
 		return nil, fmt.Errorf("convert content to message: %w", err)
 	}
-	events, err := r.Run(ctx, userID, sessionID, *message)
+	events, err := r.Run(ctx, initialSession.UserID, sessionID, *message, agent.WithRuntimeState(initialSession.State))
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
@@ -109,7 +110,7 @@ func inferencePerInvocation(
 
 // convertToolCallResponse converts the tool call response to function calls.
 func convertToolCallResponse(event *event.Event) ([]*genai.FunctionCall, error) {
-	toolUses := make([]*genai.FunctionCall, 0)
+	toolUses := []*genai.FunctionCall{}
 	for _, choice := range event.Response.Choices {
 		for _, toolCall := range choice.Message.ToolCalls {
 			toolUse, err := convertToolCallsToFunctionCalls(&toolCall)
