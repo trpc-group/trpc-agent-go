@@ -244,3 +244,173 @@ func TestInvocation_AddNoticeChannelAndWait_nil(t *testing.T) {
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
 }
+
+func TestInvocation_GetEventFilterKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		inv       *Invocation
+		expectKey string
+	}{
+		{
+			name:      "nil invocation",
+			inv:       nil,
+			expectKey: "",
+		},
+		{
+			name:      "invocation without filter key",
+			inv:       NewInvocation(),
+			expectKey: "",
+		},
+		{
+			name:      "invocation with filter key",
+			inv:       NewInvocation(WithInvocationEventFilterKey("test-filter-key")),
+			expectKey: "test-filter-key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := tt.inv.GetEventFilterKey()
+			require.Equal(t, tt.expectKey, key)
+		})
+	}
+}
+
+func TestInjectIntoEvent(t *testing.T) {
+	tests := []struct {
+		name     string
+		inv      *Invocation
+		event    *event.Event
+		validate func(*testing.T, *event.Event)
+	}{
+		{
+			name:  "nil event",
+			inv:   NewInvocation(WithInvocationID("test-id")),
+			event: nil,
+			validate: func(t *testing.T, e *event.Event) {
+				// Nothing to validate, should not panic
+			},
+		},
+		{
+			name:  "nil invocation",
+			inv:   nil,
+			event: &event.Event{},
+			validate: func(t *testing.T, e *event.Event) {
+				require.Equal(t, "", e.InvocationID)
+			},
+		},
+		{
+			name: "inject invocation info",
+			inv: NewInvocation(
+				WithInvocationID("test-inv-id"),
+				WithInvocationBranch("test-branch"),
+				WithInvocationEventFilterKey("test-filter"),
+				WithInvocationRunOptions(RunOptions{RequestID: "test-request-id"}),
+			),
+			event: &event.Event{},
+			validate: func(t *testing.T, e *event.Event) {
+				require.Equal(t, "test-inv-id", e.InvocationID)
+				require.Equal(t, "test-branch", e.Branch)
+				require.Equal(t, "test-filter", e.FilterKey)
+				require.Equal(t, "test-request-id", e.RequestID)
+			},
+		},
+		{
+			name: "inject with parent invocation",
+			inv: func() *Invocation {
+				parent := NewInvocation(WithInvocationID("parent-id"))
+				child := parent.Clone(WithInvocationID("child-id"))
+				return child
+			}(),
+			event: &event.Event{},
+			validate: func(t *testing.T, e *event.Event) {
+				require.Equal(t, "child-id", e.InvocationID)
+				require.Equal(t, "parent-id", e.ParentInvocationID)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			InjectIntoEvent(tt.inv, tt.event)
+			tt.validate(t, tt.event)
+		})
+	}
+}
+
+func TestEmitEvent(t *testing.T) {
+	tests := []struct {
+		name      string
+		inv       *Invocation
+		ch        chan *event.Event
+		event     *event.Event
+		expectErr bool
+	}{
+		{
+			name:      "nil channel",
+			inv:       NewInvocation(),
+			ch:        nil,
+			event:     &event.Event{},
+			expectErr: false,
+		},
+		{
+			name:      "nil event",
+			inv:       NewInvocation(),
+			ch:        make(chan *event.Event, 1),
+			event:     nil,
+			expectErr: false,
+		},
+		{
+			name:      "successful emit",
+			inv:       NewInvocation(WithInvocationID("test-id")),
+			ch:        make(chan *event.Event, 1),
+			event:     &event.Event{ID: "event-1"},
+			expectErr: false,
+		},
+		{
+			name:      "emit with nil invocation",
+			inv:       nil,
+			ch:        make(chan *event.Event, 1),
+			event:     &event.Event{ID: "event-2"},
+			expectErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			err := EmitEvent(ctx, tt.inv, tt.ch, tt.event)
+			if tt.expectErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestGetAppendEventNoticeKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		eventID  string
+		expected string
+	}{
+		{
+			name:     "normal event ID",
+			eventID:  "event-123",
+			expected: AppendEventNoticeKeyPrefix + "event-123",
+		},
+		{
+			name:     "empty event ID",
+			eventID:  "",
+			expected: AppendEventNoticeKeyPrefix,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := GetAppendEventNoticeKey(tt.eventID)
+			require.Equal(t, tt.expected, key)
+		})
+	}
+}

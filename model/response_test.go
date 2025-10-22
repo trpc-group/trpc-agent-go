@@ -576,3 +576,209 @@ func TestResponse_IsFinalResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestResponse_Clone(t *testing.T) {
+	tests := []struct {
+		name     string
+		response *Response
+	}{
+		{
+			name:     "clone nil response",
+			response: nil,
+		},
+		{
+			name: "clone simple response",
+			response: &Response{
+				ID:      "resp-123",
+				Object:  "chat.completion",
+				Created: 1234567890,
+				Model:   "gpt-4",
+				Choices: []Choice{
+					{
+						Index: 0,
+						Message: Message{
+							Role:    RoleAssistant,
+							Content: "Hello!",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "clone response with usage",
+			response: &Response{
+				ID:    "resp-456",
+				Model: "gpt-3.5-turbo",
+				Usage: &Usage{
+					PromptTokens:     10,
+					CompletionTokens: 20,
+					TotalTokens:      30,
+				},
+			},
+		},
+		{
+			name: "clone response with error",
+			response: &Response{
+				ID: "resp-789",
+				Error: &ResponseError{
+					Message: "API error",
+					Type:    "invalid_request_error",
+					Param:   func() *string { s := "messages"; return &s }(),
+					Code:    func() *string { s := "invalid_value"; return &s }(),
+				},
+			},
+		},
+		{
+			name: "clone response with system fingerprint",
+			response: &Response{
+				ID: "resp-abc",
+				SystemFingerprint: func() *string {
+					s := "fp_123456"
+					return &s
+				}(),
+			},
+		},
+		{
+			name: "clone response with all fields",
+			response: &Response{
+				ID:      "resp-full",
+				Object:  "chat.completion",
+				Created: 9876543210,
+				Model:   "gpt-4-turbo",
+				Choices: []Choice{
+					{
+						Index: 0,
+						Message: Message{
+							Role:    RoleAssistant,
+							Content: "First message",
+						},
+					},
+					{
+						Index: 1,
+						Message: Message{
+							Role:    RoleAssistant,
+							Content: "Second message",
+						},
+					},
+				},
+				Usage: &Usage{
+					PromptTokens:     100,
+					CompletionTokens: 200,
+					TotalTokens:      300,
+				},
+				Error: &ResponseError{
+					Message: "Test error",
+					Type:    "test_error",
+					Param:   func() *string { s := "test_param"; return &s }(),
+					Code:    func() *string { s := "test_code"; return &s }(),
+				},
+				SystemFingerprint: func() *string {
+					s := "fp_abcdef"
+					return &s
+				}(),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clone := tt.response.Clone()
+
+			// Test nil case
+			if tt.response == nil {
+				if clone != nil {
+					t.Errorf("Clone of nil should return nil, got %v", clone)
+				}
+				return
+			}
+
+			// Verify it's a different object
+			if tt.response == clone {
+				t.Error("Clone should return a different object")
+			}
+
+			// Verify all fields are equal
+			if clone.ID != tt.response.ID {
+				t.Errorf("ID mismatch: got %v, want %v", clone.ID, tt.response.ID)
+			}
+			if clone.Object != tt.response.Object {
+				t.Errorf("Object mismatch: got %v, want %v", clone.Object, tt.response.Object)
+			}
+			if clone.Created != tt.response.Created {
+				t.Errorf("Created mismatch: got %v, want %v", clone.Created, tt.response.Created)
+			}
+			if clone.Model != tt.response.Model {
+				t.Errorf("Model mismatch: got %v, want %v", clone.Model, tt.response.Model)
+			}
+
+			// Verify Choices is a deep copy
+			if len(clone.Choices) != len(tt.response.Choices) {
+				t.Errorf("Choices length mismatch: got %v, want %v", len(clone.Choices), len(tt.response.Choices))
+			}
+			if len(clone.Choices) > 0 && &clone.Choices[0] == &tt.response.Choices[0] {
+				t.Error("Choices should be deep copied")
+			}
+			for i := range clone.Choices {
+				if !reflect.DeepEqual(clone.Choices[i], tt.response.Choices[i]) {
+					t.Errorf("Choice %d mismatch: got %+v, want %+v", i, clone.Choices[i], tt.response.Choices[i])
+				}
+			}
+
+			// Verify Usage is deep copied
+			if tt.response.Usage != nil {
+				if clone.Usage == nil {
+					t.Error("Usage should be copied")
+				} else {
+					if clone.Usage == tt.response.Usage {
+						t.Error("Usage should be deep copied")
+					}
+					if !reflect.DeepEqual(clone.Usage, tt.response.Usage) {
+						t.Errorf("Usage mismatch: got %+v, want %+v", clone.Usage, tt.response.Usage)
+					}
+				}
+			} else if clone.Usage != nil {
+				t.Error("Usage should be nil")
+			}
+
+			// Verify Error is deep copied
+			if tt.response.Error != nil {
+				if clone.Error == nil {
+					t.Error("Error should be copied")
+				} else {
+					if clone.Error == tt.response.Error {
+						t.Error("Error should be deep copied")
+					}
+					if !reflect.DeepEqual(clone.Error, tt.response.Error) {
+						t.Errorf("Error mismatch: got %+v, want %+v", clone.Error, tt.response.Error)
+					}
+				}
+			} else if clone.Error != nil {
+				t.Error("Error should be nil")
+			}
+
+			// Verify SystemFingerprint is deep copied
+			if tt.response.SystemFingerprint != nil {
+				if clone.SystemFingerprint == nil {
+					t.Error("SystemFingerprint should be copied")
+				} else {
+					if clone.SystemFingerprint == tt.response.SystemFingerprint {
+						t.Error("SystemFingerprint should be deep copied")
+					}
+					if *clone.SystemFingerprint != *tt.response.SystemFingerprint {
+						t.Errorf("SystemFingerprint mismatch: got %v, want %v", *clone.SystemFingerprint, *tt.response.SystemFingerprint)
+					}
+				}
+			} else if clone.SystemFingerprint != nil {
+				t.Error("SystemFingerprint should be nil")
+			}
+
+			// Verify modifying clone doesn't affect original
+			if len(clone.Choices) > 0 {
+				clone.Choices[0].Message.Content = "Modified"
+				if tt.response.Choices[0].Message.Content == "Modified" {
+					t.Error("Modifying clone should not affect original")
+				}
+			}
+		})
+	}
+}

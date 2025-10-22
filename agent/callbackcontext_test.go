@@ -59,3 +59,97 @@ func TestNewCallbackContext(t *testing.T) {
 		})
 	}
 }
+
+func TestCallbackContext_ArtifactOperations_NoService(t *testing.T) {
+	// Test all artifact operations when ArtifactService is nil
+	inv := &Invocation{
+		AgentName:       "test-agent",
+		ArtifactService: nil, // No artifact service
+	}
+	ctx := NewInvocationContext(context.Background(), inv)
+	cc, err := NewCallbackContext(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, cc)
+
+	t.Run("SaveArtifact without service", func(t *testing.T) {
+		version, err := cc.SaveArtifact("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "artifact service is nil")
+		assert.Equal(t, 0, version)
+	})
+
+	t.Run("LoadArtifact without service", func(t *testing.T) {
+		artifact, err := cc.LoadArtifact("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "artifact service is nil")
+		assert.Nil(t, artifact)
+	})
+
+	t.Run("ListArtifacts without service", func(t *testing.T) {
+		artifacts, err := cc.ListArtifacts()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "artifact service is nil")
+		assert.Nil(t, artifacts)
+	})
+
+	t.Run("DeleteArtifact without service", func(t *testing.T) {
+		err := cc.DeleteArtifact("test.txt")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "artifact service is nil")
+	})
+
+	t.Run("ListArtifactVersions without service", func(t *testing.T) {
+		versions, err := cc.ListArtifactVersions("test.txt")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "artifact service is nil")
+		assert.Nil(t, versions)
+	})
+}
+
+func TestCallbackContext_ArtifactOperations_NoSession(t *testing.T) {
+	// Test all artifact operations when Session is nil
+	mockService := &mockArtifactService{}
+	inv := &Invocation{
+		AgentName:       "test-agent",
+		ArtifactService: mockService,
+		Session:         nil, // No session
+	}
+	ctx := NewInvocationContext(context.Background(), inv)
+	cc, err := NewCallbackContext(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, cc)
+
+	t.Run("SaveArtifact without session", func(t *testing.T) {
+		version, err := cc.SaveArtifact("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no session available")
+		assert.Equal(t, 0, version)
+	})
+
+	t.Run("LoadArtifact without session", func(t *testing.T) {
+		artifact, err := cc.LoadArtifact("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no session available")
+		assert.Nil(t, artifact)
+	})
+
+	t.Run("ListArtifacts without session", func(t *testing.T) {
+		artifacts, err := cc.ListArtifacts()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no session available")
+		assert.Nil(t, artifacts)
+	})
+
+	t.Run("DeleteArtifact without session", func(t *testing.T) {
+		err := cc.DeleteArtifact("test.txt")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no session available")
+	})
+
+	t.Run("ListArtifactVersions without session", func(t *testing.T) {
+		versions, err := cc.ListArtifactVersions("test.txt")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no session available")
+		assert.Nil(t, versions)
+	})
+}
