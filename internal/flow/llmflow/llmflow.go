@@ -197,6 +197,11 @@ func (f *Flow) processStreamingResponses(
 	span oteltrace.Span,
 ) (*event.Event, error) {
 	var lastEvent *event.Event
+	// Determine whether this model call happens after tool responses in the
+	// current turn by scanning messages since the last user message.
+	afterTool := hasToolSinceLastUser(llmRequest.Messages)
+	// Track whether this model call has shown tool intent while streaming.
+	toolPlanSeen := false
 
 	for response := range responseChan {
 		// Handle after model callbacks.
@@ -208,8 +213,12 @@ func (f *Flow) processStreamingResponses(
 			response = customResp
 		}
 
+		// Tool plan detection will be updated while tagging via shared helper.
+
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
+		// Attach reasoning tag for clients to filter pre-tool vs final thinking.
+		attachReasoningTagLLM(llmResponseEvent, afterTool, &toolPlanSeen)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
 		// 5. Check context cancellation.
@@ -310,6 +319,37 @@ func (f *Flow) preprocess(
 		for _, t := range invocation.Agent.Tools() {
 			llmRequest.Tools[t.Declaration().Name] = t
 		}
+	}
+}
+
+// hasToolSinceLastUser reports whether there is any tool-role message after the
+// last user message in the given slice. When true, the current model call is
+// considered a “finalization” call after tools.
+func hasToolSinceLastUser(messages []model.Message) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		switch m.Role {
+		case model.RoleTool:
+			return true
+		case model.RoleUser:
+			return false
+		}
+	}
+	return false
+}
+
+// attachReasoningTagLLM annotates an LLM streaming event with a reasoning tag.
+// Tagging rules mirror the graph implementation:
+//   - afterTool == true  => reasoning.final
+//   - toolPlanSeen       => reasoning.tool
+//   - else               => reasoning.unknown
+func attachReasoningTagLLM(e *event.Event, afterTool bool, toolPlanSeen *bool) {
+	tag := event.DecideReasoningTag(e, afterTool, toolPlanSeen)
+	if tag != "" {
+		event.AddTag(e, tag)
 	}
 }
 

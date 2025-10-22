@@ -38,6 +38,13 @@ type Event struct {
     // Branch is a branch identifier for multi-Agent collaboration.
     Branch string `json:"branch,omitempty"`
 
+    // Tag carries framework and business tags for easy filtering.
+    // The framework adds standard reasoning tags during streaming:
+    //   - reasoning.tool    – reasoning while planning/initiating tool calls
+    //   - reasoning.final   – reasoning for the final model answer
+    //   - reasoning.unknown – early reasoning before the framework can decide
+    Tag string `json:"tag,omitempty"`
+
     // RequiresCompletion indicates whether this event requires a completion signal.
     RequiresCompletion bool `json:"requiresCompletion,omitempty"`
 
@@ -290,6 +297,39 @@ if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.
 
 Tip: For custom events, always use `event.New(...)` with `WithResponse`, `WithBranch`, etc., to ensure IDs and timestamps are set consistently.
 
+### Reasoning Tags (filter thinking vs. final answer)
+
+When a provider returns internal reasoning/thinking (e.g., DeepSeek, Hunyuan),
+the framework annotates streaming LLM events with tags so clients can cleanly
+separate “tool-planning thoughts” from the “final thoughts”.
+
+Standard tags:
+
+- `reasoning.tool`: Reasoning that belongs to a model call that is planning or initiating tool/function usage.
+- `reasoning.final`: Reasoning that belongs to the final model answer of the turn (either no tools were required, or tools already ran and the model is summarizing the result).
+- `reasoning.unknown`: Early reasoning where the framework cannot yet determine whether tools will be used. Most UIs can ignore this tag or treat it as pre-tool.
+
+Usage example (streaming loop):
+
+```go
+for ev := range ch {
+    if ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
+        continue
+    }
+    choice := ev.Response.Choices[0]
+    // Only show final reasoning
+    if ev.Tag == event.TagReasoningFinal && choice.Delta.ReasoningContent != "" {
+        fmt.Print(choice.Delta.ReasoningContent)
+    }
+    // Show visible text as usual
+    if choice.Delta.Content != "" {
+        fmt.Print(choice.Delta.Content)
+    }
+}
+```
+
+See a minimal runnable example in `examples/reasoningtags/main.go`.
+
 ### Event Methods
 
 Event provides the `Clone` method for creating deep copies of Events.
@@ -393,7 +433,7 @@ func (c *multiTurnChat) handleToolCalls(
         }
         fmt.Printf("🔧 Tool calls initiated:\n")
         for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
-            fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+            fmt.Printf("   - %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
             if len(toolCall.Function.Arguments) > 0 {
                 fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
             }

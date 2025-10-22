@@ -38,6 +38,13 @@ type Event struct {
     // Branch 是分支标识符，用于多 Agent 协作
     Branch string `json:"branch,omitempty"`
 
+    // Tag 携带框架与业务标签，便于过滤。
+    // 框架会在流式模型事件上自动标注标准推理标签：
+    //   - reasoning.tool    —— 调用/计划调用工具阶段的思考
+    //   - reasoning.final   —— 最终回答阶段的思考
+    //   - reasoning.unknown —— 框架尚未能确定阶段的早期思考（通常可忽略）
+    Tag string `json:"tag,omitempty"`
+
     // RequiresCompletion 表示此事件是否需要完成信号
     RequiresCompletion bool `json:"requiresCompletion,omitempty"`
 
@@ -288,6 +295,38 @@ if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.
 
 提示：自定义事件时，优先使用 `event.New(...)` 搭配 `WithResponse`、`WithBranch` 等，以保证 ID 和时间戳等元数据一致。
 
+### 推理标签（区分工具阶段思考与最终思考）
+
+当模型支持返回“推理/思考”（如 DeepSeek、混元）时，框架会在流式 LLM 事件上添加标签，
+以便在产品侧清晰地区分“调用工具前的思考”和“最终总结的思考”。
+
+标准标签：
+
+- `reasoning.tool`：属于计划或正在发起工具调用阶段的思考。
+- `reasoning.final`：属于本轮会话最终回答阶段的思考（可能未用工具，或工具已执行完）。
+- `reasoning.unknown`：模型调用初期，尚未能判断是否会用工具的思考。大多数 UI 可忽略此标签。
+
+使用示例（流式循环）：
+
+```go
+for ev := range ch {
+    if ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
+        continue
+    }
+    choice := ev.Response.Choices[0]
+    // 仅展示“最终思考”
+    if ev.Tag == event.TagReasoningFinal && choice.Delta.ReasoningContent != "" {
+        fmt.Print(choice.Delta.ReasoningContent)
+    }
+    // 正常展示可见文本
+    if choice.Delta.Content != "" {
+        fmt.Print(choice.Delta.Content)
+    }
+}
+```
+
+最小可运行示例见 `examples/reasoningtags/main.go`。
+
 ### Event 方法
 
 Event 提供了 `Clone` 方法，用于创建 Event 的深拷贝。
@@ -392,7 +431,7 @@ func (c *multiTurnChat) handleToolCalls(
         }
         fmt.Printf("🔧 Tool calls initiated:\n")
         for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
-            fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+            fmt.Printf("   - %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
             if len(toolCall.Function.Arguments) > 0 {
                 fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
             }

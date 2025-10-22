@@ -745,15 +745,30 @@ func (r *llmRunner) executeModel(
 	startTime := time.Now()
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, startTime)
+	// Determine whether this model call comes after tool results in the same turn.
+	afterTool := func(msgs []model.Message) bool {
+		for i := len(msgs) - 1; i >= 0; i-- {
+			m := msgs[i]
+			switch m.Role {
+			case model.RoleTool:
+				return true
+			case model.RoleUser:
+				return false
+			}
+		}
+		return false
+	}(messages)
+
 	result, err := executeModelWithEvents(ctx, modelExecutionConfig{
-		ModelCallbacks: modelCallbacks,
-		LLMModel:       r.llmModel,
-		Request:        request,
-		EventChan:      eventChan,
-		InvocationID:   invocationID,
-		SessionID:      sessionID,
-		Span:           span,
-		NodeID:         nodeID,
+		ModelCallbacks:  modelCallbacks,
+		LLMModel:        r.llmModel,
+		Request:         request,
+		EventChan:       eventChan,
+		InvocationID:    invocationID,
+		SessionID:       sessionID,
+		Span:            span,
+		NodeID:          nodeID,
+		AfterToolResult: afterTool,
 	})
 	endTime := time.Now()
 	var modelOutput string
@@ -842,6 +857,13 @@ type modelResponseConfig struct {
 	Span           oteltrace.Span
 	// NodeID, when provided, is used as the event author.
 	NodeID string
+	// AfterToolResult indicates this model call happens after tools executed
+	// in the same turn. When true, streamed reasoning is considered final.
+	AfterToolResult bool
+	// ToolPlanSeen is a shared flag updated while streaming indicating we have
+	// observed tool call intent (via tool_calls deltas or messages) in this
+	// model call. Used to tag reasoning chunks before the final decision.
+	ToolPlanSeen *bool
 }
 
 // processModelResponse processes a single model response.
@@ -862,6 +884,8 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 			author = config.NodeID
 		}
 		llmEvent := event.NewResponseEvent(config.InvocationID, author, config.Response)
+		// Attach reasoning phase tags if applicable.
+		attachReasoningTag(llmEvent, config)
 		invocation, ok := agent.InvocationFromContext(ctx)
 		if !ok {
 			invocation = agent.NewInvocation(
@@ -882,6 +906,16 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 		return fmt.Errorf("model API error: %s", config.Response.Error.Message)
 	}
 	return nil
+}
+
+// attachReasoningTag annotates LLM streaming events with a reasoning phase tag.
+// Uses shared helpers to decide the tag and append without overwriting
+// existing business tags.
+func attachReasoningTag(e *event.Event, cfg modelResponseConfig) {
+	tag := event.DecideReasoningTag(e, cfg.AfterToolResult, cfg.ToolPlanSeen)
+	if tag != "" {
+		event.AddTag(e, tag)
+	}
 }
 
 func runModel(
@@ -1341,6 +1375,10 @@ type modelExecutionConfig struct {
 	NodeID         string // Add NodeID for parallel execution support
 	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
 	Span           oteltrace.Span
+	// AfterToolResult indicates this model call happens after at least one
+	// tool.result (i.e., a tool.response event) in the current turn. When true,
+	// the streamed reasoning belongs to the final stage by default.
+	AfterToolResult bool
 }
 
 // executeModelWithEvents executes the model with event processing.
@@ -1353,7 +1391,10 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	// Process response.
 	var finalResponse *model.Response
 	var toolCalls []model.ToolCall
+	// Track whether this model call has shown intent to call tools.
+	toolPlanDetected := false
 	for response := range responseChan {
+
 		if err := processModelResponse(ctx, modelResponseConfig{
 			Response:       response,
 			ModelCallbacks: config.ModelCallbacks,
@@ -1364,6 +1405,9 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 			Request:        config.Request,
 			Span:           config.Span,
 			NodeID:         config.NodeID,
+			// Provide context so downstream can tag reasoning chunks.
+			AfterToolResult: config.AfterToolResult,
+			ToolPlanSeen:    &toolPlanDetected,
 		}); err != nil {
 			return nil, err
 		}
