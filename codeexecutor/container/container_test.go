@@ -264,7 +264,6 @@ func TestContainerCodeExecutor_CodeBlockDelimiter(t *testing.T) {
 		t.Skipf("Skipping container tests: %s", err)
 
 	}
-
 	executor, err := New(
 		WithContainerConfig(tcontainer.Config{
 			Image: "python:3.9-slim",
