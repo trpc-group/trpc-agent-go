@@ -303,3 +303,96 @@ func TestNewMCPTool_WithOutputSchema(t *testing.T) {
 	require.Equal(t, "Success flag", convertedSchema.Properties["success"].Description)
 	require.ElementsMatch(t, []string{"result", "success"}, convertedSchema.Required)
 }
+
+func TestConvertMCPSchema_UnionTypes(t *testing.T) {
+	// Test handling of union types (nullable types represented as ["type", "null"]).
+	mcpSchema := map[string]any{
+		"type":        "object",
+		"description": "schema with optional parameters",
+		"required":    []any{"text"}, // text is required, size is optional
+		"properties": map[string]any{
+			"text": map[string]any{
+				"type":        "string",
+				"description": "Required text parameter",
+			},
+			"size": map[string]any{
+				"type":        []any{"integer", "null"}, // Nullable integer.
+				"description": "Size of the variable in bytes",
+			},
+			"count": map[string]any{
+				"type":        []any{"number", "null"}, // Nullable number.
+				"description": "Optional count parameter",
+			},
+			"flag": map[string]any{
+				"type":        []any{"boolean", "null"}, // Nullable boolean.
+				"description": "Optional flag parameter",
+			},
+		},
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+
+	// Verify top-level schema.
+	require.Equal(t, "object", schema.Type)
+	require.Equal(t, "schema with optional parameters", schema.Description)
+	require.ElementsMatch(t, []string{"text"}, schema.Required)
+
+	// Verify required string parameter.
+	textSchema := schema.Properties["text"]
+	require.NotNil(t, textSchema)
+	require.Equal(t, "string", textSchema.Type)
+	require.Equal(t, "Required text parameter", textSchema.Description)
+
+	// Verify optional integer parameter (should extract "integer" from ["integer", "null"]).
+	sizeSchema := schema.Properties["size"]
+	require.NotNil(t, sizeSchema)
+	require.Equal(t, "integer", sizeSchema.Type, "should extract 'integer' from union type")
+	require.Equal(t, "Size of the variable in bytes", sizeSchema.Description)
+
+	// Verify optional number parameter.
+	countSchema := schema.Properties["count"]
+	require.NotNil(t, countSchema)
+	require.Equal(t, "number", countSchema.Type, "should extract 'number' from union type")
+	require.Equal(t, "Optional count parameter", countSchema.Description)
+
+	// Verify optional boolean parameter.
+	flagSchema := schema.Properties["flag"]
+	require.NotNil(t, flagSchema)
+	require.Equal(t, "boolean", flagSchema.Type, "should extract 'boolean' from union type")
+	require.Equal(t, "Optional flag parameter", flagSchema.Description)
+}
+
+func TestConvertMCPSchema_UnionType_NullOnly(t *testing.T) {
+	// Edge case: what if type is ["null"] only?
+	mcpSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"nullable_field": map[string]any{
+				"type":        []any{"null"},
+				"description": "A field that can only be null",
+			},
+		},
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+
+	// When only "null" is in the array, Type should remain empty.
+	nullableSchema := schema.Properties["nullable_field"]
+	require.NotNil(t, nullableSchema)
+	require.Equal(t, "", nullableSchema.Type, "should not set type when only 'null' is present")
+	require.Equal(t, "A field that can only be null", nullableSchema.Description)
+}
+
+func TestConvertMCPSchema_TopLevelUnionType(t *testing.T) {
+	// Test union type at top level (rare but possible).
+	mcpSchema := map[string]any{
+		"type":        []any{"string", "null"},
+		"description": "A top-level union type",
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+
+	// Should extract "string" from the union type.
+	require.Equal(t, "string", schema.Type, "should extract 'string' from top-level union type")
+	require.Equal(t, "A top-level union type", schema.Description)
+}

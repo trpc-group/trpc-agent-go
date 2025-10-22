@@ -32,8 +32,17 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	}
 
 	schema := &tool.Schema{}
+	// Handle type field - can be string or array of strings (for nullable/union types).
 	if typeVal, ok := schemaMap["type"].(string); ok {
 		schema.Type = typeVal
+	} else if typeArr, ok := schemaMap["type"].([]any); ok {
+		// For nullable types like ["integer", "null"], extract the non-null type.
+		for _, t := range typeArr {
+			if typeStr, ok := t.(string); ok && typeStr != "null" {
+				schema.Type = typeStr
+				break
+			}
+		}
 	}
 	if descVal, ok := schemaMap["description"].(string); ok {
 		schema.Description = descVal
@@ -64,8 +73,17 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 	for name, prop := range props {
 		if propMap, ok := prop.(map[string]any); ok {
 			propSchema := &tool.Schema{}
+			// Handle type field - can be string or array of strings (for nullable/union types).
 			if typeVal, ok := propMap["type"].(string); ok {
 				propSchema.Type = typeVal
+			} else if typeArr, ok := propMap["type"].([]any); ok {
+				// For nullable types like ["integer", "null"], extract the non-null type.
+				for _, t := range typeArr {
+					if typeStr, ok := t.(string); ok && typeStr != "null" {
+						propSchema.Type = typeStr
+						break
+					}
+				}
 			}
 			if descVal, ok := propMap["description"].(string); ok {
 				propSchema.Description = descVal
