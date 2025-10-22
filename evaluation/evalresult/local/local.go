@@ -128,9 +128,13 @@ func (m *manager) load(appName, evalSetResultID string) (*evalresult.EvalSetResu
 		return nil, fmt.Errorf("open file %s: %w", path, err)
 	}
 	defer f.Close()
-	var res evalresult.EvalSetResult
-	if err := json.NewDecoder(f).Decode(&res); err != nil {
+	var payload string
+	if err := json.NewDecoder(f).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode file %s: %w", path, err)
+	}
+	var res evalresult.EvalSetResult
+	if err := json.Unmarshal([]byte(payload), &res); err != nil {
+		return nil, fmt.Errorf("unmarshal eval set result %s: %w", path, err)
 	}
 	return &res, nil
 }
@@ -155,9 +159,11 @@ func (m *manager) store(appName string, evalSetResult *evalresult.EvalSetResult)
 		file.Close()
 		return fmt.Errorf("json marshal: %w", err)
 	}
-	if _, err := fmt.Fprintf(file, "%q", data); err != nil {
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(string(data)); err != nil {
 		file.Close()
-		return fmt.Errorf("write file %s: %w", path, err)
+		os.Remove(tmp)
+		return fmt.Errorf("encode file %s: %w", tmp, err)
 	}
 	if err := file.Close(); err != nil {
 		os.Remove(tmp)

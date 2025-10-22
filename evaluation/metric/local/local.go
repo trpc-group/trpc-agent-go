@@ -89,29 +89,33 @@ func (m *manager) Get(_ context.Context, appName, evalSetID, metricName string) 
 }
 
 // Add adds a metric to EvalSet identified by evalSetID.
-func (m *manager) Add(ctx context.Context, appName, evalSetID string, metric *metric.EvalMetric) error {
+func (m *manager) Add(ctx context.Context, appName, evalSetID string, metricInput *metric.EvalMetric) error {
 	if appName == "" {
 		return errors.New("empty app name")
 	}
 	if evalSetID == "" {
 		return errors.New("empty eval set id")
 	}
-	if metric == nil {
+	if metricInput == nil {
 		return errors.New("metric is nil")
 	}
-	if metric.MetricName == "" {
+	if metricInput.MetricName == "" {
 		return errors.New("metric name is empty")
 	}
 	metrics, err := m.load(appName, evalSetID)
 	if err != nil {
-		return fmt.Errorf("load metrics of evalset %s.%s: %w", appName, evalSetID, err)
-	}
-	for _, evalMetric := range metrics {
-		if evalMetric != nil && evalMetric.MetricName == metric.MetricName {
-			return fmt.Errorf("metric %s.%s.%s already exists", appName, evalSetID, metric.MetricName)
+		if errors.Is(err, os.ErrNotExist) {
+			metrics = []*metric.EvalMetric{}
+		} else {
+			return fmt.Errorf("load metrics of evalset %s.%s: %w", appName, evalSetID, err)
 		}
 	}
-	metrics = append(metrics, metric)
+	for _, evalMetric := range metrics {
+		if evalMetric != nil && evalMetric.MetricName == metricInput.MetricName {
+			return fmt.Errorf("metric %s.%s.%s already exists", appName, evalSetID, metricInput.MetricName)
+		}
+	}
+	metrics = append(metrics, metricInput)
 	if err := m.store(appName, evalSetID, metrics); err != nil {
 		return fmt.Errorf("store metrics of evalset %s.%s: %w", appName, evalSetID, err)
 	}
