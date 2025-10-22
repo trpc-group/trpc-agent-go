@@ -11,6 +11,7 @@ package model
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -437,6 +438,514 @@ func TestFunctionDefinitionParam_UnmarshalJSON(t *testing.T) {
 			assert.Equal(t, tt.expected.Description, result.Description)
 			assert.Equal(t, tt.expected.Strict, result.Strict)
 			assert.Equal(t, tt.expected.Arguments, result.Arguments)
+		})
+	}
+}
+
+func TestMessage_AddFileData(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		data     []byte
+		mimetype string
+	}{
+		{
+			name:     "add text file",
+			filename: "test.txt",
+			data:     []byte("Hello, World!"),
+			mimetype: "text/plain",
+		},
+		{
+			name:     "add JSON file",
+			filename: "config.json",
+			data:     []byte(`{"key": "value"}`),
+			mimetype: "application/json",
+		},
+		{
+			name:     "add PDF file",
+			filename: "document.pdf",
+			data:     []byte("PDF content"),
+			mimetype: "application/pdf",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &Message{}
+			msg.AddFileData(tt.filename, tt.data, tt.mimetype)
+
+			require.Len(t, msg.ContentParts, 1)
+			assert.Equal(t, ContentTypeFile, msg.ContentParts[0].Type)
+			require.NotNil(t, msg.ContentParts[0].File)
+			assert.Equal(t, tt.filename, msg.ContentParts[0].File.Name)
+			assert.Equal(t, tt.data, msg.ContentParts[0].File.Data)
+			assert.Equal(t, tt.mimetype, msg.ContentParts[0].File.MimeType)
+		})
+	}
+}
+
+func TestMessage_AddFileID(t *testing.T) {
+	tests := []struct {
+		name   string
+		fileID string
+	}{
+		{
+			name:   "add file with ID",
+			fileID: "file-abc123",
+		},
+		{
+			name:   "add file with empty ID",
+			fileID: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &Message{}
+			msg.AddFileID(tt.fileID)
+
+			require.Len(t, msg.ContentParts, 1)
+			assert.Equal(t, ContentTypeFile, msg.ContentParts[0].Type)
+			require.NotNil(t, msg.ContentParts[0].File)
+			assert.Equal(t, tt.fileID, msg.ContentParts[0].File.FileID)
+		})
+	}
+}
+
+func TestMessage_AddImageURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		url    string
+		detail string
+	}{
+		{
+			name:   "add image with auto detail",
+			url:    "https://example.com/image.png",
+			detail: "auto",
+		},
+		{
+			name:   "add image with high detail",
+			url:    "https://example.com/photo.jpg",
+			detail: "high",
+		},
+		{
+			name:   "add image with low detail",
+			url:    "https://example.com/thumb.webp",
+			detail: "low",
+		},
+		{
+			name:   "add image with empty detail",
+			url:    "https://example.com/image.gif",
+			detail: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &Message{}
+			msg.AddImageURL(tt.url, tt.detail)
+
+			require.Len(t, msg.ContentParts, 1)
+			assert.Equal(t, ContentTypeImage, msg.ContentParts[0].Type)
+			require.NotNil(t, msg.ContentParts[0].Image)
+			assert.Equal(t, tt.url, msg.ContentParts[0].Image.URL)
+			assert.Equal(t, tt.detail, msg.ContentParts[0].Image.Detail)
+		})
+	}
+}
+
+func TestMessage_AddImageData(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   []byte
+		detail string
+		format string
+	}{
+		{
+			name:   "add PNG image",
+			data:   []byte("PNG data"),
+			detail: "high",
+			format: "png",
+		},
+		{
+			name:   "add JPEG image",
+			data:   []byte("JPEG data"),
+			detail: "auto",
+			format: "jpeg",
+		},
+		{
+			name:   "add WEBP image",
+			data:   []byte("WEBP data"),
+			detail: "low",
+			format: "webp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &Message{}
+			msg.AddImageData(tt.data, tt.detail, tt.format)
+
+			require.Len(t, msg.ContentParts, 1)
+			assert.Equal(t, ContentTypeImage, msg.ContentParts[0].Type)
+			require.NotNil(t, msg.ContentParts[0].Image)
+			assert.Equal(t, tt.data, msg.ContentParts[0].Image.Data)
+			assert.Equal(t, tt.detail, msg.ContentParts[0].Image.Detail)
+			assert.Equal(t, tt.format, msg.ContentParts[0].Image.Format)
+		})
+	}
+}
+
+func TestMessage_AddAudioData(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   []byte
+		format string
+	}{
+		{
+			name:   "add WAV audio",
+			data:   []byte("WAV data"),
+			format: "wav",
+		},
+		{
+			name:   "add MP3 audio",
+			data:   []byte("MP3 data"),
+			format: "mp3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &Message{}
+			msg.AddAudioData(tt.data, tt.format)
+
+			require.Len(t, msg.ContentParts, 1)
+			assert.Equal(t, ContentTypeAudio, msg.ContentParts[0].Type)
+			require.NotNil(t, msg.ContentParts[0].Audio)
+			assert.Equal(t, tt.data, msg.ContentParts[0].Audio.Data)
+			assert.Equal(t, tt.format, msg.ContentParts[0].Audio.Format)
+		})
+	}
+}
+
+func TestMessage_AddFilePath(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileContent string
+		fileExt     string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "add text file",
+			fileContent: "Hello, World!",
+			fileExt:     ".txt",
+			expectError: false,
+		},
+		{
+			name:        "add JSON file",
+			fileContent: `{"key": "value"}`,
+			fileExt:     ".json",
+			expectError: false,
+		},
+		{
+			name:        "add Python file",
+			fileContent: "print('hello')",
+			fileExt:     ".py",
+			expectError: false,
+		},
+		{
+			name:        "add Markdown file",
+			fileContent: "# Title\nContent",
+			fileExt:     ".md",
+			expectError: false,
+		},
+		{
+			name:        "unsupported file extension",
+			fileContent: "content",
+			fileExt:     ".unknown",
+			expectError: true,
+			errorMsg:    "unknown file extension",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create temporary file
+			tmpFile, err := os.CreateTemp("", "test*"+tt.fileExt)
+			require.NoError(t, err)
+			defer os.Remove(tmpFile.Name())
+
+			// Write content
+			_, err = tmpFile.WriteString(tt.fileContent)
+			require.NoError(t, err)
+			tmpFile.Close()
+
+			// Test AddFilePath
+			msg := &Message{}
+			err = msg.AddFilePath(tmpFile.Name())
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+				require.Len(t, msg.ContentParts, 1)
+				assert.Equal(t, ContentTypeFile, msg.ContentParts[0].Type)
+				require.NotNil(t, msg.ContentParts[0].File)
+				assert.Equal(t, []byte(tt.fileContent), msg.ContentParts[0].File.Data)
+			}
+		})
+	}
+
+	// Test file not exists
+	t.Run("file not exists", func(t *testing.T) {
+		msg := &Message{}
+		err := msg.AddFilePath("/nonexistent/file.txt")
+		assert.Error(t, err)
+	})
+}
+
+func TestMessage_AddImageFilePath(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileExt     string
+		detail      string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "add PNG image",
+			fileExt:     ".png",
+			detail:      "high",
+			expectError: false,
+		},
+		{
+			name:        "add JPG image",
+			fileExt:     ".jpg",
+			detail:      "auto",
+			expectError: false,
+		},
+		{
+			name:        "add JPEG image",
+			fileExt:     ".jpeg",
+			detail:      "low",
+			expectError: false,
+		},
+		{
+			name:        "add WEBP image",
+			fileExt:     ".webp",
+			detail:      "",
+			expectError: false,
+		},
+		{
+			name:        "add GIF image",
+			fileExt:     ".gif",
+			detail:      "auto",
+			expectError: false,
+		},
+		{
+			name:        "unsupported image format",
+			fileExt:     ".bmp",
+			detail:      "auto",
+			expectError: true,
+			errorMsg:    "unsupported image format",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create temporary file with fake image data
+			tmpFile, err := os.CreateTemp("", "test*"+tt.fileExt)
+			require.NoError(t, err)
+			defer os.Remove(tmpFile.Name())
+
+			// Write some fake image data
+			fakeImageData := []byte("fake image data content")
+			_, err = tmpFile.Write(fakeImageData)
+			require.NoError(t, err)
+			tmpFile.Close()
+
+			// Test AddImageFilePath
+			msg := &Message{}
+			err = msg.AddImageFilePath(tmpFile.Name(), tt.detail)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+				require.Len(t, msg.ContentParts, 1)
+				assert.Equal(t, ContentTypeImage, msg.ContentParts[0].Type)
+				require.NotNil(t, msg.ContentParts[0].Image)
+				assert.Equal(t, fakeImageData, msg.ContentParts[0].Image.Data)
+				assert.Equal(t, tt.detail, msg.ContentParts[0].Image.Detail)
+			}
+		})
+	}
+
+	// Test file not exists
+	t.Run("image file not exists", func(t *testing.T) {
+		msg := &Message{}
+		err := msg.AddImageFilePath("/nonexistent/image.png", "auto")
+		assert.Error(t, err)
+	})
+}
+
+func TestMessage_AddAudioFilePath(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileExt     string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "add WAV audio",
+			fileExt:     ".wav",
+			expectError: false,
+		},
+		{
+			name:        "add MP3 audio",
+			fileExt:     ".mp3",
+			expectError: false,
+		},
+		{
+			name:        "unsupported audio format - AAC",
+			fileExt:     ".aac",
+			expectError: true,
+			errorMsg:    "unsupported audio format",
+		},
+		{
+			name:        "unsupported audio format - FLAC",
+			fileExt:     ".flac",
+			expectError: true,
+			errorMsg:    "unsupported audio format",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create temporary file with fake audio data
+			tmpFile, err := os.CreateTemp("", "test*"+tt.fileExt)
+			require.NoError(t, err)
+			defer os.Remove(tmpFile.Name())
+
+			// Write some fake audio data
+			fakeAudioData := []byte("fake audio data content")
+			_, err = tmpFile.Write(fakeAudioData)
+			require.NoError(t, err)
+			tmpFile.Close()
+
+			// Test AddAudioFilePath
+			msg := &Message{}
+			err = msg.AddAudioFilePath(tmpFile.Name())
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+				require.Len(t, msg.ContentParts, 1)
+				assert.Equal(t, ContentTypeAudio, msg.ContentParts[0].Type)
+				require.NotNil(t, msg.ContentParts[0].Audio)
+				assert.Equal(t, fakeAudioData, msg.ContentParts[0].Audio.Data)
+			}
+		})
+	}
+
+	// Test file not exists
+	t.Run("audio file not exists", func(t *testing.T) {
+		msg := &Message{}
+		err := msg.AddAudioFilePath("/nonexistent/audio.wav")
+		assert.Error(t, err)
+	})
+}
+
+func TestInferMimeType(t *testing.T) {
+	tests := []struct {
+		name        string
+		filepath    string
+		expectMime  string
+		expectError bool
+	}{
+		{
+			name:       "text file",
+			filepath:   "test.txt",
+			expectMime: "text/plain",
+		},
+		{
+			name:       "markdown file",
+			filepath:   "README.md",
+			expectMime: "text/markdown",
+		},
+		{
+			name:       "JSON file",
+			filepath:   "config.json",
+			expectMime: "application/json",
+		},
+		{
+			name:       "PDF file",
+			filepath:   "document.pdf",
+			expectMime: "application/pdf",
+		},
+		{
+			name:       "Python file",
+			filepath:   "script.py",
+			expectMime: "text/x-python",
+		},
+		{
+			name:       "JavaScript file",
+			filepath:   "app.js",
+			expectMime: "text/javascript",
+		},
+		{
+			name:       "TypeScript file",
+			filepath:   "main.ts",
+			expectMime: "application/typescript",
+		},
+		{
+			name:       "C file",
+			filepath:   "main.c",
+			expectMime: "text/x-c",
+		},
+		{
+			name:       "case insensitive - uppercase",
+			filepath:   "TEST.TXT",
+			expectMime: "text/plain",
+		},
+		{
+			name:       "case insensitive - mixed",
+			filepath:   "Test.Py",
+			expectMime: "text/x-python",
+		},
+		{
+			name:        "unknown extension",
+			filepath:    "file.unknown",
+			expectError: true,
+		},
+		{
+			name:        "no extension",
+			filepath:    "filename",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mime, err := inferMimeType(tt.filepath)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "unknown file extension")
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectMime, mime)
+			}
 		})
 	}
 }

@@ -17,7 +17,9 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestNewBuilder(t *testing.T) {
@@ -647,4 +649,116 @@ func TestStateSchema_validateSchema_FieldNameInError(t *testing.T) {
 	if !strings.Contains(err.Error(), fieldName) {
 		t.Errorf("Error message should contain field name '%s', got: %s", fieldName, err.Error())
 	}
+}
+
+// TestStateGraph_NodeOptionSetters covers several option helpers that were missing coverage.
+func TestStateGraph_NodeOptionSetters(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+
+	// Prepare callbacks and mappers
+	var toolCB tool.Callbacks
+	var modelCB model.Callbacks
+	inMapper := func(parent State) State { return State{"x": 1} }
+	outMapper := func(parent State, _ SubgraphResult) State { return State{"y": 2} }
+
+	// Add node with various options set
+	sg.AddNode(
+		"opt",
+		func(ctx context.Context, s State) (any, error) { return s, nil },
+		WithCacheKeyFields("a", "b"),
+		WithToolCallbacks(&toolCB),
+		WithSubgraphInputMapper(inMapper),
+		WithSubgraphOutputMapper(outMapper),
+		WithSubgraphIsolatedMessages(true),
+		WithSubgraphEventScope("scope/x"),
+		WithModelCallbacks(&modelCB),
+	)
+
+	n := sg.graph.nodes["opt"]
+	if n == nil {
+		t.Fatalf("node not added")
+	}
+	if n.cacheKeySelector == nil {
+		t.Fatalf("cacheKeySelector not set by WithCacheKeyFields")
+	}
+	// Verify subset selection from WithCacheKeyFields by invoking selector on a map
+	sel := n.cacheKeySelector(map[string]any{"a": 1, "b": 2, "c": 3})
+	if got, ok := sel.(map[string]any); !ok || len(got) != 2 || got["a"] != 1 || got["b"] != 2 {
+		t.Fatalf("unexpected cacheKeySelector result: %#v", sel)
+	}
+	if n.toolCallbacks != &toolCB {
+		t.Fatalf("toolCallbacks not set")
+	}
+	if n.agentInputMapper == nil || n.agentOutputMapper == nil {
+		t.Fatalf("subgraph mappers not set")
+	}
+	if !n.agentIsolatedMessages {
+		t.Fatalf("agentIsolatedMessages not set true")
+	}
+	if n.agentEventScope != "scope/x" {
+		t.Fatalf("agentEventScope not set: %q", n.agentEventScope)
+	}
+	if n.modelCallbacks != &modelCB {
+		t.Fatalf("modelCallbacks not set")
+	}
+}
+
+// TestStateGraph_WithCacheKeySelector_OverridesSelector verifies the custom selector assignment.
+func TestStateGraph_WithCacheKeySelector_OverridesSelector(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("opt2", func(ctx context.Context, s State) (any, error) { return s, nil },
+		WithCacheKeySelector(func(m map[string]any) any { return m["a"] }),
+	)
+	n := sg.graph.nodes["opt2"]
+	if n == nil || n.cacheKeySelector == nil {
+		t.Fatalf("cacheKeySelector not set")
+	}
+	v := n.cacheKeySelector(map[string]any{"a": 123, "b": 9})
+	if v != 123 {
+		t.Fatalf("expected selector to pick 'a' value, got %#v", v)
+	}
+}
+
+// TestStateGraph_AddSubgraphNode ensures it adds an agent-typed node.
+func TestStateGraph_AddSubgraphNode(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddSubgraphNode("agentX")
+	n := sg.graph.nodes["agentX"]
+	if n == nil {
+		t.Fatalf("subgraph node not added")
+	}
+	if n.Type != NodeTypeAgent {
+		t.Fatalf("expected NodeTypeAgent, got %v", n.Type)
+	}
+}
+
+func TestOptionBranches_EmptyPoliciesAndCallbacks(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	// WithRetryPolicy with no policies should not crash or modify
+	sg.AddNode("n", func(ctx context.Context, s State) (any, error) { return s, nil }, WithRetryPolicy())
+	n := sg.graph.nodes["n"]
+	if n == nil {
+		t.Fatalf("node missing")
+	}
+	if len(n.retryPolicies) != 0 {
+		t.Fatalf("retry policies should be empty")
+	}
+
+	// WithPostNodeCallback and WithNodeErrorCallback allocate callbacks holder
+	sg.AddNode("cbs", func(ctx context.Context, s State) (any, error) { return s, nil },
+		WithPostNodeCallback(func(context.Context, *NodeCallbackContext, State, any, error) (any, error) { return nil, nil }),
+		WithNodeErrorCallback(func(context.Context, *NodeCallbackContext, State, error) {}),
+		WithAgentNodeEventCallback(func(context.Context, *NodeCallbackContext, State, *event.Event) {}),
+	)
+	if sg.graph.nodes["cbs"].callbacks == nil {
+		t.Fatalf("callbacks should be allocated")
+	}
+}
+
+// TestMustCompile_PanicsOnInvalid covers the panic path (no entry point).
+func TestMustCompile_PanicsOnInvalid(t *testing.T) {
+	defer func() { _ = recover() }()
+	sg := NewStateGraph(NewStateSchema())
+	_ = sg.MustCompile() // no entry point triggers panic
+	t.Fatalf("expected panic")
 }
