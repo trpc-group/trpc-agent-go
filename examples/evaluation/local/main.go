@@ -45,7 +45,7 @@ func main() {
 		evaluation.WithEvalSetManager(evalSetManager),
 		evaluation.WithMetricManager(metricManager),
 		evaluation.WithEvalResultManager(evalResultManager),
-		evaluation.WithEvaluatorRegistry(registry),
+		evaluation.WithRegistry(registry),
 		evaluation.WithNumRuns(*numRuns),
 	)
 	if err != nil {
@@ -77,7 +77,7 @@ func printSummary(result *evaluation.EvaluationResult, outDir string) {
 				metricResult.MetricName,
 				metricResult.Score,
 				metricResult.Threshold,
-				metricResult.Status.String(),
+				metricResult.EvalStatus.String(),
 			)
 		}
 		fmt.Println()

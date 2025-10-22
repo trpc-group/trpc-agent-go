@@ -1,6 +1,6 @@
 [
   {
-    "metricName": "tool_trajectory_avg_score",
-    "threshold": 1.0
+    "metric_name": "tool_trajectory_avg_score",
+    "threshold": 1
   }
 ]

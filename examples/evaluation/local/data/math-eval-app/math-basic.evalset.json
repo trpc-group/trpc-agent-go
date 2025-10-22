@@ -1,90 +1,91 @@
 {
-  "evalSetId": "math-basic",
+  "eval_set_id": "math-basic",
   "name": "math-basic",
-  "description": "Basic arithmetic evaluation cases for the deterministic math agent.",
-  "evalCases": [
+  "eval_cases": [
     {
-      "evalId": "calc_add",
+      "eval_id": "calc_add",
       "conversation": [
         {
-          "invocationId": "calc_add-1",
-          "userContent": {
-            "role": "user",
+          "invocation_id": "calc_add-1",
+          "user_content": {
             "parts": [
               {
                 "text": "calc add 2 3"
               }
-            ]
+            ],
+            "role": "user"
           },
-          "finalResponse": {
-            "role": "assistant",
+          "final_response": {
             "parts": [
               {
                 "text": "calc result: 5"
               }
-            ]
+            ],
+            "role": "assistant"
           },
-          "intermediateData": {
-            "toolUses": [
+          "intermediate_data": {
+            "tool_uses": [
               {
-                "name": "calculator",
                 "args": {
-                  "operation": "add",
                   "a": 2,
-                  "b": 3
-                }
+                  "b": 3,
+                  "operation": "add"
+                },
+                "name": "calculator"
               }
             ]
-          }
+          },
+          "creation_timestamp": 1761134484.981062
         }
       ],
-      "sessionInput": {
-        "appName": "math-eval-app",
-        "userId": "demo-user",
-        "state": {}
-      }
+      "session_input": {
+        "app_name": "math-eval-app",
+        "user_id": "user"
+      },
+      "creation_timestamp": 1761134484.981062
     },
     {
-      "evalId": "calc_multiply",
+      "eval_id": "calc_multiply",
       "conversation": [
         {
-          "invocationId": "calc_multiply-1",
-          "userContent": {
-            "role": "user",
+          "invocation_id": "calc_multiply-1",
+          "user_content": {
             "parts": [
               {
                 "text": "calc multiply 6 7"
               }
-            ]
+            ],
+            "role": "user"
           },
-          "finalResponse": {
-            "role": "assistant",
+          "final_response": {
             "parts": [
               {
                 "text": "calc result: 42"
               }
-            ]
+            ],
+            "role": "assistant"
           },
-          "intermediateData": {
-            "toolUses": [
+          "intermediate_data": {
+            "tool_uses": [
               {
-                "name": "calculator",
                 "args": {
-                  "operation": "multiply",
                   "a": 6,
-                  "b": 7
-                }
+                  "b": 7,
+                  "operation": "multiply"
+                },
+                "name": "calculator"
               }
             ]
-          }
+          },
+          "creation_timestamp": 1761134484.9812014
         }
       ],
-      "sessionInput": {
-        "appName": "math-eval-app",
-        "userId": "demo-user",
-        "state": {}
-      }
+      "session_input": {
+        "app_name": "math-eval-app",
+        "user_id": "user"
+      },
+      "creation_timestamp": 1761134484.9812014
     }
   ],
-  "creationTimestamp": 1760590952.8265657
+  "creation_timestamp": 1761134484.9804401
 }

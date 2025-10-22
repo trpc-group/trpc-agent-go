@@ -26,41 +26,41 @@ var (
 )
 
 const (
-	appName              = "math-eval-app"
-	evalSetID            = "math-basic"
-	toolTrajectoryMetric = "tool_trajectory_avg_score"
+	appName   = "math-eval-app"
+	evalSetID = "math-basic"
 )
 
 func main() {
 	flag.Parse()
 	ctx := context.Background()
-
+	// New runner.
 	run := runner.NewRunner(appName, newCalculatorAgent(*modelName, *streaming))
+	// New manager and registry for evaluation.
 	evalSetManager := evalsetinmemory.New()
 	metricManager := metricinmemory.New()
 	evalResultManager := evalresultinmemory.New()
-	reg := registry.New()
-
+	registry := registry.New()
+	// Prepare evalset and metric.
 	if err := prepareEvalSet(ctx, evalSetManager); err != nil {
 		log.Fatalf("prepare eval set: %v", err)
 	}
 	if err := prepareMetric(ctx, metricManager); err != nil {
 		log.Fatalf("prepare metric: %v", err)
 	}
-
+	// New agent evaluator.
 	agentEvaluator, err := evaluation.New(
 		appName,
 		run,
 		evaluation.WithEvalSetManager(evalSetManager),
 		evaluation.WithMetricManager(metricManager),
 		evaluation.WithEvalResultManager(evalResultManager),
-		evaluation.WithEvaluatorRegistry(reg),
+		evaluation.WithRegistry(registry),
 		evaluation.WithNumRuns(*numRuns),
 	)
 	if err != nil {
 		log.Fatalf("create evaluator: %v", err)
 	}
-
+	// Run evaluate.
 	result, err := agentEvaluator.Evaluate(ctx, evalSetID)
 	if err != nil {
 		log.Fatalf("evaluate: %v", err)
@@ -86,7 +86,7 @@ func printSummary(ctx context.Context, result *evaluation.EvaluationResult, eval
 				metricResult.MetricName,
 				metricResult.Score,
 				metricResult.Threshold,
-				metricResult.Status.String(),
+				metricResult.EvalStatus.String(),
 			)
 		}
 		fmt.Println()
@@ -104,7 +104,7 @@ func printSummary(ctx context.Context, result *evaluation.EvaluationResult, eval
 			fmt.Printf("eval result manager get: %v\n", err)
 			return
 		}
-		data, err := json.MarshalIndent(evalSetResult, "", "    ")
+		data, err := json.MarshalIndent(evalSetResult, "", "  ")
 		if err != nil {
 			fmt.Printf("eval result manager marshal: %v\n", err)
 			return
@@ -155,7 +155,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 			},
 			SessionInput: &evalset.SessionInput{
 				AppName: appName,
-				UserID:  "demo-user",
+				UserID:  "user",
 			},
 		},
 		{
@@ -195,7 +195,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 			},
 			SessionInput: &evalset.SessionInput{
 				AppName: appName,
-				UserID:  "demo-user",
+				UserID:  "user",
 			},
 		},
 	}
@@ -209,8 +209,8 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 
 func prepareMetric(ctx context.Context, metricManager metric.Manager) error {
 	evalMetric := &metric.EvalMetric{
-		MetricName: toolTrajectoryMetric,
+		MetricName: "tool_trajectory_avg_score",
 		Threshold:  1.0,
 	}
-	return metricManager.Save(ctx, appName, evalSetID, []*metric.EvalMetric{evalMetric})
+	return metricManager.Add(ctx, appName, evalSetID, evalMetric)
 }
