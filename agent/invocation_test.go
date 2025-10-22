@@ -419,15 +419,19 @@ func TestWithThirdPartyAgentConfigs(t *testing.T) {
 	configs := map[string]any{"custom-llm": "test-config"}
 	opts := &RunOptions{}
 	WithThirdPartyAgentConfigs(configs)(opts)
-	require.Equal(t, configs, opts.ThirdPartyAgentConfigs)
+
+	// Verify config was set by retrieving it
+	require.NotNil(t, opts.thirdPartyAgentConfigs)
+	require.Equal(t, "test-config", opts.thirdPartyAgentConfigs["custom-llm"])
 }
 
 func TestInvocation_GetThirdPartyAgentConfig(t *testing.T) {
-	// Test get existing config
+	// Test get existing config - use WithThirdPartyAgentConfigs to set it
+	opts := &RunOptions{}
+	WithThirdPartyAgentConfigs(map[string]any{"custom-llm": "test-config"})(opts)
+
 	inv := &Invocation{
-		RunOptions: RunOptions{
-			ThirdPartyAgentConfigs: map[string]any{"custom-llm": "test-config"},
-		},
+		RunOptions: *opts,
 	}
 	require.Equal(t, "test-config", inv.GetThirdPartyAgentConfig("custom-llm"))
 	require.Nil(t, inv.GetThirdPartyAgentConfig("non-existing"))
@@ -441,8 +445,11 @@ func TestInvocation_GetThirdPartyAgentConfig(t *testing.T) {
 }
 
 func TestThirdPartyAgentConfigs_Integration(t *testing.T) {
-	configs := map[string]any{"custom-llm": "test-config"}
-	inv := NewInvocation(WithInvocationRunOptions(RunOptions{ThirdPartyAgentConfigs: configs}))
+	// Create RunOptions with configs using the proper setter
+	opts := &RunOptions{}
+	WithThirdPartyAgentConfigs(map[string]any{"custom-llm": "test-config"})(opts)
+
+	inv := NewInvocation(WithInvocationRunOptions(*opts))
 
 	require.Equal(t, "test-config", inv.GetThirdPartyAgentConfig("custom-llm"))
 

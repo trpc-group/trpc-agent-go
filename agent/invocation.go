@@ -165,11 +165,40 @@ func WithA2ARequestOptions(opts ...any) RunOption {
 
 }
 
-// WithThirdPartyAgentConfigs sets third-party agent configurations.
-// Key is agent type (e.g., "custom-llm"), value is agent-specific config.
+// WithThirdPartyAgentConfigs sets third-party agent configurations for custom agents.
+// This allows passing agent-specific configurations at runtime without modifying the agent implementation.
 //
-// Note: This function creates a shallow copy of the configs map to prevent
-// external modifications from affecting the stored configuration.
+// Parameters:
+//   - configs: A map where the key is the agent type identifier and the value is the agent-specific config.
+//     It's recommended to use the agent's defined RunOptionKey constant as the key and a typed options struct as the value.
+//
+// Usage:
+//
+//	// Example: Configure a custom LLM agent using its defined key and options struct
+//	import customllm "your.module/agents/customllm"
+//
+//	runner.Run(ctx, userID, sessionID, message,
+//	    agent.WithThirdPartyAgentConfigs(map[string]any{
+//	        customllm.RunOptionKey: customllm.RunOptions{
+//	            "custom-context": "context",
+//	        },
+//	    }),
+//	)
+//
+//
+//	// In your custom agent implementation, retrieve the config:
+//	func (a *CustomLLMAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+//	    config := inv.GetThirdPartyAgentConfig(RunOptionKey)
+//	    if opts, ok := config.(RunOptions); ok {
+//	        client := NewLLMClient(opts.APIKey, opts.Model, opts.Temperature)
+//	        // Use the configuration...
+//	    }
+//	    // ...
+//	}
+//
+// Note:
+//   - This function creates a shallow copy of the configs map to prevent external modifications.
+//   - The stored configuration should be treated as read-only. Do not modify it after retrieval.
 func WithThirdPartyAgentConfigs(configs map[string]any) RunOption {
 	return func(opts *RunOptions) {
 		if configs == nil {
@@ -411,8 +440,23 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	inv.noticeChanMap = nil
 }
 
-// GetThirdPartyAgentConfig retrieves configuration for a specific third-party agent type from the invocation.
-// Returns nil if no configuration exists for the given agent type.
+// GetThirdPartyAgentConfig retrieves configuration for a specific third-party agent type.
+//
+// Parameters:
+//   - agentKey: The agent type identifier (typically the agent's RunOptionKey constant)
+//
+// Returns:
+//   - The configuration value if found, nil otherwise
+//
+// Usage:
+//
+//	func (a *CustomLLMAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+//	    config := inv.GetThirdPartyAgentConfig(RunOptionKey)
+//	    if opts, ok := config.(RunOptions); ok {
+//	        client := NewLLMClient(opts.APIKey, opts.Model)
+//	        // ...
+//	    }
+//	}
 //
 // Note: The returned config should be treated as read-only. Do not modify it.
 func (inv *Invocation) GetThirdPartyAgentConfig(agentKey string) any {
