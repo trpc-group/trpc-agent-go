@@ -17,18 +17,18 @@ import (
 )
 
 // EvalSet represents a collection of evaluation cases.
-// It mirrors the schema used by ADK Web, with field names in camel-case to align with the JSON format.
+// It mirrors the schema used by ADK Web, with field names in snake_case to align with the JSON format.
 type EvalSet struct {
 	// EvalSetID uniquely identifies this evaluation set.
-	EvalSetID string `json:"evalSetId"`
+	EvalSetID string `json:"eval_set_id,omitempty"`
 	// Name of the evaluation set.
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 	// Description of the evaluation set.
-	Description string `json:"description"`
+	Description string `json:"description,omitempty"`
 	// EvalCases contains all the evaluation cases.
-	EvalCases []*EvalCase `json:"evalCases"`
+	EvalCases []*EvalCase `json:"eval_cases,omitempty"`
 	// CreationTimestamp when this eval set was created.
-	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp"`
+	CreationTimestamp *epochtime.EpochTime `json:"creation_timestamp,omitempty"`
 }
 
 // Manager defines the interface that an evaluation set manager must satisfy.

@@ -16,10 +16,12 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 // manager implements evalresult.Manager backed by in-memory.
@@ -58,6 +60,9 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 		return "", fmt.Errorf("clone result: %w", err)
 	}
 	cloned.EvalSetResultID = evalSetResultID
+	if cloned.CreationTimestamp == nil {
+		cloned.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.evalSetResults[appName]; !ok {

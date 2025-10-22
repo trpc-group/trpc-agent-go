@@ -18,10 +18,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 const (
@@ -70,6 +72,9 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 		return "", fmt.Errorf("clone eval set result: %w", err)
 	}
 	cloned.EvalSetResultID = evalSetResultID
+	if cloned.CreationTimestamp == nil {
+		cloned.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
+	}
 	if err := m.store(appName, cloned); err != nil {
 		return "", fmt.Errorf("store eval set result %s.%s: %w", appName, evalSetResultID, err)
 	}

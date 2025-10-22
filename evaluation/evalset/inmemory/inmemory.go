@@ -149,6 +149,14 @@ func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase
 	if err != nil {
 		return fmt.Errorf("clone eval case %s.%s.%s: %w", appName, evalSetID, evalCase.EvalID, err)
 	}
+	if cloned.CreationTimestamp == nil {
+		cloned.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
+	}
+	for _, invocation := range cloned.Conversation {
+		if invocation.CreationTimestamp == nil {
+			invocation.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
+		}
+	}
 	m.evalCases[appName][evalSetID][evalCase.EvalID] = cloned
 	evalSet.EvalCases = append(evalSet.EvalCases, cloned)
 	return nil
