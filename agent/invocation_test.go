@@ -421,8 +421,8 @@ func TestWithThirdPartyAgentConfigs(t *testing.T) {
 	WithThirdPartyAgentConfigs(configs)(opts)
 
 	// Verify config was set by retrieving it
-	require.NotNil(t, opts.thirdPartyAgentConfigs)
-	require.Equal(t, "test-config", opts.thirdPartyAgentConfigs["custom-llm"])
+	require.NotNil(t, opts.ThirdPartyAgentConfigs)
+	require.Equal(t, "test-config", opts.ThirdPartyAgentConfigs["custom-llm"])
 }
 
 func TestInvocation_GetThirdPartyAgentConfig(t *testing.T) {
