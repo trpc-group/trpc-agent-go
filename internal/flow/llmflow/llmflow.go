@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/eventtag"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -347,7 +348,7 @@ func hasToolSinceLastUser(messages []model.Message) bool {
 //   - toolPlanSeen       => reasoning.tool
 //   - else               => reasoning.unknown
 func attachReasoningTagLLM(e *event.Event, afterTool bool, toolPlanSeen *bool) {
-	tag := event.DecideReasoningTag(e, afterTool, toolPlanSeen)
+	tag := eventtag.DecideReasoningTag(e, afterTool, toolPlanSeen)
 	if tag != "" {
 		event.AddTag(e, tag)
 	}

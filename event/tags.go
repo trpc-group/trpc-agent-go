@@ -11,8 +11,6 @@ package event
 
 import (
 	"strings"
-
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // Standard event tags used by the framework.
@@ -85,36 +83,4 @@ func (e *Event) HasTag(tag string) bool {
 		return false
 	}
 	return ContainsTagString(e.Tag, tag)
-}
-
-// DecideReasoningTag determines the appropriate reasoning tag for a streaming
-// event based on context and observed tool intent. It may update toolPlanSeen
-// to true when tool intent is detected on the current chunk.
-// Returns one of TagReasoningFinal, TagReasoningTool, or TagReasoningUnknown.
-func DecideReasoningTag(e *Event, afterTool bool, toolPlanSeen *bool) string {
-	if e == nil || e.Response == nil {
-		return ""
-	}
-	if e.Object != model.ObjectTypeChatCompletion && e.Object != model.ObjectTypeChatCompletionChunk {
-		return ""
-	}
-	// Detect tool intent from this chunk.
-	hasToolDelta := false
-	if len(e.Response.Choices) > 0 {
-		ch := e.Response.Choices[0]
-		if len(ch.Message.ToolCalls) > 0 || len(ch.Delta.ToolCalls) > 0 {
-			hasToolDelta = true
-		}
-	}
-	if toolPlanSeen != nil && hasToolDelta {
-		*toolPlanSeen = true
-	}
-	switch {
-	case afterTool:
-		return TagReasoningFinal
-	case (toolPlanSeen != nil && *toolPlanSeen) || hasToolDelta:
-		return TagReasoningTool
-	default:
-		return TagReasoningUnknown
-	}
 }

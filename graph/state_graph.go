@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/eventtag"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -912,7 +913,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 // Uses shared helpers to decide the tag and append without overwriting
 // existing business tags.
 func attachReasoningTag(e *event.Event, cfg modelResponseConfig) {
-	tag := event.DecideReasoningTag(e, cfg.AfterToolResult, cfg.ToolPlanSeen)
+	tag := eventtag.DecideReasoningTag(e, cfg.AfterToolResult, cfg.ToolPlanSeen)
 	if tag != "" {
 		event.AddTag(e, tag)
 	}
