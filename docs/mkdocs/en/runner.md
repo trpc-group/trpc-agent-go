@@ -46,50 +46,55 @@ Runner provides the interface to run Agents, responsible for session management 
 package main
 
 import (
-    "context"
-    "fmt"
+	"context"
+	"fmt"
 
-    "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/agent"
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-    "trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 func main() {
-    // 1. Create model.
-    llmModel := openai.New("DeepSeek-V3-Online-64K")
+	// 1. Create model.
+	llmModel := openai.New("DeepSeek-V3-Online-64K")
 
-    // 2. Create Agent.
-    agent := llmagent.New("assistant",
-        llmagent.WithModel(llmModel),
-        llmagent.WithInstruction("You are a helpful AI assistant."),
-        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
-    )
+	// 2. Create Agent.
+	a := llmagent.New("assistant",
+		llmagent.WithModel(llmModel),
+		llmagent.WithInstruction("You are a helpful AI assistant."),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
+	)
 
-    // 3. Create Runner.
-    r := runner.NewRunner("my-app", agent)
+	// 3. Create Runner.
+	r := runner.NewRunner("my-app", a)
 
-    // 4. Run conversation.
-    ctx := context.Background()
-    userMessage := model.NewUserMessage("Hello!")
+	// 4. Run conversation.
+	ctx := context.Background()
+	userMessage := model.NewUserMessage("Hello!")
 
-    eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
-    if err != nil {
-        panic(err)
-    }
+	eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
+	if err != nil {
+		panic(err)
+	}
 
-    // 5. Handle responses.
-    for event := range eventChan {
-        if event.Error != nil {
-            fmt.Printf("Error: %s\n", event.Error.Message)
-            continue
-        }
+	// 5. Handle responses.
+	for event := range eventChan {
+		if event.Error != nil {
+			fmt.Printf("Error: %s\n", event.Error.Message)
+			continue
+		}
 
-        if len(event.Response.Choices) > 0 {
-            fmt.Print(event.Response.Choices[0].Delta.Content)
-        }
-    }
+		if len(event.Response.Choices) > 0 {
+			fmt.Print(event.Response.Choices[0].Delta.Content)
+		}
+
+		// Recommended: stop when Runner emits its completion event.
+		if event.IsRunnerCompletion() {
+			break
+		}
+	}
 }
 ```
 
@@ -194,6 +199,43 @@ option; it only derives messages from session events (or falls back to the
 single `invocation.Message` if the session has no events). `RunWithMessages`
 still sets `invocation.Message` to the latest user turn so graph/flow agents
 that inspect it continue to work.
+
+### ✅ Detecting End-of-Run and Reading Final Output (Graph-friendly)
+
+When driving a GraphAgent workflow, the LLM’s “final response” is not the end of
+the workflow—nodes like `output` may still be pending. Instead of checking
+`Response.IsFinalResponse()`, always stop on the Runner’s terminal completion
+event:
+
+```go
+for e := range eventChan {
+    // ... print streaming chunks, etc.
+    if e.IsRunnerCompletion() {
+        break
+    }
+}
+```
+
+For convenience, Runner now propagates the graph’s final snapshot into this last
+event. You can extract the final textual output via `graph.StateKeyLastResponse`:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/graph"
+
+for e := range eventChan {
+    if e.IsRunnerCompletion() {
+        if b, ok := e.StateDelta[graph.StateKeyLastResponse]; ok {
+            var final string
+            _ = json.Unmarshal(b, &final)
+            fmt.Println("\nFINAL:", final)
+        }
+        break
+    }
+}
+```
+
+This keeps application code simple and consistent across Agent types while still
+preserving detailed graph events for advanced use.
 
 ## 💾 Session Management
 

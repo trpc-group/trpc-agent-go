@@ -12,10 +12,14 @@ package graph
 import (
 	"context"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestNewBuilder(t *testing.T) {
@@ -360,4 +364,401 @@ func TestConditionalEdgeWithTools(t *testing.T) {
 	}
 
 	t.Log("Tools conditional edge test completed")
+}
+
+func dummyReducer(existing, update any) any {
+	return update
+}
+
+func intDefault() any {
+	return 42
+}
+
+func stringDefault() any {
+	return "default"
+}
+
+func nilDefault() any {
+	return nil
+}
+
+func TestStateSchema_validateSchema(t *testing.T) {
+	tests := []struct {
+		name        string
+		fields      map[string]StateField
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "valid schema with all required fields",
+			fields: map[string]StateField{
+				"testField": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  dummyReducer,
+					Required: true,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid schema with default value matching type",
+			fields: map[string]StateField{
+				"intField": {
+					Type:     reflect.TypeOf(0),
+					Reducer:  dummyReducer,
+					Default:  intDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid schema with string default value matching type",
+			fields: map[string]StateField{
+				"intField": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  dummyReducer,
+					Default:  stringDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "field with nil type should error",
+			fields: map[string]StateField{
+				"invalidField": {
+					Type:     nil,
+					Reducer:  dummyReducer,
+					Required: true,
+				},
+			},
+			wantErr:     true,
+			errContains: "has nil type",
+		},
+		{
+			name: "field with nil reducer should error",
+			fields: map[string]StateField{
+				"invalidField": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  nil,
+					Required: true,
+				},
+			},
+			wantErr:     true,
+			errContains: "has nil reducer",
+		},
+		{
+			name: "field with incompatible default value type",
+			fields: map[string]StateField{
+				"stringField": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  dummyReducer,
+					Default:  intDefault,
+					Required: false,
+				},
+			},
+			wantErr:     true,
+			errContains: "has incompatible default value",
+		},
+		{
+			name: "field with nil default for pointer type (should pass)",
+			fields: map[string]StateField{
+				"pointerField": {
+					Type:     reflect.TypeOf((*int)(nil)),
+					Reducer:  dummyReducer,
+					Default:  nilDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "field with nil default for interface type (should pass)",
+			fields: map[string]StateField{
+				"interfaceField": {
+					Type:     reflect.TypeOf((*any)(nil)).Elem(),
+					Reducer:  dummyReducer,
+					Default:  nilDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "field with nil default for slice type (should pass)",
+			fields: map[string]StateField{
+				"sliceField": {
+					Type:     reflect.TypeOf([]int{}),
+					Reducer:  dummyReducer,
+					Default:  nilDefault,
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "field with nil default for non-nillable type (should error)",
+			fields: map[string]StateField{
+				"intField": {
+					Type:     reflect.TypeOf(0),
+					Reducer:  dummyReducer,
+					Default:  nilDefault,
+					Required: false,
+				},
+			},
+			wantErr:     true,
+			errContains: "nil is not assignable",
+		},
+		{
+			name: "multiple fields with one invalid",
+			fields: map[string]StateField{
+				"validField1": {
+					Type:     reflect.TypeOf(""),
+					Reducer:  dummyReducer,
+					Required: true,
+				},
+				"invalidField": {
+					Type:     nil,
+					Reducer:  dummyReducer,
+					Required: true,
+				},
+				"validField2": {
+					Type:     reflect.TypeOf(0),
+					Reducer:  dummyReducer,
+					Required: false,
+				},
+			},
+			wantErr:     true,
+			errContains: "has nil type",
+		},
+		{
+			name: "complex type with valid default",
+			fields: map[string]StateField{
+				"structField": {
+					Type: reflect.TypeOf(struct {
+						Name string
+						Age  int
+					}{}),
+					Reducer: dummyReducer,
+					Default: func() any {
+						return struct {
+							Name string
+							Age  int
+						}{
+							Name: "default",
+							Age:  25,
+						}
+					},
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &StateSchema{
+				Fields: tt.fields,
+			}
+
+			err := s.validateSchema()
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("StateSchema.validateSchema() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && tt.errContains != "" {
+				if err == nil || err.Error() == "" {
+					t.Errorf("Expected error containing '%s', but got nil error", tt.errContains)
+					return
+				}
+
+				errorMsg := err.Error()
+				if tt.errContains != "" && !strings.Contains(errorMsg, tt.errContains) {
+					t.Errorf("StateSchema.validateSchema() error = %v, should contain %v", errorMsg, tt.errContains)
+				}
+			}
+
+			if !tt.wantErr && err != nil {
+				t.Errorf("StateSchema.validateSchema() unexpected error = %v", err)
+			}
+		})
+	}
+}
+
+func TestStateSchema_validateSchema_Concurrent(t *testing.T) {
+	schema := &StateSchema{
+		Fields: map[string]StateField{
+			"testField": {
+				Type:     reflect.TypeOf(""),
+				Reducer:  dummyReducer,
+				Required: true,
+			},
+		},
+	}
+
+	var wg sync.WaitGroup
+	iterations := 100
+
+	for i := 0; i < iterations; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+
+			err := schema.validateSchema()
+			if err != nil {
+				t.Errorf("Concurrent test %d failed: %v", index, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestStateSchema_validateSchema_Empty(t *testing.T) {
+	schema := &StateSchema{
+		Fields: map[string]StateField{},
+	}
+
+	err := schema.validateSchema()
+	if err != nil {
+		t.Errorf("Empty schema should be valid, got error: %v", err)
+	}
+}
+
+func TestStateSchema_validateSchema_FieldNameInError(t *testing.T) {
+	fieldName := "mySpecialField"
+	schema := &StateSchema{
+		Fields: map[string]StateField{
+			fieldName: {
+				Type:    nil,
+				Reducer: dummyReducer,
+			},
+		},
+	}
+
+	err := schema.validateSchema()
+	if err == nil {
+		t.Error("Expected error for nil type, got nil")
+		return
+	}
+
+	if !strings.Contains(err.Error(), fieldName) {
+		t.Errorf("Error message should contain field name '%s', got: %s", fieldName, err.Error())
+	}
+}
+
+// TestStateGraph_NodeOptionSetters covers several option helpers that were missing coverage.
+func TestStateGraph_NodeOptionSetters(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+
+	// Prepare callbacks and mappers
+	var toolCB tool.Callbacks
+	var modelCB model.Callbacks
+	inMapper := func(parent State) State { return State{"x": 1} }
+	outMapper := func(parent State, _ SubgraphResult) State { return State{"y": 2} }
+
+	// Add node with various options set
+	sg.AddNode(
+		"opt",
+		func(ctx context.Context, s State) (any, error) { return s, nil },
+		WithCacheKeyFields("a", "b"),
+		WithToolCallbacks(&toolCB),
+		WithSubgraphInputMapper(inMapper),
+		WithSubgraphOutputMapper(outMapper),
+		WithSubgraphIsolatedMessages(true),
+		WithSubgraphEventScope("scope/x"),
+		WithModelCallbacks(&modelCB),
+	)
+
+	n := sg.graph.nodes["opt"]
+	if n == nil {
+		t.Fatalf("node not added")
+	}
+	if n.cacheKeySelector == nil {
+		t.Fatalf("cacheKeySelector not set by WithCacheKeyFields")
+	}
+	// Verify subset selection from WithCacheKeyFields by invoking selector on a map
+	sel := n.cacheKeySelector(map[string]any{"a": 1, "b": 2, "c": 3})
+	if got, ok := sel.(map[string]any); !ok || len(got) != 2 || got["a"] != 1 || got["b"] != 2 {
+		t.Fatalf("unexpected cacheKeySelector result: %#v", sel)
+	}
+	if n.toolCallbacks != &toolCB {
+		t.Fatalf("toolCallbacks not set")
+	}
+	if n.agentInputMapper == nil || n.agentOutputMapper == nil {
+		t.Fatalf("subgraph mappers not set")
+	}
+	if !n.agentIsolatedMessages {
+		t.Fatalf("agentIsolatedMessages not set true")
+	}
+	if n.agentEventScope != "scope/x" {
+		t.Fatalf("agentEventScope not set: %q", n.agentEventScope)
+	}
+	if n.modelCallbacks != &modelCB {
+		t.Fatalf("modelCallbacks not set")
+	}
+}
+
+// TestStateGraph_WithCacheKeySelector_OverridesSelector verifies the custom selector assignment.
+func TestStateGraph_WithCacheKeySelector_OverridesSelector(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("opt2", func(ctx context.Context, s State) (any, error) { return s, nil },
+		WithCacheKeySelector(func(m map[string]any) any { return m["a"] }),
+	)
+	n := sg.graph.nodes["opt2"]
+	if n == nil || n.cacheKeySelector == nil {
+		t.Fatalf("cacheKeySelector not set")
+	}
+	v := n.cacheKeySelector(map[string]any{"a": 123, "b": 9})
+	if v != 123 {
+		t.Fatalf("expected selector to pick 'a' value, got %#v", v)
+	}
+}
+
+// TestStateGraph_AddSubgraphNode ensures it adds an agent-typed node.
+func TestStateGraph_AddSubgraphNode(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddSubgraphNode("agentX")
+	n := sg.graph.nodes["agentX"]
+	if n == nil {
+		t.Fatalf("subgraph node not added")
+	}
+	if n.Type != NodeTypeAgent {
+		t.Fatalf("expected NodeTypeAgent, got %v", n.Type)
+	}
+}
+
+func TestOptionBranches_EmptyPoliciesAndCallbacks(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	// WithRetryPolicy with no policies should not crash or modify
+	sg.AddNode("n", func(ctx context.Context, s State) (any, error) { return s, nil }, WithRetryPolicy())
+	n := sg.graph.nodes["n"]
+	if n == nil {
+		t.Fatalf("node missing")
+	}
+	if len(n.retryPolicies) != 0 {
+		t.Fatalf("retry policies should be empty")
+	}
+
+	// WithPostNodeCallback and WithNodeErrorCallback allocate callbacks holder
+	sg.AddNode("cbs", func(ctx context.Context, s State) (any, error) { return s, nil },
+		WithPostNodeCallback(func(context.Context, *NodeCallbackContext, State, any, error) (any, error) { return nil, nil }),
+		WithNodeErrorCallback(func(context.Context, *NodeCallbackContext, State, error) {}),
+		WithAgentNodeEventCallback(func(context.Context, *NodeCallbackContext, State, *event.Event) {}),
+	)
+	if sg.graph.nodes["cbs"].callbacks == nil {
+		t.Fatalf("callbacks should be allocated")
+	}
+}
+
+// TestMustCompile_PanicsOnInvalid covers the panic path (no entry point).
+func TestMustCompile_PanicsOnInvalid(t *testing.T) {
+	defer func() { _ = recover() }()
+	sg := NewStateGraph(NewStateSchema())
+	_ = sg.MustCompile() // no entry point triggers panic
+	t.Fatalf("expected panic")
 }

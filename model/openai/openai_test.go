@@ -18,13 +18,18 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	openai "github.com/openai/openai-go"
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -69,26 +74,16 @@ func TestNew(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := New(tt.modelName, tt.opts...)
-			if m == nil {
-				t.Fatal("expected model to be created, got nil")
-			}
+			require.NotNil(t, m, "expected model to be created, got nil")
 
 			o := options{}
 			for _, opt := range tt.opts {
 				opt(&o)
 			}
 
-			if m.name != tt.modelName {
-				t.Errorf("expected model name %s, got %s", tt.modelName, m.name)
-			}
-
-			if m.apiKey != o.APIKey {
-				t.Errorf("expected api key %s, got %s", o.APIKey, m.apiKey)
-			}
-
-			if m.baseURL != o.BaseURL {
-				t.Errorf("expected base url %s, got %s", o.BaseURL, m.baseURL)
-			}
+			assert.Equal(t, tt.modelName, m.name, "expected model name %s, got %s", tt.modelName, m.name)
+			assert.Equal(t, o.APIKey, m.apiKey, "expected api key %s, got %s", o.APIKey, m.apiKey)
+			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
 		})
 	}
 }
@@ -99,13 +94,8 @@ func TestModel_GenContent_NilReq(t *testing.T) {
 	ctx := context.Background()
 	_, err := m.GenerateContent(ctx, nil)
 
-	if err == nil {
-		t.Fatal("expected error for nil request, got nil")
-	}
-
-	if err.Error() != "request cannot be nil" {
-		t.Errorf("expected 'request cannot be nil', got %s", err.Error())
-	}
+	require.Error(t, err, "expected error for nil request, got nil")
+	assert.Equal(t, "request cannot be nil", err.Error(), "expected 'request cannot be nil', got %s", err.Error())
 }
 
 func TestModel_GenContent_ValidReq(t *testing.T) {
@@ -136,9 +126,7 @@ func TestModel_GenContent_ValidReq(t *testing.T) {
 	}
 
 	responseChan, err := m.GenerateContent(ctx, request)
-	if err != nil {
-		t.Fatalf("failed to generate content: %v", err)
-	}
+	require.NoError(t, err, "failed to generate content: %v", err)
 
 	var responses []*model.Response
 	for response := range responseChan {
@@ -148,9 +136,7 @@ func TestModel_GenContent_ValidReq(t *testing.T) {
 		}
 	}
 
-	if len(responses) == 0 {
-		t.Fatal("expected at least one response, got none")
-	}
+	require.NotEmpty(t, responses, "expected at least one response, got none")
 }
 
 func TestModel_GenContent_CustomBaseURL(t *testing.T) {
@@ -160,9 +146,7 @@ func TestModel_GenContent_CustomBaseURL(t *testing.T) {
 	customBaseURL := "https://api.custom-openai.com"
 	m := New("custom-model", WithAPIKey("test-key"), WithBaseURL(customBaseURL))
 
-	if m.baseURL != customBaseURL {
-		t.Errorf("expected base URL %s, got %s", customBaseURL, m.baseURL)
-	}
+	assert.Equal(t, customBaseURL, m.baseURL, "expected base URL %s, got %s", customBaseURL, m.baseURL)
 
 	// Test that the model can be created without errors.
 	ctx := context.Background()
@@ -177,9 +161,7 @@ func TestModel_GenContent_CustomBaseURL(t *testing.T) {
 
 	// This will likely fail due to invalid API key/URL, but should not panic.
 	responseChan, err := m.GenerateContent(ctx, request)
-	if err != nil {
-		t.Fatalf("failed to create request: %v", err)
-	}
+	require.NoError(t, err, "failed to create request: %v", err)
 
 	// Just consume one response to test the channel setup.
 	select {
@@ -225,22 +207,15 @@ func TestOptions_Validation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := New("test-model", tt.opts...)
-			if m == nil {
-				t.Fatal("expected model to be created")
-			}
+			require.NotNil(t, m, "expected model to be created")
 
 			o := options{}
 			for _, opt := range tt.opts {
 				opt(&o)
 			}
 
-			if m.apiKey != o.APIKey {
-				t.Errorf("expected api key %s, got %s", o.APIKey, m.apiKey)
-			}
-
-			if m.baseURL != o.BaseURL {
-				t.Errorf("expected base url %s, got %s", o.BaseURL, m.baseURL)
-			}
+			assert.Equal(t, o.APIKey, m.apiKey, "expected api key %s, got %s", o.APIKey, m.apiKey)
+			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
 		})
 	}
 }
@@ -284,9 +259,7 @@ func TestModel_convertMessages(t *testing.T) {
 	}
 
 	converted := m.convertMessages(msgs)
-	if got, want := len(converted), len(msgs); got != want {
-		t.Fatalf("converted len=%d want=%d", got, want)
-	}
+	require.Len(t, converted, len(msgs), "converted len=%d want=%d", len(converted), len(msgs))
 
 	roleChecks := []func(openaigo.ChatCompletionMessageParamUnion) bool{
 		func(u openaigo.ChatCompletionMessageParamUnion) bool { return u.OfSystem != nil },
@@ -297,19 +270,13 @@ func TestModel_convertMessages(t *testing.T) {
 	}
 
 	for i, u := range converted {
-		if !roleChecks[i](u) {
-			t.Fatalf("index %d: expected role variant not set", i)
-		}
+		require.Truef(t, roleChecks[i](u), "index %d: expected role variant not set", i)
 	}
 
 	// Assert that assistant message contains tool calls after conversion.
 	assistantUnion := converted[2]
-	if assistantUnion.OfAssistant == nil {
-		t.Fatalf("assistant union is nil")
-	}
-	if len(assistantUnion.GetToolCalls()) == 0 {
-		t.Fatalf("assistant message should contain tool calls")
-	}
+	require.NotNil(t, assistantUnion.OfAssistant, "assistant union is nil")
+	require.NotEmpty(t, assistantUnion.GetToolCalls(), "assistant message should contain tool calls")
 }
 
 // TestModel_convertTools ensures that tool declarations are mapped to the
@@ -331,21 +298,13 @@ func TestModel_convertTools(t *testing.T) {
 	}
 
 	params := m.convertTools(toolsMap)
-	if got, want := len(params), 1; got != want {
-		t.Fatalf("convertTools len=%d want=%d", got, want)
-	}
+	require.Len(t, params, 1, "convertTools len=%d want=%d", len(params), 1)
 
 	fn := params[0].Function
-	if fn.Name != toolName {
-		t.Fatalf("function name=%s want=%s", fn.Name, toolName)
-	}
-	if !fn.Description.Valid() || fn.Description.Value != toolDesc {
-		t.Fatalf("function description mismatch")
-	}
+	assert.Equal(t, toolName, fn.Name, "function name=%s want=%s", fn.Name, toolName)
+	require.True(t, fn.Description.Valid() && fn.Description.Value == toolDesc, "function description mismatch")
 
-	if reflect.ValueOf(fn.Parameters).IsZero() {
-		t.Fatalf("expected parameters to be populated from schema")
-	}
+	require.False(t, reflect.ValueOf(fn.Parameters).IsZero(), "expected parameters to be populated from schema")
 }
 
 // TestModel_Callbacks tests that callback functions are properly called with
@@ -384,15 +343,13 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		responseChan, err := m.GenerateContent(ctx, request)
-		if err != nil {
-			t.Fatalf("failed to generate content: %v", err)
-		}
+		require.NoError(t, err, "failed to generate content: %v", err)
 
 		// Wait for callback to be called.
 		select {
 		case <-callbackCalled:
 		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for request callback")
+			require.Fail(t, "timeout waiting for request callback")
 		}
 
 		// Consume responses.
@@ -403,15 +360,9 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		// Verify the callback was called with correct parameters.
-		if capturedCtx == nil {
-			t.Fatal("expected context to be captured in callback")
-		}
-		if capturedRequest == nil {
-			t.Fatal("expected request to be captured in callback")
-		}
-		if capturedRequest.Model != "gpt-3.5-turbo" {
-			t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
-		}
+		require.NotNil(t, capturedCtx, "expected context to be captured in callback")
+		require.NotNil(t, capturedRequest, "expected request to be captured in callback")
+		assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
 	})
 
 	t.Run("chat response callback", func(t *testing.T) {
@@ -443,9 +394,7 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		responseChan, err := m.GenerateContent(ctx, request)
-		if err != nil {
-			t.Fatalf("failed to generate content: %v", err)
-		}
+		require.NoError(t, err, "failed to generate content: %v", err)
 
 		// Consume responses to trigger the callback.
 		for response := range responseChan {
@@ -458,25 +407,19 @@ func TestModel_Callbacks(t *testing.T) {
 		select {
 		case <-callbackCalled:
 		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for response callback")
+			require.Fail(t, "timeout waiting for response callback")
 		}
 
 		// Verify the callback was called with correct parameters.
-		if capturedCtx == nil {
-			t.Fatal("expected context to be captured in callback")
-		}
-		if capturedRequest == nil {
-			t.Fatal("expected request to be captured in callback")
-		}
+		require.NotNil(t, capturedCtx, "expected context to be captured in callback")
+		require.NotNil(t, capturedRequest, "expected request to be captured in callback")
 		// Note: capturedResponse might be nil if there was an API error.
 		// We only check if it's not nil when we expect a successful response.
-		if capturedRequest.Model != "gpt-3.5-turbo" {
-			t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
-		}
+		assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
 		// Only check response model if we got a successful response.
 		// Note: OpenAI now returns gpt-3.5-turbo-1106 when requesting gpt-3.5-turbo.
-		if capturedResponse != nil && capturedResponse.Model != "gpt-3.5-turbo-1106" {
-			t.Errorf("expected response model %s, got %s", "gpt-3.5-turbo-1106", capturedResponse.Model)
+		if capturedResponse != nil {
+			assert.Equal(t, "gpt-3.5-turbo-1106", capturedResponse.Model, "expected response model %s, got %s", "gpt-3.5-turbo-1106", capturedResponse.Model)
 		}
 	})
 
@@ -513,9 +456,7 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		responseChan, err := m.GenerateContent(ctx, request)
-		if err != nil {
-			t.Fatalf("failed to generate content: %v", err)
-		}
+		require.NoError(t, err, "failed to generate content: %v", err)
 
 		// Wait for callback to be called or for responses to complete.
 		select {
@@ -540,18 +481,10 @@ func TestModel_Callbacks(t *testing.T) {
 
 		// Verify the callback was called with correct parameters (if it was called).
 		if capturedCtx != nil {
-			if capturedRequest == nil {
-				t.Fatal("expected request to be captured in callback")
-			}
-			if capturedChunk == nil {
-				t.Fatal("expected chunk to be captured in callback")
-			}
-			if capturedRequest.Model != "gpt-3.5-turbo" {
-				t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
-			}
-			if chunkCount == 0 {
-				t.Fatal("expected chunk callback to be called at least once")
-			}
+			require.NotNil(t, capturedRequest, "expected request to be captured in callback")
+			require.NotNil(t, capturedChunk, "expected chunk to be captured in callback")
+			assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
+			require.Greater(t, chunkCount, 0, "expected chunk callback to be called at least once")
 		}
 	})
 
@@ -586,9 +519,7 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		responseChan, err := m.GenerateContent(ctx, request)
-		if err != nil {
-			t.Fatalf("failed to generate content: %v", err)
-		}
+		require.NoError(t, err, "failed to generate content: %v", err)
 
 		// Consume all responses
 		for response := range responseChan {
@@ -608,16 +539,10 @@ func TestModel_Callbacks(t *testing.T) {
 
 		// Verify the callback was called with correct parameters (if it was called)
 		if capturedCtx != nil {
-			if capturedRequest == nil {
-				t.Fatal("expected request to be captured in callback")
-			}
-			if capturedRequest.Model != "gpt-3.5-turbo" {
-				t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
-			}
+			require.NotNil(t, capturedRequest, "expected request to be captured in callback")
+			assert.Equal(t, "gpt-3.5-turbo", capturedRequest.Model, "expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
 			// Either accumulator should be non-nil (success) or streamErr should be non-nil (failure)
-			if capturedAccumulator == nil && capturedStreamErr == nil {
-				t.Fatal("expected either accumulator or streamErr to be set")
-			}
+			require.True(t, capturedAccumulator != nil || capturedStreamErr != nil, "expected either accumulator or streamErr to be set")
 		}
 	})
 
@@ -660,15 +585,13 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		responseChan, err := m.GenerateContent(ctx, request)
-		if err != nil {
-			t.Fatalf("failed to generate content: %v", err)
-		}
+		require.NoError(t, err, "failed to generate content: %v", err)
 
 		// Wait for request callback.
 		select {
 		case <-requestCallbackDone:
 		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for request callback")
+			require.Fail(t, "timeout waiting for request callback")
 		}
 
 		// Consume responses to trigger the response callback.
@@ -682,20 +605,14 @@ func TestModel_Callbacks(t *testing.T) {
 		select {
 		case <-responseCallbackDone:
 		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for response callback")
+			require.Fail(t, "timeout waiting for response callback")
 		}
 
 		// Verify appropriate callbacks were called.
-		if !requestCalled {
-			t.Error("expected request callback to be called")
-		}
-		if !responseCalled {
-			t.Error("expected response callback to be called")
-		}
+		assert.True(t, requestCalled, "expected request callback to be called")
+		assert.True(t, responseCalled, "expected response callback to be called")
 		// Chunk callback should not be called for non-streaming requests.
-		if chunkCalled {
-			t.Error("expected chunk callback not to be called for non-streaming requests")
-		}
+		assert.False(t, chunkCalled, "expected chunk callback not to be called for non-streaming requests")
 	})
 
 	t.Run("nil callbacks", func(t *testing.T) {
@@ -713,9 +630,7 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 
 		responseChan, err := m.GenerateContent(ctx, request)
-		if err != nil {
-			t.Fatalf("failed to generate content: %v", err)
-		}
+		require.NoError(t, err, "failed to generate content: %v", err)
 
 		// Should not panic when callbacks are nil.
 		for response := range responseChan {
@@ -774,15 +689,13 @@ func TestModel_CallbackParameters(t *testing.T) {
 		}
 
 		responseChan, err := m.GenerateContent(ctx, request)
-		if err != nil {
-			t.Fatalf("failed to generate content: %v", err)
-		}
+		require.NoError(t, err, "failed to generate content: %v", err)
 
 		// Wait for request callback.
 		select {
 		case <-requestCallbackDone:
 		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for request callback")
+			require.Fail(t, "timeout waiting for request callback")
 		}
 
 		// Consume responses to trigger the response callback.
@@ -796,29 +709,21 @@ func TestModel_CallbackParameters(t *testing.T) {
 		select {
 		case <-responseCallbackDone:
 		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for response callback")
+			require.Fail(t, "timeout waiting for response callback")
 		}
 
 		// Verify parameter types are correct.
-		if requestParam == nil {
-			t.Fatal("expected request parameter to be set")
-		}
-		if reflect.TypeOf(requestParam) != reflect.TypeOf(&openaigo.ChatCompletionNewParams{}) {
-			t.Errorf("expected request parameter type %T, got %T", &openaigo.ChatCompletionNewParams{}, requestParam)
-		}
+		require.NotNil(t, requestParam, "expected request parameter to be set")
+		assert.Equal(t, reflect.TypeOf(&openaigo.ChatCompletionNewParams{}), reflect.TypeOf(requestParam), "expected request parameter type %T, got %T", &openaigo.ChatCompletionNewParams{}, requestParam)
 
 		// Note: responseParam might be nil if there was an API error.
 		// We only check the type if we got a successful response.
 		if responseParam != nil {
-			if reflect.TypeOf(responseParam) != reflect.TypeOf(&openaigo.ChatCompletion{}) {
-				t.Errorf("expected response parameter type %T, got %T", &openaigo.ChatCompletion{}, responseParam)
-			}
+			assert.Equal(t, reflect.TypeOf(&openaigo.ChatCompletion{}), reflect.TypeOf(responseParam), "expected response parameter type %T, got %T", &openaigo.ChatCompletion{}, responseParam)
 		}
 
 		// Chunk parameter should be nil for non-streaming requests.
-		if chunkParam != nil {
-			t.Error("expected chunk parameter to be nil for non-streaming requests")
-		}
+		assert.Nil(t, chunkParam, "expected chunk parameter to be nil for non-streaming requests")
 	})
 }
 
@@ -850,15 +755,9 @@ func TestModel_CallbackAssignment(t *testing.T) {
 		)
 
 		// Verify that callbacks are assigned.
-		if m.chatRequestCallback == nil {
-			t.Error("expected chat request callback to be assigned")
-		}
-		if m.chatResponseCallback == nil {
-			t.Error("expected chat response callback to be assigned")
-		}
-		if m.chatChunkCallback == nil {
-			t.Error("expected chat chunk callback to be assigned")
-		}
+		assert.NotNil(t, m.chatRequestCallback, "expected chat request callback to be assigned")
+		assert.NotNil(t, m.chatResponseCallback, "expected chat response callback to be assigned")
+		assert.NotNil(t, m.chatChunkCallback, "expected chat chunk callback to be assigned")
 
 		// Test that callbacks can be called without panicking.
 		ctx := context.Background()
@@ -868,43 +767,219 @@ func TestModel_CallbackAssignment(t *testing.T) {
 
 		// Test request callback.
 		m.chatRequestCallback(ctx, req)
-		if !requestCalled {
-			t.Error("expected request callback to be called")
-		}
+		assert.True(t, requestCalled, "expected request callback to be called")
 
 		// Test response callback.
 		resp := &openaigo.ChatCompletion{
 			Model: "test-model",
 		}
 		m.chatResponseCallback(ctx, req, resp)
-		if !responseCalled {
-			t.Error("expected response callback to be called")
-		}
+		assert.True(t, responseCalled, "expected response callback to be called")
 
 		// Test chunk callback.
 		chunk := &openaigo.ChatCompletionChunk{
 			Model: "test-model",
 		}
 		m.chatChunkCallback(ctx, req, chunk)
-		if !chunkCalled {
-			t.Error("expected chunk callback to be called")
-		}
+		assert.True(t, chunkCalled, "expected chunk callback to be called")
 	})
 
 	t.Run("nil callback assignment", func(t *testing.T) {
 		m := New("test-model", WithAPIKey("test-key"))
 
 		// Verify that callbacks are nil when not provided.
-		if m.chatRequestCallback != nil {
-			t.Error("expected chat request callback to be nil")
-		}
-		if m.chatResponseCallback != nil {
-			t.Error("expected chat response callback to be nil")
-		}
-		if m.chatChunkCallback != nil {
-			t.Error("expected chat chunk callback to be nil")
-		}
+		assert.Nil(t, m.chatRequestCallback, "expected chat request callback to be nil")
+		assert.Nil(t, m.chatResponseCallback, "expected chat response callback to be nil")
+		assert.Nil(t, m.chatChunkCallback, "expected chat chunk callback to be nil")
 	})
+}
+
+// testStubCounter implements model.TokenCounter for unit tests.
+type testStubCounter struct{}
+
+func (testStubCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+	return 1, nil
+}
+
+func (testStubCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+	}
+	return end - start, nil
+}
+
+// testStubStrategy implements model.TailoringStrategy for unit tests.
+type testStubStrategy struct{}
+
+func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Message, maxTokens int) ([]model.Message, error) {
+	if len(messages) <= 1 {
+		return messages, nil
+	}
+	// Drop the second message to make tailoring observable.
+	return append([]model.Message{messages[0]}, messages[2:]...), nil
+}
+
+// TestWithTokenTailoring ensures messages are tailored before request is built.
+func TestWithTokenTailoring(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("test-model",
+		WithEnableTokenTailoring(true), // Enable token tailoring.
+		WithMaxInputTokens(100),
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; strategy will drop the second one.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring, OpenAI messages should be 1 user message (system omitted in this test).
+	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+// TestWithEnableTokenTailoring_SimpleMode tests the simple mode of token tailoring.
+func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini", // Known model with 200000 context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 100; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 100))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring, messages should be reduced.
+	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored, got %d (original: %d)", len(captured.Messages), len(messages))
+}
+
+// TestWithEnableTokenTailoring_AdvancedMode tests the advanced mode with custom parameters.
+func TestWithEnableTokenTailoring_AdvancedMode(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1000), // Custom max input tokens
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; strategy will drop the second one.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring, OpenAI messages should be 1 user message.
+	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+// TestWithEnableTokenTailoring_Disabled tests that token tailoring is disabled when flag is false.
+func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(false),
+		WithMaxInputTokens(100), // This should be ignored when tailoring is disabled
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; should NOT be tailored when disabled.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring disabled, OpenAI messages should be unchanged (2 messages).
+	require.Len(t, captured.Messages, 2, "expected 2 messages when tailoring disabled, got %d", len(captured.Messages))
+}
+
+// TestWithEnableTokenTailoring_UnknownModel tests behavior with unknown model.
+func TestWithEnableTokenTailoring_UnknownModel(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("unknown-model-xyz", // Unknown model should fallback to default context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 50; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 50))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring, messages should be reduced even with unknown model.
+	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored with unknown model, got %d (original: %d)", len(captured.Messages), len(messages))
 }
 
 // TestModel_CallbackSignature tests that the callback function signatures
@@ -1014,19 +1089,13 @@ func TestWithOpenAIOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := New(tt.modelName, tt.opts...)
-			if m == nil {
-				t.Fatal("expected model to be created, got nil")
-			}
+			require.NotNil(t, m, "expected model to be created, got nil")
 
 			// Verify that the model was created with the expected name.
-			if m.name != tt.modelName {
-				t.Errorf("expected model name %s, got %s", tt.modelName, m.name)
-			}
+			assert.Equal(t, tt.modelName, m.name, "expected model name %s, got %s", tt.modelName, m.name)
 
 			// Verify that the model was created successfully.
-			if m.name != tt.modelName {
-				t.Errorf("expected model name %s, got %s", tt.modelName, m.name)
-			}
+			assert.Equal(t, tt.modelName, m.name, "expected model name %s, got %s", tt.modelName, m.name)
 		})
 	}
 }
@@ -1044,9 +1113,7 @@ func TestWithOpenAIOptions_OptionsStruct(t *testing.T) {
 	)(o)
 
 	// Verify that OpenAI options were stored.
-	if len(o.OpenAIOptions) != 2 {
-		t.Errorf("expected 2 OpenAI options, got %d", len(o.OpenAIOptions))
-	}
+	assert.Len(t, o.OpenAIOptions, 2, "expected 2 OpenAI options, got %d", len(o.OpenAIOptions))
 
 	// Apply additional options.
 	WithOpenAIOptions(
@@ -1054,9 +1121,7 @@ func TestWithOpenAIOptions_OptionsStruct(t *testing.T) {
 	)(o)
 
 	// Verify that options were appended.
-	if len(o.OpenAIOptions) != 3 {
-		t.Errorf("expected 3 OpenAI options after append, got %d", len(o.OpenAIOptions))
-	}
+	assert.Len(t, o.OpenAIOptions, 3, "expected 3 OpenAI options after append, got %d", len(o.OpenAIOptions))
 }
 
 // TestWithOpenAIOptions_Integration tests that OpenAI options are properly
@@ -1071,9 +1136,7 @@ func TestWithOpenAIOptions_Integration(t *testing.T) {
 		),
 	)
 
-	if m == nil {
-		t.Fatal("expected model to be created")
-	}
+	require.NotNil(t, m, "expected model to be created")
 
 	// Verify that the model can be used to create a request.
 	ctx := context.Background()
@@ -1088,14 +1151,10 @@ func TestWithOpenAIOptions_Integration(t *testing.T) {
 
 	// This should not panic and should create a response channel.
 	responseChan, err := m.GenerateContent(ctx, request)
-	if err != nil {
-		t.Fatalf("failed to create request: %v", err)
-	}
+	require.NoError(t, err, "failed to create request: %v", err)
 
 	// Verify that the response channel was created.
-	if responseChan == nil {
-		t.Fatal("expected response channel to be created")
-	}
+	require.NotNil(t, responseChan, "expected response channel to be created")
 
 	// Clean up by consuming the channel.
 	go func() {
@@ -1125,9 +1184,7 @@ func TestWithOpenAIOptions_Middleware(t *testing.T) {
 		),
 	)
 
-	if m == nil {
-		t.Fatal("expected model to be created")
-	}
+	require.NotNil(t, m, "expected model to be created")
 
 	// Create a request to trigger the middleware.
 	ctx := context.Background()
@@ -1142,17 +1199,13 @@ func TestWithOpenAIOptions_Middleware(t *testing.T) {
 
 	// This will likely fail due to invalid API key, but middleware should be called.
 	responseChan, err := m.GenerateContent(ctx, request)
-	if err != nil {
-		t.Fatalf("failed to create request: %v", err)
-	}
+	require.NoError(t, err, "failed to create request: %v", err)
 
 	// Consume one response to trigger the middleware.
 	select {
 	case <-responseChan:
 		// Middleware should have been called during the request.
-		if !middlewareCalled {
-			t.Error("expected middleware to be called")
-		}
+		assert.True(t, middlewareCalled, "expected middleware to be called")
 	case <-time.After(5 * time.Second):
 		t.Log("Request timed out as expected with test credentials")
 	}
@@ -1192,39 +1245,21 @@ func TestWithOpenAIOptions_CombinedOptions(t *testing.T) {
 		),
 	)
 
-	if m == nil {
-		t.Fatal("expected model to be created")
-	}
+	require.NotNilf(t, m, "expected model to be created")
 
 	// Verify that all options were applied correctly.
-	if m.name != "test-model" {
-		t.Errorf("expected model name 'test-model', got %s", m.name)
-	}
+	assert.Equal(t, "test-model", m.name, "expected model name 'test-model', got %s", m.name)
+	assert.Equal(t, "test-key", m.apiKey, "expected API key 'test-key', got %s", m.apiKey)
+	assert.Equal(t, "https://api.example.com", m.baseURL, "expected base URL 'https://api.example.com', got %s", m.baseURL)
 
-	if m.apiKey != "test-key" {
-		t.Errorf("expected API key 'test-key', got %s", m.apiKey)
-	}
-
-	if m.baseURL != "https://api.example.com" {
-		t.Errorf("expected base URL 'https://api.example.com', got %s", m.baseURL)
-	}
-
-	if m.channelBufferSize != 1024 {
-		t.Errorf("expected channel buffer size 1024, got %d", m.channelBufferSize)
-	}
+	assert.Equal(t, 1024, m.channelBufferSize, "expected channel buffer size 1024, got %d", m.channelBufferSize)
 
 	// Verify that callbacks were set.
-	if m.chatRequestCallback == nil {
-		t.Error("expected chat request callback to be set")
-	}
+	assert.NotNil(t, m.chatRequestCallback, "expected chat request callback to be set")
 
-	if m.chatResponseCallback == nil {
-		t.Error("expected chat response callback to be set")
-	}
+	assert.NotNil(t, m.chatResponseCallback, "expected chat response callback to be set")
 
-	if m.chatChunkCallback == nil {
-		t.Error("expected chat chunk callback to be set")
-	}
+	assert.NotNil(t, m.chatChunkCallback, "expected chat chunk callback to be set")
 }
 
 func TestConvertSystemMessageContent(t *testing.T) {
@@ -1243,13 +1278,9 @@ func TestConvertSystemMessageContent(t *testing.T) {
 	content := m.convertSystemMessageContent(message)
 
 	// System messages should convert text content parts to array of content parts
-	if len(content.OfArrayOfContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
-	}
+	assert.Len(t, content.OfArrayOfContentParts, 1, "Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
 
-	if content.OfArrayOfContentParts[0].Text != "System instruction" {
-		t.Errorf("Expected text content to be 'System instruction', got %s", content.OfArrayOfContentParts[0].Text)
-	}
+	assert.Equal(t, "System instruction", content.OfArrayOfContentParts[0].Text, "Expected text content to be 'System instruction', got %s", content.OfArrayOfContentParts[0].Text)
 }
 
 func TestConvertUserMessageContent(t *testing.T) {
@@ -1268,18 +1299,10 @@ func TestConvertUserMessageContent(t *testing.T) {
 	content, _ := model.convertUserMessageContent(message)
 
 	// Check that content parts are converted
-	if len(content.OfArrayOfContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
-	}
-
+	assert.Lenf(t, content.OfArrayOfContentParts, 1, "Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
 	contentPart := content.OfArrayOfContentParts[0]
-	if contentPart.OfText == nil {
-		t.Error("Expected text content part to be set")
-	}
-
-	if contentPart.OfText.Text != "Hello, world!" {
-		t.Errorf("Expected text to be 'Hello, world!', got %s", contentPart.OfText.Text)
-	}
+	assert.NotNilf(t, contentPart.OfText, "Expected text content part to be set")
+	assert.Equalf(t, "Hello, world!", contentPart.OfText.Text, "Expected text content to be 'Hello, world!', got %s", contentPart.OfText.Text)
 }
 
 func TestConvertUserMessageContentWithImage(t *testing.T) {
@@ -1300,18 +1323,10 @@ func TestConvertUserMessageContentWithImage(t *testing.T) {
 	model := &Model{}
 	content, _ := model.convertUserMessageContent(message)
 
-	if len(content.OfArrayOfContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
-	}
-
+	assert.Lenf(t, content.OfArrayOfContentParts, 1, "Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
 	contentPart := content.OfArrayOfContentParts[0]
-	if contentPart.OfImageURL == nil {
-		t.Error("Expected image content part to be set")
-	}
-
-	if contentPart.OfImageURL.ImageURL.URL != "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" {
-		t.Error("Expected image URL to match")
-	}
+	assert.NotNilf(t, contentPart.OfImageURL, "Expected image content part to be set")
+	assert.Equalf(t, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", contentPart.OfImageURL.ImageURL.URL, "Expected image URL to match")
 }
 
 func TestConvertUserMessageContentWithAudio(t *testing.T) {
@@ -1332,14 +1347,9 @@ func TestConvertUserMessageContentWithAudio(t *testing.T) {
 	model := &Model{}
 	content, _ := model.convertUserMessageContent(message)
 
-	if len(content.OfArrayOfContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
-	}
-
+	assert.Lenf(t, content.OfArrayOfContentParts, 1, "Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
 	contentPart := content.OfArrayOfContentParts[0]
-	if contentPart.OfInputAudio == nil {
-		t.Error("Expected audio content part to be set")
-	}
+	assert.NotNilf(t, contentPart.OfInputAudio, "Expected audio content part to be set")
 }
 
 func TestConvertUserMessageContentWithFile(t *testing.T) {
@@ -1359,18 +1369,12 @@ func TestConvertUserMessageContentWithFile(t *testing.T) {
 	model := &Model{}
 	content, _ := model.convertUserMessageContent(message)
 
-	if len(content.OfArrayOfContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
-	}
+	assert.Lenf(t, content.OfArrayOfContentParts, 1, "Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
 
 	contentPart := content.OfArrayOfContentParts[0]
-	if contentPart.OfFile == nil {
-		t.Error("Expected file content part to be set")
-	}
+	assert.NotNilf(t, contentPart.OfFile, "Expected file content part to be set")
 
-	if contentPart.OfFile.File.FileID.Value != "file-abc123" {
-		t.Errorf("Expected file ID to be 'file-abc123', got %s", contentPart.OfFile.File.FileID.Value)
-	}
+	assert.Equalf(t, "file-abc123", contentPart.OfFile.File.FileID.Value, "Expected file ID to be 'file-abc123', got %s", contentPart.OfFile.File.FileID.Value)
 }
 
 func TestConvertAssistantMessageContent(t *testing.T) {
@@ -1389,18 +1393,12 @@ func TestConvertAssistantMessageContent(t *testing.T) {
 	content := model.convertAssistantMessageContent(message)
 
 	// Assistant messages should only support text content
-	if len(content.OfArrayOfContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
-	}
+	assert.Lenf(t, content.OfArrayOfContentParts, 1, "Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
 
 	contentPart := content.OfArrayOfContentParts[0]
-	if contentPart.OfText == nil {
-		t.Error("Expected text content part to be set")
-	}
+	assert.NotNilf(t, contentPart.OfText, "Expected text content part to be set")
 
-	if contentPart.OfText.Text != "I can help you with that." {
-		t.Errorf("Expected text to be 'I can help you with that.', got %s", contentPart.OfText.Text)
-	}
+	assert.Equalf(t, "I can help you with that.", contentPart.OfText.Text, "Expected text to be 'I can help you with that.', got %s", contentPart.OfText.Text)
 }
 
 func TestConvertAssistantMessageContentWithNonText(t *testing.T) {
@@ -1422,9 +1420,7 @@ func TestConvertAssistantMessageContentWithNonText(t *testing.T) {
 	content := model.convertAssistantMessageContent(message)
 
 	// Assistant messages should ignore non-text content parts
-	if len(content.OfArrayOfContentParts) != 0 {
-		t.Errorf("Expected 0 content parts for non-text content, got %d", len(content.OfArrayOfContentParts))
-	}
+	assert.Lenf(t, content.OfArrayOfContentParts, 0, "Expected 0 content parts for non-text content, got %d", len(content.OfArrayOfContentParts))
 }
 
 func TestConvertContentPart(t *testing.T) {
@@ -1437,17 +1433,11 @@ func TestConvertContentPart(t *testing.T) {
 	}
 
 	contentPart := m.convertContentPart(textPart)
-	if contentPart == nil {
-		t.Error("Expected content part to be converted")
-	}
+	assert.NotNilf(t, contentPart, "Expected content part to be converted")
 
-	if contentPart.OfText == nil {
-		t.Error("Expected text content part to be set")
-	}
+	assert.NotNilf(t, contentPart.OfText, "Expected text content part to be set")
 
-	if contentPart.OfText.Text != "Test text" {
-		t.Errorf("Expected text to be 'Test text', got %s", contentPart.OfText.Text)
-	}
+	assert.Equalf(t, "Test text", contentPart.OfText.Text, "Expected text to be 'Test text', got %s", contentPart.OfText.Text)
 
 	// Test image content part
 	imagePart := model.ContentPart{
@@ -1459,13 +1449,9 @@ func TestConvertContentPart(t *testing.T) {
 	}
 
 	contentPart = m.convertContentPart(imagePart)
-	if contentPart == nil {
-		t.Error("Expected image content part to be converted")
-	}
+	assert.NotNilf(t, contentPart, "Expected image content part to be converted")
 
-	if contentPart.OfImageURL == nil {
-		t.Error("Expected image content part to be set")
-	}
+	assert.NotNilf(t, contentPart.OfImageURL, "Expected image content part to be set")
 
 	// Test unknown content part type
 	unknownPart := model.ContentPart{
@@ -1473,9 +1459,7 @@ func TestConvertContentPart(t *testing.T) {
 	}
 
 	contentPart = m.convertContentPart(unknownPart)
-	if contentPart != nil {
-		t.Error("Expected unknown content part to return nil")
-	}
+	assert.Nilf(t, contentPart, "Expected unknown content part to return nil")
 }
 
 // Helper function to create string pointers
@@ -1610,17 +1594,13 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 
 			ctx := context.Background()
 			responseChan, err := m.GenerateContent(ctx, req)
-			if err != nil {
-				t.Fatalf("GenerateContent failed: %v", err)
-			}
+			require.NoErrorf(t, err, "GenerateContent failed: %v", err)
 
 			// Collect all responses.
 			var responses []*model.Response
 			for response := range responseChan {
 				responses = append(responses, response)
-				if response.Error != nil {
-					t.Fatalf("Response error: %v", response.Error)
-				}
+				require.Nilf(t, response.Error, "Response error: %v", response.Error)
 			}
 
 			// Find response with tool calls.
@@ -1633,63 +1613,39 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 			}
 
 			// Verify our batch processing worked.
-			if toolCallResponse == nil {
-				t.Fatalf("No tool calls found - batch processing failed")
-			}
+			require.NotNilf(t, toolCallResponse, "No tool calls found - batch processing failed")
 
 			toolCalls := toolCallResponse.Choices[0].Message.ToolCalls
-			if len(toolCalls) != tt.expectedCount {
-				t.Errorf("Expected %d tool calls, got %d", tt.expectedCount, len(toolCalls))
-			}
+			assert.Equalf(t, tt.expectedCount, len(toolCalls), "Expected %d tool calls, got %d", tt.expectedCount, len(toolCalls))
 
 			// Verify first tool call details.
 			if len(toolCalls) > 0 {
 				tc := toolCalls[0]
-				if tc.Function.Name != tt.expectedTool {
-					t.Errorf("Expected tool '%s', got '%s'", tt.expectedTool, tc.Function.Name)
-				}
-				if string(tc.Function.Arguments) != tt.expectedArgs {
-					t.Errorf("Expected args '%s', got '%s'", tt.expectedArgs, string(tc.Function.Arguments))
-				}
+				assert.Equalf(t, tt.expectedTool, tc.Function.Name, "Expected tool '%s', got '%s'", tt.expectedTool, tc.Function.Name)
+				assert.Equalf(t, tt.expectedArgs, string(tc.Function.Arguments), "Expected args '%s', got '%s'", tt.expectedArgs, string(tc.Function.Arguments))
 				// Verify Done=false for tool call responses.
-				if toolCallResponse.Done {
-					t.Error("Tool call response should have Done=false")
-				}
+				assert.Falsef(t, toolCallResponse.Done, "Tool call response should have Done=false")
 			}
 
 			// Special verification for ID_Index_Mapping_Verification test case.
 			if tt.name == "ID_Index_Mapping_Verification" && len(toolCalls) >= 2 {
 				// Verify that Index values are correctly preserved from the original streaming chunks.
-				if toolCalls[0].Index == nil || *toolCalls[0].Index != 0 {
-					t.Errorf("Expected first tool call index to be 0, got %v", toolCalls[0].Index)
-				}
-				if toolCalls[1].Index == nil || *toolCalls[1].Index != 1 {
-					t.Errorf("Expected second tool call index to be 1, got %v", toolCalls[1].Index)
-				}
+				require.NotNilf(t, toolCalls[0].Index, "Expected first tool call index to be set")
+				assert.Equalf(t, 0, *toolCalls[0].Index, "Expected first tool call index to be 0, got %v", *toolCalls[0].Index)
+				require.NotNilf(t, toolCalls[1].Index, "Expected second tool call index to be set")
+				assert.Equalf(t, 1, *toolCalls[1].Index, "Expected second tool call index to be 1, got %v", *toolCalls[1].Index)
 
 				// Verify both tool calls have correct IDs and functions.
-				if toolCalls[0].ID != "call_weather_abc" {
-					t.Errorf("Expected first tool call ID 'call_weather_abc', got '%s'", toolCalls[0].ID)
-				}
-				if toolCalls[1].ID != "call_time_xyz" {
-					t.Errorf("Expected second tool call ID 'call_time_xyz', got '%s'", toolCalls[1].ID)
-				}
-				if toolCalls[0].Function.Name != "get_weather" {
-					t.Errorf("Expected first tool call function 'get_weather', got '%s'", toolCalls[0].Function.Name)
-				}
-				if toolCalls[1].Function.Name != "get_time" {
-					t.Errorf("Expected second tool call function 'get_time', got '%s'", toolCalls[1].Function.Name)
-				}
+				assert.Equalf(t, "call_weather_abc", toolCalls[0].ID, "Expected first tool call ID 'call_weather_abc', got '%s'", toolCalls[0].ID)
+				assert.Equalf(t, "call_time_xyz", toolCalls[1].ID, "Expected second tool call ID 'call_time_xyz', got '%s'", toolCalls[1].ID)
+				assert.Equalf(t, "get_weather", toolCalls[0].Function.Name, "Expected first tool call function 'get_weather', got '%s'", toolCalls[0].Function.Name)
+				assert.Equalf(t, "get_time", toolCalls[1].Function.Name, "Expected second tool call function 'get_time', got '%s'", toolCalls[1].Function.Name)
 
 				// Verify arguments were correctly assembled despite missing IDs in data chunks.
 				expectedWeatherArgs := `{"location":"Tokyo"}`
 				expectedTimeArgs := `{"timezone":"UTC"}`
-				if string(toolCalls[0].Function.Arguments) != expectedWeatherArgs {
-					t.Errorf("Expected first tool args '%s', got '%s'", expectedWeatherArgs, string(toolCalls[0].Function.Arguments))
-				}
-				if string(toolCalls[1].Function.Arguments) != expectedTimeArgs {
-					t.Errorf("Expected second tool args '%s', got '%s'", expectedTimeArgs, string(toolCalls[1].Function.Arguments))
-				}
+				assert.Equalf(t, expectedWeatherArgs, string(toolCalls[0].Function.Arguments), "Expected first tool args '%s', got '%s'", expectedWeatherArgs, string(toolCalls[0].Function.Arguments))
+				assert.Equalf(t, expectedTimeArgs, string(toolCalls[1].Function.Arguments), "Expected second tool args '%s', got '%s'", expectedTimeArgs, string(toolCalls[1].Function.Arguments))
 			}
 		})
 	}
@@ -1735,29 +1691,21 @@ func TestModel_GenerateContent_WithReasoningContent(t *testing.T) {
 	// Send request
 	ctx := context.Background()
 	responseChan, err := m.GenerateContent(ctx, req)
-	if err != nil {
-		t.Fatalf("GenerateContent failed: %v", err)
-	}
+	require.NoErrorf(t, err, "GenerateContent failed: %v", err)
 
 	// Collect responses
 	var responses []*model.Response
 	for response := range responseChan {
 		responses = append(responses, response)
-		if response.Error != nil {
-			t.Fatalf("Response error: %v", response.Error)
-		}
+		require.Nilf(t, response.Error, "Response error: %v", response.Error)
 	}
 
 	// Verify responses contain reasoning_content
-	if len(responses) < 3 {
-		t.Fatalf("Expected at least 3 responses, got %d", len(responses))
-	}
+	require.GreaterOrEqualf(t, len(responses), 3, "Expected at least 3 responses, got %d", len(responses))
 
 	// Check the first response chunk
 	if len(responses) > 0 && len(responses[0].Choices) > 0 {
-		if responses[0].Choices[0].Delta.ReasoningContent != "First part of reasoning" {
-			t.Errorf("Expected reasoning_content 'First part of reasoning', got '%s'", responses[0].Choices[0].Delta.ReasoningContent)
-		}
+		assert.Equalf(t, "First part of reasoning", responses[0].Choices[0].Delta.ReasoningContent, "Expected reasoning_content 'First part of reasoning', got '%s'", responses[0].Choices[0].Delta.ReasoningContent)
 	}
 
 	// Check if any responses contain reasoning_content
@@ -1769,9 +1717,7 @@ func TestModel_GenerateContent_WithReasoningContent(t *testing.T) {
 		}
 	}
 
-	if !foundReasoningContent {
-		t.Error("Expected to find responses with reasoning_content, but none were found")
-	}
+	assert.Truef(t, foundReasoningContent, "Expected to find responses with reasoning_content, but none were found")
 }
 
 func TestModel_GenerateContent_WithReasoningContent_NonStreaming(t *testing.T) {
@@ -1823,37 +1769,25 @@ func TestModel_GenerateContent_WithReasoningContent_NonStreaming(t *testing.T) {
 	// Send request
 	ctx := context.Background()
 	responseChan, err := m.GenerateContent(ctx, req)
-	if err != nil {
-		t.Fatalf("GenerateContent failed: %v", err)
-	}
+	require.NoErrorf(t, err, "GenerateContent failed: %v", err)
 
 	// Collect responses
 	var responses []*model.Response
 	for response := range responseChan {
 		responses = append(responses, response)
-		if response.Error != nil {
-			t.Fatalf("Response error: %v", response.Error)
-		}
+		require.Nilf(t, response.Error, "Response error: %v", response.Error)
 	}
 
 	// Verify response contains reasoning_content
-	if len(responses) != 1 {
-		t.Fatalf("Expected 1 response, got %d", len(responses))
-	}
+	require.Lenf(t, responses, 1, "Expected 1 response, got %d", len(responses))
 
-	if len(responses[0].Choices) == 0 {
-		t.Fatal("Expected at least one choice in response")
-	}
+	require.NotEmptyf(t, responses[0].Choices, "Expected at least one choice in response")
 
 	// Check that reasoning content is present in the final message
-	if responses[0].Choices[0].Message.ReasoningContent != "Complete reasoning process" {
-		t.Errorf("Expected reasoning_content 'Complete reasoning process', got '%s'", responses[0].Choices[0].Message.ReasoningContent)
-	}
+	assert.Equalf(t, "Complete reasoning process", responses[0].Choices[0].Message.ReasoningContent, "Expected reasoning_content 'Complete reasoning process', got '%s'", responses[0].Choices[0].Message.ReasoningContent)
 
 	// Check that content is also present
-	if responses[0].Choices[0].Message.Content != "Final answer" {
-		t.Errorf("Expected content 'Final answer', got '%s'", responses[0].Choices[0].Message.Content)
-	}
+	assert.Equalf(t, "Final answer", responses[0].Choices[0].Message.Content, "Expected content 'Final answer', got '%s'", responses[0].Choices[0].Message.Content)
 }
 
 // TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized verifies that
@@ -1911,9 +1845,7 @@ func TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized(t *testing.
 	// Send request
 	ctx := context.Background()
 	responseChan, err := m.GenerateContent(ctx, req)
-	if err != nil {
-		t.Fatalf("GenerateContent failed: %v", err)
-	}
+	require.NoErrorf(t, err, "GenerateContent failed: %v", err)
 
 	// Collect single response
 	var responses []*model.Response
@@ -1924,31 +1856,17 @@ func TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized(t *testing.
 		}
 	}
 
-	if len(responses) == 0 {
-		t.Fatalf("Expected at least 1 response, got %d", len(responses))
-	}
+	require.NotEmptyf(t, responses, "Expected at least 1 response, got %d", len(responses))
 	resp := responses[0]
-	if resp.Error != nil {
-		t.Fatalf("Unexpected model error: type=%s msg=%s", resp.Error.Type, resp.Error.Message)
-	}
-	if len(resp.Choices) == 0 {
-		t.Fatalf("Expected choices in response")
-	}
+	require.Nilf(t, resp.Error, "Unexpected model error: %v", resp.Error)
+	require.NotEmptyf(t, resp.Choices, "Expected choices in response")
 
 	toolCalls := resp.Choices[0].Message.ToolCalls
-	if len(toolCalls) != 1 {
-		t.Fatalf("Expected 1 tool call, got %d", len(toolCalls))
-	}
+	require.Lenf(t, toolCalls, 1, "Expected 1 tool call, got %d", len(toolCalls))
 	// The adapter should synthesize an ID for the first tool call.
-	if toolCalls[0].ID != "auto_call_0" {
-		t.Errorf("Expected synthesized tool call ID 'auto_call_0', got '%s'", toolCalls[0].ID)
-	}
-	if toolCalls[0].Function.Name != "calc" {
-		t.Errorf("Expected function name 'calc', got '%s'", toolCalls[0].Function.Name)
-	}
-	if string(toolCalls[0].Function.Arguments) != `{"a":1}` {
-		t.Errorf("Expected function arguments '{\"a\":1}', got '%s'", string(toolCalls[0].Function.Arguments))
-	}
+	assert.Equalf(t, "auto_call_0", toolCalls[0].ID, "Expected synthesized tool call ID 'auto_call_0', got '%s'", toolCalls[0].ID)
+	assert.Equalf(t, "calc", toolCalls[0].Function.Name, "Expected function name 'calc', got '%s'", toolCalls[0].Function.Name)
+	assert.Equalf(t, `{"a":1}`, string(toolCalls[0].Function.Arguments), "Expected function arguments '{\"a\":1}', got '%s'", string(toolCalls[0].Function.Arguments))
 }
 
 // TestFileOptions verifies the FileOptions struct and its option functions.
@@ -1956,81 +1874,43 @@ func TestFileOptions(t *testing.T) {
 	t.Run("default_options", func(t *testing.T) {
 		opts := &FileOptions{}
 
-		if opts.Path != "" {
-			t.Errorf("expected Path to be empty, got %q", opts.Path)
-		}
-		if opts.Purpose != openaigo.FilePurpose("") {
-			t.Errorf("expected Purpose to be empty, got %q", opts.Purpose)
-		}
-		if opts.Method != "" {
-			t.Errorf("expected Method to be empty, got %q", opts.Method)
-		}
-		if opts.Body != nil {
-			t.Errorf("expected Body to be nil, got %v", opts.Body)
-		}
-		if opts.BaseURL != "" {
-			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
-		}
+		assert.Empty(t, opts.Path, "expected Path to be empty, got %q", opts.Path)
+		assert.Equal(t, openaigo.FilePurpose(""), opts.Purpose, "expected Purpose to be empty, got %q", opts.Purpose)
+		assert.Empty(t, opts.Method, "expected Method to be empty, got %q", opts.Method)
+		assert.Nil(t, opts.Body, "expected Body to be nil, got %v", opts.Body)
+		assert.Empty(t, opts.BaseURL, "expected BaseURL to be empty, got %q", opts.BaseURL)
 	})
 
 	t.Run("with_path_option", func(t *testing.T) {
 		opts := &FileOptions{}
 		WithPath("/custom/files")(opts)
 
-		if opts.Path != "/custom/files" {
-			t.Errorf("expected Path '/custom/files', got %q", opts.Path)
-		}
-		if opts.Purpose != openaigo.FilePurpose("") {
-			t.Errorf("expected Purpose to be empty, got %q", opts.Purpose)
-		}
-		if opts.Method != "" {
-			t.Errorf("expected Method to be empty, got %q", opts.Method)
-		}
-		if opts.Body != nil {
-			t.Errorf("expected Body to be nil, got %v", opts.Body)
-		}
-		if opts.BaseURL != "" {
-			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
-		}
+		assert.Equal(t, "/custom/files", opts.Path, "expected Path '/custom/files', got %q", opts.Path)
+		assert.Equal(t, openaigo.FilePurpose(""), opts.Purpose, "expected Purpose to be empty, got %q", opts.Purpose)
+		assert.Empty(t, opts.Method, "expected Method to be empty, got %q", opts.Method)
+		assert.Nil(t, opts.Body, "expected Body to be nil, got %v", opts.Body)
+		assert.Empty(t, opts.BaseURL, "expected BaseURL to be empty, got %q", opts.BaseURL)
 	})
 
 	t.Run("with_purpose_option", func(t *testing.T) {
 		opts := &FileOptions{}
 		WithPurpose(openaigo.FilePurposeBatch)(opts)
 
-		if opts.Path != "" {
-			t.Errorf("expected Path to be empty, got %q", opts.Path)
-		}
-		if opts.Purpose != openaigo.FilePurposeBatch {
-			t.Errorf("expected Purpose 'batch', got %q", opts.Purpose)
-		}
-		if opts.Method != "" {
-			t.Errorf("expected Method to be empty, got %q", opts.Method)
-		}
-		if opts.Body != nil {
-			t.Errorf("expected Body to be nil, got %v", opts.Body)
-		}
-		if opts.BaseURL != "" {
-			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
-		}
+		assert.Emptyf(t, opts.Path, "expected Path to be empty, got %q", opts.Path)
+		assert.Equalf(t, openaigo.FilePurposeBatch, opts.Purpose, "expected Purpose 'batch', got %q", opts.Purpose)
+		assert.Emptyf(t, opts.Method, "expected Method to be empty, got %q", opts.Method)
+		assert.Nilf(t, opts.Body, "expected Body to be nil, got %v", opts.Body)
+		assert.Emptyf(t, opts.BaseURL, "expected BaseURL to be empty, got %q", opts.BaseURL)
 	})
 
 	t.Run("with_method_option", func(t *testing.T) {
 		opts := &FileOptions{}
 		WithMethod("PUT")(opts)
 
-		if opts.Path != "" {
-			t.Errorf("expected Path to be empty, got %q", opts.Path)
-		}
-		if opts.Purpose != openaigo.FilePurpose("") {
-			t.Errorf("expected Purpose to be empty, got %q", opts.Purpose)
-		}
-		if opts.Method != "PUT" {
-			t.Errorf("expected Method 'PUT', got %q", opts.Method)
-		}
-		if opts.Body != nil {
-			t.Errorf("expected Body to be nil, got %v", opts.Body)
-		}
+		assert.Empty(t, opts.Path, "expected Path to be empty, got %q", opts.Path)
+		assert.Equal(t, openaigo.FilePurpose(""), opts.Purpose, "expected Purpose to be empty, got %q", opts.Purpose)
+		assert.Equal(t, "PUT", opts.Method, "expected Method 'PUT', got %q", opts.Method)
+		assert.Nil(t, opts.Body, "expected Body to be nil, got %v", opts.Body)
 	})
 
 	t.Run("with_body_option", func(t *testing.T) {
@@ -2038,21 +1918,11 @@ func TestFileOptions(t *testing.T) {
 		testBody := []byte("{\"test\":\"data\"}")
 		WithBody(testBody)(opts)
 
-		if opts.Path != "" {
-			t.Errorf("expected Path to be empty, got %q", opts.Path)
-		}
-		if opts.Purpose != openaigo.FilePurpose("") {
-			t.Errorf("expected Purpose to be empty, got %q", opts.Purpose)
-		}
-		if opts.Method != "" {
-			t.Errorf("expected Method to be empty, got %q", opts.Method)
-		}
-		if string(opts.Body) != string(testBody) {
-			t.Errorf("expected Body %q, got %q", string(testBody), string(opts.Body))
-		}
-		if opts.BaseURL != "" {
-			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
-		}
+		assert.Emptyf(t, opts.Path, "expected Path to be empty, got %q", opts.Path)
+		assert.Equalf(t, openaigo.FilePurpose(""), opts.Purpose, "expected Purpose to be empty, got %q", opts.Purpose)
+		assert.Emptyf(t, opts.Method, "expected Method to be empty, got %q", opts.Method)
+		assert.Equalf(t, string(testBody), string(opts.Body), "expected Body %q, got %q", string(testBody), string(opts.Body))
+		assert.Emptyf(t, opts.BaseURL, "expected BaseURL to be empty, got %q", opts.BaseURL)
 	})
 
 	t.Run("multiple_options", func(t *testing.T) {
@@ -2064,18 +1934,10 @@ func TestFileOptions(t *testing.T) {
 		WithMethod("POST")(opts)
 		WithBody(testBody)(opts)
 
-		if opts.Path != "/custom/path" {
-			t.Errorf("expected Path '/custom/path', got %q", opts.Path)
-		}
-		if opts.Purpose != openaigo.FilePurposeUserData {
-			t.Errorf("expected Purpose 'user_data', got %q", opts.Purpose)
-		}
-		if opts.Method != "POST" {
-			t.Errorf("expected Method 'POST', got %q", opts.Method)
-		}
-		if string(opts.Body) != string(testBody) {
-			t.Errorf("expected Body %q, got %q", string(testBody), string(opts.Body))
-		}
+		assert.Equalf(t, "/custom/path", opts.Path, "expected Path '/custom/path', got %q", opts.Path)
+		assert.Equalf(t, openaigo.FilePurposeUserData, opts.Purpose, "expected Purpose 'user_data', got %q", opts.Purpose)
+		assert.Equalf(t, "POST", opts.Method, "expected Method 'POST', got %q", opts.Method)
+		assert.Equalf(t, string(testBody), string(opts.Body), "expected Body %q, got %q", string(testBody), string(opts.Body))
 	})
 
 	t.Run("option_functions_return_functions", func(t *testing.T) {
@@ -2085,9 +1947,11 @@ func TestFileOptions(t *testing.T) {
 		bodyOpt := WithBody([]byte("test"))
 		baseURLOpt := WithFileBaseURL("http://example.com/v1")
 
-		if pathOpt == nil || purposeOpt == nil || methodOpt == nil || bodyOpt == nil || baseURLOpt == nil {
-			t.Fatal("expected option functions to be non-nil")
-		}
+		require.NotNilf(t, pathOpt, "expected option functions to be non-nil")
+		require.NotNilf(t, purposeOpt, "expected option functions to be non-nil")
+		require.NotNilf(t, methodOpt, "expected option functions to be non-nil")
+		require.NotNilf(t, bodyOpt, "expected option functions to be non-nil")
+		require.NotNilf(t, baseURLOpt, "expected option functions to be non-nil")
 
 		opts := &FileOptions{}
 		pathOpt(opts)
@@ -2096,21 +1960,11 @@ func TestFileOptions(t *testing.T) {
 		bodyOpt(opts)
 		baseURLOpt(opts)
 
-		if opts.Path != "/test" {
-			t.Errorf("expected Path '/test', got %q", opts.Path)
-		}
-		if opts.Purpose != openaigo.FilePurposeBatch {
-			t.Errorf("expected Purpose 'batch', got %q", opts.Purpose)
-		}
-		if opts.Method != "DELETE" {
-			t.Errorf("expected Method 'DELETE', got %q", opts.Method)
-		}
-		if string(opts.Body) != "test" {
-			t.Errorf("expected Body 'test', got %q", string(opts.Body))
-		}
-		if opts.BaseURL != "http://example.com/v1" {
-			t.Errorf("expected BaseURL 'http://example.com/v1', got %q", opts.BaseURL)
-		}
+		assert.Equalf(t, "/test", opts.Path, "expected Path '/test', got %q", opts.Path)
+		assert.Equalf(t, openaigo.FilePurposeBatch, opts.Purpose, "expected Purpose 'batch', got %q", opts.Purpose)
+		assert.Equalf(t, "DELETE", opts.Method, "expected Method 'DELETE', got %q", opts.Method)
+		assert.Equalf(t, "test", string(opts.Body), "expected Body 'test', got %q", string(opts.Body))
+		assert.Equalf(t, "http://example.com/v1", opts.BaseURL, "expected BaseURL 'http://example.com/v1', got %q", opts.BaseURL)
 	})
 }
 
@@ -2155,24 +2009,17 @@ func TestUploadFileData_Success(t *testing.T) {
 	// Model base URL is intentionally wrong; we rely on WithFileBaseURL override.
 	m := New("test-model", WithAPIKey("k"), WithBaseURL("http://wrong-base"))
 	id, err := m.UploadFileData(context.Background(), "batch_input.jsonl", []byte("hello jsonl"), WithPurpose(openaigo.FilePurposeBatch), WithPath(""), WithFileBaseURL(server.URL))
-	if err != nil {
-		t.Fatalf("UploadFileData failed: %v", err)
-	}
-	if id != "file_test_1" {
-		t.Fatalf("expected id=file_test_1, got %s", id)
-	}
+	require.NoErrorf(t, err, "UploadFileData failed: %v", err)
+	assert.Equalf(t, "file_test_1", id, "expected id=file_test_1, got %s", id)
 }
 
 // TestUploadFile_Success tests UploadFile with a temp file and mock server.
 func TestUploadFile_Success(t *testing.T) {
 	tmp, err := os.CreateTemp(t.TempDir(), "batch_input_*.jsonl")
-	if err != nil {
-		t.Fatalf("temp: %v", err)
-	}
+	require.NoErrorf(t, err, "temp: %v", err)
 	defer tmp.Close()
-	if _, err := tmp.WriteString("hello jsonl"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	_, err = tmp.WriteString("hello jsonl")
+	require.NoErrorf(t, err, "write: %v", err)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/files") {
@@ -2203,12 +2050,8 @@ func TestUploadFile_Success(t *testing.T) {
 
 	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
 	id, err := m.UploadFile(context.Background(), tmp.Name(), WithPurpose(openaigo.FilePurposeBatch), WithPath(""), WithFileBaseURL(server.URL))
-	if err != nil {
-		t.Fatalf("UploadFile failed: %v", err)
-	}
-	if id != "file_test_2" {
-		t.Fatalf("expected id=file_test_2, got %s", id)
-	}
+	require.NoErrorf(t, err, "UploadFile failed: %v", err)
+	assert.Equalf(t, "file_test_2", id, "expected id=file_test_2, got %s", id)
 }
 
 // TestGetFile_Success tests GetFile using a mock server.
@@ -2222,12 +2065,9 @@ func TestGetFile_Success(t *testing.T) {
 
 	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
 	obj, err := m.GetFile(context.Background(), "file_x")
-	if err != nil {
-		t.Fatalf("GetFile failed: %v", err)
-	}
-	if obj == nil || obj.ID != "file_x" {
-		t.Fatalf("unexpected file object: %#v", obj)
-	}
+	require.NoErrorf(t, err, "GetFile failed: %v", err)
+	require.NotNilf(t, obj, "unexpected file object: %#v", obj)
+	assert.Equalf(t, "file_x", obj.ID, "unexpected file object: %#v", obj)
 }
 
 // TestDeleteFile_Success tests DeleteFile using a mock server.
@@ -2240,9 +2080,8 @@ func TestDeleteFile_Success(t *testing.T) {
 	defer server.Close()
 
 	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
-	if err := m.DeleteFile(context.Background(), "file_z"); err != nil {
-		t.Fatalf("DeleteFile failed: %v", err)
-	}
+	err := m.DeleteFile(context.Background(), "file_z")
+	require.NoErrorf(t, err, "DeleteFile failed: %v", err)
 }
 
 // TestModel_GenerateContent_Streaming_FinalReasoningAggregated
@@ -2286,16 +2125,12 @@ func TestModel_GenerateContent_Streaming_FinalReasoningAggregated(t *testing.T) 
 
 	ctx := context.Background()
 	ch, err := m.GenerateContent(ctx, req)
-	if err != nil {
-		t.Fatalf("GenerateContent error: %v", err)
-	}
+	require.NoErrorf(t, err, "GenerateContent error: %v", err)
 
 	var final *model.Response
 	var partials int
 	for rsp := range ch {
-		if rsp.Error != nil {
-			t.Fatalf("response error: %v", rsp.Error)
-		}
+		require.Nilf(t, rsp.Error, "response error: %v", rsp.Error)
 		if rsp.IsPartial {
 			partials++
 			continue
@@ -2306,24 +2141,281 @@ func TestModel_GenerateContent_Streaming_FinalReasoningAggregated(t *testing.T) 
 		}
 	}
 
-	if partials == 0 {
-		t.Fatal("expected at least one partial delta with reasoning_content")
-	}
-	if final == nil {
-		t.Fatal("expected a final response")
-	}
-	if len(final.Choices) == 0 {
-		t.Fatal("expected choices in final response")
-	}
+	require.Greaterf(t, partials, 0, "expected at least one partial delta with reasoning_content")
+	require.NotNilf(t, final, "expected a final response")
+	require.NotEmptyf(t, final.Choices, "expected choices in final response")
 	got := final.Choices[0].Message.ReasoningContent
 	want := "First second final"
-	if got != want {
-		t.Fatalf("final ReasoningContent mismatch: got %q want %q", got, want)
+	assert.Equalf(t, want, got, "final ReasoningContent mismatch: got %q want %q", got, want)
+	assert.Truef(t, final.Done, "expected final.Done == true")
+	assert.Falsef(t, final.IsPartial, "expected final.IsPartial == false")
+}
+
+func TestOpenAI_TokenCounterInitialization(t *testing.T) {
+	tests := []struct {
+		name                 string
+		initialTokenCounter  model.TokenCounter
+		expectedTokenCounter bool // true if should be set, false if should be nil initially
+	}{
+		{
+			name:                 "with user provided token counter",
+			initialTokenCounter:  model.NewSimpleTokenCounter(),
+			expectedTokenCounter: true,
+		},
+		{
+			name:                 "without user provided token counter",
+			initialTokenCounter:  nil,
+			expectedTokenCounter: false,
+		},
 	}
-	if !final.Done {
-		t.Error("expected final.Done == true")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create OpenAI client
+			client := &Model{
+				name:                 "gpt-3.5-turbo",
+				apiKey:               "test-api-key",
+				enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+				tokenCounter:         tt.initialTokenCounter,
+			}
+
+			// Create a simple conversation to trigger the initialization logic
+			conv := []model.Message{
+				model.NewUserMessage("test message"),
+			}
+
+			// Create a mock HTTP server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := `{
+					"id": "chatcmpl-123",
+					"object": "chat.completion",
+					"created": 1677652288,
+					"model": "gpt-3.5-turbo",
+					"choices": [{
+						"index": 0,
+						"message": {
+							"role": "assistant",
+							"content": "test response"
+						},
+						"finish_reason": "stop"
+					}],
+					"usage": {
+						"prompt_tokens": 10,
+						"completion_tokens": 5,
+						"total_tokens": 15
+					}
+				}`
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, response)
+			}))
+			defer server.Close()
+
+			client.baseURL = server.URL
+			client.client = openai.NewClient(openaiopt.WithBaseURL(server.URL), openaiopt.WithAPIKey("test-key"))
+
+			// Create request to trigger initialization
+			request := &model.Request{
+				Messages: conv,
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			}
+
+			// Apply token tailoring to trigger initialization
+			client.applyTokenTailoring(context.Background(), request)
+
+			// Verify token counter initialization
+			if tt.expectedTokenCounter {
+				assert.Equal(t, tt.initialTokenCounter, client.tokenCounter, "expected tokenCounter to remain as provided, got different instance")
+			} else {
+				require.NotNil(t, client.tokenCounter, "expected tokenCounter to be initialized with default, got nil")
+				// Should be initialized with default SimpleTokenCounter
+				assert.IsType(t, &model.SimpleTokenCounter{}, client.tokenCounter, "expected SimpleTokenCounter, got %T", client.tokenCounter)
+			}
+		})
 	}
-	if final.IsPartial {
-		t.Error("expected final.IsPartial == false")
+}
+
+func TestOpenAI_TailoringStrategyInitialization(t *testing.T) {
+	tests := []struct {
+		name                      string
+		initialTailoringStrategy  model.TailoringStrategy
+		expectedTailoringStrategy bool // true if should be set, false if should be nil initially
+	}{
+		{
+			name:                      "with user provided tailoring strategy",
+			initialTailoringStrategy:  model.NewMiddleOutStrategy(model.NewSimpleTokenCounter()),
+			expectedTailoringStrategy: true,
+		},
+		{
+			name:                      "without user provided tailoring strategy",
+			initialTailoringStrategy:  nil,
+			expectedTailoringStrategy: false,
+		},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create OpenAI client
+			client := &Model{
+				name:                 "gpt-3.5-turbo",
+				apiKey:               "test-api-key",
+				enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+				tailoringStrategy:    tt.initialTailoringStrategy,
+			}
+
+			// Create a simple conversation to trigger the initialization logic
+			conv := []model.Message{
+				model.NewUserMessage("test message"),
+			}
+
+			// Create a mock HTTP server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := `{
+					"id": "chatcmpl-123",
+					"object": "chat.completion",
+					"created": 1677652288,
+					"model": "gpt-3.5-turbo",
+					"choices": [{
+						"index": 0,
+						"message": {
+							"role": "assistant",
+							"content": "test response"
+						},
+						"finish_reason": "stop"
+					}],
+					"usage": {
+						"prompt_tokens": 10,
+						"completion_tokens": 5,
+						"total_tokens": 15
+					}
+				}`
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, response)
+			}))
+			defer server.Close()
+
+			client.baseURL = server.URL
+			client.client = openai.NewClient(openaiopt.WithBaseURL(server.URL), openaiopt.WithAPIKey("test-key"))
+
+			// Create request to trigger initialization
+			request := &model.Request{
+				Messages: conv,
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			}
+
+			// Apply token tailoring to trigger initialization
+			client.applyTokenTailoring(context.Background(), request)
+
+			// Verify tailoring strategy initialization
+			if tt.expectedTailoringStrategy {
+				assert.Equal(t, tt.initialTailoringStrategy, client.tailoringStrategy, "expected tailoringStrategy to remain as provided, got different instance")
+			} else {
+				require.NotNil(t, client.tailoringStrategy, "expected tailoringStrategy to be initialized with default, got nil")
+				// Should be initialized with default MiddleOutStrategy
+				assert.IsType(t, &model.MiddleOutStrategy{}, client.tailoringStrategy, "expected MiddleOutStrategy, got %T", client.tailoringStrategy)
+			}
+		})
+	}
+}
+
+func TestOpenAI_ConcurrentInitialization(t *testing.T) {
+	// Test concurrent access to ensure sync.Once works correctly
+	client := &Model{
+		name:                 "gpt-3.5-turbo",
+		apiKey:               "test-api-key",
+		enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+		// Don't set tokenCounter or tailoringStrategy to test default initialization
+	}
+
+	// Create a mock HTTP server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := `{
+			"id": "chatcmpl-123",
+			"object": "chat.completion",
+			"created": 1677652288,
+			"model": "gpt-3.5-turbo",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "test response"
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {
+				"prompt_tokens": 10,
+				"completion_tokens": 5,
+				"total_tokens": 15
+			}
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	client.baseURL = server.URL
+	client.client = openai.NewClient(openaiopt.WithBaseURL(server.URL), openaiopt.WithAPIKey("test-key"))
+
+	// Run multiple goroutines concurrently
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			conv := []model.Message{
+				model.NewUserMessage("test message"),
+			}
+			request := &model.Request{
+				Messages: conv,
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			}
+			client.applyTokenTailoring(context.Background(), request)
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify that initialization happened only once and both are set
+	assert.NotNilf(t, client.tokenCounter, "expected tokenCounter to be initialized")
+	assert.NotNilf(t, client.tailoringStrategy, "expected tailoringStrategy to be initialized")
+	assert.IsType(t, &model.SimpleTokenCounter{}, client.tokenCounter, "expected SimpleTokenCounter, got %T", client.tokenCounter)
+	assert.IsType(t, &model.MiddleOutStrategy{}, client.tailoringStrategy, "expected MiddleOutStrategy, got %T", client.tailoringStrategy)
+}
+
+func TestOpenAI_InitializationPriority(t *testing.T) {
+	// Test that user-provided components take priority over defaults
+	userTokenCounter := model.NewSimpleTokenCounter()
+	userTailoringStrategy := model.NewMiddleOutStrategy(userTokenCounter)
+
+	client := &Model{
+		name:                 "gpt-3.5-turbo",
+		apiKey:               "test-api-key",
+		enableTokenTailoring: true, // Enable token tailoring to trigger initialization
+		tokenCounter:         userTokenCounter,
+		tailoringStrategy:    userTailoringStrategy,
+	}
+
+	// Create request
+	request := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("test message"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	}
+
+	// Apply token tailoring
+	client.applyTokenTailoring(context.Background(), request)
+
+	// Verify that user-provided components are preserved
+	assert.Equalf(t, userTokenCounter, client.tokenCounter, "expected user-provided tokenCounter to be preserved")
+	assert.Equalf(t, userTailoringStrategy, client.tailoringStrategy, "expected user-provided tailoringStrategy to be preserved")
 }

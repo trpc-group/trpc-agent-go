@@ -816,3 +816,124 @@ func TestGetMemoryServiceFromContext(t *testing.T) {
 		assert.Equal(t, service, memoryService, "Expected the same memory service instance")
 	})
 }
+
+func TestMemoryTool_UpdateMemory_GetMemoryServiceError(t *testing.T) {
+	tool := NewUpdateTool()
+	// Use context without invocation context.
+	ctx := context.Background()
+
+	args := map[string]any{
+		"memory_id": "test-id",
+		"memory":    "Updated content",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error for context without invocation")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_AddMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil, // No session, which will cause GetAppAndUserFromContext to fail.
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewAddTool()
+	args := map[string]any{
+		"memory": "Test memory",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_SearchMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil,
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewSearchTool()
+	args := map[string]any{
+		"query": "test query",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_LoadMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil,
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewLoadTool()
+	args := map[string]any{
+		"limit": 10,
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_ClearMemory_GetMemoryServiceError(t *testing.T) {
+	tool := NewClearTool()
+	// Use context without invocation context.
+	ctx := context.Background()
+
+	args := map[string]any{}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error for context without invocation")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_DeleteMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil,
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewDeleteTool()
+	args := map[string]any{
+		"memory_id": "test-id",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}

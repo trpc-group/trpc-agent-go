@@ -36,7 +36,7 @@ func (s *NamedToolSet) Tools(ctx context.Context) []tool.Tool {
 	// Create tools with prefixed names to avoid conflicts
 	prefixedTools := make([]tool.Tool, 0, len(tools))
 	for _, t := range tools {
-		prefixedTool := &namedTool{
+		prefixedTool := &NamedTool{
 			original: t,
 			name:     toolSetName,
 		}
@@ -56,14 +56,14 @@ func (s *NamedToolSet) Name() string {
 	return s.toolSet.Name()
 }
 
-// namedTool wraps an original tool with a prefixed name to avoid conflicts.
-type namedTool struct {
+// NamedTool wraps an original tool with a prefixed name to avoid conflicts.
+type NamedTool struct {
 	original tool.Tool
 	name     string
 }
 
 // Declaration returns the tool declaration with a prefixed name.
-func (t *namedTool) Declaration() *tool.Declaration {
+func (t *NamedTool) Declaration() *tool.Declaration {
 	decl := t.original.Declaration()
 	name := decl.Name
 	if t.name != "" {
@@ -78,8 +78,13 @@ func (t *namedTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Original returns the underlying Tool instance wrapped by the NamedTool.
+func (t *NamedTool) Original() tool.Tool {
+	return t.original
+}
+
 // Call delegates to the original tool's Call method.
-func (t *namedTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (t *NamedTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if callable, ok := t.original.(tool.CallableTool); ok {
 		return callable.Call(ctx, jsonArgs)
 	}
@@ -87,7 +92,7 @@ func (t *namedTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 }
 
 // StreamableCall delegates to the original tool's StreamableCall method.
-func (t *namedTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
+func (t *NamedTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	if streamable, ok := t.original.(tool.StreamableTool); ok {
 		return streamable.StreamableCall(ctx, jsonArgs)
 	}

@@ -12,6 +12,7 @@ Graph 将可控的工作流编排与可扩展的 Agent 能力结合，适用于�
 - BSP 风格（计划/执行/合并）的确定性并行；
 - 内置节点类型封装 LLM、工具与 Agent，减少重复代码；
 - 流式事件、检查点与中断，便于观测与恢复。
+- 节点级重试/退避（指数退避与抖动），支持执行器默认重试策略与带重试元数据的事件观测。
 
 ## 快速开始
 
@@ -238,6 +239,7 @@ schema.AddField("counter", graph.StateField{
 
 - `examples/graph/io_conventions`：函数 + LLM + Agent 的 I/O 演示
 - `examples/graph/io_conventions_tools`：加入 Tools 节点，展示如何获取工具 JSON 并落入 State
+- `examples/graph/retry`：节点级重试/退避演示
 
 #### 状态键常量与来源（可直接引用）
 
@@ -284,6 +286,7 @@ func myNode(ctx context.Context, state graph.State) (any, error) {
 
 - 模型元数据：`_model_metadata` → `graph.MetadataKeyModel`（结构体 `graph.ModelExecutionMetadata`）
 - 工具元数据：`_tool_metadata` → `graph.MetadataKeyTool`（结构体 `graph.ToolExecutionMetadata`）
+- 节点元数据：`_node_metadata` → `graph.MetadataKeyNode`（结构体 `graph.NodeExecutionMetadata`）。包含重试字段：`Attempt`、`MaxAttempts`、`NextDelay`、`Retrying` 及时间相关信息。
 
 使用示例：
 
@@ -387,7 +390,8 @@ func main() {
             }
         }
 
-        if event.Done {
+        // 推荐：使用 Runner 完成事件作为“流程结束”的信号。
+        if event.IsRunnerCompletion() {
             break
         }
     }
@@ -491,6 +495,42 @@ stateGraph.AddLLMNode(
 ```
 
 可参考可运行示例：`examples/graph/placeholder`。
+
+将检索结果与用户输入注入指令
+
+- 在进入 LLM 节点前的任意节点，将临时值写入会话的 `temp:` 命名空间，LLM 指令即可用占位符读取。
+- 示例模式：
+
+```go
+// 在 LLM 节点之前
+stateGraph.AddNode("retrieve", func(ctx context.Context, s graph.State) (any, error) {
+    // 假设你已经得到检索内容 retrieved，并希望连同当前用户输入一起注入
+    retrieved := "• 文档A...\n• 文档B..."
+    var input string
+    if v, ok := s[graph.StateKeyUserInput].(string); ok { input = v }
+    if sess, _ := s[graph.StateKeySession].(*session.Session); sess != nil {
+        if sess.State == nil { sess.State = make(session.StateMap) }
+        sess.State[session.StateTempPrefix+"retrieved_context"] = []byte(retrieved)
+        sess.State[session.StateTempPrefix+"user_input"] = []byte(input)
+    }
+    return graph.State{}, nil
+})
+
+// LLM 节点的指令引用 {temp:retrieved_context} 和 {temp:user_input}
+stateGraph.AddLLMNode("answer", mdl,
+    "请结合上下文回答。\n\n上下文：\n{temp:retrieved_context}\n\n问题：{temp:user_input}",
+    nil)
+```
+
+示例：`examples/graph/retrieval_placeholder`。
+
+占位符与会话状态的最佳实践
+
+- 短期 vs 持久：只用于本轮提示词组装的数据写到 `session.State` 的 `temp:*`；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 `user:*`/`app:*`。
+- 为什么可以直接写：LLM 节点从图状态里的会话对象读取并展开占位符，见 [graph/state_graph.go](graph/state_graph.go)；GraphAgent 在启动时把会话对象放入图状态，见 [agent/graphagent/graph_agent.go](agent/graphagent/graph_agent.go)。
+- 服务侧护栏：内存实现禁止通过“更新用户态”的接口写 `temp:*`（以及 `app:*` via user updater），见 [session/inmemory/service.go](session/inmemory/service.go)。
+- 并发建议：并行分支不要同时改同一批 `session.State` 键；建议汇总到单节点合并后一次写入，或先放图状态再一次写到 `temp:*`。
+- 可观测性：若希望在完成事件中看到摘要，可额外把精简信息放入图状态（如 `metadata`）；最终事件会序列化非内部的最终状态，见 [graph/events.go](graph/events.go)。
 
 #### 通过 Reducer 与 MessageOp 实现的原子更新
 
@@ -601,7 +641,60 @@ stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 - 当工具节点完成后返回到 LLM 节点时，`user_input` 已被清空，LLM 将走
   “Messages only” 分支，以历史中的 tool 响应继续推理。
 
-### 6. Runner 配置
+### 6. 节点重试与退避
+
+为节点配置指数退避的重试策略（可选抖动）。失败的尝试不会产生写入；只有成功的一次才会落库并触发路由。
+
+- 节点级策略（`WithRetryPolicy`）：
+
+```go
+// 便捷策略（attempts 含首次尝试）
+sg.AddNode("unstable", unstableFunc,
+    graph.WithRetryPolicy(graph.WithSimpleRetry(3)))
+
+// 完整策略
+policy := graph.RetryPolicy{
+    MaxAttempts:     3,                      // 1 次首试 + 最多 2 次重试
+    InitialInterval: 200 * time.Millisecond, // 基础等待
+    BackoffFactor:   2.0,                    // 指数增长
+    MaxInterval:     2 * time.Second,        // 上限
+    Jitter:          true,                   // 抖动
+    RetryOn: []graph.RetryCondition{
+        graph.DefaultTransientCondition(),   // 截止/网络超时等瞬时错误
+        graph.RetryOnErrors(context.DeadlineExceeded),
+        graph.RetryOnPredicate(func(error) bool { return true }),
+    },
+    MaxElapsedTime:  5 * time.Second,        // 总重试预算（可选）
+    // PerAttemptTimeout: 0,                 // 预留；节点超时由执行器控制
+}
+sg.AddNode("unstable", unstableFunc, graph.WithRetryPolicy(policy))
+```
+
+- 执行器默认策略（当节点未配置时生效）：
+
+```go
+exec, _ := graph.NewExecutor(compiled,
+    graph.WithDefaultRetryPolicy(graph.WithSimpleRetry(2)))
+```
+
+注意事项
+- 中断（interrupt）不参与重试。
+- 当设置了步骤超时（`WithStepTimeout`）时，退避时间会被当前步骤的截止时间钳制。
+- 事件会携带重试元数据，便于 CLI/UI 展示进度：
+
+```go
+if b, ok := ev.StateDelta[graph.MetadataKeyNode]; ok {
+    var md graph.NodeExecutionMetadata
+    _ = json.Unmarshal(b, &md)
+    if md.Phase == graph.ExecutionPhaseError && md.Retrying {
+        // md.Attempt, md.MaxAttempts, md.NextDelay
+    }
+}
+```
+
+示例：`examples/graph/retry` 展示了一个会先失败后成功的节点，并在成功后进入下游 LLM 输出最终答案。
+
+### 7. Runner 配置
 
 Runner 提供了会话管理和执行环境：
 
@@ -625,7 +718,7 @@ message := model.NewUserMessage("用户输入")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
 
-### 7. 消息状态模式
+### 8. 消息状态模式
 
 对于对话式应用，可以使用预定义的消息状态模式：
 
@@ -641,7 +734,7 @@ schema := graph.MessagesStateSchema()
 // - metadata: 元数据（StateKeyMetadata）
 ```
 
-### 8. 状态键使用场景
+### 9. 状态键使用场景
 
 **用户自定义状态键**：用于存储业务逻辑数据
 
@@ -726,6 +819,8 @@ b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error)
         "message": "请审批此操作 (yes/no):",
         "data":    s["some_data"],
     }
+})
+```
  
 
 用代码把这个图变成可运行的工作流：
@@ -839,7 +934,6 @@ func main() {
         }
         if ev.Author == nodeAsk && !ev.Response.IsPartial && len(ev.Response.Choices) > 0 {
             fmt.Println("LLM:", ev.Response.Choices[0].Message.Content)
-        }
         }
     }
 }
@@ -999,6 +1093,290 @@ sg.AddLLMNode(llmNodeAssistant, model, llmSystemPrompt, tools)
 // 输入优先级: graph.StateKeyOneShotMessages > graph.StateKeyUserInput > graph.StateKeyMessages
 // 输出: graph.StateKeyLastResponse、graph.StateKeyMessages(原子更新)、graph.StateKeyNodeResponses（包含当前节点输出，便于并行汇总）
 ```
+
+## 节点缓存（Cache）
+
+为“纯函数型”节点开启缓存可以显著减少重复计算开销。Graph 支持图级与节点级缓存策略：
+
+- 图级设置缓存实现与默认策略：
+  - `WithCache(cache Cache)` 设置缓存后端（默认示例提供内存实现 InMemoryCache）
+  - `WithCachePolicy(policy *CachePolicy)` 设置默认缓存策略（键函数 KeyFunc + 生存时间 Time To Live, TTL）
+- 节点级覆盖策略：`WithNodeCachePolicy(policy *CachePolicy)`（优先于图级）
+- 清理：`ClearCache(nodes ...string)` 按节点清理缓存命名空间
+
+参考：
+- Graph 接口（缓存与策略的访问/设置）：[graph/graph.go](graph/graph.go)
+- 默认策略与内存后端实现：
+  - 接口/策略与默认键函数（规范化 JSON + SHA‑256）：[graph/cache.go](graph/cache.go)
+  - 内存缓存（InMemoryCache）并发安全实现（读写锁 + 深拷贝）：[graph/cache.go](graph/cache.go)
+- 执行器：
+  - 节点执行前尝试 Get，命中则跳过节点函数执行，仅触发 after 回调与写出（Writes）：[graph/executor.go](graph/executor.go)
+  - 正常执行成功后写入缓存（Set）：[graph/executor.go](graph/executor.go)
+  - 节点完成事件中附带 `_cache_hit` 观察标记（命中时插入 `StateDelta["_cache_hit"]=true`）：[graph/executor.go](graph/executor.go)
+
+最小用法：
+
+```go
+schema := graph.NewStateSchema()
+sg := graph.NewStateGraph(schema).
+  WithCache(graph.NewInMemoryCache()).
+  WithCachePolicy(graph.DefaultCachePolicy())
+
+// 对某个节点单独设置 TTL 10 分钟
+nodePolicy := &graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 10*time.Minute}
+sg.AddNode("compute", computeFunc, graph.WithNodeCachePolicy(nodePolicy)).
+  SetEntryPoint("compute").
+  SetFinishPoint("compute")
+
+compiled, _ := sg.Compile()
+```
+
+进阶用法：
+- 仅使用部分字段作为键（推荐）
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) {
+        // your logic here
+        return graph.State{"out": s["n"].(int) * 2}, nil
+    }
+
+    // 仅使用 n 与 user_id 两个字段参与键计算（其余字段不会影响命中）
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 30*time.Minute}),
+        graph.WithCacheKeyFields("n", "user_id"),
+    )
+
+    return sg.Compile()
+}
+```
+
+- 自定义选择器（当字段映射更复杂时）
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) { return graph.State{"out": 42}, nil }
+
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 5*time.Minute}),
+        graph.WithCacheKeySelector(func(m map[string]any) any {
+            // 仅从净化后的输入中选择 n 与 uid 作为键来源
+            return map[string]any{"n": m["n"], "uid": m["uid"]}
+        }),
+    )
+    return sg.Compile()
+}
+```
+
+- 版本化命名空间（跨版本防脏缓存）
+
+```go
+package main
+
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithGraphVersion("v2025.03"). // 命名空间变为 __writes__:v2025.03:<node>
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    // ... AddNode(...)
+    return sg.Compile()
+}
+```
+
+- 节点级 TTL（Time To Live）
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) { return graph.State{"out": 42}, nil }
+
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{
+            KeyFunc: graph.DefaultCachePolicy().KeyFunc,
+            TTL:     10 * time.Minute,
+        }),
+    )
+    return sg.Compile()
+}
+```
+
+- 清理缓存（按节点）
+
+```go
+package main
+
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func clear(sg *graph.StateGraph) {
+    // 清理指定节点
+    sg.ClearCache("compute", "format")
+
+    // 清理图内所有节点（不传参）
+    sg.ClearCache()
+}
+```
+
+- 读取缓存命中标记（_cache_hit）
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func runAndReadHits(executor *graph.Executor, initial graph.State) error {
+    inv := &agent.Invocation{InvocationID: "demo"}
+    ch, err := executor.Execute(context.Background(), initial, inv)
+    if err != nil { return err }
+    for e := range ch {
+        if e.Response != nil && e.Response.Object == graph.ObjectTypeGraphNodeComplete {
+            if e.StateDelta != nil {
+                if _, ok := e.StateDelta["_cache_hit"]; ok {
+                    fmt.Println("cache hit: skipped node function")
+                }
+            }
+        }
+        if e.Done { break }
+    }
+    return nil
+}
+```
+
+注意事项：
+- 仅对“纯函数（相同输入→相同输出，无外部副作用）”节点开启缓存，避免语义错误。
+- TTL（Time To Live）为 0 表示不过期，需防止内存增长；生产建议使用持久化后端（如 Redis/SQLite）与定期清理。
+- 键函数会“净化输入”后再规范化序列化，避免把会话、执行上下文等“易变/不可序列化”值纳入键，提升命中率、避免错误（见 [graph/cache_key.go](graph/cache_key.go)）。
+- 代码更新后可调用 `ClearCache("nodeID")` 清理旧缓存，或在键/命名空间中引入“函数标识符/版本”维度。
+
+Runner + GraphAgent 环境使用示例：
+
+```go
+package main
+
+import (
+    "bufio"
+    "context"
+    "flag"
+    "fmt"
+    "os"
+    "strings"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func main() {
+    ttl := flag.Duration("ttl", 1*time.Minute, "cache ttl")
+    flag.Parse()
+
+    // Build graph with cache
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) {
+        n, _ := s["n"].(int)
+        time.Sleep(200 * time.Millisecond)
+        return graph.State{"out": n * 2}, nil
+    }
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: *ttl}),
+        graph.WithCacheKeyFields("n"),
+    ).
+        SetEntryPoint("compute").
+        SetFinishPoint("compute")
+    g, _ := sg.Compile()
+
+    // GraphAgent + Runner
+    ga, _ := graphagent.New("cache-demo", g, graphagent.WithInitialState(graph.State{}))
+    app := runner.NewRunner("app", ga, runner.WithSessionService(inmemory.NewSessionService()))
+
+    // Interactive
+    sc := bufio.NewScanner(os.Stdin)
+    fmt.Println("Enter integers; repeated inputs should hit cache. type 'exit' to quit")
+    for {
+        fmt.Print("> ")
+        if !sc.Scan() { break }
+        txt := strings.TrimSpace(sc.Text())
+        if txt == "exit" { break }
+        if txt == "" { continue }
+        msg := model.NewUserMessage(fmt.Sprintf("compute %s", txt))
+        evts, err := app.Run(context.Background(), "user", fmt.Sprintf("s-%d", time.Now().UnixNano()), msg, agent.WithRuntimeState(graph.State{"n": atoi(txt)}))
+        if err != nil { fmt.Println("run error:", err); continue }
+        for e := range evts {
+            if e.Response != nil && e.Response.Object == graph.ObjectTypeGraphNodeComplete {
+                if e.StateDelta != nil { if _, ok := e.StateDelta["_cache_hit"]; ok { fmt.Println("cache hit") } }
+            }
+            if e.Done { break }
+        }
+    }
+}
+
+func atoi(s string) int { var n int; fmt.Sscanf(s, "%d", &n); return n }
+```
+
+示例：
+- 交互式（Interactive）+ Runner + GraphAgent 演示：`examples/graph/nodecache`，入口 [examples/graph/nodecache/main.go](examples/graph/nodecache/main.go)
 
 #### Tools 节点
 执行工具调用，注意是**顺序执行**：
@@ -1762,6 +2140,44 @@ stateGraph.
 
 更多端到端用法见 `examples/graph`（基础/并行/多轮/中断/工具/占位符）。
 
+## 可视化导出（DOT/图片）
+
+Graph 支持直接导出 Graphviz（图形可视化软件，Graph Visualization）`DOT`（Graphviz 的描述语言，Directed Graph Language）文本，以及通过系统安装的 `dot`（Graphviz 命令行工具 `dot` 是 Graphviz 的布局引擎之一，用于渲染 DOT 文件）渲染 `PNG`（Portable Network Graphics，便携式网络图形格式）/`SVG`（Scalable Vector Graphics，可缩放矢量图形）。
+
+- `WithDestinations`（在节点上声明潜在动态去向）会以虚线（dotted、灰色）显示，仅用于静态检查与可视化，不影响运行时路由。
+- 条件边（Conditional edges）会以虚线（dashed、灰色）并标注分支键值。
+- 常规边（AddEdge）为实线。
+- 虚拟 `Start`/`End` 节点可通过选项打开/隐藏。
+
+示例：
+
+```go
+g := sg.MustCompile()
+
+// 生成 DOT 文本
+dot := g.DOT(
+    graph.WithRankDir(graph.RankDirLR),     // 左→右布局（或 graph.RankDirTB）
+    graph.WithIncludeDestinations(true),    // 显示 WithDestinations 声明
+    graph.WithGraphLabel("My Workflow"),   // 图标题
+)
+
+// 渲染 PNG （需要已安装 Graphviz 的 dot）
+if err := g.RenderImage(context.Background(), graph.ImageFormatPNG, "workflow.png",
+    graph.WithRankDir(graph.RankDirLR),
+    graph.WithIncludeDestinations(true),
+); err != nil {
+    // 未安装 Graphviz 时这里会返回错误，可忽略或提示安装
+}
+```
+
+API 参考：
+
+- `g.DOT(...)` / `g.WriteDOT(w, ...)`：导出 DOT 文本
+- `g.RenderImage(ctx, format, outputPath, ...)`：调用 `dot` 渲染图片（`png`/`svg` 等）
+- 选项：`WithRankDir(graph.RankDirLR|graph.RankDirTB)`、`WithIncludeDestinations(bool)`、`WithIncludeStartEnd(bool)`、`WithGraphLabel(string)`
+
+完整示例见：`examples/graph/visualization`
+
 ## 高级特性
 
 ### 检查点与恢复
@@ -2038,6 +2454,79 @@ for ev := range events {
     }
 }
 ```
+
+#### 在节点回调中携带业务值
+
+默认情况下，中途事件（如 `graph.state.update`）只会上报“更新了哪些键”，不携带值；最终完成事件（`graph.execution`）的 `StateDelta` 才包含“最终状态快照”。如果仅需在“某个节点”完成后，将其返回的部分键值即时发给上游服务，可在该节点的 After 回调中构造并发送一条自定义事件：
+
+实现步骤：
+- 在节点上注册 `WithPostNodeCallback`；
+- 在回调的 `result any` 中读取该节点返回的 `graph.State`（state delta）；
+- 选择需要的键值，序列化后放入自定义事件的 `StateDelta`；
+- 通过 `agent.EmitEvent` 发送到事件通道。
+
+示例：
+
+```go
+import (
+    "context"
+    "encoding/json"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    nodeParse   = "parse"
+    stateKeyOut = "parsed_value" // 仅输出所需键
+)
+
+func parseNode(ctx context.Context, s graph.State) (any, error) {
+    // ...业务处理...
+    val := map[string]any{"ok": true, "score": 0.97}
+    return graph.State{stateKeyOut: val}, nil
+}
+
+func buildGraph() (*graph.Graph, error) {
+    sg := graph.NewStateGraph(graph.MessagesStateSchema())
+    sg.AddNode(nodeParse, parseNode,
+        graph.WithPostNodeCallback(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            st graph.State,
+            result any,
+            nodeErr error,
+        ) (any, error) {
+            if nodeErr != nil { return nil, nil }
+            inv, _ := agent.InvocationFromContext(ctx)
+            execCtx, _ := st[graph.StateKeyExecContext].(*graph.ExecutionContext)
+            if delta, ok := result.(graph.State); ok {
+                if v, exists := delta[stateKeyOut]; exists && execCtx != nil {
+                    evt := graph.NewGraphEvent(
+                        inv.InvocationID,
+                        cb.NodeID,
+                        graph.ObjectTypeGraphNodeExecution,
+                    )
+                    if evt.StateDelta == nil { evt.StateDelta = make(map[string][]byte) }
+                    if b, err := json.Marshal(v); err == nil {
+                        evt.StateDelta[stateKeyOut] = b
+                        _ = agent.EmitEvent(ctx, inv, execCtx.EventChan, evt)
+                    }
+                }
+            }
+            return nil, nil
+        }),
+    ).
+        SetEntryPoint(nodeParse).
+        SetFinishPoint(nodeParse)
+    return sg.Compile()
+}
+```
+
+建议：
+- 仅输出必要键，控制负载与敏感信息；
+- 内部/易变键不会被序列化到最终快照，亦不建议外发（参考 [graph/internal_keys.go:16](graph/internal_keys.go:16)）；
+- 文本类中间结果优先复用模型流式事件（`choice.Delta.Content`）。
 
 也可以在 Agent 级别配置回调：
 

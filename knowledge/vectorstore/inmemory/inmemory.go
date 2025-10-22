@@ -15,11 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
@@ -44,6 +46,8 @@ type VectorStore struct {
 
 	// maxResults is the maximum number of search results.
 	maxResults int
+
+	filterConverter searchfilter.Converter[comparisonFunc]
 }
 
 // Option represents a functional option for configuring VectorStore.
@@ -62,9 +66,10 @@ func WithMaxResults(maxResults int) Option {
 // New creates a new in-memory vector store instance with options.
 func New(opts ...Option) *VectorStore {
 	vs := &VectorStore{
-		documents:  make(map[string]*document.Document),
-		embeddings: make(map[string][]float64),
-		maxResults: defaultMaxResults,
+		documents:       make(map[string]*document.Document),
+		embeddings:      make(map[string][]float64),
+		maxResults:      defaultMaxResults,
+		filterConverter: &inmemoryConverter{},
 	}
 
 	// Apply options.
@@ -537,9 +542,19 @@ func (vs *VectorStore) matchesFilter(docID string, filter *vectorstore.SearchFil
 			return false
 		}
 		for key, value := range filter.Metadata {
-			if docValue, exists := doc.Metadata[key]; !exists || docValue != value {
+			if docValue, exists := doc.Metadata[key]; !exists || !reflect.DeepEqual(docValue, value) {
 				return false
 			}
+		}
+	}
+
+	if filter.FilterCondition != nil {
+		condFunc, err := vs.filterConverter.Convert(filter.FilterCondition)
+		if err != nil {
+			return false
+		}
+		if condFunc != nil && !condFunc(doc) {
+			return false
 		}
 	}
 

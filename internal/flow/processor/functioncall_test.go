@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -695,6 +696,18 @@ func TestFindCompatibleTool(t *testing.T) {
 	}
 }
 
+// Ensure executeSingleToolCallSequential uses fallback declaration when missing tool
+func TestExecuteSingleToolCallSequential_MissingTool_UsesFallbackDecl(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	tc := model.ToolCall{ID: "id1", Function: model.FunctionDefinitionParam{Name: "missing"}}
+	ch := make(chan *event.Event, 4)
+	ev, err := p.executeSingleToolCallSequential(context.Background(), inv, rsp, map[string]tool.Tool{}, ch, 0, tc)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+}
+
 func TestConvertToolArguments(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1345,8 +1358,9 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(true, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
+	res, err := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
 	require.NotNil(t, res)
+	require.NoError(t, err)
 }
 
 func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
@@ -1438,4 +1452,38 @@ func TestMarshalChunkToText_MarshalError(t *testing.T) {
 	// Passing a function is not JSON-serializable, forcing fmt.Sprintf path.
 	text := marshalChunkToText(func() {})
 	require.NotEmpty(t, text)
+}
+
+func TestExecuteTool_NamedTool(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
+	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) { return map[string]string{"k": "v"}, nil }}
+	toolSet := &mockToolSet{tools: []tool.Tool{tl}}
+	namedToolSet := itool.NewNamedToolSet(toolSet)
+	namedTools := namedToolSet.Tools(ctx)
+	require.Len(t, namedTools, 1)
+	nameTool := namedTools[0]
+	require.IsType(t, &itool.NamedTool{}, nameTool)
+	res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, nameTool, nil)
+	require.NoError(t, err)
+	b, _ := json.Marshal(map[string]any{"k": "v"})
+	require.JSONEq(t, string(b), string(mustJSON(res)))
+}
+
+type mockToolSet struct {
+	tools []tool.Tool
+}
+
+func (s *mockToolSet) Tools(ctx context.Context) []tool.Tool {
+	return s.tools
+}
+
+func (s *mockToolSet) Close() error {
+	return nil
+}
+
+func (s *mockToolSet) Name() string {
+	return "mock"
 }

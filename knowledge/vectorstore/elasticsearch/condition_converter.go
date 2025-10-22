@@ -32,14 +32,15 @@ func (c *esConverter) Convert(cond *searchfilter.UniversalFilterCondition) (type
 			log.Errorf("panic in esConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
-	if cond == nil {
-		return nil, nil
-	}
 
 	return c.convertCondition(cond)
 }
 
 func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("nil condition")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
 		return c.buildLogicalCondition(cond)
@@ -50,9 +51,9 @@ func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterConditi
 	case searchfilter.OperatorIn, searchfilter.OperatorNotIn:
 		return c.buildInCondition(cond)
 	case searchfilter.OperatorLike, searchfilter.OperatorNotLike:
-		return c.convertWildcard(cond)
+		return c.buildLikeCondition(cond)
 	case searchfilter.OperatorBetween:
-		return c.convertRangeBetween(cond)
+		return c.buildBetweenCondition(cond)
 	default:
 		return nil, fmt.Errorf("unsupported operation: %s", cond.Operator)
 	}
@@ -61,7 +62,7 @@ func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterConditi
 func (c *esConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	conditions, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
 	if !ok {
-		return nil, fmt.Errorf("bool operator requires an array of conditions")
+		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 
 	var queries []types.Query
@@ -73,6 +74,10 @@ func (c *esConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCo
 		if query != nil {
 			queries = append(queries, *query.QueryCaster())
 		}
+	}
+
+	if len(queries) == 0 {
+		return nil, fmt.Errorf("empty logical condition")
 	}
 
 	if cond.Operator == searchfilter.OperatorAnd {
@@ -144,16 +149,13 @@ func (c *esConverter) convertRange(cond *searchfilter.UniversalFilterCondition) 
 	}, nil
 }
 
-func (c *esConverter) convertRangeBetween(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+func (c *esConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("in operator requires an array of values")
-	}
 	value := reflect.ValueOf(cond.Value)
-	if value.Len() != 2 {
-		return nil, fmt.Errorf("between operator requires an array with two values")
+	if value.Kind() != reflect.Slice || value.Len() != 2 {
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 
 	return &types.Query{
@@ -170,8 +172,9 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
-		return nil, fmt.Errorf("in operator requires an array of values")
+	value := reflect.ValueOf(cond.Value)
+	if value.Kind() != reflect.Slice || value.Len() <= 0 {
+		return nil, fmt.Errorf("in operator value must be a slice with at least one element: %v", cond.Value)
 	}
 
 	termsQuery := types.Query{
@@ -193,13 +196,13 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 	return &termsQuery, nil
 }
 
-func (c *esConverter) convertWildcard(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+func (c *esConverter) buildLikeCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
 	valueStr, ok := cond.Value.(string)
 	if !ok {
-		return nil, fmt.Errorf("like operator requires string value")
+		return nil, fmt.Errorf("like operator value must be a string: %v", cond.Value)
 	}
 
 	wildcardPattern := strings.ReplaceAll(valueStr, "%", "*")

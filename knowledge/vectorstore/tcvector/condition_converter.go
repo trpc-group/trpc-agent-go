@@ -40,14 +40,15 @@ func (c *tcVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 			log.Errorf("panic in tcVectorConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
-	if cond == nil {
-		return nil, nil
-	}
 
 	return c.convertCondition(cond)
 }
 
 func (c *tcVectorConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
+	if cond == nil {
+		return nil, fmt.Errorf("nil condition")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorAnd, searchfilter.OperatorOr:
 		return c.buildLogicalCondition(cond)
@@ -57,6 +58,8 @@ func (c *tcVectorConverter) convertCondition(cond *searchfilter.UniversalFilterC
 		return c.buildComparisonCondition(cond)
 	case searchfilter.OperatorIn, searchfilter.OperatorNotIn:
 		return c.buildInCondition(cond)
+	case searchfilter.OperatorBetween:
+		return c.buildBetweenCondition(cond)
 	default:
 		return nil, fmt.Errorf("unsupported operation: %s", cond.Operator)
 	}
@@ -65,6 +68,10 @@ func (c *tcVectorConverter) convertCondition(cond *searchfilter.UniversalFilterC
 func (c *tcVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
+	}
+	s := reflect.ValueOf(cond.Value)
+	if s.Kind() != reflect.Slice || s.Len() <= 0 {
+		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
 	var filter string
@@ -79,19 +86,30 @@ func (c *tcVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
 	conds, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
 	if !ok {
-		return nil, fmt.Errorf("invalid logical condition: %v", cond.Value)
+		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
-	filter := tcvectordb.NewFilter("")
+
+	var filter *tcvectordb.Filter
 	for _, child := range conds {
 		childFilter, err := c.convertCondition(child)
 		if err != nil {
 			return nil, err
 		}
+
+		if filter == nil {
+			filter = childFilter
+			continue
+		}
+
 		if cond.Operator == searchfilter.OperatorAnd {
 			filter.And(childFilter.Cond())
 		} else {
 			filter.Or(childFilter.Cond())
 		}
+	}
+
+	if filter == nil {
+		return nil, fmt.Errorf("empty logical condition")
 	}
 
 	return filter, nil
@@ -108,10 +126,32 @@ func (c *tcVectorConverter) buildComparisonCondition(cond *searchfilter.Universa
 	}
 
 	var filter string
-	if reflect.TypeOf(cond.Value).Kind() == reflect.String {
+	if cond.Value != nil && reflect.TypeOf(cond.Value).Kind() == reflect.String {
 		filter = fmt.Sprintf(`%s %s "%v"`, cond.Field, operator, cond.Value)
 	} else {
 		filter = fmt.Sprintf(`%s %s %v`, cond.Field, operator, cond.Value)
 	}
 	return tcvectordb.NewFilter(filter), nil
+}
+
+func (c *tcVectorConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
+	value := reflect.ValueOf(cond.Value)
+	if value.Kind() != reflect.Slice || value.Len() != 2 {
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
+	}
+
+	isString := value.Index(0).Kind() == reflect.String
+	filter := tcvectordb.NewFilter("")
+	if isString {
+		filter.And(fmt.Sprintf(`%s >= "%v"`, cond.Field, value.Index(0).Interface()))
+		filter.And(fmt.Sprintf(`%s <= "%v"`, cond.Field, value.Index(1).Interface()))
+		return filter, nil
+	}
+
+	filter.And(fmt.Sprintf(`%s >= %v`, cond.Field, value.Index(0).Interface()))
+	filter.And(fmt.Sprintf(`%s <= %v`, cond.Field, value.Index(1).Interface()))
+	return filter, nil
 }

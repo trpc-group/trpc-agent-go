@@ -209,3 +209,160 @@ func TestClientV7_Ping(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, c.Ping(ctx))
 }
+
+func TestClientV7_NewClientV7(t *testing.T) {
+	es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}})
+	require.NoError(t, err)
+	c := NewClientV7(es)
+	require.NotNil(t, c)
+}
+
+func TestClientV7_ErrorCases(t *testing.T) {
+	t.Run("Ping error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusInternalServerError, Status: http.StatusText(http.StatusInternalServerError), Body: io.NopCloser(bytes.NewBufferString("")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		require.Error(t, c.Ping(context.Background()))
+	})
+
+	t.Run("CreateIndex error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusBadRequest, Status: http.StatusText(http.StatusBadRequest), Body: io.NopCloser(bytes.NewBufferString("error")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		require.Error(t, c.CreateIndex(context.Background(), "idx", []byte(`{}`)))
+	})
+
+	t.Run("DeleteIndex error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusNotFound, Status: http.StatusText(http.StatusNotFound), Body: io.NopCloser(bytes.NewBufferString("error")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		require.Error(t, c.DeleteIndex(context.Background(), "idx"))
+	})
+
+	t.Run("IndexDoc error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusBadRequest, Status: http.StatusText(http.StatusBadRequest), Body: io.NopCloser(bytes.NewBufferString("error")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		require.Error(t, c.IndexDoc(context.Background(), "idx", "1", []byte(`{}`)))
+	})
+
+	t.Run("GetDoc read error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusOK, Status: http.StatusText(http.StatusOK), Body: &errorReader{}, Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		_, err = c.GetDoc(context.Background(), "idx", "1")
+		require.Error(t, err)
+	})
+
+	t.Run("UpdateDoc error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusNotFound, Status: http.StatusText(http.StatusNotFound), Body: io.NopCloser(bytes.NewBufferString("error")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		require.Error(t, c.UpdateDoc(context.Background(), "idx", "1", []byte(`{}`)))
+	})
+
+	t.Run("DeleteDoc error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusNotFound, Status: http.StatusText(http.StatusNotFound), Body: io.NopCloser(bytes.NewBufferString("error")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		require.Error(t, c.DeleteDoc(context.Background(), "idx", "1"))
+	})
+
+	t.Run("Search read error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusOK, Status: http.StatusText(http.StatusOK), Body: &errorReader{}, Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		_, err = c.Search(context.Background(), "idx", []byte(`{}`))
+		require.Error(t, err)
+	})
+
+	t.Run("Count read error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusOK, Status: http.StatusText(http.StatusOK), Body: &errorReader{}, Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		_, err = c.Count(context.Background(), "idx", []byte(`{}`))
+		require.Error(t, err)
+	})
+
+	t.Run("Count parse error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusOK, Status: http.StatusText(http.StatusOK), Body: io.NopCloser(bytes.NewBufferString("invalid json")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		_, err = c.Count(context.Background(), "idx", []byte(`{}`))
+		require.Error(t, err)
+	})
+
+	t.Run("DeleteByQuery error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusBadRequest, Status: http.StatusText(http.StatusBadRequest), Body: io.NopCloser(bytes.NewBufferString("error")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		require.Error(t, c.DeleteByQuery(context.Background(), "idx", []byte(`{}`)))
+	})
+
+	t.Run("Refresh error", func(t *testing.T) {
+		rt := roundTripper(func(r *http.Request) *http.Response {
+			resp := &http.Response{StatusCode: http.StatusInternalServerError, Status: http.StatusText(http.StatusInternalServerError), Body: io.NopCloser(bytes.NewBufferString("error")), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		})
+		es, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: rt})
+		require.NoError(t, err)
+		c := &clientV7{esClient: es}
+		require.Error(t, c.Refresh(context.Background(), "idx"))
+	})
+}

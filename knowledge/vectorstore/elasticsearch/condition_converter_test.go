@@ -55,6 +55,35 @@ func Test_esConverter_convertCondition(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "like condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "active",
+				Operator: searchfilter.OperatorLike,
+				Value:    "*test*",
+			},
+			want:    `{"wildcard":{"active":{"value":"*test*"}}}`,
+			wantErr: false,
+		},
+		{
+			name: "nil value like condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "active",
+				Operator: searchfilter.OperatorLike,
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty value like condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "active",
+				Operator: searchfilter.OperatorLike,
+				Value:    "",
+			},
+			want:    `{"wildcard":{"active":{"value":""}}}`,
+			wantErr: false,
+		},
+		{
 			name: "test1",
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "name",
@@ -164,6 +193,62 @@ func Test_esConverter_convertCondition(t *testing.T) {
 			wantErr: false,
 			want:    `{"range":{"age":{"gte":20,"lte":30}}}`,
 		},
+		{
+			name: "nil value Between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty value Between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []int{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid value Between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []any{nil, 1},
+			},
+			wantErr: false,
+			want:    `{"range":{"age":{"gte":null,"lte":1}}}`,
+		},
+		{
+			name: "nil value in condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty value in condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    []any{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element in condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    []any{nil},
+			},
+			wantErr: false,
+			want:    `{"terms":{"age":[null]}}`,
+		},
 	}
 
 	c := &esConverter{}
@@ -232,6 +317,16 @@ func Test_esConverter_convertNotEqual(t *testing.T) {
 			want:    `{"bool":{"must_not":[{"term":{"active":{"value":true}}}]}}`,
 			wantErr: false,
 		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "active",
+				Operator: searchfilter.OperatorNotEqual,
+				Value:    nil,
+			},
+			want:    `{"bool":{"must_not":[{"term":{"active":{"value":null}}}]}}`,
+			wantErr: false,
+		},
 	}
 
 	c := &esConverter{}
@@ -298,6 +393,16 @@ func Test_esConverter_convertEqual(t *testing.T) {
 				Value:    true,
 			},
 			want:    `{"term":{"active":{"value":true}}}`,
+			wantErr: false,
+		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "active",
+				Operator: searchfilter.OperatorEqual,
+				Value:    nil,
+			},
+			want:    `{"term":{"active":{"value":null}}}`,
 			wantErr: false,
 		},
 	}
@@ -386,6 +491,16 @@ func Test_esConverter_convertRange(t *testing.T) {
 			},
 			wantErr: false,
 			want:    `{"range":{"date":{"lte":"2025-10-11 11:11:11"}}}`,
+		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "date",
+				Operator: searchfilter.OperatorLessThanOrEqual,
+				Value:    nil,
+			},
+			wantErr: false,
+			want:    `{"range":{"date":{"lte":null}}}`,
 		},
 	}
 	c := &esConverter{}
@@ -521,6 +636,16 @@ func Test_esConverter_buildComparisonCondition(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorEqual,
+				Field:    "active",
+				Value:    nil,
+			},
+			wantErr: false,
+			want:    `{"term":{"active":{"value":null}}}`,
+		},
 	}
 	c := &esConverter{}
 
@@ -626,6 +751,33 @@ func Test_esConverter_buildLogicalCondition(t *testing.T) {
 			},
 			wantErr: false,
 			want:    `{"bool":{"must":[{"term":{"name":{"value":"test"}}},{"bool":{"should":[{"term":{"status":{"value":"active"}}},{"range":{"score":{"lt":80}}}]}}]}}`,
+		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "status",
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty slice",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "status",
+				Value:    []*searchfilter.UniversalFilterCondition{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element slice",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "status",
+				Value:    []*searchfilter.UniversalFilterCondition{nil, nil},
+			},
+			wantErr: true,
 		},
 	}
 

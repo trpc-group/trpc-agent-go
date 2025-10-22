@@ -44,6 +44,23 @@ func TestReadMultipleFiles(t *testing.T) {
 		}
 	}
 	assert.NoError(t, os.Chmod(filepath.Join(base, "noaccess.txt"), 0000))
+	// Detect whether the underlying filesystem is case-sensitive within the temp base.
+	fsCaseSensitive := func(dir string) bool {
+		sub := filepath.Join(dir, "_casesens_check")
+		_ = os.MkdirAll(sub, 0755)
+		a := filepath.Join(sub, "foo.txt")
+		b := filepath.Join(sub, "Foo.txt")
+		_ = os.WriteFile(a, []byte("x"), 0644)
+		_ = os.WriteFile(b, []byte("y"), 0644)
+		sa, ea := os.Stat(a)
+		sb, eb := os.Stat(b)
+		if ea != nil || eb != nil || sa == nil || sb == nil {
+			return false
+		}
+		// If both stats refer to the same file, the FS is case-insensitive.
+		return !os.SameFile(sa, sb)
+	}(base)
+
 	tests := []struct {
 		name             string
 		opts             []Option
@@ -123,6 +140,10 @@ func TestReadMultipleFiles(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// Skip tests that rely on distinct-case filenames when the filesystem is case-insensitive.
+			if (tc.name == "invalid pattern aggregated with valid" || tc.name == "case insensitive" || tc.name == "case sensitive") && !fsCaseSensitive {
+				t.Skip("filesystem is case-insensitive; skipping case-dependent subtest")
+			}
 			opts := []Option{WithBaseDir(base)}
 			if len(tc.opts) > 0 {
 				opts = append(opts, tc.opts...)

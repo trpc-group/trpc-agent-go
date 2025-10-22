@@ -181,6 +181,26 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 			wantErr:    false,
 		},
 		{
+			name: "string between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "date",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []string{"2020-01-01", "2020-01-31"},
+			},
+			wantFilter: `date >= "2020-01-01" and (date <= "2020-01-31")`,
+			wantErr:    false,
+		},
+		{
+			name: "number between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []int{20, 30},
+			},
+			wantFilter: `age >= 20 and (age <= 30)`,
+			wantErr:    false,
+		},
+		{
 			name: "composite condition with nested operators",
 			condition: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorAnd,
@@ -208,6 +228,34 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 				},
 			},
 			wantFilter: `name = "test" and (status = "active" or (score < 80))`,
+			wantErr:    false,
+		},
+		{
+			name: "nil between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []any{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element between condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []any{nil, nil},
+			},
+			wantFilter: `age >= <nil> and (age <= <nil>)`,
 			wantErr:    false,
 		},
 	}
@@ -319,6 +367,33 @@ func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
 			wantFilter: `name = "test" and (status = "active" or (score < 80))`,
 			wantErr:    false,
 		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "age",
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty slice",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "age",
+				Value:    []*searchfilter.UniversalFilterCondition{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element slice",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Field:    "age",
+				Value:    []*searchfilter.UniversalFilterCondition{nil, nil},
+			},
+			wantErr: true,
+		},
 	}
 
 	converter := &tcVectorConverter{}
@@ -386,6 +461,34 @@ func TestTcVectorConverter_buildInCondition(t *testing.T) {
 				Value:    []string{"Alice", "Bob", "Charlie"},
 			},
 			wantErr: true,
+		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    nil,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    []any{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil element value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "age",
+				Operator: searchfilter.OperatorIn,
+				Value:    []any{nil, nil},
+			},
+			wantErr:    false,
+			wantFilter: `age in (<nil>,<nil>)`,
 		},
 	}
 
@@ -504,6 +607,16 @@ func TestTcVectorConverter_buildComparisonCondition(t *testing.T) {
 				Value:    true,
 			},
 			wantFilter: "active = true",
+			wantErr:    false,
+		},
+		{
+			name: "nil value",
+			condition: &searchfilter.UniversalFilterCondition{
+				Field:    "active",
+				Operator: searchfilter.OperatorEqual,
+				Value:    nil,
+			},
+			wantFilter: "active = <nil>",
 			wantErr:    false,
 		},
 	}

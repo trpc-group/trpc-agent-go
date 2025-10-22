@@ -12,6 +12,7 @@ package llmagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -579,13 +580,13 @@ func registerTools(options *Options) []tool.Tool {
 	// Add knowledge search tool if knowledge base is provided.
 	if options.Knowledge != nil {
 		if options.EnableKnowledgeAgenticFilter {
-			agentticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
-				options.Knowledge, options.KnowledgeFilter, options.AgenticFilterInfo,
+			agenticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
+				options.Knowledge, options.AgenticFilterInfo, knowledgetool.WithFilter(options.KnowledgeFilter),
 			)
-			allTools = append(allTools, agentticKnowledge)
+			allTools = append(allTools, agenticKnowledge)
 		} else {
 			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(
-				options.Knowledge, options.KnowledgeFilter,
+				options.Knowledge, knowledgetool.WithFilter(options.KnowledgeFilter),
 			))
 		}
 	}
@@ -596,23 +597,34 @@ func registerTools(options *Options) []tool.Tool {
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, a.genConfig)
-	defer func() {
-		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
-			span.End()
-		}
-	}()
-
-	// Setup invocation
 	a.setupInvocation(invocation)
 
-	// Run before agent callbacks if they exist.
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, &a.genConfig)
+
+	flowEventChan, err := a.executeAgentFlow(ctx, invocation)
+	if err != nil {
+		// Check if this is a custom response error (early return)
+		var customErr *haveCustomResponseError
+		if errors.As(err, &customErr) {
+			span.End()
+			return customErr.EventChan, nil
+		}
+		// Handle actual errors
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.End()
+		return nil, err
+	}
+
+	return a.wrapEventChannel(ctx, invocation, flowEventChan, span), nil
+}
+
+// executeAgentFlow executes the agent flow with before agent callbacks.
+// Returns the event channel and any error that occurred.
+func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if a.agentCallbacks != nil {
-		var customResponse *model.Response
-		customResponse, err = a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
@@ -623,7 +635,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
-			return eventChan, nil
+			return nil, &haveCustomResponseError{EventChan: eventChan}
 		}
 	}
 
@@ -632,7 +644,19 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	if err != nil {
 		return nil, err
 	}
-	return a.wrapEventChannel(ctx, invocation, flowEventChan, span), nil
+
+	return flowEventChan, nil
+
+}
+
+// haveCustomResponseError represents an early return due to a custom response from before agent callbacks.
+// This is not an actual error but a signal to return early with the custom response.
+type haveCustomResponseError struct {
+	EventChan <-chan *event.Event
+}
+
+func (e *haveCustomResponseError) Error() string {
+	return "custom response provided, returning early"
 }
 
 // setupInvocation sets up the invocation
