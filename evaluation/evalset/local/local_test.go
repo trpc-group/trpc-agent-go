@@ -42,7 +42,12 @@ func TestLocalManager(t *testing.T) {
 	err = manager.AddCase(ctx, "app", "set1", &evalset.EvalCase{})
 	assert.Error(t, err)
 
-	caseInput := &evalset.EvalCase{EvalID: "case1"}
+	caseInput := &evalset.EvalCase{
+		EvalID: "case1",
+		Conversation: []*evalset.Invocation{
+			{InvocationID: "inv1"},
+		},
+	}
 	err = manager.AddCase(ctx, "app", "set1", caseInput)
 	assert.NoError(t, err)
 	err = manager.AddCase(ctx, "app", "set1", &evalset.EvalCase{EvalID: "case1"})
@@ -54,6 +59,9 @@ func TestLocalManager(t *testing.T) {
 	gotCase, err := manager.GetCase(ctx, "app", "set1", "case1")
 	assert.NoError(t, err)
 	assert.Equal(t, "case1", gotCase.EvalID)
+	assert.NotNil(t, gotCase.CreationTimestamp)
+	assert.Len(t, gotCase.Conversation, 1)
+	assert.NotNil(t, gotCase.Conversation[0].CreationTimestamp)
 
 	update := &evalset.EvalCase{EvalID: "case1", SessionInput: &evalset.SessionInput{AppName: "updated"}}
 	err = manager.UpdateCase(ctx, "app", "set1", update)
@@ -158,6 +166,23 @@ func TestLocalManagerStoreValidation(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestLocalManagerDeleteEvalSet(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	manager := New(evalset.WithBaseDir(dir)).(*manager)
+
+	_, err := manager.Create(ctx, "app", "set1")
+	assert.NoError(t, err)
+	assert.FileExists(t, manager.evalSetPath("app", "set1"))
+
+	err = manager.Delete(ctx, "app", "set1")
+	assert.NoError(t, err)
+	assert.NoFileExists(t, manager.evalSetPath("app", "set1"))
+
+	_, err = manager.Get(ctx, "app", "set1")
+	assert.Error(t, err)
+}
+
 type failingLocator struct {
 }
 
@@ -226,4 +251,67 @@ func TestLocalManagerLoadNilEvalCases(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, evalSet.EvalCases)
 	assert.Empty(t, evalSet.EvalCases)
+}
+
+func TestLocalManagerEmptyInputs(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	manager := New(evalset.WithBaseDir(dir)).(*manager)
+
+	_, err := manager.Get(ctx, "", "set")
+	assert.Error(t, err)
+
+	_, err = manager.Get(ctx, "app", "")
+	assert.Error(t, err)
+
+	_, err = manager.Create(ctx, "", "set")
+	assert.Error(t, err)
+
+	_, err = manager.Create(ctx, "app", "")
+	assert.Error(t, err)
+
+	_, err = manager.List(ctx, "")
+	assert.Error(t, err)
+
+	err = manager.Delete(ctx, "", "set")
+	assert.Error(t, err)
+
+	err = manager.Delete(ctx, "app", "")
+	assert.Error(t, err)
+
+	_, err = manager.GetCase(ctx, "", "set", "case")
+	assert.Error(t, err)
+
+	_, err = manager.GetCase(ctx, "app", "", "case")
+	assert.Error(t, err)
+
+	_, err = manager.GetCase(ctx, "app", "set", "")
+	assert.Error(t, err)
+
+	err = manager.AddCase(ctx, "", "set", &evalset.EvalCase{EvalID: "case"})
+	assert.Error(t, err)
+
+	err = manager.AddCase(ctx, "app", "", &evalset.EvalCase{EvalID: "case"})
+	assert.Error(t, err)
+
+	err = manager.AddCase(ctx, "app", "set", &evalset.EvalCase{})
+	assert.Error(t, err)
+
+	err = manager.UpdateCase(ctx, "", "set", &evalset.EvalCase{EvalID: "case"})
+	assert.Error(t, err)
+
+	err = manager.UpdateCase(ctx, "app", "", &evalset.EvalCase{EvalID: "case"})
+	assert.Error(t, err)
+
+	err = manager.UpdateCase(ctx, "app", "set", nil)
+	assert.Error(t, err)
+
+	err = manager.DeleteCase(ctx, "", "set", "case")
+	assert.Error(t, err)
+
+	err = manager.DeleteCase(ctx, "app", "", "case")
+	assert.Error(t, err)
+
+	err = manager.DeleteCase(ctx, "app", "set", "")
+	assert.Error(t, err)
 }

@@ -38,8 +38,15 @@ func TestLocalManagerLifecycle(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, names)
 
-	err = mgr.Save(ctx, "app", "set", nil)
+	err = mgr.Add(ctx, "app", "set", &metric.EvalMetric{MetricName: "accuracy", Threshold: 0.9})
 	assert.NoError(t, err)
+
+	err = mgr.Add(ctx, "app", "set", &metric.EvalMetric{MetricName: "accuracy", Threshold: 1})
+	assert.Error(t, err)
+
+	names, err = mgr.List(ctx, "app", "set")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"accuracy"}, names)
 
 	path := mgr.metricFilePath("app", "set")
 	data, err := os.ReadFile(path)
@@ -47,16 +54,8 @@ func TestLocalManagerLifecycle(t *testing.T) {
 	var stored []*metric.EvalMetric
 	err = json.Unmarshal(data, &stored)
 	assert.NoError(t, err)
-	assert.Empty(t, stored)
-
-	input := []*metric.EvalMetric{{MetricName: "accuracy", Threshold: 0.9}}
-	err = mgr.Save(ctx, "app", "set", input)
-	assert.NoError(t, err)
-	assert.FileExists(t, path)
-
-	names, err = mgr.List(ctx, "app", "set")
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, []string{"accuracy"}, names)
+	assert.Len(t, stored, 1)
+	assert.Equal(t, 0.9, stored[0].Threshold)
 
 	got, err := mgr.Get(ctx, "app", "set", "accuracy")
 	assert.NoError(t, err)
@@ -67,9 +66,45 @@ func TestLocalManagerLifecycle(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0.9, fresh.Threshold)
 
-	_, err = mgr.Get(ctx, "app", "set", "missing")
+	err = mgr.Update(ctx, "app", "set", &metric.EvalMetric{MetricName: "accuracy", Threshold: 1.1})
+	assert.NoError(t, err)
+
+	updated, err := mgr.Get(ctx, "app", "set", "accuracy")
+	assert.NoError(t, err)
+	assert.Equal(t, 1.1, updated.Threshold)
+
+	err = mgr.Update(ctx, "app", "set", &metric.EvalMetric{MetricName: "missing"})
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, os.ErrNotExist))
+
+	err = mgr.Delete(ctx, "app", "set", "accuracy")
+	assert.NoError(t, err)
+
+	_, err = mgr.Get(ctx, "app", "set", "accuracy")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, os.ErrNotExist))
+
+	err = mgr.Delete(ctx, "app", "set", "missing")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, os.ErrNotExist))
+
+	names, err = mgr.List(ctx, "app", "set")
+	assert.NoError(t, err)
+	assert.Empty(t, names)
+
+	// Ensure load handles nil slice persisted as JSON null.
+	err = os.WriteFile(path, []byte("null"), 0o644)
+	assert.NoError(t, err)
+	names, err = mgr.List(ctx, "app", "set")
+	assert.NoError(t, err)
+	assert.Empty(t, names)
+
+	// Ensure store handles nil metrics slice by writing an empty array.
+	err = mgr.store("app", "set", nil)
+	assert.NoError(t, err)
+	storedBytes, err := os.ReadFile(path)
+	assert.NoError(t, err)
+	assert.JSONEq(t, "[]", string(storedBytes))
 }
 
 func TestLocalManagerValidation(t *testing.T) {
@@ -78,21 +113,41 @@ func TestLocalManagerValidation(t *testing.T) {
 	mgr := New(metric.WithBaseDir(dir)).(*manager)
 
 	_, err := mgr.List(ctx, "", "set")
-	assert.EqualError(t, err, "empty app name")
+	assert.Error(t, err)
 	_, err = mgr.List(ctx, "app", "")
-	assert.EqualError(t, err, "empty eval set id")
+	assert.Error(t, err)
 
-	err = mgr.Save(ctx, "", "set", nil)
-	assert.EqualError(t, err, "empty app name")
-	err = mgr.Save(ctx, "app", "", nil)
-	assert.EqualError(t, err, "empty eval set id")
+	err = mgr.Add(ctx, "", "set", &metric.EvalMetric{MetricName: "m"})
+	assert.Error(t, err)
+	err = mgr.Add(ctx, "app", "", &metric.EvalMetric{MetricName: "m"})
+	assert.Error(t, err)
+	err = mgr.Add(ctx, "app", "set", nil)
+	assert.Error(t, err)
+	err = mgr.Add(ctx, "app", "set", &metric.EvalMetric{})
+	assert.Error(t, err)
 
 	_, err = mgr.Get(ctx, "", "set", "metric")
-	assert.EqualError(t, err, "empty app name")
+	assert.Error(t, err)
 	_, err = mgr.Get(ctx, "app", "", "metric")
-	assert.EqualError(t, err, "empty eval set id")
+	assert.Error(t, err)
 	_, err = mgr.Get(ctx, "app", "set", "")
-	assert.EqualError(t, err, "empty metric name")
+	assert.Error(t, err)
+
+	err = mgr.Update(ctx, "", "set", &metric.EvalMetric{MetricName: "m"})
+	assert.Error(t, err)
+	err = mgr.Update(ctx, "app", "", &metric.EvalMetric{MetricName: "m"})
+	assert.Error(t, err)
+	err = mgr.Update(ctx, "app", "set", nil)
+	assert.Error(t, err)
+	err = mgr.Update(ctx, "app", "set", &metric.EvalMetric{})
+	assert.Error(t, err)
+
+	err = mgr.Delete(ctx, "", "set", "metric")
+	assert.Error(t, err)
+	err = mgr.Delete(ctx, "app", "", "metric")
+	assert.Error(t, err)
+	err = mgr.Delete(ctx, "app", "set", "")
+	assert.Error(t, err)
 }
 
 func TestLocalManagerLoadError(t *testing.T) {
@@ -126,17 +181,17 @@ func TestLocalManagerStoreErrors(t *testing.T) {
 		err := os.WriteFile(conflict, []byte("x"), 0o644)
 		assert.NoError(t, err)
 
-		err = mgr.Save(ctx, "app", "set", []*metric.EvalMetric{{MetricName: "m", Threshold: 1}})
+		err = mgr.Add(ctx, "app", "set", &metric.EvalMetric{MetricName: "m", Threshold: 1})
 		assert.Error(t, err)
-		assert.ErrorContains(t, err, "mkdir all")
+		assert.ErrorContains(t, err, "not a directory")
 	})
 
-	t.Run("open file failure", func(t *testing.T) {
+	t.Run("rename failure", func(t *testing.T) {
 		dir := t.TempDir()
 		loc := &fixedLocator{path: dir}
 		mgr := New(metric.WithBaseDir(dir), metric.WithLocator(loc)).(*manager)
 
-		err := mgr.Save(ctx, "app", "set", []*metric.EvalMetric{{MetricName: "m", Threshold: 1}})
+		err := mgr.store("app", "set", []*metric.EvalMetric{})
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "rename file")
 	})

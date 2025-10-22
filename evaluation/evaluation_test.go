@@ -95,11 +95,38 @@ func (f *fakeMetricManager) Get(ctx context.Context, appName, evalSetID, metricN
 	return nil, errors.New("metric not found")
 }
 
+func (f *fakeMetricManager) Add(ctx context.Context, appName, evalSetID string, metricValue *metric.EvalMetric) error {
+	if metricValue == nil {
+		return errors.New("metric is nil")
+	}
+	if f.metrics == nil {
+		f.metrics = make(map[string]*metric.EvalMetric)
+	}
+	f.metrics[metricValue.MetricName] = metricValue
+	return nil
+}
+
+func (f *fakeMetricManager) Delete(ctx context.Context, appName, evalSetID, metricName string) error {
+	delete(f.metrics, metricName)
+	return nil
+}
+
+func (f *fakeMetricManager) Update(ctx context.Context, appName, evalSetID string, metricValue *metric.EvalMetric) error {
+	if metricValue == nil {
+		return errors.New("metric is nil")
+	}
+	if f.metrics == nil {
+		f.metrics = make(map[string]*metric.EvalMetric)
+	}
+	f.metrics[metricValue.MetricName] = metricValue
+	return nil
+}
+
 func makeEvalMetricResult(metricName string, score float64, status status.EvalStatus, threshold float64) *evalresult.EvalMetricResult {
 	return &evalresult.EvalMetricResult{
 		MetricName: metricName,
 		Score:      score,
-		Status:     status,
+		EvalStatus: status,
 		Threshold:  threshold,
 	}
 }
@@ -114,7 +141,7 @@ func makeEvalCaseResult(evalSetID, caseID string, metricName string, score float
 		},
 		EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
 			{
-				MetricResults: []*evalresult.EvalMetricResult{
+				EvalMetricResults: []*evalresult.EvalMetricResult{
 					makeEvalMetricResult(metricName, score, status, threshold),
 				},
 			},
@@ -155,7 +182,7 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 	metricName := "metric"
 
 	metricMgr := metricinmemory.New()
-	err := metricMgr.Save(ctx, appName, evalSetID, []*metric.EvalMetric{{MetricName: metricName, Threshold: 1}})
+	err := metricMgr.Add(ctx, appName, evalSetID, &metric.EvalMetric{MetricName: metricName, Threshold: 1})
 	assert.NoError(t, err)
 
 	svc := &fakeService{
@@ -200,7 +227,7 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 		stubRunner{},
 		WithMetricManager(metricMgr),
 		WithEvalSetManager(evalsetinmemory.New()),
-		WithEvaluatorRegistry(registry.New()),
+		WithRegistry(registry.New()),
 		WithEvaluationService(svc),
 		WithNumRuns(2),
 	)
@@ -238,12 +265,21 @@ func TestAgentEvaluatorEvaluateInferenceError(t *testing.T) {
 		evalService:       svc,
 		metricManager:     metricinmemory.New(),
 		evalResultManager: evalresultinmemory.New(),
-		evaluatorRegistry: registry.New(),
+		registry:          registry.New(),
 		numRuns:           1,
 	}
 
 	_, err := ae.Evaluate(ctx, "set")
 	assert.Error(t, err)
+}
+
+func TestAgentEvaluatorEvaluateEmptyEvalSetID(t *testing.T) {
+	ctx := context.Background()
+	ae := &agentEvaluator{}
+
+	result, err := ae.Evaluate(ctx, "")
+	assert.Error(t, err)
+	assert.Nil(t, result)
 }
 
 func TestAgentEvaluatorRunEvaluationErrors(t *testing.T) {
@@ -289,14 +325,6 @@ func TestAgentEvaluatorRunEvaluationErrors(t *testing.T) {
 			},
 			metricMgr: &fakeMetricManager{metrics: map[string]*metric.EvalMetric{"metric": {MetricName: "metric", Threshold: 1}}},
 		},
-		{
-			name: "nil evaluate result",
-			svc: &fakeService{
-				inferenceResults: [][]*service.InferenceResult{baseInference},
-				evaluateResults:  []*evalresult.EvalSetResult{nil},
-			},
-			metricMgr: &fakeMetricManager{metrics: map[string]*metric.EvalMetric{"metric": {MetricName: "metric", Threshold: 1}}},
-		},
 	}
 
 	for _, tc := range tests {
@@ -306,7 +334,7 @@ func TestAgentEvaluatorRunEvaluationErrors(t *testing.T) {
 				evalService:       tc.svc,
 				metricManager:     tc.metricMgr,
 				evalResultManager: evalresultinmemory.New(),
-				evaluatorRegistry: registry.New(),
+				registry:          registry.New(),
 				numRuns:           1,
 			}
 			_, err := ae.runEvaluation(ctx, evalSetID)
@@ -335,8 +363,21 @@ func TestAggregateCaseRunsUnknownStatus(t *testing.T) {
 	runs := []*evalresult.EvalCaseResult{
 		makeEvalCaseResult("set", "case", "metric", 0.5, 1, status.EvalStatusUnknown),
 	}
-	_, err := aggregateCaseRuns("case", runs)
-	assert.Error(t, err)
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
+	assert.Len(t, result.MetricResults, 1)
+}
+
+func TestAggregateCaseRunsNotEvaluated(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		makeEvalCaseResult("set", "case", "metric", 0.5, 1, status.EvalStatusNotEvaluated),
+	}
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusNotEvaluated, result.OverallStatus)
+	assert.Empty(t, result.MetricResults)
+	assert.Len(t, result.EvalCaseResults, 1)
 }
 
 func TestSummarizeOverallStatus(t *testing.T) {

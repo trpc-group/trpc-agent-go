@@ -133,7 +133,7 @@ func newLocalService(t *testing.T, r runner.Runner, evalSetMgr evalset.Manager, 
 		r,
 		service.WithEvalSetManager(evalSetMgr),
 		service.WithEvalResultManager(resultMgr),
-		service.WithEvaluatorRegistry(reg),
+		service.WithRegistry(reg),
 		service.WithSessionIDSupplier(func(ctx context.Context) string {
 			return sessionID
 		}),
@@ -144,7 +144,7 @@ func newLocalService(t *testing.T, r runner.Runner, evalSetMgr evalset.Manager, 
 	return l
 }
 
-func TestLocalInferenceNilRequest(t *testing.T) {
+func TestLocalInferenceRequestValidation(t *testing.T) {
 	ctx := context.Background()
 	mgr := evalsetinmemory.New()
 	reg := registry.New()
@@ -152,6 +152,14 @@ func TestLocalInferenceNilRequest(t *testing.T) {
 	svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session")
 
 	results, err := svc.Inference(ctx, nil)
+	assert.Error(t, err)
+	assert.Nil(t, results)
+
+	results, err = svc.Inference(ctx, &service.InferenceRequest{})
+	assert.Error(t, err)
+	assert.Nil(t, results)
+
+	results, err = svc.Inference(ctx, &service.InferenceRequest{AppName: "app"})
 	assert.Error(t, err)
 	assert.Nil(t, results)
 }
@@ -259,7 +267,7 @@ func TestLocalInferenceRunnerError(t *testing.T) {
 	assert.Nil(t, results)
 }
 
-func TestLocalEvaluateNilRequest(t *testing.T) {
+func TestLocalEvaluateRequestValidation(t *testing.T) {
 	ctx := context.Background()
 	mgr := evalsetinmemory.New()
 	reg := registry.New()
@@ -267,6 +275,14 @@ func TestLocalEvaluateNilRequest(t *testing.T) {
 	svc := newLocalService(t, &fakeRunner{}, mgr, resMgr, reg, "session")
 
 	result, err := svc.Evaluate(ctx, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+
+	result, err = svc.Evaluate(ctx, &service.EvaluateRequest{})
+	assert.Error(t, err)
+	assert.Nil(t, result)
+
+	result, err = svc.Evaluate(ctx, &service.EvaluateRequest{AppName: "app"})
 	assert.Error(t, err)
 	assert.Nil(t, result)
 }
@@ -322,7 +338,7 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, metricName, caseResult.OverallEvalMetricResults[0].MetricName)
 	assert.Equal(t, 0.8, caseResult.OverallEvalMetricResults[0].Score)
 	assert.Len(t, caseResult.EvalMetricResultPerInvocation, 1)
-	assert.Len(t, caseResult.EvalMetricResultPerInvocation[0].MetricResults, 1)
+	assert.Len(t, caseResult.EvalMetricResultPerInvocation[0].EvalMetricResults, 1)
 	assert.Equal(t, "demo-user", caseResult.UserID)
 
 	storedIDs, err := resMgr.List(ctx, appName)

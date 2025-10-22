@@ -139,10 +139,25 @@ func TestManager(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, evalSetAfterDelete.EvalCases)
 
+	err = mgr.UpdateCase(ctx, "app", "set1", &evalset.EvalCase{EvalID: "missing"})
+	assert.Error(t, err)
+
 	_, err = mgr.Create(ctx, "app", "set1")
 	assert.Error(t, err)
 
 	_, err = mgr.Get(ctx, "app", "missing")
+	assert.Error(t, err)
+
+	err = mgr.Delete(ctx, "", "set1")
+	assert.Error(t, err)
+
+	err = mgr.Delete(ctx, "app", "")
+	assert.Error(t, err)
+
+	err = mgr.Delete(ctx, "app", "set1")
+	assert.NoError(t, err)
+
+	_, err = mgr.Get(ctx, "app", "set1")
 	assert.Error(t, err)
 }
 

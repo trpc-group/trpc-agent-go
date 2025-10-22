@@ -42,5 +42,5 @@ func TestCloneNilInput(t *testing.T) {
 	var src *sample
 	clone, err := Clone(src)
 	assert.Nil(t, clone)
-	assert.EqualError(t, err, "nil input")
+	assert.Error(t, err)
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 )
@@ -14,7 +15,8 @@ func TestNewOptionsDefaults(t *testing.T) {
 	opts := NewOptions()
 
 	assert.NotNil(t, opts.EvalSetManager)
-	assert.NotNil(t, opts.EvaluatorRegistry)
+	assert.NotNil(t, opts.EvalResultManager)
+	assert.NotNil(t, opts.Registry)
 	assert.NotNil(t, opts.SessionIDSupplier)
 
 	sessionID := opts.SessionIDSupplier(context.Background())
@@ -28,11 +30,18 @@ func TestWithEvalSetManager(t *testing.T) {
 	assert.Equal(t, custom, opts.EvalSetManager)
 }
 
-func TestWithEvaluatorRegistry(t *testing.T) {
-	custom := registry.New()
-	opts := NewOptions(WithEvaluatorRegistry(custom))
+func TestWithEvalResultManager(t *testing.T) {
+	custom := evalresultinmemory.New()
+	opts := NewOptions(WithEvalResultManager(custom))
 
-	assert.Equal(t, custom, opts.EvaluatorRegistry)
+	assert.Equal(t, custom, opts.EvalResultManager)
+}
+
+func TestWithRegistry(t *testing.T) {
+	custom := registry.New()
+	opts := NewOptions(WithRegistry(custom))
+
+	assert.Equal(t, custom, opts.Registry)
 }
 
 func TestWithSessionIDSupplier(t *testing.T) {

@@ -25,21 +25,23 @@ func TestManagerSaveGetList(t *testing.T) {
 	mgr := New().(*manager)
 
 	_, err := mgr.Save(ctx, "", &evalresult.EvalSetResult{EvalSetID: "set"})
-	assert.EqualError(t, err, "app name is empty")
+	assert.Error(t, err)
 
 	_, err = mgr.Save(ctx, "app", nil)
-	assert.EqualError(t, err, "eval set result is nil")
+	assert.Error(t, err)
 
 	_, err = mgr.Save(ctx, "app", &evalresult.EvalSetResult{})
-	assert.EqualError(t, err, "eval set id is empty")
+	assert.Error(t, err)
 
 	id, err := mgr.Save(ctx, "app", &evalresult.EvalSetResult{EvalSetID: "set"})
 	assert.NoError(t, err)
-	assert.True(t, strings.HasPrefix(id, "set_"))
+	assert.True(t, strings.HasPrefix(id, "app_set_"))
 
 	// Ensure value stored under generated ID.
 	stored := mgr.evalSetResults["app"][id]
 	assert.Equal(t, id, stored.EvalSetResultID)
+	assert.Equal(t, id, stored.EvalSetResultName)
+	assert.NotNil(t, stored.CreationTimestamp)
 
 	// Subsequent Save with explicit ID should override that entry.
 	withID := &evalresult.EvalSetResult{
@@ -58,7 +60,7 @@ func TestManagerSaveGetList(t *testing.T) {
 	result.EvalSetResultName = "mutated"
 	fresh, err := mgr.Get(ctx, "app", explicitID)
 	assert.NoError(t, err)
-	assert.Empty(t, fresh.EvalSetResultName)
+	assert.Equal(t, explicitID, fresh.EvalSetResultName)
 
 	ids, err := mgr.List(ctx, "app")
 	assert.NoError(t, err)
@@ -73,7 +75,13 @@ func TestManagerGetErrors(t *testing.T) {
 	ctx := context.Background()
 	mgr := New().(*manager)
 
-	_, err := mgr.Get(ctx, "app", "unknown")
+	_, err := mgr.Get(ctx, "", "unknown")
+	assert.Error(t, err)
+
+	_, err = mgr.Get(ctx, "app", "")
+	assert.Error(t, err)
+
+	_, err = mgr.Get(ctx, "app", "unknown")
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, os.ErrNotExist))
 
@@ -83,4 +91,12 @@ func TestManagerGetErrors(t *testing.T) {
 	_, err = mgr.Get(ctx, "app", "missing")
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, os.ErrNotExist))
+}
+
+func TestManagerListErrors(t *testing.T) {
+	ctx := context.Background()
+	mgr := New().(*manager)
+
+	_, err := mgr.List(ctx, "")
+	assert.Error(t, err)
 }

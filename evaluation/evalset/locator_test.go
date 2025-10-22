@@ -35,6 +35,10 @@ func TestDefaultLocatorList(t *testing.T) {
 	assert.NoError(t, err)
 	err = os.WriteFile(filepath.Join(appDir, "ignore.txt"), []byte("x"), 0o644)
 	assert.NoError(t, err)
+	err = os.Mkdir(filepath.Join(appDir, "nested"), 0o755)
+	assert.NoError(t, err)
+	err = os.WriteFile(filepath.Join(appDir, "nested", "set-2"+defaultEvalSetFileSuffix), []byte("{}"), 0o644)
+	assert.NoError(t, err)
 
 	loc := &locator{}
 	results, err := loc.List(dir, "demo")

@@ -56,8 +56,8 @@ func TestSummarizeMetricsStatus(t *testing.T) {
 
 	metrics := []*evalresult.EvalMetricResult{
 		nil,
-		{Status: evalstatus.EvalStatusPassed},
-		{Status: evalstatus.EvalStatusFailed},
+		{EvalStatus: evalstatus.EvalStatusPassed},
+		{EvalStatus: evalstatus.EvalStatusFailed},
 	}
 	result, err := SummarizeMetricsStatus(metrics)
 	assert.NoError(t, err)
