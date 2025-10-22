@@ -75,7 +75,7 @@ func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) ([
 	// Run the agent for the requested eval cases and return the inference results for each case.
 	inferenceResults := make([]*service.InferenceResult, 0, len(evalCases))
 	for _, evalCase := range evalCases {
-		inference, err := s.inferenceEvalCase(ctx, req.AppName, req.EvalSetID, evalCase)
+		inference, err := s.inferenceEvalCase(ctx, req.EvalSetID, evalCase)
 		if err != nil {
 			return nil, fmt.Errorf("run inference for eval case %s: %w", evalCase.EvalID, err)
 		}
@@ -85,11 +85,11 @@ func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) ([
 }
 
 // inferenceEvalCase runs the agent for a single eval case and returns the inference result.
-func (s *local) inferenceEvalCase(ctx context.Context, appName, evalSetID string,
+func (s *local) inferenceEvalCase(ctx context.Context, evalSetID string,
 	evalCase *evalset.EvalCase) (*service.InferenceResult, error) {
 	sessionID := s.sessionIDSupplier(ctx)
 	inferenceResult := &service.InferenceResult{
-		AppName:    appName,
+		AppName:    evalCase.SessionInput.AppName,
 		EvalSetID:  evalSetID,
 		EvalCaseID: evalCase.EvalID,
 		SessionID:  sessionID,
@@ -177,7 +177,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		perInvocation = append(perInvocation, &evalresult.EvalMetricResultPerInvocation{
 			ActualInvocation:   inferenceResult.Inferences[i],
 			ExpectedInvocation: evalCase.Conversation[i],
-			MetricResults:      make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics)),
+			EvalMetricResults:  make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics)),
 		})
 	}
 	// Iterate through every configured metric and run the evaluation.
@@ -190,7 +190,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 			MetricName: evalMetric.MetricName,
 			Threshold:  evalMetric.Threshold,
 			Score:      result.OverallScore,
-			Status:     result.OverallStatus,
+			EvalStatus: result.OverallStatus,
 		})
 		if len(result.PerInvocationResults) != len(perInvocation) {
 			return nil, fmt.Errorf("metric %s returned %d per-invocation results, expected %d", evalMetric.MetricName,
@@ -198,12 +198,13 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		}
 		for i, invocationResult := range result.PerInvocationResults {
 			// Record the metric outcome for the corresponding invocation.
-			perInvocation[i].MetricResults = append(perInvocation[i].MetricResults, &evalresult.EvalMetricResult{
+			evalMetricResult := &evalresult.EvalMetricResult{
 				MetricName: evalMetric.MetricName,
 				Threshold:  evalMetric.Threshold,
 				Score:      invocationResult.Score,
-				Status:     invocationResult.Status,
-			})
+				EvalStatus: invocationResult.Status,
+			}
+			perInvocation[i].EvalMetricResults = append(perInvocation[i].EvalMetricResults, evalMetricResult)
 		}
 	}
 	// Summarize the overall metric results and return the final eval status.

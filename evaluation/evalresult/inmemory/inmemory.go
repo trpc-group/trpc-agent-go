@@ -53,13 +53,16 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 	}
 	evalSetResultID := evalSetResult.EvalSetResultID
 	if evalSetResultID == "" {
-		evalSetResultID = fmt.Sprintf("%s_%s", evalSetResult.EvalSetID, uuid.New().String())
+		evalSetResultID = fmt.Sprintf("%s_%s_%s", appName, evalSetResult.EvalSetID, uuid.New().String())
 	}
 	cloned, err := clone.Clone(evalSetResult)
 	if err != nil {
 		return "", fmt.Errorf("clone result: %w", err)
 	}
 	cloned.EvalSetResultID = evalSetResultID
+	if cloned.EvalSetResultName == "" {
+		cloned.EvalSetResultName = evalSetResultID
+	}
 	if cloned.CreationTimestamp == nil {
 		cloned.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
 	}

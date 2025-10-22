@@ -65,13 +65,16 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 	defer m.mu.Unlock()
 	evalSetResultID := evalSetResult.EvalSetResultID
 	if evalSetResultID == "" {
-		evalSetResultID = fmt.Sprintf("%s_%s", evalSetResult.EvalSetID, uuid.New().String())
+		evalSetResultID = fmt.Sprintf("%s_%s_%s", appName, evalSetResult.EvalSetID, uuid.New().String())
 	}
 	cloned, err := clone.Clone(evalSetResult)
 	if err != nil {
 		return "", fmt.Errorf("clone eval set result: %w", err)
 	}
 	cloned.EvalSetResultID = evalSetResultID
+	if cloned.EvalSetResultName == "" {
+		cloned.EvalSetResultName = evalSetResultID
+	}
 	if cloned.CreationTimestamp == nil {
 		cloned.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
 	}
@@ -147,13 +150,15 @@ func (m *manager) store(appName string, evalSetResult *evalresult.EvalSetResult)
 	if err != nil {
 		return fmt.Errorf("open file %s: %w", tmp, err)
 	}
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(evalSetResult); err != nil {
-		file.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("encode file %s: %w", tmp, err)
-	}
+	// encoder := json.NewEncoder(file)
+	// encoder.SetIndent("", "  ")
+	// if err := encoder.Encode(evalSetResult); err != nil {
+	// 	file.Close()
+	// 	os.Remove(tmp)
+	// 	return fmt.Errorf("encode file %s: %w", tmp, err)
+	// }
+	data, _ := json.Marshal(evalSetResult)
+	fmt.Fprintf(file, "%q", data)
 	if err := file.Close(); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("close file %s: %w", tmp, err)

@@ -24,7 +24,7 @@ func SummarizeMetricsStatus(metrics []*evalresult.EvalMetricResult) (status.Eval
 		if evalMetricResult == nil {
 			continue
 		}
-		evalStatuses = append(evalStatuses, evalMetricResult.Status)
+		evalStatuses = append(evalStatuses, evalMetricResult.EvalStatus)
 	}
 	return Summarize(evalStatuses)
 }

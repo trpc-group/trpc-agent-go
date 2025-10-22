@@ -191,7 +191,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 	aggregatedMetrics := make(map[string]*aggregatedMetric)
 	for _, run := range runs {
 		for _, metric := range run.OverallEvalMetricResults {
-			if metric.Status == status.EvalStatusNotEvaluated {
+			if metric.EvalStatus == status.EvalStatusNotEvaluated {
 				continue
 			}
 			if _, ok := aggregatedMetrics[metric.MetricName]; !ok {
@@ -212,7 +212,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		metricsResults = append(metricsResults, &evalresult.EvalMetricResult{
 			MetricName: name,
 			Score:      average,
-			Status:     evalStatus,
+			EvalStatus: evalStatus,
 			Threshold:  aggregatedMetric.threshold,
 		})
 	}

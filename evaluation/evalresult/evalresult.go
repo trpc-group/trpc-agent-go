@@ -59,8 +59,8 @@ type EvalMetricResult struct {
 	MetricName string `json:"metric_name,omitempty"`
 	// Score obtained for this metric.
 	Score float64 `json:"score,omitempty"`
-	// Status of this metric evaluation.
-	Status status.EvalStatus `json:"status,omitempty"`
+	// EvalStatus of this metric evaluation.
+	EvalStatus status.EvalStatus `json:"eval_status,omitempty"`
 	// Threshold that was used.
 	Threshold float64 `json:"threshold,omitempty"`
 	// Details contains additional metric-specific information.
@@ -74,8 +74,8 @@ type EvalMetricResultPerInvocation struct {
 	ActualInvocation *evalset.Invocation `json:"actual_invocation,omitempty"`
 	// ExpectedInvocation is the expected invocation.
 	ExpectedInvocation *evalset.Invocation `json:"expected_invocation,omitempty"`
-	// MetricResults contains results for each metric for this invocation.
-	MetricResults []*EvalMetricResult `json:"metric_results,omitempty"`
+	// EvalMetricResults contains results for each metric for this invocation.
+	EvalMetricResults []*EvalMetricResult `json:"eval_metric_results,omitempty"`
 }
 
 // Manager defines the interface for managing evaluation results.
