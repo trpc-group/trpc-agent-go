@@ -11,6 +11,7 @@ package processor_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -108,4 +109,40 @@ func (a *testAgent) FindSubAgent(name string) agent.Agent {
 
 func (a *testAgent) CodeExecutor() codeexecutor.CodeExecutor {
 	return a.exec
+}
+
+// errExec returns error on ExecuteCode
+type errExec struct{ stubExec }
+
+func (e *errExec) ExecuteCode(ctx context.Context, in codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, fmt.Errorf("boom")
+}
+
+func TestCodeExecutionResponseProcessor_Branches(t *testing.T) {
+	ctx := context.Background()
+	p := iprocessor.NewCodeExecutionResponseProcessor()
+
+	// Early returns
+	p.ProcessResponse(ctx, nil, nil, nil, make(chan *event.Event, 1))
+	p.ProcessResponse(ctx, &agent.Invocation{}, nil, nil, make(chan *event.Event, 1))
+	p.ProcessResponse(ctx, &agent.Invocation{Agent: &testAgent{exec: nil}}, nil, nil, make(chan *event.Event, 1))
+
+	// isPartial return
+	inv := &agent.Invocation{Agent: &testAgent{exec: &stubExec{}}, Session: &session.Session{ID: "s1"}, AgentName: "a"}
+	rsp := &model.Response{IsPartial: true}
+	p.ProcessResponse(ctx, inv, nil, rsp, make(chan *event.Event, 2))
+
+	// no choices return
+	rsp = &model.Response{}
+	p.ProcessResponse(ctx, inv, nil, rsp, make(chan *event.Event, 2))
+
+	// no code block return
+	rsp = &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "no code here"}}}}
+	p.ProcessResponse(ctx, inv, nil, rsp, make(chan *event.Event, 2))
+
+	// ExecuteCode error path
+	inv.Agent = &testAgent{exec: &errExec{}}
+	ch := make(chan *event.Event, 4)
+	rsp = &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "```go\nfmt.Println(1)```"}}}}
+	p.ProcessResponse(ctx, inv, nil, rsp, ch)
 }

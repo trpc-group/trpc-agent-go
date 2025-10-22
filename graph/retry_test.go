@@ -384,3 +384,69 @@ func TestExecutor_DefaultRetryPolicy(t *testing.T) {
 	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
 	require.Equal(t, int32(1), atomic.LoadInt32(&sinkRuns))
 }
+
+// Additional retry helpers coverage
+type fakeNetErr struct{ timeout, temp bool }
+
+func (e fakeNetErr) Error() string   { return "fake" }
+func (e fakeNetErr) Timeout() bool   { return e.timeout }
+func (e fakeNetErr) Temporary() bool { return e.temp }
+
+func TestRetry_DefaultTransientCondition_Matches(t *testing.T) {
+	cond := DefaultTransientCondition()
+	if !cond.Match(context.DeadlineExceeded) {
+		t.Fatalf("expected match on deadline exceeded")
+	}
+	if !cond.Match(fakeNetErr{timeout: true}) {
+		t.Fatalf("expected match on net.Error Timeout")
+	}
+	if !cond.Match(fakeNetErr{temp: true}) {
+		t.Fatalf("expected match on net.Error Temporary")
+	}
+	if cond.Match(fmt.Errorf("perm")) {
+		t.Fatalf("did not expect match on arbitrary error")
+	}
+}
+
+func TestRetry_RetryOnHelpers_AndShouldRetry(t *testing.T) {
+	e1 := fmt.Errorf("e1")
+	e2 := fmt.Errorf("e2")
+	p := RetryPolicy{RetryOn: []RetryCondition{RetryOnErrors(e1), RetryOnPredicate(func(err error) bool { return err == e2 })}}
+	if !p.ShouldRetry(e1) || !p.ShouldRetry(e2) || p.ShouldRetry(fmt.Errorf("x")) {
+		t.Fatalf("ShouldRetry mismatch")
+	}
+}
+
+func TestRetry_NextDelay_JitterAndClamps(t *testing.T) {
+	p := RetryPolicy{MaxAttempts: 3, InitialInterval: 10 * time.Millisecond, BackoffFactor: 2, MaxInterval: 15 * time.Millisecond, Jitter: true}
+	d1 := p.NextDelay(1)
+	if d1 < 10*time.Millisecond || d1 >= 20*time.Millisecond {
+		t.Fatalf("unexpected d1=%v", d1)
+	}
+	d3 := p.NextDelay(3)
+	if d3 < 15*time.Millisecond || d3 >= 30*time.Millisecond {
+		t.Fatalf("unexpected d3=%v", d3)
+	}
+}
+
+func TestRetry_WithSimpleRetry_SetsDefaults(t *testing.T) {
+	p := WithSimpleRetry(0)
+	if p.MaxAttempts < 1 || p.InitialInterval <= 0 || p.BackoffFactor <= 0 || p.MaxInterval <= 0 || len(p.RetryOn) == 0 {
+		t.Fatalf("unexpected simple retry defaults: %+v", p)
+	}
+}
+
+func TestRetry_NextDelay_EdgeBranches(t *testing.T) {
+	p := RetryPolicy{MaxAttempts: 3, InitialInterval: 5 * time.Millisecond, BackoffFactor: 0, MaxInterval: 0, Jitter: false}
+	d := p.NextDelay(0)
+	if d != 5*time.Millisecond {
+		t.Fatalf("expected 5ms, got %v", d)
+	}
+}
+
+func TestRetry_ShouldRetry_Negative(t *testing.T) {
+	p := RetryPolicy{}
+	if p.ShouldRetry(fmt.Errorf("e")) {
+		t.Fatalf("expected false without conditions")
+	}
+}

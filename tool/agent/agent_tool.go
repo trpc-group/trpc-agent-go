@@ -33,6 +33,7 @@ type Tool struct {
 	agent             agent.Agent
 	skipSummarization bool
 	streamInner       bool
+	historyScope      HistoryScope
 	name              string
 	description       string
 	inputSchema       *tool.Schema
@@ -46,6 +47,7 @@ type Option func(*agentToolOptions)
 type agentToolOptions struct {
 	skipSummarization bool
 	streamInner       bool
+	historyScope      HistoryScope
 }
 
 // WithSkipSummarization sets whether to skip summarization of the agent output.
@@ -64,6 +66,29 @@ func WithStreamInner(enabled bool) Option {
 	}
 }
 
+// HistoryScope controls whether and how AgentTool inherits parent history.
+//   - HistoryScopeIsolated: keep child events isolated; do not inherit parent history.
+//   - HistoryScopeParentBranch: inherit parent branch history by using a hierarchical
+//     filter key "parent/child-uuid" so that content processors see parent events via
+//     prefix matching while keeping child events in a separate sub-branch.
+type HistoryScope int
+
+// HistoryScopeIsolated: keep child events isolated; do not inherit parent history.
+// HistoryScopeParentBranch: inherit parent branch history by using a hierarchical
+// filter key "parent/child-uuid" so that content processors see parent events via
+// prefix matching while keeping child events in a separate sub-branch.
+const (
+	HistoryScopeIsolated HistoryScope = iota
+	HistoryScopeParentBranch
+)
+
+// WithHistoryScope sets the history inheritance behavior for AgentTool.
+func WithHistoryScope(scope HistoryScope) Option {
+	return func(opts *agentToolOptions) {
+		opts.historyScope = scope
+	}
+}
+
 // NewTool creates a new Tool that wraps the given agent.
 //
 // Note: The tool name is derived from the agent's info (agent.Info().Name).
@@ -76,7 +101,7 @@ func WithStreamInner(enabled bool) Option {
 func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	// Default to allowing summarization so the parent agent can perform its
 	// normal post-tool reasoning unless opt-out is requested.
-	options := &agentToolOptions{skipSummarization: false}
+	options := &agentToolOptions{skipSummarization: false, historyScope: HistoryScopeIsolated}
 	for _, opt := range opts {
 		opt(options)
 	}
@@ -114,6 +139,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		agent:             agent,
 		skipSummarization: options.skipSummarization,
 		streamInner:       options.streamInner,
+		historyScope:      options.historyScope,
 		name:              info.Name,
 		description:       info.Description,
 		inputSchema:       inputSchema,
@@ -124,28 +150,109 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 // Call executes the agent tool with the provided JSON arguments.
 func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	message := model.NewUserMessage(string(jsonArgs))
-	// Create a runner to execute the agent.
-	runner := runner.NewRunner(
+
+	// Prefer to reuse parent invocation + session so the child can see parent
+	// history according to the configured history scope.
+	if parentInv, ok := agent.InvocationFromContext(ctx); ok && parentInv != nil && parentInv.Session != nil {
+		return at.callWithParentInvocation(ctx, parentInv, message)
+	}
+
+	// Fallback: isolated in-memory run when parent invocation is not available.
+	return at.callWithIsolatedRunner(ctx, message)
+}
+
+// callWithParentInvocation executes the agent using parent invocation context.
+// This allows the child agent to inherit parent history based on the configured
+// history scope.
+func (at *Tool) callWithParentInvocation(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+	message model.Message,
+) (string, error) {
+	// Build child filter key based on history scope.
+	childKey := at.buildChildFilterKey(parentInv)
+
+	// Clone parent invocation with child-specific settings.
+	subInv := parentInv.Clone(
+		agent.WithInvocationAgent(at.agent),
+		agent.WithInvocationMessage(message),
+		agent.WithInvocationEventFilterKey(childKey),
+	)
+
+	// Ensure current tool input is visible to the child content processor by
+	// appending it into the shared session.
+	at.injectToolInputEvent(subInv, message)
+
+	// Run the agent and collect response.
+	evCh, err := at.agent.Run(agent.NewInvocationContext(ctx, subInv), subInv)
+	if err != nil {
+		return "", fmt.Errorf("failed to run agent: %w", err)
+	}
+	return at.collectResponse(evCh)
+}
+
+// callWithIsolatedRunner executes the agent in an isolated environment using
+// an in-memory session service. This is used as a fallback when no parent
+// invocation context is available.
+func (at *Tool) callWithIsolatedRunner(
+	ctx context.Context,
+	message model.Message,
+) (string, error) {
+	r := runner.NewRunner(
 		at.name,
 		at.agent,
 		runner.WithSessionService(inmemory.NewSessionService()),
 	)
-
-	// Run the agent.
-	eventChan, err := runner.Run(ctx, "tool_user", "tool_session", message)
+	evCh, err := r.Run(ctx, "tool_user", "tool_session", message)
 	if err != nil {
-		return nil, fmt.Errorf("failed to run agent: %w", err)
+		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
+	return at.collectResponse(evCh)
+}
 
-	// Collect the response from the agent.
-	var response strings.Builder
-	for event := range eventChan {
-		if event.Error != nil {
-			return nil, fmt.Errorf("agent error: %s", event.Error.Message)
+// buildChildFilterKey constructs a child filter key based on the history scope
+// configuration. For HistoryScopeParentBranch, it creates a hierarchical key
+// that allows the child to inherit parent history.
+func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
+	childKey := at.agent.Info().Name + "-" + uuid.NewString()
+	if at.historyScope == HistoryScopeParentBranch {
+		if pk := parentInv.GetEventFilterKey(); pk != "" {
+			childKey = pk + agent.EventFilterKeyDelimiter + childKey
 		}
+	}
+	return childKey
+}
 
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			choice := event.Response.Choices[0]
+// injectToolInputEvent appends the tool input message as an event into the
+// session, making it visible to the child content processor.
+func (at *Tool) injectToolInputEvent(
+	subInv *agent.Invocation,
+	message model.Message,
+) {
+	if subInv.Session != nil && message.Content != "" {
+		evt := event.NewResponseEvent(
+			subInv.InvocationID,
+			"user",
+			&model.Response{
+				Done:    false,
+				Choices: []model.Choice{{Index: 0, Message: message}},
+			},
+		)
+		agent.InjectIntoEvent(subInv, evt)
+		subInv.Session.Events = append(subInv.Session.Events, *evt)
+	}
+}
+
+// collectResponse collects and concatenates assistant messages from the event
+// channel, returning the complete response text.
+func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
+	var response strings.Builder
+	for ev := range evCh {
+		if ev.Error != nil {
+			return "", fmt.Errorf("agent error: %s", ev.Error.Message)
+		}
+		if ev.Response != nil && len(ev.Response.Choices) > 0 {
+			choice := ev.Response.Choices[0]
 			if choice.Message.Role == model.RoleAssistant && choice.Message.Content != "" {
 				response.WriteString(choice.Message.Content)
 			}
@@ -168,10 +275,13 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 		message := model.NewUserMessage(string(jsonArgs))
 
 		if ok && parentInv != nil && parentInv.Session != nil {
-			// Use random FilterKey for automatic isolation across multiple invocations.
-			// This avoids the need for manual session cleanup while ensuring that
-			// each AgentTool call has its own isolated event context.
+			// Build child filter key based on history scope.
 			uniqueFilterKey := at.agent.Info().Name + "-" + uuid.NewString()
+			if at.historyScope == HistoryScopeParentBranch {
+				if pk := parentInv.GetEventFilterKey(); pk != "" {
+					uniqueFilterKey = pk + agent.EventFilterKeyDelimiter + uniqueFilterKey
+				}
+			}
 
 			subInv := parentInv.Clone(
 				agent.WithInvocationAgent(at.agent),

@@ -80,6 +80,13 @@ type Node struct {
 	toolSets []tool.ToolSet
 	// Per-node callbacks for fine-grained control
 	callbacks *NodeCallbacks
+	// Optional per-node cache policy. If nil, graph-level policy applies.
+	cachePolicy *CachePolicy
+	// Optional per-node cache key selector. When set, the executor applies this
+	// selector to the sanitized node input before invoking the CachePolicy.KeyFunc.
+	// The selector receives a sanitized map[string]any view and should return a
+	// projection to be used for key derivation (e.g., subset of fields).
+	cacheKeySelector func(map[string]any) any
 
 	// Retry policies configured for this node. When empty, executor defaults
 	// (if any) will be used. Policies are evaluated in order to determine
@@ -143,6 +150,13 @@ type Graph struct {
 	// Pregel-style extensions
 	channelManager *channel.Manager
 	triggerToNodes map[string][]string // Maps channel names to nodes that are triggered
+
+	// Caching
+	cache       Cache
+	cachePolicy *CachePolicy
+	// Optional graph version used to scope cache namespaces, helping avoid
+	// stale cache collisions across graph code changes or deployments.
+	graphVersion string
 }
 
 // New creates a new empty graph with the given state schema.
@@ -194,6 +208,65 @@ func (g *Graph) EntryPoint() string {
 // Schema returns the state schema.
 func (g *Graph) Schema() *StateSchema {
 	return g.schema
+}
+
+// Cache returns the graph-level cache (may be nil).
+func (g *Graph) Cache() Cache {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.cache
+}
+
+// CachePolicy returns the graph-level cache policy (may be nil).
+func (g *Graph) CachePolicy() *CachePolicy {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.cachePolicy
+}
+
+// setCache sets the graph-level cache.
+func (g *Graph) setCache(c Cache) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cache = c
+}
+
+// setCachePolicy sets the graph-level cache policy.
+func (g *Graph) setCachePolicy(p *CachePolicy) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cachePolicy = p
+}
+
+// setGraphVersion sets an optional version string used for cache namespacing.
+func (g *Graph) setGraphVersion(v string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.graphVersion = v
+}
+
+// cacheNamespace builds a per-node namespace including optional graph version.
+func (g *Graph) cacheNamespace(nodeID string) string {
+	g.mu.RLock()
+	v := g.graphVersion
+	g.mu.RUnlock()
+	if v == "" {
+		return fmt.Sprintf("%s:%s", CacheNamespacePrefix, nodeID)
+	}
+	return fmt.Sprintf("%s:%s:%s", CacheNamespacePrefix, v, nodeID)
+}
+
+// clearCacheForNodes clears cache entries for the given node IDs.
+func (g *Graph) clearCacheForNodes(nodes []string) {
+	g.mu.RLock()
+	c := g.cache
+	g.mu.RUnlock()
+	if c == nil {
+		return
+	}
+	for _, id := range nodes {
+		c.Clear(g.cacheNamespace(id))
+	}
 }
 
 // validate validates the graph structure.

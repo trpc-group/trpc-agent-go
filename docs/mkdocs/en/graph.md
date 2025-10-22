@@ -388,7 +388,9 @@ func main() {
             }
         }
 
-        if event.Done {
+        // Prefer Runner completion as the end-of-run signal.
+        // LLM final response is not equal to graph completion.
+        if event.IsRunnerCompletion() {
             break
         }
     }
@@ -588,6 +590,42 @@ stateGraph.AddLLMNode(
 
 See the runnable example: `examples/graph/placeholder`.
 
+Injecting retrieval output and user input
+
+- Upstream nodes can place ephemeral values into the session's `temp:` namespace so the LLM instruction can read them with placeholders.
+- Pattern:
+
+```go
+// In a node before the LLM node
+sg.AddNode("retrieve", func(ctx context.Context, s graph.State) (any, error) {
+    // Suppose you computed `retrieved` and want to include current user input.
+    retrieved := "• doc A...\n• doc B..."
+    var input string
+    if v, ok := s[graph.StateKeyUserInput].(string); ok { input = v }
+    if sess, _ := s[graph.StateKeySession].(*session.Session); sess != nil {
+        if sess.State == nil { sess.State = make(session.StateMap) }
+        sess.State[session.StateTempPrefix+"retrieved_context"] = []byte(retrieved)
+        sess.State[session.StateTempPrefix+"user_input"] = []byte(input)
+    }
+    return graph.State{}, nil
+})
+
+// LLM node instruction can reference {temp:retrieved_context} and {temp:user_input}
+sg.AddLLMNode("answer", mdl,
+    "Use context to answer.\n\nContext:\n{temp:retrieved_context}\n\nQuestion: {temp:user_input}",
+    nil)
+```
+
+Example: `examples/graph/retrieval_placeholder`.
+
+Best practices for placeholders and session state
+
+- Ephemeral vs persistent: write per‑turn values to `temp:*` on `session.State` (session state). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
+- Why direct write is OK: LLM nodes expand placeholders from the session object present in graph state; see [graph/state_graph.go](graph/state_graph.go). GraphAgent puts the session into state; see [agent/graphagent/graph_agent.go](agent/graphagent/graph_agent.go).
+- Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](session/inmemory/service.go).
+- Concurrency: when multiple branches run in parallel, avoid multiple nodes mutating the same `session.State` keys. Prefer composing in a single node before the LLM, or store intermediate values in graph state then write once to `temp:*`.
+- Observability: if you want parts of the prompt to appear in completion events, also store a compact summary in graph state (e.g., under `metadata`). The final event serializes non‑internal final state; see [graph/events.go](graph/events.go).
+
 ### 6. Node Retry & Backoff
 
 Configure per‑node retry with exponential backoff and optional jitter. Failed attempts do not produce writes; only a successful attempt applies its state delta and routing.
@@ -767,6 +805,8 @@ b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error)
         "message": "Please approve this action (yes/no):",
         "data":    s["some_data"],
     }
+}
+```
  
 
 Turn the diagram into a runnable workflow:
@@ -880,7 +920,6 @@ func main() {
         }
         if ev.Author == nodeAsk && !ev.Response.IsPartial && len(ev.Response.Choices) > 0 {
             fmt.Println("LLM:", ev.Response.Choices[0].Message.Content)
-        }
         }
     }
 }
@@ -1041,6 +1080,293 @@ sg.AddLLMNode(llmNodeAssistant, model, llmSystemPrompt, tools)
 // Inputs (priority): graph.StateKeyOneShotMessages > graph.StateKeyUserInput > graph.StateKeyMessages
 // Outputs: graph.StateKeyLastResponse, graph.StateKeyMessages (atomic), graph.StateKeyNodeResponses (includes this node's output for aggregation)
 ```
+
+## Node Cache
+
+Enable caching for pure function-like nodes to avoid repeated computation.
+
+- Graph-level settings:
+  - `WithCache(cache Cache)` sets the cache backend (an in-memory implementation is provided for testing)
+  - `WithCachePolicy(policy *CachePolicy)` sets the default cache policy (key function + Time To Live, TTL)
+- Node-level override: `WithNodeCachePolicy(policy *CachePolicy)`
+- Clear by nodes: `ClearCache(nodes ...string)`
+
+References:
+- Graph accessors and setters: [graph/graph.go](graph/graph.go)
+- Defaults and in-memory backend:
+  - Interface/policy + canonical JSON + SHA‑256: [graph/cache.go](graph/cache.go)
+  - In-memory cache with read-write lock and deep copy: [graph/cache.go](graph/cache.go)
+- Executor:
+  - Try Get before executing a node; on hit, skip the node function and only run callbacks + writes: [graph/executor.go](graph/executor.go)
+  - Persist Set after successful execution: [graph/executor.go](graph/executor.go)
+  - Attach `_cache_hit` flag on node.complete events: [graph/executor.go](graph/executor.go)
+
+Minimal usage:
+
+```go
+schema := graph.NewStateSchema()
+sg := graph.NewStateGraph(schema).
+  WithCache(graph.NewInMemoryCache()).
+  WithCachePolicy(graph.DefaultCachePolicy())
+
+nodePolicy := &graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 10*time.Minute}
+sg.AddNode("compute", computeFunc, graph.WithNodeCachePolicy(nodePolicy)).
+  SetEntryPoint("compute").
+  SetFinishPoint("compute")
+
+compiled, _ := sg.Compile()
+```
+
+Advanced usage:
+- Field-based keys (recommended)
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) {
+        return graph.State{"out": s["n"].(int) * 2}, nil
+    }
+
+    // Use only `n` and `user_id` for cache key derivation; other fields won't affect hits
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 30*time.Minute}),
+        graph.WithCacheKeyFields("n", "user_id"),
+    )
+
+    return sg.Compile()
+}
+```
+
+- Custom selector (for complex projections)
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) { return graph.State{"out": 42}, nil }
+
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: 5*time.Minute}),
+        graph.WithCacheKeySelector(func(m map[string]any) any {
+            // derive cache key input from sanitized map
+            return map[string]any{"n": m["n"], "uid": m["uid"]}
+        }),
+    )
+    return sg.Compile()
+}
+```
+
+- Versioned namespace (avoid stale cache across versions)
+
+```go
+package main
+
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithGraphVersion("v2025.03"). // namespace becomes __writes__:v2025.03:<node>
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    // ... AddNode(...)
+    return sg.Compile()
+}
+```
+
+- Per-node TTL (Time To Live)
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func build() (*graph.Graph, error) {
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) { return graph.State{"out": 42}, nil }
+
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{
+            KeyFunc: graph.DefaultCachePolicy().KeyFunc,
+            TTL:     10 * time.Minute,
+        }),
+    )
+    return sg.Compile()
+}
+```
+
+- Clear cache (per node)
+
+```go
+package main
+
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func clear(sg *graph.StateGraph) {
+    // clear specific nodes
+    sg.ClearCache("compute", "format")
+
+    // clear all nodes in the graph (no args)
+    sg.ClearCache()
+}
+```
+
+- Read cache-hit marker (`_cache_hit`)
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func runAndReadHits(executor *graph.Executor, initial graph.State) error {
+    inv := &agent.Invocation{InvocationID: "demo"}
+    ch, err := executor.Execute(context.Background(), initial, inv)
+    if err != nil { return err }
+    for e := range ch {
+        if e.Response != nil && e.Response.Object == graph.ObjectTypeGraphNodeComplete {
+            if e.StateDelta != nil {
+                if _, ok := e.StateDelta["_cache_hit"]; ok {
+                    fmt.Println("cache hit: skipped node function")
+                }
+            }
+        }
+        if e.Done { break }
+    }
+    return nil
+}
+```
+Advanced usage:
+- Field-based keys (recommended): declare `WithCacheKeyFields("n", "user_id")` on a node; internally this maps the sanitized input to `{n, user_id}` before default canonicalization and hashing.
+- Custom selector: `WithCacheKeySelector(func(m map[string]any) any { return map[string]any{"n": m["n"], "uid": m["uid"]} })`
+- Versioned namespace: `WithGraphVersion("v2025.03")` expands the namespace to `__writes__:<version>:<node>`, reducing stale cache collisions across code changes.
+
+Notes:
+- Prefer caching only pure functions (no side effects)
+- TTL=0 means no expiration; consider a persistent backend (Redis/SQLite) in production
+- Key function sanitizes input to avoid volatile/non-serializable fields being part of the key: [graph/cache_key.go](graph/cache_key.go)
+- Call `ClearCache("nodeID")` after code changes or include a function identifier/version in the key
+
+Runner + GraphAgent usage example:
+
+```go
+package main
+
+import (
+    "bufio"
+    "context"
+    "flag"
+    "fmt"
+    "os"
+    "strings"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func main() {
+    ttl := flag.Duration("ttl", 1*time.Minute, "cache ttl")
+    flag.Parse()
+
+    // Build graph with cache
+    schema := graph.NewStateSchema()
+    sg := graph.NewStateGraph(schema).
+        WithCache(graph.NewInMemoryCache()).
+        WithCachePolicy(graph.DefaultCachePolicy())
+
+    compute := func(ctx context.Context, s graph.State) (any, error) {
+        n, _ := s["n"].(int)
+        time.Sleep(200 * time.Millisecond)
+        return graph.State{"out": n * 2}, nil
+    }
+    sg.AddNode("compute", compute,
+        graph.WithNodeCachePolicy(&graph.CachePolicy{KeyFunc: graph.DefaultCachePolicy().KeyFunc, TTL: *ttl}),
+        graph.WithCacheKeyFields("n"),
+    ).
+        SetEntryPoint("compute").
+        SetFinishPoint("compute")
+    g, _ := sg.Compile()
+
+    // GraphAgent + Runner
+    ga, _ := graphagent.New("cache-demo", g, graphagent.WithInitialState(graph.State{}))
+    app := runner.NewRunner("app", ga, runner.WithSessionService(inmemory.NewSessionService()))
+
+    // Interactive
+    sc := bufio.NewScanner(os.Stdin)
+    fmt.Println("Enter integers; repeated inputs should hit cache. type 'exit' to quit")
+    for {
+        fmt.Print("> ")
+        if !sc.Scan() { break }
+        txt := strings.TrimSpace(sc.Text())
+        if txt == "exit" { break }
+        if txt == "" { continue }
+        msg := model.NewUserMessage(fmt.Sprintf("compute %s", txt))
+        evts, err := app.Run(context.Background(), "user", fmt.Sprintf("s-%d", time.Now().UnixNano()), msg, agent.WithRuntimeState(graph.State{"n": atoi(txt)}))
+        if err != nil { fmt.Println("run error:", err); continue }
+        for e := range evts {
+            if e.Response != nil && e.Response.Object == graph.ObjectTypeGraphNodeComplete {
+                if e.StateDelta != nil { if _, ok := e.StateDelta["_cache_hit"]; ok { fmt.Println("cache hit") } }
+            }
+            if e.Done { break }
+        }
+    }
+}
+
+func atoi(s string) int { var n int; fmt.Sscanf(s, "%d", &n); return n }
+```
+
+Example:
+- Interactive + Runner + GraphAgent: [examples/graph/nodecache/main.go](examples/graph/nodecache/main.go)
 
 #### Tools Node
 Executes tool calls in sequence:
@@ -1826,6 +2152,44 @@ Good practice:
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
 
 See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/tools/placeholder).
+
+## Visualization (DOT/Image)
+
+Graph can export a Graphviz DOT (Directed Graph Language) description and render images via the `dot` (Graph Visualization layout engine) executable.
+
+- `WithDestinations` draws dotted gray edges for declared dynamic routes (visualization + static checks only; it does not affect runtime).
+- Conditional edges render as dashed gray edges with branch labels.
+- Regular edges render as solid lines.
+- Virtual `Start`/`End` nodes can be shown or hidden via an option.
+
+Example:
+
+```go
+g := sg.MustCompile()
+
+// Build DOT text
+dot := g.DOT(
+    graph.WithRankDir(graph.RankDirLR),  // left→right (or graph.RankDirTB)
+    graph.WithIncludeDestinations(true), // show declared WithDestinations
+    graph.WithGraphLabel("My Workflow"),
+)
+
+// Render PNG (requires Graphviz's dot)
+if err := g.RenderImage(context.Background(), graph.ImageFormatPNG, "workflow.png",
+    graph.WithRankDir(graph.RankDirLR),
+    graph.WithIncludeDestinations(true),
+); err != nil {
+    // If Graphviz is not installed, this returns an error — ignore or instruct the user to install dot
+}
+```
+
+API reference:
+
+- `g.DOT(...)` / `g.WriteDOT(w, ...)` on a compiled `*graph.Graph`
+- `g.RenderImage(ctx, format, outputPath, ...)` (e.g., `png`/`svg`)
+- Options: `WithRankDir(graph.RankDirLR|graph.RankDirTB)`, `WithIncludeDestinations(bool)`, `WithIncludeStartEnd(bool)`, `WithGraphLabel(string)`
+
+Full example: `examples/graph/visualization`
 
 ## Advanced Features
 

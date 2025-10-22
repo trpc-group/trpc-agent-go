@@ -11,6 +11,7 @@ package processor
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -270,5 +271,51 @@ func TestOutputResponseProcessor_extractFirstJSONObject(t *testing.T) {
 				t.Fatalf("expected %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+// typedStruct is used to test typed structured output unmarshalling.
+type typedStruct struct {
+	A int `json:"a"`
+}
+
+func TestOutputResponseProcessor_TypedAndStateDelta(t *testing.T) {
+	ctx := context.Background()
+	inv := agent.NewInvocation()
+	inv.AgentName = "test-agent"
+	inv.StructuredOutputType = reflect.TypeOf(typedStruct{})
+
+	// Prepare response content that contains JSON object.
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "text {\"a\":1} more"}}}}
+
+	ch := make(chan *event.Event, 4)
+
+	// Ack state delta event completion to prevent blocking.
+	go func() {
+		for e := range ch {
+			if e.RequiresCompletion {
+				_ = inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(e.ID))
+			}
+		}
+	}()
+
+	proc := NewOutputResponseProcessor("k", map[string]any{"type": "object"})
+	proc.ProcessResponse(ctx, inv, nil, rsp, ch)
+}
+
+func TestOutputResponseProcessor_ExtractFinalContent(t *testing.T) {
+	p := NewOutputResponseProcessor("", nil)
+	if _, ok := p.extractFinalContent(nil); ok {
+		t.Fatalf("nil rsp should return false")
+	}
+	if _, ok := p.extractFinalContent(&model.Response{IsPartial: true}); ok {
+		t.Fatalf("partial rsp should return false")
+	}
+	if _, ok := p.extractFinalContent(&model.Response{}); ok {
+		t.Fatalf("no choices should return false")
+	}
+	s, ok := p.extractFinalContent(&model.Response{Choices: []model.Choice{{Message: model.Message{Content: "ok"}}}})
+	if !ok || s != "ok" {
+		t.Fatalf("expected ok content")
 	}
 }

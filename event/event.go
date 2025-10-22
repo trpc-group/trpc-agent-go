@@ -35,6 +35,9 @@ const (
 
 	// FilterKeyDelimiter is the delimiter for hierarchical event filtering.
 	FilterKeyDelimiter = "/"
+
+	// TagDelimiter is the delimiter for event tags.
+	TagDelimiter = ";"
 )
 
 // Event represents an event in conversation between agents and users.
@@ -217,6 +220,17 @@ func AsEmitEventTimeoutError(err error) (*EmitEventTimeoutError, bool) {
 // NewEmitEventTimeoutError creates a new EmitEventTimeoutError with the given message.
 func NewEmitEventTimeoutError(message string) *EmitEventTimeoutError {
 	return &EmitEventTimeoutError{Message: message}
+}
+
+// IsRunnerCompletion reports whether this event is the terminal completion
+// event emitted by Runner. It is the most reliable signal that the entire
+// run has finished (regardless of the specific Agent implementation), and the
+// recommended condition to stop consuming the event stream.
+func (e *Event) IsRunnerCompletion() bool {
+	if e == nil || e.Response == nil {
+		return false
+	}
+	return e.Done && e.Object == model.ObjectTypeRunnerCompletion
 }
 
 // EmitEvent sends an event to the channel without timeout.
