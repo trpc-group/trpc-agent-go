@@ -10,6 +10,7 @@
 package elasticsearch
 
 import (
+	"errors"
 	"net/http"
 )
 
@@ -19,4 +20,15 @@ type roundTripper func(*http.Request) *http.Response
 // RoundTrip implements the http.RoundTripper interface.
 func (f roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req), nil
+}
+
+// errorReader is a mock reader that always returns an error.
+type errorReader struct{}
+
+func (r *errorReader) Read(p []byte) (n int, err error) {
+	return 0, errors.New("mock read error")
+}
+
+func (r *errorReader) Close() error {
+	return nil
 }

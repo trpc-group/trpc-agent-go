@@ -626,3 +626,180 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testi
 	// Don't call s.Close() since we manually closed the channels
 	// This simulates a scenario where the service is being shut down
 }
+
+func TestRedisService_GetSessionSummaryText_NilSession(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	text, ok := s.GetSessionSummaryText(context.Background(), nil)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_GetSessionSummaryText_EmptySummaries(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	sess := &session.Session{ID: "s1", AppName: "a", UserID: "u", Summaries: map[string]*session.Summary{}}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_GetSessionSummaryText_NilSummaries(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	sess := &session.Session{ID: "s1", AppName: "a", UserID: "u", Summaries: nil}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_GetSessionSummaryText_EmptySummaryText(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	sess := &session.Session{
+		ID:      "s1",
+		AppName: "a",
+		UserID:  "u",
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {Summary: "", UpdatedAt: time.Now()},
+		},
+	}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_GetSessionSummaryText_NilSummaryEntry(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	sess := &session.Session{
+		ID:      "s1",
+		AppName: "a",
+		UserID:  "u",
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: nil,
+		},
+	}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_PickSummaryText_BranchFallback(t *testing.T) {
+	summaries := map[string]*session.Summary{
+		"branch1": {Summary: "branch-summary", UpdatedAt: time.Now()},
+	}
+	text, ok := pickSummaryText(summaries)
+	require.True(t, ok)
+	require.Equal(t, "branch-summary", text)
+}
+
+func TestRedisService_PickSummaryText_EmptySummaries(t *testing.T) {
+	summaries := map[string]*session.Summary{}
+	text, ok := pickSummaryText(summaries)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_PickSummaryText_NilSummaries(t *testing.T) {
+	text, ok := pickSummaryText(nil)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_PickSummaryText_EmptyText(t *testing.T) {
+	summaries := map[string]*session.Summary{
+		"branch1": {Summary: "", UpdatedAt: time.Now()},
+	}
+	text, ok := pickSummaryText(summaries)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_PickSummaryText_NilEntry(t *testing.T) {
+	summaries := map[string]*session.Summary{
+		"branch1": nil,
+	}
+	text, ok := pickSummaryText(summaries)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestRedisService_CreateSessionSummary_NilSession(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(WithRedisClientURL(redisURL), WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+	require.NoError(t, err)
+	defer s.Close()
+
+	err = s.CreateSessionSummary(context.Background(), nil, "", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil session")
+}
+
+func TestRedisService_CreateSessionSummary_InvalidKey(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(WithRedisClientURL(redisURL), WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+	require.NoError(t, err)
+	defer s.Close()
+
+	sess := &session.Session{ID: "", AppName: "app", UserID: "user"}
+	err = s.CreateSessionSummary(context.Background(), sess, "", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "check session key failed")
+}
+
+func TestRedisService_ProcessSummaryJob_Panic(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+
+	// Process a job with no stored session - should trigger error but not panic.
+	job := &summaryJob{
+		sessionKey: key,
+		filterKey:  "",
+		force:      false,
+		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+	}
+
+	// This should not panic, just log error.
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
+}

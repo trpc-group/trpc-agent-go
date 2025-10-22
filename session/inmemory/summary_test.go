@@ -384,3 +384,124 @@ func TestMemoryService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *test
 	require.True(t, ok)
 	require.Equal(t, "all-channels-closed-summary", sum.Summary)
 }
+
+func TestMemoryService_GetSessionSummaryText_NilSession(t *testing.T) {
+	s := NewSessionService()
+	text, ok := s.GetSessionSummaryText(context.Background(), nil)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestMemoryService_GetSessionSummaryText_EmptySummaries(t *testing.T) {
+	s := NewSessionService()
+	sess := &session.Session{ID: "s1", Summaries: map[string]*session.Summary{}}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestMemoryService_GetSessionSummaryText_NilSummaries(t *testing.T) {
+	s := NewSessionService()
+	sess := &session.Session{ID: "s1", Summaries: nil}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestMemoryService_GetSessionSummaryText_EmptySummaryText(t *testing.T) {
+	s := NewSessionService()
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {Summary: "", UpdatedAt: time.Now()},
+		},
+	}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestMemoryService_GetSessionSummaryText_NilSummaryEntry(t *testing.T) {
+	s := NewSessionService()
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: nil,
+		},
+	}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok)
+	require.Empty(t, text)
+}
+
+func TestMemoryService_GetSessionSummaryText_BranchSummaryFallback(t *testing.T) {
+	s := NewSessionService()
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"branch1": {Summary: "branch-summary", UpdatedAt: time.Now()},
+		},
+	}
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	require.Equal(t, "branch-summary", text)
+}
+
+func TestMemoryService_CreateSessionSummary_NilSession(t *testing.T) {
+	s := NewSessionService(WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+	err := s.CreateSessionSummary(context.Background(), nil, "", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil session")
+}
+
+func TestMemoryService_CreateSessionSummary_InvalidKey(t *testing.T) {
+	s := NewSessionService(WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+	sess := &session.Session{ID: "", AppName: "app", UserID: "user"}
+	err := s.CreateSessionSummary(context.Background(), sess, "", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "check session key failed")
+}
+
+func TestMemoryService_CreateSessionSummary_SessionNotFound(t *testing.T) {
+	s := NewSessionService(WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+
+	// Create a session in memory to trigger the branch summary logic.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	_, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Add an event.
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Try to create summary for non-existent session.
+	nonExistentSess := &session.Session{ID: "non-existent", AppName: "app", UserID: "user"}
+	err = s.CreateSessionSummary(context.Background(), nonExistentSess, "b1", true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "session not found")
+}
+
+func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
+	s := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+	)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+
+	// Process a job with no stored session - should trigger error but not panic.
+	job := &summaryJob{
+		sessionKey: key,
+		filterKey:  "",
+		force:      false,
+		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+	}
+
+	// This should not panic, just log error.
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
+}

@@ -336,6 +336,180 @@ func TestOptions_Struct(t *testing.T) {
 	assert.False(t, opts.EventTime.IsZero())
 }
 
+func TestSession_GetEvents(t *testing.T) {
+	tests := []struct {
+		name           string
+		initialEvents  []event.Event
+		expectedLength int
+	}{
+		{
+			name: "get events from session with events",
+			initialEvents: []event.Event{
+				{ID: "event1"},
+				{ID: "event2"},
+				{ID: "event3"},
+			},
+			expectedLength: 3,
+		},
+		{
+			name:           "get events from session with no events",
+			initialEvents:  []event.Event{},
+			expectedLength: 0,
+		},
+		{
+			name:           "get events from session with nil events",
+			initialEvents:  nil,
+			expectedLength: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := &Session{
+				ID:      "test-session",
+				AppName: "testapp",
+				UserID:  "user123",
+				Events:  tt.initialEvents,
+			}
+
+			events := session.GetEvents()
+
+			assert.Equal(t, tt.expectedLength, len(events))
+
+			// Verify that the returned events are a copy, not the original.
+			if tt.expectedLength > 0 {
+				// Modify the returned slice.
+				events[0].ID = "modified"
+				// Original should remain unchanged.
+				assert.NotEqual(t, "modified", session.Events[0].ID)
+			}
+		})
+	}
+}
+
+func TestSession_GetEventCount(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialEvents []event.Event
+		expectedCount int
+	}{
+		{
+			name: "count events in session with multiple events",
+			initialEvents: []event.Event{
+				{ID: "event1"},
+				{ID: "event2"},
+				{ID: "event3"},
+			},
+			expectedCount: 3,
+		},
+		{
+			name: "count events in session with one event",
+			initialEvents: []event.Event{
+				{ID: "event1"},
+			},
+			expectedCount: 1,
+		},
+		{
+			name:          "count events in session with no events",
+			initialEvents: []event.Event{},
+			expectedCount: 0,
+		},
+		{
+			name:          "count events in session with nil events",
+			initialEvents: nil,
+			expectedCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := &Session{
+				ID:      "test-session",
+				AppName: "testapp",
+				UserID:  "user123",
+				Events:  tt.initialEvents,
+			}
+
+			count := session.GetEventCount()
+			assert.Equal(t, tt.expectedCount, count)
+		})
+	}
+}
+
+func TestSession_GetEventsConcurrentSafety(t *testing.T) {
+	// Test that GetEvents is safe for concurrent reads.
+	session := &Session{
+		ID:      "test-session",
+		AppName: "testapp",
+		UserID:  "user123",
+		Events: []event.Event{
+			{ID: "event1"},
+			{ID: "event2"},
+		},
+	}
+
+	// Run multiple goroutines reading events concurrently.
+	done := make(chan bool)
+	for i := 0; i < 10; i++ {
+		go func() {
+			events := session.GetEvents()
+			assert.Equal(t, 2, len(events))
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines to complete.
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+func TestSession_GetEventCountConcurrentSafety(t *testing.T) {
+	// Test that GetEventCount is safe for concurrent reads.
+	session := &Session{
+		ID:      "test-session",
+		AppName: "testapp",
+		UserID:  "user123",
+		Events: []event.Event{
+			{ID: "event1"},
+			{ID: "event2"},
+			{ID: "event3"},
+		},
+	}
+
+	// Run multiple goroutines counting events concurrently.
+	done := make(chan bool)
+	for i := 0; i < 10; i++ {
+		go func() {
+			count := session.GetEventCount()
+			assert.Equal(t, 3, count)
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines to complete.
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+func TestSummary_Struct(t *testing.T) {
+	// Test that Summary struct can be created and fields are accessible.
+	now := time.Now()
+	summary := &Summary{
+		Summary:   "This is a test summary",
+		Topics:    []string{"topic1", "topic2", "topic3"},
+		UpdatedAt: now,
+	}
+
+	assert.Equal(t, "This is a test summary", summary.Summary)
+	assert.Equal(t, 3, len(summary.Topics))
+	assert.Equal(t, "topic1", summary.Topics[0])
+	assert.Equal(t, "topic2", summary.Topics[1])
+	assert.Equal(t, "topic3", summary.Topics[2])
+	assert.True(t, summary.UpdatedAt.Equal(now))
+}
+
 func TestService_Interface(t *testing.T) {
 	// Test that Service interface is properly defined
 	// This is a compile-time test to ensure the interface is complete
