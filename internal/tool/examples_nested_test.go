@@ -12,7 +12,11 @@ import (
 type Pet struct {
 	// Name of the animal.
 	Name string `json:"name" jsonschema:"title=Name"`
+	// Animal type, e.g., dog, cat, hamster.
+	AnimalType AnimalType `json:"animal_type" jsonschema:"title=Animal Type"`
 }
+
+type AnimalType string
 
 // Pets is a collection of Pet objects.
 type Pets []*Pet
