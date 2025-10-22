@@ -696,6 +696,18 @@ func TestFindCompatibleTool(t *testing.T) {
 	}
 }
 
+// Ensure executeSingleToolCallSequential uses fallback declaration when missing tool
+func TestExecuteSingleToolCallSequential_MissingTool_UsesFallbackDecl(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	tc := model.ToolCall{ID: "id1", Function: model.FunctionDefinitionParam{Name: "missing"}}
+	ch := make(chan *event.Event, 4)
+	ev, err := p.executeSingleToolCallSequential(context.Background(), inv, rsp, map[string]tool.Tool{}, ch, 0, tc)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+}
+
 func TestConvertToolArguments(t *testing.T) {
 	tests := []struct {
 		name         string

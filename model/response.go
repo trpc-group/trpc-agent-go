@@ -232,7 +232,7 @@ func (rsp *Response) IsFinalResponse() bool {
 		return true
 	}
 
-	if rsp.IsToolCallResponse() {
+	if rsp.IsPartial || rsp.IsToolCallResponse() {
 		return false
 	}
 

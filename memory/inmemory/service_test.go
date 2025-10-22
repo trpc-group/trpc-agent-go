@@ -16,15 +16,16 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestNewMemoryService(t *testing.T) {
 	service := NewMemoryService()
-	if service == nil {
-		t.Fatal("NewMemoryService should not return nil")
-	}
+	require.NotNil(t, service, "NewMemoryService should not return nil")
 }
 
 func TestMemoryService_AddMemory(t *testing.T) {
@@ -38,28 +39,15 @@ func TestMemoryService_AddMemory(t *testing.T) {
 	topics := []string{"test", "memory"}
 
 	// Test adding memory.
-	err := service.AddMemory(ctx, userKey, memoryStr, topics)
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
+	require.NoError(t, service.AddMemory(ctx, userKey, memoryStr, topics), "AddMemory failed")
 
 	// Test reading memories.
 	memories, err := service.ReadMemories(ctx, userKey, 10)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
+	require.NoError(t, err, "ReadMemories failed")
 
-	if len(memories) != 1 {
-		t.Fatalf("Expected 1 memory, got %d", len(memories))
-	}
-
-	if memories[0].Memory.Memory != memoryStr {
-		t.Fatalf("Expected memory content %s, got %s", memoryStr, memories[0].Memory.Memory)
-	}
-
-	if len(memories[0].Memory.Topics) != 2 {
-		t.Fatalf("Expected 2 topics, got %d", len(memories[0].Memory.Topics))
-	}
+	assert.Len(t, memories, 1, "Expected 1 memory")
+	assert.Equal(t, memoryStr, memories[0].Memory.Memory, "Expected memory content")
+	assert.Len(t, memories[0].Memory.Topics, 2, "Expected 2 topics")
 }
 
 func TestMemoryService_UpdateMemory(t *testing.T) {
@@ -71,16 +59,11 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 	}
 
 	// Add a memory first.
-	err := service.AddMemory(ctx, userKey, "first memory", nil)
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
+	require.NoError(t, service.AddMemory(ctx, userKey, "first memory", nil), "AddMemory failed")
 
 	// Read memories to get the ID.
 	memories, err := service.ReadMemories(ctx, userKey, 1)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
+	require.NoError(t, err, "ReadMemories failed")
 
 	memoryKey := memory.Key{
 		AppName:  userKey.AppName,
@@ -89,20 +72,13 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 	}
 
 	// Update the memory.
-	err = service.UpdateMemory(ctx, memoryKey, "updated memory", []string{"updated"})
-	if err != nil {
-		t.Fatalf("UpdateMemory failed: %v", err)
-	}
+	require.NoError(t, service.UpdateMemory(ctx, memoryKey, "updated memory", []string{"updated"}), "UpdateMemory failed")
 
 	// Read memories again to verify the update.
 	memories, err = service.ReadMemories(ctx, userKey, 1)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
+	require.NoError(t, err, "ReadMemories failed")
 
-	if memories[0].Memory.Memory != "updated memory" {
-		t.Fatalf("Expected updated memory content, got %s", memories[0].Memory.Memory)
-	}
+	assert.Equal(t, "updated memory", memories[0].Memory.Memory, "Expected updated memory content")
 }
 
 func TestMemoryService_DeleteMemory(t *testing.T) {
@@ -114,16 +90,11 @@ func TestMemoryService_DeleteMemory(t *testing.T) {
 	}
 
 	// Add a memory first.
-	err := service.AddMemory(ctx, userKey, "test memory", nil)
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
+	require.NoError(t, service.AddMemory(ctx, userKey, "test memory", nil), "AddMemory failed")
 
 	// Read memories to get the ID.
 	memories, err := service.ReadMemories(ctx, userKey, 1)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
+	require.NoError(t, err, "ReadMemories failed")
 
 	memoryKey := memory.Key{
 		AppName:  userKey.AppName,
@@ -132,20 +103,13 @@ func TestMemoryService_DeleteMemory(t *testing.T) {
 	}
 
 	// Delete the memory.
-	err = service.DeleteMemory(ctx, memoryKey)
-	if err != nil {
-		t.Fatalf("DeleteMemory failed: %v", err)
-	}
+	require.NoError(t, service.DeleteMemory(ctx, memoryKey), "DeleteMemory failed")
 
 	// Read memories again to verify the deletion.
 	memories, err = service.ReadMemories(ctx, userKey, 10)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
+	require.NoError(t, err, "ReadMemories failed")
 
-	if len(memories) != 0 {
-		t.Fatalf("Expected 0 memories after deletion, got %d", len(memories))
-	}
+	assert.Len(t, memories, 0, "Expected 0 memories after deletion")
 }
 
 func TestMemoryService_ClearMemories(t *testing.T) {
@@ -157,41 +121,21 @@ func TestMemoryService_ClearMemories(t *testing.T) {
 	}
 
 	// Add multiple memories.
-	err := service.AddMemory(ctx, userKey, "first memory", nil)
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
-
-	err = service.AddMemory(ctx, userKey, "second memory", nil)
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
+	require.NoError(t, service.AddMemory(ctx, userKey, "first memory", nil), "AddMemory failed")
+	require.NoError(t, service.AddMemory(ctx, userKey, "second memory", nil), "AddMemory failed")
 
 	// Verify memories were added.
 	memories, err := service.ReadMemories(ctx, userKey, 10)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
-
-	if len(memories) != 2 {
-		t.Fatalf("Expected 2 memories, got %d", len(memories))
-	}
+	require.NoError(t, err, "ReadMemories failed")
+	assert.Len(t, memories, 2, "Expected 2 memories")
 
 	// Clear all memories.
-	err = service.ClearMemories(ctx, userKey)
-	if err != nil {
-		t.Fatalf("ClearMemories failed: %v", err)
-	}
+	require.NoError(t, service.ClearMemories(ctx, userKey), "ClearMemories failed")
 
 	// Verify memories were cleared.
 	memories, err = service.ReadMemories(ctx, userKey, 10)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
-
-	if len(memories) != 0 {
-		t.Fatalf("Expected 0 memories after clearing, got %d", len(memories))
-	}
+	require.NoError(t, err, "ReadMemories failed")
+	assert.Len(t, memories, 0, "Expected 0 memories after clearing")
 }
 
 func TestMemoryService_SearchMemories(t *testing.T) {
@@ -203,45 +147,23 @@ func TestMemoryService_SearchMemories(t *testing.T) {
 	}
 
 	// Add memories with different content.
-	err := service.AddMemory(ctx, userKey, "User likes coffee", []string{"preferences"})
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
-
-	err = service.AddMemory(ctx, userKey, "User works as a developer", []string{"work"})
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
+	require.NoError(t, service.AddMemory(ctx, userKey, "User likes coffee", []string{"preferences"}), "AddMemory failed")
+	require.NoError(t, service.AddMemory(ctx, userKey, "User works as a developer", []string{"work"}), "AddMemory failed")
 
 	// Search for coffee-related memories.
 	results, err := service.SearchMemories(ctx, userKey, "coffee")
-	if err != nil {
-		t.Fatalf("SearchMemories failed: %v", err)
-	}
-
-	if len(results) != 1 {
-		t.Fatalf("Expected 1 result for 'coffee' search, got %d", len(results))
-	}
+	require.NoError(t, err, "SearchMemories failed")
+	assert.Len(t, results, 1, "Expected 1 result for 'coffee' search")
 
 	// Search for work-related memories.
 	results, err = service.SearchMemories(ctx, userKey, "developer")
-	if err != nil {
-		t.Fatalf("SearchMemories failed: %v", err)
-	}
-
-	if len(results) != 1 {
-		t.Fatalf("Expected 1 result for 'developer' search, got %d", len(results))
-	}
+	require.NoError(t, err, "SearchMemories failed")
+	assert.Len(t, results, 1, "Expected 1 result for 'developer' search")
 
 	// Search for non-existent content.
 	results, err = service.SearchMemories(ctx, userKey, "nonexistent")
-	if err != nil {
-		t.Fatalf("SearchMemories failed: %v", err)
-	}
-
-	if len(results) != 0 {
-		t.Fatalf("Expected 0 results for 'nonexistent' search, got %d", len(results))
-	}
+	require.NoError(t, err, "SearchMemories failed")
+	assert.Len(t, results, 0, "Expected 0 results for 'nonexistent' search")
 }
 
 func TestMemoryService_ReadMemoriesWithLimit(t *testing.T) {
@@ -254,31 +176,18 @@ func TestMemoryService_ReadMemoriesWithLimit(t *testing.T) {
 
 	// Add multiple memories.
 	for i := 0; i < 5; i++ {
-		err := service.AddMemory(ctx, userKey, fmt.Sprintf("memory %d", i), nil)
-		if err != nil {
-			t.Fatalf("AddMemory failed: %v", err)
-		}
+		require.NoError(t, service.AddMemory(ctx, userKey, fmt.Sprintf("memory %d", i), nil), "AddMemory failed")
 	}
 
 	// Test reading with limit.
 	memories, err := service.ReadMemories(ctx, userKey, 3)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
-
-	if len(memories) != 3 {
-		t.Fatalf("Expected 3 memories with limit, got %d", len(memories))
-	}
+	require.NoError(t, err, "ReadMemories failed")
+	assert.Len(t, memories, 3, "Expected 3 memories with limit")
 
 	// Test reading without limit.
 	memories, err = service.ReadMemories(ctx, userKey, 0)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
-
-	if len(memories) != 5 {
-		t.Fatalf("Expected 5 memories without limit, got %d", len(memories))
-	}
+	require.NoError(t, err, "ReadMemories failed")
+	assert.Len(t, memories, 5, "Expected 5 memories without limit")
 }
 
 func TestMemoryService_Concurrency(t *testing.T) {
@@ -315,19 +224,15 @@ func TestMemoryService_Concurrency(t *testing.T) {
 
 	// Check for errors.
 	for err := range errChan {
-		t.Errorf("Concurrency test error: %v", err)
+		assert.NoError(t, err, "Concurrency test error")
 	}
 
 	// Verify all memories were added.
 	memories, err := service.ReadMemories(ctx, userKey, 0)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
+	require.NoError(t, err, "ReadMemories failed")
 
 	expectedCount := numGoroutines * memoriesPerGoroutine
-	if len(memories) != expectedCount {
-		t.Fatalf("Expected %d memories, got %d", expectedCount, len(memories))
-	}
+	assert.Len(t, memories, expectedCount, "Expected memories count")
 }
 
 func TestMemoryService_Tools(t *testing.T) {
@@ -335,9 +240,7 @@ func TestMemoryService_Tools(t *testing.T) {
 	service := NewMemoryService()
 	tools := service.Tools()
 	// Should have 4 default enabled tools: add, update, search, load.
-	if len(tools) != 4 {
-		t.Errorf("expected 4 default tools, got %d", len(tools))
-	}
+	assert.Len(t, tools, 4, "Expected 4 default tools")
 
 	// Register some tools.
 	service = NewMemoryService(
@@ -353,13 +256,10 @@ func TestMemoryService_Tools(t *testing.T) {
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	if !toolNames[memory.AddToolName] || !toolNames[memory.SearchToolName] {
-		t.Errorf("expected enabled tools to be present")
-	}
+	assert.True(t, toolNames[memory.AddToolName], "Expected enabled tools to be present")
+	assert.True(t, toolNames[memory.SearchToolName], "Expected enabled tools to be present")
 	// Should have 4 tools total (2 custom + 2 default enabled).
-	if len(tools) != 4 {
-		t.Errorf("expected 4 tools (2 custom + 2 default enabled), got %d", len(tools))
-	}
+	assert.Len(t, tools, 4, "Expected 4 tools (2 custom + 2 default enabled)")
 
 	// Custom tool should be returned when provided.
 	custom := &mockTool{name: memory.AddToolName}
@@ -377,9 +277,7 @@ func TestMemoryService_Tools(t *testing.T) {
 			}
 		}
 	}
-	if !found {
-		t.Errorf("expected custom tool to be returned for %s", memory.AddToolName)
-	}
+	assert.True(t, found, "Expected custom tool to be returned for %s", memory.AddToolName)
 
 	// Test tool enable/disable functionality.
 	service = NewMemoryService(
@@ -396,12 +294,8 @@ func TestMemoryService_Tools(t *testing.T) {
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	if toolNames[memory.AddToolName] {
-		t.Errorf("expected %s to be disabled", memory.AddToolName)
-	}
-	if !toolNames[memory.SearchToolName] {
-		t.Errorf("expected %s to be enabled", memory.SearchToolName)
-	}
+	assert.False(t, toolNames[memory.AddToolName], "Expected %s to be disabled", memory.AddToolName)
+	assert.True(t, toolNames[memory.SearchToolName], "Expected %s to be enabled", memory.SearchToolName)
 
 	// Test tool builder functionality.
 	service = NewMemoryService(
@@ -417,9 +311,7 @@ func TestMemoryService_Tools(t *testing.T) {
 			break
 		}
 	}
-	if !found {
-		t.Errorf("expected tool built by builder to be present")
-	}
+	assert.True(t, found, "Expected tool built by builder to be present")
 
 	// Test disabling all tools.
 	service = NewMemoryService(
@@ -429,9 +321,7 @@ func TestMemoryService_Tools(t *testing.T) {
 		WithToolEnabled(memory.LoadToolName, false),
 	)
 	tools = service.Tools()
-	if len(tools) != 0 {
-		t.Errorf("expected no tools when all disabled, got %d", len(tools))
-	}
+	assert.Len(t, tools, 0, "Expected no tools when all disabled")
 }
 
 // mockTool implements tool.Tool for testing.
@@ -452,9 +342,7 @@ func TestMemoryService_ToolNameValidation(t *testing.T) {
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	if !toolNames[memory.AddToolName] {
-		t.Errorf("expected valid tool name %s to be registered", memory.AddToolName)
-	}
+	assert.True(t, toolNames[memory.AddToolName], "Expected valid tool name %s to be registered", memory.AddToolName)
 
 	// Test that invalid tool names are ignored.
 	service = NewMemoryService(
@@ -468,9 +356,7 @@ func TestMemoryService_ToolNameValidation(t *testing.T) {
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	if toolNames["invalid_tool_name"] {
-		t.Errorf("expected invalid tool name to be ignored")
-	}
+	assert.False(t, toolNames["invalid_tool_name"], "Expected invalid tool name to be ignored")
 
 	// Test that mixed valid and invalid tool names work correctly.
 	service = NewMemoryService(
@@ -488,13 +374,149 @@ func TestMemoryService_ToolNameValidation(t *testing.T) {
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	if !toolNames[memory.AddToolName] {
-		t.Errorf("expected valid tool name %s to be registered", memory.AddToolName)
+	assert.True(t, toolNames[memory.AddToolName], "Expected valid tool name %s to be registered", memory.AddToolName)
+	assert.False(t, toolNames["invalid_tool"], "Expected invalid tool name to be ignored")
+	assert.False(t, toolNames["invalid_enable"], "Expected invalid tool name in WithToolEnabled to be ignored")
+}
+
+func TestWithMemoryLimit(t *testing.T) {
+	service := NewMemoryService(WithMemoryLimit(2))
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
 	}
-	if toolNames["invalid_tool"] {
-		t.Errorf("expected invalid tool name to be ignored")
+
+	// Add memories up to the limit.
+	require.NoError(t, service.AddMemory(ctx, userKey, "memory 1", nil), "AddMemory failed")
+	require.NoError(t, service.AddMemory(ctx, userKey, "memory 2", nil), "AddMemory failed")
+
+	// Try to add one more memory beyond the limit.
+	err := service.AddMemory(ctx, userKey, "memory 3", nil)
+	require.Error(t, err, "Expected error when exceeding memory limit")
+
+	// Verify the error message mentions the limit.
+	assert.Contains(t, err.Error(), "memory limit exceeded", "Expected error to mention memory limit")
+}
+
+func TestAddMemory_InvalidKey(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+
+	// Test with empty app name.
+	err := service.AddMemory(ctx, memory.UserKey{AppName: "", UserID: "user"}, "test", nil)
+	require.Error(t, err, "Expected error with empty app name")
+
+	// Test with empty user id.
+	err = service.AddMemory(ctx, memory.UserKey{AppName: "app", UserID: ""}, "test", nil)
+	require.Error(t, err, "Expected error with empty user id")
+}
+
+func TestUpdateMemory_Errors(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+
+	// Test with invalid key.
+	err := service.UpdateMemory(ctx, memory.Key{AppName: "", UserID: "user", MemoryID: "id"}, "test", nil)
+	require.Error(t, err, "Expected error with empty app name")
+
+	// Test with non-existent user.
+	err = service.UpdateMemory(ctx, memory.Key{AppName: "app", UserID: "user", MemoryID: "id"}, "test", nil)
+	require.Error(t, err, "Expected error with non-existent user")
+
+	// Add a memory.
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "test memory", nil), "AddMemory failed")
+
+	// Test with non-existent memory id.
+	err = service.UpdateMemory(ctx, memory.Key{AppName: "app", UserID: "user", MemoryID: "non-existent"}, "test", nil)
+	require.Error(t, err, "Expected error with non-existent memory id")
+}
+
+func TestDeleteMemory_Errors(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+
+	// Test with invalid key.
+	err := service.DeleteMemory(ctx, memory.Key{AppName: "", UserID: "user", MemoryID: "id"})
+	require.Error(t, err, "Expected error with empty app name")
+
+	// Test with non-existent user.
+	err = service.DeleteMemory(ctx, memory.Key{AppName: "app", UserID: "user", MemoryID: "id"})
+	require.Error(t, err, "Expected error with non-existent user")
+
+	// Add a memory.
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "test memory", nil), "AddMemory failed")
+
+	// Test with non-existent memory id.
+	err = service.DeleteMemory(ctx, memory.Key{AppName: "app", UserID: "user", MemoryID: "non-existent"})
+	require.Error(t, err, "Expected error with non-existent memory id")
+}
+
+func TestClearMemories_InvalidKey(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+
+	// Test with empty app name.
+	err := service.ClearMemories(ctx, memory.UserKey{AppName: "", UserID: "user"})
+	require.Error(t, err, "Expected error with empty app name")
+
+	// Test with empty user id.
+	err = service.ClearMemories(ctx, memory.UserKey{AppName: "app", UserID: ""})
+	require.Error(t, err, "Expected error with empty user id")
+}
+
+func TestReadMemories_InvalidKey(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+
+	// Test with empty app name.
+	_, err := service.ReadMemories(ctx, memory.UserKey{AppName: "", UserID: "user"}, 10)
+	require.Error(t, err, "Expected error with empty app name")
+
+	// Test with empty user id.
+	_, err = service.ReadMemories(ctx, memory.UserKey{AppName: "app", UserID: ""}, 10)
+	require.Error(t, err, "Expected error with empty user id")
+}
+
+func TestSearchMemories_InvalidKey(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+
+	// Test with empty app name.
+	_, err := service.SearchMemories(ctx, memory.UserKey{AppName: "", UserID: "user"}, "query")
+	require.Error(t, err, "Expected error with empty app name")
+
+	// Test with empty user id.
+	_, err = service.SearchMemories(ctx, memory.UserKey{AppName: "app", UserID: ""}, "query")
+	require.Error(t, err, "Expected error with empty user id")
+}
+
+func TestReadMemories_NilUser(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "non-existent-user",
 	}
-	if toolNames["invalid_enable"] {
-		t.Errorf("expected invalid tool name in WithToolEnabled to be ignored")
+
+	// Reading memories for non-existent user should return empty slice.
+	memories, err := service.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err, "ReadMemories failed")
+	assert.Len(t, memories, 0, "Expected 0 memories for non-existent user")
+}
+
+func TestSearchMemories_NilUser(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "non-existent-user",
 	}
+
+	// Searching memories for non-existent user should return empty slice.
+	results, err := service.SearchMemories(ctx, userKey, "query")
+	require.NoError(t, err, "SearchMemories failed")
+	assert.Len(t, results, 0, "Expected 0 results for non-existent user")
 }
