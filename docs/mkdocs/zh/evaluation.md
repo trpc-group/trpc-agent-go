@@ -41,7 +41,7 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithEvalSetManager(evalSetManager),
 	evaluation.WithMetricManager(metricManager),
 	evaluation.WithEvalResultManager(evalResultManager),
-	evaluation.WithEvaluatorRegistry(registry),
+	evaluation.WithRegistry(registry),
 	evaluation.WithNumRuns(numRuns),
 )
 if err != nil {
@@ -58,53 +58,53 @@ if err != nil {
 
 ```json
 {
-  "evalSetId": "math-basic",
+  "eval_set_id": "math-basic",
   "name": "math-basic",
-  "description": "Basic arithmetic evaluation cases for the deterministic math agent.",
-  "evalCases": [
+  "eval_cases": [
     {
-      "evalId": "calc_add",
+      "eval_id": "calc_add",
       "conversation": [
         {
-          "invocationId": "calc_add-1",
-          "userContent": {
-            "role": "user",
+          "invocation_id": "calc_add-1",
+          "user_content": {
             "parts": [
               {
                 "text": "calc add 2 3"
               }
-            ]
+            ],
+            "role": "user"
           },
-          "finalResponse": {
-            "role": "assistant",
+          "final_response": {
             "parts": [
               {
                 "text": "calc result: 5"
               }
-            ]
+            ],
+            "role": "assistant"
           },
-          "intermediateData": {
-            "toolUses": [
+          "intermediate_data": {
+            "tool_uses": [
               {
-                "name": "calculator",
                 "args": {
-                  "operation": "add",
                   "a": 2,
-                  "b": 3
-                }
+                  "b": 3,
+                  "operation": "add"
+                },
+                "name": "calculator"
               }
             ]
-          }
+          },
+          "creation_timestamp": 1761134484.981062
         }
       ],
-      "sessionInput": {
-        "appName": "math-eval-app",
-        "userId": "demo-user",
-        "state": {}
-      }
-    }
+      "session_input": {
+        "app_name": "math-eval-app",
+        "user_id": "user"
+      },
+      "creation_timestamp": 1761134484.981062
+    },
   ],
-  "creationTimestamp": 1760590952.8265657
+  "creation_timestamp": 1761134484.9804401
 }
 ```
 
@@ -113,8 +113,8 @@ if err != nil {
 ```json
 [
   {
-    "metricName": "tool_trajectory_avg_score",
-    "threshold": 1.0
+    "metric_name": "tool_trajectory_avg_score",
+    "threshold": 1
   }
 ]
 ```
@@ -122,109 +122,7 @@ if err != nil {
 #### 评估结果 EvalResult 文件示例
 
 ```json
-{
-  "evalSetResultId": "math-basic_e0398d2c-3beb-4678-b760-3fa972532fd5",
-  "evalSetId": "math-basic",
-  "evalCaseResults": [
-    {
-      "evalSetId": "math-basic",
-      "evalId": "calc_add",
-      "finalEvalStatus": 1,
-      "overallEvalMetricResults": [
-        {
-          "metricName": "tool_trajectory_avg_score",
-          "score": 1,
-          "status": 1,
-          "threshold": 1
-        }
-      ],
-      "evalMetricResultPerInvocation": [
-        {
-          "actualInvocation": {
-            "invocationId": "619c8b4c-0035-4b10-842f-65fc664e58d5",
-            "userContent": {
-              "parts": [
-                {
-                  "text": "calc add 2 3"
-                }
-              ],
-              "role": "user"
-            },
-            "finalResponse": {
-              "parts": [
-                {
-                  "text": "The result of 2 + 3 is **5**."
-                }
-              ],
-              "role": "assistant"
-            },
-            "intermediateData": {
-              "toolUses": [
-                {
-                  "id": "call_00_K2yf9IlPKKOW4wSB9Pn1FHGn",
-                  "args": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add"
-                  },
-                  "name": "calculator"
-                }
-              ],
-              "toolResponses": null,
-              "intermediateResponses": null
-            },
-            "creationTimestamp": null
-          },
-          "expectedInvocation": {
-            "invocationId": "calc_add-1",
-            "userContent": {
-              "parts": [
-                {
-                  "text": "calc add 2 3"
-                }
-              ],
-              "role": "user"
-            },
-            "finalResponse": {
-              "parts": [
-                {
-                  "text": "calc result: 5"
-                }
-              ],
-              "role": "assistant"
-            },
-            "intermediateData": {
-              "toolUses": [
-                {
-                  "args": {
-                    "a": 2,
-                    "b": 3,
-                    "operation": "add"
-                  },
-                  "name": "calculator"
-                }
-              ],
-              "toolResponses": null,
-              "intermediateResponses": null
-            },
-            "creationTimestamp": null
-          },
-          "metricResults": [
-            {
-              "metricName": "tool_trajectory_avg_score",
-              "score": 1,
-              "status": 1,
-              "threshold": 1
-            }
-          ]
-        }
-      ],
-      "sessionId": "e86c2785-9ebb-420c-92d1-5c057f2c9d7f",
-      "userId": "demo-user"
-    },
-  ],
-  "creationTimestamp": 1760591230.35239
-}
+"{\"eval_set_result_id\":\"math-eval-app_math-basic_76798060-dcc3-41e9-b20e-06f23aa3cdbc\",\"eval_set_result_name\":\"math-eval-app_math-basic_76798060-dcc3-41e9-b20e-06f23aa3cdbc\",\"eval_set_id\":\"math-basic\",\"eval_case_results\":[{\"eval_set_id\":\"math-basic\",\"eval_id\":\"calc_add\",\"final_eval_status\":1,\"overall_eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}],\"eval_metric_result_per_invocation\":[{\"actual_invocation\":{\"invocation_id\":\"8b205b3f-682e-409a-b751-89ef805d0221\",\"user_content\":{\"parts\":[{\"text\":\"calc add 2 3\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"The result of adding 2 and 3 is **5**.\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"id\":\"call_00_j75SIh8A9xSlG61OrC1ARIab\",\"args\":{\"a\":2,\"b\":3,\"operation\":\"add\"},\"name\":\"calculator\"}]}},\"expected_invocation\":{\"invocation_id\":\"calc_add-1\",\"user_content\":{\"parts\":[{\"text\":\"calc add 2 3\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"calc result: 5\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"args\":{\"a\":2,\"b\":3,\"operation\":\"add\"},\"name\":\"calculator\"}]},\"creation_timestamp\":1761134484.981062},\"eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}]}],\"session_id\":\"74252944-b1a7-4c17-8f39-4a5809395d1d\",\"user_id\":\"user\"},{\"eval_set_id\":\"math-basic\",\"eval_id\":\"calc_multiply\",\"final_eval_status\":1,\"overall_eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}],\"eval_metric_result_per_invocation\":[{\"actual_invocation\":{\"invocation_id\":\"65226930-d45c-43ae-ab88-9c35f3abce70\",\"user_content\":{\"parts\":[{\"text\":\"calc multiply 6 7\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"6 × 7 = 42\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"id\":\"call_00_b3Gj4Y3fJu9Blkbl6H0MLquO\",\"args\":{\"a\":6,\"b\":7,\"operation\":\"multiply\"},\"name\":\"calculator\"}]}},\"expected_invocation\":{\"invocation_id\":\"calc_multiply-1\",\"user_content\":{\"parts\":[{\"text\":\"calc multiply 6 7\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"calc result: 42\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"args\":{\"a\":6,\"b\":7,\"operation\":\"multiply\"},\"name\":\"calculator\"}]},\"creation_timestamp\":1761134484.9812014},\"eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}]}],\"session_id\":\"6393fabd-ab50-49b7-8656-59fcb0a29758\",\"user_id\":\"user\"}],\"creation_timestamp\":1761134849.3572516}"
 ```
 
 ### 内存 inmemory
@@ -254,7 +152,7 @@ run := runner.NewRunner(appName, agent)
 evalSetManager := evalsetinmemory.New()
 metricManager := metricinmemory.New()
 evalResultManager := evalresultinmemory.New()
-reg := registry.New()
+registry := registry.New()
 // 构建评估集数据
 if err := prepareEvalSet(ctx, evalSetManager); err != nil {
 	log.Fatalf("prepare eval set: %v", err)
@@ -270,7 +168,7 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithEvalSetManager(evalSetManager),
 	evaluation.WithMetricManager(metricManager),
 	evaluation.WithEvalResultManager(evalResultManager),
-	evaluation.WithEvaluatorRegistry(reg),
+	evaluation.WithRegistry(registry),
 	evaluation.WithNumRuns(numRuns),
 )
 if err != nil {
@@ -332,7 +230,7 @@ cases := []*evalset.EvalCase{
 		},
 		SessionInput: &evalset.SessionInput{
 			AppName: appName,
-			UserID:  "demo-user",
+			UserID:  "user",
 		},
 	},
 }
@@ -341,7 +239,6 @@ for _, evalCase := range cases {
 		return err
 	}
 }
-return nil
 ```
 
 #### 评估指标 Metric 构建
@@ -353,7 +250,7 @@ evalMetric := &metric.EvalMetric{
 	MetricName: "tool_trajectory_avg_score",
 	Threshold:  1.0,
 }
-return metricManager.Save(ctx, appName, evalSetID, []*metric.EvalMetric{evalMetric})
+metricManager.Add(ctx, appName, evalSetID, evalMetric)
 ```
 
 ## 核心概念
@@ -465,10 +362,8 @@ Metric 表示一个评估指标，用于衡量 EvalSet 的某一方面表现。
 type EvalMetric struct {
 	MetricName string         // 指标名称
 	Threshold  float64        // 评分阈值
-	Config     map[string]any // 指标相关配置
 }
 ```
-
 
 Metric Manager 负责管理评估指标。
 
@@ -591,11 +486,11 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 
 // EvalSetResult 表示评估集的整体评估结果
 type EvalSetResult struct {
-	EvalSetResultID    string              // 评估结果唯一标识
-	EvalSetResultName  string              // 评估结果名称
-	EvalSetID          string              // 对应的评估集 ID
-	EvalCaseResults    []*EvalCaseResult   // 各评估用例的结果
-	CreationTimestamp  *epochtime.EpochTime  // 结果创建时间
+	EvalSetResultID   string               // 评估结果唯一标识
+	EvalSetResultName string               // 评估结果名称
+	EvalSetID         string               // 对应的评估集 ID
+	EvalCaseResults   []*EvalCaseResult    // 各评估用例的结果
+	CreationTimestamp *epochtime.EpochTime // 结果创建时间
 }
 ```
 
@@ -625,7 +520,7 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 type EvalMetricResult struct {
 	MetricName string            // 指标名称
 	Score      float64           // 实际得分
-	Status     status.EvalStatus // 评测状态
+	EvalStatus status.EvalStatus // 评测状态
 	Threshold  float64           // 阈值
 	Details    map[string]any    // 额外信息，如评分过程、错误描述等
 }
@@ -638,9 +533,9 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 
 // EvalMetricResultPerInvocation 表示单轮对话的逐指标评估结果
 type EvalMetricResultPerInvocation struct {
-	ActualInvocation   *evalset.Invocation   // 实际执行的对话
-	ExpectedInvocation *evalset.Invocation   // 预期的对话结果
-	MetricResults      []*EvalMetricResult   // 各指标评估结果
+	ActualInvocation   *evalset.Invocation // 实际执行的对话
+	ExpectedInvocation *evalset.Invocation // 预期的对话结果
+	EvalMetricResults  []*EvalMetricResult // 各指标评估结果
 }
 ```
 
@@ -660,7 +555,7 @@ type Manager interface {
 
 框架为 EvalResult Manager 提供两种实现方式：
 
-- local：将评估结果存储在本地文件系统中，文件默认命名格式为 `<EvalSetResultID>.evalset_result.json`。
+- local：将评估结果存储在本地文件系统中，文件默认命名格式为 `<EvalSetResultID>.evalset_result.json`。其中，`EvalSetResultID` 默认命名规则为 `<appName>_<EvalSetID>_<UUID>`。
 - inmemory：将评估结果存储在内存中，所有操作均保证深拷贝，适合调试与快速验证场景。
 
 ### 评估服务 -- Service
@@ -949,7 +844,7 @@ func (l *customLocator) Build(baseDir, appName, EvalSetID string) string {
 
 评估结果文件的默认路径为 `./<AppName>/<EvalSetResultID>.evalresult.json`。
 
-可以通过 `WithBaseDir` 设置自定义 `BaseDir`，即文件路径为 `<BaseDir>/<AppName>/<EvalSetResultID>.evalresult.json`。
+可以通过 `WithBaseDir` 设置自定义 `BaseDir`，即文件路径为 `<BaseDir>/<AppName>/<EvalSetResultID>.evalresult.json`。其中，`EvalSetResultID` 默认命名规则为 `<appName>_<EvalSetID>_<UUID>`。
 
 ```go
 import (
