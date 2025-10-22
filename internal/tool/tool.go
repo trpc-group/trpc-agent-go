@@ -29,7 +29,7 @@ func GenerateJSONSchema(t reflect.Type) *tool.Schema {
 		defs:    make(map[string]*tool.Schema),
 	}
 
-	schema := generateJSONSchemaWithContext(t, ctx)
+	schema := generateJSONSchema(t, ctx, true)
 
 	// Add $defs to the root schema if we have any definitions
 	if len(ctx.defs) > 0 {
@@ -45,13 +45,8 @@ type schemaContext struct {
 	defs    map[string]*tool.Schema // Stores reusable schema definitions
 }
 
-// generateJSONSchemaWithContext generates a JSON schema with recursion handling
-func generateJSONSchemaWithContext(t reflect.Type, ctx *schemaContext) *tool.Schema {
-	return generateJSONSchemaWithContextInternal(t, ctx, true)
-}
-
-// generateJSONSchemaWithContextInternal generates a JSON schema with recursion handling
-func generateJSONSchemaWithContextInternal(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
+// generateJSONSchema generates a JSON schema with recursion handling
+func generateJSONSchema(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
 	// Handle different kinds of types.
 	switch t.Kind() {
 	case reflect.Struct:
@@ -99,7 +94,8 @@ func generateJSONSchemaWithContextInternal(t reflect.Type, ctx *schemaContext, i
 			}
 
 			// Generate schema for field type.
-			fieldSchema := generateFieldSchemaWithContextInternal(field.Type, ctx, false)
+			fieldSchema := generateFieldSchema(field.Type, ctx, false)
+			properties[fieldName] = fieldSchema
 
 			// Parse jsonschema tag to customize the schema
 			// Only apply jsonschema tags if the field schema is not a reference
@@ -121,7 +117,6 @@ func generateJSONSchemaWithContextInternal(t reflect.Type, ctx *schemaContext, i
 				}
 			}
 
-			properties[fieldName] = fieldSchema
 		}
 
 		schema.Properties = properties
@@ -157,10 +152,10 @@ func generateJSONSchemaWithContextInternal(t reflect.Type, ctx *schemaContext, i
 	case reflect.Ptr:
 		// For function tool parameters, we typically use value types
 		// So we can just return the element type schema.
-		return generateFieldSchemaWithContextInternal(t.Elem(), ctx, isRoot)
+		return generateFieldSchema(t.Elem(), ctx, isRoot)
 
 	default:
-		return generateFieldSchemaWithContextInternal(t, ctx, isRoot)
+		return generateFieldSchema(t, ctx, isRoot)
 	}
 }
 
@@ -294,23 +289,8 @@ func parseJSONSchemaTag(fieldType reflect.Type, tag reflect.StructTag, schema *t
 	return isRequiredByTag, nil
 }
 
-// GenerateFieldSchema generates schema for a specific field type.
-func GenerateFieldSchema(t reflect.Type) *tool.Schema {
-	// Create a new context for backward compatibility
-	ctx := &schemaContext{
-		visited: make(map[reflect.Type]string),
-		defs:    make(map[string]*tool.Schema),
-	}
-	return generateFieldSchemaWithContext(t, ctx)
-}
-
-// generateFieldSchemaWithContext generates schema for a specific field type with recursion handling.
-func generateFieldSchemaWithContext(t reflect.Type, ctx *schemaContext) *tool.Schema {
-	return generateFieldSchemaWithContextInternal(t, ctx, false)
-}
-
-// generateFieldSchemaWithContextInternal generates schema for a specific field type with recursion handling.
-func generateFieldSchemaWithContextInternal(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
+// generateFieldSchema generates schema for a specific field type with recursion handling.
+func generateFieldSchema(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
 	switch t.Kind() {
 	case reflect.String:
 		return &tool.Schema{Type: "string"}
@@ -325,17 +305,17 @@ func generateFieldSchemaWithContextInternal(t reflect.Type, ctx *schemaContext, 
 	case reflect.Slice, reflect.Array:
 		return &tool.Schema{
 			Type:  "array",
-			Items: generateFieldSchemaWithContextInternal(t.Elem(), ctx, false),
+			Items: generateFieldSchema(t.Elem(), ctx, false),
 		}
 	case reflect.Map:
 		return &tool.Schema{
 			Type:                 "object",
-			AdditionalProperties: generateFieldSchemaWithContextInternal(t.Elem(), ctx, false),
+			AdditionalProperties: generateFieldSchema(t.Elem(), ctx, false),
 		}
 	case reflect.Ptr:
 		// For function tool parameters, we typically use value types
 		// So we can just return the element type schema
-		return generateFieldSchemaWithContextInternal(t.Elem(), ctx, isRoot)
+		return generateFieldSchema(t.Elem(), ctx, isRoot)
 	case reflect.Struct:
 		// Check if we've already seen this struct type
 		if defName, exists := ctx.visited[t]; exists {
@@ -373,7 +353,7 @@ func generateFieldSchemaWithContextInternal(t reflect.Type, ctx *schemaContext, 
 					}
 				}
 
-				nestedSchema.Properties[fieldName] = generateFieldSchemaWithContextInternal(field.Type, ctx, false)
+				nestedSchema.Properties[fieldName] = generateFieldSchema(field.Type, ctx, false)
 			}
 
 			return nestedSchema
@@ -408,7 +388,7 @@ func generateFieldSchemaWithContextInternal(t reflect.Type, ctx *schemaContext, 
 				}
 			}
 
-			nestedSchema.Properties[fieldName] = generateFieldSchemaWithContextInternal(field.Type, ctx, false)
+			nestedSchema.Properties[fieldName] = generateFieldSchema(field.Type, ctx, false)
 		}
 
 		// Store the definition
