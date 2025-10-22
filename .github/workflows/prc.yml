@@ -25,8 +25,7 @@ jobs:
       with:
         files: coverage.out
         flags: unittests
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        token: ${{ secrets.CODECOV_TOKEN }}
   golangci:
     name: lint
     runs-on: ubuntu-latest
