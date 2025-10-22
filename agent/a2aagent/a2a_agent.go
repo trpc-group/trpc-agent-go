@@ -26,8 +26,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-var defaultStreamingChannelSize = 1024
-var defaultNonStreamingChannelSize = 10
+const (
+	defaultStreamingChannelSize    = 1024
+	defaultNonStreamingChannelSize = 10
+	defaultUserIDHeader            = "X-User-ID"
+)
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
 type A2AAgent struct {

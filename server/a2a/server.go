@@ -157,7 +157,9 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		userIDHeader = serverUserIDHeader
 	}
 
-	// Extract base path from agent card URL if it has a valid scheme
+	// Extract base path from agent card URL for request routing.
+	// If the URL contains a path component (e.g., "http://example.com/api/v1"),
+	// it will be extracted and used as the base path for routing incoming requests.
 	basePath := extractBasePath(normalizeURL(agentCard.URL))
 
 	opts := []a2a.Option{
@@ -172,9 +174,17 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	return a2aServer, nil
 }
 
-// extractBasePath extracts the path from a URL if it has a valid scheme.
-// For URLs with a valid scheme (http, https, grpc, custom, etc.), it returns the path component.
-// For URLs without a scheme or invalid URLs, it returns an empty string.
+// extractBasePath extracts the path component from a URL for request routing.
+// It parses the URL and returns the path if the URL has a valid scheme.
+//
+// Examples:
+//   - "http://example.com/api/v1" → "/api/v1"
+//   - "https://example.com/docs" → "/docs"
+//   - "grpc://service:9090/rpc" → "/rpc"
+//   - "http://example.com" → "" (no path)
+//   - "invalid-url" → "" (no scheme)
+//
+// The extracted path is used as the base path for routing incoming A2A requests.
 func extractBasePath(urlStr string) string {
 	if urlStr == "" {
 		return ""

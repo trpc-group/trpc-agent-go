@@ -744,7 +744,7 @@ func TestA2ARequestOptions(t *testing.T) {
 	t.Run("validates option types and returns error for invalid types", func(t *testing.T) {
 		// Create test server
 		testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == AgentCardWellKnownPath {
+			if r.URL.Path == "/.well-known/agent-card.json" {
 				agentCard := server.AgentCard{
 					Name:        "test-agent",
 					Description: "A test agent",
@@ -887,7 +887,7 @@ func TestUserIDHeaderInRequest(t *testing.T) {
 
 			// Create mock A2A server
 			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == AgentCardWellKnownPath {
+				if r.URL.Path == "/.well-known/agent-card.json" {
 					// Return agent card with the mock server's URL
 					agentCard := server.AgentCard{
 						Name:        "test-agent",
