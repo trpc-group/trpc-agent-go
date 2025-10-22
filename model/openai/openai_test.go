@@ -11,6 +11,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -305,6 +306,149 @@ func TestModel_convertTools(t *testing.T) {
 	require.True(t, fn.Description.Valid() && fn.Description.Value == toolDesc, "function description mismatch")
 
 	require.False(t, reflect.ValueOf(fn.Parameters).IsZero(), "expected parameters to be populated from schema")
+}
+
+// TestModel_convertTools_ObjectSchemaWithoutProperties tests that tools with
+// object type schemas but missing properties field are properly handled.
+// This is required for compatibility with OpenAI o3 and other models that
+// enforce strict schema validation.
+func TestModel_convertTools_ObjectSchemaWithoutProperties(t *testing.T) {
+	m := New("dummy")
+
+	tests := []struct {
+		name        string
+		inputSchema *tool.Schema
+		expectProps bool // whether properties should exist in the result.
+	}{
+		{
+			name:        "object without properties",
+			inputSchema: &tool.Schema{Type: "object"},
+			expectProps: true,
+		},
+		{
+			name: "object with properties",
+			inputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"arg1": {Type: "string"},
+				},
+			},
+			expectProps: true,
+		},
+		{
+			name: "nested object without properties",
+			inputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"nested": {Type: "object"},
+				},
+			},
+			expectProps: true,
+		},
+		{
+			name:        "non-object schema",
+			inputSchema: &tool.Schema{Type: "string"},
+			expectProps: false, // string types don't have properties.
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toolsMap := map[string]tool.Tool{
+				"test": stubTool{decl: &tool.Declaration{
+					Name:        "test",
+					Description: "test",
+					InputSchema: tt.inputSchema,
+				}},
+			}
+
+			params := m.convertTools(toolsMap)
+			require.Len(t, params, 1)
+
+			// Marshal the parameters to check the JSON structure.
+			paramBytes, err := json.Marshal(params[0].Function.Parameters)
+			require.NoError(t, err, "failed to marshal parameters")
+
+			var paramMap map[string]any
+			err = json.Unmarshal(paramBytes, &paramMap)
+			require.NoError(t, err, "failed to unmarshal parameters")
+
+			if tt.expectProps {
+				// For object types, properties must exist.
+				if typeVal, ok := paramMap["type"].(string); ok && typeVal == "object" {
+					_, hasProps := paramMap["properties"]
+					assert.True(t, hasProps, "object type schema must have properties field")
+
+					// If there are nested objects, check them too.
+					if props, ok := paramMap["properties"].(map[string]any); ok {
+						for propName, propVal := range props {
+							if propMap, ok := propVal.(map[string]any); ok {
+								if propType, ok := propMap["type"].(string); ok && propType == "object" {
+									_, nestedHasProps := propMap["properties"]
+									assert.True(t, nestedHasProps, "nested object %s must have properties field", propName)
+								}
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestEnsureObjectHasProperties tests the helper function that ensures
+// object schemas have properties fields.
+func TestEnsureObjectHasProperties(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "add missing properties",
+			input:    `{"type":"object"}`,
+			expected: `{"type":"object","properties":{}}`,
+		},
+		{
+			name:     "preserve existing properties",
+			input:    `{"type":"object","properties":{"foo":{"type":"string"}}}`,
+			expected: `{"type":"object","properties":{"foo":{"type":"string"}}}`,
+		},
+		{
+			name:     "fix nested objects",
+			input:    `{"type":"object","properties":{"nested":{"type":"object"}}}`,
+			expected: `{"type":"object","properties":{"nested":{"type":"object","properties":{}}}}`,
+		},
+		{
+			name:     "non-object types unchanged",
+			input:    `{"type":"string"}`,
+			expected: `{"type":"string"}`,
+		},
+		{
+			name:     "array with object items",
+			input:    `{"type":"array","items":{"type":"object"}}`,
+			expected: `{"type":"array","items":{"type":"object","properties":{}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Parse input
+			var schemaMap map[string]any
+			err := json.Unmarshal([]byte(tt.input), &schemaMap)
+			require.NoError(t, err, "failed to unmarshal input")
+
+			// Apply fix
+			ensureObjectHasProperties(schemaMap)
+
+			// Parse expected
+			var expectedMap map[string]any
+			err = json.Unmarshal([]byte(tt.expected), &expectedMap)
+			require.NoError(t, err, "failed to unmarshal expected")
+
+			assert.Equal(t, expectedMap, schemaMap, "schema mismatch")
+		})
+	}
 }
 
 // TestModel_Callbacks tests that callback functions are properly called with

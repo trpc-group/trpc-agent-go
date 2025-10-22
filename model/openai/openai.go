@@ -233,7 +233,7 @@ type ChatStreamCompleteCallbackFunc func(
 	ctx context.Context,
 	chatRequest *openai.ChatCompletionNewParams,
 	accumulator *openai.ChatCompletionAccumulator, // nil if streamErr is not nil
-	streamErr error, // nil if streaming completed successfully
+	streamErr error,                               // nil if streaming completed successfully
 )
 
 // options contains configuration options for creating a Model.
@@ -949,6 +949,10 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 			log.Errorf("failed to unmarshal tool schema for %s: %v", declaration.Name, err)
 			continue
 		}
+
+		// Ensure the schema is compatible with OpenAI's strict requirements:
+		// When type is "object", the "properties" field must be present (even if empty).
+		ensureObjectHasProperties(parameters)
 		result = append(result, openai.ChatCompletionToolParam{
 			Function: openai.FunctionDefinitionParam{
 				Name:        declaration.Name,
@@ -958,6 +962,37 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 		})
 	}
 	return result
+}
+
+// ensureObjectHasProperties recursively ensures all object-type schemas have a "properties" field.
+// It directly modifies the schema map in-place for optimal performance.
+func ensureObjectHasProperties(schema map[string]any) {
+	// Check if this is an object type schema without properties.
+	if typeVal, ok := schema["type"].(string); ok && typeVal == "object" {
+		if _, hasProps := schema["properties"]; !hasProps {
+			// Add empty properties object.
+			schema["properties"] = make(map[string]any)
+		}
+	}
+
+	// Recursively process nested properties.
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for _, propSchema := range props {
+			if propMap, ok := propSchema.(map[string]any); ok {
+				ensureObjectHasProperties(propMap)
+			}
+		}
+	}
+
+	// Process array items.
+	if items, ok := schema["items"].(map[string]any); ok {
+		ensureObjectHasProperties(items)
+	}
+
+	// Process additionalProperties if it's a schema object.
+	if additionalProps, ok := schema["additionalProperties"].(map[string]any); ok {
+		ensureObjectHasProperties(additionalProps)
+	}
 }
 
 // handleStreamingResponse handles streaming chat completion responses.
