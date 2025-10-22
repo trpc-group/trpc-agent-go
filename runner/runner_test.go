@@ -471,3 +471,117 @@ func TestWithArtifactService(t *testing.T) {
 		assert.Nil(t, opts.artifactService, "Artifact service should be nil")
 	})
 }
+
+// TestRunner_GraphCompletionPropagation tests that graph completion events
+// are properly captured and propagated to the runner completion event.
+func TestRunner_GraphCompletionPropagation(t *testing.T) {
+	// Create a mock agent that emits a graph completion event.
+	graphAgent := &graphCompletionMockAgent{name: "graph-agent"}
+
+	// Create runner with in-memory session service.
+	sessionService := sessioninmemory.NewSessionService()
+	runner := NewRunner("test-app", graphAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session"
+	message := model.NewUserMessage("Execute graph")
+
+	// Run the agent.
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
+	require.NoError(t, err, "Run should not return an error")
+
+	// Collect all events.
+	var events []*event.Event
+	for ev := range eventCh {
+		events = append(events, ev)
+	}
+
+	// Verify we received events.
+	require.NotEmpty(t, events, "Should receive events")
+
+	// Find the runner completion event (should be the last one).
+	var runnerCompletionEvent *event.Event
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Object == model.ObjectTypeRunnerCompletion {
+			runnerCompletionEvent = events[i]
+			break
+		}
+	}
+
+	require.NotNil(t, runnerCompletionEvent, "Should have runner completion event")
+
+	// Verify that the state delta was propagated.
+	assert.NotNil(t, runnerCompletionEvent.StateDelta, "State delta should be propagated")
+	assert.Equal(t, "final_value", string(runnerCompletionEvent.StateDelta["final_key"]),
+		"State delta should contain the final key-value pair")
+
+	// Verify that the final choices were propagated.
+	assert.NotEmpty(t, runnerCompletionEvent.Response.Choices,
+		"Final choices should be propagated")
+	assert.Equal(t, "Graph execution completed",
+		runnerCompletionEvent.Response.Choices[0].Message.Content,
+		"Final message content should match")
+}
+
+// graphCompletionMockAgent emits a graph completion event with state delta
+// and choices.
+type graphCompletionMockAgent struct {
+	name string
+}
+
+func (m *graphCompletionMockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent that emits graph completion events",
+	}
+}
+
+func (m *graphCompletionMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *graphCompletionMockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *graphCompletionMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	eventCh := make(chan *event.Event, 2)
+
+	// Emit a graph completion event with state delta and choices.
+	graphCompletionEvent := &event.Event{
+		Response: &model.Response{
+			ID:     "graph-completion",
+			Object: "graph.execution",
+			Done:   true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Graph execution completed",
+					},
+				},
+			},
+		},
+		StateDelta: map[string][]byte{
+			"final_key": []byte("final_value"),
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "graph-event-id",
+		Timestamp:    time.Now(),
+	}
+
+	eventCh <- graphCompletionEvent
+	close(eventCh)
+
+	return eventCh, nil
+}
+
+func (m *graphCompletionMockAgent) Tools() []tool.Tool {
+	return []tool.Tool{}
+}

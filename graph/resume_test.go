@@ -40,14 +40,14 @@ func TestResumeValueAndHelpers_WithMap(t *testing.T) {
 func TestResumeValueOrDefaultAndHasClear(t *testing.T) {
 	state := State{StateKeyResumeMap: map[string]any{"k": 5, "x": 7}}
 	require.True(t, HasResumeValue(state, "k"))
-	require.Equal(t, 5, ResumeValueOrDefault[int](context.Background(), state, "k", 1))
+	require.Equal(t, 5, ResumeValueOrDefault(context.Background(), state, "k", 1))
 	// k consumed; x remains
 	require.True(t, HasResumeValue(state, "x"))
 	ClearResumeValue(state, "x")
 	require.False(t, HasResumeValue(state, "x"))
 
 	// default path
-	require.Equal(t, 42, ResumeValueOrDefault[int](context.Background(), state, "missing", 42))
+	require.Equal(t, 42, ResumeValueOrDefault(context.Background(), state, "missing", 42))
 
 	// Clear all
 	state[ResumeChannel] = "c"

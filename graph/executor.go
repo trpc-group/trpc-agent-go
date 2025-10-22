@@ -1199,24 +1199,53 @@ func (e *Executor) executeSingleTask(
 	t *Task,
 	step int,
 ) error {
+	// Initialize node execution context with retry policies and metadata.
+	nodeCtx := e.initializeNodeContext(ctx, invocation, execCtx, t, step)
+
+	// Run before node callbacks.
+	if handled, err := e.runBeforeCallbacks(
+		ctx, invocation, nodeCtx.mergedCallbacks, nodeCtx.callbackCtx,
+		nodeCtx.stateCopy, execCtx, t, nodeCtx.nodeType, nodeCtx.nodeStart, step,
+	); handled || err != nil {
+		return err
+	}
+
+	// Ensure pre-callback state mutations are visible to the node function.
+	// We pass the callback-mutated state copy as the task input so that
+	// executeNodeFunction uses it (instead of rebuilding from the global state).
+	// This preserves overlay application done in buildTaskStateCopy and respects
+	// any in-place state changes made by before-node callbacks.
+	t.Input = nodeCtx.stateCopy
+
+	// Attempt cache lookup; if hit, handle cached result and return.
+	if cacheHit, result := e.attemptCacheLookup(t); cacheHit {
+		return e.handleCachedResult(ctx, invocation, execCtx, t, result, step, nodeCtx)
+	}
+
+	// Execute with retry logic (emits completion event downstream on success).
+	return e.executeTaskWithRetry(ctx, invocation, execCtx, t, step, nodeCtx)
+}
+
+// initializeNodeContext initializes the node execution context with all
+// necessary metadata, policies, and callbacks.
+func (e *Executor) initializeNodeContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	step int,
+) *nodeExecutionContext {
 	// Get node type and determine retry policies for metadata.
 	nodeType := e.getNodeType(t.NodeID)
 	nodeStart := time.Now()
-	var nodePolicies []RetryPolicy
-	if node, ok := e.graph.Node(t.NodeID); ok && node != nil && len(node.retryPolicies) > 0 {
-		nodePolicies = node.retryPolicies
-	} else if len(e.defaultRetry) > 0 {
-		nodePolicies = e.defaultRetry
-	}
+	nodePolicies := e.getNodeRetryPolicies(t.NodeID)
+
 	// Best-effort max attempts hint for start event (first policy wins).
-	maxAttempts := 0
-	if len(nodePolicies) > 0 {
-		if nodePolicies[0].MaxAttempts > 0 {
-			maxAttempts = nodePolicies[0].MaxAttempts
-		}
-	}
-	e.emitNodeStartEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart,
-		WithNodeEventAttempt(1), WithNodeEventMaxAttempts(maxAttempts))
+	maxAttempts := e.getMaxAttemptsHint(nodePolicies)
+
+	// Emit node start event with attempt metadata.
+	e.emitNodeStartEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step,
+		nodeStart, WithNodeEventAttempt(1), WithNodeEventMaxAttempts(maxAttempts))
 
 	// Create callback context.
 	callbackCtx := e.newNodeCallbackContext(execCtx, t.NodeID, nodeType, step, nodeStart)
@@ -1227,81 +1256,7 @@ func (e *Executor) executeSingleTask(
 	// Merge callbacks: global callbacks run first, then per-node callbacks.
 	mergedCallbacks := e.getMergedCallbacks(stateCopy, t.NodeID)
 
-	// Run before node callbacks.
-	if handled, err := e.runBeforeCallbacks(
-		ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, execCtx, t,
-		nodeType, nodeStart, step,
-	); handled || err != nil {
-		return err
-	}
-
-	// Ensure pre-callback state mutations are visible to the node function.
-	// We pass the callback-mutated state copy as the task input so that
-	// executeNodeFunction uses it (instead of rebuilding from the global state).
-	// This preserves overlay application done in buildTaskStateCopy and respects
-	// any in-place state changes made by before-node callbacks.
-	t.Input = stateCopy
-
-	// Optional: attempt cache lookup based on sanitized task input.
-	var (
-		result   any
-		cacheHit bool
-	)
-
-	if c := e.graph.Cache(); c != nil {
-		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
-			sanitized := sanitizeForCacheKey(t.Input)
-			// Apply optional cache key selector (node-level) to focus on relevant inputs.
-			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-				if m, ok2 := sanitized.(map[string]any); ok2 {
-					sanitized = node.cacheKeySelector(m)
-				}
-			}
-			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
-				ns := e.graph.cacheNamespace(t.NodeID)
-				if cached, ok := c.Get(ns, string(keyBytes)); ok {
-					// Cache hit: skip node execution; use cached result.
-					result = cached
-					cacheHit = true
-				}
-			}
-		}
-	}
-
-	if cacheHit {
-		// Run after node callbacks on cache hit.
-		if res, err := e.runAfterCallbacks(
-			ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, result,
-			execCtx, t.NodeID, nodeType, step,
-		); err != nil {
-			return err
-		} else if res != nil {
-			result = res
-		}
-
-		// Handle result and process channel writes.
-		routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
-		if herr != nil {
-			return herr
-		}
-
-		// Update versions seen for this node after successful execution.
-		e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
-
-		// Process conditional edges after node execution.
-		if !routed {
-			if perr := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); perr != nil {
-				return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
-			}
-		}
-
-		// Emit node completion event with cache-hit metadata.
-		e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, true)
-		return nil
-	}
-
-	// Package execution context into a struct to reduce parameter count.
-	nodeCtx := &nodeExecutionContext{
+	return &nodeExecutionContext{
 		nodeType:        nodeType,
 		nodeStart:       nodeStart,
 		nodePolicies:    nodePolicies,
@@ -1309,9 +1264,104 @@ func (e *Executor) executeSingleTask(
 		stateCopy:       stateCopy,
 		mergedCallbacks: mergedCallbacks,
 	}
+}
 
-	// Execute with retry logic (emits completion event downstream on success).
-	return e.executeTaskWithRetry(ctx, invocation, execCtx, t, step, nodeCtx)
+// getNodeRetryPolicies retrieves retry policies for the given node.
+// Returns node-specific policies if available, otherwise returns default policies.
+func (e *Executor) getNodeRetryPolicies(nodeID string) []RetryPolicy {
+	if node, ok := e.graph.Node(nodeID); ok && node != nil && len(node.retryPolicies) > 0 {
+		return node.retryPolicies
+	}
+	if len(e.defaultRetry) > 0 {
+		return e.defaultRetry
+	}
+	return nil
+}
+
+// getMaxAttemptsHint extracts the max attempts hint from retry policies.
+// Returns the MaxAttempts value from the first policy, or 0 if not available.
+func (e *Executor) getMaxAttemptsHint(policies []RetryPolicy) int {
+	if len(policies) > 0 && policies[0].MaxAttempts > 0 {
+		return policies[0].MaxAttempts
+	}
+	return 0
+}
+
+// attemptCacheLookup attempts to retrieve a cached result for the task.
+// Returns true and the cached result if found, false otherwise.
+func (e *Executor) attemptCacheLookup(t *Task) (bool, any) {
+	c := e.graph.Cache()
+	if c == nil {
+		return false, nil
+	}
+
+	pol := e.getEffectiveCachePolicy(t.NodeID)
+	if pol == nil || pol.KeyFunc == nil {
+		return false, nil
+	}
+
+	sanitized := sanitizeForCacheKey(t.Input)
+
+	// Apply optional cache key selector (node-level) to focus on relevant inputs.
+	if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
+		if m, ok2 := sanitized.(map[string]any); ok2 {
+			sanitized = node.cacheKeySelector(m)
+		}
+	}
+
+	keyBytes, kerr := pol.KeyFunc(sanitized)
+	if kerr != nil {
+		return false, nil
+	}
+
+	ns := e.graph.cacheNamespace(t.NodeID)
+	if cached, ok := c.Get(ns, string(keyBytes)); ok {
+		return true, cached
+	}
+	return false, nil
+}
+
+// handleCachedResult processes a cache hit by running callbacks and handling
+// the result without executing the node function.
+func (e *Executor) handleCachedResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	result any,
+	step int,
+	nodeCtx *nodeExecutionContext,
+) error {
+	// Run after node callbacks on cache hit.
+	if res, err := e.runAfterCallbacks(
+		ctx, invocation, nodeCtx.mergedCallbacks, nodeCtx.callbackCtx,
+		nodeCtx.stateCopy, result, execCtx, t.NodeID, nodeCtx.nodeType, step,
+	); err != nil {
+		return err
+	} else if res != nil {
+		result = res
+	}
+
+	// Handle result and process channel writes.
+	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	if herr != nil {
+		return herr
+	}
+
+	// Update versions seen for this node after successful execution.
+	e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
+
+	// Process conditional edges after node execution.
+	if !routed {
+		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); perr != nil {
+			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
+		}
+	}
+
+	// Emit node completion event with cache-hit metadata.
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType,
+		step, nodeCtx.nodeStart, true)
+	return nil
 }
 
 // nodeExecutionContext holds node execution related state.
