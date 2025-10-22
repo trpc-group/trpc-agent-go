@@ -63,32 +63,32 @@ type toolResult struct {
 	err   error
 }
 
-// Default fallback message used when delegating to a sub-agent without an explicit message.
-// This keeps backward compatibility while allowing users to override or disable it via SetDelegationFallback.
-const defaultDelegationFallbackMessage = "Task delegated from coordinator"
+// Default message used when transferring to a sub-agent without an explicit message.
+// Users can override or disable it via SetDefaultTransferMessage.
+const defaultTransferMessage = "Task delegated from coordinator"
 
-// delegationFallback holds runtime configuration for delegation message fallback.
-// When enabled and no message is provided, we inject a fallback so the target agent
+// transferMessagePolicy holds runtime configuration for transfer message fallback.
+// When enabled and no message is provided, we inject a default message so the target agent
 // receives a clear user instruction.
-var delegationFallback = struct {
+var transferMessagePolicy = struct {
 	enabled bool
 	message string
 }{
 	enabled: true,
-	message: defaultDelegationFallbackMessage,
+	message: defaultTransferMessage,
 }
 
-// SetDelegationFallback configures whether and what message to inject when a sub-agent
+// SetDefaultTransferMessage configures whether and what message to inject when a sub-agent
 // is called without an explicit message (model directly calls the sub-agent name).
-// If enabled is false, no fallback message will be injected.
-// If enabled is true and message is empty, the defaultDelegationFallbackMessage is used.
-func SetDelegationFallback(enabled bool, message string) {
-	delegationFallback.enabled = enabled
+// If enabled is false, no default message will be injected.
+// If enabled is true and message is empty, the defaultTransferMessage is used.
+func SetDefaultTransferMessage(enabled bool, message string) {
+	transferMessagePolicy.enabled = enabled
 	if enabled {
 		if message == "" {
-			delegationFallback.message = defaultDelegationFallbackMessage
+			transferMessagePolicy.message = defaultTransferMessage
 		} else {
-			delegationFallback.message = message
+			transferMessagePolicy.message = message
 		}
 	}
 }
@@ -928,8 +928,8 @@ func convertToolArguments(originalName string, originalArgs []byte, targetName s
 	}
 
 	message := input.Message
-	if message == "" && delegationFallback.enabled {
-		message = delegationFallback.message
+	if message == "" && transferMessagePolicy.enabled {
+		message = transferMessagePolicy.message
 	}
 
 	req := &transfer.Request{

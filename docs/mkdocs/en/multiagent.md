@@ -442,31 +442,6 @@ Coordinator Agent (Main Entry)
     └── Research SubAgent (Information search)
 ```
 
-### Suppress Transfer Announcements (Optional)
-
-In some applications, you may want Agent Transfer (task delegation) to work silently without user-facing announcement texts such as:
-- Handoff notice: "Transferring control to agent: <name>"
-
-- Disable announcements at the source:
-
-```go
-coordinatorAgent := llmagent.New(
-    "coordinator-agent",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
-    // Suppress user-facing transfer texts while keeping transfer events for programmatic handling
-    // Transfer announcements are always emitted (tagged `transfer`). Filter by tag if needed.
-)
-```
-
-- Or filter at the UI/service layer via event type:
-  - Transfer announcements are emitted as Events with `Response.Object == "agent.transfer"`.
-  - You can filter out such Events in your renderer to hide them from end users.
-
-Notes:
-- Disabling announcements does not affect the actual handoff to the SubAgent or its input message; it only removes the human-readable transfer texts from the event stream.
-- Even when announcements are disabled, the framework still emits `agent.transfer` typed events to allow logging and orchestration.
-
 #### Example Session
 
 ```

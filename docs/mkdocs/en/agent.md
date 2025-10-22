@@ -137,9 +137,9 @@ if err != nil {
 
 When building multi‑Agent systems (task delegation between Agents), LLMAgent provides a unified fallback option for delegation events. Transfer events always include announcement text and are tagged `transfer` so UIs (User Interfaces) can filter them if desired.
 
-- `llmagent.WithDelegationFallback(string)`
-  - Unifies configuration of delegation fallback when a model calls a SubAgent without a `message`.
-  - Pass an empty string to disable the fallback. Pass a non‑empty string to enable it and override the injected message.
+- `llmagent.WithDefaultTransferMessage(string)`
+  - Configure the default message used when a model calls a SubAgent without a `message`.
+  - Pass an empty string to disable injecting a default message; pass a non‑empty string to enable and override it.
 
 Usage example:
 
@@ -149,8 +149,8 @@ coordinator := llmagent.New(
   llmagent.WithModel(modelInstance),
   llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
   // Transfer announcement events are always emitted (tagged `transfer`). Filter in the UI if needed.
-  // Enable fallback and customize the injected message when model omits it
-  llmagent.WithDelegationFallback("Handing off to the specialist"),
+  // Customize the default message when the model omits it (empty string disables)
+  llmagent.WithDefaultTransferMessage("Handing off to the specialist"),
 )
 ```
 

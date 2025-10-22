@@ -137,9 +137,9 @@ if err != nil {
 
 在构建多 Agent（智能体）系统（Agent 之间的任务委托）时，LLMAgent 提供“默认占位消息”的统一配置。转移（transfer）事件始终包含提示文本，并统一打上 `transfer` 标签，前端（UI, User Interface）可按标签过滤。
 
-- `llmagent.WithDelegationFallback(string)`
-  - 统一配置当模型未提供 `message` 时的“委托占位消息”。
-  - 传入空字符串表示“禁用占位注入”；传入非空字符串表示“启用并使用该字符串作为注入内容”。
+- `llmagent.WithDefaultTransferMessage(string)`
+  - 配置当模型未提供 `message` 时的“转移默认消息”。
+  - 传入空字符串表示“禁用默认消息注入”；传入非空字符串表示“启用并使用该字符串作为默认消息”。
 
 用法示例：
 
@@ -149,8 +149,8 @@ coordinator := llmagent.New(
   llmagent.WithModel(modelInstance),
   llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
   // 转移提示事件总是会输出（带有 `transfer` 标签），如需隐藏可在 UI 层按标签过滤
-  // 当模型未传 message 时，启用并自定义注入消息
-  llmagent.WithDelegationFallback("Handing off to the specialist"),
+  // 当模型未传 message 时，自定义默认消息（传空字符串可禁用）
+  llmagent.WithDefaultTransferMessage("Handing off to the specialist"),
 )
 ```
 

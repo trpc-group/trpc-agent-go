@@ -190,14 +190,13 @@ func WithEnableParallelTools(enable bool) Option {
 	}
 }
 
-// WithDelegationFallback unifies configuration for delegation fallback behavior.
-// If msg is an empty string, delegation fallback is disabled. If msg is non-empty,
-// delegation fallback is enabled and the given message is used when the model
-// calls a sub-agent without providing a message.
-func WithDelegationFallback(msg string) Option {
+// WithDefaultTransferMessage configures the default message used when the model
+// calls a sub-agent without providing a message. If msg is an empty string,
+// the default message injection is disabled; if non-empty, it is enabled and msg is used.
+func WithDefaultTransferMessage(msg string) Option {
 	return func(opts *Options) {
-		opts.delegationFallbackConfigured = true
-		opts.DelegationFallbackMessage = msg
+		opts.defaultTransferMessageConfigured = true
+		opts.DefaultTransferMessage = msg
 	}
 }
 
@@ -392,15 +391,15 @@ type Options struct {
 	// when the transfer is complete. Defaults to true.
 	EndInvocationAfterTransfer bool
 
-	// DelegationFallbackMessage holds the message to inject when the model directly
-	// calls a sub-agent without providing a message. Configured via WithDelegationFallback.
+	// DefaultTransferMessage holds the message to inject when the model directly
+	// calls a sub-agent without providing a message. Configured via WithDefaultTransferMessage.
 	// Semantics:
 	//   - Not configured: use default behavior (enabled with default message).
-	//   - Configured with empty string: disable fallback injection.
+	//   - Configured with empty string: disable default message injection.
 	//   - Configured with non-empty: enable and use the provided message.
-	DelegationFallbackMessage string
-	// delegationFallbackConfigured marks whether WithDelegationFallback was explicitly set.
-	delegationFallbackConfigured bool
+	DefaultTransferMessage string
+	// defaultTransferMessageConfigured marks whether WithDefaultTransferMessage was explicitly set.
+	defaultTransferMessageConfigured bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -458,13 +457,13 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
-	// Configure delegation fallback for direct sub-agent calls.
-	if options.delegationFallbackConfigured {
-		// Explicitly configured via WithDelegationFallback
-		processor.SetDelegationFallback(options.DelegationFallbackMessage != "", options.DelegationFallbackMessage)
+	// Configure default transfer message for direct sub-agent calls.
+	if options.defaultTransferMessageConfigured {
+		// Explicitly configured via WithDefaultTransferMessage
+		processor.SetDefaultTransferMessage(options.DefaultTransferMessage != "", options.DefaultTransferMessage)
 	} else {
-		// Default: enabled with default message
-		processor.SetDelegationFallback(true, "")
+		// Default: enabled with built-in default message
+		processor.SetDefaultTransferMessage(true, "")
 	}
 	responseProcessors = append(responseProcessors, toolcallProcessor)
 

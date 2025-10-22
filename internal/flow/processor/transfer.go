@@ -96,13 +96,13 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		Created:   rsp.Created,
 		Model:     rsp.Model,
 		Timestamp: rsp.Timestamp,
-	}
-	transferEvent.Response.Choices = []model.Choice{
-		{
-			Index: 0,
-			Message: model.Message{
-				Role:    model.RoleAssistant,
-				Content: "Transferring control to agent: " + targetAgent.Info().Name,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Transferring control to agent: " + targetAgent.Info().Name,
+				},
 			},
 		},
 	}
