@@ -32,7 +32,7 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 // and emits events for the code execution result.
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) {
-	if invocation == nil {
+	if invocation == nil || rsp == nil || rsp.IsPartial {
 		return
 	}
 	ce, ok := invocation.Agent.(agent.CodeExecutor)
@@ -44,11 +44,6 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		return
 	}
 
-	// [Step 1] Extract code from the model predict response,
-	// and truncate the content to the part with the first code block().
-	if rsp.IsPartial {
-		return
-	}
 	if len(rsp.Choices) == 0 {
 		return
 	}
