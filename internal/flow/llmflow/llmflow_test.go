@@ -25,6 +25,77 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// Additional unit tests for long-running tool tracking and preprocess
+
+// mockLongRunnerTool implements tool.Tool and a LongRunning() flag.
+type mockLongRunnerTool struct {
+	name string
+	long bool
+}
+
+func (m *mockLongRunnerTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: m.name} }
+func (m *mockLongRunnerTool) LongRunning() bool              { return m.long }
+
+func TestCollectLongRunningToolIDs(t *testing.T) {
+	calls := []model.ToolCall{
+		{ID: "1", Function: model.FunctionDefinitionParam{Name: "fast"}},
+		{ID: "2", Function: model.FunctionDefinitionParam{Name: "slow"}},
+		{ID: "3", Function: model.FunctionDefinitionParam{Name: "unknown"}},
+		{ID: "4", Function: model.FunctionDefinitionParam{Name: "nolong"}},
+	}
+	tools := map[string]tool.Tool{
+		"fast":   &mockLongRunnerTool{name: "fast", long: false},
+		"slow":   &mockLongRunnerTool{name: "slow", long: true},
+		"nolong": &mockLongRunnerTool{name: "nolong", long: false},
+		// unknown not present
+	}
+	got := collectLongRunningToolIDs(calls, tools)
+	if _, ok := got["2"]; !ok {
+		t.Fatalf("expected long-running id '2' present, got %#v", got)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 id, got %d", len(got))
+	}
+}
+
+// minimalAgent exposes tools for preprocess test.
+type minimalAgent struct{ tools []tool.Tool }
+
+func (m *minimalAgent) Run(context.Context, *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+func (m *minimalAgent) Tools() []tool.Tool              { return m.tools }
+func (m *minimalAgent) Info() agent.Info                { return agent.Info{Name: "a"} }
+func (m *minimalAgent) SubAgents() []agent.Agent        { return nil }
+func (m *minimalAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func TestPreprocess_AddsAgentToolsWhenPresent(t *testing.T) {
+	f := New(nil, nil, Options{})
+	req := &model.Request{Tools: map[string]tool.Tool{}}
+	inv := agent.NewInvocation()
+	inv.Agent = &minimalAgent{tools: []tool.Tool{&mockLongRunnerTool{name: "t1"}}}
+	ch := make(chan *event.Event, 4)
+	f.preprocess(context.Background(), inv, req, ch)
+	if _, ok := req.Tools["t1"]; !ok {
+		t.Fatalf("expected tool 't1' added to request")
+	}
+}
+
+func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation()
+	req := &model.Request{Tools: map[string]tool.Tool{
+		"slow": &mockLongRunnerTool{name: "slow", long: true},
+	}}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "x", Function: model.FunctionDefinitionParam{Name: "slow"}}}}}}}
+	evt := f.createLLMResponseEvent(inv, rsp, req)
+	if _, ok := evt.LongRunningToolIDs["x"]; !ok {
+		t.Fatalf("expected long-running tool id tracked")
+	}
+}
+
 // mockAgent implements agent.Agent for testing
 type mockAgent struct {
 	name  string

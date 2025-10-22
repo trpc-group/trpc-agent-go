@@ -90,3 +90,15 @@ func intPtr(i int) *int {
 func floatPtr(f float64) *float64 {
 	return &f
 }
+
+// Cover early-return branches for robustness and full coverage.
+func TestBasicReqProc_NilRequestAndInvocation(t *testing.T) {
+	p := NewBasicRequestProcessor()
+	ch := make(chan *event.Event, 1)
+
+	// Nil request -> returns immediately without panic.
+	p.ProcessRequest(context.Background(), &agent.Invocation{AgentName: "a"}, nil, ch)
+
+	// Nil invocation -> no event, but should not panic.
+	p.ProcessRequest(context.Background(), nil, &model.Request{}, ch)
+}

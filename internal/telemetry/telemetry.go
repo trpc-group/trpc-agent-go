@@ -27,6 +27,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// grpcDial is a package-level variable to allow test injection of a custom dialer.
+// In production, this points to grpc.Dial.
+var grpcDial = grpc.Dial
+
 // telemetry service constants.
 const (
 	ServiceName      = "telemetry"
@@ -411,7 +415,7 @@ func TraceEmbedding(span trace.Span, requestEncodingFormat, requestModel string,
 func NewGRPCConn(endpoint string) (*grpc.ClientConn, error) {
 	// It connects the OpenTelemetry Collector through gRPC connection.
 	// You can customize the endpoint using SetConfig() or environment variables.
-	conn, err := grpc.Dial(endpoint,
+	conn, err := grpcDial(endpoint,
 		// Note the use of insecure transport here. TLS is recommended in production.
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)

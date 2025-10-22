@@ -10,12 +10,156 @@
 package tool_test
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// --- NamedToolSet and NamedTool tests (migrated) ---
+
+// fakeTool implements tool.CallableTool and tool.StreamableTool for testing.
+type fakeTool struct {
+	decl       *tool.Declaration
+	callResult any
+	callErr    error
+	stream     *tool.Stream
+}
+
+func (f *fakeTool) Declaration() *tool.Declaration                { return f.decl }
+func (f *fakeTool) Call(_ context.Context, _ []byte) (any, error) { return f.callResult, f.callErr }
+func (f *fakeTool) StreamableCall(_ context.Context, _ []byte) (*tool.StreamReader, error) {
+	if f.stream == nil {
+		f.stream = tool.NewStream(1)
+	}
+	return f.stream.Reader, nil
+}
+
+// simpleTool implements only tool.Tool (not callable/streamable) for negative paths.
+type simpleTool struct{ name, desc string }
+
+func (s *simpleTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name, Description: s.desc}
+}
+
+// fakeToolSet implements tool.ToolSet.
+type fakeToolSet struct {
+	name   string
+	tools  []tool.Tool
+	closed bool
+}
+
+func (f *fakeToolSet) Tools(context.Context) []tool.Tool { return f.tools }
+func (f *fakeToolSet) Close() error                      { f.closed = true; return nil }
+func (f *fakeToolSet) Name() string                      { return f.name }
+
+func TestNamedToolSet_Idempotent(t *testing.T) {
+	ts := &fakeToolSet{name: "fs"}
+	nts := itool.NewNamedToolSet(ts)
+	// Calling again with an already wrapped toolset should return the same instance.
+	nts2 := itool.NewNamedToolSet(nts)
+	if nts != nts2 {
+		t.Fatalf("expected idempotent wrapping to return same instance")
+	}
+}
+
+func TestNamedToolSet_Tools_PrefixingAndPassthrough(t *testing.T) {
+	// With a name, tool names should be prefixed.
+	base := &fakeToolSet{
+		name:  "fs",
+		tools: []tool.Tool{&simpleTool{name: "read", desc: "read file"}},
+	}
+	nts := itool.NewNamedToolSet(base)
+	got := nts.Tools(context.Background())
+	if len(got) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(got))
+	}
+	if got[0].Declaration().Name != "fs_read" {
+		t.Fatalf("expected prefixed name 'fs_read', got %q", got[0].Declaration().Name)
+	}
+
+	// Without a name, names should be unchanged.
+	base2 := &fakeToolSet{name: "", tools: []tool.Tool{&simpleTool{name: "write", desc: "write file"}}}
+	nts2 := itool.NewNamedToolSet(base2)
+	got2 := nts2.Tools(context.Background())
+	if got2[0].Declaration().Name != "write" {
+		t.Fatalf("expected unmodified name 'write', got %q", got2[0].Declaration().Name)
+	}
+}
+
+func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {
+	base := &fakeToolSet{name: "fs"}
+	nts := itool.NewNamedToolSet(base)
+	// Wrap a single tool.
+	t1 := &simpleTool{name: "copy", desc: "copy file"}
+	base.tools = []tool.Tool{t1}
+	got := nts.Tools(context.Background())
+	nt, ok := got[0].(*itool.NamedTool)
+	if !ok {
+		t.Fatalf("expected NamedTool, got %T", got[0])
+	}
+	if nt.Original() != t1 {
+		t.Fatalf("Original() mismatch")
+	}
+	if nts.Name() != "fs" {
+		t.Fatalf("Name() forward mismatch: %q", nts.Name())
+	}
+	if err := nts.Close(); err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+	if !base.closed {
+		t.Fatalf("underlying Close() not called")
+	}
+}
+
+func TestNamedTool_CallAndStreamableCall(t *testing.T) {
+	// Positive path via NamedToolSet wrapper.
+	f := &fakeTool{decl: &tool.Declaration{Name: "sum"}, callResult: 42}
+	nts := itool.NewNamedToolSet(&fakeToolSet{name: "math", tools: []tool.Tool{f}})
+	ts := nts.Tools(context.Background())
+	nt, ok := ts[0].(*itool.NamedTool)
+	if !ok {
+		t.Fatalf("expected NamedTool, got %T", ts[0])
+	}
+	v, err := nt.Call(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Call() unexpected error: %v", err)
+	}
+	if v != 42 {
+		t.Fatalf("Call() result = %v, want 42", v)
+	}
+
+	r, err := nt.StreamableCall(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("StreamableCall() unexpected error: %v", err)
+	}
+	if f.stream == nil {
+		t.Fatalf("stream should be initialized")
+	}
+	f.stream.Writer.Send(tool.StreamChunk{Content: "ok"}, nil)
+	chunk, recvErr := r.Recv()
+	if recvErr != nil {
+		t.Fatalf("Recv() unexpected error: %v", recvErr)
+	}
+	if chunk.Content != "ok" {
+		t.Fatalf("Recv() content = %v, want ok", chunk.Content)
+	}
+	f.stream.Writer.Close()
+}
+
+func TestNamedTool_CallFailures(t *testing.T) {
+	// Negative path through wrapper (not callable or streamable).
+	nts := itool.NewNamedToolSet(&fakeToolSet{name: "fs", tools: []tool.Tool{&simpleTool{name: "noop"}}})
+	nt := nts.Tools(context.Background())[0].(*itool.NamedTool)
+	if _, err := nt.Call(context.Background(), nil); err == nil || err.Error() != "tool is not callable" {
+		t.Fatalf("Call() expected not callable error, got %v", err)
+	}
+	if _, err := nt.StreamableCall(context.Background(), nil); err == nil || err.Error() != "tool is not streamable" {
+		t.Fatalf("StreamableCall() expected not streamable error, got %v", err)
+	}
+}
 
 func TestGenerateJSONSchema_Primitives(t *testing.T) {
 	tests := []struct {
