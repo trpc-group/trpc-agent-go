@@ -150,15 +150,15 @@ func (m *manager) store(appName string, evalSetResult *evalresult.EvalSetResult)
 	if err != nil {
 		return fmt.Errorf("open file %s: %w", tmp, err)
 	}
-	// encoder := json.NewEncoder(file)
-	// encoder.SetIndent("", "  ")
-	// if err := encoder.Encode(evalSetResult); err != nil {
-	// 	file.Close()
-	// 	os.Remove(tmp)
-	// 	return fmt.Errorf("encode file %s: %w", tmp, err)
-	// }
-	data, _ := json.Marshal(evalSetResult)
-	fmt.Fprintf(file, "%q", data)
+	data, err := json.Marshal(evalSetResult)
+	if err != nil {
+		file.Close()
+		return fmt.Errorf("json marshal: %w", err)
+	}
+	if _, err := fmt.Fprintf(file, "%q", data); err != nil {
+		file.Close()
+		return fmt.Errorf("write file %s: %w", path, err)
+	}
 	if err := file.Close(); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("close file %s: %w", tmp, err)
