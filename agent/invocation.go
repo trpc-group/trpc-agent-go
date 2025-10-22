@@ -167,9 +167,21 @@ func WithA2ARequestOptions(opts ...any) RunOption {
 
 // WithThirdPartyAgentConfigs sets third-party agent configurations.
 // Key is agent type (e.g., "custom-llm"), value is agent-specific config.
+//
+// Note: This function creates a shallow copy of the configs map to prevent
+// external modifications from affecting the stored configuration.
 func WithThirdPartyAgentConfigs(configs map[string]any) RunOption {
 	return func(opts *RunOptions) {
-		opts.ThirdPartyAgentConfigs = configs
+		if configs == nil {
+			opts.thirdPartyAgentConfigs = nil
+			return
+		}
+		// Create a shallow copy to prevent external modifications
+		copied := make(map[string]any, len(configs))
+		for k, v := range configs {
+			copied[k] = v
+		}
+		opts.thirdPartyAgentConfigs = copied
 	}
 }
 
@@ -201,9 +213,10 @@ type RunOptions struct {
 	// Users should pass client.RequestOption values (e.g., client.WithRequestHeader).
 	// The a2aagent package will validate the option types at runtime.
 	A2ARequestOptions []any
-	// ThirdPartyAgentConfigs stores configurations for third-party agents.
+
+	// thirdPartyAgentConfigs stores configurations for third-party agents.
 	// Key: agent type, Value: agent-specific config.
-	ThirdPartyAgentConfigs map[string]any
+	thirdPartyAgentConfigs map[string]any
 }
 
 // NewInvocation create a new invocation
@@ -400,9 +413,11 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 
 // GetThirdPartyAgentConfig retrieves configuration for a specific third-party agent type from the invocation.
 // Returns nil if no configuration exists for the given agent type.
+//
+// Note: The returned config should be treated as read-only. Do not modify it.
 func (inv *Invocation) GetThirdPartyAgentConfig(agentKey string) any {
-	if inv == nil || inv.RunOptions.ThirdPartyAgentConfigs == nil {
+	if inv == nil || inv.RunOptions.thirdPartyAgentConfigs == nil {
 		return nil
 	}
-	return inv.RunOptions.ThirdPartyAgentConfigs[agentKey]
+	return inv.RunOptions.thirdPartyAgentConfigs[agentKey]
 }
