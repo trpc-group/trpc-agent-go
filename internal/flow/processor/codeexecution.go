@@ -44,11 +44,6 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		return
 	}
 
-	// [Step 1] Extract code from the model predict response,
-	// and truncate the content to the part with the first code block().
-	if rsp.IsPartial {
-		return
-	}
 	if len(rsp.Choices) == 0 {
 		return
 	}
