@@ -135,18 +135,11 @@ if err != nil {
 
 ### 委托可见性选项
 
-在构建多 Agent（智能体）系统（Agent 之间的任务委托）时，LLMAgent 提供以下选项来控制“对外可见的提示文本”和“默认占位消息”的行为：
+在构建多 Agent（智能体）系统（Agent 之间的任务委托）时，LLMAgent 提供“默认占位消息”的统一配置。转移（transfer）事件始终包含提示文本，并统一打上 `transfer` 标签，前端（UI, User Interface）可按标签过滤。
 
-- `llmagent.WithEmitTransferAnnouncements(bool)`
-  - 控制是否输出“用户可见”的转移提示文本（例如 `Transferring control to agent: <name>`）。
-  - 默认：`true`（保持现有行为）。设置为 `false` 可对用户“静默”转移提示。
-
-- `llmagent.WithEnableDelegationFallback(bool)`
-  - 当模型直接点名子 Agent（函数名即子 Agent 名称）且未提供 `message` 时，是否注入一条“默认占位消息”，以便目标子 Agent 能收到明确的用户输入。
-  - 默认：`true`（保持兼容）。设置为 `false` 则不再注入该占位消息。
-
-- `llmagent.WithDelegationFallbackMessage(string)`
-  - 在启用占位注入时，自定义该“默认占位消息”的文本内容。
+- `llmagent.WithDelegationFallback(string)`
+  - 统一配置当模型未提供 `message` 时的“委托占位消息”。
+  - 传入空字符串表示“禁用占位注入”；传入非空字符串表示“启用并使用该字符串作为注入内容”。
 
 用法示例：
 
@@ -155,12 +148,9 @@ coordinator := llmagent.New(
   "coordinator",
   llmagent.WithModel(modelInstance),
   llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
-  // 对用户静默“转移提示”
-  llmagent.WithEmitTransferAnnouncements(false),
-  // 保持兼容：当模型未传 message 时，注入一条默认占位消息
-  llmagent.WithEnableDelegationFallback(true),
-  // 可选：自定义占位消息
-  llmagent.WithDelegationFallbackMessage("Handing off to the specialist"),
+  // 转移提示事件总是会输出（带有 `transfer` 标签），如需隐藏可在 UI 层按标签过滤
+  // 当模型未传 message 时，启用并自定义注入消息
+  llmagent.WithDelegationFallback("Handing off to the specialist"),
 )
 ```
 

@@ -455,7 +455,7 @@ coordinatorAgent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
     // Suppress user-facing transfer texts while keeping transfer events for programmatic handling
-    llmagent.WithEmitTransferAnnouncements(false),
+    // Transfer announcements are always emitted (tagged `transfer`). Filter by tag if needed.
 )
 ```
 

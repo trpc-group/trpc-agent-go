@@ -27,29 +27,13 @@ type TransferResponseProcessor struct {
 	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
 	// when the transfer is complete. Defaults to true.
 	endInvocationAfterTransfer bool
-
-	// emitTransferAnnouncements controls whether to emit user-facing textual
-	// announcements such as "Transferring control to agent: <name>" and the
-	// immediate transfer message echo. When false, transfer events are still
-	// generated with object type model.ObjectTypeTransfer for programmatic
-	// handling, but their textual Choices are omitted so typical UIs
-	// (User Interfaces) won’t render them.
-	emitTransferAnnouncements bool
 }
 
 // NewTransferResponseProcessor creates a new transfer response processor.
 func NewTransferResponseProcessor(endInvocation bool) *TransferResponseProcessor {
 	return &TransferResponseProcessor{
 		endInvocationAfterTransfer: endInvocation,
-		emitTransferAnnouncements:  true,
 	}
-}
-
-// SetEmitTransferAnnouncement controls whether to emit textual transfer announcements.
-// When set to false, the processor will suppress the human-readable texts while
-// still emitting the transfer event object for downstream logic.
-func (p *TransferResponseProcessor) SetEmitTransferAnnouncement(emit bool) {
-	p.emitTransferAnnouncements = emit
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
@@ -113,16 +97,14 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		Model:     rsp.Model,
 		Timestamp: rsp.Timestamp,
 	}
-	if p.emitTransferAnnouncements {
-		transferEvent.Response.Choices = []model.Choice{
-			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: "Transferring control to agent: " + targetAgent.Info().Name,
-				},
+	transferEvent.Response.Choices = []model.Choice{
+		{
+			Index: 0,
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "Transferring control to agent: " + targetAgent.Info().Name,
 			},
-		}
+		},
 	}
 
 	// Send transfer event.
@@ -144,15 +126,14 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			Role:    model.RoleUser,
 			Content: transferInfo.Message,
 		}
-		// Emit a transfer message echo for visibility unless announcements are disabled.
-		if p.emitTransferAnnouncements {
-			agent.EmitEvent(ctx, targetInvocation, ch, event.NewResponseEvent(
-				targetInvocation.InvocationID,
-				targetAgent.Info().Name,
-				&model.Response{Choices: []model.Choice{{Message: targetInvocation.Message}}},
-				event.WithTag(TransferTag),
-			))
-		}
+		// Always emit a transfer message echo for visibility and traceability.
+		// Use tag so UIs can filter internal delegation messages without breaking event alignment.
+		agent.EmitEvent(ctx, targetInvocation, ch, event.NewResponseEvent(
+			targetInvocation.InvocationID,
+			targetAgent.Info().Name,
+			&model.Response{Choices: []model.Choice{{Message: targetInvocation.Message}}},
+			event.WithTag(TransferTag),
+		))
 	}
 
 	// Actually call the target agent's Run method with the target invocation in context

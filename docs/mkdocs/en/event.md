@@ -199,7 +199,11 @@ Transfer announcements (Agent delegation notices) are emitted as Events with `Re
 
 This typically appears as a handoff notice: "Transferring control to agent: <name>".
 
-If your UI should not display these system-level notices, filter out Events with this object type at the rendering/service layer. To disable the texts at the source, see the “Suppress Transfer Announcements (Optional)” section in Multi‑Agent docs.
+ If your UI should not display these system-level notices, you have two compatible strategies:
+ - Filter by `Object`: hide events where `Response.Object == "agent.transfer"`.
+ - Filter by `Tag`: hide events whose `Event.Tag` contains the `transfer` tag. The framework adds this tag to delegation-related events (including transfer tool results), so filtering by tag avoids breaking ToolCall/ToolResult alignment.
+
+ Tags are appended using a semicolon delimiter (`;`). Use `event.WithTag(tag)` when creating custom events; multiple tags are stored as `tag1;tag2;...`.
 
 #### Helper: Detect Runner Completion
 
@@ -298,6 +302,14 @@ if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.
 ```
 
 Tip: For custom events, always use `event.New(...)` with `WithResponse`, `WithBranch`, etc., to ensure IDs and timestamps are set consistently.
+
+### Tags
+
+Events support simple tagging via `Event.Tag` to annotate business labels for filtering and analytics:
+
+- Delimiter: `;` (semicolon). Multiple tags concatenate as `tag1;tag2`.
+- Helper: `event.WithTag("<tag>")` to append a tag without losing existing ones.
+- Built-in usage: delegation-related events are tagged with `transfer`. UIs can hide these internal messages while preserving the complete event stream for debugging and processing.
 
 ### Event Methods
 

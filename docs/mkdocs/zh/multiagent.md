@@ -455,7 +455,7 @@ coordinatorAgent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
     // 关闭对话可见的转移提示文本，事件仍会产生，便于日志与编排
-    llmagent.WithEmitTransferAnnouncements(false),
+    // 转移提示事件总是会输出（带有 `transfer` 标签），如需隐藏可在 UI 层按标签过滤
 )
 ```
 
