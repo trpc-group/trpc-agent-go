@@ -195,8 +195,7 @@ func WithEnableParallelTools(enable bool) Option {
 // the default message injection is disabled; if non-empty, it is enabled and msg is used.
 func WithDefaultTransferMessage(msg string) Option {
 	return func(opts *Options) {
-		opts.defaultTransferMessageConfigured = true
-		opts.DefaultTransferMessage = msg
+		opts.DefaultTransferMessage = &msg
 	}
 }
 
@@ -393,13 +392,11 @@ type Options struct {
 
 	// DefaultTransferMessage holds the message to inject when the model directly
 	// calls a sub-agent without providing a message. Configured via WithDefaultTransferMessage.
-	// Semantics:
-	//   - Not configured: use default behavior (enabled with default message).
-	//   - Configured with empty string: disable default message injection.
-	//   - Configured with non-empty: enable and use the provided message.
-	DefaultTransferMessage string
-	// defaultTransferMessageConfigured marks whether WithDefaultTransferMessage was explicitly set.
-	defaultTransferMessageConfigured bool
+	// Behavior:
+	//   - Not configured: use built-in default message.
+	//   - Configured with empty string: use built-in default message.
+	//   - Configured with non-empty: use the provided message.
+	DefaultTransferMessage *string
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -458,12 +455,10 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
 	// Configure default transfer message for direct sub-agent calls.
-	if options.defaultTransferMessageConfigured {
-		// Explicitly configured via WithDefaultTransferMessage
-		processor.SetDefaultTransferMessage(options.DefaultTransferMessage != "", options.DefaultTransferMessage)
-	} else {
-		// Default: enabled with built-in default message
-		processor.SetDefaultTransferMessage(true, "")
+	// Default behavior (when not configured): enabled with built-in default message.
+	if options.DefaultTransferMessage != nil {
+		// Explicitly configured via WithDefaultTransferMessage.
+		processor.SetDefaultTransferMessage(*options.DefaultTransferMessage)
 	}
 	responseProcessors = append(responseProcessors, toolcallProcessor)
 

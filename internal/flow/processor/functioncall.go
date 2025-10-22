@@ -65,32 +65,12 @@ type toolResult struct {
 
 // Default message used when transferring to a sub-agent without an explicit message.
 // Users can override or disable it via SetDefaultTransferMessage.
-const defaultTransferMessage = "Task delegated from coordinator"
+var defaultTransferMessage = "Task delegated from coordinator"
 
-// transferMessagePolicy holds runtime configuration for transfer message fallback.
-// When enabled and no message is provided, we inject a default message so the target agent
-// receives a clear user instruction.
-var transferMessagePolicy = struct {
-	enabled bool
-	message string
-}{
-	enabled: true,
-	message: defaultTransferMessage,
-}
-
-// SetDefaultTransferMessage configures whether and what message to inject when a sub-agent
-// is called without an explicit message (model directly calls the sub-agent name).
-// If enabled is false, no default message will be injected.
-// If enabled is true and message is empty, the defaultTransferMessage is used.
-func SetDefaultTransferMessage(enabled bool, message string) {
-	transferMessagePolicy.enabled = enabled
-	if enabled {
-		if message == "" {
-			transferMessagePolicy.message = defaultTransferMessage
-		} else {
-			transferMessagePolicy.message = message
-		}
-	}
+// SetDefaultTransferMessage configures the message to inject when a sub-agent is
+// called without an explicit message (model directly calls the sub-agent name).
+func SetDefaultTransferMessage(message string) {
+	defaultTransferMessage = message
 }
 
 // subAgentCall defines the input format for direct sub-agent tool calls.
@@ -928,8 +908,8 @@ func convertToolArguments(originalName string, originalArgs []byte, targetName s
 	}
 
 	message := input.Message
-	if message == "" && transferMessagePolicy.enabled {
-		message = transferMessagePolicy.message
+	if message == "" {
+		message = defaultTransferMessage
 	}
 
 	req := &transfer.Request{
