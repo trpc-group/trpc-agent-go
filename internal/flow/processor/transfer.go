@@ -46,11 +46,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if invocation == nil {
-		return
-	}
-	if rsp == nil {
-		log.Errorf("Transfer response processor: response is nil")
+	if invocation == nil || rsp == nil || rsp.IsPartial {
 		return
 	}
 

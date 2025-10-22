@@ -93,7 +93,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if invocation == nil || !rsp.IsToolCallResponse() {
+	if invocation == nil || rsp == nil || rsp.IsPartial || !rsp.IsToolCallResponse() {
 		return
 	}
 
