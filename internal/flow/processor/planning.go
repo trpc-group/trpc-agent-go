@@ -132,11 +132,7 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if invocation == nil {
-		return
-	}
-	if rsp == nil {
-		log.Errorf("Planning response processor: response is nil")
+	if invocation == nil || rsp == nil || rsp.IsPartial {
 		return
 	}
 	if p.Planner == nil {
