@@ -91,6 +91,75 @@ func TestNodeCache_HitSkipsExecution(t *testing.T) {
 	require.Equal(t, 42, asInt(final2["out"]))
 }
 
+// Additional cache coverage: after-node callback on cache hit and key selection.
+func TestExecutor_CacheHit_UsesCachedResult(t *testing.T) {
+	t.Parallel()
+
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+
+	var runs int32
+	nodeFn := func(ctx context.Context, s State) (any, error) {
+		// Use a direct int counter to avoid JSON float conversion in asserts
+		c := 0
+		if v, ok := s["counter"].(int); ok {
+			c = v
+		}
+		runs++
+		return State{"counter": c + 1}, nil
+	}
+
+	// Graph-level cache + node-level cache policy so results are cached.
+	sg.WithCache(NewInMemoryCache())
+	sg.WithCachePolicy(DefaultCachePolicy())
+	sg.AddNode("work", nodeFn,
+		WithNodeCachePolicy(DefaultCachePolicy()),
+		WithCacheKeyFields("counter"),
+		WithPostNodeCallback(func(ctx context.Context, c *NodeCallbackContext, s State, result any, nodeErr error) (any, error) {
+			if m, ok := result.(State); ok {
+				m["marked"] = true
+				return m, nil
+			}
+			return result, nil
+		}),
+	)
+	sg.SetEntryPoint("work").SetFinishPoint("work")
+	g, err := sg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	exec, err := NewExecutor(g, WithStepTimeout(100*time.Millisecond))
+	if err != nil {
+		t.Fatalf("executor: %v", err)
+	}
+
+	init := State{"counter": 0}
+	inv := &agent.Invocation{InvocationID: "inv-cache"}
+	ch, err := exec.Execute(context.Background(), init, inv)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for range ch { /* drain */
+	}
+
+	if runs != 1 {
+		t.Fatalf("first run should execute node: %d", runs)
+	}
+
+	// Second run with same input should take cache path -> node function not executed again.
+	ch2, err := exec.Execute(context.Background(), init, &agent.Invocation{InvocationID: "inv-cache-2"})
+	if err != nil {
+		t.Fatalf("execute2: %v", err)
+	}
+	for range ch2 { /* drain */
+	}
+
+	if runs != 1 {
+		t.Fatalf("second run should use cache (no new run): %d", runs)
+	}
+}
+
 // Test TTL expiry: a short TTL should force re-computation after expiration.
 func TestNodeCache_TTLExpires(t *testing.T) {
 	schema := NewStateSchema().

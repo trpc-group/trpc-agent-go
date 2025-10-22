@@ -564,6 +564,173 @@ func TestBuildAgentInvocation(t *testing.T) {
 
 }
 
+// Additional manager and builder coverage using configurable fake saver
+type fakeSaver2 struct {
+	put      func(context.Context, PutRequest) (map[string]any, error)
+	putFull  func(context.Context, PutFullRequest) (map[string]any, error)
+	get      func(context.Context, map[string]any) (*Checkpoint, error)
+	getTuple func(context.Context, map[string]any) (*CheckpointTuple, error)
+	list     func(context.Context, map[string]any, *CheckpointFilter) ([]*CheckpointTuple, error)
+	del      func(context.Context, string) error
+}
+
+func (f fakeSaver2) Put(ctx context.Context, req PutRequest) (map[string]any, error) {
+	if f.put != nil {
+		return f.put(ctx, req)
+	}
+	return map[string]any{}, nil
+}
+func (f fakeSaver2) PutWrites(context.Context, PutWritesRequest) error { return nil }
+func (f fakeSaver2) PutFull(ctx context.Context, req PutFullRequest) (map[string]any, error) {
+	if f.putFull != nil {
+		return f.putFull(ctx, req)
+	}
+	return map[string]any{}, nil
+}
+func (f fakeSaver2) Get(ctx context.Context, cfg map[string]any) (*Checkpoint, error) {
+	if f.get != nil {
+		return f.get(ctx, cfg)
+	}
+	return nil, nil
+}
+func (f fakeSaver2) GetTuple(ctx context.Context, cfg map[string]any) (*CheckpointTuple, error) {
+	if f.getTuple != nil {
+		return f.getTuple(ctx, cfg)
+	}
+	return nil, nil
+}
+func (f fakeSaver2) List(ctx context.Context, cfg map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
+	if f.list != nil {
+		return f.list(ctx, cfg, filter)
+	}
+	return nil, nil
+}
+func (f fakeSaver2) DeleteLineage(ctx context.Context, id string) error {
+	if f.del != nil {
+		return f.del(ctx, id)
+	}
+	return nil
+}
+func (f fakeSaver2) Close() error { return nil }
+
+func TestGetLineageID_And_GetResumeMap_Branches(t *testing.T) {
+	if GetLineageID(nil) != "" {
+		t.Fatalf("expected empty lineage id")
+	}
+	if GetResumeMap(nil) != nil {
+		t.Fatalf("expected nil resume map")
+	}
+	if GetLineageID(map[string]any{"x": 1}) != "" {
+		t.Fatalf("expected empty lineage id")
+	}
+	if GetResumeMap(map[string]any{"x": 1}) != nil {
+		t.Fatalf("expected nil resume map")
+	}
+	if GetLineageID(map[string]any{CfgKeyConfigurable: map[string]any{}}) != "" {
+		t.Fatalf("expected empty lineage id")
+	}
+	if GetResumeMap(map[string]any{CfgKeyConfigurable: map[string]any{}}) != nil {
+		t.Fatalf("expected nil resume map")
+	}
+}
+
+func TestCheckpointManager_CreateCheckpoint_Success(t *testing.T) {
+	called := false
+	cm := NewCheckpointManager(fakeSaver2{put: func(ctx context.Context, req PutRequest) (map[string]any, error) {
+		called = true
+		if req.Checkpoint == nil || req.Metadata == nil {
+			t.Fatalf("missing data")
+		}
+		return map[string]any{"ok": true}, nil
+	}})
+	st := State{"a": 1, "b": "x"}
+	ck, err := cm.CreateCheckpoint(context.Background(), map[string]any{"k": "v"}, st, CheckpointSourceInput, 0)
+	if err != nil || ck == nil || !called {
+		t.Fatalf("unexpected: %v %v %v", ck, err, called)
+	}
+}
+
+func TestCheckpointManager_Latest_Success(t *testing.T) {
+	expect := &CheckpointTuple{Checkpoint: NewCheckpoint(map[string]any{"a": 1}, map[string]int64{}, nil)}
+	cm := NewCheckpointManager(fakeSaver2{list: func(context.Context, map[string]any, *CheckpointFilter) ([]*CheckpointTuple, error) {
+		return []*CheckpointTuple{expect}, nil
+	}})
+	tup, err := cm.Latest(context.Background(), "ln", "ns")
+	if err != nil || tup != expect {
+		t.Fatalf("latest failed: %v %v", tup, err)
+	}
+}
+
+func TestCheckpointManager_BranchFrom_ErrorsAndSuccess(t *testing.T) {
+	cm := NewCheckpointManager(fakeSaver2{getTuple: func(context.Context, map[string]any) (*CheckpointTuple, error) {
+		return nil, fmt.Errorf("get source err")
+	}})
+	if _, err := cm.BranchFrom(context.Background(), "ln", "ns", "cid", "ns2"); err == nil {
+		t.Fatalf("expected error")
+	}
+	cm = NewCheckpointManager(fakeSaver2{getTuple: func(context.Context, map[string]any) (*CheckpointTuple, error) { return nil, nil }})
+	if _, err := cm.BranchFrom(context.Background(), "ln", "ns", "cid", "ns2"); err == nil {
+		t.Fatalf("expected not found")
+	}
+	src := &CheckpointTuple{Checkpoint: NewCheckpoint(map[string]any{}, map[string]int64{}, nil), Metadata: NewCheckpointMetadata(CheckpointSourceInput, 3)}
+	cm = NewCheckpointManager(fakeSaver2{getTuple: func(context.Context, map[string]any) (*CheckpointTuple, error) { return src, nil }, putFull: func(context.Context, PutFullRequest) (map[string]any, error) { return nil, fmt.Errorf("putfull") }})
+	if _, err := cm.BranchFrom(context.Background(), "ln", "ns", "cid", "ns2"); err == nil {
+		t.Fatalf("expected putfull error")
+	}
+	cm = NewCheckpointManager(fakeSaver2{getTuple: func(context.Context, map[string]any) (*CheckpointTuple, error) { return src, nil }, putFull: func(context.Context, PutFullRequest) (map[string]any, error) { return map[string]any{"ok": true}, nil }})
+	out, err := cm.BranchFrom(context.Background(), "ln", "ns", "cid", "ns2")
+	if err != nil || out == nil || out.Config["ok"] != true {
+		t.Fatalf("unexpected: %v %v", out, err)
+	}
+}
+
+func TestCheckpointManager_BranchToNewLineage_Variants(t *testing.T) {
+	src := NewCheckpoint(map[string]any{}, map[string]int64{}, nil)
+	src.Timestamp = time.Now().Add(-time.Minute)
+	cm := NewCheckpointManager(fakeSaver2{getTuple: func(context.Context, map[string]any) (*CheckpointTuple, error) {
+		return &CheckpointTuple{Checkpoint: src, Metadata: NewCheckpointMetadata(CheckpointSourceInput, 2)}, nil
+	}, put: func(context.Context, PutRequest) (map[string]any, error) { return map[string]any{"ok": true}, nil }})
+	if out, err := cm.BranchToNewLineage(context.Background(), "srcLn", "", "", "newLn", "ns"); err != nil || out == nil || out.Config["ok"] != true {
+		t.Fatalf("expected success: %v %v", out, err)
+	}
+	cm = NewCheckpointManager(fakeSaver2{getTuple: func(context.Context, map[string]any) (*CheckpointTuple, error) { return nil, nil }})
+	if _, err := cm.BranchToNewLineage(context.Background(), "srcLn", "nsA", "cidX", "newLn", "nsB"); err == nil {
+		t.Fatalf("expected not found")
+	}
+}
+
+func TestCheckpointManager_ResumeFromLatest_Variants(t *testing.T) {
+	cm := NewCheckpointManager(fakeSaver2{list: func(context.Context, map[string]any, *CheckpointFilter) ([]*CheckpointTuple, error) {
+		return nil, fmt.Errorf("list err")
+	}})
+	if _, err := cm.ResumeFromLatest(context.Background(), "ln", "ns", &Command{}); err == nil {
+		t.Fatalf("expected error")
+	}
+	cm = NewCheckpointManager(fakeSaver2{list: func(context.Context, map[string]any, *CheckpointFilter) ([]*CheckpointTuple, error) {
+		return []*CheckpointTuple{}, nil
+	}})
+	if _, err := cm.ResumeFromLatest(context.Background(), "ln", "ns", nil); err == nil {
+		t.Fatalf("expected none found error")
+	}
+	ck := NewCheckpoint(map[string]any{"a": 1}, map[string]int64{}, nil)
+	cm = NewCheckpointManager(fakeSaver2{list: func(context.Context, map[string]any, *CheckpointFilter) ([]*CheckpointTuple, error) {
+		return []*CheckpointTuple{{Checkpoint: ck}}, nil
+	}})
+	st, err := cm.ResumeFromLatest(context.Background(), "ln", "ns", &Command{Resume: "v"})
+	if err != nil || st[StateKeyCommand] == nil {
+		t.Fatalf("expected command in state: %v %v", st, err)
+	}
+}
+
+func TestCheckpointManager_ResumeFromCheckpoint_NilCheckpointError(t *testing.T) {
+	cm := NewCheckpointManager(fakeSaver2{getTuple: func(context.Context, map[string]any) (*CheckpointTuple, error) {
+		return &CheckpointTuple{Checkpoint: nil}, nil
+	}})
+	if _, err := cm.ResumeFromCheckpoint(context.Background(), map[string]any{}); err == nil {
+		t.Fatalf("expected error when tuple.Checkpoint is nil")
+	}
+}
+
 func TestExtractToolCallsFromState_SuccessAndErrors(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")

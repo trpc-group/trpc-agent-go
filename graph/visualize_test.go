@@ -10,6 +10,7 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -125,5 +126,56 @@ func TestRenderImage_SkipWhenNoDot(t *testing.T) {
 
 	if err := g.RenderImage(context.Background(), ImageFormatPNG, tmp.Name()); err != nil {
 		t.Fatalf("render failed: %v", err)
+	}
+}
+
+// Additional coverage: entry highlight when Start is hidden.
+func TestDOT_HighlightEntryWhenStartHidden(t *testing.T) {
+	g := buildSampleGraph(t)
+	dot := g.DOT(WithIncludeStartEnd(false))
+	if !strings.Contains(dot, "\"prepare\" [peripheries=2];") { // entry is 'prepare'
+		t.Fatalf("expected entry highlight when hiding Start, got: %s", dot)
+	}
+}
+
+// Additional coverage: styles for all node types.
+func TestDOT_StylesForAllNodeTypes(t *testing.T) {
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddNode("llm", func(ctx context.Context, s State) (any, error) { return s, nil }, WithNodeType(NodeTypeLLM))
+	sg.AddNode("tool", func(ctx context.Context, s State) (any, error) { return s, nil }, WithNodeType(NodeTypeTool))
+	sg.AddNode("agent", func(ctx context.Context, s State) (any, error) { return s, nil }, WithNodeType(NodeTypeAgent))
+	sg.AddNode("join", func(ctx context.Context, s State) (any, error) { return s, nil }, WithNodeType(NodeTypeJoin))
+	sg.AddNode("router", func(ctx context.Context, s State) (any, error) { return s, nil }, WithNodeType(NodeTypeRouter))
+	sg.SetEntryPoint("llm")
+	g, err := sg.Compile()
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	dot := g.DOT()
+	checks := []struct{ id, shape, fill, color string }{
+		{"llm", "shape=box", colorLLMFill, colorLLMBorder},
+		{"tool", "shape=box", colorToolFill, colorToolBorder},
+		{"agent", "shape=box", colorAgentFill, colorAgentBorder},
+		{"join", "shape=diamond", colorJoinFill, colorJoinBorder},
+		{"router", "shape=diamond", colorRouterFill, colorRouterBorder},
+	}
+	for _, c := range checks {
+		line := "\"" + c.id + "\""
+		if !strings.Contains(dot, line) || !strings.Contains(dot, c.shape) || !strings.Contains(dot, c.fill) || !strings.Contains(dot, c.color) {
+			t.Fatalf("missing style for %s: dot=%s", c.id, dot)
+		}
+	}
+}
+
+// Additional coverage: WriteDOT wrapper writes content with a label.
+func TestWriteDOT_WritesToWriter(t *testing.T) {
+	g := buildSampleGraph(t)
+	var buf bytes.Buffer
+	if err := g.WriteDOT(&buf, WithGraphLabel("Z")); err != nil {
+		t.Fatalf("WriteDOT error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "label=\"Z\";") {
+		t.Fatalf("missing graph label in DOT: %s", buf.String())
 	}
 }

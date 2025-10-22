@@ -221,6 +221,24 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 	})
 }
 
+// Cover empty WithDefaultRetryPolicy branch ensuring no defaults are set.
+func TestExecutor_WithDefaultRetryPolicy_EmptyCoversNoop(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("n", func(ctx context.Context, s State) (any, error) { return s, nil })
+	sg.SetEntryPoint("n")
+	g, err := sg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	exec, err := NewExecutor(g, WithDefaultRetryPolicy())
+	if err != nil {
+		t.Fatalf("executor: %v", err)
+	}
+	if len(exec.defaultRetry) != 0 {
+		t.Fatalf("expected no default policies")
+	}
+}
+
 // MockModel implements a mock model for testing
 type MockModel struct {
 	responses map[string]string

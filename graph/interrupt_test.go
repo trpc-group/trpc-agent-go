@@ -10,6 +10,7 @@
 package graph
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -39,4 +40,60 @@ func TestResumeCommandBuilder(t *testing.T) {
 	require.Equal(t, "v", rc.Resume)
 	require.Equal(t, 1, rc.ResumeMap["a"]) //nolint:forcetypeassert
 	require.Equal(t, 2, rc.ResumeMap["b"]) //nolint:forcetypeassert
+}
+
+func TestResumeCommand_AddResumeValue_CreatesMap(t *testing.T) {
+	c := &ResumeCommand{}
+	c.AddResumeValue("t1", 123)
+	if c.ResumeMap == nil || c.ResumeMap["t1"].(int) != 123 {
+		t.Fatalf("resume map not created or value incorrect: %#v", c.ResumeMap)
+	}
+	// Non-nil path
+	c.AddResumeValue("t2", 456)
+	if c.ResumeMap["t2"].(int) != 456 {
+		t.Fatalf("resume map missing t2")
+	}
+}
+
+func TestHasResumeValue_Variants(t *testing.T) {
+	st := State{}
+	if HasResumeValue(st, "k") {
+		t.Fatalf("expected false initially")
+	}
+	// Direct resume channel
+	st[ResumeChannel] = 1
+	if !HasResumeValue(st, "k") {
+		t.Fatalf("expected true with direct resume channel")
+	}
+	delete(st, ResumeChannel)
+	// ResumeMap wrong type ignored
+	st[StateKeyResumeMap] = []int{1}
+	if HasResumeValue(st, "k") {
+		t.Fatalf("expected false for wrong resume map type")
+	}
+	// ResumeMap correct type with key
+	st[StateKeyResumeMap] = map[string]any{"k": 2}
+	if !HasResumeValue(st, "k") {
+		t.Fatalf("expected true for resume map entry")
+	}
+}
+
+func TestInterrupt_ResumePaths(t *testing.T) {
+	ctx := context.Background()
+	st := State{}
+	// First call interrupts
+	if _, err := Interrupt(ctx, st, "k", "prompt"); err == nil {
+		t.Fatalf("expected interrupt error")
+	}
+	// Provide direct resume value
+	st[ResumeChannel] = "answer"
+	v, err := Interrupt(ctx, st, "k", "prompt")
+	if err != nil || v != "answer" {
+		t.Fatalf("expected resume: %v %v", v, err)
+	}
+	// Reuse same key should return stored used value without consuming new
+	v2, err := Interrupt(ctx, st, "k", "prompt")
+	if err != nil || v2 != "answer" {
+		t.Fatalf("expected repeated resume value: %v %v", v2, err)
+	}
 }
