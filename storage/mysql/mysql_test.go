@@ -10,6 +10,7 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -160,7 +161,7 @@ func TestSetAndGetClientBuilder(t *testing.T) {
 	defer SetClientBuilder(originalBuilder)
 
 	// Create a custom builder.
-	customBuilder := func(builderOpts ...ClientBuilderOpt) (*sql.DB, error) {
+	customBuilder := func(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
 		return nil, sql.ErrConnDone
 	}
 
@@ -180,7 +181,7 @@ func TestSetAndGetClientBuilder(t *testing.T) {
 func TestDefaultClientBuilder_SuccessPath(t *testing.T) {
 	// Test the success path by using a custom builder that simulates successful connection.
 	// This tests the logic after sql.Open succeeds and ping succeeds.
-	
+
 	// Save original builder.
 	originalBuilder := GetClientBuilder()
 	defer SetClientBuilder(originalBuilder)
@@ -194,7 +195,7 @@ func TestDefaultClientBuilder_SuccessPath(t *testing.T) {
 	mock.ExpectPing()
 
 	// Create a custom builder that simulates DefaultClientBuilder's success path.
-	successBuilder := func(builderOpts ...ClientBuilderOpt) (*sql.DB, error) {
+	successBuilder := func(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
 		// Apply options (same as DefaultClientBuilder).
 		o := &ClientBuilderOpts{}
 		for _, opt := range builderOpts {
@@ -257,7 +258,7 @@ func TestDefaultClientBuilder_SuccessPath(t *testing.T) {
 func TestDefaultClientBuilder_ConnectionPoolApplication(t *testing.T) {
 	// Test that connection pool settings are correctly applied.
 	// This verifies the logic between sql.Open and Ping.
-	
+
 	mockDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
 	defer mockDB.Close()
@@ -338,7 +339,7 @@ func TestDefaultClientBuilder_Integration(t *testing.T) {
 		defer SetClientBuilder(originalBuilder)
 
 		// Set a custom builder that returns our mock.
-		SetClientBuilder(func(builderOpts ...ClientBuilderOpt) (*sql.DB, error) {
+		SetClientBuilder(func(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
 			o := &ClientBuilderOpts{}
 			for _, opt := range builderOpts {
 				opt(o)
@@ -382,5 +383,75 @@ func TestDefaultClientBuilder_Integration(t *testing.T) {
 
 		// Verify all expectations were met.
 		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+// TestClientInterfaceCompliance tests that ClientInterface is properly implemented
+func TestClientInterfaceCompliance(t *testing.T) {
+	t.Run("dbWrapper implements ClientInterface", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		// Test that our wrapper implements the interface
+		var client ClientInterface = mockDB
+
+		// Test ExecContext
+		mock.ExpectExec("INSERT INTO test").WillReturnResult(sqlmock.NewResult(1, 1))
+		result, err := client.ExecContext(context.Background(), "INSERT INTO test VALUES (1)")
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+
+		// Test QueryContext
+		rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "test")
+		mock.ExpectQuery("SELECT id, name FROM test").WillReturnRows(rows)
+		queryResult, err := client.QueryContext(context.Background(), "SELECT id, name FROM test")
+		require.NoError(t, err)
+		defer queryResult.Close()
+
+		// Test QueryRowContext
+		countRows := sqlmock.NewRows([]string{"count"}).AddRow(1)
+		mock.ExpectQuery("SELECT COUNT").WillReturnRows(countRows)
+		row := client.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM test")
+		var count int
+		err = row.Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 1, count)
+
+		// Test Ping
+		mock.ExpectPing()
+		err = client.Ping()
+		require.NoError(t, err)
+
+		// Test Close (sqlmock doesn't track Close calls, so we just call it)
+		client.Close()
+
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+// TestDefaultClientBuilderInterface tests that DefaultClientBuilder returns ClientInterface
+func TestDefaultClientBuilderInterface(t *testing.T) {
+	t.Run("returns ClientInterface", func(t *testing.T) {
+		// This test will fail because we don't have a real MySQL server
+		// But it validates that the function signature is correct
+		_, err := DefaultClientBuilder(WithClientBuilderDSN("invalid-dsn"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mysql: open connection")
+	})
+
+	t.Run("with valid options", func(t *testing.T) {
+		// Test that all options are processed correctly
+		// This will fail at connection time but validates option processing
+		_, err := DefaultClientBuilder(
+			WithClientBuilderDSN("user:password@tcp(localhost:3306)/testdb"),
+			WithMaxOpenConns(10),
+			WithMaxIdleConns(5),
+			WithConnMaxLifetime(time.Hour),
+			WithConnMaxIdleTime(30*time.Minute),
+		)
+		// Should fail at connection or ping stage
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mysql")
 	})
 }

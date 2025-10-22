@@ -28,7 +28,7 @@ import (
 )
 
 // mockClientBuilder creates a mock MySQL client for testing.
-func mockClientBuilder(builderOpts ...storage.ClientBuilderOpt) (*sql.DB, error) {
+func mockClientBuilder(builderOpts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
 	// For unit tests, we can use an in-memory SQLite database or mock
 	// Here we just return an error to demonstrate the pattern
 	return nil, sql.ErrConnDone
@@ -36,9 +36,9 @@ func mockClientBuilder(builderOpts ...storage.ClientBuilderOpt) (*sql.DB, error)
 
 // setupMockDB creates a mock database and sqlmock for testing.
 func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
-	db, mock, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	return db, mock
+	return mockDB, mock
 }
 
 // setupMockService creates a service with a mock database.
@@ -127,12 +127,12 @@ func TestNewService_InvalidTableName(t *testing.T) {
 
 // TestNewService_WithAutoCreateTable tests that the service automatically creates the table when enabled.
 func TestNewService_WithAutoCreateTable(t *testing.T) {
-	db, mock := setupMockDB(t)
-	defer db.Close()
+	mockDB, mock := setupMockDB(t)
+	defer mockDB.Close()
 
 	originalBuilder := storage.GetClientBuilder()
-	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (*sql.DB, error) {
-		return db, nil
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+		return mockDB, nil
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 

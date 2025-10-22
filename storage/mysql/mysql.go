@@ -11,6 +11,7 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -25,7 +26,27 @@ func init() {
 
 var mysqlRegistry map[string][]ClientBuilderOpt
 
-type clientBuilder func(builderOpts ...ClientBuilderOpt) (*sql.DB, error)
+// ClientInterface defines the interface for database operations.
+// This interface abstracts the common database operations needed by the
+// memory service, making it easier to inject mock implementations for testing.
+type ClientInterface interface {
+	// ExecContext executes a query without returning any rows.
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+
+	// QueryContext executes a query that returns rows.
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+
+	// QueryRowContext executes a query that is expected to return at most one row.
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+
+	// Ping verifies a connection to the database is still alive.
+	Ping() error
+
+	// Close closes the database connection.
+	Close() error
+}
+
+type clientBuilder func(builderOpts ...ClientBuilderOpt) (ClientInterface, error)
 
 var globalBuilder clientBuilder = DefaultClientBuilder
 
@@ -40,7 +61,7 @@ func GetClientBuilder() clientBuilder {
 }
 
 // DefaultClientBuilder is the default mysql client builder.
-func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (*sql.DB, error) {
+func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
 	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)
@@ -55,7 +76,7 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (*sql.DB, error) {
 		return nil, fmt.Errorf("mysql: open connection %s: %w", o.DSN, err)
 	}
 
-	// Set connection pool settings if provided
+	// Set connection pool settings if provided.
 	if o.MaxOpenConns > 0 {
 		db.SetMaxOpenConns(o.MaxOpenConns)
 	}
@@ -69,7 +90,7 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (*sql.DB, error) {
 		db.SetConnMaxIdleTime(o.ConnMaxIdleTime)
 	}
 
-	// Test connection
+	// Test connection.
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("mysql: ping failed: %w", err)

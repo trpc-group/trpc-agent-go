@@ -42,7 +42,7 @@ var tableNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 //	Index: (app_name, user_id), (app_name, user_id, memory_id).
 type Service struct {
 	opts      ServiceOpts
-	db        *sql.DB
+	db        storage.ClientInterface
 	tableName string
 
 	cachedTools map[string]tool.Tool
@@ -72,7 +72,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	builder := storage.GetClientBuilder()
 	var (
-		db  *sql.DB
+		db  storage.ClientInterface
 		err error
 	)
 
