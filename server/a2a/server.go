@@ -157,17 +157,41 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		userIDHeader = serverUserIDHeader
 	}
 
+	// Extract base path from agent card URL if it has a valid scheme
+	basePath := extractBasePath(normalizeURL(agentCard.URL))
+
 	opts := []a2a.Option{
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
+		a2a.WithBasePath(basePath),
 	}
-
-	// if other AuthProvider is set, user info should be covered
 	opts = append(opts, options.extraOptions...)
 	a2aServer, err := a2a.NewA2AServer(agentCard, taskManager, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a2a server: %w", err)
 	}
 	return a2aServer, nil
+}
+
+// extractBasePath extracts the path from a URL if it has a valid scheme.
+// For URLs with a valid scheme (http, https, grpc, custom, etc.), it returns the path component.
+// For URLs without a scheme or invalid URLs, it returns an empty string.
+func extractBasePath(urlStr string) string {
+	if urlStr == "" {
+		return ""
+	}
+
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return ""
+	}
+
+	// Extract path if URL has a valid scheme
+	if u.Scheme != "" {
+		return u.Path
+	}
+
+	// No valid scheme, return empty string
+	return ""
 }
 
 // messageProcessor is the message processor for the a2a server.

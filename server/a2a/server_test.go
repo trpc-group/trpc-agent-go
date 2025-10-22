@@ -2001,3 +2001,81 @@ func TestNormalizeURL(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractBasePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "http with path",
+			input:    "http://example.com/api/v1",
+			expected: "/api/v1",
+		},
+		{
+			name:     "https with path",
+			input:    "https://example.com/api/v1/agents",
+			expected: "/api/v1/agents",
+		},
+		{
+			name:     "http without path",
+			input:    "http://example.com",
+			expected: "",
+		},
+		{
+			name:     "https without path",
+			input:    "https://example.com:8080",
+			expected: "",
+		},
+		{
+			name:     "http with root path",
+			input:    "http://example.com/",
+			expected: "/",
+		},
+		{
+			name:     "custom scheme with path - should return path",
+			input:    "grpc://example.com:9090/service",
+			expected: "/service",
+		},
+		{
+			name:     "custom scheme without path - should return empty",
+			input:    "custom://service.namespace",
+			expected: "",
+		},
+		{
+			name:     "http with path and query",
+			input:    "http://example.com/api?key=value",
+			expected: "/api",
+		},
+		{
+			name:     "https with path and fragment",
+			input:    "https://example.com/docs#section",
+			expected: "/docs",
+		},
+		{
+			name:     "invalid URL - no scheme",
+			input:    "://invalid",
+			expected: "",
+		},
+		{
+			name:     "grpc with complex path",
+			input:    "grpc://service:9090/api/v1/rpc",
+			expected: "/api/v1/rpc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractBasePath(tt.input)
+			if result != tt.expected {
+				t.Errorf("extractBasePath(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
