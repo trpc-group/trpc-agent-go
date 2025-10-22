@@ -117,3 +117,26 @@ func TestDecideReasoningTag_Unknown_NoSideEffectOnSeen(t *testing.T) {
 		t.Fatalf("expected toolPlanSeen to remain false when no tool delta")
 	}
 }
+
+func TestEventHasTag(t *testing.T) {
+	// nil event returns false
+	var eNil *Event
+	if eNil.HasTag("a") {
+		t.Fatalf("nil event should not have any tag")
+	}
+
+	e := &Event{Tag: "a"}
+	if !e.HasTag("a") {
+		t.Fatalf("expected HasTag to find existing tag 'a'")
+	}
+	if e.HasTag("") {
+		t.Fatalf("empty tag should return false")
+	}
+	e.Tag = "a" + TagDelimiter + "b"
+	if !e.HasTag("b") || !e.HasTag("a") {
+		t.Fatalf("expected HasTag to find both 'a' and 'b'")
+	}
+	if e.HasTag("ab") {
+		t.Fatalf("should not match substrings")
+	}
+}

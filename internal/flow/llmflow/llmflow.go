@@ -201,7 +201,7 @@ func (f *Flow) processStreamingResponses(
 	// current turn by scanning messages since the last user message.
 	afterTool := hasToolSinceLastUser(llmRequest.Messages)
 	// Track whether this model call has shown tool intent while streaming.
-	toolPlanSeen := false
+	var toolPlanSeen bool
 
 	for response := range responseChan {
 		// Handle after model callbacks.

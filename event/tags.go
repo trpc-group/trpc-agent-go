@@ -48,11 +48,8 @@ func AppendTagString(existing, tag string) string {
 	}
 	// Split and check for duplicates.
 	// Tags are treated case-sensitively for now to keep semantics simple.
-	parts := strings.Split(existing, TagDelimiter)
-	for _, p := range parts {
-		if p == tag {
-			return existing
-		}
+	if ContainsTagString(existing, tag) {
+		return existing
 	}
 	return existing + TagDelimiter + tag
 }
@@ -64,6 +61,30 @@ func AddTag(e *Event, tag string) {
 		return
 	}
 	e.Tag = AppendTagString(e.Tag, tag)
+}
+
+// ContainsTagString reports whether the delimited tag string contains the given tag.
+// It performs an exact match on segments split by TagDelimiter. Tags are case-sensitive.
+func ContainsTagString(existing, tag string) bool {
+	if existing == "" || tag == "" {
+		return false
+	}
+	parts := strings.Split(existing, TagDelimiter)
+	for _, p := range parts {
+		if p == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// HasTag reports whether the event currently contains the provided tag.
+// It returns false for nil events or empty tag input.
+func (e *Event) HasTag(tag string) bool {
+	if e == nil || tag == "" {
+		return false
+	}
+	return ContainsTagString(e.Tag, tag)
 }
 
 // DecideReasoningTag determines the appropriate reasoning tag for a streaming
