@@ -414,3 +414,39 @@ func TestGetAppendEventNoticeKey(t *testing.T) {
 		})
 	}
 }
+
+func TestWithThirdPartyAgentConfigs(t *testing.T) {
+	configs := map[string]any{"custom-llm": "test-config"}
+	opts := &RunOptions{}
+	WithThirdPartyAgentConfigs(configs)(opts)
+	require.Equal(t, configs, opts.ThirdPartyAgentConfigs)
+}
+
+func TestInvocation_GetThirdPartyAgentConfig(t *testing.T) {
+	// Test get existing config
+	inv := &Invocation{
+		RunOptions: RunOptions{
+			ThirdPartyAgentConfigs: map[string]any{"custom-llm": "test-config"},
+		},
+	}
+	require.Equal(t, "test-config", inv.GetThirdPartyAgentConfig("custom-llm"))
+	require.Nil(t, inv.GetThirdPartyAgentConfig("non-existing"))
+
+	// Test nil cases
+	var nilInv *Invocation
+	require.Nil(t, nilInv.GetThirdPartyAgentConfig("custom-llm"))
+
+	invWithNilConfigs := &Invocation{RunOptions: RunOptions{}}
+	require.Nil(t, invWithNilConfigs.GetThirdPartyAgentConfig("custom-llm"))
+}
+
+func TestThirdPartyAgentConfigs_Integration(t *testing.T) {
+	configs := map[string]any{"custom-llm": "test-config"}
+	inv := NewInvocation(WithInvocationRunOptions(RunOptions{ThirdPartyAgentConfigs: configs}))
+
+	require.Equal(t, "test-config", inv.GetThirdPartyAgentConfig("custom-llm"))
+
+	// Test Clone preserves configs
+	clonedInv := inv.Clone()
+	require.Equal(t, "test-config", clonedInv.GetThirdPartyAgentConfig("custom-llm"))
+}
