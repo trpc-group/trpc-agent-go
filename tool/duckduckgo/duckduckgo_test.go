@@ -280,3 +280,192 @@ func TestToolTypesJSONMarshaling(t *testing.T) {
 		t.Errorf("Results length mismatch: got %d, want 1", len(unmarshaledResp.Results))
 	}
 }
+
+func TestNewTool(t *testing.T) {
+	customURL := "https://custom.api.com"
+	customAgent := "custom-agent/2.0"
+	customClient := &http.Client{Timeout: 10 * time.Second}
+
+	testCases := []struct {
+		name string
+		opts []Option
+	}{
+		{
+			name: "default options",
+			opts: nil,
+		},
+		{
+			name: "custom base URL",
+			opts: []Option{WithBaseURL(customURL)},
+		},
+		{
+			name: "custom user agent",
+			opts: []Option{WithUserAgent(customAgent)},
+		},
+		{
+			name: "custom HTTP client",
+			opts: []Option{WithHTTPClient(customClient)},
+		},
+		{
+			name: "all options combined",
+			opts: []Option{
+				WithBaseURL(customURL),
+				WithUserAgent(customAgent),
+				WithHTTPClient(customClient),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewTool(tc.opts...)
+			if tool == nil {
+				t.Fatalf("NewTool() returned nil for %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestDDGTool_SearchError(t *testing.T) {
+	// Test with server returning error status
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	testClient := client.New(server.URL, "test-agent/1.0", httpClient)
+	ddgTool := &ddgTool{client: testClient}
+	req := searchRequest{Query: "test query"}
+	result, err := ddgTool.search(context.Background(), req)
+
+	if err == nil {
+		t.Error("Expected error for server error response")
+	}
+	if !contains(result.Summary, "Error performing search") {
+		t.Errorf("Expected error message in summary, got: %s", result.Summary)
+	}
+}
+
+func TestDDGTool_MaxResults(t *testing.T) {
+	// Create response with more than maxResults (5) related topics
+	mockResponse := `{
+		"Abstract": "Test abstract",
+		"AbstractText": "Test abstract text",
+		"Answer": "",
+		"Definition": "",
+		"RelatedTopics": [
+			{"Text": "Topic 1", "FirstURL": "http://example.com/1"},
+			{"Text": "Topic 2", "FirstURL": "http://example.com/2"},
+			{"Text": "Topic 3", "FirstURL": "http://example.com/3"},
+			{"Text": "Topic 4", "FirstURL": "http://example.com/4"},
+			{"Text": "Topic 5", "FirstURL": "http://example.com/5"},
+			{"Text": "Topic 6", "FirstURL": "http://example.com/6"},
+			{"Text": "Topic 7", "FirstURL": "http://example.com/7"}
+		],
+		"Results": []
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(mockResponse))
+	}))
+	defer server.Close()
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	testClient := client.New(server.URL, "test-agent/1.0", httpClient)
+	ddgTool := &ddgTool{client: testClient}
+	req := searchRequest{Query: "test"}
+	result, err := ddgTool.search(context.Background(), req)
+	require.NoError(t, err)
+
+	// Should only return maxResults (5) items
+	if len(result.Results) != maxResults {
+		t.Errorf("Expected %d results (maxResults), got %d", maxResults, len(result.Results))
+	}
+}
+
+func TestDDGTool_WhitespaceQuery(t *testing.T) {
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	testClient := client.New("https://api.duckduckgo.com", "test-agent/1.0", httpClient)
+	ddgTool := &ddgTool{client: testClient}
+
+	// Test with whitespace-only query
+	req := searchRequest{Query: "   "}
+	result, err := ddgTool.search(context.Background(), req)
+
+	if err == nil {
+		t.Error("Expected error for whitespace-only query")
+	}
+	if !contains(result.Summary, "Error: Empty search query") {
+		t.Errorf("Expected error message for whitespace query, got: %s", result.Summary)
+	}
+}
+
+func TestDDGTool_RelatedTopicsWithoutURL(t *testing.T) {
+	// Test related topics with missing FirstURL
+	mockResponse := `{
+		"Abstract": "",
+		"Answer": "",
+		"Definition": "",
+		"RelatedTopics": [
+			{"Text": "Topic with URL", "FirstURL": "http://example.com/1"},
+			{"Text": "Topic without URL", "FirstURL": ""},
+			{"Text": "", "FirstURL": "http://example.com/2"}
+		],
+		"Results": []
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(mockResponse))
+	}))
+	defer server.Close()
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	testClient := client.New(server.URL, "test-agent/1.0", httpClient)
+	ddgTool := &ddgTool{client: testClient}
+	req := searchRequest{Query: "test"}
+	result, err := ddgTool.search(context.Background(), req)
+	require.NoError(t, err)
+
+	// Should only include topics with both text and URL
+	if len(result.Results) != 1 {
+		t.Errorf("Expected 1 result (only valid topic), got %d", len(result.Results))
+	}
+}
+
+func TestDDGTool_AbstractWithSource(t *testing.T) {
+	mockResponse := `{
+		"Abstract": "Test abstract",
+		"AbstractText": "Test abstract text",
+		"AbstractSource": "Test Source",
+		"Answer": "",
+		"Definition": "",
+		"RelatedTopics": [],
+		"Results": []
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(mockResponse))
+	}))
+	defer server.Close()
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	testClient := client.New(server.URL, "test-agent/1.0", httpClient)
+	ddgTool := &ddgTool{client: testClient}
+	req := searchRequest{Query: "test"}
+	result, err := ddgTool.search(context.Background(), req)
+	require.NoError(t, err)
+
+	if !contains(result.Summary, "Abstract: Test abstract text") {
+		t.Errorf("Expected abstract in summary, got: %s", result.Summary)
+	}
+	if !contains(result.Summary, "Source: Test Source") {
+		t.Errorf("Expected source in summary, got: %s", result.Summary)
+	}
+}

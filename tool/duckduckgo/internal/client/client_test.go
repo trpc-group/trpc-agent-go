@@ -222,3 +222,237 @@ func TestResponseJSONUnmarshaling(t *testing.T) {
 		})
 	}
 }
+
+func TestFlexibleString_UnmarshalJSON(t *testing.T) {
+	testCases := []struct {
+		name     string
+		jsonData string
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "string value",
+			jsonData: `"hello"`,
+			expected: "hello",
+			wantErr:  false,
+		},
+		{
+			name:     "integer value",
+			jsonData: `123`,
+			expected: "123",
+			wantErr:  false,
+		},
+		{
+			name:     "float value",
+			jsonData: `123.45`,
+			expected: "123.45",
+			wantErr:  false,
+		},
+		{
+			name:     "empty string",
+			jsonData: `""`,
+			expected: "",
+			wantErr:  false,
+		},
+		{
+			name:     "zero",
+			jsonData: `0`,
+			expected: "0",
+			wantErr:  false,
+		},
+		{
+			name:     "boolean true",
+			jsonData: `true`,
+			expected: "true",
+			wantErr:  false,
+		},
+		{
+			name:     "boolean false",
+			jsonData: `false`,
+			expected: "false",
+			wantErr:  false,
+		},
+		{
+			name:     "null value",
+			jsonData: `null`,
+			expected: "",
+			wantErr:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fs FlexibleString
+			err := json.Unmarshal([]byte(tc.jsonData), &fs)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("UnmarshalJSON() error = %v, wantErr %v", err, tc.wantErr)
+				return
+			}
+			if !tc.wantErr && fs.String() != tc.expected {
+				t.Errorf("UnmarshalJSON() got = %v, want %v", fs.String(), tc.expected)
+			}
+		})
+	}
+}
+
+func TestFlexibleString_String(t *testing.T) {
+	testCases := []struct {
+		name     string
+		fs       FlexibleString
+		expected string
+	}{
+		{
+			name:     "normal string",
+			fs:       FlexibleString("test"),
+			expected: "test",
+		},
+		{
+			name:     "empty string",
+			fs:       FlexibleString(""),
+			expected: "",
+		},
+		{
+			name:     "numeric string",
+			fs:       FlexibleString("123"),
+			expected: "123",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.fs.String()
+			if result != tc.expected {
+				t.Errorf("String() = %v, want %v", result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestClient_Search_InvalidRequest(t *testing.T) {
+	// Test with invalid URL (this will cause NewRequest to fail)
+	client := New("ht!tp://invalid url with spaces", "test-agent/1.0", &http.Client{Timeout: 30 * time.Second})
+	_, err := client.Search("test query")
+	if err == nil {
+		t.Error("Expected error for invalid base URL")
+	}
+}
+
+func TestClient_Search_NetworkError(t *testing.T) {
+	// Test with unreachable server
+	client := New("http://localhost:1", "test-agent/1.0", &http.Client{Timeout: 1 * time.Millisecond})
+	_, err := client.Search("test query")
+	if err == nil {
+		t.Error("Expected error for network failure")
+	}
+}
+
+func TestClient_Search_InvalidJSON(t *testing.T) {
+	// Test with invalid JSON response
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{invalid json`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "test-agent/1.0", &http.Client{Timeout: 30 * time.Second})
+	_, err := client.Search("test query")
+	if err == nil {
+		t.Error("Expected error for invalid JSON response")
+	}
+	if !contains(err.Error(), "failed to parse response") {
+		t.Errorf("Expected parse error, got: %v", err)
+	}
+}
+
+func TestClient_Search_NonOKStatus(t *testing.T) {
+	testCases := []struct {
+		name       string
+		statusCode int
+	}{
+		{"Bad Request", http.StatusBadRequest},
+		{"Not Found", http.StatusNotFound},
+		{"Internal Server Error", http.StatusInternalServerError},
+		{"Service Unavailable", http.StatusServiceUnavailable},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.statusCode)
+			}))
+			defer server.Close()
+
+			client := New(server.URL, "test-agent/1.0", &http.Client{Timeout: 30 * time.Second})
+			_, err := client.Search("test query")
+			if err == nil {
+				t.Errorf("Expected error for status code %d", tc.statusCode)
+			}
+		})
+	}
+}
+
+func TestClient_Search_Headers(t *testing.T) {
+	customUserAgent := "custom-test-agent/2.0"
+	var receivedUserAgent string
+	var receivedAccept string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedUserAgent = r.Header.Get("User-Agent")
+		receivedAccept = r.Header.Get("Accept")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"Answer": "test"}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL, customUserAgent, &http.Client{Timeout: 30 * time.Second})
+	_, err := client.Search("test query")
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+
+	if receivedUserAgent != customUserAgent {
+		t.Errorf("Expected User-Agent %q, got %q", customUserAgent, receivedUserAgent)
+	}
+	if receivedAccept != "application/json" {
+		t.Errorf("Expected Accept header 'application/json', got %q", receivedAccept)
+	}
+}
+
+func TestClient_Search_QueryEscaping(t *testing.T) {
+	var receivedQuery string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQuery = r.URL.Query().Get("q")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"Answer": "test"}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "test-agent/1.0", &http.Client{Timeout: 30 * time.Second})
+	testQuery := "test query with spaces & special chars"
+	_, err := client.Search(testQuery)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+
+	if receivedQuery != testQuery {
+		t.Errorf("Expected query %q, got %q", testQuery, receivedQuery)
+	}
+}
+
+// Helper function
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && containsSubstring(s, substr)
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

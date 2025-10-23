@@ -29,6 +29,39 @@ func TestNewMCPToolSet(t *testing.T) {
 		t.Fatal("Expected toolset to be created")
 	}
 
+	// Test default name
+	if toolset.Name() != "mcp" {
+		t.Errorf("Expected default name 'mcp', got %q", toolset.Name())
+	}
+
+	// Clean up
+	if err := toolset.Close(); err != nil {
+		t.Errorf("Failed to close toolset: %v", err)
+	}
+}
+
+func TestNewMCPToolSet_WithOptions(t *testing.T) {
+	config := ConnectionConfig{
+		Transport: "stdio",
+		Command:   "echo",
+		Args:      []string{"hello"},
+	}
+
+	filter := NewIncludeFilter("tool1", "tool2")
+	toolset := NewMCPToolSet(config,
+		WithName("test-toolset"),
+		WithToolFilter(filter),
+		WithSessionReconnect(3),
+	)
+
+	if toolset == nil {
+		t.Fatal("Expected toolset to be created")
+	}
+
+	if toolset.Name() != "test-toolset" {
+		t.Errorf("Expected name 'test-toolset', got %q", toolset.Name())
+	}
+
 	// Clean up
 	if err := toolset.Close(); err != nil {
 		t.Errorf("Failed to close toolset: %v", err)

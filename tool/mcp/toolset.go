@@ -413,31 +413,6 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 	return result, operationErr
 }
 
-// extractErrorFromContent extracts error information from MCP content.
-func (m *mcpSessionManager) extractErrorFromContent(contents []mcp.Content) string {
-	if len(contents) == 0 {
-		return "unknown error"
-	}
-
-	var errorMessages []string
-	for _, content := range contents {
-		if textContent, ok := content.(mcp.TextContent); ok {
-			errorMessages = append(errorMessages, textContent.Text)
-		}
-	}
-
-	if len(errorMessages) == 0 {
-		return "error content not readable"
-	}
-
-	if len(errorMessages) == 1 {
-		return errorMessages[0]
-	}
-
-	// Join multiple error messages.
-	return fmt.Sprintf("%s", errorMessages)
-}
-
 // close closes the MCP session and client connection.
 func (m *mcpSessionManager) close() error {
 	m.mu.Lock()
