@@ -200,3 +200,43 @@ server, err := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTransl
 
 - 自定义事件处理：在事件翻译过程中修改事件数据，添加额外的业务逻辑。
 - 监控上报：在翻译前后插入监控上报逻辑，与 Langfuse 可观测平台的结合示例可参考 [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse)。
+
+### RunAgentInput Hook
+
+可以使用 `WithRunAgentInputHook` 对 AG-UI 请求体进行统一改写，示例中演示了如何从 `ForwardedProps` 读取提示词并合并到最后一条用户消息中：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
+	if input == nil {
+		return nil, errors.New("empty input")
+	}
+	if len(input.Messages) == 0 {
+		return nil, errors.New("missing messages")
+	}
+	if input.ForwardedProps == nil {
+		return input, nil
+	}
+	otherContent, ok := input.ForwardedProps["other_content"].(string)
+	if !ok {
+		return input, nil
+	}
+
+	input.Messages[len(input.Messages)-1].Content += otherContent
+	return input, nil
+}
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunAgentInputHook(hook)))
+```
+要点：
+
+- 返回 `nil` 会保留原始输入，但保留原位修改。
+- 返回自定义的 `*adapter.RunAgentInput` 会覆盖原始输入；返回 `nil` 表示使用原输入。
+- 返回错误会中止本次请求，客户端会收到 `RunError` 事件。
