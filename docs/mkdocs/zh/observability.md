@@ -111,14 +111,16 @@ import (
 
 func main() {
     // 启动指标收集
-    metricClean, err := ametric.Start(
-        context.Background(),
-        ametric.WithEndpoint("localhost:4317"), // metric 导出地址
-    )
-    if err != nil {
-        log.Fatalf("Failed to start metric telemetry: %v", err)
-    }
-    defer metricClean()
+    mp, err := ametric.NewMeterProvider(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4318"),
+		ametric.WithProtocol("http"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create meter provider: %v", err)
+	}
+	defer mp.Shutdown(context.Background())
+	ametric.InitMeterProvider(mp)
 
     // 启动链路追踪
     traceClean, err := atrace.Start(

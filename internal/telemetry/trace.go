@@ -90,6 +90,9 @@ var (
 	KeyRunnerInput     = "trpc.go.agent.runner.input"
 	KeyRunnerOutput    = "trpc.go.agent.runner.output"
 
+	KeyTRPCAgentGoAppName = "trpc_go_agent.app.name"
+	KeyTRPCAgentGoUserID  = "trpc_go_agent.user.id"
+
 	// GenAI operation attributes
 	KeyGenAIOperationName = "gen_ai.operation.name"
 	KeyGenAISystem        = "gen_ai.system"
@@ -114,6 +117,7 @@ var (
 	KeyGenAIRequestTemperature      = "gen_ai.request.temperature"
 	KeyGenAIRequestTopP             = "gen_ai.request.top_p"
 	KeyGenAISystemInstructions      = "gen_ai.system_instructions"
+	KeyGenAITokenType               = "gen_ai.token.type"
 
 	KeyGenAIToolName          = "gen_ai.tool.name"
 	KeyGenAIToolDescription   = "gen_ai.tool.description"

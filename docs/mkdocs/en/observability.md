@@ -109,14 +109,16 @@ import (
 
 func main() {
     // Start metrics collection.
-    metricClean, err := ametric.Start(
-        context.Background(),
-        ametric.WithEndpoint("localhost:4317"), // Metric export address.
-    )
-    if err != nil {
-        log.Fatalf("Failed to start metric telemetry: %v", err)
-    }
-    defer metricClean()
+    mp, err := ametric.NewMeterProvider(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4318"),
+		ametric.WithProtocol("http"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create meter provider: %v", err)
+	}
+	defer mp.Shutdown(context.Background())
+	ametric.InitMeterProvider(mp)
 
     // Start tracing.
     traceClean, err := atrace.Start(

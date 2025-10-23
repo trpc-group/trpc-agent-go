@@ -16,27 +16,81 @@ import (
 	"fmt"
 	"os"
 
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
-
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
-var (
-	// Meter is the global OpenTelemetry meter for the trpc-go-agent.
-	Meter metric.Meter = otel.GetMeterProvider().Meter("")
-)
+// InitMeterProvider initializes the meter provider and default meters.
+func InitMeterProvider(mp *sdkmetric.MeterProvider) error {
+	itelemetry.MeterProvider = mp
 
-// Start collects telemetry with optional configuration.
+	itelemetry.ChatMeter = mp.Meter(itelemetry.MeterNameChat)
+	var err error
+	if itelemetry.ChatMetricTRPCAgentGoClientRequestCnt, err = itelemetry.ChatMeter.Int64Counter(
+		itelemetry.MetricTRPCAgentGoClientRequestCnt,
+		metric.WithDescription("Total number of client requests"),
+		metric.WithUnit("1"),
+	); err != nil {
+		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientRequestCnt: %w", err)
+	}
+	if itelemetry.ChatMetricGenAIClientTokenUsage, err = itelemetry.ChatMeter.Int64Histogram(
+		itelemetry.MetricGenAIClientTokenUsage,
+		metric.WithDescription("Token usage for client"),
+		metric.WithUnit("1"),
+	); err != nil {
+		return fmt.Errorf("failed to create chat metric GenAIClientTokenUsage: %w", err)
+	}
+	if itelemetry.ChatMetricGenAIClientOperationDuration, err = itelemetry.ChatMeter.Float64Histogram(
+		itelemetry.MetricGenAIClientOperationDuration,
+		metric.WithDescription("Duration of client operation"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create chat metric GenAIClientOperationDuration: %w", err)
+	}
+	if itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken, err = itelemetry.ChatMeter.Float64Histogram(
+		itelemetry.MetricTRPCAgentGoClientTimeToFirstToken,
+		metric.WithDescription("Time to first token for client"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimeToFirstToken: %w", err)
+	}
+	if itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken, err = itelemetry.ChatMeter.Float64Histogram(
+		itelemetry.MetricTRPCAgentGoClientTimePerOutputToken,
+		metric.WithDescription("Time per output token for client"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimePerOutputToken: %w", err)
+	}
+
+	itelemetry.ExecuteToolMeter = mp.Meter(itelemetry.MeterNameExecuteTool)
+	if itelemetry.ExecuteToolMetricTRPCAgentGoClientRequestCnt, err = itelemetry.ExecuteToolMeter.Int64Counter(
+		itelemetry.MetricTRPCAgentGoClientRequestCnt,
+		metric.WithDescription("Total number of client requests"),
+		metric.WithUnit("1"),
+	); err != nil {
+		return fmt.Errorf("failed to create execute tool metric TRPCAgentGoClientRequestCnt: %w", err)
+	}
+	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration, err = itelemetry.ExecuteToolMeter.Float64Histogram(
+		itelemetry.MetricGenAIClientOperationDuration,
+		metric.WithDescription("Duration of client operation"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create execute tool metric GenAIClientOperationDuration: %w", err)
+	}
+	return nil
+}
+
+// NewMeterProvider creates a new meter provider with optional configuration.
 // The environment variables described below can be used for Endpoint configuration.
 // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (default: "https://localhost:4317")
 // https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
-func Start(ctx context.Context, opts ...Option) (clean func() error, err error) {
+func NewMeterProvider(ctx context.Context, opts ...Option) (*sdkmetric.MeterProvider, error) {
 	// Set default options
 	options := &options{
 		serviceName:      itelemetry.ServiceName,
@@ -64,24 +118,18 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
-	var shutdownMeterProvider func(context.Context) error
+	var meterProvider *sdkmetric.MeterProvider
 	switch options.protocol {
 	case itelemetry.ProtocolHTTP:
-		shutdownMeterProvider, err = initHTTPMeterProvider(ctx, res, options.metricsEndpoint)
+		meterProvider, err = newHTTPMeterProvider(ctx, res, options.metricsEndpoint)
 	default:
-		shutdownMeterProvider, err = initGRPCMeterProvider(ctx, res, options.metricsEndpoint)
+		meterProvider, err = newGRPCMeterProvider(ctx, res, options.metricsEndpoint)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
 	}
 
-	Meter = otel.Meter(itelemetry.InstrumentName)
-	return func() error {
-		if err := shutdownMeterProvider(ctx); err != nil {
-			return fmt.Errorf("failed to shutdown MeterProvider: %w", err)
-		}
-		return err
-	}, nil
+	return meterProvider, nil
 }
 
 func metricsEndpoint(protocol string) string {
@@ -102,7 +150,7 @@ func metricsEndpoint(protocol string) string {
 }
 
 // Initializes an OTLP HTTP exporter, and configures the corresponding meter provider.
-func initHTTPMeterProvider(ctx context.Context, res *resource.Resource, endpoint string) (func(context.Context) error, error) {
+func newHTTPMeterProvider(ctx context.Context, res *resource.Resource, endpoint string) (*sdkmetric.MeterProvider, error) {
 	metricExporter, err := otlpmetrichttp.New(ctx,
 		otlpmetrichttp.WithEndpoint(endpoint),
 		otlpmetrichttp.WithInsecure())
@@ -114,16 +162,15 @@ func initHTTPMeterProvider(ctx context.Context, res *resource.Resource, endpoint
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
 		sdkmetric.WithResource(res),
 	)
-	otel.SetMeterProvider(meterProvider)
 
-	return meterProvider.Shutdown, nil
+	return meterProvider, nil
 }
 
 // Initializes an OTLP gRPC exporter, and configures the corresponding meter provider.
-func initGRPCMeterProvider(ctx context.Context, res *resource.Resource, endpoint string) (func(context.Context) error, error) {
+func newGRPCMeterProvider(ctx context.Context, res *resource.Resource, endpoint string) (*sdkmetric.MeterProvider, error) {
 	metricsConn, err := itelemetry.NewGRPCConn(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize metrics connection: %w", err)
+		return nil, fmt.Errorf("failed to create metrics connection: %w", err)
 	}
 
 	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(metricsConn))
@@ -135,9 +182,8 @@ func initGRPCMeterProvider(ctx context.Context, res *resource.Resource, endpoint
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
 		sdkmetric.WithResource(res),
 	)
-	otel.SetMeterProvider(meterProvider)
 
-	return meterProvider.Shutdown, nil
+	return meterProvider, nil
 }
 
 // Option is a function that configures meter options.

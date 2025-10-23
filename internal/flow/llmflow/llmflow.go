@@ -176,7 +176,7 @@ func (f *Flow) runOneStep(
 		_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(invocation.Model.Info().Name))
 	}
 	defer span.End()
-
+	itelemetry.IncChatRequestCnt(ctx, invocation.Model.Info().Name, invocation.Session)
 	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
@@ -224,6 +224,10 @@ func (f *Flow) processStreamingResponses(
 		}
 
 		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID)
+		if response.Usage != nil {
+			itelemetry.RecordChatInputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(response.Usage.PromptTokens))
+			itelemetry.RecordChatOutputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(response.Usage.CompletionTokens))
+		}
 	}
 
 	return lastEvent, nil

@@ -47,12 +47,13 @@ func main() {
 	fmt.Println(strings.Repeat("=", 70))
 
 	// Initialize OpenTelemetry.
-	if err := initTelemetry(); err != nil {
+	meter, err := initTelemetry()
+	if err != nil {
 		log.Fatalf("Failed to initialize telemetry: %v", err)
 	}
 
 	// Create the example.
-	example := &toolTimerExample{}
+	example := &toolTimerExample{meter: meter}
 
 	// Setup and run.
 	if err := example.run(); err != nil {
@@ -62,6 +63,7 @@ func main() {
 
 // toolTimerExample demonstrates tool execution timing with telemetry integration.
 type toolTimerExample struct {
+	meter     metric.Meter
 	runner    runner.Runner
 	userID    string
 	sessionID string

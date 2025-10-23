@@ -590,6 +590,15 @@ func NewLLMNodeFunc(
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
+		sessInfo := &session.Session{}
+		if sess, ok := state[StateKeySession]; ok {
+			if s, ok := sess.(*session.Session); ok && s != nil {
+				sessInfo.ID = s.ID
+				sessInfo.AppName = s.AppName
+				sessInfo.UserID = s.UserID
+			}
+		}
+		itelemetry.IncChatRequestCnt(ctx, llmModel.Info().Name, sessInfo)
 		_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
