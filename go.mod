@@ -2,8 +2,6 @@ module trpc.group/trpc-go/trpc-agent-go
 
 go 1.21
 
-replace trpc.group/trpc-go/trpc-a2a-go => github.com/hyprh/trpc-a2a-go v0.2.1-0.20251021024052-2b2f5c6d4271
-
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/gomutex/godocx v0.1.5
@@ -36,7 +34,7 @@ require (
 	golang.org/x/text v0.21.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251020094851-6ab922c9dab1
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a
 	trpc.group/trpc-go/trpc-mcp-go v0.0.5
 )
 
