@@ -70,7 +70,7 @@ type EvalMetricResult struct {
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
 // It mirrors the schema used by ADK Web, with field names in snake_case to align with the JSON format.
 type EvalMetricResultPerInvocation struct {
-	// ActualInvocation is the actual invocation, captureed from agent run.
+	// ActualInvocation is the actual invocation, captured from agent run.
 	ActualInvocation *evalset.Invocation `json:"actual_invocation,omitempty"`
 	// ExpectedInvocation is the expected invocation.
 	ExpectedInvocation *evalset.Invocation `json:"expected_invocation,omitempty"`

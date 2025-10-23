@@ -80,19 +80,19 @@ type agentEvaluator struct {
 
 // EvaluationResult contains the aggregated outcome of running an evaluation across multiple runs.
 type EvaluationResult struct {
-	AppName       string
-	EvalSetID     string
-	OverallStatus status.EvalStatus
-	ExecutionTime time.Duration
-	EvalCases     []*EvaluationCaseResult
+	AppName       string                  // AppName identifies the agent being evaluated.
+	EvalSetID     string                  // EvalSetID identifies the evaluation set used in this run.
+	OverallStatus status.EvalStatus       // OverallStatus summarizes the aggregated evaluation status across cases.
+	ExecutionTime time.Duration           // ExecutionTime records the total latency for the evaluation run.
+	EvalCases     []*EvaluationCaseResult // EvalCases contains aggregated results for each evaluation case.
 }
 
 // EvaluationCaseResult aggregates the outcome of a single eval case across multiple runs.
 type EvaluationCaseResult struct {
-	EvalCaseID      string
-	OverallStatus   status.EvalStatus
-	EvalCaseResults []*evalresult.EvalCaseResult
-	MetricResults   []*evalresult.EvalMetricResult
+	EvalCaseID      string                         // EvalCaseID identifies the evaluation case.
+	OverallStatus   status.EvalStatus              // OverallStatus summarizes the overall status of case across runs.
+	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults stores the per-run results for this case.
+	MetricResults   []*evalresult.EvalMetricResult // MetricResults lists aggregated metric outcomes across runs.
 }
 
 // Evaluate evaluates agent against the specified eval set across multiple runs.
@@ -123,7 +123,7 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 // collectCaseResults runs evaluation on the specified eval set across multiple runs and groups results by case ID.
 func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID string) ([]*EvaluationCaseResult, error) {
 	// Due to multiple runs, an evaluation case may be evaluated multiple times and generate multiple evaluation
-	// case results. So EvalCaseResult need to be grouped by case ID.
+	// case results. So EvalCaseResults need to be grouped by case ID.
 	// caseResultsByID is a map from case ID to a list of eval case results.
 	caseResultsByID := make(map[string][]*evalresult.EvalCaseResult)
 	for range a.numRuns {
