@@ -393,3 +393,50 @@ Memory Service is used to record user preference information, supporting persona
 1. [Runner](runner.md) - Learn the recommended usage
 2. [Session](session.md) - Understand session management
 3. [Multi-Agent](multiagent.md) - Learn multi-Agent systems
+
+## Runtime Instruction Updates
+
+You can update an Agent’s behavior-defining text at runtime without rebuilding or restarting the Agent.
+
+What changes dynamically
+
+- Instruction: the behavior guideline appended to the system message.
+- Global Instruction (system prompt): the system-level preface prepended to the request.
+
+Both can be updated on an existing `LLMAgent` instance and take effect on subsequent model requests.
+
+Example
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+// 1) Build model and agent once at startup.
+mdl := openai.New("gpt-4o-mini", openai.Options{})
+llm := llmagent.New(
+    "support-bot",
+    llmagent.WithModel(mdl),
+    llmagent.WithInstruction("Be helpful and concise."),
+)
+run := runner.NewRunner("my-app", llm)
+
+// 2) Later, change behavior at runtime (e.g., user updates prompt in UI).
+llm.SetInstruction("Translate all user inputs to French.")
+llm.SetGlobalInstruction("System: Safety first. No PII leakage.")
+
+// 3) Subsequent runs use the new instructions.
+msg := model.NewUserMessage("Where is the nearest museum?")
+ch, err := run.Run(context.Background(), "u1", "s1", msg)
+_ = ch; _ = err
+```
+
+Notes
+
+- Thread‑safe: the setters are concurrency‑safe and can be called while the service is handling requests.
+- Mid‑turn behavior: if an Agent’s current turn triggers more than one model request (e.g., due to tool calls), updates may apply to subsequent requests in the same turn. If you need per‑run stability, set or freeze the text at the start of the run.
+- Per‑session personalization: for per‑user or per‑session data, prefer placeholders in the instruction and session state injection (see the “Placeholder Variables” section above).
