@@ -11,6 +11,7 @@ package langfuse
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -32,6 +33,15 @@ func TestTransform(t *testing.T) {
 			name:     "empty input",
 			input:    nil,
 			expected: nil,
+		},
+		{
+			name: "nil scope spans and nil spans",
+			input: []*tracepb.ResourceSpans{
+				{ScopeSpans: []*tracepb.ScopeSpans{nil, {}}},
+			},
+			expected: []*tracepb.ResourceSpans{
+				{ScopeSpans: []*tracepb.ScopeSpans{nil, {}}},
+			},
 		},
 		{
 			name:     "empty slice",
@@ -501,6 +511,22 @@ func TestExporterExportSpans(t *testing.T) {
 
 	// Note: We can't easily test with real ReadOnlySpan objects without more complex setup
 	// The transformation logic is already tested in the other test functions
+}
+
+// mockErrorClient returns error on upload
+
+type mockErrorClient struct{}
+
+func (m *mockErrorClient) Start(ctx context.Context) error { return nil }
+func (m *mockErrorClient) Stop(ctx context.Context) error  { return nil }
+func (m *mockErrorClient) UploadTraces(ctx context.Context, spans []*tracepb.ResourceSpans) error {
+	return fmt.Errorf("upload failed")
+}
+
+func TestExporterExportSpans_Error(t *testing.T) {
+	exp := &exporter{client: &mockErrorClient{}}
+	err := exp.ExportSpans(context.Background(), nil)
+	assert.Error(t, err)
 }
 
 // Integration test for the full transformation pipeline

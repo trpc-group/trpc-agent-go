@@ -16,6 +16,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestWithInsecure(t *testing.T) {
+	cfg := &config{}
+	WithInsecure()(cfg)
+	assert.True(t, cfg.insecure)
+}
+
 func TestNewConfigFromEnv(t *testing.T) {
 	tests := []struct {
 		name     string
