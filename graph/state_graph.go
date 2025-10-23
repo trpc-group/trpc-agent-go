@@ -858,8 +858,11 @@ type modelResponseConfig struct {
 	Span           oteltrace.Span
 	// NodeID, when provided, is used as the event author.
 	NodeID string
-	// AfterToolResult indicates this model call happens after tools executed
-	// in the same turn. When true, streamed reasoning is considered final.
+	// AfterToolResult indicates this model call happens after at least one
+	// tool message was produced in the same user turn. By default, such
+	// calls are considered to produce final reasoning unless this call
+	// itself shows tool intent (which takes precedence and yields
+	// reasoning.tool).
 	AfterToolResult bool
 	// ToolPlanSeen is a shared flag updated while streaming indicating we have
 	// observed tool call intent (via tool_calls deltas or messages) in this
@@ -1377,8 +1380,9 @@ type modelExecutionConfig struct {
 	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
 	Span           oteltrace.Span
 	// AfterToolResult indicates this model call happens after at least one
-	// tool.result (i.e., a tool.response event) in the current turn. When true,
-	// the streamed reasoning belongs to the final stage by default.
+	// tool.response in the current turn. By default, such calls carry final
+	// reasoning unless this call again shows tool intent (which takes
+	// precedence and yields reasoning.tool).
 	AfterToolResult bool
 }
 

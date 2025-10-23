@@ -35,6 +35,18 @@ func TestAttachReasoningTag_AfterToolResult_Final(t *testing.T) {
 	}
 }
 
+func TestAttachReasoningTag_AfterToolResult_WithToolDelta_Tool(t *testing.T) {
+	// If a chunk contains tool intent even after tools have run in this turn,
+	// it should still be tagged as reasoning.tool.
+	delta := model.Message{ToolCalls: []model.ToolCall{{ID: "t1"}}}
+	ev := buildStreamEvent(model.ObjectTypeChatCompletionChunk, delta, model.Message{})
+	cfg := modelResponseConfig{AfterToolResult: true}
+	attachReasoningTag(ev, cfg)
+	if ev.Tag != event.TagReasoningTool {
+		t.Fatalf("expected tag %q, got %q", event.TagReasoningTool, ev.Tag)
+	}
+}
+
 func TestAttachReasoningTag_ToolPlanSeen_Tool(t *testing.T) {
 	ev := buildStreamEvent(model.ObjectTypeChatCompletionChunk, model.Message{}, model.Message{})
 	seen := true

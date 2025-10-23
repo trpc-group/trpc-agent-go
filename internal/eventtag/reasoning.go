@@ -37,11 +37,16 @@ func DecideReasoningTag(e *event.Event, afterTool bool, toolPlanSeen *bool) stri
 	if toolPlanSeen != nil && hasToolDelta {
 		*toolPlanSeen = true
 	}
+	// Tagging priority:
+	// 1) If this call is planning tools (either detected on this chunk or previously
+	//    within the same call), it is reasoning for tools.
+	// 2) Else if we're after any tool responses in this turn, it's the final reasoning.
+	// 3) Otherwise, reasoning is still unknown.
 	switch {
-	case afterTool:
-		return event.TagReasoningFinal
 	case (toolPlanSeen != nil && *toolPlanSeen) || hasToolDelta:
 		return event.TagReasoningTool
+	case afterTool:
+		return event.TagReasoningFinal
 	default:
 		return event.TagReasoningUnknown
 	}

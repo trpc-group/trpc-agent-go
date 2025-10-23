@@ -45,6 +45,16 @@ func TestDecideReasoningTag_AfterTool_Final(t *testing.T) {
 	}
 }
 
+func TestDecideReasoningTag_AfterTool_WithToolDelta_Tool(t *testing.T) {
+	// Even if afterTool is true, if the current chunk reveals tool intent,
+	// it should be tagged as reasoning.tool.
+	delta := model.Message{ToolCalls: []model.ToolCall{{ID: "t1"}}}
+	ev := buildStreamEvent(model.ObjectTypeChatCompletionChunk, delta, model.Message{})
+	if got := DecideReasoningTag(ev, true, nil); got != event.TagReasoningTool {
+		t.Fatalf("expected %q, got %q", event.TagReasoningTool, got)
+	}
+}
+
 func TestDecideReasoningTag_ToolDelta_SetsSeenAndTool(t *testing.T) {
 	// Delta contains tool call -> should mark as tool and set seen=true
 	delta := model.Message{ToolCalls: []model.ToolCall{{ID: "t1"}}}

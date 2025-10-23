@@ -343,10 +343,10 @@ func hasToolSinceLastUser(messages []model.Message) bool {
 }
 
 // attachReasoningTagLLM annotates an LLM streaming event with a reasoning tag.
-// Tagging rules mirror the graph implementation:
-//   - afterTool == true  => reasoning.final
-//   - toolPlanSeen       => reasoning.tool
-//   - else               => reasoning.unknown
+// Tagging rules mirror the graph implementation, with precedence:
+//   - tool intent detected (now or earlier in this call) => reasoning.tool
+//   - else if afterTool == true                          => reasoning.final
+//   - else                                               => reasoning.unknown
 func attachReasoningTagLLM(e *event.Event, afterTool bool, toolPlanSeen *bool) {
 	tag := eventtag.DecideReasoningTag(e, afterTool, toolPlanSeen)
 	if tag != "" {

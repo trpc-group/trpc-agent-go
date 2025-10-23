@@ -63,3 +63,18 @@ func TestAttachReasoningTagLLM(t *testing.T) {
 		t.Fatalf("expected to contain %q, got %q", event.TagReasoningUnknown, ev.Tag)
 	}
 }
+
+func TestAttachReasoningTagLLM_AfterTool_WithToolDelta_Tool(t *testing.T) {
+	// Build a streaming event that carries tool intent in delta
+	resp := &model.Response{
+		Object:    model.ObjectTypeChatCompletionChunk,
+		Choices:   []model.Choice{{Index: 0, Delta: model.Message{ToolCalls: []model.ToolCall{{ID: "t1"}}}}},
+		IsPartial: true,
+		Done:      false,
+	}
+	ev := event.NewResponseEvent("inv", "agent", resp)
+	attachReasoningTagLLM(ev, true, nil)
+	if ev.Tag != event.TagReasoningTool {
+		t.Fatalf("expected %q, got %q", event.TagReasoningTool, ev.Tag)
+	}
+}
