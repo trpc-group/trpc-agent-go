@@ -376,6 +376,8 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		} else {
 			searchQuery, err = vs.buildHybridSearchQuery(query)
 		}
+	case vectorstore.SearchModeFilter:
+		searchQuery, err = vs.buildFilterSearchQuery(query)
 	default:
 		searchQuery, err = vs.buildVectorSearchQuery(query)
 	}

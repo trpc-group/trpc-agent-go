@@ -75,6 +75,23 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 	return searchBody.SearchRequestBodyCaster(), nil
 }
 
+func (vs *VectorStore) buildFilterSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
+	filterQuery, err := vs.buildFilterQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+	if filterQuery == nil {
+		return nil, fmt.Errorf("elasticsearch filter query is nil")
+	}
+
+	// Build the complete search request using official SearchRequestBody.
+	searchBody := esdsl.NewSearchRequestBody().
+		Query(filterQuery.QueryCaster()).
+		Size(vs.getMaxResult(query.Limit))
+
+	return searchBody.SearchRequestBodyCaster(), nil
+}
+
 // buildKeywordSearchQuery builds a keyword-based search query.
 func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
 	contentField := vs.option.contentFieldName
