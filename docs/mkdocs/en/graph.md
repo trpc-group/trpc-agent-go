@@ -542,6 +542,65 @@ stateGraph.AddConditionalEdges("analyze", complexityCondition, map[string]string
 })
 ```
 
+### 4.1 Named Ends (Per‑node Ends)
+
+When a node produces business outcomes (e.g., `approve`/`reject`/`manual_review`) and you want to route by those semantic labels, declare node‑local Named Ends (Ends).
+
+Why this helps:
+- Central, declarative mapping from labels to concrete targets at the node site.
+- Compile‑time validation: `Compile()` verifies every end target exists (or is the special `graph.End`).
+- Unified routing: reused by both `Command.GoTo` and conditional edges.
+- Decoupling: nodes express outcomes in business terms; the mapping ties outcomes to graph structure.
+
+API:
+
+```go
+// Declare Ends on a node (label -> concrete target)
+sg.AddNode("decision", decideNode,
+    graph.WithEndsMap(map[string]string{
+        "approve": "approved",
+        "reject":  "rejected",
+        // You may map a label to the terminal End
+        // "drop":  graph.End,
+    }),
+)
+
+// Short form: label equals the target node ID
+sg.AddNode("router", routerNode, graph.WithEnds("nodeB", "nodeC"))
+```
+
+Command‑style routing (Command.GoTo):
+
+```go
+func decideNode(ctx context.Context, s graph.State) (any, error) {
+    switch s["decision"].(string) {
+    case "approve":
+        return &graph.Command{GoTo: "approve"}, nil // label
+    case "reject":
+        return &graph.Command{GoTo: "reject"}, nil
+    default:
+        return &graph.Command{GoTo: "reject"}, nil
+    }
+}
+```
+
+Conditional edges can reuse Ends: when `AddConditionalEdges(from, condition, pathMap)` receives a `nil` `pathMap` or no match is found, the executor tries the node’s Ends; if still no match, the return string is treated as a concrete node ID.
+
+Resolution precedence:
+1. Explicit mapping in the conditional edge’s `pathMap`.
+2. The node’s Ends mapping (label → concrete target).
+3. Treat the return string as a node ID.
+
+Compile‑time checks:
+- `WithEndsMap/WithEnds` targets are validated in `Compile()`.
+- Targets must exist in the graph or be the special constant `graph.End`.
+
+Notes:
+- Use the constant `graph.End` to terminate; do not use the string "END".
+- With `Command.GoTo`, you don’t need to add a static `AddEdge(from, to)` for the target; ensure the target exists and set `SetFinishPoint(target)` if it should end the graph.
+
+Runnable example: `examples/graph/multiends`.
+
 ### 5. Tool Node Integration
 
 ```go

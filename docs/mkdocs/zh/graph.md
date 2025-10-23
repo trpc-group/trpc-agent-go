@@ -618,6 +618,65 @@ stateGraph.AddConditionalEdges("analyze", complexityCondition, map[string]string
 })
 ```
 
+### 4.1 节点命名分支（Ends）
+
+当一个节点需要把“业务结论”（例如 `approve`/`reject`/`manual_review`）路由到具体的下游节点时，建议在该节点上声明命名分支（Ends）。
+
+作用与优势：
+- 在节点本地集中声明“符号名 → 具体目标”的映射，更直观、更易重构；
+- 编译期校验：`Compile()` 会检查映射中的目标是否存在（或为常量 `graph.End`）；
+- 路由统一：命令式路由（`Command.GoTo`）与条件路由都可复用同一份映射；
+- 解耦：节点返回业务语义（例如 `GoTo:"approve"`），映射负责落地到图结构。
+
+API：
+
+```go
+// 在节点上声明 Ends（符号名到具体目标）
+sg.AddNode("decision", decideNode,
+    graph.WithEndsMap(map[string]string{
+        "approve": "approved",
+        "reject":  "rejected",
+        // 也可以把某个符号映射到终点
+        // "drop":  graph.End,
+    }),
+)
+
+// 简写：符号名与目标节点名相同的情况
+sg.AddNode("router", routerNode, graph.WithEnds("nodeB", "nodeC"))
+```
+
+命令式路由（Command.GoTo）：
+
+```go
+func decideNode(ctx context.Context, s graph.State) (any, error) {
+    switch s["decision"].(string) {
+    case "approve":
+        return &graph.Command{GoTo: "approve"}, nil // 符号名
+    case "reject":
+        return &graph.Command{GoTo: "reject"}, nil
+    default:
+        return &graph.Command{GoTo: "reject"}, nil
+    }
+}
+```
+
+条件路由复用 Ends：当 `AddConditionalEdges(from, condition, pathMap)` 的 `pathMap` 为 `nil` 或未匹配到键时，执行器会继续使用该节点的 Ends 解析返回值；若仍未匹配，则把返回值当作具体节点 ID。
+
+解析优先级：
+1. 条件边 `pathMap` 的显式映射；
+2. 当前节点的 Ends 映射（符号名 → 具体目标）；
+3. 直接把返回值当作节点 ID。
+
+编译期校验：
+- `WithEndsMap/WithEnds` 中声明的目标会在 `Compile()` 阶段校验；
+- 目标必须存在于图中或为特殊常量 `graph.End`。
+
+注意：
+- 请使用常量 `graph.End` 表示“终点”，不要使用字符串 "END"；
+- 当通过 `Command.GoTo` 进行路由时，无需额外添加 `AddEdge(from, to)`；只需保证目标节点存在，若为终点需设置 `SetFinishPoint(target)`。
+
+完整可运行示例：`examples/graph/multiends`。
+
 ### 5. 工具节点集成
 
 ```go

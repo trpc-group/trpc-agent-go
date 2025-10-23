@@ -169,6 +169,35 @@ func WithDestinations(dests map[string]string) Option {
 	}
 }
 
+// WithEndsMap declares per-node named ends and their concrete destinations.
+// The map keys are local symbolic names (e.g., "approved"), and values are
+// concrete node IDs (or the special End) this node may route to.
+// These ends are used at runtime to resolve Command.GoTo and conditional
+// branch results, and at compile time for stronger validation.
+func WithEndsMap(ends map[string]string) Option {
+	return func(node *Node) {
+		if node.ends == nil {
+			node.ends = make(map[string]string)
+		}
+		for k, v := range ends {
+			node.ends[k] = v
+		}
+	}
+}
+
+// WithEnds declares per-node named ends where the symbolic names are also the
+// destination node IDs. Equivalent to WithEndsMap({name: name}).
+func WithEnds(names ...string) Option {
+	return func(node *Node) {
+		if node.ends == nil {
+			node.ends = make(map[string]string)
+		}
+		for _, n := range names {
+			node.ends[n] = n
+		}
+	}
+}
+
 // WithPreNodeCallback sets a callback that will be executed before this specific node.
 // This callback is specific to this node and will be executed in addition to any global callbacks.
 func WithPreNodeCallback(callback BeforeNodeCallback) Option {

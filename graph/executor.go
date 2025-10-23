@@ -1972,6 +1972,12 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 			e.updateStateFromResult(execCtx, v)
 		case *Command: // Single command.
 			if v != nil {
+				// Resolve GoTo via per-node ends if provided.
+				if v.GoTo != "" {
+					if resolved := e.resolveTargetByEnds(t.NodeID, v.GoTo); resolved != "" {
+						v.GoTo = resolved
+					}
+				}
 				if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
 					return false, err
 				}
@@ -1985,6 +1991,14 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 		case []*Command: // Fan-out commands.
 			// Fan-out: enqueue tasks with overlays.
 			routed = true
+			// Resolve per-node ends for each command before enqueue.
+			for _, c := range v {
+				if c != nil && c.GoTo != "" {
+					if resolved := e.resolveTargetByEnds(t.NodeID, c.GoTo); resolved != "" {
+						c.GoTo = resolved
+					}
+				}
+			}
 			e.enqueueCommands(execCtx, t, v)
 		default:
 		}
@@ -1998,6 +2012,22 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 	}
 
 	return routed, nil
+}
+
+// resolveTargetByEnds resolves a symbolic target name using the node's per-node
+// ends mapping. If no mapping is found, returns an empty string.
+func (e *Executor) resolveTargetByEnds(fromNodeID, target string) string {
+	if target == "" {
+		return ""
+	}
+	node, ok := e.graph.Node(fromNodeID)
+	if !ok || node == nil || node.ends == nil {
+		return ""
+	}
+	if concrete, exists := node.ends[target]; exists {
+		return concrete
+	}
+	return ""
 }
 
 // enqueueCommands enqueues a set of commands as pending tasks for subsequent steps.
@@ -2360,10 +2390,20 @@ func (e *Executor) processConditionalResult(
 	result string,
 	step int,
 ) error {
-	target, exists := condEdge.PathMap[result]
-	if !exists {
-		log.Warnf("⚠️ Step %d: No target found for conditional result %v in path map", step, result)
-		return nil
+	// Determine target by precedence:
+	// 1) explicit PathMap mapping
+	// 2) node-level ends mapping (symbolic -> concrete)
+	// 3) treat result as a concrete node id
+	// First, check explicit PathMap mapping.
+	target, ok := condEdge.PathMap[result]
+	if !ok {
+		// Then resolve by node-level ends mapping (symbolic -> concrete).
+		if concrete := e.resolveTargetByEnds(condEdge.From, result); concrete != "" {
+			target = concrete
+		} else {
+			// Finally, fallback to treating the result as a concrete node id.
+			target = result
+		}
 	}
 
 	// Create and trigger the target channel.
