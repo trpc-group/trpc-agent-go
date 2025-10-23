@@ -42,11 +42,10 @@ const (
 
 // SessionState is the state of a session.
 type SessionState struct {
-	ID        string                      `json:"id"`
-	State     session.StateMap            `json:"state"`
-	CreatedAt time.Time                   `json:"createdAt"`
-	UpdatedAt time.Time                   `json:"updatedAt"`
-	Summaries map[string]*session.Summary `json:"summaries,omitempty"`
+	ID        string           `json:"id"`
+	State     session.StateMap `json:"state"`
+	CreatedAt time.Time        `json:"createdAt"`
+	UpdatedAt time.Time        `json:"updatedAt"`
 }
 
 // Service is the redis session service.
