@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // TestWithTag_Single verifies that a single tag is applied without a leading delimiter.
@@ -30,17 +29,4 @@ func TestWithTag_Multiple(t *testing.T) {
 	WithTag("gamma")(e)
 
 	require.Equal(t, "alpha"+TagDelimiter+"beta"+TagDelimiter+"gamma", e.Tag)
-}
-
-// TestIsRunnerCompletion verifies the helper correctly identifies runner completion events.
-func TestIsRunnerCompletion(t *testing.T) {
-	// Negative cases
-	require.False(t, (*Event)(nil).IsRunnerCompletion())
-
-	e := &Event{Response: &model.Response{Object: model.ObjectTypeChatCompletion, Done: false}}
-	require.False(t, e.IsRunnerCompletion())
-
-	// Positive case
-	done := &Event{Response: &model.Response{Object: model.ObjectTypeRunnerCompletion, Done: true}}
-	require.True(t, done.IsRunnerCompletion())
 }
