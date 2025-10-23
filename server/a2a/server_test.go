@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
@@ -732,6 +734,75 @@ func TestMessageProcessor_HandleError(t *testing.T) {
 	}
 }
 
+func TestMessageProcessor_HandleError_HandlerFailure(t *testing.T) {
+	proc := &messageProcessor{
+		errorHandler: func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+			return nil, fmt.Errorf("handler failure")
+		},
+	}
+	msg := &protocol.Message{MessageID: "err"}
+	_, err := proc.handleError(context.Background(), msg, false, errors.New("boom"))
+	assert.Error(t, err)
+}
+
+func TestMessageProcessor_HandleStreamingProcessingError_HandlerFailure(t *testing.T) {
+	proc := &messageProcessor{
+		errorHandler: func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+			return nil, fmt.Errorf("handler failure")
+		},
+	}
+	msg := &protocol.Message{MessageID: "stream"}
+	err := proc.handleStreamingProcessingError(context.Background(), msg, &mockTaskSubscriber{}, errors.New("boom"))
+	assert.Error(t, err)
+}
+
+func TestMessageProcessor_HandleError_DebugLogging(t *testing.T) {
+	proc := &messageProcessor{
+		debugLogging: true,
+		errorHandler: func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+			res := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+			return &res, nil
+		},
+	}
+	msg := &protocol.Message{MessageID: "dbg"}
+	res, err := proc.handleError(context.Background(), msg, false, errors.New("boom"))
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.NotNil(t, res.Result)
+	streamRes, err := proc.handleError(context.Background(), msg, true, errors.New("boom"))
+	assert.NoError(t, err)
+	assert.NotNil(t, streamRes)
+	assert.NotNil(t, streamRes.StreamingEvents)
+}
+
+func TestIsFinalStreamingEventVariants(t *testing.T) {
+	assert.False(t, isFinalStreamingEvent(nil))
+	assert.False(t, isFinalStreamingEvent(&event.Event{}))
+	base := &event.Event{Response: &model.Response{Done: false}}
+	assert.False(t, isFinalStreamingEvent(base))
+	toolCall := &event.Event{Response: &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "call"}}}},
+		},
+	}}
+	assert.False(t, isFinalStreamingEvent(toolCall))
+	toolRole := &event.Event{Response: &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleTool}},
+		},
+	}}
+	assert.False(t, isFinalStreamingEvent(toolRole))
+	final := &event.Event{Response: &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant}},
+		},
+	}}
+	assert.True(t, isFinalStreamingEvent(final))
+}
+
 func TestMessageProcessor_ProcessMessage_EdgeCases(t *testing.T) {
 	ctxID := "edge-ctx"
 
@@ -818,6 +889,377 @@ func TestMessageProcessor_ProcessMessage_EdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMessageProcessor_ProcessMessage_ContextIDMissing(t *testing.T) {
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "user"})
+	proc := createTestMessageProcessor()
+	msg := protocol.Message{
+		MessageID: "missing",
+		Role:      protocol.MessageRoleUser,
+	}
+	result, err := proc.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{}, &mockTaskHandler{})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Result)
+}
+
+func TestMessageProcessor_HandleStreamingProcessingError(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx-stream"
+	msg := &protocol.Message{ContextID: &ctxID}
+	processor := createTestMessageProcessor()
+	processor.debugLogging = true
+
+	t.Run("send_failure", func(t *testing.T) {
+		sub := &mockTaskSubscriber{
+			sendFunc: func(protocol.StreamingMessageEvent) error {
+				return fmt.Errorf("send failure")
+			},
+		}
+		err := processor.handleStreamingProcessingError(ctx, msg, sub, errors.New("run failed"))
+		assert.Error(t, err)
+	})
+
+	t.Run("success_path", func(t *testing.T) {
+		var received protocol.StreamingMessageEvent
+		sub := &mockTaskSubscriber{
+			sendFunc: func(evt protocol.StreamingMessageEvent) error {
+				received = evt
+				return nil
+			},
+		}
+		err := processor.handleStreamingProcessingError(ctx, msg, sub, errors.New("upstream err"))
+		assert.NoError(t, err)
+		assert.NotNil(t, received.Result)
+	})
+}
+
+func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "stream-ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	t.Run("nil_agent_message", func(t *testing.T) {
+		processor := createTestMessageProcessor()
+		handler := &mockTaskHandler{}
+
+		result, err := processor.processStreamingMessage(ctx, "user", "session", msg, nil, handler, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotNil(t, result.StreamingEvents)
+	})
+
+	t.Run("runner_error", func(t *testing.T) {
+		var closed bool
+		sub := &mockTaskSubscriber{
+			closeFunc: func() { closed = true },
+		}
+		handler := &mockTaskHandler{
+			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+				return "task-id", nil
+			},
+			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+				return sub, nil
+			},
+		}
+		processor := createTestMessageProcessor()
+		processor.runner = &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				return nil, errors.New("runner failure")
+			},
+		}
+		agentMsg := &model.Message{Role: model.RoleUser, Content: "input"}
+
+		result, err := processor.processStreamingMessage(ctx, "user", "session", msg, agentMsg, handler, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotNil(t, result.StreamingEvents)
+		assert.True(t, closed)
+	})
+
+	t.Run("build_task_error", func(t *testing.T) {
+		processor := createTestMessageProcessor()
+		handler := &mockTaskHandler{
+			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+				return "", fmt.Errorf("build failed")
+			},
+		}
+		result, err := processor.processStreamingMessage(ctx, "user", "session", msg, &model.Message{}, handler, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotNil(t, result.StreamingEvents)
+	})
+
+	t.Run("subscribe_error", func(t *testing.T) {
+		processor := createTestMessageProcessor()
+		handler := &mockTaskHandler{
+			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+				return "task", nil
+			},
+			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+				return nil, fmt.Errorf("subscribe failed")
+			},
+		}
+		result, err := processor.processStreamingMessage(ctx, "user", "session", msg, &model.Message{}, handler, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotNil(t, result.StreamingEvents)
+	})
+
+	t.Run("success_path", func(t *testing.T) {
+		processor := createTestMessageProcessor()
+		processor.debugLogging = true
+		eventCh := make(chan *event.Event, 1)
+		eventCh <- &event.Event{
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{Delta: model.Message{Content: "chunk"}},
+				},
+			},
+		}
+		close(eventCh)
+		processor.runner = &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				return eventCh, nil
+			},
+		}
+		handler := &mockTaskHandler{
+			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+				return "task", nil
+			},
+			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+				return &mockTaskSubscriber{}, nil
+			},
+			cleanTaskFunc: func(taskID *string) error { return nil },
+		}
+		result, err := processor.processStreamingMessage(ctx, "user", "session", msg, &model.Message{Content: "input"}, handler, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotNil(t, result.StreamingEvents)
+	})
+}
+
+func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "batch-ctx"
+	msg := &protocol.Message{ContextID: &ctxID, MessageID: "msg"}
+	taskID := "tid"
+
+	t.Run("empty_batch", func(t *testing.T) {
+		proc := createTestMessageProcessor()
+		sub := &mockTaskSubscriber{}
+		cont, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{}, sub)
+		assert.NoError(t, err)
+		assert.True(t, cont)
+	})
+
+	t.Run("nil_event_entries", func(t *testing.T) {
+		proc := createTestMessageProcessor()
+		sub := &mockTaskSubscriber{}
+		batch := []*event.Event{{}, nil}
+		cont, err := proc.processBatchStreamingEvents(ctx, taskID, msg, batch, sub)
+		assert.NoError(t, err)
+		assert.True(t, cont)
+	})
+
+	t.Run("converter_error", func(t *testing.T) {
+		proc := createTestMessageProcessor()
+		proc.eventToA2AConverter = streamingErrorConverter{}
+		sub := &mockTaskSubscriber{}
+		evt := &event.Event{Response: &model.Response{}}
+		_, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{evt}, sub)
+		assert.Error(t, err)
+	})
+
+	t.Run("send_error", func(t *testing.T) {
+		proc := createTestMessageProcessor()
+		sendErrSub := &mockTaskSubscriber{
+			sendFunc: func(protocol.StreamingMessageEvent) error {
+				return fmt.Errorf("send error")
+			},
+		}
+		evt := &event.Event{Response: &model.Response{
+			Choices: []model.Choice{
+				{Delta: model.Message{Content: "chunk"}},
+			},
+		}}
+		_, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{evt}, sendErrSub)
+		assert.Error(t, err)
+	})
+
+	t.Run("final_event_stops", func(t *testing.T) {
+		proc := createTestMessageProcessor()
+		sub := &mockTaskSubscriber{}
+		final := &event.Event{
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{Message: model.Message{Role: model.RoleAssistant}},
+				},
+			},
+		}
+		cont, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{final}, sub)
+		assert.NoError(t, err)
+		assert.False(t, cont)
+	})
+}
+
+type streamingErrorConverter struct{}
+
+func (streamingErrorConverter) ConvertToA2AMessage(ctx context.Context, event *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error) {
+	return nil, nil
+}
+
+func (streamingErrorConverter) ConvertStreamingToA2AMessage(ctx context.Context, event *event.Event, options EventToA2AStreamingOptions) (protocol.StreamingMessageResult, error) {
+	return nil, errors.New("stream conversion failed")
+}
+
+func TestMessageProcessor_ProcessMessage_NilAgentMessage(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	handler := &mockTaskHandler{}
+	processor := createTestMessageProcessor()
+
+	result, err := processor.processMessage(ctx, "user", "session", msg, nil, handler, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestMessageProcessor_ProcessMessage_Success(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "user"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "success",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+	processor := &messageProcessor{
+		debugLogging: true,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{},
+		errorHandler:        defaultErrorHandler,
+	}
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+			return "task", nil
+		},
+	}
+	res, err := processor.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{Streaming: false}, handler)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.NotNil(t, res.Result)
+}
+
+func TestProcessAgentStreamingEvents_SendFailure(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event)
+	close(events)
+
+	var handlerCalled bool
+	proc := createTestMessageProcessor()
+	proc.errorHandler = func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		handlerCalled = true
+		res := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("error")})
+		return &res, nil
+	}
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				return fmt.Errorf("send fail")
+			}
+			return nil
+		},
+	}
+
+	var cleaned bool
+	handler := &mockTaskHandler{
+		cleanTaskFunc: func(taskID *string) error {
+			cleaned = true
+			return nil
+		},
+	}
+
+	proc.processAgentStreamingEvents(ctx, "task", msg, events, sub, handler)
+	assert.True(t, handlerCalled)
+	assert.True(t, cleaned)
+}
+
+func TestProcessAgentStreamingEvents_ConverterError(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Delta: model.Message{Content: "chunk"}},
+			},
+		},
+	}
+	close(events)
+
+	var handlerCalled bool
+	proc := createTestMessageProcessor()
+	proc.eventToA2AConverter = streamingErrorConverter{}
+	proc.errorHandler = func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		handlerCalled = true
+		res := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+		return &res, nil
+	}
+
+	proc.processAgentStreamingEvents(ctx, "task", msg, events, &mockTaskSubscriber{}, &mockTaskHandler{})
+	assert.True(t, handlerCalled)
+}
+
+func TestProcessAgentStreamingEvents_Success(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{Delta: model.Message{Content: "chunk"}}},
+		},
+	}
+	close(events)
+
+	sub := &mockTaskSubscriber{}
+	handler := &mockTaskHandler{
+		cleanTaskFunc: func(taskID *string) error { return nil },
+	}
+
+	processor := createTestMessageProcessor()
+	processor.debugLogging = true
+	ch := sub.Channel()
+	processor.processAgentStreamingEvents(ctx, "task", msg, events, sub, handler)
+
+	count := 0
+	for evt := range ch {
+		if evt.Result != nil {
+			count++
+		}
+	}
+	assert.NotZero(t, count)
 }
 
 func TestBuildA2AServer_EdgeCases(t *testing.T) {
