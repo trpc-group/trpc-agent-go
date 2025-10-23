@@ -443,6 +443,26 @@ func TestAddMemory_InsertError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestAddMemory_NoLimit tests that when memory limit is 0, no limit is enforced.
+func TestAddMemory_NoLimit(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+	s.opts.memoryLimit = 0
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	mock.ExpectExec("INSERT INTO").
+		WithArgs("app", "user", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := s.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.NoError(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestUpdateMemory_InvalidMemoryKey tests that UpdateMemory rejects invalid memory keys.
 // All three fields (AppName, UserID, MemoryID) are required.
 func TestUpdateMemory_InvalidMemoryKey(t *testing.T) {
@@ -525,6 +545,86 @@ func TestUpdateMemory_Success(t *testing.T) {
 
 	err := s.UpdateMemory(ctx, memKey, "updated memory", []string{"new"})
 	require.NoError(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUpdateMemory_SelectError tests error handling when the select query fails.
+func TestUpdateMemory_SelectError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "mem123"}
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user", "mem123").
+		WillReturnError(errors.New("select error"))
+
+	err := s.UpdateMemory(ctx, memKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get memory entry failed")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUpdateMemory_UnmarshalError tests error handling when unmarshaling fails.
+func TestUpdateMemory_UnmarshalError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "mem123"}
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user", "mem123").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow([]byte("invalid json")))
+
+	err := s.UpdateMemory(ctx, memKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUpdateMemory_UpdateError tests error handling when the update operation fails.
+func TestUpdateMemory_UpdateError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "mem123"}
+
+	now := time.Now()
+	entry := &memory.Entry{
+		ID:      "mem123",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "old memory",
+			Topics:      []string{"old"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	entryJSON, _ := json.Marshal(entry)
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user", "mem123").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryJSON))
+
+	mock.ExpectExec("UPDATE").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
+		WillReturnError(errors.New("update error"))
+
+	err := s.UpdateMemory(ctx, memKey, "updated memory", []string{"new"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update memory entry failed")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -735,6 +835,51 @@ func TestReadMemories_QueryError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestReadMemories_ScanError tests error handling when scanning rows fails.
+func TestReadMemories_ScanError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	rows := sqlmock.NewRows([]string{"memory_data"}).
+		AddRow(nil).
+		RowError(0, errors.New("scan error"))
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user").
+		WillReturnRows(rows)
+
+	_, err := s.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "iterate rows failed")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestReadMemories_UnmarshalError tests error handling when unmarshaling fails.
+func TestReadMemories_UnmarshalError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow([]byte("invalid json")))
+
+	_, err := s.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestSearchMemories_InvalidUserKey tests that SearchMemories rejects invalid user keys.
 func TestSearchMemories_InvalidUserKey(t *testing.T) {
 	db, _ := setupMockDB(t)
@@ -798,6 +943,51 @@ func TestSearchMemories_QueryError(t *testing.T) {
 	_, err := s.SearchMemories(ctx, userKey, "query")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "search memories failed")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSearchMemories_ScanError tests error handling when scanning rows fails.
+func TestSearchMemories_ScanError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	rows := sqlmock.NewRows([]string{"memory_data"}).
+		AddRow(nil).
+		RowError(0, errors.New("scan error"))
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user").
+		WillReturnRows(rows)
+
+	_, err := s.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "iterate rows failed")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSearchMemories_UnmarshalError tests error handling when unmarshaling fails.
+func TestSearchMemories_UnmarshalError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow([]byte("invalid json")))
+
+	_, err := s.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

@@ -38,8 +38,9 @@ var tableNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // Storage structure:
 //
 //	Table: memories
-//	Columns: id (PK), app_name, user_id, memory_id, memory_data (JSON), created_at, updated_at.
-//	Index: (app_name, user_id), (app_name, user_id, memory_id).
+//	Columns: app_name, user_id, memory_id, memory_data (JSON), created_at, updated_at.
+//	Primary Key: (app_name, user_id, memory_id).
+//	Index: (app_name, user_id).
 type Service struct {
 	opts      ServiceOpts
 	db        storage.ClientInterface
@@ -120,15 +121,14 @@ func (s *Service) initTable(ctx context.Context) error {
 	// #nosec G201
 	query := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
 			app_name VARCHAR(255) NOT NULL,
 			user_id VARCHAR(255) NOT NULL,
 			memory_id VARCHAR(64) NOT NULL,
 			memory_data JSON NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			INDEX idx_app_user (app_name, user_id),
-			UNIQUE INDEX idx_app_user_memory (app_name, user_id, memory_id)
+			PRIMARY KEY (app_name, user_id, memory_id),
+			INDEX idx_app_user (app_name, user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`, s.tableName)
 
