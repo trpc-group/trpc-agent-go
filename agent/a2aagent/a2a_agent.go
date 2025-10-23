@@ -46,6 +46,7 @@ type A2AAgent struct {
 	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
 	transferStateKey     []string               // Keys in session state to transfer to the A2A agent message by metadata
 	userIDHeader         string                 // HTTP header name to send UserID to A2A server
+	enableStreaming      *bool                  // Explicitly set streaming mode; nil means use agent card capability
 
 	a2aClient *client.A2AClient
 }
@@ -161,7 +162,12 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 
 // shouldUseStreaming determines whether to use streaming protocol
 func (r *A2AAgent) shouldUseStreaming() bool {
-	// Check if agent card supports streaming
+	// If explicitly set via option, use that value
+	if r.enableStreaming != nil {
+		return *r.enableStreaming
+	}
+
+	// Otherwise check if agent card supports streaming
 	if r.agentCard != nil && r.agentCard.Capabilities.Streaming != nil {
 		return *r.agentCard.Capabilities.Streaming
 	}
