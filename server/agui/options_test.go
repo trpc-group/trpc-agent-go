@@ -10,10 +10,12 @@
 package agui
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
 func TestNewOptionsDefaults(t *testing.T) {
@@ -46,4 +48,27 @@ func TestOptionAppends(t *testing.T) {
 	WithAGUIRunnerOptions(aguiOpt2)(opts)
 
 	assert.Equal(t, []aguirunner.Option{aguiOpt1, aguiOpt2}, opts.aguiRunnerOptions)
+}
+
+type fakeService struct{}
+
+func (fakeService) Handler() http.Handler { return http.NewServeMux() }
+
+var _ service.Service = fakeService{}
+
+func TestWithServiceFactory(t *testing.T) {
+	var invoked bool
+	customFactory := func(_ aguirunner.Runner, _ ...service.Option) service.Service {
+		invoked = true
+		return fakeService{}
+	}
+
+	opts := newOptions(WithServiceFactory(customFactory))
+
+	svc := opts.serviceFactory(nil)
+	assert.NotNil(t, svc)
+	assert.True(t, invoked)
+	if _, ok := svc.(fakeService); !ok {
+		t.Fatal("expected fakeService instance")
+	}
 }

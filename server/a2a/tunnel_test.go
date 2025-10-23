@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -328,6 +329,93 @@ func TestEventTunnel_Run_TimerFlush(t *testing.T) {
 	if len(receivedBatches[0]) != 2 {
 		t.Errorf("Run() first batch has %d events, want 2", len(receivedBatches[0]))
 	}
+}
+
+func TestEventTunnel_Run_FinalFlush(t *testing.T) {
+	var mu sync.Mutex
+	flushCount := 0
+	produced := false
+
+	produce := func() (*event.Event, bool) {
+		if produced {
+			return nil, false
+		}
+		produced = true
+		return createTestEvent("pending", false), true
+	}
+
+	consume := func(batch []*event.Event) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		flushCount++
+		assert.Equal(t, 1, len(batch))
+		if len(batch) == 1 {
+			assert.NotNil(t, batch[0].Response)
+			if batch[0].Response != nil {
+				assert.NotEmpty(t, batch[0].Response.Choices)
+				if len(batch[0].Response.Choices) > 0 {
+					assert.Equal(t, "pending", batch[0].Response.Choices[0].Message.Content)
+				}
+			}
+		}
+		return true, nil
+	}
+
+	tunnel := newEventTunnel(4, 200*time.Millisecond, produce, consume)
+	assert.NoError(t, tunnel.Run(context.Background()))
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, flushCount)
+}
+
+func TestEventTunnel_Run_TimerFlushError(t *testing.T) {
+	const flushInterval = 5 * time.Millisecond
+	call := 0
+	produce := func() (*event.Event, bool) {
+		call++
+		switch call {
+		case 1:
+			return createTestEvent("pending", false), true
+		case 2:
+			time.Sleep(2 * flushInterval)
+			return nil, true
+		default:
+			return nil, false
+		}
+	}
+
+	consume := func(batch []*event.Event) (bool, error) {
+		return true, errors.New("timer flush failed")
+	}
+
+	tunnel := newEventTunnel(10, flushInterval, produce, consume)
+	err := tunnel.Run(context.Background())
+	assert.Error(t, err)
+}
+
+func TestEventTunnel_Run_TimerFlushStop(t *testing.T) {
+	const flushInterval = 5 * time.Millisecond
+	call := 0
+	produce := func() (*event.Event, bool) {
+		call++
+		switch call {
+		case 1:
+			return createTestEvent("pending", false), true
+		case 2:
+			time.Sleep(2 * flushInterval)
+			return nil, true
+		default:
+			return nil, false
+		}
+	}
+
+	consume := func(batch []*event.Event) (bool, error) {
+		return false, nil
+	}
+
+	tunnel := newEventTunnel(10, flushInterval, produce, consume)
+	assert.NoError(t, tunnel.Run(context.Background()))
 }
 
 func TestEventTunnel_FlushBatch(t *testing.T) {
