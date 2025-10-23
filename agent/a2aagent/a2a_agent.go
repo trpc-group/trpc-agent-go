@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -63,7 +64,6 @@ func New(opts ...Option) (*A2AAgent, error) {
 		opt(agent)
 	}
 
-	// Determine the agent URL and normalize it
 	var agentURL string
 	if agent.agentCard != nil {
 		agentURL = agent.agentCard.URL
@@ -72,6 +72,9 @@ func New(opts ...Option) (*A2AAgent, error) {
 	} else {
 		log.Info("agent card or agent card url not set")
 	}
+
+	// Normalize the URL to ensure it has a proper scheme
+	agentURL = ia2a.NormalizeURL(agentURL)
 
 	// Create A2A client first
 	a2aClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
@@ -97,6 +100,9 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 		if agentCard.URL == "" {
 			agentCard.URL = agentURL
+		} else {
+			// Normalize the agent card URL to ensure it has a proper scheme
+			agentCard.URL = ia2a.NormalizeURL(agentCard.URL)
 		}
 
 		// Rebuild a2a client if URL changed

@@ -24,29 +24,13 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
-
-// normalizeURL ensures the URL has a scheme.
-// If the input already has a scheme (e.g., http://, https://, custom://), it returns it as-is.
-// Otherwise, it prepends "http://"
-func normalizeURL(urlOrHost string) string {
-	if urlOrHost == "" {
-		return ""
-	}
-	// Parse the URL to check if it has a valid scheme
-	u, err := url.Parse(urlOrHost)
-	if err == nil && u.Scheme != "" && u.Host != "" {
-		// Has both scheme and host (e.g., http://example.com, custom://service)
-		return urlOrHost
-	}
-	// No valid scheme, add http:// prefix
-	return "http://" + urlOrHost
-}
 
 // New creates a new a2a server.
 func New(opts ...Option) (*a2a.A2AServer, error) {
@@ -65,8 +49,10 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 		return nil, errors.New("agent is required")
 	}
 
-	if options.host == "" {
-		return nil, errors.New("host is required")
+	// Host is only required if we need to build an agent card
+	// If user provides a custom agent card, host is optional
+	if options.agentCard == nil && options.host == "" {
+		return nil, errors.New("host is required when agent card is not provided")
 	}
 
 	return buildA2AServer(options)
@@ -81,7 +67,7 @@ func buildAgentCard(options *options) a2a.AgentCard {
 	name := agent.Info().Name
 
 	// Normalize the host to ensure it has a proper URL scheme
-	url := normalizeURL(options.host)
+	url := ia2a.NormalizeURL(options.host)
 
 	// Build skills from agent tools
 	skills := buildSkillsFromTools(agent, name, desc)
@@ -160,7 +146,7 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	// Extract base path from agent card URL for request routing.
 	// If the URL contains a path component (e.g., "http://example.com/api/v1"),
 	// it will be extracted and used as the base path for routing incoming requests.
-	basePath := extractBasePath(normalizeURL(agentCard.URL))
+	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.URL))
 
 	opts := []a2a.Option{
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),

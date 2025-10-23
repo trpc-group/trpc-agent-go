@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -1387,13 +1388,25 @@ func TestNew(t *testing.T) {
 			errMsg:  "agent is required",
 		},
 		{
-			name: "missing host with empty host",
+			name: "missing host without agent card",
 			opts: []Option{
 				WithAgent(&mockAgent{name: "test-agent", description: "test description"}, true),
 				WithHost(""),
 			},
 			wantErr: true,
-			errMsg:  "host is required",
+			errMsg:  "host is required when agent card is not provided",
+		},
+		{
+			name: "with agent card but no host - should succeed",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent", description: "test description"}, true),
+				WithAgentCard(a2a.AgentCard{
+					Name:        "custom-agent",
+					Description: "custom description",
+					URL:         "http://custom.example.com",
+				}),
+			},
+			wantErr: false,
 		},
 		{
 			name:    "no options",
@@ -1994,9 +2007,9 @@ func TestNormalizeURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := normalizeURL(tt.input)
+			result := ia2a.NormalizeURL(tt.input)
 			if result != tt.expected {
-				t.Errorf("normalizeURL(%q) = %q, want %q", tt.input, result, tt.expected)
+				t.Errorf("NormalizeURL(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
