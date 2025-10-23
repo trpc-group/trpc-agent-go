@@ -351,3 +351,79 @@ func TestClone_And_Filter_VersionCompatibility(t *testing.T) {
 	require.True(t, e.Filter("root/leaf/child"))
 	require.False(t, e.Filter("other"))
 }
+
+// TestEmitEventTimeoutError covers Error() and AsEmitEventTimeoutError.
+func TestEmitEventTimeoutError(t *testing.T) {
+	msg := "custom timeout"
+	e := NewEmitEventTimeoutError(msg)
+	require.Equal(t, msg, e.Error())
+
+	// Positive match
+	got, ok := AsEmitEventTimeoutError(e)
+	require.True(t, ok)
+	require.Equal(t, e, got)
+
+	// Negative match
+	_, ok = AsEmitEventTimeoutError(errors.New("other"))
+	require.False(t, ok)
+}
+
+// TestEmitEvent exercises the wrapper that emits without timeout.
+func TestEmitEvent(t *testing.T) {
+	ch := make(chan *Event, 1)
+	e := New("inv", "author")
+	err := EmitEvent(context.Background(), ch, e)
+	require.NoError(t, err)
+	select {
+	case got := <-ch:
+		require.Equal(t, e, got)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("did not receive event")
+	}
+}
+
+// TestEmitEventWithTimeoutMoreBranches covers remaining branches: ch==nil and no-timeout with canceled ctx.
+func TestEmitEventWithTimeoutMoreBranches(t *testing.T) {
+	// ch == nil returns nil
+	err := EmitEventWithTimeout(context.Background(), nil, New("inv", "author"), 10*time.Millisecond)
+	require.NoError(t, err)
+
+	// EmitWithoutTimeout path with canceled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ch := make(chan *Event) // unbuffered so send would block if select picked it
+	err = EmitEventWithTimeout(ctx, ch, New("inv", "author"), EmitWithoutTimeout)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// TestFilterNilReceiverAndVersion ensures nil receiver and legacy-version branch are covered.
+func TestFilterNilReceiverAndVersion(t *testing.T) {
+	// nil receiver -> false
+	var e *Event
+	require.False(t, e.Filter("any"))
+
+	// Version compatibility: when Version != CurrentVersion, Filter uses Branch
+	legacy := &Event{
+		Response: &model.Response{},
+		// Intentionally set a FilterKey that does not match Branch; Filter should use Branch.
+		FilterKey: "wrong/key",
+		Branch:    "root/child",
+		Version:   InitVersion, // differs from CurrentVersion
+	}
+	require.True(t, legacy.Filter("root"))
+	require.True(t, legacy.Filter("root/child"))
+	require.True(t, legacy.Filter("root/child/grand"))
+	require.False(t, legacy.Filter("root/other"))
+}
+
+// TestCloneNilReceiver hits the nil guard in Clone().
+func TestCloneNilReceiver(t *testing.T) {
+	var e *Event
+	require.Nil(t, e.Clone())
+}
+
+// TestWithTag covers first-set and append behavior.
+func TestWithTag(t *testing.T) {
+	e := New("inv", "author", WithTag("alpha"), WithTag("beta"))
+	require.Equal(t, "alpha"+TagDelimiter+"beta", e.Tag)
+}
