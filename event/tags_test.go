@@ -33,7 +33,7 @@ func TestWithTag_Multiple(t *testing.T) {
 }
 
 // TestIsRunnerCompletion verifies the helper correctly identifies runner completion events.
-func TestIsRunnerCompletion(t *testing.T) {
+func TestIsRunnerCompletion_Tags(t *testing.T) {
 	// Negative cases
 	require.False(t, (*Event)(nil).IsRunnerCompletion())
 
