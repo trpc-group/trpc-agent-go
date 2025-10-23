@@ -24,60 +24,61 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
 // InitMeterProvider initializes the meter provider and default meters.
 func InitMeterProvider(mp *sdkmetric.MeterProvider) error {
 	itelemetry.MeterProvider = mp
 
-	itelemetry.ChatMeter = mp.Meter(itelemetry.MeterNameChat)
+	itelemetry.ChatMeter = mp.Meter(metrics.MeterNameChat)
 	var err error
 	if itelemetry.ChatMetricTRPCAgentGoClientRequestCnt, err = itelemetry.ChatMeter.Int64Counter(
-		itelemetry.MetricTRPCAgentGoClientRequestCnt,
+		metrics.MetricTRPCAgentGoClientRequestCnt,
 		metric.WithDescription("Total number of client requests"),
 		metric.WithUnit("1"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientRequestCnt: %w", err)
 	}
 	if itelemetry.ChatMetricGenAIClientTokenUsage, err = itelemetry.ChatMeter.Int64Histogram(
-		itelemetry.MetricGenAIClientTokenUsage,
+		metrics.MetricGenAIClientTokenUsage,
 		metric.WithDescription("Token usage for client"),
 		metric.WithUnit("1"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIClientTokenUsage: %w", err)
 	}
 	if itelemetry.ChatMetricGenAIClientOperationDuration, err = itelemetry.ChatMeter.Float64Histogram(
-		itelemetry.MetricGenAIClientOperationDuration,
+		metrics.MetricGenAIClientOperationDuration,
 		metric.WithDescription("Duration of client operation"),
 		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIClientOperationDuration: %w", err)
 	}
 	if itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken, err = itelemetry.ChatMeter.Float64Histogram(
-		itelemetry.MetricTRPCAgentGoClientTimeToFirstToken,
+		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
 		metric.WithDescription("Time to first token for client"),
 		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimeToFirstToken: %w", err)
 	}
 	if itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken, err = itelemetry.ChatMeter.Float64Histogram(
-		itelemetry.MetricTRPCAgentGoClientTimePerOutputToken,
+		metrics.MetricTRPCAgentGoClientTimePerOutputToken,
 		metric.WithDescription("Time per output token for client"),
 		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimePerOutputToken: %w", err)
 	}
 
-	itelemetry.ExecuteToolMeter = mp.Meter(itelemetry.MeterNameExecuteTool)
+	itelemetry.ExecuteToolMeter = mp.Meter(metrics.MeterNameExecuteTool)
 	if itelemetry.ExecuteToolMetricTRPCAgentGoClientRequestCnt, err = itelemetry.ExecuteToolMeter.Int64Counter(
-		itelemetry.MetricTRPCAgentGoClientRequestCnt,
+		metrics.MetricTRPCAgentGoClientRequestCnt,
 		metric.WithDescription("Total number of client requests"),
 		metric.WithUnit("1"),
 	); err != nil {
 		return fmt.Errorf("failed to create execute tool metric TRPCAgentGoClientRequestCnt: %w", err)
 	}
 	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration, err = itelemetry.ExecuteToolMeter.Float64Histogram(
-		itelemetry.MetricGenAIClientOperationDuration,
+		metrics.MetricGenAIClientOperationDuration,
 		metric.WithDescription("Duration of client operation"),
 		metric.WithUnit("s"),
 	); err != nil {

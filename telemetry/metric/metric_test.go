@@ -55,15 +55,11 @@ func TestStartAndClean(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	clean, err := Start(ctx,
+	mp, err := NewMeterProvider(ctx,
 		WithEndpoint(metricEP),
-		// Provide small custom service data to avoid environment pollution.
 	)
 	if err != nil {
-		t.Fatalf("Start returned error: %v", err)
+		t.Fatalf("NewMeterProvider returned error: %v", err)
 	}
-	if clean == nil {
-		t.Fatalf("expected non-nil cleanup function")
-	}
-	_ = clean() // Ignore cleanup error as no collector is running in tests.
+	defer mp.Shutdown(ctx)
 }
