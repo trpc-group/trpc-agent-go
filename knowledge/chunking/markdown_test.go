@@ -446,3 +446,43 @@ func TestMarkdownChunking_MixedParagraphSizes(t *testing.T) {
 	}
 	require.True(t, foundLarge, "Large paragraph content should be in chunks")
 }
+
+// TestMarkdownChunking_OverlapValidation tests overlap >= chunkSize boundary condition.
+func TestMarkdownChunking_OverlapValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		chunkSize int
+		overlap   int
+	}{
+		{
+			name:      "overlap greater than chunkSize",
+			chunkSize: 10,
+			overlap:   15,
+		},
+		{
+			name:      "overlap equal to chunkSize",
+			chunkSize: 20,
+			overlap:   20,
+		},
+		{
+			name:      "very large overlap",
+			chunkSize: 5,
+			overlap:   100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := NewMarkdownChunking(
+				WithMarkdownChunkSize(tt.chunkSize),
+				WithMarkdownOverlap(tt.overlap),
+			)
+
+			// Should still work despite invalid overlap
+			doc := &document.Document{ID: "test", Content: "# Header\n\nTest content for validation"}
+			chunks, err := mc.Chunk(doc)
+			require.NoError(t, err)
+			require.NotEmpty(t, chunks)
+		})
+	}
+}

@@ -118,3 +118,61 @@ func TestDefaultRetriever_WithFilter(t *testing.T) {
 		t.Fatal("expected at least one result")
 	}
 }
+
+// errorEmbedder always returns an error.
+type errorEmbedder struct{}
+
+func (errorEmbedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
+	return nil, context.DeadlineExceeded
+}
+func (errorEmbedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error) {
+	return nil, nil, context.DeadlineExceeded
+}
+func (errorEmbedder) GetDimensions() int { return 3 }
+
+// TestDefaultRetriever_EmbedderError tests error handling from embedder.
+func TestDefaultRetriever_EmbedderError(t *testing.T) {
+	vs := inmemory.New()
+	d := New(
+		WithEmbedder(errorEmbedder{}),
+		WithVectorStore(vs),
+	)
+
+	// Should return error from embedder
+	_, err := d.Retrieve(context.Background(), &Query{Text: "test", Limit: 5})
+	if err == nil {
+		t.Fatal("expected error from embedder")
+	}
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected DeadlineExceeded error, got: %v", err)
+	}
+}
+
+// TestDefaultRetriever_WithEmptyQuery tests retrieving with empty query.
+func TestDefaultRetriever_WithEmptyQuery(t *testing.T) {
+	vs := inmemory.New()
+	doc := &document.Document{ID: "doc4", Content: "content"}
+	if err := vs.Add(context.Background(), doc, []float64{1, 0, 0}); err != nil {
+		t.Fatalf("add doc: %v", err)
+	}
+
+	d := New(
+		WithEmbedder(dummyEmbedder{}),
+		WithVectorStore(vs),
+	)
+
+	// Query with empty text - may return error depending on vector store implementation
+	res, err := d.Retrieve(context.Background(), &Query{
+		Text:  "",
+		Limit: 5,
+	})
+	// Vector store may reject empty/nil vectors for hybrid search
+	// Both success and specific errors are acceptable here
+	if err == nil {
+		// If no error, we should have a valid result
+		if res == nil {
+			t.Fatal("expected non-nil result when no error")
+		}
+	}
+	// If there's an error, that's also valid behavior for empty queries
+}

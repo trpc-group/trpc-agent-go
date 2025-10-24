@@ -238,3 +238,47 @@ func BenchmarkRecursiveChunking(b *testing.B) {
 		_ = ctx
 	}
 }
+
+// TestRecursiveChunking_OverlapValidation tests overlap >= chunkSize boundary condition.
+func TestRecursiveChunking_OverlapValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		chunkSize int
+		overlap   int
+	}{
+		{
+			name:      "overlap greater than chunkSize",
+			chunkSize: 10,
+			overlap:   15,
+		},
+		{
+			name:      "overlap equal to chunkSize",
+			chunkSize: 20,
+			overlap:   20,
+		},
+		{
+			name:      "very large overlap",
+			chunkSize: 5,
+			overlap:   100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rc := NewRecursiveChunking(
+				WithRecursiveChunkSize(tt.chunkSize),
+				WithRecursiveOverlap(tt.overlap),
+			)
+
+			// Should still work despite invalid overlap
+			doc := &document.Document{ID: "test", Content: "Test content for recursive chunking validation with some text"}
+			chunks, err := rc.Chunk(doc)
+			if err != nil {
+				t.Fatalf("chunking failed: %v", err)
+			}
+			if len(chunks) == 0 {
+				t.Fatal("expected at least one chunk")
+			}
+		})
+	}
+}
