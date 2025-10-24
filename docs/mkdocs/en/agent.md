@@ -133,6 +133,31 @@ if err != nil {
 }
 ```
 
+### Delegation Visibility Options
+
+When building multi‑Agent systems (task delegation between Agents), LLMAgent provides a unified fallback option for delegation events. Transfer events always include announcement text and are tagged `transfer` so UIs (User Interfaces) can filter them if desired.
+
+- `llmagent.WithDefaultTransferMessage(string)`
+  - Configure the default message used when a model calls a SubAgent without a `message`.
+  - Pass an empty string to disable injecting a default message; pass a non‑empty string to enable and override it.
+
+Usage example:
+
+```go
+coordinator := llmagent.New(
+  "coordinator",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
+  // Transfer announcement events are always emitted (tagged `transfer`). Filter in the UI if needed.
+  // Customize the default message when the model omits it (empty string disables)
+  llmagent.WithDefaultTransferMessage("Handing off to the specialist"),
+)
+```
+
+Notes:
+- These options do not change the actual handoff logic; they only affect user‑visible texts or whether a fallback `message` is injected.
+- Transfer announcements are emitted as Events with `Response.Object == "agent.transfer"`. If your UI should not display system‑level notices, filter this object type at the renderer/service layer.
+
 ### Handling Event Stream
 
 The `eventChan` returned by `runner.Run()` is an event channel. The Agent continuously sends Event objects to this channel during execution.

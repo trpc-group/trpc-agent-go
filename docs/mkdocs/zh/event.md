@@ -192,6 +192,19 @@ const (
 )
 ```
 
+### 过滤委托提示（Transfer Announcements）
+
+委托提示（Agent 委托/转移说明）统一以 `Response.Object == "agent.transfer"` 的事件输出。
+
+常见形式为：
+- 交接提示：`Transferring control to agent: <name>`
+
+ 如需在 UI 层隐藏这些系统级提示，可以采用两种兼容方式：
+ - 按对象类型过滤：隐藏 `Response.Object == "agent.transfer"` 的事件。
+ - 按标签（Tag）过滤：隐藏 `Event.Tag` 中包含 `transfer` 的事件。框架会为与委托相关的事件（包括 transfer 工具结果）统一打上 `transfer` 标签，按标签过滤不会破坏 ToolCall/ToolResult 的配对关系。
+
+ 标签以分号（`;`）分隔。自定义事件可使用 `event.WithTag(tag)` 追加标签，多标签格式为 `tag1;tag2;...`。
+
 #### 辅助方法：检测 Runner 完成
 
 使用便捷方法来判断整次运行是否已完成，无论 Agent 类型如何：
@@ -287,6 +300,14 @@ if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.
 ```
 
 提示：自定义事件时，优先使用 `event.New(...)` 搭配 `WithResponse`、`WithBranch` 等，以保证 ID 和时间戳等元数据一致。
+
+### 标签（Tags）
+
+Event 支持通过 `Event.Tag` 添加简单标签，便于过滤与统计：
+
+- 分隔符：`;`（分号）。多标签拼接为 `tag1;tag2`。
+- 辅助函数：`event.WithTag("<tag>")` 在不覆盖已有标签的情况下追加新标签。
+- 内置用法：与委托相关的事件会统一打上 `transfer` 标签。UI 可据此隐藏内部委托类消息，同时保留完整事件流，便于调试与处理。
 
 ### Event 方法
 

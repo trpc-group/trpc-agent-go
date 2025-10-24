@@ -63,6 +63,16 @@ type toolResult struct {
 	err   error
 }
 
+// Default message used when transferring to a sub-agent without an explicit message.
+// Users can override or disable it via SetDefaultTransferMessage.
+var defaultTransferMessage = "Task delegated from coordinator"
+
+// SetDefaultTransferMessage configures the message to inject when a sub-agent is
+// called without an explicit message (model directly calls the sub-agent name).
+func SetDefaultTransferMessage(message string) {
+	defaultTransferMessage = message
+}
+
 // subAgentCall defines the input format for direct sub-agent tool calls.
 // This handles cases where models call sub-agent names directly instead of using transfer_to_agent.
 type subAgentCall struct {
@@ -899,7 +909,7 @@ func convertToolArguments(originalName string, originalArgs []byte, targetName s
 
 	message := input.Message
 	if message == "" {
-		message = "Task delegated from coordinator"
+		message = defaultTransferMessage
 	}
 
 	req := &transfer.Request{

@@ -122,7 +122,8 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			Role:    model.RoleUser,
 			Content: transferInfo.Message,
 		}
-		// emit transfer message event
+		// Always emit a transfer message echo for visibility and traceability.
+		// Use tag so UIs can filter internal delegation messages without breaking event alignment.
 		agent.EmitEvent(ctx, targetInvocation, ch, event.NewResponseEvent(
 			targetInvocation.InvocationID,
 			targetAgent.Info().Name,
