@@ -26,8 +26,16 @@ import (
 type InstructionRequestProcessor struct {
 	// Instruction is the instruction to add to requests.
 	Instruction string
+	// InstructionGetter, if provided, dynamically supplies the instruction
+	// each time a request is processed. When set, this takes precedence over
+	// the static Instruction field.
+	InstructionGetter func() string
 	// SystemPrompt is the system prompt to add to requests.
 	SystemPrompt string
+	// SystemPromptGetter, if provided, dynamically supplies the system prompt
+	// each time a request is processed. When set, this takes precedence over
+	// the static SystemPrompt field.
+	SystemPromptGetter func() string
 	// OutputSchema is the JSON schema for output validation.
 	// When provided, JSON output instructions are automatically injected.
 	OutputSchema map[string]any
@@ -51,6 +59,24 @@ func WithOutputSchema(outputSchema map[string]any) InstructionRequestProcessorOp
 func WithStructuredOutputSchema(schema map[string]any) InstructionRequestProcessorOption {
 	return func(p *InstructionRequestProcessor) {
 		p.StructuredOutputSchema = schema
+	}
+}
+
+// WithInstructionGetter configures a dynamic getter for instruction content.
+// When provided, this getter is called for every request, allowing callers to
+// update the instruction at runtime without reconstructing the processor/agent.
+func WithInstructionGetter(getter func() string) InstructionRequestProcessorOption {
+	return func(p *InstructionRequestProcessor) {
+		p.InstructionGetter = getter
+	}
+}
+
+// WithSystemPromptGetter configures a dynamic getter for system prompt content.
+// When provided, this getter is called for every request, allowing callers to
+// update the system prompt at runtime without reconstructing the processor/agent.
+func WithSystemPromptGetter(getter func() string) InstructionRequestProcessorOption {
+	return func(p *InstructionRequestProcessor) {
+		p.SystemPromptGetter = getter
 	}
 }
 
@@ -101,8 +127,20 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 
 // processInstructionsWithState processes instruction and system prompt with state injection.
 func (p *InstructionRequestProcessor) processInstructionsWithState(invocation *agent.Invocation) (string, string) {
-	processedInstruction := p.Instruction
-	processedSystemPrompt := p.SystemPrompt
+	// Prefer dynamic getters when present; fall back to static fields.
+	var processedInstruction string
+	if p.InstructionGetter != nil {
+		processedInstruction = p.InstructionGetter()
+	} else {
+		processedInstruction = p.Instruction
+	}
+
+	var processedSystemPrompt string
+	if p.SystemPromptGetter != nil {
+		processedSystemPrompt = p.SystemPromptGetter()
+	} else {
+		processedSystemPrompt = p.SystemPrompt
+	}
 
 	// Automatically inject JSON output instructions.
 	// Precedence: StructuredOutputSchema > OutputSchema.
