@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spaolacci/murmur3"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -504,4 +505,173 @@ func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
 	require.NotPanics(t, func() {
 		s.processSummaryJob(job)
 	})
+}
+
+func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
+	service := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Fill the queue first
+	job1 := &summaryJob{
+		sessionKey: key,
+		filterKey:  "",
+		force:      false,
+		session:    sess,
+	}
+
+	// First job should succeed
+	assert.True(t, service.tryEnqueueJob(ctx, job1))
+
+	// Create a cancelled context
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	// Second job with cancelled context should fail
+	job2 := &summaryJob{
+		sessionKey: session.Key{AppName: "app", UserID: "u2", SessionID: "s2"},
+		filterKey:  "",
+		force:      false,
+		session:    sess,
+	}
+	assert.False(t, service.tryEnqueueJob(cancelledCtx, job2))
+}
+
+func TestMemoryService_AppendEvent_Errors(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Test with invalid session key
+	sess := &session.Session{
+		ID:      "",
+		AppName: "",
+		UserID:  "",
+	}
+	err := service.AppendEvent(ctx, sess, &event.Event{})
+	require.Error(t, err)
+
+	// Test with non-existent app
+	sess = &session.Session{
+		ID:      "s1",
+		AppName: "non-existent",
+		UserID:  "u1",
+	}
+	err = service.AppendEvent(ctx, sess, &event.Event{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "app not found")
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	sess, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Test with non-existent user
+	sess2 := &session.Session{
+		ID:      "s2",
+		AppName: "app",
+		UserID:  "non-existent",
+	}
+	err = service.AppendEvent(ctx, sess2, &event.Event{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "user not found")
+
+	// Test with non-existent session
+	sess3 := &session.Session{
+		ID:      "non-existent",
+		AppName: "app",
+		UserID:  "u",
+	}
+	err = service.AppendEvent(ctx, sess3, &event.Event{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session not found")
+}
+
+func TestMemoryService_ListSessions_Filtering(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "u"}
+
+	// Create multiple sessions with events
+	key1 := session.Key{AppName: "app", UserID: "u", SessionID: "s1"}
+	sess1, err := service.CreateSession(ctx, key1, session.StateMap{})
+	require.NoError(t, err)
+
+	// Add some events
+	e1 := &event.Event{
+		ID:        "e1",
+		Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}},
+		Timestamp: time.Now(),
+	}
+	require.NoError(t, service.AppendEvent(ctx, sess1, e1))
+
+	// List sessions
+	sessions, err := service.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.NotEmpty(t, sessions[0].Events)
+}
+
+func TestMemoryService_DeleteSession_Errors(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Test with invalid key
+	err := service.DeleteSession(ctx, session.Key{AppName: "", UserID: "u", SessionID: "s"})
+	require.Error(t, err)
+
+	// Test with non-existent app
+	err = service.DeleteSession(ctx, session.Key{AppName: "non-existent", UserID: "u", SessionID: "s"})
+	require.NoError(t, err) // Should not error
+
+	// Test with non-existent user
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	err = service.DeleteSession(ctx, session.Key{AppName: "app", UserID: "non-existent", SessionID: "s"})
+	require.NoError(t, err) // Should not error
+
+	// Test with non-existent session
+	err = service.DeleteSession(ctx, session.Key{AppName: "app", UserID: "u", SessionID: "non-existent"})
+	require.NoError(t, err) // Should not error
+}
+
+func TestMemoryService_GetOrCreateAppSessions_Concurrent(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	// Test concurrent access to getOrCreateAppSessions
+	const numGoroutines = 10
+	done := make(chan bool, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			app := service.getOrCreateAppSessions("concurrent-app")
+			assert.NotNil(t, app)
+			done <- true
+		}()
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Verify only one app was created
+	app, ok := service.getAppSessions("concurrent-app")
+	assert.True(t, ok)
+	assert.NotNil(t, app)
 }

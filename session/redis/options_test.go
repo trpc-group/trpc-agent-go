@@ -156,3 +156,272 @@ func TestServiceOptsIntegration(t *testing.T) {
 	assert.Equal(t, 100, service.opts.summaryQueueSize)
 	assert.Equal(t, 5*time.Second, service.opts.summaryJobTimeout)
 }
+
+func TestWithRedisInstance(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "valid instance name",
+			input:    "test-instance",
+			expected: "test-instance",
+		},
+		{
+			name:     "empty instance name",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "instance name with special characters",
+			input:    "test-instance-123",
+			expected: "test-instance-123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithRedisInstance(tt.input)(&opts)
+			assert.Equal(t, tt.expected, opts.instanceName)
+		})
+	}
+}
+
+func TestWithExtraOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []any
+		expected []any
+	}{
+		{
+			name:     "single option",
+			input:    []any{"option1"},
+			expected: []any{"option1"},
+		},
+		{
+			name:     "multiple options",
+			input:    []any{"option1", 123, true},
+			expected: []any{"option1", 123, true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithExtraOptions(tt.input...)(&opts)
+			assert.Equal(t, tt.expected, opts.extraOptions)
+		})
+	}
+}
+
+func TestWithExtraOptions_Accumulation(t *testing.T) {
+	opts := ServiceOpts{}
+
+	// First call
+	WithExtraOptions("option1", "option2")(&opts)
+	assert.Len(t, opts.extraOptions, 2)
+	assert.Equal(t, "option1", opts.extraOptions[0])
+	assert.Equal(t, "option2", opts.extraOptions[1])
+
+	// Second call should append
+	WithExtraOptions("option3", "option4")(&opts)
+	assert.Len(t, opts.extraOptions, 4)
+	assert.Equal(t, "option1", opts.extraOptions[0])
+	assert.Equal(t, "option2", opts.extraOptions[1])
+	assert.Equal(t, "option3", opts.extraOptions[2])
+	assert.Equal(t, "option4", opts.extraOptions[3])
+}
+
+func TestWithSessionEventLimit(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    int
+		expected int
+	}{
+		{
+			name:     "positive limit",
+			input:    100,
+			expected: 100,
+		},
+		{
+			name:     "zero limit",
+			input:    0,
+			expected: 0,
+		},
+		{
+			name:     "negative limit",
+			input:    -1,
+			expected: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithSessionEventLimit(tt.input)(&opts)
+			assert.Equal(t, tt.expected, opts.sessionEventLimit)
+		})
+	}
+}
+
+func TestWithSessionTTL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Duration
+		expected time.Duration
+	}{
+		{
+			name:     "positive TTL",
+			input:    30 * time.Minute,
+			expected: 30 * time.Minute,
+		},
+		{
+			name:     "zero TTL",
+			input:    0,
+			expected: 0,
+		},
+		{
+			name:     "negative TTL",
+			input:    -1 * time.Minute,
+			expected: -1 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithSessionTTL(tt.input)(&opts)
+			assert.Equal(t, tt.expected, opts.sessionTTL)
+		})
+	}
+}
+
+func TestWithAppStateTTL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Duration
+		expected time.Duration
+	}{
+		{
+			name:     "positive TTL",
+			input:    time.Hour,
+			expected: time.Hour,
+		},
+		{
+			name:     "zero TTL",
+			input:    0,
+			expected: 0,
+		},
+		{
+			name:     "negative TTL",
+			input:    -1 * time.Hour,
+			expected: -1 * time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithAppStateTTL(tt.input)(&opts)
+			assert.Equal(t, tt.expected, opts.appStateTTL)
+		})
+	}
+}
+
+func TestWithUserStateTTL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Duration
+		expected time.Duration
+	}{
+		{
+			name:     "positive TTL",
+			input:    2 * time.Hour,
+			expected: 2 * time.Hour,
+		},
+		{
+			name:     "zero TTL",
+			input:    0,
+			expected: 0,
+		},
+		{
+			name:     "negative TTL",
+			input:    -1 * time.Hour,
+			expected: -1 * time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithUserStateTTL(tt.input)(&opts)
+			assert.Equal(t, tt.expected, opts.userStateTTL)
+		})
+	}
+}
+
+func TestWithEnableAsyncPersist(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    bool
+		expected bool
+	}{
+		{
+			name:     "enable async persist",
+			input:    true,
+			expected: true,
+		},
+		{
+			name:     "disable async persist",
+			input:    false,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithEnableAsyncPersist(tt.input)(&opts)
+			assert.Equal(t, tt.expected, opts.enableAsyncPersist)
+		})
+	}
+}
+
+func TestWithAsyncPersisterNum(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    int
+		expected int
+	}{
+		{
+			name:     "positive number",
+			input:    5,
+			expected: 5,
+		},
+		{
+			name:     "zero defaults to defaultAsyncPersisterNum",
+			input:    0,
+			expected: defaultAsyncPersisterNum,
+		},
+		{
+			name:     "negative defaults to defaultAsyncPersisterNum",
+			input:    -1,
+			expected: defaultAsyncPersisterNum,
+		},
+		{
+			name:     "one is allowed",
+			input:    1,
+			expected: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithAsyncPersisterNum(tt.input)(&opts)
+			assert.Equal(t, tt.expected, opts.asyncPersisterNum)
+		})
+	}
+}
