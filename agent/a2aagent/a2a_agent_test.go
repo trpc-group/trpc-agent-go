@@ -43,7 +43,7 @@ func TestNew(t *testing.T) {
 			opts: []Option{},
 			setupFunc: func(tc *testCase) *httptest.Server {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == AgentCardWellKnownPath {
+					if r.URL.Path == "/.well-known/agent-card.json" {
 						agentCard := server.AgentCard{
 							Name:        "test-agent",
 							Description: "A test agent",
@@ -154,7 +154,7 @@ func TestNew(t *testing.T) {
 			},
 			setupFunc: func(tc *testCase) *httptest.Server {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == AgentCardWellKnownPath {
+					if r.URL.Path == "/.well-known/agent-card.json" {
 						agentCard := server.AgentCard{
 							Name:        "test-agent",
 							Description: "Test agent",
@@ -531,142 +531,6 @@ func TestA2AAgent_buildA2AMessage(t *testing.T) {
 	}
 }
 
-func TestA2AAgent_resolveAgentCardFromURL(t *testing.T) {
-	type testCase struct {
-		name         string
-		agent        *A2AAgent
-		setupFunc    func(tc *testCase) *httptest.Server
-		validateFunc func(t *testing.T, agentCard *server.AgentCard, err error)
-	}
-
-	tests := []testCase{
-		{
-			name:  "success with valid agent card",
-			agent: &A2AAgent{},
-			setupFunc: func(tc *testCase) *httptest.Server {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == AgentCardWellKnownPath {
-						agentCard := server.AgentCard{
-							Name:        "resolved-agent",
-							Description: "Resolved from URL",
-							URL:         "http://resolved.com",
-						}
-						json.NewEncoder(w).Encode(agentCard)
-						return
-					}
-					w.WriteHeader(http.StatusNotFound)
-				}))
-				tc.agent.agentURL = server.URL
-				return server
-			},
-			validateFunc: func(t *testing.T, agentCard *server.AgentCard, err error) {
-				if err != nil {
-					t.Errorf("expected no error, got %v", err)
-				}
-				if agentCard == nil {
-					t.Fatal("expected agent card, got nil")
-				}
-				if agentCard.Name != "resolved-agent" {
-					t.Errorf("expected name 'resolved-agent', got %s", agentCard.Name)
-				}
-				if agentCard.Description != "Resolved from URL" {
-					t.Errorf("expected description 'Resolved from URL', got %s", agentCard.Description)
-				}
-			},
-		},
-		{
-			name: "fills agent name and description when empty",
-			agent: &A2AAgent{
-				name:        "",
-				description: "",
-			},
-			setupFunc: func(tc *testCase) *httptest.Server {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					agentCard := server.AgentCard{
-						Name:        "auto-filled",
-						Description: "Auto-filled description",
-					}
-					json.NewEncoder(w).Encode(agentCard)
-				}))
-				tc.agent.agentURL = server.URL
-				return server
-			},
-			validateFunc: func(t *testing.T, agentCard *server.AgentCard, err error) {
-				if err != nil {
-					t.Errorf("expected no error, got %v", err)
-				}
-				if agentCard.Name != "auto-filled" {
-					t.Errorf("expected name 'auto-filled', got %s", agentCard.Name)
-				}
-			},
-		},
-		{
-			name:  "error when HTTP request fails",
-			agent: &A2AAgent{agentURL: "http://nonexistent.local"},
-			setupFunc: func(tc *testCase) *httptest.Server {
-				return nil
-			},
-			validateFunc: func(t *testing.T, agentCard *server.AgentCard, err error) {
-				if err == nil {
-					t.Error("expected error when HTTP request fails")
-				}
-				if agentCard != nil {
-					t.Error("expected agent card to be nil on error")
-				}
-			},
-		},
-		{
-			name:  "error when HTTP status not OK",
-			agent: &A2AAgent{},
-			setupFunc: func(tc *testCase) *httptest.Server {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					w.WriteHeader(http.StatusNotFound)
-				}))
-				tc.agent.agentURL = server.URL
-				return server
-			},
-			validateFunc: func(t *testing.T, agentCard *server.AgentCard, err error) {
-				if err == nil {
-					t.Error("expected error when HTTP status not OK")
-				}
-				if agentCard != nil {
-					t.Error("expected agent card to be nil on error")
-				}
-			},
-		},
-		{
-			name:  "error when invalid JSON",
-			agent: &A2AAgent{},
-			setupFunc: func(tc *testCase) *httptest.Server {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					w.Write([]byte("invalid json"))
-				}))
-				tc.agent.agentURL = server.URL
-				return server
-			},
-			validateFunc: func(t *testing.T, agentCard *server.AgentCard, err error) {
-				if err == nil {
-					t.Error("expected error when JSON is invalid")
-				}
-				if agentCard != nil {
-					t.Error("expected agent card to be nil on error")
-				}
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			server := tc.setupFunc(&tc)
-			if server != nil {
-				defer server.Close()
-			}
-			agentCard, err := tc.agent.resolveAgentCardFromURL()
-			tc.validateFunc(t, agentCard, err)
-		})
-	}
-}
-
 func TestA2AAgent_Run_ErrorCases(t *testing.T) {
 	type testCase struct {
 		name         string
@@ -880,7 +744,7 @@ func TestA2ARequestOptions(t *testing.T) {
 	t.Run("validates option types and returns error for invalid types", func(t *testing.T) {
 		// Create test server
 		testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == AgentCardWellKnownPath {
+			if r.URL.Path == "/.well-known/agent-card.json" {
 				agentCard := server.AgentCard{
 					Name:        "test-agent",
 					Description: "A test agent",
@@ -1023,7 +887,7 @@ func TestUserIDHeaderInRequest(t *testing.T) {
 
 			// Create mock A2A server
 			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == AgentCardWellKnownPath {
+				if r.URL.Path == "/.well-known/agent-card.json" {
 					// Return agent card with the mock server's URL
 					agentCard := server.AgentCard{
 						Name:        "test-agent",

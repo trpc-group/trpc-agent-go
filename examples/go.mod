@@ -20,7 +20,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.29.0
 	go.opentelemetry.io/otel/trace v1.29.0
 	go.uber.org/zap v1.27.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251020094851-6ab922c9dab1
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.2.0

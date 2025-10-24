@@ -105,3 +105,12 @@ func WithUserIDHeader(header string) Option {
 		}
 	}
 }
+
+// WithEnableStreaming explicitly controls whether to use streaming protocol.
+// If not set (nil), the agent will use the streaming capability from the agent card.
+// This option overrides the agent card's capability setting.
+func WithEnableStreaming(enable bool) Option {
+	return func(a *A2AAgent) {
+		a.enableStreaming = &enable
+	}
+}
