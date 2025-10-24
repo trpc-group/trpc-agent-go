@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -253,6 +254,145 @@ func (f *fakeModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 		content = "Summary: " + content
 	}
 	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: content}}}}
+	close(ch)
+	return ch, nil
+}
+
+func TestSessionSummarizer_Summarize_NilModel(t *testing.T) {
+	s := &sessionSummarizer{
+		model:  nil,
+		prompt: "test prompt",
+	}
+
+	sess := &session.Session{
+		ID: "test",
+		Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}}, Timestamp: time.Now()},
+		},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no model configured")
+}
+
+func TestSessionSummarizer_GenerateSummary_ModelError(t *testing.T) {
+	errorModel := &errorModel{}
+	s := NewSummarizer(errorModel)
+
+	sess := &session.Session{
+		ID: "test",
+		Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}}, Timestamp: time.Now()},
+		},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to generate summary")
+}
+
+func TestSessionSummarizer_GenerateSummary_ResponseError(t *testing.T) {
+	responseErrorModel := &responseErrorModel{}
+	s := NewSummarizer(responseErrorModel)
+
+	sess := &session.Session{
+		ID: "test",
+		Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}}, Timestamp: time.Now()},
+		},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model error during summarization")
+}
+
+func TestSessionSummarizer_GenerateSummary_EmptyResponse(t *testing.T) {
+	emptyModel := &emptyResponseModel{}
+	s := NewSummarizer(emptyModel)
+
+	sess := &session.Session{
+		ID: "test",
+		Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}}, Timestamp: time.Now()},
+		},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "generated empty summary")
+}
+
+func TestSessionSummarizer_ShouldSummarize_EmptyEvents(t *testing.T) {
+	s := NewSummarizer(&fakeModel{}, WithEventThreshold(10))
+	sess := &session.Session{Events: []event.Event{}}
+	assert.False(t, s.ShouldSummarize(sess))
+}
+
+func TestSessionSummarizer_Metadata_NilModel(t *testing.T) {
+	s := &sessionSummarizer{
+		model:           nil,
+		maxSummaryWords: 100,
+		checks:          []Checker{},
+	}
+	md := s.Metadata()
+	assert.Equal(t, "", md[metadataKeyModelName])
+	assert.Equal(t, false, md[metadataKeyModelAvailable])
+	assert.Equal(t, 100, md[metadataKeyMaxSummaryWords])
+}
+
+func TestSessionSummarizer_ExtractConversationText_WithAuthor(t *testing.T) {
+	s := NewSummarizer(&fakeModel{})
+	sess := &session.Session{
+		ID: "test",
+		Events: []event.Event{
+			{
+				Author:   "user",
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "hello"}}}},
+			},
+			{
+				Author:   "assistant",
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "hi there"}}}},
+			},
+		},
+	}
+
+	text, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Contains(t, text, "user:")
+	assert.Contains(t, text, "assistant:")
+}
+
+// errorModel returns an error when generating content
+type errorModel struct{}
+
+func (e *errorModel) Info() model.Info { return model.Info{Name: "error"} }
+func (e *errorModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	return nil, fmt.Errorf("model error")
+}
+
+// responseErrorModel returns a response with an error
+type responseErrorModel struct{}
+
+func (r *responseErrorModel) Info() model.Info { return model.Info{Name: "response-error"} }
+func (r *responseErrorModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done:  true,
+		Error: &model.ResponseError{Message: "response error"},
+	}
+	close(ch)
+	return ch, nil
+}
+
+// emptyResponseModel returns an empty response
+type emptyResponseModel struct{}
+
+func (e *emptyResponseModel) Info() model.Info { return model.Info{Name: "empty"} }
+func (e *emptyResponseModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: ""}}}}
 	close(ch)
 	return ch, nil
 }
