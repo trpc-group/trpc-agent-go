@@ -11,713 +11,535 @@ package tcvector
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
-	"reflect"
-	"strconv"
-	"testing"
-	"time"
+	"math"
+	"sort"
+	"sync"
 
-	"github.com/stretchr/testify/suite"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
-var (
-	key        = getEnvOrDefault("TCVECTOR_STORE_KEY", "")
-	urlStr     = getEnvOrDefault("TCVECTOR_STORE_URL", "")
-	user       = getEnvOrDefault("TCVECTOR_STORE_USER", "root")
-	db         = getEnvOrDefault("TCVECTOR_STORE_DATABASE", "trpc_agent_unit_test")
-	collection = getEnvOrDefault("TCVECTOR_STORE_COLLECTION", "trpc_agent_unit_test_documents")
-)
+// mockClient is a mock implementation of storage.ClientInterface for testing.
+// It provides an in-memory storage and allows simulating various scenarios.
+type mockClient struct {
+	// Embed interfaces to satisfy the interface requirements
+	tcvectordb.DatabaseInterface
+	tcvectordb.FlatInterface
 
-func TestTCVectorSuite(t *testing.T) {
-	suite.Run(t, new(TCVectorTestSuite))
+	// In-memory storage
+	documents map[string]tcvectordb.Document
+	mu        sync.RWMutex
+
+	// Call tracking for verification
+	upsertCalls  int
+	queryCalls   int
+	searchCalls  int
+	deleteCalls  int
+	updateCalls  int
+	hybridCalls  int
+	batchCalls   int
+	rebuildCalls int
+
+	// Error simulation
+	upsertError  error
+	queryError   error
+	searchError  error
+	deleteError  error
+	updateError  error
+	hybridError  error
+	batchError   error
+	rebuildError error
+
+	// Database and collection tracking
+	databases   map[string]bool
+	collections map[string]map[string]bool // db -> collection -> exists
 }
 
-// TCVectorTestSuite contains test suite state.
-type TCVectorTestSuite struct {
-	suite.Suite
-	vs          *VectorStore
-	ctx         context.Context
-	addedDocIDs []string // Track documents for cleanup.
-}
-
-var testData = []struct {
-	name   string
-	doc    *document.Document
-	vector []float64
-}{
-	{
-		name: "ai_doc",
-		doc: &document.Document{
-			ID:      "test_001",
-			Name:    "AI Fundamentals",
-			Content: "Artificial intelligence is a branch of computer science",
-			Metadata: map[string]any{
-				"category": "AI",
-				"priority": 5,
-				"tags":     []string{"AI", "fundamentals"},
-			},
-		},
-		vector: []float64{1.0, 0.5, 0.2},
-	},
-	{
-		name: "ml_doc",
-		doc: &document.Document{
-			ID:      "test_002",
-			Name:    "Machine Learning Algorithms",
-			Content: "Machine learning is the core technology of artificial intelligence",
-			Metadata: map[string]any{
-				"category": "ML",
-				"priority": 8,
-				"tags":     []string{"ML", "algorithms"},
-			},
-		},
-		vector: []float64{0.8, 1.0, 0.3},
-	},
-	{
-		name: "dl_doc",
-		doc: &document.Document{
-			ID:      "test_003",
-			Name:    "Deep Learning Framework",
-			Content: "Deep learning is a subset of machine learning",
-			Metadata: map[string]any{
-				"category": "DL",
-				"priority": 6,
-				"tags":     []string{"DL", "framework"},
-			},
-		},
-		vector: []float64{0.6, 0.8, 1.0},
-	},
-}
-
-// SetupSuite initializes the test suite.
-func (suite *TCVectorTestSuite) SetupSuite() {
-	suite.ctx = context.Background()
-	if urlStr == "" || key == "" {
-		suite.T().Skip("Skip test: TCVECTOR_STORE_URL, TCVECTOR_STORE_KEY environment variables required")
-		return
-	}
-
-	vs, err := New(
-		WithURL(urlStr),
-		WithUsername(user),
-		WithPassword(key),
-		WithDatabase(db),
-		WithCollection(collection),
-		WithIndexDimension(3),
-		WithSharding(1),
-		WithReplicas(0),
-	)
-	suite.Require().NoError(err, "Failed to create VectorStore")
-	suite.vs = vs
-	suite.addedDocIDs = make([]string, 0)
-
-	suite.T().Logf("Test suite setup completed with collection: %s", collection)
-	// sleep 3 seconds to ensure the collection is ready.
-	time.Sleep(3 * time.Second)
-}
-
-// TearDownSuite cleans up test data.
-func (suite *TCVectorTestSuite) TearDownSuite() {
-	if suite.vs == nil {
-		return
-	}
-
-	suite.vs.client.DropDatabase(suite.ctx, db)
-	suite.vs.Close()
-}
-
-// SetupTest runs before each test to ensure a clean state.
-func (suite *TCVectorTestSuite) SetupTest() {
-	// Clean up any documents that were added in a previous test run.
-	for _, id := range suite.addedDocIDs {
-		_ = suite.vs.Delete(suite.ctx, id) // Ignore error as doc might already be deleted
-	}
-	// Reset the tracker.
-	suite.addedDocIDs = make([]string, 0)
-}
-
-// validateDocument compares two documents for equality.
-func (suite *TCVectorTestSuite) validateDocument(expected *document.Document, actual *document.Document) {
-	suite.Equal(expected.ID, actual.ID, "Document ID should match")
-	suite.Equal(expected.Name, actual.Name, "Document Name should match")
-	suite.Equal(expected.Content, actual.Content, "Document Content should match")
-
-	// Validate metadata with more flexible type checking.
-	for key, expectedValue := range expected.Metadata {
-		actualValue, exists := actual.Metadata[key]
-		if !exists {
-			suite.T().Logf("Note: Missing metadata key: %s", key)
-			continue
-		}
-
-		// More flexible comparison for different types.
-		suite.True(suite.compareMetadataValues(expectedValue, actualValue),
-			"Metadata %s should match: got %v (%T), expected %v (%T)",
-			key, actualValue, actualValue, expectedValue, expectedValue)
+// newMockClient creates a new mock client for testing.
+func newMockClient() *mockClient {
+	return &mockClient{
+		documents:   make(map[string]tcvectordb.Document),
+		databases:   make(map[string]bool),
+		collections: make(map[string]map[string]bool),
 	}
 }
 
-// compareMetadataValues provides flexible comparison for metadata values.
-func (suite *TCVectorTestSuite) compareMetadataValues(expected, actual any) bool {
-	// Direct equality.
-	if reflect.DeepEqual(expected, actual) {
-		return true
+// Reset clears all state and counters.
+func (m *mockClient) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.documents = make(map[string]tcvectordb.Document)
+	m.databases = make(map[string]bool)
+	m.collections = make(map[string]map[string]bool)
+
+	m.upsertCalls = 0
+	m.queryCalls = 0
+	m.searchCalls = 0
+	m.deleteCalls = 0
+	m.updateCalls = 0
+	m.hybridCalls = 0
+	m.batchCalls = 0
+	m.rebuildCalls = 0
+
+	m.upsertError = nil
+	m.queryError = nil
+	m.searchError = nil
+	m.deleteError = nil
+	m.updateError = nil
+	m.hybridError = nil
+	m.batchError = nil
+	m.rebuildError = nil
+}
+
+// Error setters for simulating failures
+
+func (m *mockClient) SetUpsertError(err error)  { m.upsertError = err }
+func (m *mockClient) SetQueryError(err error)   { m.queryError = err }
+func (m *mockClient) SetSearchError(err error)  { m.searchError = err }
+func (m *mockClient) SetDeleteError(err error)  { m.deleteError = err }
+func (m *mockClient) SetUpdateError(err error)  { m.updateError = err }
+func (m *mockClient) SetHybridError(err error)  { m.hybridError = err }
+func (m *mockClient) SetBatchError(err error)   { m.batchError = err }
+func (m *mockClient) SetRebuildError(err error) { m.rebuildError = err }
+
+// Getters for verification
+
+func (m *mockClient) GetDocument(id string) (tcvectordb.Document, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	doc, ok := m.documents[id]
+	return doc, ok
+}
+
+func (m *mockClient) GetDocumentCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.documents)
+}
+
+func (m *mockClient) GetUpsertCalls() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.upsertCalls
+}
+
+func (m *mockClient) GetQueryCalls() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.queryCalls
+}
+
+func (m *mockClient) GetSearchCalls() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.searchCalls
+}
+
+func (m *mockClient) GetDeleteCalls() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.deleteCalls
+}
+
+func (m *mockClient) GetUpdateCalls() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.updateCalls
+}
+
+func (m *mockClient) GetHybridCalls() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.hybridCalls
+}
+
+func (m *mockClient) GetBatchCalls() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.batchCalls
+}
+
+func (m *mockClient) GetRebuildCalls() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.rebuildCalls
+}
+
+// Implementation of storage.ClientInterface methods
+
+func (m *mockClient) Upsert(ctx context.Context, db, collection string, docs interface{}, params ...*tcvectordb.UpsertDocumentParams) (*tcvectordb.UpsertDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.upsertCalls++
+
+	if m.upsertError != nil {
+		return nil, m.upsertError
 	}
 
-	// Handle numeric type conversions.
-	switch a := actual.(type) {
-	case json.Number:
-		eStr := fmt.Sprintf("%v", expected)
-		return eStr == a.String()
-	case string:
-		eStr := fmt.Sprintf("%v", expected)
-		return eStr == actual
-	case float64:
-		if e, ok := expected.(float64); ok {
-			return e == actual
-		}
-	case int64:
-		if e, ok := expected.(int64); ok {
-			return e == actual
-		}
+	// Convert docs to []tcvectordb.Document
+	docSlice, ok := docs.([]tcvectordb.Document)
+	if !ok {
+		return nil, errors.New("invalid document type")
 	}
 
-	// For slices, try element-wise comparison.
-	expectedVal := reflect.ValueOf(expected)
-	actualVal := reflect.ValueOf(actual)
-	if expectedVal.Kind() == reflect.Slice && actualVal.Kind() == reflect.Slice {
-		if expectedVal.Len() != actualVal.Len() {
-			return false
-		}
-		for i := 0; i < expectedVal.Len(); i++ {
-			if !suite.compareMetadataValues(expectedVal.Index(i).Interface(), actualVal.Index(i).Interface()) {
-				return false
+	for _, doc := range docSlice {
+		m.documents[doc.Id] = doc
+	}
+
+	return &tcvectordb.UpsertDocumentResult{AffectedCount: len(docSlice)}, nil
+}
+
+func (m *mockClient) Query(ctx context.Context, db, collection string, ids []string, params ...*tcvectordb.QueryDocumentParams) (*tcvectordb.QueryDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.queryCalls++
+
+	if m.queryError != nil {
+		return nil, m.queryError
+	}
+
+	var docs []tcvectordb.Document
+	if len(ids) > 0 {
+		// Query by specific IDs
+		for _, id := range ids {
+			if doc, ok := m.documents[id]; ok {
+				docs = append(docs, doc)
 			}
 		}
-		return true
+	} else {
+		// Query all documents (for GetMetadata)
+		for _, doc := range m.documents {
+			docs = append(docs, doc)
+		}
 	}
 
-	return false
+	// Apply offset and limit
+	offset := 0
+	limit := len(docs)
+	if len(params) > 0 && params[0] != nil {
+		if params[0].Offset > 0 {
+			offset = int(params[0].Offset)
+		}
+		if params[0].Limit > 0 {
+			limit = int(params[0].Limit)
+		}
+	}
+
+	// Apply pagination
+	if offset >= len(docs) {
+		return &tcvectordb.QueryDocumentResult{
+			Documents:     []tcvectordb.Document{},
+			AffectedCount: 0,
+		}, nil
+	}
+
+	end := offset + limit
+	if end > len(docs) {
+		end = len(docs)
+	}
+
+	docs = docs[offset:end]
+
+	return &tcvectordb.QueryDocumentResult{
+		Documents:     docs,
+		AffectedCount: len(docs),
+	}, nil
 }
 
-// validateVector compares two vectors for equality.
-func (suite *TCVectorTestSuite) validateVector(expected []float64, actual []float64, tolerance float64) {
-	suite.Require().Len(actual, len(expected), "Vector length should match")
+func (m *mockClient) Search(ctx context.Context, db, collection string, vectors [][]float32, params ...*tcvectordb.SearchDocumentParams) (*tcvectordb.SearchDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	for i, expectedVal := range expected {
-		suite.Assert().InDelta(expectedVal, actual[i], tolerance,
-			"Vector[%d] should match within tolerance", i)
-	}
-}
+	m.searchCalls++
 
-func (suite *TCVectorTestSuite) TestAdd() {
-	tests := []struct {
-		name    string
-		doc     *document.Document
-		vector  []float64
-		wantErr bool
-	}{
-		{
-			name:    "valid_document",
-			doc:     testData[0].doc,
-			vector:  testData[0].vector,
-			wantErr: false,
-		},
-		{
-			name:    "empty_vector",
-			doc:     testData[1].doc,
-			vector:  []float64{},
-			wantErr: true,
-		},
+	if m.searchError != nil {
+		return nil, m.searchError
 	}
 
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			err := suite.vs.Add(suite.ctx, tt.doc, tt.vector)
-			if tt.wantErr {
-				suite.Error(err, "error expected")
-				return
-			}
+	// Calculate cosine similarity and sort by score
+	var results [][]tcvectordb.Document
+	for _, queryVector := range vectors {
+		var batch []tcvectordb.Document
 
-			suite.Require().NoError(err, "no error expected")
+		// Calculate similarity scores
+		type docWithScore struct {
+			doc   tcvectordb.Document
+			score float32
+		}
+		var scored []docWithScore
 
-			// Track for cleanup.
-			suite.addedDocIDs = append(suite.addedDocIDs, tt.doc.ID)
-			retrievedDoc, retrievedVector, err := suite.vs.Get(suite.ctx, tt.doc.ID)
-			suite.Require().NoError(err, "query after add should succeed")
-			suite.Require().NotNil(retrievedDoc, "retrieved document should not be nil")
+		for _, doc := range m.documents {
+			score := cosineSimilarity(queryVector, doc.Vector)
+			docCopy := doc
+			docCopy.Score = score
+			scored = append(scored, docWithScore{doc: docCopy, score: score})
+		}
 
-			fmt.Println(retrievedDoc)
-			suite.validateDocument(tt.doc, retrievedDoc)
-			suite.validateVector(tt.vector, retrievedVector, 0.0001)
-			suite.T().Logf("Successfully added and validated document: %s", tt.doc.ID)
+		// Sort by score descending
+		sort.Slice(scored, func(i, j int) bool {
+			return scored[i].score > scored[j].score
 		})
-	}
-}
 
-func (suite *TCVectorTestSuite) TestGet() {
-	// Setup: Add test document first.
-	testDoc := testData[0]
-	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
-	suite.Require().NoError(err, "Failed to add test document")
-
-	suite.addedDocIDs = append(suite.addedDocIDs, testDoc.doc.ID)
-
-	tests := []struct {
-		name    string
-		id      string
-		wantErr bool
-	}{
-		{
-			name:    "existing_document",
-			id:      testDoc.doc.ID,
-			wantErr: false,
-		},
-		{
-			name:    "non_existing_document",
-			id:      "non_existent_id",
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			doc, vector, err := suite.vs.Get(suite.ctx, tt.id)
-
-			if tt.wantErr {
-				suite.Error(err, "error expected for non-existing document")
-				return
+		// Apply limit if specified
+		limit := len(scored)
+		if len(params) > 0 && params[0] != nil && params[0].Limit > 0 {
+			limit = int(params[0].Limit)
+			if limit > len(scored) {
+				limit = len(scored)
 			}
-
-			suite.Require().NoError(err, "no error expected for existing document")
-			suite.Require().NotNil(doc, "document should not be nil")
-			suite.Require().NotNil(vector, "vector should not be nil")
-
-			suite.validateDocument(testDoc.doc, doc)
-			suite.validateVector(testDoc.vector, vector, 0.0001)
-			suite.T().Logf("Successfully retrieved and validated document: %s", tt.id)
-		})
-	}
-}
-
-func (suite *TCVectorTestSuite) TestUpdate() {
-	// Setup: Add test document.
-	testDoc := testData[0]
-	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
-	suite.Require().NoError(err, "Failed to add test document")
-
-	suite.addedDocIDs = append(suite.addedDocIDs, testDoc.doc.ID)
-
-	tests := []struct {
-		name      string
-		updateDoc *document.Document
-		newVector []float64
-		wantErr   bool
-	}{
-		{
-			name: "valid_update",
-			updateDoc: &document.Document{
-				ID:      testDoc.doc.ID,
-				Name:    "Updated AI Fundamentals",
-				Content: "Updated content about artificial intelligence",
-				Metadata: map[string]any{
-					"category":   "AI",
-					"priority":   9,
-					"tags":       []string{"AI", "fundamentals", "updated"},
-					"updated_at": time.Now().Unix(),
-				},
-			},
-			newVector: []float64{1.0, 0.6, 0.3},
-			wantErr:   false,
-		},
-	}
-
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			err := suite.vs.Update(suite.ctx, tt.updateDoc, tt.newVector)
-			if tt.wantErr {
-				suite.Error(err, "error expected")
-				return
-			}
-
-			suite.Require().NoError(err, "update should succeed")
-
-			doc, vector, err := suite.vs.Get(suite.ctx, tt.updateDoc.ID)
-			suite.Require().NoError(err, "get after update should succeed")
-			suite.Require().NotNil(doc, "document should not be nil after update")
-			suite.Require().NotNil(vector, "vector should not be nil after update")
-
-			suite.validateDocument(tt.updateDoc, doc)
-			suite.validateVector(tt.newVector, vector, 0.0001)
-			suite.T().Logf("Successfully updated and validated document: %s", tt.updateDoc.ID)
-		})
-	}
-}
-
-func (suite *TCVectorTestSuite) TestDelete() {
-	// Setup: Add test document.
-	testDoc := testData[0]
-	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
-	suite.Require().NoError(err, "Failed to add test document")
-
-	tests := []struct {
-		name    string
-		id      string
-		wantErr bool
-	}{
-		{
-			name:    "existing_document",
-			id:      testDoc.doc.ID,
-			wantErr: false,
-		},
-		{
-			name:    "non_existing_document",
-			id:      "non_existent_id",
-			wantErr: false, // Delete non-existing should not error.
-		},
-	}
-
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			err := suite.vs.Delete(suite.ctx, tt.id)
-			if tt.wantErr {
-				suite.Error(err, "error expected")
-				return
-			}
-
-			suite.NoError(err, "delete should not error")
-
-			if tt.id == testDoc.doc.ID {
-				_, _, err := suite.vs.Get(suite.ctx, tt.id)
-				suite.Error(err, "document should not exist after deletion")
-				suite.T().Logf("Successfully deleted document: %s", tt.id)
-			}
-		})
-	}
-}
-
-func (suite *TCVectorTestSuite) TestEdgeCases() {
-	suite.Run("empty_vector_search", func() {
-		query := &vectorstore.SearchQuery{
-			Vector:     []float64{0, 0, 0},
-			Limit:      1,
-			SearchMode: vectorstore.SearchModeVector,
 		}
-		_, err := suite.vs.Search(suite.ctx, query)
-		// Empty vector search might be valid or invalid depending on implementation.
-		if err != nil {
-			suite.T().Logf("Empty vector search error (may be expected): %v", err)
-		}
-	})
 
-	suite.Run("high_threshold_search", func() {
-		query := &vectorstore.SearchQuery{
-			Vector:     []float64{1.0, 1.0, 1.0},
-			Limit:      1000,
-			MinScore:   0.99,
-			SearchMode: vectorstore.SearchModeVector,
+		// Apply score threshold if specified
+		minScore := float32(0.0)
+		if len(params) > 0 && params[0] != nil && params[0].Radius != nil {
+			minScore = *params[0].Radius
 		}
-		result, err := suite.vs.Search(suite.ctx, query)
-		suite.NoError(err, "high threshold search should not error")
-		if result != nil {
-			suite.GreaterOrEqual(len(result.Results), 0,
-				"high threshold search should return >= 0 results")
-			suite.T().Logf("High threshold search returned %d results", len(result.Results))
+
+		for i := 0; i < limit; i++ {
+			if scored[i].score >= minScore {
+				batch = append(batch, scored[i].doc)
+			}
 		}
-	})
+
+		results = append(results, batch)
+	}
+
+	return &tcvectordb.SearchDocumentResult{Documents: results}, nil
 }
 
-// Helper functions for environment variable parsing used in tests.
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+// cosineSimilarity calculates cosine similarity between two vectors
+func cosineSimilarity(a, b []float32) float32 {
+	if len(a) != len(b) {
+		return 0
 	}
-	return defaultValue
+
+	var dotProduct, normA, normB float64
+	for i := range a {
+		dotProduct += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+
+	return float32(dotProduct / (math.Sqrt(normA) * math.Sqrt(normB)))
 }
 
-func TestVectorStore_convertQueryResult(t *testing.T) {
-	type fields struct {
-		option options
-	}
-	type args struct {
-		queryResult *tcvectordb.QueryDocumentResult
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		want    *vectorstore.SearchResult
-		wantErr bool
-	}{
-		{
-			name: "normal case with multiple documents",
-			fields: fields{
-				option: options{
-					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
-						return &document.Document{ID: "doc1"}, nil, nil
-					},
-				},
-			},
-			args: args{
-				queryResult: &tcvectordb.QueryDocumentResult{
-					Documents: []tcvectordb.Document{{}, {}},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{
-					{Document: &document.Document{ID: "doc1"}, Score: 1.0},
-					{Document: &document.Document{ID: "doc1"}, Score: 1.0},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "docBuilder returns error",
-			fields: fields{
-				option: options{
-					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
-						return nil, nil, errors.New("conversion error")
-					},
-				},
-			},
-			args: args{
-				queryResult: &tcvectordb.QueryDocumentResult{
-					Documents: []tcvectordb.Document{{}},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{},
-			},
-			wantErr: false,
-		},
-		{
-			name: "empty documents list",
-			fields: fields{
-				option: options{
-					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
-						return &document.Document{}, nil, nil
-					},
-				},
-			},
-			args: args{
-				queryResult: &tcvectordb.QueryDocumentResult{
-					Documents: []tcvectordb.Document{},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{},
-			},
-			wantErr: false,
-		},
-		{
-			name: "partial document conversion failure",
-			fields: fields{
-				option: options{
-					docBuilder: func() func(tcvectordb.Document) (*document.Document, []float64, error) {
-						count := 0
-						return func(doc tcvectordb.Document) (*document.Document, []float64, error) {
-							count++
-							if count == 1 {
-								return nil, nil, errors.New("second doc error")
-							}
-							return &document.Document{ID: "doc" + strconv.Itoa(count)}, nil, nil
-						}
-					}(),
-				},
-			},
-			args: args{
-				queryResult: &tcvectordb.QueryDocumentResult{
-					Documents: []tcvectordb.Document{{}, {}, {}},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{
-					{Document: &document.Document{ID: "doc2"}, Score: 1.0},
-					{Document: &document.Document{ID: "doc3"}, Score: 1.0},
-				},
-			},
-			wantErr: false,
-		},
+func (m *mockClient) Delete(ctx context.Context, db, collection string, params tcvectordb.DeleteDocumentParams) (*tcvectordb.DeleteDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.deleteCalls++
+
+	if m.deleteError != nil {
+		return nil, m.deleteError
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			vs := &VectorStore{
-				option: tt.fields.option,
+	count := 0
+	for _, id := range params.DocumentIds {
+		if _, ok := m.documents[id]; ok {
+			delete(m.documents, id)
+			count++
+		}
+	}
+
+	return &tcvectordb.DeleteDocumentResult{AffectedCount: count}, nil
+}
+
+func (m *mockClient) Update(ctx context.Context, db, collection string, params tcvectordb.UpdateDocumentParams) (*tcvectordb.UpdateDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.updateCalls++
+
+	if m.updateError != nil {
+		return nil, m.updateError
+	}
+
+	// Update existing documents
+	// For mock purposes, we just track that update was called
+	// In real implementation, this would update the document fields
+	affectedCount := 0
+	for _, id := range params.QueryIds {
+		if _, ok := m.documents[id]; ok {
+			affectedCount++
+		}
+	}
+
+	return &tcvectordb.UpdateDocumentResult{AffectedCount: affectedCount}, nil
+}
+
+func (m *mockClient) HybridSearch(ctx context.Context, db, collection string, params tcvectordb.HybridSearchDocumentParams) (*tcvectordb.SearchDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.hybridCalls++
+
+	if m.hybridError != nil {
+		return nil, m.hybridError
+	}
+
+	// Simple implementation: return all documents
+	var batch []tcvectordb.Document
+	for _, doc := range m.documents {
+		batch = append(batch, doc)
+	}
+
+	return &tcvectordb.SearchDocumentResult{Documents: [][]tcvectordb.Document{batch}}, nil
+}
+
+func (m *mockClient) FullTextSearch(ctx context.Context, db, collection string, params tcvectordb.FullTextSearchParams) (*tcvectordb.SearchDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Return all documents for keyword search in mock
+	var batch []tcvectordb.Document
+	for _, doc := range m.documents {
+		batch = append(batch, doc)
+	}
+
+	return &tcvectordb.SearchDocumentResult{Documents: [][]tcvectordb.Document{batch}}, nil
+}
+
+func (m *mockClient) Count(ctx context.Context, db, collection string, params ...tcvectordb.CountDocumentParams) (*tcvectordb.CountDocumentResult, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := len(m.documents)
+	return &tcvectordb.CountDocumentResult{Count: uint64(count)}, nil
+}
+
+func (m *mockClient) SearchByContents(ctx context.Context, db, collection string, contents []string, params ...*tcvectordb.SearchDocumentParams) (*tcvectordb.SearchDocumentResult, error) {
+	// Delegate to Search for simplicity
+	return m.Search(ctx, db, collection, nil, params...)
+}
+
+func (m *mockClient) RebuildIndex(ctx context.Context, db, collection string, params *tcvectordb.RebuildIndexParams) (*tcvectordb.RebuildIndexResult, error) {
+	m.rebuildCalls++
+
+	if m.rebuildError != nil {
+		return nil, m.rebuildError
+	}
+
+	return &tcvectordb.RebuildIndexResult{}, nil
+}
+
+// Close closes the connection to the vector store.
+func (m *mockClient) Close() {
+	// No-op for mock
+}
+
+// Database operations (minimal implementation for testing)
+
+func (m *mockClient) CreateDatabaseIfNotExists(ctx context.Context, dbName string) (*tcvectordb.CreateDatabaseResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.databases[dbName] = true
+	return &tcvectordb.CreateDatabaseResult{}, nil
+}
+
+func (m *mockClient) DropDatabase(ctx context.Context, dbName string) (*tcvectordb.DropDatabaseResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.databases, dbName)
+	return &tcvectordb.DropDatabaseResult{}, nil
+}
+
+func (m *mockClient) ListDatabases(ctx context.Context) ([]*tcvectordb.Database, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var dbs []*tcvectordb.Database
+	for name := range m.databases {
+		dbs = append(dbs, &tcvectordb.Database{DatabaseName: name})
+	}
+	return dbs, nil
+}
+
+func (m *mockClient) Database(dbName string) *tcvectordb.Database {
+	// Return a mock database that has the required methods
+	return &tcvectordb.Database{DatabaseName: dbName}
+}
+
+// TruncateCollection truncates a collection (for DeleteAll support).
+func (m *mockClient) TruncateCollection(ctx context.Context, dbName, collectionName string) (*tcvectordb.TruncateCollectionResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Clear all documents
+	m.documents = make(map[string]tcvectordb.Document)
+	return &tcvectordb.TruncateCollectionResult{}, nil
+}
+
+// defaultMockDocBuilder creates a default document builder for mock testing
+func defaultMockDocBuilder(opt options) DocBuilderFunc {
+	return func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+		doc := &document.Document{
+			ID: tcDoc.Id,
+		}
+
+		// Extract fields
+		if nameField, ok := tcDoc.Fields[opt.nameFieldName]; ok {
+			if name, ok := nameField.Val.(string); ok {
+				doc.Name = name
 			}
-			got, err := vs.convertQueryResult(tt.args.queryResult)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("convertQueryResult() error = %v, wantErr %v", err, tt.wantErr)
-				return
+		}
+		if contentField, ok := tcDoc.Fields[opt.contentFieldName]; ok {
+			if content, ok := contentField.Val.(string); ok {
+				doc.Content = content
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("convertQueryResult() = %v, want %v", got, tt.want)
+		}
+		if metadataField, ok := tcDoc.Fields[opt.metadataFieldName]; ok {
+			if metadata, ok := metadataField.Val.(map[string]any); ok {
+				doc.Metadata = metadata
 			}
-		})
+		}
+
+		// Convert vector from float32 to float64
+		embedding := make([]float64, len(tcDoc.Vector))
+		for i, v := range tcDoc.Vector {
+			embedding[i] = float64(v)
+		}
+
+		return doc, embedding, nil
 	}
 }
 
-func TestVectorStore_convertSearchResult(t *testing.T) {
-	type fields struct {
-		option options
-	}
-	type args struct {
-		searchMode   vectorstore.SearchMode
-		searchResult *tcvectordb.SearchDocumentResult
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		want    *vectorstore.SearchResult
-		wantErr bool
-	}{
-		{
-			name: "empty documents list",
-			fields: fields{
-				option: options{
-					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
-						return &document.Document{}, nil, nil
-					},
-				},
-			},
-			args: args{
-				searchResult: &tcvectordb.SearchDocumentResult{
-					Documents: [][]tcvectordb.Document{},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{},
-			},
-			wantErr: false,
-		},
-		{
-			name: "multiple document lists error",
-			args: args{
-				searchResult: &tcvectordb.SearchDocumentResult{
-					Documents: [][]tcvectordb.Document{{}, {}},
-				},
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name: "normal document conversion",
-			fields: fields{
-				option: options{
-					docBuilder: func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
-						return &document.Document{ID: tcDoc.Id}, nil, nil
-					},
-				},
-			},
-			args: args{
-				searchResult: &tcvectordb.SearchDocumentResult{
-					Documents: [][]tcvectordb.Document{
-						{
-							{Id: "doc1", Score: 95},
-							{Id: "doc2", Score: 85},
-						},
-					},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{
-					{Document: &document.Document{ID: "doc1"}, Score: 95},
-					{Document: &document.Document{ID: "doc2"}, Score: 85},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "docBuilder returns error",
-			fields: fields{
-				option: options{
-					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
-						return nil, nil, errors.New("conversion error")
-					},
-				},
-			},
-			args: args{
-				searchResult: &tcvectordb.SearchDocumentResult{
-					Documents: [][]tcvectordb.Document{{{}, {}}},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{},
-			},
-			wantErr: false,
-		},
-		{
-			name: "partial document conversion failure",
-			fields: fields{
-				option: options{
-					docBuilder: func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
-						if tcDoc.Id == "error_id" {
-							return nil, nil, errors.New("conversion error")
-						}
-						return &document.Document{ID: tcDoc.Id}, nil, nil
-					},
-				},
-			},
-			args: args{
-				searchResult: &tcvectordb.SearchDocumentResult{
-					Documents: [][]tcvectordb.Document{
-						{
-							{Id: "doc1"},
-							{Id: "error_id"},
-							{Id: "doc3"},
-						},
-					},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{
-					{Document: &document.Document{ID: "doc1"}, Score: 0},
-					{Document: &document.Document{ID: "doc3"}, Score: 0},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "nil document from docBuilder",
-			fields: fields{
-				option: options{
-					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
-						return nil, nil, nil
-					},
-				},
-			},
-			args: args{
-				searchResult: &tcvectordb.SearchDocumentResult{
-					Documents: [][]tcvectordb.Document{{{}}},
-				},
-			},
-			want: &vectorstore.SearchResult{
-				Results: []*vectorstore.ScoredDocument{},
-			},
-			wantErr: false,
-		},
+// Helper function to create a VectorStore with mock client for testing
+func newVectorStoreWithMockClient(mockClient *mockClient, opts ...Option) *VectorStore {
+	option := defaultOptions
+	// Disable TSVector by default in mock tests to avoid encoder dependency
+	option.enableTSVector = false
+
+	for _, opt := range opts {
+		opt(&option)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			vs := &VectorStore{
-				option: tt.fields.option,
-			}
-			got, err := vs.convertSearchResult(tt.args.searchMode, tt.args.searchResult)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("%q. VectorStore.convertSearchResult() error = %v, wantErr %v", tt.name, err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("%q. VectorStore.convertSearchResult() = %v, want %v", tt.name, got, tt.want)
-			}
-		})
+	// Set default docBuilder if not provided
+	if option.docBuilder == nil {
+		option.docBuilder = defaultMockDocBuilder(option)
 	}
+
+	vs := &VectorStore{
+		client:          mockClient,
+		option:          option,
+		filterConverter: &tcVectorConverter{},
+		sparseEncoder:   nil, // Will be initialized if enableTSVector is true
+	}
+
+	// Initialize sparse encoder if needed
+	if option.enableTSVector {
+		// For testing, we can skip the sparse encoder initialization
+		// or use a mock encoder if needed
+		// sparseEncoder, _ := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
+		// vs.sparseEncoder = sparseEncoder
+	}
+
+	return vs
 }
