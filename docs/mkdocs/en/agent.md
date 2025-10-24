@@ -418,3 +418,120 @@ Memory Service is used to record user preference information, supporting persona
 1. [Runner](runner.md) - Learn the recommended usage
 2. [Session](session.md) - Understand session management
 3. [Multi-Agent](multiagent.md) - Learn multi-Agent systems
+
+## Runtime Instruction Updates
+
+You can update an Agent’s behavior-defining text at runtime without rebuilding or restarting the Agent.
+
+What changes dynamically
+
+- Instruction: the behavior guideline appended to the system message.
+- Global Instruction (system prompt): the system-level preface prepended to the request.
+
+Both can be updated on an existing `LLMAgent` instance and take effect on subsequent model requests.
+
+Example
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+// 1) Build model and agent once at startup.
+mdl := openai.New("gpt-4o-mini", openai.Options{})
+llm := llmagent.New(
+    "support-bot",
+    llmagent.WithModel(mdl),
+    llmagent.WithInstruction("Be helpful and concise."),
+)
+run := runner.NewRunner("my-app", llm)
+
+// 2) Later, change behavior at runtime (e.g., user updates prompt in UI).
+llm.SetInstruction("Translate all user inputs to French.")
+llm.SetGlobalInstruction("System: Safety first. No PII leakage.")
+
+// 3) Subsequent runs use the new instructions.
+msg := model.NewUserMessage("Where is the nearest museum?")
+ch, err := run.Run(context.Background(), "u1", "s1", msg)
+_ = ch; _ = err
+```
+
+Notes
+
+- Thread‑safe: the setters are concurrency‑safe and can be called while the service is handling requests.
+- Mid‑turn behavior: if an Agent’s current turn triggers more than one model request (e.g., due to tool calls), updates may apply to subsequent requests in the same turn. If you need per‑run stability, set or freeze the text at the start of the run.
+- Per‑session personalization: for per‑user or per‑session data, prefer placeholders in the instruction and session state injection (see the “Placeholder Variables” section above).
+
+### Alternative: Placeholder‑Driven Dynamic System Prompts
+
+If you’d rather not call setters, you can make the instruction itself a template and feed values via session state. The instruction processor replaces placeholders using session/app/user state on each turn.
+
+Patterns
+
+- Persistent per‑user value: store under `user:*` and reference `{user:key}`.
+- Persistent per‑app value: store under `app:*` and reference `{app:key}`.
+- Per‑turn ephemeral value: write into the session’s `temp:*` namespace and reference `{temp:key}` (not persisted).
+
+Example: per‑user dynamic instruction
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+svc := inmemory.NewSessionService()
+app, user, sid := "my-app", "u1", "s1"
+
+// 1) Instruction template references a user-scoped key.
+llm := llmagent.New(
+  "dyn-agent",
+  llmagent.WithInstruction("{user:system_prompt}"),
+)
+run := runner.NewRunner(app, llm, runner.WithSessionService(svc))
+
+// 2) Update the user-scoped state when the user changes settings.
+_ = svc.UpdateUserState(context.Background(), session.UserKey{AppName: app, UserID: user}, session.StateMap{
+  "system_prompt": []byte("You are a helpful assistant. Always answer in English."),
+})
+
+// 3) Runs now read the latest prompt via placeholder injection.
+_, _ = run.Run(context.Background(), user, sid, model.NewUserMessage("Hi!"))
+```
+
+Example: per‑turn temp value via a before‑agent callback
+
+```go
+callbacks := &agent.AgentCallbacks{
+  BeforeAgent: []agent.BeforeAgentCallback{
+    func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+      if inv != nil && inv.Session != nil {
+        if inv.Session.State == nil { inv.Session.State = make(map[string][]byte) }
+        // Write a one-off instruction for this turn only
+        inv.Session.State["temp:sys"] = []byte("Translate to French.")
+      }
+      return nil, nil
+    },
+  },
+}
+
+llm := llmagent.New(
+  "temp-agent",
+  llmagent.WithInstruction("{temp:sys}"),
+  llmagent.WithAgentCallbacks(callbacks),
+)
+```
+
+Caveats
+
+- In-memory `UpdateUserState` intentionally forbids `temp:*` updates; write `temp:*` directly to `invocation.Session.State` (e.g., via a callback) when you need ephemeral, per‑turn values.
+- Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.
