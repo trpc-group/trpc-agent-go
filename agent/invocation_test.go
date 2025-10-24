@@ -414,3 +414,46 @@ func TestGetAppendEventNoticeKey(t *testing.T) {
 		})
 	}
 }
+
+func TestWithCustomAgentConfigs(t *testing.T) {
+	configs := map[string]any{"custom-llm": "test-config"}
+	opts := &RunOptions{}
+	WithCustomAgentConfigs(configs)(opts)
+
+	// Verify config was set by retrieving it
+	require.NotNil(t, opts.CustomAgentConfigs)
+	require.Equal(t, "test-config", opts.CustomAgentConfigs["custom-llm"])
+}
+
+func TestInvocation_GetCustomAgentConfig(t *testing.T) {
+	// Test get existing config - use WithCustomAgentConfigs to set it
+	opts := &RunOptions{}
+	WithCustomAgentConfigs(map[string]any{"custom-llm": "test-config"})(opts)
+
+	inv := &Invocation{
+		RunOptions: *opts,
+	}
+	require.Equal(t, "test-config", inv.GetCustomAgentConfig("custom-llm"))
+	require.Nil(t, inv.GetCustomAgentConfig("non-existing"))
+
+	// Test nil cases
+	var nilInv *Invocation
+	require.Nil(t, nilInv.GetCustomAgentConfig("custom-llm"))
+
+	invWithNilConfigs := &Invocation{RunOptions: RunOptions{}}
+	require.Nil(t, invWithNilConfigs.GetCustomAgentConfig("custom-llm"))
+}
+
+func TestCustomAgentConfigs_Integration(t *testing.T) {
+	// Create RunOptions with configs using the proper setter
+	opts := &RunOptions{}
+	WithCustomAgentConfigs(map[string]any{"custom-llm": "test-config"})(opts)
+
+	inv := NewInvocation(WithInvocationRunOptions(*opts))
+
+	require.Equal(t, "test-config", inv.GetCustomAgentConfig("custom-llm"))
+
+	// Test Clone preserves configs
+	clonedInv := inv.Clone()
+	require.Equal(t, "test-config", clonedInv.GetCustomAgentConfig("custom-llm"))
+}
