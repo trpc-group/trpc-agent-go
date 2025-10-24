@@ -22,7 +22,166 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
 )
+
+// TestNew tests the New function using SetClientBuilder for dependency injection
+func TestNew(t *testing.T) {
+	tests := []struct {
+		name          string
+		opts          []Option
+		setupMock     func() *mockClient
+		builderError  error
+		wantErr       bool
+		errMsg        string
+		validateStore func(*testing.T, *VectorStore)
+	}{
+		{
+			name: "success_with_existing_index",
+			opts: []Option{
+				WithIndexName("test_index"),
+				WithVectorDimension(768),
+			},
+			setupMock: func() *mockClient {
+				mc := newMockClient()
+				mc.indexExists = true // Index already exists
+				return mc
+			},
+			wantErr: false,
+			validateStore: func(t *testing.T, vs *VectorStore) {
+				assert.NotNil(t, vs)
+				assert.Equal(t, "test_index", vs.option.indexName)
+				assert.Equal(t, 768, vs.option.vectorDimension)
+				assert.NotNil(t, vs.client)
+				assert.NotNil(t, vs.filterConverter)
+			},
+		},
+		{
+			name: "success_with_default_options",
+			opts: []Option{},
+			setupMock: func() *mockClient {
+				mc := newMockClient()
+				mc.indexExists = true
+				return mc
+			},
+			wantErr: false,
+			validateStore: func(t *testing.T, vs *VectorStore) {
+				assert.NotNil(t, vs)
+				assert.Equal(t, defaultIndexName, vs.option.indexName)
+				assert.Equal(t, defaultVectorDimension, vs.option.vectorDimension)
+			},
+		},
+		{
+			name: "success_create_index_if_not_exists",
+			opts: []Option{
+				WithIndexName("new_index"),
+				WithVectorDimension(512),
+			},
+			setupMock: func() *mockClient {
+				mc := newMockClient()
+				mc.indexExists = false // Index doesn't exist, will be created
+				return mc
+			},
+			wantErr: false,
+			validateStore: func(t *testing.T, vs *VectorStore) {
+				assert.NotNil(t, vs)
+				assert.Equal(t, "new_index", vs.option.indexName)
+				assert.Equal(t, 512, vs.option.vectorDimension)
+				// Verify index was created
+				mc := vs.client.(*mockClient)
+				assert.True(t, mc.indexExists)
+			},
+		},
+		{
+			name: "error_client_builder_fails",
+			opts: []Option{
+				WithIndexName("test_index"),
+			},
+			builderError: assert.AnError,
+			wantErr:      true,
+			errMsg:       "elasticsearch create client",
+		},
+		{
+			name: "error_ensure_index_fails",
+			opts: []Option{
+				WithIndexName("test_index"),
+			},
+			setupMock: func() *mockClient {
+				mc := newMockClient()
+				mc.indexExists = false
+				mc.createIndexError = assert.AnError
+				return mc
+			},
+			wantErr: true,
+			errMsg:  "elasticsearch ensure index",
+		},
+		{
+			name: "success_with_custom_options",
+			opts: []Option{
+				WithIndexName("custom_index"),
+				WithVectorDimension(384),
+				WithMaxResults(50),
+				WithScoreThreshold(0.75),
+				WithAddresses([]string{"http://es1:9200", "http://es2:9200"}),
+				WithUsername("testuser"),
+				WithPassword("testpass"),
+			},
+			setupMock: func() *mockClient {
+				mc := newMockClient()
+				mc.indexExists = true
+				return mc
+			},
+			wantErr: false,
+			validateStore: func(t *testing.T, vs *VectorStore) {
+				assert.Equal(t, "custom_index", vs.option.indexName)
+				assert.Equal(t, 384, vs.option.vectorDimension)
+				assert.Equal(t, 50, vs.option.maxResults)
+				assert.Equal(t, 0.75, vs.option.scoreThreshold)
+				assert.Equal(t, []string{"http://es1:9200", "http://es2:9200"}, vs.option.addresses)
+				assert.Equal(t, "testuser", vs.option.username)
+				assert.Equal(t, "testpass", vs.option.password)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save original builder
+			originalBuilder := storage.GetClientBuilder()
+			defer storage.SetClientBuilder(originalBuilder)
+
+			// Setup mock builder
+			if tt.builderError != nil {
+				// Builder returns error
+				storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (any, error) {
+					return nil, tt.builderError
+				})
+			} else if tt.setupMock != nil {
+				// Builder returns mock client
+				mc := tt.setupMock()
+				storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (any, error) {
+					return mc, nil
+				})
+			}
+
+			// Call New
+			vs, err := New(tt.opts...)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, vs)
+				if tt.validateStore != nil {
+					tt.validateStore(t, vs)
+				}
+			}
+		})
+	}
+}
 
 // TestVectorStore_Add tests Add method
 func TestVectorStore_Add(t *testing.T) {

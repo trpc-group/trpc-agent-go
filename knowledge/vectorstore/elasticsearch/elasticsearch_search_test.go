@@ -12,20 +12,22 @@ package elasticsearch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
-// TestVectorStore_Search tests Search method with vector search
+// TestVectorStore_Search tests Search method with various scenarios
 func TestVectorStore_Search(t *testing.T) {
 	tests := []struct {
 		name      string
 		query     *vectorstore.SearchQuery
-		setupMock func(*mockClient)
+		setupMock func(*mockClient, *VectorStore) // Added *VectorStore for setup that needs Add
 		wantErr   bool
 		errMsg    string
 		validate  func(*testing.T, *vectorstore.SearchResult)
@@ -37,7 +39,7 @@ func TestVectorStore_Search(t *testing.T) {
 				SearchMode: vectorstore.SearchModeVector,
 				Limit:      5,
 			},
-			setupMock: func(mc *mockClient) {
+			setupMock: func(mc *mockClient, vs *VectorStore) {
 				mc.SetSearchHits([]map[string]any{
 					{
 						"_score": 0.95,
@@ -49,7 +51,6 @@ func TestVectorStore_Search(t *testing.T) {
 					},
 				})
 			},
-			wantErr: false,
 			validate: func(t *testing.T, result *vectorstore.SearchResult) {
 				require.NotNil(t, result)
 				require.GreaterOrEqual(t, len(result.Results), 1)
@@ -58,11 +59,10 @@ func TestVectorStore_Search(t *testing.T) {
 			},
 		},
 		{
-			name:      "nil_query",
-			query:     nil,
-			setupMock: func(mc *mockClient) {},
-			wantErr:   true,
-			errMsg:    "query cannot be nil",
+			name:    "nil_query",
+			query:   nil,
+			wantErr: true,
+			errMsg:  "query cannot be nil",
 		},
 		{
 			name: "empty_vector",
@@ -70,8 +70,7 @@ func TestVectorStore_Search(t *testing.T) {
 				Vector:     []float64{},
 				SearchMode: vectorstore.SearchModeVector,
 			},
-			setupMock: func(mc *mockClient) {},
-			wantErr:   true,
+			wantErr: true,
 		},
 		{
 			name: "wrong_dimension",
@@ -79,9 +78,8 @@ func TestVectorStore_Search(t *testing.T) {
 				Vector:     []float64{0.1, 0.2}, // Only 2 dimensions, expected 3
 				SearchMode: vectorstore.SearchModeVector,
 			},
-			setupMock: func(mc *mockClient) {},
-			wantErr:   true,
-			errMsg:    "dimension",
+			wantErr: true,
+			errMsg:  "dimension",
 		},
 		{
 			name: "empty_results",
@@ -89,10 +87,9 @@ func TestVectorStore_Search(t *testing.T) {
 				Vector:     []float64{0.1, 0.2, 0.3},
 				SearchMode: vectorstore.SearchModeVector,
 			},
-			setupMock: func(mc *mockClient) {
+			setupMock: func(mc *mockClient, vs *VectorStore) {
 				mc.SetSearchHits([]map[string]any{}) // Empty results
 			},
-			wantErr: false,
 			validate: func(t *testing.T, result *vectorstore.SearchResult) {
 				require.NotNil(t, result)
 				assert.Equal(t, 0, len(result.Results))
@@ -104,11 +101,66 @@ func TestVectorStore_Search(t *testing.T) {
 				Vector:     []float64{0.1, 0.2, 0.3},
 				SearchMode: vectorstore.SearchModeVector,
 			},
-			setupMock: func(mc *mockClient) {
+			setupMock: func(mc *mockClient, vs *VectorStore) {
 				mc.SetSearchError(errors.New("search service unavailable"))
 			},
 			wantErr: true,
 			errMsg:  "search service unavailable",
+		},
+		{
+			name: "with_min_score_filter",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{1.0, 0.5, 0.2},
+				SearchMode: vectorstore.SearchModeVector,
+				Limit:      10,
+				MinScore:   0.8,
+			},
+			setupMock: func(mc *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				// Add documents with varying similarity scores
+				for i := 0; i < 5; i++ {
+					doc := &document.Document{
+						ID:      fmt.Sprintf("score_%d", i),
+						Content: fmt.Sprintf("Content %d", i),
+					}
+					_ = vs.Add(ctx, doc, []float64{float64(i) / 5.0, 0.5, 0.2})
+				}
+			},
+			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+				require.NotNil(t, result)
+				// All results should have score >= minScore
+				for _, res := range result.Results {
+					assert.GreaterOrEqual(t, res.Score, 0.8)
+				}
+			},
+		},
+		{
+			name: "with_metadata_filter",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{1.0, 0.5, 0.2},
+				SearchMode: vectorstore.SearchModeVector,
+				Limit:      10,
+				Filter: &vectorstore.SearchFilter{
+					Metadata: map[string]any{
+						"category": "test",
+					},
+				},
+			},
+			setupMock: func(mc *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				doc := &document.Document{
+					ID:      "filtered_doc",
+					Content: "Test content",
+					Metadata: map[string]any{
+						"category": "test",
+					},
+				}
+				_ = vs.Add(ctx, doc, []float64{1.0, 0.5, 0.2})
+			},
+			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+				require.NotNil(t, result)
+				// Could add more specific assertions if needed
+			},
 		},
 	}
 
@@ -116,8 +168,11 @@ func TestVectorStore_Search(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mc := newMockClient()
 			mc.indexExists = true
-			tt.setupMock(mc)
 			vs := newTestVectorStore(t, mc, WithScoreThreshold(0.5), WithVectorDimension(3))
+
+			if tt.setupMock != nil {
+				tt.setupMock(mc, vs)
+			}
 
 			result, err := vs.Search(context.Background(), tt.query)
 
