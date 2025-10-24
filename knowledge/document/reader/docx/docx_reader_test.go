@@ -247,6 +247,15 @@ func TestDOCXReader_ExtractTextFromDocWithMultipleParagraphs(t *testing.T) {
 	}
 }
 
+// TestDOCXReader_Name tests the Name method.
+func TestDOCXReader_Name(t *testing.T) {
+	reader := &Reader{}
+	name := reader.Name()
+	if name != "DOCXReader" {
+		t.Fatalf("expected 'DOCXReader', got %s", name)
+	}
+}
+
 // createDocxWithMultipleParagraphs creates a DOCX with multiple paragraphs for testing.
 func createDocxWithMultipleParagraphs(t *testing.T, paragraphs []string) []byte {
 	t.Helper()
