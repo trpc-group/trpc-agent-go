@@ -471,11 +471,11 @@ stateGraph.AddLLMNode("analyze", model,
 
 #### LLM 指令中的占位符
 
-LLM 节点的 `instruction` 支持占位符注入（与 LLMAgent 规则一致）：
+LLM 节点的 `instruction` 支持占位符注入（与 LLMAgent 规则一致）。支持原生 `{key}` 与 Mustache `{{key}}` 两种写法（Mustache 会自动规整为原生写法）：
 
-- `{key}` → 替换为 `session.State["key"]`
-- `{key?}` → 可选，缺失时替换为空
-- `{user:subkey}`、`{app:subkey}`、`{temp:subkey}` → 访问用户/应用/临时命名空间（SessionService 会将 app/user 作用域合并到 session，并带上前缀）
+- `{key}` / `{{key}}` → 替换为 `session.State["key"]`
+- `{key?}` / `{{key?}}` → 可选，缺失时替换为空
+- `{user:subkey}`、`{app:subkey}`、`{temp:subkey}`（以及其 Mustache 写法）→ 访问用户/应用/临时命名空间（SessionService 会将 app/user 作用域合并到 session，并带上前缀）
 
 说明：
 

@@ -53,6 +53,7 @@ This pattern is ideal when retrieval results are per‑turn ephemeral and should
 
 - Placeholder expansion for LLM (Large Language Model) nodes reads from the session’s state, see [graph/state_graph.go](graph/state_graph.go).
 - GraphAgent injects the current `*session.Session` into graph state, see [agent/graphagent/graph_agent.go](agent/graphagent/graph_agent.go).
+- Templates can use both `{key}` and `{{key}}` styles (Mustache is normalized automatically).
 - For per‑turn data used only to build this round’s prompt, writing `temp:*` directly on `session.State` is appropriate and simple. It won’t be persisted.
 
 ## When to Use `SessionService` Instead
