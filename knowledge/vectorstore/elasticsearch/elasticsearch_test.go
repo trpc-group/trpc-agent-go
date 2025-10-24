@@ -654,3 +654,39 @@ func TestGetSuccess_withDocBuilder(t *testing.T) {
 	assert.Equal(t, 2, len(d.Metadata))
 	assert.Equal(t, 1, d.Metadata["page"])
 }
+
+func TestSearchFilterMode(t *testing.T) {
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if strings.Contains(r.URL.Path, "_search") {
+			payload := map[string]any{
+				"hits": map[string]any{
+					"hits": []map[string]any{{"_score": 0.9, "_source": map[string]any{"id": "d1", "name": "N", "content": "C"}}},
+				},
+			}
+			json.NewEncoder(w).Encode(payload)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer hs.Close()
+
+	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3), WithScoreThreshold(0.5))
+	require.NoError(t, err)
+
+	res, err := vs.Search(context.Background(), &vectorstore.SearchQuery{
+		Filter: &vectorstore.SearchFilter{
+			IDs: []string{"d1"},
+		},
+		SearchMode: vectorstore.SearchModeFilter,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 1, len(res.Results))
+	assert.Equal(t, "N", res.Results[0].Document.Name)
+}

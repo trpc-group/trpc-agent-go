@@ -12,6 +12,7 @@ package elasticsearch
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/elastic/go-elasticsearch/v9/typedapi/esdsl"
@@ -81,7 +82,7 @@ func (vs *VectorStore) buildFilterSearchQuery(query *vectorstore.SearchQuery) (*
 		return nil, err
 	}
 	if filterQuery == nil {
-		return nil, fmt.Errorf("elasticsearch filter query is nil")
+		return nil, errors.New("elasticsearch filter query is nil")
 	}
 
 	// Build the complete search request using official SearchRequestBody.
