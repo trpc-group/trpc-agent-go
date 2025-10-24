@@ -175,6 +175,9 @@ func WithMaxRetries(maxRetries int) Option {
 // WithIndexName sets the Elasticsearch index name.
 func WithIndexName(indexName string) Option {
 	return func(o *options) {
+		if indexName == "" {
+			indexName = defaultIndexName
+		}
 		o.indexName = indexName
 	}
 }
@@ -199,6 +202,9 @@ func WithMaxResults(maxResults int) Option {
 // WithVectorDimension sets the dimension of embedding vectors.
 func WithVectorDimension(dimension int) Option {
 	return func(o *options) {
+		if dimension <= 0 {
+			dimension = defaultVectorDimension
+		}
 		o.vectorDimension = dimension
 	}
 }

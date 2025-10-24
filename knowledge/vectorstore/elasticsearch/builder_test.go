@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
@@ -33,6 +34,39 @@ func TestBuildVectorSearchQuery(t *testing.T) {
 	}
 
 	result, err := vs.buildVectorSearchQuery(query)
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 20, *result.Size)
+	assert.NotNil(t, result.Query)
+}
+
+func TestBuildFilterSearchQuery(t *testing.T) {
+	// Create a mock VectorStore with options
+	vs := &VectorStore{
+		option: options{
+			maxResults:      20,
+			vectorDimension: 3,
+			idFieldName:     "id",
+		},
+		filterConverter: &esConverter{},
+	}
+
+	query := &vectorstore.SearchQuery{
+		Filter: &vectorstore.SearchFilter{
+			IDs: []string{"doc1", "doc2"},
+			Metadata: map[string]any{
+				"category": "test",
+				"type":     "document",
+			},
+			FilterCondition: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorEqual,
+				Value:    "test",
+			},
+		},
+	}
+
+	result, err := vs.buildFilterSearchQuery(query)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 20, *result.Size)

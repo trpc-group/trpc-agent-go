@@ -70,14 +70,6 @@ func New(opts ...Option) (*VectorStore, error) {
 		opt(&option)
 	}
 
-	if option.indexName == "" {
-		option.indexName = defaultIndexName
-	}
-
-	if option.vectorDimension == 0 {
-		option.vectorDimension = defaultVectorDimension
-	}
-
 	// Create Elasticsearch client configuration.
 	esClient, err := storage.GetClientBuilder()(
 		storage.WithAddresses(option.addresses),
@@ -376,6 +368,8 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		} else {
 			searchQuery, err = vs.buildHybridSearchQuery(query)
 		}
+	case vectorstore.SearchModeFilter:
+		searchQuery, err = vs.buildFilterSearchQuery(query)
 	default:
 		searchQuery, err = vs.buildVectorSearchQuery(query)
 	}

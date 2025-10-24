@@ -90,7 +90,7 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, er
 
 	// Step 2: Generate embedding.
 	var embedding []float64
-	if dr.embedder != nil {
+	if dr.embedder != nil && finalQuery != "" {
 		var err error
 		embedding, err = dr.embedder.GetEmbedding(ctx, finalQuery)
 		if err != nil {
