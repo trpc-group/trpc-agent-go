@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessiondb "trpc.group/trpc-go/trpc-agent-go/session/database"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -38,7 +39,8 @@ import (
 var (
 	modelName       = flag.String("model", "deepseek-chat", "Name of the model to use")
 	redisAddr       = flag.String("redis-addr", "localhost:6379", "Redis address")
-	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis")
+	databaseDSN     = flag.String("database-dsn", "", "Database DSN (MySQL: user:pass@tcp(host:port)/db?charset=utf8mb4&parseTime=True&loc=Local, PostgreSQL: postgres://user:pass@host/db)")
+	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use: inmemory / redis / database")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	enableParallel  = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
 )
@@ -55,8 +57,15 @@ func main() {
 		parallelStatus = "enabled (parallel execution)"
 	}
 	fmt.Printf("Parallel Tools: %s\n", parallelStatus)
-	if *sessServiceName == "redis" {
+	switch *sessServiceName {
+	case "redis":
 		fmt.Printf("Redis: %s\n", *redisAddr)
+	case "database":
+		if *databaseDSN != "" {
+			fmt.Printf("Database: DSN configured\n")
+		} else {
+			fmt.Printf("Database: Using default configuration\n")
+		}
 	}
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time\n")
@@ -113,10 +122,23 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		redisURL := fmt.Sprintf("redis://%s", *redisAddr)
 		sessionService, err = redis.NewService(redis.WithRedisClientURL(redisURL))
 		if err != nil {
-			return fmt.Errorf("failed to create session service: %w", err)
+			return fmt.Errorf("failed to create redis session service: %w", err)
 		}
+
+	case "database":
+		if *databaseDSN == "" {
+			return fmt.Errorf("database-dsn is required when using database session service")
+		}
+		sessionService, err = sessiondb.NewService(
+			sessiondb.WithDatabaseDSN(*databaseDSN),
+			sessiondb.WithAutoCreateTable(true),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create database session service: %w", err)
+		}
+
 	default:
-		return fmt.Errorf("invalid session service name: %s", *sessServiceName)
+		return fmt.Errorf("invalid session service name: %s (valid options: inmemory, redis, database)", *sessServiceName)
 	}
 
 	// Create tools.
