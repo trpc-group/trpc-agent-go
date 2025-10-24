@@ -133,6 +133,31 @@ if err != nil {
 }
 ```
 
+### 委托可见性选项
+
+在构建多 Agent（智能体）系统（Agent 之间的任务委托）时，LLMAgent 提供“默认占位消息”的统一配置。转移（transfer）事件始终包含提示文本，并统一打上 `transfer` 标签，前端（UI, User Interface）可按标签过滤。
+
+- `llmagent.WithDefaultTransferMessage(string)`
+  - 配置当模型未提供 `message` 时的“转移默认消息”。
+  - 传入空字符串表示“禁用默认消息注入”；传入非空字符串表示“启用并使用该字符串作为默认消息”。
+
+用法示例：
+
+```go
+coordinator := llmagent.New(
+  "coordinator",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithSubAgents([]agent.Agent{mathAgent, weatherAgent}),
+  // 转移提示事件总是会输出（带有 `transfer` 标签），如需隐藏可在 UI 层按标签过滤
+  // 当模型未传 message 时，自定义默认消息（传空字符串可禁用）
+  llmagent.WithDefaultTransferMessage("Handing off to the specialist"),
+)
+```
+
+说明：
+- 这些选项不会改变真实的委托/切换逻辑，只影响“对外可见的提示文本”或“是否注入默认占位消息”。
+- 转移提示事件统一以 `Response.Object == "agent.transfer"` 输出；如需在 UI 层隐藏系统级提示，可直接过滤该对象类型的事件。
+
 ### 处理事件流
 
 `runner.Run()` 返回的 `eventChan` 是一个事件通道，Agent 执行过程中会持续向这个通道发送 Event 对象。

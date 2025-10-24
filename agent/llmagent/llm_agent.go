@@ -190,6 +190,15 @@ func WithEnableParallelTools(enable bool) Option {
 	}
 }
 
+// WithDefaultTransferMessage configures the default message used when the model
+// calls a sub-agent without providing a message. If msg is an empty string,
+// the default message injection is disabled; if non-empty, it is enabled and msg is used.
+func WithDefaultTransferMessage(msg string) Option {
+	return func(opts *Options) {
+		opts.DefaultTransferMessage = &msg
+	}
+}
+
 // WithStructuredOutputJSON sets a JSON schema structured output for normal runs.
 // The schema is constructed automatically from the provided example type.
 // Provide a typed zero-value pointer like: new(MyStruct) or (*MyStruct)(nil) and we infer the type.
@@ -380,6 +389,14 @@ type Options struct {
 	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
 	// when the transfer is complete. Defaults to true.
 	EndInvocationAfterTransfer bool
+
+	// DefaultTransferMessage holds the message to inject when the model directly
+	// calls a sub-agent without providing a message. Configured via WithDefaultTransferMessage.
+	// Behavior:
+	//   - Not configured: use built-in default message.
+	//   - Configured with empty string: use built-in default message.
+	//   - Configured with non-empty: use the provided message.
+	DefaultTransferMessage *string
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -437,6 +454,12 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
+	// Configure default transfer message for direct sub-agent calls.
+	// Default behavior (when not configured): enabled with built-in default message.
+	if options.DefaultTransferMessage != nil {
+		// Explicitly configured via WithDefaultTransferMessage.
+		processor.SetDefaultTransferMessage(*options.DefaultTransferMessage)
+	}
 	responseProcessors = append(responseProcessors, toolcallProcessor)
 
 	// Add transfer response processor if sub-agents are configured.

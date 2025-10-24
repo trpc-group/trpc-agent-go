@@ -201,3 +201,44 @@ Event translation callbacks can be used in various scenarios, such as:
 
 - Custom Event Handling: Modify event data or add additional business logic during the translation process.
 - Monitoring and Reporting: Insert monitoring and reporting logic before and after event translation. A full example of integrating with Langfuse observability platform can be found at [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse).
+
+### RunAgentInput Hook
+
+You can use `WithRunAgentInputHook` to mutate the AG-UI request before it reaches the runner. The following example reads `other_content` from `ForwardedProps` and appends it to the latest user message:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+hook := func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
+	if input == nil {
+		return nil, errors.New("empty input")
+	}
+	if len(input.Messages) == 0 {
+		return nil, errors.New("missing messages")
+	}
+	if input.ForwardedProps == nil {
+		return input, nil
+	}
+	otherContent, ok := input.ForwardedProps["other_content"].(string)
+	if !ok {
+		return input, nil
+	}
+
+	input.Messages[len(input.Messages)-1].Content += otherContent
+	return input, nil
+}
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunAgentInputHook(hook)))
+```
+
+Key points:
+
+- Returning `nil` keeps the original input object while preserving in-place edits.
+- Returning a custom `*adapter.RunAgentInput` replaces the original input; returning `nil` keeps it.
+- Returning an error aborts the request and the client receives a `RunError` event.

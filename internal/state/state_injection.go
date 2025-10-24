@@ -20,6 +20,27 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// mustachePlaceholderRE matches Mustache-style placeholders like {{key}},
+// optionally allowing namespaces (user:, app:, temp:) and the optional
+// suffix '?' (e.g., {{key?}}, {{temp:value}}). It purposely restricts the
+// allowed characters to avoid over-replacing in free text.
+var mustachePlaceholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*:(?:[A-Za-z_][A-Za-z0-9_]*)|[A-Za-z_][A-Za-z0-9_]*)(\?)?\s*\}\}`)
+
+// normalizePlaceholders converts supported Mustache-style placeholders
+// to the framework's native single-brace form before injection.
+// Examples:
+//
+//	{{key}}          -> {key}
+//	{{key?}}         -> {key?}
+//	{{user:name}}    -> {user:name}
+//	{{temp:value?}}  -> {temp:value?}
+func normalizePlaceholders(s string) string {
+	if s == "" {
+		return s
+	}
+	return mustachePlaceholderRE.ReplaceAllString(s, `{$1$2}`)
+}
+
 // InjectSessionState replaces state variables in the instruction template with their corresponding values from session state.
 // This function supports the following patterns:
 // - {variable_name}: Replaces with the value of the variable from session state.
@@ -35,6 +56,12 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 	if template == "" {
 		return template, nil
 	}
+
+	// 1) Normalize Mustache-style placeholders ({{...}}) into the framework's
+	//    native single-brace form so downstream logic works uniformly.
+	//    This provides global compatibility for templates authored with
+	//    systems like Agno without requiring callers to pre-process.
+	template = normalizePlaceholders(template)
 
 	// Regular expression to match state variables in curly braces.
 	// Supports optional variables with ? suffix.

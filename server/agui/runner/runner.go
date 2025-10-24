@@ -37,6 +37,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		translatorFactory:  opts.TranslatorFactory,
 		userIDResolver:     opts.UserIDResolver,
 		translateCallbacks: opts.TranslateCallbacks,
+		runAgentInputHook:  opts.RunAgentInputHook,
 	}
 	return run
 }
@@ -47,6 +48,7 @@ type runner struct {
 	translatorFactory  TranslatorFactory
 	userIDResolver     UserIDResolver
 	translateCallbacks *translator.Callbacks
+	runAgentInputHook  RunAgentInputHook
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -57,8 +59,12 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if runAgentInput == nil {
 		return nil, errors.New("agui: run input cannot be nil")
 	}
+	modifiedInput, err := r.applyRunAgentInputHook(ctx, runAgentInput)
+	if err != nil {
+		return nil, fmt.Errorf("agui: run input hook: %w", err)
+	}
 	events := make(chan aguievents.Event)
-	go r.run(ctx, runAgentInput, events)
+	go r.run(ctx, modifiedInput, events)
 	return events, nil
 }
 
@@ -110,6 +116,20 @@ func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, 
 			}
 		}
 	}
+}
+
+func (r *runner) applyRunAgentInputHook(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
+	if r.runAgentInputHook == nil {
+		return input, nil
+	}
+	newInput, err := r.runAgentInputHook(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("run agent input hook: %w", err)
+	}
+	if newInput == nil {
+		return input, nil
+	}
+	return newInput, nil
 }
 
 func (r *runner) handleBeforeTranslate(ctx context.Context, event *event.Event) (*event.Event, error) {

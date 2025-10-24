@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
@@ -23,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -47,8 +49,10 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 		return nil, errors.New("agent is required")
 	}
 
-	if options.host == "" {
-		return nil, errors.New("host is required")
+	// Host is only required if we need to build an agent card
+	// If user provides a custom agent card, host is optional
+	if options.agentCard == nil && options.host == "" {
+		return nil, errors.New("host is required when agent card is not provided")
 	}
 
 	return buildA2AServer(options)
@@ -61,7 +65,9 @@ func buildAgentCard(options *options) a2a.AgentCard {
 	agent := options.agent
 	desc := agent.Info().Description
 	name := agent.Info().Name
-	url := fmt.Sprintf("http://%s", options.host)
+
+	// Normalize the host to ensure it has a proper URL scheme
+	url := ia2a.NormalizeURL(options.host)
 
 	// Build skills from agent tools
 	skills := buildSkillsFromTools(agent, name, desc)
@@ -137,17 +143,51 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		userIDHeader = serverUserIDHeader
 	}
 
+	// Extract base path from agent card URL for request routing.
+	// If the URL contains a path component (e.g., "http://example.com/api/v1"),
+	// it will be extracted and used as the base path for routing incoming requests.
+	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.URL))
+
 	opts := []a2a.Option{
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
+		a2a.WithBasePath(basePath),
 	}
-
-	// if other AuthProvider is set, user info should be covered
 	opts = append(opts, options.extraOptions...)
 	a2aServer, err := a2a.NewA2AServer(agentCard, taskManager, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a2a server: %w", err)
 	}
 	return a2aServer, nil
+}
+
+// extractBasePath extracts the path component from a URL for request routing.
+// It parses the URL and returns the path if the URL has a valid scheme.
+//
+// Examples:
+//   - "http://example.com/api/v1" → "/api/v1"
+//   - "https://example.com/docs" → "/docs"
+//   - "grpc://service:9090/rpc" → "/rpc"
+//   - "http://example.com" → "" (no path)
+//   - "invalid-url" → "" (no scheme)
+//
+// The extracted path is used as the base path for routing incoming A2A requests.
+func extractBasePath(urlStr string) string {
+	if urlStr == "" {
+		return ""
+	}
+
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return ""
+	}
+
+	// Extract path if URL has a valid scheme
+	if u.Scheme != "" {
+		return u.Path
+	}
+
+	// No valid scheme, return empty string
+	return ""
 }
 
 // messageProcessor is the message processor for the a2a server.
