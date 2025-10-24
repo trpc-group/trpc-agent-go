@@ -693,6 +693,17 @@ stateGraph.AddToolsNode("tools", tools)
 stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 ```
 
+开启工具并行执行（与 LLMAgent 的选项对齐）：
+
+```go
+// 当同一条 assistant 消息包含多个 tool_calls 时，并行执行以加速整体耗时。
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithEnableParallelTools(true), // 可选；默认串行
+)
+```
+
 **工具调用配对机制与二次进入 LLM：**
 
 - 从 `messages` 尾部向前扫描最近的 `assistant(tool_calls)`；遇到 `user`
