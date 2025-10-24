@@ -10,10 +10,12 @@
 package elasticsearch
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
 )
 
@@ -79,4 +81,52 @@ func TestWithExtraOptions(t *testing.T) {
 		WithExtraOptions()(&opt)
 		assert.Nil(t, opt.extraOptions)
 	})
+}
+
+// TestAdditionalOptions tests options with 0% coverage
+func TestAdditionalOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		option   Option
+		validate func(*testing.T, *options)
+	}{
+		{
+			name:   "WithMetadataField",
+			option: WithMetadataField("custom_meta"),
+			validate: func(t *testing.T, opt *options) {
+				assert.Equal(t, "custom_meta", opt.metadataFieldName)
+			},
+		},
+		{
+			name:   "WithCreatedAtField",
+			option: WithCreatedAtField("created_time"),
+			validate: func(t *testing.T, opt *options) {
+				assert.Equal(t, "created_time", opt.createdAtFieldName)
+			},
+		},
+		{
+			name:   "WithUpdatedAtField",
+			option: WithUpdatedAtField("updated_time"),
+			validate: func(t *testing.T, opt *options) {
+				assert.Equal(t, "updated_time", opt.updatedAtFieldName)
+			},
+		},
+		{
+			name: "WithDocBuilder",
+			option: WithDocBuilder(func(json.RawMessage) (*document.Document, []float64, error) {
+				return &document.Document{}, []float64{}, nil
+			}),
+			validate: func(t *testing.T, opt *options) {
+				assert.NotNil(t, opt.docBuilder)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opt := defaultOptions
+			tt.option(&opt)
+			tt.validate(t, &opt)
+		})
+	}
 }

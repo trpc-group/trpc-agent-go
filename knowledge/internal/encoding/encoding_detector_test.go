@@ -81,21 +81,36 @@ func TestSmartProcessText(t *testing.T) {
 	testCases := []struct {
 		name           string
 		text           string
-		expectUTF8     bool
 		expectValid    bool
 		expectEncoding Encoding
 	}{
 		{
 			name:           "valid UTF-8",
 			text:           "Hello 世界",
-			expectUTF8:     true,
 			expectValid:    true,
 			expectEncoding: EncodingUTF8,
 		},
 		{
 			name:           "empty string",
 			text:           "",
-			expectUTF8:     true,
+			expectValid:    true,
+			expectEncoding: EncodingUTF8,
+		},
+		{
+			name:           "ASCII only",
+			text:           "Hello World",
+			expectValid:    true,
+			expectEncoding: EncodingUTF8,
+		},
+		{
+			name:           "pure Chinese",
+			text:           "中文测试文本",
+			expectValid:    true,
+			expectEncoding: EncodingUTF8,
+		},
+		{
+			name:           "mixed scripts",
+			text:           "Test中文123テスト",
 			expectValid:    true,
 			expectEncoding: EncodingUTF8,
 		},
@@ -170,51 +185,346 @@ func TestIsUTF8Safe(t *testing.T) {
 	}
 }
 
-// TestEncodingPatterns tests the encoding pattern detection.
-func TestEncodingPatterns(t *testing.T) {
-	// Note: These tests use byte patterns that simulate different encodings
-	// In real scenarios, you'd need actual encoded text to test properly
+// TestEncodingPatternsEmpty tests encoding pattern detection with empty bytes.
+func TestEncodingPatternsEmpty(t *testing.T) {
+	emptyBytes := []byte{}
 
+	if isLikelyGBK(emptyBytes) {
+		t.Error("isLikelyGBK returned true for empty bytes")
+	}
+	if isLikelyBig5(emptyBytes) {
+		t.Error("isLikelyBig5 returned true for empty bytes")
+	}
+	if isLikelyShiftJIS(emptyBytes) {
+		t.Error("isLikelyShiftJIS returned true for empty bytes")
+	}
+	if isLikelyEUCKR(emptyBytes) {
+		t.Error("isLikelyEUCKR returned true for empty bytes")
+	}
+}
+
+// TestIsLikelyGBKPattern tests the GBK pattern detection.
+func TestIsLikelyGBKPattern(t *testing.T) {
 	testCases := []struct {
 		name     string
 		bytes    []byte
-		expected Encoding
+		expected bool
 	}{
 		{
-			name:     "empty bytes",
+			name:     "empty",
 			bytes:    []byte{},
-			expected: EncodingUnknown,
+			expected: false,
 		},
 		{
-			name:     "ASCII only",
-			bytes:    []byte("Hello World"),
-			expected: EncodingUnknown, // Will be detected as UTF-8 by main detection
+			name:     "single byte",
+			bytes:    []byte{0x81},
+			expected: false,
+		},
+		{
+			name:     "GBK pattern with valid continuation",
+			bytes:    []byte{0x81, 0x40, 0x82, 0x44},
+			expected: true,
+		},
+		{
+			name:     "low confidence GBK pattern",
+			bytes:    []byte{0x81, 0x20, 0x82, 0x21},
+			expected: false,
+		},
+		{
+			name:     "one valid pattern",
+			bytes:    []byte{0x81, 0x40},
+			expected: false,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Test individual pattern detection functions
-			if tc.name == "empty bytes" {
-				if isLikelyGBK(tc.bytes) {
-					t.Error("isLikelyGBK returned true for empty bytes")
-				}
-				if isLikelyBig5(tc.bytes) {
-					t.Error("isLikelyBig5 returned true for empty bytes")
-				}
-				if isLikelyShiftJIS(tc.bytes) {
-					t.Error("isLikelyShiftJIS returned true for empty bytes")
-				}
-				if isLikelyEUCKR(tc.bytes) {
-					t.Error("isLikelyEUCKR returned true for empty bytes")
-				}
+			result := isLikelyGBK(tc.bytes)
+			if result != tc.expected {
+				t.Errorf("isLikelyGBK(%v) = %v, expected %v", tc.bytes, result, tc.expected)
 			}
 		})
 	}
 }
 
-// TestCalculateUTF8Confidence tests the UTF-8 confidence calculation.
-func TestCalculateUTF8Confidence(t *testing.T) {
+// TestIsLikelyBig5Pattern tests the Big5 pattern detection.
+func TestIsLikelyBig5Pattern(t *testing.T) {
+	testCases := []struct {
+		name     string
+		bytes    []byte
+		expected bool
+	}{
+		{
+			name:     "empty",
+			bytes:    []byte{},
+			expected: false,
+		},
+		{
+			name:     "single byte",
+			bytes:    []byte{0xA1},
+			expected: false,
+		},
+		{
+			name:     "Big5 pattern with valid continuation",
+			bytes:    []byte{0xA1, 0x40, 0xA2, 0x44},
+			expected: true,
+		},
+		{
+			name:     "Big5 with A1 range",
+			bytes:    []byte{0xA1, 0xA1, 0xA2, 0xA2},
+			expected: true,
+		},
+		{
+			name:     "low confidence Big5 pattern",
+			bytes:    []byte{0xA1, 0x20, 0xA2, 0x21},
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := isLikelyBig5(tc.bytes)
+			if result != tc.expected {
+				t.Errorf("isLikelyBig5(%v) = %v, expected %v", tc.bytes, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestIsLikelyShiftJISPattern tests the Shift_JIS pattern detection.
+func TestIsLikelyShiftJISPattern(t *testing.T) {
+	testCases := []struct {
+		name     string
+		bytes    []byte
+		expected bool
+	}{
+		{
+			name:     "empty",
+			bytes:    []byte{},
+			expected: false,
+		},
+		{
+			name:     "Shift_JIS pattern 81-9F range",
+			bytes:    []byte{0x81, 0x40},
+			expected: true,
+		},
+		{
+			name:     "Shift_JIS pattern E0-EF range",
+			bytes:    []byte{0xE0, 0x40},
+			expected: true,
+		},
+		{
+			name:     "invalid continuation",
+			bytes:    []byte{0x81, 0x20},
+			expected: false,
+		},
+		{
+			name:     "single byte",
+			bytes:    []byte{0x81},
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := isLikelyShiftJIS(tc.bytes)
+			if result != tc.expected {
+				t.Errorf("isLikelyShiftJIS(%v) = %v, expected %v", tc.bytes, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestIsLikelyEUCKRPattern tests the EUC-KR pattern detection.
+func TestIsLikelyEUCKRPattern(t *testing.T) {
+	testCases := []struct {
+		name     string
+		bytes    []byte
+		expected bool
+	}{
+		{
+			name:     "empty",
+			bytes:    []byte{},
+			expected: false,
+		},
+		{
+			name:     "EUC-KR pattern",
+			bytes:    []byte{0xA1, 0xA1},
+			expected: true,
+		},
+		{
+			name:     "EUC-KR pattern FE range",
+			bytes:    []byte{0xFE, 0xA1},
+			expected: true,
+		},
+		{
+			name:     "invalid continuation",
+			bytes:    []byte{0xA1, 0x20},
+			expected: false,
+		},
+		{
+			name:     "single byte",
+			bytes:    []byte{0xA1},
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := isLikelyEUCKR(tc.bytes)
+			if result != tc.expected {
+				t.Errorf("isLikelyEUCKR(%v) = %v, expected %v", tc.bytes, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestDetectNonUTF8EncodingDirect tests detectNonUTF8Encoding function directly.
+func TestDetectNonUTF8EncodingDirect(t *testing.T) {
+	testCases := []struct {
+		name          string
+		text          string
+		expectedType  Encoding
+		minConfidence float64
+		maxConfidence float64
+	}{
+		{
+			name:          "ASCII bytes",
+			text:          "Hello World",
+			expectedType:  EncodingUnknown,
+			minConfidence: 0.0,
+			maxConfidence: 0.5,
+		},
+		{
+			name:          "empty string",
+			text:          "",
+			expectedType:  EncodingUnknown,
+			minConfidence: 0.0,
+			maxConfidence: 0.5,
+		},
+		{
+			name:          "single high byte",
+			text:          "\xFF",
+			expectedType:  EncodingUnknown,
+			minConfidence: 0.0,
+			maxConfidence: 0.5,
+		},
+		{
+			name:          "mixed ASCII and high bytes",
+			text:          "test\xFF\xFE",
+			expectedType:  EncodingUnknown,
+			minConfidence: 0.0,
+			maxConfidence: 0.5,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			info := detectNonUTF8Encoding(tc.text)
+			if info.Encoding != tc.expectedType {
+				t.Errorf("detectNonUTF8Encoding(%q) = %s, expected %s", tc.text, info.Encoding, tc.expectedType)
+			}
+			if info.Confidence < tc.minConfidence || info.Confidence > tc.maxConfidence {
+				t.Errorf("confidence %f not in range [%f, %f]", info.Confidence, tc.minConfidence, tc.maxConfidence)
+			}
+		})
+	}
+}
+
+// TestConvertToUTF8 tests the convertToUTF8 function.
+func TestConvertToUTF8(t *testing.T) {
+	testCases := []struct {
+		name        string
+		text        string
+		encoding    Encoding
+		shouldError bool
+		checkValid  bool
+	}{
+		{
+			name:        "unsupported encoding",
+			text:        "test",
+			encoding:    EncodingUnknown,
+			shouldError: true,
+			checkValid:  false,
+		},
+		{
+			name:        "GBK to UTF-8",
+			text:        "test",
+			encoding:    EncodingGBK,
+			shouldError: false,
+			checkValid:  true,
+		},
+		{
+			name:        "Big5 to UTF-8",
+			text:        "test",
+			encoding:    EncodingBig5,
+			shouldError: false,
+			checkValid:  true,
+		},
+		{
+			name:        "Shift_JIS to UTF-8",
+			text:        "test",
+			encoding:    EncodingShiftJIS,
+			shouldError: false,
+			checkValid:  true,
+		},
+		{
+			name:        "EUC-JP to UTF-8",
+			text:        "test",
+			encoding:    EncodingEUCJP,
+			shouldError: false,
+			checkValid:  true,
+		},
+		{
+			name:        "EUC-KR to UTF-8",
+			text:        "test",
+			encoding:    EncodingEUCKR,
+			shouldError: false,
+			checkValid:  true,
+		},
+		{
+			name:        "ISO-8859 to UTF-8",
+			text:        "test",
+			encoding:    EncodingISO8859,
+			shouldError: false,
+			checkValid:  true,
+		},
+		{
+			name:        "Windows-1252 to UTF-8",
+			text:        "test",
+			encoding:    EncodingWindows,
+			shouldError: false,
+			checkValid:  true,
+		},
+		{
+			name:        "GB18030 to UTF-8",
+			text:        "test",
+			encoding:    EncodingGB18030,
+			shouldError: false,
+			checkValid:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := convertToUTF8(tc.text, tc.encoding)
+
+			if tc.shouldError && err == nil {
+				t.Errorf("convertToUTF8 expected error but got none")
+			}
+			if !tc.shouldError && err != nil {
+				t.Errorf("convertToUTF8 got unexpected error: %v", err)
+			}
+
+			if tc.checkValid && !IsValidUTF8(result) {
+				t.Errorf("result is not valid UTF-8: %q", result)
+			}
+		})
+	}
+}
+
+// TestCalculateUTF8ConfidenceExtended tests UTF-8 confidence calculation with more cases.
+func TestCalculateUTF8ConfidenceExtended(t *testing.T) {
 	testCases := []struct {
 		name        string
 		text        string
@@ -240,10 +550,34 @@ func TestCalculateUTF8Confidence(t *testing.T) {
 			expectedMax: 1.0,
 		},
 		{
-			name:        "invalid UTF-8",
-			text:        "Hello" + string([]byte{0xFF, 0xFE}) + "World",
-			expectedMin: 0.0,
-			expectedMax: 0.0,
+			name:        "with Hiragana",
+			text:        "ひらがな",
+			expectedMin: 0.9,
+			expectedMax: 1.0,
+		},
+		{
+			name:        "with Katakana",
+			text:        "カタカナ",
+			expectedMin: 0.9,
+			expectedMax: 1.0,
+		},
+		{
+			name:        "with Hangul",
+			text:        "한글",
+			expectedMin: 0.9,
+			expectedMax: 1.0,
+		},
+		{
+			name:        "numbers only",
+			text:        "12345",
+			expectedMin: 0.8,
+			expectedMax: 0.9,
+		},
+		{
+			name:        "special characters",
+			text:        "!@#$%^&*()",
+			expectedMin: 0.8,
+			expectedMax: 0.9,
 		},
 	}
 
@@ -254,6 +588,42 @@ func TestCalculateUTF8Confidence(t *testing.T) {
 			if confidence < tc.expectedMin || confidence > tc.expectedMax {
 				t.Errorf("calculateUTF8Confidence(%q) = %f, expected between %f and %f",
 					tc.text, confidence, tc.expectedMin, tc.expectedMax)
+			}
+		})
+	}
+}
+
+// TestSmartProcessTextWithInvalidUTF8 tests SmartProcessText with invalid UTF-8.
+func TestSmartProcessTextWithInvalidUTF8(t *testing.T) {
+	testCases := []struct {
+		name        string
+		text        string
+		expectValid bool
+	}{
+		{
+			name:        "valid UTF-8 processing",
+			text:        "Hello 世界",
+			expectValid: true,
+		},
+		{
+			name:        "empty string",
+			text:        "",
+			expectValid: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			processed, info := SmartProcessText(tc.text)
+
+			// For valid UTF-8 input, output should be valid UTF-8
+			if tc.expectValid && !IsValidUTF8(processed) {
+				t.Errorf("SmartProcessText(%q) returned invalid UTF-8: %q", tc.text, processed)
+			}
+
+			// Verify the result has encoding info
+			if info.Encoding == "" {
+				t.Errorf("SmartProcessText(%q) returned empty encoding", tc.text)
 			}
 		})
 	}

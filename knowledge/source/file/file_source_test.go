@@ -177,3 +177,167 @@ func TestProcessFile_Unsupported(t *testing.T) {
 		t.Fatalf("expected error for unsupported file")
 	}
 }
+
+// TestNameAndType verifies Name() and Type() methods.
+func TestNameAndType(t *testing.T) {
+	tests := []struct {
+		name         string
+		opts         []Option
+		expectedName string
+	}{
+		{
+			name:         "default_name",
+			opts:         nil,
+			expectedName: "File Source",
+		},
+		{
+			name:         "custom_name",
+			opts:         []Option{WithName("Custom File")},
+			expectedName: "Custom File",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := New([]string{"dummy.txt"}, tt.opts...)
+
+			if src.Name() != tt.expectedName {
+				t.Errorf("Name() = %s, want %s", src.Name(), tt.expectedName)
+			}
+
+			if src.Type() != source.TypeFile {
+				t.Errorf("Type() = %s, want %s", src.Type(), source.TypeFile)
+			}
+		})
+	}
+}
+
+// TestGetMetadata verifies GetMetadata returns a copy of metadata.
+func TestGetMetadata(t *testing.T) {
+	meta := map[string]any{
+		"key1": "value1",
+		"key2": 456,
+	}
+
+	src := New([]string{"test.txt"}, WithMetadataValue("key1", "value1"), WithMetadataValue("key2", 456))
+
+	retrieved := src.GetMetadata()
+
+	// Verify metadata values match
+	for k, expectedValue := range meta {
+		if actualValue, ok := retrieved[k]; !ok || actualValue != expectedValue {
+			t.Errorf("GetMetadata()[%s] = %v, want %v", k, actualValue, expectedValue)
+		}
+	}
+
+	// Verify modifying returned metadata doesn't affect original
+	retrieved["new_key"] = "new_value"
+	if _, ok := src.metadata["new_key"]; ok {
+		t.Error("GetMetadata() should return a copy, not reference")
+	}
+}
+
+// TestWithMetadata verifies WithMetadata option.
+func TestWithMetadata(t *testing.T) {
+	meta := map[string]any{
+		"author":  "test-author",
+		"version": 1,
+	}
+
+	src := New([]string{"test.txt"}, WithMetadata(meta))
+
+	for k, expectedValue := range meta {
+		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
+			t.Errorf("metadata[%s] = %v, want %v", k, actualValue, expectedValue)
+		}
+	}
+}
+
+// TestSetMetadataWithNilMap verifies SetMetadata works when metadata is nil.
+func TestSetMetadataWithNilMap(t *testing.T) {
+	src := &Source{}
+	src.SetMetadata("key", "value")
+
+	if v, ok := src.metadata["key"]; !ok || v != "value" {
+		t.Errorf("SetMetadata with nil map failed, got %v", v)
+	}
+}
+
+// TestReadDocumentsWithEmptyPaths verifies behavior with empty file paths.
+func TestReadDocumentsWithEmptyPaths(t *testing.T) {
+	ctx := context.Background()
+	src := New([]string{})
+
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Errorf("ReadDocuments with empty paths should not error, got %v", err)
+	}
+	if docs != nil {
+		t.Errorf("ReadDocuments with empty paths should return nil, got %v", docs)
+	}
+}
+
+// TestProcessFileAbsolutePath verifies absolute path handling in metadata.
+func TestProcessFileAbsolutePath(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("test content"), 0600); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	src := New([]string{filePath})
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments returned error: %v", err)
+	}
+
+	if len(docs) == 0 {
+		t.Fatalf("expected at least one document")
+	}
+
+	// Check that URI metadata contains file:// scheme
+	if uri, ok := docs[0].Metadata[source.MetaURI].(string); !ok || !strings.HasPrefix(uri, "file://") {
+		t.Errorf("expected URI to have file:// scheme, got %v", uri)
+	}
+}
+
+// TestWithMetadataValueNilMetadata verifies WithMetadataValue initializes metadata map.
+func TestWithMetadataValueNilMetadata(t *testing.T) {
+	src := &Source{}
+	opt := WithMetadataValue("key", "value")
+	opt(src)
+
+	if v, ok := src.metadata["key"]; !ok || v != "value" {
+		t.Errorf("WithMetadataValue should initialize metadata map, got %v", src.metadata)
+	}
+}
+
+// TestReadDocumentsMultipleFiles verifies reading multiple files.
+func TestReadDocumentsMultipleFiles(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	files := []string{"file1.txt", "file2.txt"}
+	for _, fname := range files {
+		fpath := filepath.Join(tmpDir, fname)
+		if err := os.WriteFile(fpath, []byte("content"), 0600); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+	}
+
+	paths := []string{
+		filepath.Join(tmpDir, "file1.txt"),
+		filepath.Join(tmpDir, "file2.txt"),
+	}
+
+	src := New(paths)
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+
+	if len(docs) < 2 {
+		t.Errorf("expected at least 2 documents, got %d", len(docs))
+	}
+}

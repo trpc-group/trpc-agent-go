@@ -111,6 +111,10 @@ func WrapSDKClient(client any) (ielasticsearch.Client, error) {
 		return istorage.NewClientV8(client), nil
 	case *esv9.Client:
 		return istorage.NewClientV9(client), nil
+	case ielasticsearch.Client:
+		// Already wrapped (useful for testing with mock clients)
+		// This case is placed last to ensure concrete SDK types are matched first
+		return client, nil
 	default:
 		return nil, fmt.Errorf("elasticsearch client is not supported, type: %T", client)
 	}

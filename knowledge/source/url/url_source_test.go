@@ -16,6 +16,7 @@ import (
 	neturl "net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -188,6 +189,222 @@ func TestSetMetadataMultiple(t *testing.T) {
 		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
 			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
 		}
+	}
+}
+
+// TestNameAndType verifies Name() and Type() methods.
+func TestNameAndType(t *testing.T) {
+	tests := []struct {
+		name         string
+		opts         []Option
+		expectedName string
+	}{
+		{
+			name:         "default_name",
+			opts:         nil,
+			expectedName: "URL Source",
+		},
+		{
+			name:         "custom_name",
+			opts:         []Option{WithName("Custom URL")},
+			expectedName: "Custom URL",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := New([]string{"https://example.com"}, tt.opts...)
+
+			if src.Name() != tt.expectedName {
+				t.Errorf("Name() = %s, want %s", src.Name(), tt.expectedName)
+			}
+
+			if src.Type() != source.TypeURL {
+				t.Errorf("Type() = %s, want %s", src.Type(), source.TypeURL)
+			}
+		})
+	}
+}
+
+// TestGetMetadata verifies GetMetadata returns a copy of metadata.
+func TestGetMetadata(t *testing.T) {
+	meta := map[string]any{
+		"key1": "value1",
+		"key2": 999,
+	}
+
+	src := New([]string{"https://example.com"}, WithMetadata(meta))
+
+	retrieved := src.GetMetadata()
+
+	// Verify metadata values match
+	for k, expectedValue := range meta {
+		if actualValue, ok := retrieved[k]; !ok || actualValue != expectedValue {
+			t.Errorf("GetMetadata()[%s] = %v, want %v", k, actualValue, expectedValue)
+		}
+	}
+
+	// Verify modifying returned metadata doesn't affect original
+	retrieved["new_key"] = "new_value"
+	if _, ok := src.metadata["new_key"]; ok {
+		t.Error("GetMetadata() should return a copy, not reference")
+	}
+}
+
+// TestReadDocumentsWithEmptyURLs verifies behavior with empty URLs.
+func TestReadDocumentsWithEmptyURLs(t *testing.T) {
+	ctx := context.Background()
+	src := New([]string{})
+
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Errorf("ReadDocuments with empty URLs should not error, got %v", err)
+	}
+	if docs != nil {
+		t.Errorf("ReadDocuments with empty URLs should return nil, got %v", docs)
+	}
+}
+
+// TestSetMetadataWithNilMap verifies SetMetadata works when metadata is nil.
+func TestSetMetadataWithNilMap(t *testing.T) {
+	src := &Source{}
+	src.SetMetadata("key", "value")
+
+	if v, ok := src.metadata["key"]; !ok || v != "value" {
+		t.Errorf("SetMetadata with nil map failed, got %v", v)
+	}
+}
+
+// TestWithHTTPClient verifies WithHTTPClient option.
+func TestWithHTTPClient(t *testing.T) {
+	customClient := &http.Client{Timeout: 5 * time.Second}
+	src := New([]string{"https://example.com"}, WithHTTPClient(customClient))
+
+	if src.httpClient != customClient {
+		t.Error("WithHTTPClient did not set custom HTTP client")
+	}
+}
+
+// TestGetFileNameVariants verifies getFileName with various edge cases.
+func TestGetFileNameVariants(t *testing.T) {
+	s := &Source{}
+
+	tests := []struct {
+		name        string
+		rawURL      string
+		contentType string
+		want        string
+	}{
+		{
+			name:        "csv_content_type",
+			rawURL:      "https://example.com/",
+			contentType: "text/csv",
+			want:        "document.csv",
+		},
+		{
+			name:        "pdf_content_type",
+			rawURL:      "https://example.com/",
+			contentType: "application/pdf",
+			want:        "document.pdf",
+		},
+		{
+			name:        "unknown_content_type",
+			rawURL:      "https://example.com/",
+			contentType: "application/octet-stream",
+			want:        "document",
+		},
+		{
+			name:        "empty_content_type_with_host",
+			rawURL:      "https://example.com/",
+			contentType: "",
+			want:        "example.com.txt",
+		},
+		{
+			name:        "json_content_type_root_path",
+			rawURL:      "https://api.example.com/",
+			contentType: "application/json",
+			want:        "document.json",
+		},
+		{
+			name:        "path_provides_filename",
+			rawURL:      "https://example.com/path/data.json",
+			contentType: "text/plain",
+			want:        "data.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, err := neturl.Parse(tt.rawURL)
+			if err != nil {
+				t.Fatalf("failed to parse URL: %v", err)
+			}
+			got := s.getFileName(parsed, tt.contentType)
+			if got != tt.want {
+				t.Errorf("getFileName() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestProcessURLHTTPError verifies error handling for non-200 HTTP status.
+func TestProcessURLHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL})
+	_, err := src.ReadDocuments(context.Background())
+	if err == nil {
+		t.Error("expected error for non-200 HTTP status")
+	}
+}
+
+// TestWithMetadataValueNilMetadata verifies WithMetadataValue initializes metadata map.
+func TestWithMetadataValueNilMetadata(t *testing.T) {
+	src := &Source{}
+	opt := WithMetadataValue("key", "value")
+	opt(src)
+
+	if v, ok := src.metadata["key"]; !ok || v != "value" {
+		t.Errorf("WithMetadataValue should initialize metadata map, got %v", src.metadata)
+	}
+}
+
+// TestProcessURLMetadata verifies metadata is properly set for URL documents.
+func TestProcessURLMetadata(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("test content"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL}, WithMetadataValue("custom_key", "custom_value"))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+
+	// Check custom metadata
+	if v, ok := docs[0].Metadata["custom_key"]; !ok || v != "custom_value" {
+		t.Errorf("custom metadata not set, got %v", docs[0].Metadata)
+	}
+
+	// Check URL metadata
+	if v, ok := docs[0].Metadata[source.MetaURL]; !ok || v != server.URL {
+		t.Errorf("URL metadata not set correctly, got %v", docs[0].Metadata[source.MetaURL])
+	}
+
+	// Check source type
+	if v, ok := docs[0].Metadata[source.MetaSource]; !ok || v != source.TypeURL {
+		t.Errorf("source type not set correctly, got %v", docs[0].Metadata[source.MetaSource])
 	}
 }
 
