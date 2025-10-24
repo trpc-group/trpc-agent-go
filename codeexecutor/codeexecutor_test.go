@@ -98,3 +98,40 @@ func TestExtractCodeBlock(t *testing.T) {
 		})
 	}
 }
+
+func TestCodeExecutionResultString(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   codeexecutor.CodeExecutionResult
+		expected string
+	}{
+		{
+			name: "only output",
+			result: codeexecutor.CodeExecutionResult{
+				Output: "hello world",
+			},
+			expected: "Code execution result:\nhello world\n",
+		},
+		{
+			name: "with files",
+			result: codeexecutor.CodeExecutionResult{
+				OutputFiles: []codeexecutor.File{
+					{Name: "foo.txt"},
+					{Name: "bar.log"},
+				},
+			},
+			expected: "Code execution result:\n Saved artifacts:\nfoo.txt\nbar.log",
+		},
+		{
+			name:     "empty result",
+			result:   codeexecutor.CodeExecutionResult{},
+			expected: "Code execution result: No output or errors.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.result.String())
+		})
+	}
+}
