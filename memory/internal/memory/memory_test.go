@@ -457,3 +457,104 @@ func TestBuildSearchTokens_Duplicates(t *testing.T) {
 	assert.Len(t, result, 1)
 	assert.Equal(t, "中中", result[0])
 }
+
+func TestMatchMemoryEntry_EmptyTokensWithTopics(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test content",
+			Topics: []string{"topic1", "topic2"},
+		},
+	}
+
+	// Query that produces empty tokens after filtering
+	result := MatchMemoryEntry(entry, "   ")
+	assert.False(t, result)
+}
+
+func TestMatchMemoryEntry_TokenMatchInTopics(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some content",
+			Topics: []string{"important", "keyword"},
+		},
+	}
+
+	// Query that matches a topic
+	result := MatchMemoryEntry(entry, "keyword")
+	assert.True(t, result)
+}
+
+func TestMatchMemoryEntry_NoTokensButTopicMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some content",
+			Topics: []string{"special!topic"},
+		},
+	}
+
+	// Query with only punctuation that produces no tokens, but matches topic in fallback
+	result := MatchMemoryEntry(entry, "special!")
+	assert.True(t, result)
+}
+
+func TestMatchMemoryEntry_EmptyTokenInList(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test content with keyword",
+			Topics: []string{},
+		},
+	}
+
+	// This should match the content
+	result := MatchMemoryEntry(entry, "keyword")
+	assert.True(t, result)
+}
+
+func TestBuildSearchTokens_MixedContent(t *testing.T) {
+	// Test with mixed CJK and English
+	result := BuildSearchTokens("hello世界test")
+	assert.NotNil(t, result)
+	// Should have both English words and CJK bigrams
+	assert.NotEmpty(t, result)
+}
+
+func TestBuildSearchTokens_OnlyPunctuation(t *testing.T) {
+	// Test with only punctuation
+	result := BuildSearchTokens("!@#$%^&*()")
+	// Should return empty or minimal tokens
+	assert.NotNil(t, result)
+}
+
+func TestBuildSearchTokens_StopwordsOnly(t *testing.T) {
+	// Test with only stopwords
+	result := BuildSearchTokens("the a an")
+	// Should filter out stopwords
+	assert.NotNil(t, result)
+	// Stopwords should be filtered
+	for _, token := range result {
+		assert.NotEqual(t, "the", token)
+		assert.NotEqual(t, "a", token)
+		assert.NotEqual(t, "an", token)
+	}
+}
+
+func TestMatchMemoryEntry_NilMemory(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: nil,
+	}
+
+	result := MatchMemoryEntry(entry, "test")
+	assert.False(t, result)
+}
+
+func TestMatchMemoryEntry_WhitespaceQuery(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test content",
+			Topics: []string{"topic"},
+		},
+	}
+
+	result := MatchMemoryEntry(entry, "   \t\n  ")
+	assert.False(t, result)
+}
