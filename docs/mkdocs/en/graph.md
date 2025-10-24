@@ -624,11 +624,11 @@ Tool-call pairing and second entry into LLM:
 
 #### Placeholder Variables in LLM Instructions
 
-LLM nodes support placeholder injection in their `instruction` string (same rules as LLMAgent):
+LLM nodes support placeholder injection in their `instruction` string (same rules as LLMAgent). Both native `{key}` and Mustache `{{key}}` syntaxes are accepted (Mustache is normalized to the native form automatically):
 
-- `{key}` → replaced by `session.State["key"]`
-- `{key?}` → optional; missing values become empty
-- `{user:subkey}`, `{app:subkey}`, `{temp:subkey}` → access user/app/temp scopes (session services merge app/user state into session with these prefixes)
+- `{key}` / `{{key}}` → replaced by `session.State["key"]`
+- `{key?}` / `{{key?}}` → optional; missing values become empty
+- `{user:subkey}`, `{app:subkey}`, `{temp:subkey}` (and their Mustache forms) → access user/app/temp scopes (session services merge app/user state into session with these prefixes)
 
 Notes:
 
