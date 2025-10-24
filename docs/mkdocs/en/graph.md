@@ -1960,6 +1960,38 @@ graphAgent, _ := graphagent.New("workflow", g,
 // graph.StateKeyLastResponse and graph.StateKeyNodeResponses[nodeID]
 ```
 
+#### Passing only results: map last_response to downstream user_input
+
+> Scenario: A → B → C as black boxes. Downstream should only consume upstream’s result text as this turn’s input, without pulling full session history.
+
+- Approach 1 (dependency‑free, universally available): add a pre‑node callback to the target Agent node that assigns parent `last_response` to `user_input`. Optionally isolate messages.
+
+```go
+sg.AddAgentNode("orchestrator",
+    // Map upstream last_response → this turn's user_input
+    graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
+        if v, ok := s[graph.StateKeyLastResponse].(string); ok && v != "" {
+            s[graph.StateKeyUserInput] = v
+        }
+        return nil, nil
+    }),
+    // Optional: isolate child sub‑agent from session contents
+    graph.WithSubgraphIsolatedMessages(true),
+)
+```
+
+- Approach 2 (enhanced option, more concise):
+
+```go
+// Declarative option that automatically maps last_response → user_input
+sg.AddAgentNode("orchestrator",
+    graph.WithSubgraphInputFromLastResponse(),
+    graph.WithSubgraphIsolatedMessages(true), // optional: isolate for true "pass only results"
+)
+```
+
+Notes: Both approaches ensure B only sees A’s result, and C only sees B’s. The option is more concise when available; the callback is zero‑dependency and works everywhere.
+
 ### Hybrid Pattern Example
 
 Embed dynamic decision‑making within a structured flow:

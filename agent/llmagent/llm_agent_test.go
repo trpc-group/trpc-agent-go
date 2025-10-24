@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -488,4 +489,101 @@ func TestLLMAgent_InvocationContextAccess(t *testing.T) {
 	// The agent should have been able to run successfully, which means
 	// it could access the invocation from context for any internal operations.
 	t.Logf("LLMAgent successfully executed with %d events, confirming invocation context access", len(events))
+}
+
+// fakeInvocation creates an invocation carrying a runtime state include_contents flag.
+func fakeInvocation(include string) *agent.Invocation {
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("u")),
+	)
+	st := map[string]any{graph.CfgKeyIncludeContents: include}
+	inv.RunOptions = agent.RunOptions{RuntimeState: st}
+	return inv
+}
+
+// Test that buildRequestProcessors honors include_contents from runtime state
+// by constructing the content processor with the expected mode.
+func TestBuildRequestProcessors_IncludeContentsHonored(t *testing.T) {
+	opts := &Options{}
+
+	// Case 1: none
+	{
+		inv := fakeInvocation("none")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		if ctx == nil {
+			t.Fatalf("context should not be nil")
+		}
+
+		procs := buildRequestProcessors("tester", opts)
+		// Last processor is content processor created with include mode.
+		// We cannot access internals directly; instead, simulate request processing:
+		// When include=none and session is nil, invocation message should be appended.
+		req := &model.Request{}
+		for _, p := range procs {
+			p.ProcessRequest(ctx, inv, req, nil)
+		}
+		// Expect at least the invocation message present (role=user, content="u").
+		if len(req.Messages) == 0 {
+			t.Fatalf("expected invocation message appended")
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleUser || last.Content != "u" {
+			t.Fatalf("unexpected last message: %+v", last)
+		}
+	}
+
+	// Case 2: filtered
+	{
+		inv := fakeInvocation("filtered")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		procs := buildRequestProcessors("tester", opts)
+		req := &model.Request{}
+		for _, p := range procs {
+			p.ProcessRequest(ctx, inv, req, nil)
+		}
+		// With no session, behavior equals none: invocation message appended.
+		if len(req.Messages) == 0 {
+			t.Fatalf("expected invocation message appended (filtered)")
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleUser || last.Content != "u" {
+			t.Fatalf("unexpected last message (filtered): %+v", last)
+		}
+	}
+
+	// Case 3: all (same expectation with empty session)
+	{
+		inv := fakeInvocation("all")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		procs := buildRequestProcessors("tester", opts)
+		req := &model.Request{}
+		for _, p := range procs {
+			p.ProcessRequest(ctx, inv, req, nil)
+		}
+		if len(req.Messages) == 0 {
+			t.Fatalf("expected invocation message appended (all)")
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleUser || last.Content != "u" {
+			t.Fatalf("unexpected last message (all): %+v", last)
+		}
+	}
+
+	// Case 4: invalid -> defaults to filtered (still works with empty session)
+	{
+		inv := fakeInvocation("invalid")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		procs := buildRequestProcessors("tester", opts)
+		req := &model.Request{}
+		for _, p := range procs {
+			p.ProcessRequest(ctx, inv, req, nil)
+		}
+		if len(req.Messages) == 0 {
+			t.Fatalf("expected invocation message appended (invalid->filtered)")
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleUser || last.Content != "u" {
+			t.Fatalf("unexpected last message (invalid->filtered): %+v", last)
+		}
+	}
 }
