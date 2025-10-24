@@ -163,6 +163,7 @@ The example demonstrates the batch API usage:
 
 ```go
 import (
+    openaisdk "github.com/openai/openai-go"
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -175,7 +176,7 @@ requests := []*openai.BatchRequestInput{
     {
         CustomID: "1",
         Method:   "POST",
-        URL:      "/v1/chat/completions",
+        URL:      string(openaisdk.BatchNewParamsEndpointV1ChatCompletions),
         Body: openai.BatchRequest{
             Messages: []model.Message{
                 model.NewSystemMessage("You are a helpful assistant."),

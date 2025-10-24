@@ -431,7 +431,365 @@ model := openai.New("deepseek-chat",
 )
 ```
 
-### 2. Token 裁剪（Token Tailoring）
+### 2. 批量处理（Batch API）
+
+Batch API 是一种异步批量处理技术，用于高效处理大量请求。该功能特别适用于需要处理大规模数据的场景，能够显著降低成本并提高处理效率。
+
+#### 核心特性
+
+- **异步处理**：批量请求异步处理，无需等待即时响应
+- **成本优化**：通常比单独请求更具成本效益
+- **灵活输入**：支持内联请求和文件输入两种方式
+- **完整管理**：提供创建、查询、取消、列表等完整操作
+- **结果解析**：自动下载和解析批处理结果
+
+#### 快速开始
+
+**创建批处理任务**：
+
+```go
+import (
+    openaisdk "github.com/openai/openai-go"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// 创建模型实例
+llm := openai.New("gpt-4o-mini")
+
+// 准备批处理请求
+requests := []*openai.BatchRequestInput{
+    {
+        CustomID: "request-1",
+        Method:   "POST",
+        URL:      string(openaisdk.BatchNewParamsEndpointV1ChatCompletions),
+        Body: openai.BatchRequest{
+            Messages: []model.Message{
+                model.NewSystemMessage("你是一个有用的助手。"),
+                model.NewUserMessage("你好"),
+            },
+        },
+    },
+    {
+        CustomID: "request-2",
+        Method:   "POST",
+        URL:      string(openaisdk.BatchNewParamsEndpointV1ChatCompletions),
+        Body: openai.BatchRequest{
+            Messages: []model.Message{
+                model.NewSystemMessage("你是一个有用的助手。"),
+                model.NewUserMessage("介绍一下 Go 语言"),
+            },
+        },
+    },
+}
+
+// 创建批处理任务
+batch, err := llm.CreateBatch(ctx, requests,
+    openai.WithBatchCreateCompletionWindow("24h"),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("批处理任务已创建: %s\n", batch.ID)
+```
+
+#### 批处理操作
+
+**查询批处理状态**：
+
+```go
+// 获取批处理详情
+batch, err := llm.RetrieveBatch(ctx, batchID)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("状态: %s\n", batch.Status)
+fmt.Printf("总请求数: %d\n", batch.RequestCounts.Total)
+fmt.Printf("已完成: %d\n", batch.RequestCounts.Completed)
+fmt.Printf("失败: %d\n", batch.RequestCounts.Failed)
+```
+
+**下载和解析结果**：
+
+```go
+// 下载输出文件
+if batch.OutputFileID != "" {
+    text, err := llm.DownloadFileContent(ctx, batch.OutputFileID)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // 解析批处理输出
+    entries, err := llm.ParseBatchOutput(text)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // 处理每个结果
+    for _, entry := range entries {
+        fmt.Printf("[%s] 状态码: %d\n", entry.CustomID, entry.Response.StatusCode)
+        if len(entry.Response.Body.Choices) > 0 {
+            content := entry.Response.Body.Choices[0].Message.Content
+            fmt.Printf("内容: %s\n", content)
+        }
+        if entry.Error != nil {
+            fmt.Printf("错误: %s\n", entry.Error.Message)
+        }
+    }
+}
+```
+
+**取消批处理任务**：
+
+```go
+// 取消正在进行的批处理
+batch, err := llm.CancelBatch(ctx, batchID)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("批处理任务已取消: %s\n", batch.ID)
+```
+
+**列出批处理任务**：
+
+```go
+// 列出批处理任务（支持分页）
+page, err := llm.ListBatches(ctx, "", 10)
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, batch := range page.Data {
+    fmt.Printf("ID: %s, 状态: %s\n", batch.ID, batch.Status)
+}
+```
+
+#### 配置选项
+
+**全局配置**：
+
+```go
+// 在创建模型时配置批处理默认参数
+llm := openai.New("gpt-4o-mini",
+    openai.WithBatchCompletionWindow("24h"),
+    openai.WithBatchMetadata(map[string]string{
+        "project": "my-project",
+        "env":     "production",
+    }),
+    openai.WithBatchBaseURL("https://custom-batch-api.com"),
+)
+```
+
+**请求级配置**：
+
+```go
+// 在创建批处理时覆盖默认配置
+batch, err := llm.CreateBatch(ctx, requests,
+    openai.WithBatchCreateCompletionWindow("48h"),
+    openai.WithBatchCreateMetadata(map[string]string{
+        "priority": "high",
+    }),
+)
+```
+
+#### 工作原理
+
+Batch API 的执行流程：
+
+```
+1. 准备批处理请求（BatchRequestInput 列表）
+2. 验证请求格式和 CustomID 唯一性
+3. 生成 JSONL 格式的输入文件
+4. 上传输入文件到服务端
+5. 创建批处理任务
+6. 异步处理请求
+7. 下载输出文件并解析结果
+```
+
+关键设计：
+
+- **CustomID 唯一性**：每个请求必须有唯一的 CustomID 用于匹配输入输出
+- **JSONL 格式**：批处理使用 JSONL（JSON Lines）格式存储请求和响应
+- **异步处理**：批处理任务在后台异步执行，不阻塞主流程
+- **完成窗口**：可配置批处理的完成时间窗口（如 24h）
+
+#### 使用场景
+
+- **大规模数据处理**：需要处理数千或数万条请求
+- **离线分析**：非实时的数据分析和处理任务
+- **成本优化**：批量处理通常比单独请求更经济
+- **定时任务**：定期执行的批量处理作业
+
+#### 使用示例
+
+完整的交互式示例请参考 [examples/model/batch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/batch)。
+
+### 3. 重试机制（Retry）
+
+重试机制是一种自动错误恢复技术，用于在请求失败时自动重试。该功能由底层 OpenAI SDK 提供，框架通过配置选项将重试参数传递给 SDK。
+
+#### 核心特性
+
+- **自动重试**：SDK 自动处理可重试的错误
+- **智能退避**：遵循 API 的 `Retry-After` 头或使用指数退避
+- **可配置性**：支持自定义最大重试次数和超时时间
+- **零维护**：无需自定义重试逻辑，由成熟的 SDK 处理
+
+#### 快速开始
+
+**基础配置**：
+
+```go
+import (
+    "time"
+    
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// 创建带重试配置的模型实例
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(3),
+        openaiopt.WithRequestTimeout(30*time.Second),
+    ),
+)
+```
+
+#### 可重试的错误
+
+OpenAI SDK 自动重试以下错误：
+
+- **408 Request Timeout**：请求超时
+- **409 Conflict**：冲突错误
+- **429 Too Many Requests**：速率限制
+- **500+ Server Errors**：服务器内部错误（5xx）
+- **网络连接错误**：无响应或连接失败
+
+**注意**：SDK 默认最大重试次数为 2 次。
+
+#### 重试策略
+
+**标准重试**：
+
+```go
+// 适用于大多数场景的标准配置
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(3),
+        openaiopt.WithRequestTimeout(30*time.Second),
+    ),
+)
+```
+
+**速率限制优化**：
+
+```go
+// 针对速率限制场景的优化配置
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(5),  // 更多重试次数
+        openaiopt.WithRequestTimeout(60*time.Second),  // 更长超时
+    ),
+)
+```
+
+**快速失败**：
+
+```go
+// 需要快速失败的场景
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(1),  // 最少重试
+        openaiopt.WithRequestTimeout(10*time.Second),  // 短超时
+    ),
+)
+```
+
+#### 工作原理
+
+重试机制的执行流程：
+
+```
+1. 发送请求到 LLM API
+2. 如果请求失败且错误可重试：
+   a. 检查是否达到最大重试次数
+   b. 根据 Retry-After 头或指数退避计算等待时间
+   c. 等待后重新发送请求
+3. 如果请求成功或不可重试，返回结果
+```
+
+关键设计：
+
+- **SDK 级实现**：重试逻辑完全由 OpenAI SDK 处理
+- **配置传递**：框架通过 `WithOpenAIOptions` 传递配置
+- **智能退避**：优先使用 API 返回的 `Retry-After` 头
+- **透明处理**：对应用层透明，无需额外代码
+
+#### 使用场景
+
+- **生产环境**：提高服务可靠性和容错能力
+- **速率限制**：自动处理 429 错误
+- **网络不稳定**：应对临时网络故障
+- **服务器错误**：处理临时的服务端问题
+
+#### 重要说明
+
+- **无框架重试**：框架本身不实现重试逻辑
+- **客户端级重试**：所有重试由 OpenAI 客户端处理
+- **配置透传**：使用 `WithOpenAIOptions` 配置重试行为
+- **自动处理**：速率限制（429）自动处理，无需额外代码
+
+#### 使用示例
+
+完整的交互式示例请参考 [examples/model/retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/retry)。
+
+### 4. 模型切换（Model Switching）
+
+模型切换允许在运行时动态更换 Agent 使用的 LLM 模型，通过 `SetModel` 方法即可完成切换。
+
+#### 基本用法
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// 创建 Agent
+agent := llmagent.New("my-agent",
+    llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+
+// 切换到其他模型
+agent.SetModel(openai.New("gpt-4o"))
+```
+
+#### 使用场景
+
+```go
+// 根据任务复杂度选择模型
+if isComplexTask {
+    agent.SetModel(openai.New("gpt-4o"))  // 使用强大模型
+} else {
+    agent.SetModel(openai.New("gpt-4o-mini"))  // 使用快速模型
+}
+```
+
+#### 重要说明
+
+- **即时生效**：调用 `SetModel` 后，下一次请求立即使用新模型
+- **会话保持**：切换模型不会清除会话历史
+- **配置独立**：每个模型保留自己的配置（温度、最大 token 等）
+
+#### 使用示例
+
+完整的交互式示例请参考 [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch)。
+
+### 5. Token 裁剪（Token Tailoring）
 
 Token Tailoring 是一种智能的消息管理技术，用于在消息超出模型上下文窗口限制时自动裁剪消息，确保请求能够成功发送到 LLM API。该功能特别适用于长对话场景，能够在保留关键上下文的同时，将消息列表控制在模型的 token 限制内。
 

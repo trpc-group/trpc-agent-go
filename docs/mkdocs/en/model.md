@@ -431,7 +431,364 @@ model := openai.New("deepseek-chat",
 )
 ```
 
-### 2. Token Tailoring
+### 2. Batch Processing (Batch API)
+
+Batch API is an asynchronous batch processing technique for efficiently handling large volumes of requests. This feature is particularly suitable for scenarios requiring large-scale data processing, significantly reducing costs and improving processing efficiency.
+
+#### Core Features
+
+- **Asynchronous Processing**: Batch requests are processed asynchronously without waiting for immediate responses
+- **Cost Optimization**: Typically more cost-effective than individual requests
+- **Flexible Input**: Supports both inline requests and file-based input
+- **Complete Management**: Provides full operations including create, retrieve, cancel, and list
+- **Result Parsing**: Automatically downloads and parses batch processing results
+
+#### Quick Start
+
+**Creating a Batch Job**:
+
+```go
+import (
+    openaisdk "github.com/openai/openai-go"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// Create model instance.
+llm := openai.New("gpt-4o-mini")
+
+// Prepare batch requests.
+requests := []*openai.BatchRequestInput{
+    {
+        CustomID: "request-1",
+        Method:   "POST",
+        URL:      string(openaisdk.BatchNewParamsEndpointV1ChatCompletions),
+        Body: openai.BatchRequest{
+            Messages: []model.Message{
+                model.NewSystemMessage("You are a helpful assistant."),
+                model.NewUserMessage("Hello"),
+            },
+        },
+    },
+    {
+        CustomID: "request-2",
+        Method:   "POST",
+        URL:      string(openaisdk.BatchNewParamsEndpointV1ChatCompletions),
+        Body: openai.BatchRequest{
+            Messages: []model.Message{
+                model.NewSystemMessage("You are a helpful assistant."),
+                model.NewUserMessage("Introduce Go language"),
+            },
+        },
+    },
+}
+
+// Create batch job.
+batch, err := llm.CreateBatch(ctx, requests,
+    openai.WithBatchCreateCompletionWindow("24h"),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Batch job created: %s\n", batch.ID)
+```
+
+#### Batch Operations
+
+**Retrieving Batch Status**:
+
+```go
+// Get batch details.
+batch, err := llm.RetrieveBatch(ctx, batchID)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Status: %s\n", batch.Status)
+fmt.Printf("Total requests: %d\n", batch.RequestCounts.Total)
+fmt.Printf("Completed: %d\n", batch.RequestCounts.Completed)
+fmt.Printf("Failed: %d\n", batch.RequestCounts.Failed)
+```
+
+**Downloading and Parsing Results**:
+
+```go
+// Download output file.
+if batch.OutputFileID != "" {
+    text, err := llm.DownloadFileContent(ctx, batch.OutputFileID)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Parse batch output.
+    entries, err := llm.ParseBatchOutput(text)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Process each result.
+    for _, entry := range entries {
+        fmt.Printf("[%s] Status code: %d\n", entry.CustomID, entry.Response.StatusCode)
+        if len(entry.Response.Body.Choices) > 0 {
+            content := entry.Response.Body.Choices[0].Message.Content
+            fmt.Printf("Content: %s\n", content)
+        }
+        if entry.Error != nil {
+            fmt.Printf("Error: %s\n", entry.Error.Message)
+        }
+    }
+}
+```
+
+**Canceling a Batch Job**:
+
+```go
+// Cancel an in-progress batch.
+batch, err := llm.CancelBatch(ctx, batchID)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Batch job canceled: %s\n", batch.ID)
+```
+
+**Listing Batch Jobs**:
+
+```go
+// List batch jobs (with pagination support).
+page, err := llm.ListBatches(ctx, "", 10)
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, batch := range page.Data {
+    fmt.Printf("ID: %s, Status: %s\n", batch.ID, batch.Status)
+}
+```
+
+#### Configuration Options
+
+**Global Configuration**:
+
+```go
+// Configure batch default parameters when creating model.
+llm := openai.New("gpt-4o-mini",
+    openai.WithBatchCompletionWindow("24h"),
+    openai.WithBatchMetadata(map[string]string{
+        "project": "my-project",
+        "env":     "production",
+    }),
+    openai.WithBatchBaseURL("https://custom-batch-api.com"),
+)
+```
+
+**Request-level Configuration**:
+
+```go
+// Override default configuration when creating batch.
+batch, err := llm.CreateBatch(ctx, requests,
+    openai.WithBatchCreateCompletionWindow("48h"),
+    openai.WithBatchCreateMetadata(map[string]string{
+        "priority": "high",
+    }),
+)
+```
+
+#### How It Works
+
+Batch API execution flow:
+
+```
+1. Prepare batch requests (BatchRequestInput list)
+2. Validate request format and CustomID uniqueness
+3. Generate JSONL format input file
+4. Upload input file to server
+5. Create batch job
+6. Process requests asynchronously
+7. Download output file and parse results
+```
+
+Key design:
+
+- **CustomID Uniqueness**: Each request must have a unique CustomID for matching input/output
+- **JSONL Format**: Batch processing uses JSONL (JSON Lines) format for storing requests and responses
+- **Asynchronous Processing**: Batch jobs execute asynchronously in the background without blocking main flow
+- **Completion Window**: Configurable completion time window for batch processing (e.g., 24h)
+
+#### Use Cases
+
+- **Large-scale Data Processing**: Processing thousands or tens of thousands of requests
+- **Offline Analysis**: Non-real-time data analysis and processing tasks
+- **Cost Optimization**: Batch processing is typically more economical than individual requests
+- **Scheduled Tasks**: Regularly executed batch processing jobs
+
+#### Usage Example
+
+For a complete interactive example, see [examples/model/batch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/batch).
+
+### 3. Retry Mechanism
+
+The retry mechanism is an automatic error recovery technique that automatically retries failed requests. This feature is provided by the underlying OpenAI SDK, with the framework passing retry parameters to the SDK through configuration options.
+
+#### Core Features
+
+- **Automatic Retry**: SDK automatically handles retryable errors
+- **Smart Backoff**: Follows API's `Retry-After` headers or uses exponential backoff
+- **Configurable**: Supports custom maximum retry count and timeout duration
+- **Zero Maintenance**: No custom retry logic needed, handled by mature SDK
+
+#### Quick Start
+
+**Basic Configuration**:
+
+```go
+import (
+    "time"
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// Create model instance with retry configuration.
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(3),
+        openaiopt.WithRequestTimeout(30*time.Second),
+    ),
+)
+```
+
+#### Retryable Errors
+
+The OpenAI SDK automatically retries the following errors:
+
+- **408 Request Timeout**: Request timeout
+- **409 Conflict**: Conflict error
+- **429 Too Many Requests**: Rate limiting
+- **500+ Server Errors**: Internal server errors (5xx)
+- **Network Connection Errors**: No response or connection failure
+
+**Note**: SDK default maximum retry count is 2.
+
+#### Retry Strategies
+
+**Standard Retry**:
+
+```go
+// Standard configuration suitable for most scenarios.
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(3),
+        openaiopt.WithRequestTimeout(30*time.Second),
+    ),
+)
+```
+
+**Rate Limiting Optimization**:
+
+```go
+// Optimized configuration for rate limiting scenarios.
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(5),  // More retry attempts.
+        openaiopt.WithRequestTimeout(60*time.Second),  // Longer timeout.
+    ),
+)
+```
+
+**Fast Fail**:
+
+```go
+// For scenarios requiring quick failure.
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(1),  // Minimal retries.
+        openaiopt.WithRequestTimeout(10*time.Second),  // Short timeout.
+    ),
+)
+```
+
+#### How It Works
+
+Retry mechanism execution flow:
+
+```
+1. Send request to LLM API
+2. If request fails and error is retryable:
+   a. Check if maximum retry count is reached
+   b. Calculate wait time based on Retry-After header or exponential backoff
+   c. Wait and resend request
+3. If request succeeds or error is not retryable, return result
+```
+
+Key design:
+
+- **SDK-level Implementation**: Retry logic is completely handled by OpenAI SDK
+- **Configuration Pass-through**: Framework passes configuration via `WithOpenAIOptions`
+- **Smart Backoff**: Prioritizes using `Retry-After` header returned by API
+- **Transparent Handling**: Transparent to application layer, no additional code needed
+
+#### Use Cases
+
+- **Production Environment**: Improve service reliability and fault tolerance
+- **Rate Limiting**: Automatically handle 429 errors
+- **Network Instability**: Handle temporary network failures
+- **Server Errors**: Handle temporary server-side issues
+
+#### Important Notes
+
+- **No Framework Retry**: Framework itself does not implement retry logic
+- **Client-level Retry**: All retry is handled by OpenAI client
+- **Configuration Pass-through**: Use `WithOpenAIOptions` to configure retry behavior
+- **Automatic Handling**: Rate limiting (429) is automatically handled without additional code
+
+#### Usage Example
+
+For a complete interactive example, see [examples/model/retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/retry).
+
+### 4. Model Switching
+
+Model switching allows dynamically changing the LLM model used by an Agent at runtime, accomplished simply with the `SetModel` method.
+
+#### Basic Usage
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// Create Agent.
+agent := llmagent.New("my-agent",
+    llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+
+// Switch to another model.
+agent.SetModel(openai.New("gpt-4o"))
+```
+
+#### Use Cases
+
+```go
+// Select model based on task complexity.
+if isComplexTask {
+    agent.SetModel(openai.New("gpt-4o"))  // Use powerful model.
+} else {
+    agent.SetModel(openai.New("gpt-4o-mini"))  // Use fast model.
+}
+```
+
+#### Important Notes
+
+- **Immediate Effect**: After calling `SetModel`, the next request immediately uses the new model
+- **Session Persistence**: Switching models does not clear session history
+- **Independent Configuration**: Each model retains its own configuration (temperature, max tokens, etc.)
+
+#### Usage Example
+
+For a complete interactive example, see [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch).
+
+### 5. Token Tailoring
 
 Token Tailoring is an intelligent message management technique that automatically trims messages when they exceed the model's context window limit, ensuring requests can be successfully sent to the LLM API. This feature is particularly useful for long conversation scenarios, maintaining key context while keeping the message list within the model's token constraints.
 

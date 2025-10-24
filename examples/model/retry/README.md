@@ -52,7 +52,7 @@ The OpenAI client automatically retries on:
 - `408 Request Timeout`
 - `409 Conflict`
 - `429 Too Many Requests` (Rate Limiting)
-- `5xx Server Errors`
+- `500+ Server Errors`
 - Network connection errors
 
 ## Running the Example
