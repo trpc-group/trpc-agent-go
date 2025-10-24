@@ -116,5 +116,309 @@ func TestExtensionToType(t *testing.T) {
 	}
 }
 
-// Intentionally avoid calling GetReader/GetAllReaders here because their
-// internal lock upgrade strategy may deadlock under some schedulers.
+// TestGetReader tests the GetReader function.
+func TestGetReader(t *testing.T) {
+	testCases := []struct {
+		name          string
+		setupFn       func()
+		extension     string
+		expectFound   bool
+		expectContent string
+	}{
+		{
+			name: "get unregistered extension",
+			setupFn: func() {
+				ClearRegistry()
+			},
+			extension:   ".unknown",
+			expectFound: false,
+		},
+		{
+			name: "get registered extension",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".test"}, func() Reader {
+					return &dummyReader{name: "test-reader", exts: []string{".test"}}
+				})
+			},
+			extension:     ".test",
+			expectFound:   true,
+			expectContent: "test-reader",
+		},
+		{
+			name: "get with case insensitive extension",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".TXT"}, func() Reader {
+					return &dummyReader{name: "txt-reader", exts: []string{".txt"}}
+				})
+			},
+			extension:     ".txt",
+			expectFound:   true,
+			expectContent: "txt-reader",
+		},
+		{
+			name: "get cached reader instance",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".cached"}, func() Reader {
+					return &dummyReader{name: "cached-reader", exts: []string{".cached"}}
+				})
+				// First call to cache the instance
+				_, _ = GetReader(".cached")
+			},
+			extension:     ".cached",
+			expectFound:   true,
+			expectContent: "cached-reader",
+		},
+		{
+			name: "get uppercase extension",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".md"}, func() Reader {
+					return &dummyReader{name: "md-reader", exts: []string{".md"}}
+				})
+			},
+			extension:     ".MD",
+			expectFound:   true,
+			expectContent: "md-reader",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setupFn()
+
+			reader, found := GetReader(tc.extension)
+
+			if found != tc.expectFound {
+				t.Errorf("GetReader(%q) found = %v, expected %v", tc.extension, found, tc.expectFound)
+			}
+
+			if tc.expectFound {
+				if reader == nil {
+					t.Errorf("GetReader(%q) returned nil reader", tc.extension)
+					return
+				}
+				if reader.Name() != tc.expectContent {
+					t.Errorf("GetReader(%q) reader name = %q, expected %q",
+						tc.extension, reader.Name(), tc.expectContent)
+				}
+			} else {
+				if reader != nil {
+					t.Errorf("GetReader(%q) expected nil reader, got %v", tc.extension, reader)
+				}
+			}
+		})
+	}
+
+	// Clean up
+	ClearRegistry()
+}
+
+// TestGetAllReaders tests the GetAllReaders function.
+func TestGetAllReaders(t *testing.T) {
+	testCases := []struct {
+		name          string
+		setupFn       func()
+		expectedTypes []string
+		expectedCount int
+	}{
+		{
+			name: "no readers registered",
+			setupFn: func() {
+				ClearRegistry()
+			},
+			expectedTypes: []string{},
+			expectedCount: 0,
+		},
+		{
+			name: "single reader",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".txt"}, func() Reader {
+					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
+				})
+			},
+			expectedTypes: []string{"text"},
+			expectedCount: 1,
+		},
+		{
+			name: "multiple readers",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".txt"}, func() Reader {
+					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
+				})
+				RegisterReader([]string{".md"}, func() Reader {
+					return &dummyReader{name: "markdown-reader", exts: []string{".md"}}
+				})
+				RegisterReader([]string{".json"}, func() Reader {
+					return &dummyReader{name: "json-reader", exts: []string{".json"}}
+				})
+			},
+			expectedTypes: []string{"text", "markdown", "json"},
+			expectedCount: 3,
+		},
+		{
+			name: "multiple extensions same type",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".txt", ".text"}, func() Reader {
+					return &dummyReader{name: "text-reader", exts: []string{".txt", ".text"}}
+				})
+			},
+			expectedTypes: []string{"text"},
+			expectedCount: 1,
+		},
+		{
+			name: "with cached readers",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".txt"}, func() Reader {
+					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
+				})
+				RegisterReader([]string{".md"}, func() Reader {
+					return &dummyReader{name: "markdown-reader", exts: []string{".md"}}
+				})
+				// Pre-cache one reader
+				_, _ = GetReader(".txt")
+			},
+			expectedTypes: []string{"text", "markdown"},
+			expectedCount: 2,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setupFn()
+
+			readers := GetAllReaders()
+
+			if len(readers) != tc.expectedCount {
+				t.Errorf("GetAllReaders() returned %d readers, expected %d",
+					len(readers), tc.expectedCount)
+			}
+
+			for _, expectedType := range tc.expectedTypes {
+				if _, exists := readers[expectedType]; !exists {
+					t.Errorf("GetAllReaders() missing expected type %q", expectedType)
+				}
+			}
+
+			// Verify all readers are non-nil
+			for typeName, reader := range readers {
+				if reader == nil {
+					t.Errorf("GetAllReaders() returned nil reader for type %q", typeName)
+				}
+			}
+		})
+	}
+
+	// Clean up
+	ClearRegistry()
+}
+
+// TestGetReaderConcurrent tests GetReader under concurrent access.
+func TestGetReaderConcurrent(t *testing.T) {
+	ClearRegistry()
+
+	// Register a reader
+	RegisterReader([]string{".concurrent"}, func() Reader {
+		return &dummyReader{name: "concurrent-reader", exts: []string{".concurrent"}}
+	})
+
+	// Launch multiple goroutines to access the same reader
+	done := make(chan bool)
+	for i := 0; i < 10; i++ {
+		go func() {
+			reader, found := GetReader(".concurrent")
+			if !found {
+				t.Error("GetReader failed to find registered extension")
+			}
+			if reader == nil {
+				t.Error("GetReader returned nil reader")
+			}
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	ClearRegistry()
+}
+
+// TestExtensionToTypeEdgeCases tests edge cases in extensionToType.
+func TestExtensionToTypeEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "doc extension",
+			input:    ".doc",
+			expected: "docx",
+		},
+		{
+			name:     "no dot prefix",
+			input:    "txt",
+			expected: "text",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "dot only",
+			input:    ".",
+			expected: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := extensionToType(tc.input)
+			if result != tc.expected {
+				t.Errorf("extensionToType(%q) = %q, expected %q",
+					tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestRegisterReaderMultipleExtensions tests registering a reader with multiple extensions.
+func TestRegisterReaderMultipleExtensions(t *testing.T) {
+	ClearRegistry()
+
+	extensions := []string{".test1", ".test2", ".test3"}
+	RegisterReader(extensions, func() Reader {
+		return &dummyReader{name: "multi-ext-reader", exts: extensions}
+	})
+
+	registeredExts := GetRegisteredExtensions()
+
+	if len(registeredExts) != len(extensions) {
+		t.Errorf("expected %d registered extensions, got %d",
+			len(extensions), len(registeredExts))
+	}
+
+	// Verify all extensions are registered (case-insensitive)
+	extMap := make(map[string]bool)
+	for _, ext := range registeredExts {
+		extMap[ext] = true
+	}
+
+	for _, ext := range extensions {
+		normalized := strings.ToLower(ext)
+		if !extMap[normalized] {
+			t.Errorf("extension %q not found in registered extensions", normalized)
+		}
+	}
+
+	ClearRegistry()
+}
