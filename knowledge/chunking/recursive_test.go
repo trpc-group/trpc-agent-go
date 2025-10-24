@@ -180,6 +180,43 @@ func TestRecursiveChunking_ForceSplit(t *testing.T) {
 	}
 }
 
+// TestRecursiveChunking_CustomSep tests recursive chunking with custom separators.
+func TestRecursiveChunking_CustomSep(t *testing.T) {
+	text := strings.Repeat("A B C D E F ", 10) // 70 chars
+	doc := &document.Document{ID: "txt", Content: text}
+
+	rc := NewRecursiveChunking(
+		WithRecursiveChunkSize(25),
+		WithRecursiveOverlap(3),
+		WithRecursiveSeparators([]string{" ", ""}),
+	)
+
+	chunks, err := rc.Chunk(doc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(chunks) <= 2 {
+		t.Fatalf("expected more than 2 chunks, got %d", len(chunks))
+	}
+
+	// Each chunk <= 25 and overlap 3.
+	for i, c := range chunks {
+		if len(c.Content) > 25 {
+			t.Fatalf("chunk %d exceeds size limit: %d > 25", i, len(c.Content))
+		}
+		if i > 0 {
+			prev := chunks[i-1].Content
+			if len(prev) >= 3 && len(c.Content) >= 3 {
+				overlap := prev[len(prev)-3:]
+				if overlap != c.Content[:3] {
+					t.Fatalf("overlap mismatch at chunk %d", i)
+				}
+			}
+		}
+	}
+}
+
 // BenchmarkRecursiveChunking provides a quick performance smoke-test to avoid
 // accidental O(N²) behaviour regressions. It is intentionally lightweight so
 // as not to bloat CI runtime.
