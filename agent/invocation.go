@@ -165,7 +165,7 @@ func WithA2ARequestOptions(opts ...any) RunOption {
 
 }
 
-// WithThirdPartyAgentConfigs sets third-party agent configurations for custom agents.
+// WithCustomAgentConfigs sets custom agent configurations.
 // This allows passing agent-specific configurations at runtime without modifying the agent implementation.
 //
 // Parameters:
@@ -178,7 +178,7 @@ func WithA2ARequestOptions(opts ...any) RunOption {
 //	import customllm "your.module/agents/customllm"
 //
 //	runner.Run(ctx, userID, sessionID, message,
-//	    agent.WithThirdPartyAgentConfigs(map[string]any{
+//	    agent.WithCustomAgentConfigs(map[string]any{
 //	        customllm.RunOptionKey: customllm.RunOptions{
 //	            "custom-context": "context",
 //	        },
@@ -188,7 +188,7 @@ func WithA2ARequestOptions(opts ...any) RunOption {
 //
 //	// In your custom agent implementation, retrieve the config:
 //	func (a *CustomLLMAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
-//	    config := inv.GetThirdPartyAgentConfig(RunOptionKey)
+//	    config := inv.GetCustomAgentConfig(RunOptionKey)
 //	    if opts, ok := config.(RunOptions); ok {
 //	        client := NewLLMClient(opts.APIKey, opts.Model, opts.Temperature)
 //	        // Use the configuration...
@@ -199,10 +199,10 @@ func WithA2ARequestOptions(opts ...any) RunOption {
 // Note:
 //   - This function creates a shallow copy of the configs map to prevent external modifications.
 //   - The stored configuration should be treated as read-only. Do not modify it after retrieval.
-func WithThirdPartyAgentConfigs(configs map[string]any) RunOption {
+func WithCustomAgentConfigs(configs map[string]any) RunOption {
 	return func(opts *RunOptions) {
 		if configs == nil {
-			opts.ThirdPartyAgentConfigs = nil
+			opts.CustomAgentConfigs = nil
 			return
 		}
 		// Create a shallow copy to prevent external modifications
@@ -210,7 +210,7 @@ func WithThirdPartyAgentConfigs(configs map[string]any) RunOption {
 		for k, v := range configs {
 			copied[k] = v
 		}
-		opts.ThirdPartyAgentConfigs = copied
+		opts.CustomAgentConfigs = copied
 	}
 }
 
@@ -243,9 +243,9 @@ type RunOptions struct {
 	// The a2aagent package will validate the option types at runtime.
 	A2ARequestOptions []any
 
-	// ThirdPartyAgentConfigs stores configurations for third-party agents.
+	// CustomAgentConfigs stores configurations for custom agents.
 	// Key: agent type, Value: agent-specific config.
-	ThirdPartyAgentConfigs map[string]any
+	CustomAgentConfigs map[string]any
 }
 
 // NewInvocation create a new invocation
@@ -440,7 +440,7 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	inv.noticeChanMap = nil
 }
 
-// GetThirdPartyAgentConfig retrieves configuration for a specific third-party agent type.
+// GetCustomAgentConfig retrieves configuration for a specific custom agent type.
 //
 // Parameters:
 //   - agentKey: The agent type identifier (typically the agent's RunOptionKey constant)
@@ -451,7 +451,7 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 // Usage:
 //
 //	func (a *CustomLLMAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
-//	    config := inv.GetThirdPartyAgentConfig(RunOptionKey)
+//	    config := inv.GetCustomAgentConfig(RunOptionKey)
 //	    if opts, ok := config.(RunOptions); ok {
 //	        client := NewLLMClient(opts.APIKey, opts.Model)
 //	        // ...
@@ -459,9 +459,9 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 //	}
 //
 // Note: The returned config should be treated as read-only. Do not modify it.
-func (inv *Invocation) GetThirdPartyAgentConfig(agentKey string) any {
-	if inv == nil || inv.RunOptions.ThirdPartyAgentConfigs == nil {
+func (inv *Invocation) GetCustomAgentConfig(agentKey string) any {
+	if inv == nil || inv.RunOptions.CustomAgentConfigs == nil {
 		return nil
 	}
-	return inv.RunOptions.ThirdPartyAgentConfigs[agentKey]
+	return inv.RunOptions.CustomAgentConfigs[agentKey]
 }
