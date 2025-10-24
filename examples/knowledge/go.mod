@@ -85,7 +85,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4 // indirect
 )
