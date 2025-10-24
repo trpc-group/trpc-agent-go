@@ -316,6 +316,22 @@ func WithSubgraphIsolatedMessages(isolate bool) Option {
 	}
 }
 
+// WithSubgraphInputFromLastResponse maps the parent's last_response to the
+// child sub-agent's user_input for this agent node.
+//
+// Use this option when you want the downstream agent to consume only the
+// upstream agent's result as its current-round input, without injecting the
+// session history. This keeps agent nodes as black boxes while enabling
+// explicit result passing.
+//
+// Note: For even stricter isolation from session history, combine with
+// WithSubgraphIsolatedMessages(true).
+func WithSubgraphInputFromLastResponse() Option {
+	return func(node *Node) {
+		node.agentInputFromLastResponse = true
+	}
+}
+
 // WithSubgraphEventScope customizes the child invocation's filter scope segment.
 // Docs note: Scope may be hierarchical (can include '/'). If empty, it
 // defaults to the child agent name. The final filterKey becomes
@@ -1031,6 +1047,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	outputMapper := dummyNode.agentOutputMapper
 	isolated := dummyNode.agentIsolatedMessages
 	scope := dummyNode.agentEventScope
+	inputFromLast := dummyNode.agentInputFromLastResponse
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "agent_node_execution")
 		defer span.End()
@@ -1078,8 +1095,21 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			childState[CfgKeyIncludeContents] = "none"
 		}
 
+		// Optionally map parent's last_response to user_input for this agent node.
+		parentForInput := state
+		if inputFromLast {
+			if lr, ok := state[StateKeyLastResponse]; ok {
+				if v, ok2 := lr.(string); ok2 && v != "" {
+					// Clone a shallow copy to avoid mutating the original state view.
+					cloned := state.Clone()
+					cloned[StateKeyUserInput] = v
+					parentForInput = cloned
+				}
+			}
+		}
+
 		// Build invocation for the target agent with custom runtime state and scope.
-		invocation := buildAgentInvocationWithStateAndScope(ctx, state, childState, targetAgent, scope)
+		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
 		// Emit agent execution start event.
 		startTime := time.Now()

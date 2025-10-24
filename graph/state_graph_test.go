@@ -670,6 +670,7 @@ func TestStateGraph_NodeOptionSetters(t *testing.T) {
 		WithSubgraphInputMapper(inMapper),
 		WithSubgraphOutputMapper(outMapper),
 		WithSubgraphIsolatedMessages(true),
+		WithSubgraphInputFromLastResponse(),
 		WithSubgraphEventScope("scope/x"),
 		WithModelCallbacks(&modelCB),
 	)
@@ -694,6 +695,9 @@ func TestStateGraph_NodeOptionSetters(t *testing.T) {
 	}
 	if !n.agentIsolatedMessages {
 		t.Fatalf("agentIsolatedMessages not set true")
+	}
+	if !n.agentInputFromLastResponse {
+		t.Fatalf("agentInputFromLastResponse not set true")
 	}
 	if n.agentEventScope != "scope/x" {
 		t.Fatalf("agentEventScope not set: %q", n.agentEventScope)

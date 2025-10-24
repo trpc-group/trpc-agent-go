@@ -1947,6 +1947,38 @@ graphAgent, _ := graphagent.New("workflow", g,
 // graph.StateKeyLastResponse 以及 graph.StateKeyNodeResponses[nodeID]
 ```
 
+#### 只传结果：将 last_response 映射为下游 user_input
+
+> 场景：A → B → C 互为黑盒，不希望下游读取完整会话，只需要上游的“结果文本”作为本轮输入。
+
+- 方式一（无需依赖，推荐通用）：在目标 Agent 节点添加前置回调，把父态 `last_response` 写入 `user_input`，必要时开启“消息隔离”。
+
+```go
+sg.AddAgentNode("orchestrator",
+    // 将上游 last_response 设置为本轮 user_input
+    graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
+        if v, ok := s[graph.StateKeyLastResponse].(string); ok && v != "" {
+            s[graph.StateKeyUserInput] = v
+        }
+        return nil, nil
+    }),
+    // 可选：隔离子 Agent 的会话注入，仅消费本轮 user_input
+    graph.WithSubgraphIsolatedMessages(true),
+)
+```
+
+- 方式二（使用增强选项，更简洁）：
+
+```go
+// 框架提供声明式 Option，自动执行 last_response → user_input 的映射
+sg.AddAgentNode("orchestrator",
+    graph.WithSubgraphInputFromLastResponse(),
+    graph.WithSubgraphIsolatedMessages(true), // 可选，配合隔离达到“只传结果”
+)
+```
+
+说明：以上两种方式都能让 B 仅看到 A 的结果、C 仅看到 B 的结果；方式二更简洁，方式一零依赖、到处可用。
+
 ### 混合模式示例
 
 结构化流程中嵌入动态决策：

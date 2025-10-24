@@ -59,6 +59,98 @@ func (a *inspectAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *
 	return ch, nil
 }
 
+// messageEchoAgent emits the invocation message content for verification.
+type messageEchoAgent struct{ name string }
+
+func (a *messageEchoAgent) Info() agent.Info                     { return agent.Info{Name: a.name} }
+func (a *messageEchoAgent) Tools() []tool.Tool                   { return nil }
+func (a *messageEchoAgent) SubAgents() []agent.Agent             { return nil }
+func (a *messageEchoAgent) FindSubAgent(name string) agent.Agent { return nil }
+
+func (a *messageEchoAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		// Emit the message content as a state delta for parent to inspect.
+		e := event.New(inv.InvocationID, a.name, event.WithObject("test.msg"))
+		if inv != nil && inv.Message.Content != "" {
+			e.StateDelta = map[string][]byte{"msg": []byte(inv.Message.Content)}
+		}
+		ch <- e
+		// Emit terminal graph completion event to close the stream.
+		done := NewGraphCompletionEvent(
+			WithCompletionEventInvocationID(inv.InvocationID),
+			WithCompletionEventFinalState(State{"child_done": true}),
+		)
+		ch <- done
+		close(ch)
+	}()
+	return ch, nil
+}
+
+// TestSubgraph_InputFromLastResponse_MapsUserInput verifies that enabling
+// WithSubgraphInputFromLastResponse maps parent's last_response to child
+// invocation's user input. When last_response is empty, it falls back to the
+// original user_input.
+func TestSubgraph_InputFromLastResponse_MapsUserInput(t *testing.T) {
+	// Case 1: last_response is present → child should see it as message content.
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-map", EventChan: ch}
+	child := &messageEchoAgent{name: "child3"}
+	parent := &parentWithSubAgent{a: child}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "agentNode",
+		StateKeyParentAgent:   parent,
+		StateKeyUserInput:     "original-user-input",
+		StateKeyLastResponse:  "from-upstream-A",
+	}
+	fn := NewAgentNodeFunc("child3", WithSubgraphInputFromLastResponse())
+	_, err := fn(context.Background(), state)
+	require.NoError(t, err)
+
+	var msg string
+	for i := 0; i < 8; i++ {
+		select {
+		case ev := <-ch:
+			if ev != nil && ev.Object == "test.msg" && ev.StateDelta != nil {
+				if raw, ok := ev.StateDelta["msg"]; ok {
+					msg = string(raw)
+				}
+			}
+		default:
+		}
+	}
+	require.Equal(t, "from-upstream-A", msg)
+
+	// Case 2: last_response empty → falls back to original user_input
+	ch2 := make(chan *event.Event, 8)
+	exec2 := &ExecutionContext{InvocationID: "inv-fallback", EventChan: ch2}
+	state2 := State{
+		StateKeyExecContext:   exec2,
+		StateKeyCurrentNodeID: "agentNode",
+		StateKeyParentAgent:   parent,
+		StateKeyUserInput:     "original-user-input",
+		// no last_response here
+	}
+	fn2 := NewAgentNodeFunc("child3", WithSubgraphInputFromLastResponse())
+	_, err = fn2(context.Background(), state2)
+	require.NoError(t, err)
+
+	var msg2 string
+	for i := 0; i < 8; i++ {
+		select {
+		case ev := <-ch2:
+			if ev != nil && ev.Object == "test.msg" && ev.StateDelta != nil {
+				if raw, ok := ev.StateDelta["msg"]; ok {
+					msg2 = string(raw)
+				}
+			}
+		default:
+		}
+	}
+	require.Equal(t, "original-user-input", msg2)
+}
+
 // Verify the default child runtime state copy filters internal keys.
 func TestSubgraph_DefaultRuntimeStateFiltersInternalKeys(t *testing.T) {
 	ch := make(chan *event.Event, 8)
