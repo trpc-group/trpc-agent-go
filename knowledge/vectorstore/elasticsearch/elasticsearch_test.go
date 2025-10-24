@@ -13,10 +13,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	istorage "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 // mockClient is a mock implementation of istorage.Client for testing.
