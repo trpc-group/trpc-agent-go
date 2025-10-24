@@ -70,14 +70,6 @@ func New(opts ...Option) (*VectorStore, error) {
 		opt(&option)
 	}
 
-	if option.indexName == "" {
-		option.indexName = defaultIndexName
-	}
-
-	if option.vectorDimension == 0 {
-		option.vectorDimension = defaultVectorDimension
-	}
-
 	// Create Elasticsearch client configuration.
 	esClient, err := storage.GetClientBuilder()(
 		storage.WithAddresses(option.addresses),
