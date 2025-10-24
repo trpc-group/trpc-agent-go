@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,76 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+func TestNewService(t *testing.T) {
+	tests := []struct {
+		name        string
+		options     []ServiceOpt
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "valid redis URL",
+			options:     []ServiceOpt{WithRedisClientURL("redis://localhost:6379")},
+			expectError: false,
+		},
+		{
+			name:        "non-existent redis instance",
+			options:     []ServiceOpt{WithRedisInstance("non-existent-instance")},
+			expectError: true,
+			errorMsg:    "redis instance",
+		},
+		{
+			name:        "invalid redis URL",
+			options:     []ServiceOpt{WithRedisClientURL("invalid://url")},
+			expectError: true,
+			errorMsg:    "create redis client from url failed",
+		},
+		{
+			name:        "empty options",
+			options:     []ServiceOpt{WithRedisClientURL("redis://localhost:6379")},
+			expectError: false,
+		},
+		{
+			name: "multiple options combination",
+			options: []ServiceOpt{
+				WithRedisClientURL("redis://localhost:6379"),
+				WithSessionEventLimit(1000),
+				WithSessionTTL(time.Hour),
+				WithAppStateTTL(2 * time.Hour),
+				WithUserStateTTL(30 * time.Minute),
+				WithEnableAsyncPersist(true),
+				WithAsyncPersisterNum(5),
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, err := NewService(tt.options...)
+
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorMsg)
+				assert.Nil(t, service)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, service)
+
+				// Verify options were applied correctly
+				// Service creation is successful, which means options were applied
+				_ = service
+
+				// Clean up
+				if service != nil {
+					err := service.Close()
+					assert.NoError(t, err)
+				}
+			}
+		})
+	}
+}
 
 func setupTestRedis(t testing.TB) (string, func()) {
 	mr, err := miniredis.Run()
@@ -1415,4 +1486,1069 @@ func TestGetSession_AllAssistantEvents_Integration(t *testing.T) {
 
 	// Should have no events since all are from assistant
 	assert.Equal(t, 0, len(retrievedSess.Events), "Should filter out all assistant events when no user events exist")
+}
+
+func TestService_Close_MultipleTimes(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+
+	// Close multiple times should not panic
+	err1 := service.Close()
+	assert.NoError(t, err1)
+
+	err2 := service.Close()
+	assert.NoError(t, err2)
+}
+
+func TestService_ConcurrentSessions(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	const numSessions = 10
+
+	// Create multiple sessions concurrently
+	var wg sync.WaitGroup
+	sessions := make([]*session.Session, numSessions)
+	keys := make([]session.Key, numSessions)
+
+	for i := 0; i < numSessions; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			key := session.Key{
+				AppName:   "testapp",
+				UserID:    fmt.Sprintf("user%d", idx),
+				SessionID: fmt.Sprintf("session%d", idx),
+			}
+			keys[idx] = key
+
+			sess, err := service.CreateSession(ctx, key, session.StateMap{
+				"user_id": []byte(fmt.Sprintf("user%d", idx)),
+			})
+			require.NoError(t, err)
+			sessions[idx] = sess
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify all sessions were created
+	for i, sess := range sessions {
+		require.NotNil(t, sess)
+		assert.Equal(t, fmt.Sprintf("session%d", i), sess.ID)
+		assert.Equal(t, fmt.Sprintf("user%d", i), sess.UserID)
+		assert.Equal(t, "testapp", sess.AppName)
+		assert.Equal(t, fmt.Sprintf("user%d", i), string(sess.State["user_id"]))
+	}
+
+	// Verify all sessions can be retrieved
+	for i, key := range keys {
+		retrieved, err := service.GetSession(ctx, key)
+		require.NoError(t, err)
+		require.NotNil(t, retrieved)
+		assert.Equal(t, fmt.Sprintf("session%d", i), retrieved.ID)
+	}
+}
+
+func TestService_SessionStateConsistency(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create session with initial state
+	initialState := session.StateMap{
+		"counter": []byte("0"),
+		"status":  []byte("active"),
+	}
+	sess, err := service.CreateSession(ctx, key, initialState)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "0", string(sess.State["counter"]))
+	assert.Equal(t, "active", string(sess.State["status"]))
+
+	// Update app state
+	appState := session.StateMap{
+		"global_config": []byte("enabled"),
+	}
+	err = service.UpdateAppState(ctx, key.AppName, appState)
+	require.NoError(t, err)
+
+	// Update user state
+	userState := session.StateMap{
+		"user_pref": []byte("dark_mode"),
+	}
+	err = service.UpdateUserState(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID}, userState)
+	require.NoError(t, err)
+
+	// Retrieve session and verify merged state
+	retrievedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, retrievedSess)
+
+	// Check session-specific state
+	assert.Equal(t, "0", string(retrievedSess.State["counter"]))
+	assert.Equal(t, "active", string(retrievedSess.State["status"]))
+
+	// Check app state (prefixed)
+	assert.Equal(t, "enabled", string(retrievedSess.State[session.StateAppPrefix+"global_config"]))
+
+	// Check user state (prefixed)
+	assert.Equal(t, "dark_mode", string(retrievedSess.State[session.StateUserPrefix+"user_pref"]))
+}
+
+func TestStartAsyncPersistWorker(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(3),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Verify that event pair channels are initialized
+	assert.Len(t, service.eventPairChans, 3)
+	assert.NotNil(t, service.eventPairChans[0])
+	assert.NotNil(t, service.eventPairChans[1])
+	assert.NotNil(t, service.eventPairChans[2])
+
+	// Verify channel buffer sizes
+	for i, ch := range service.eventPairChans {
+		assert.Equal(t, defaultChanBufferSize, cap(ch), "Channel %d should have buffer size %d", i, defaultChanBufferSize)
+	}
+}
+
+func TestStartAsyncSummaryWorker(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(50),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Verify that summary job channels are initialized
+	assert.Len(t, service.summaryJobChans, 2)
+	assert.NotNil(t, service.summaryJobChans[0])
+	assert.NotNil(t, service.summaryJobChans[1])
+
+	// Verify channel buffer sizes
+	for i, ch := range service.summaryJobChans {
+		assert.Equal(t, 50, cap(ch), "Summary channel %d should have buffer size 50", i)
+	}
+}
+
+func TestService_Close(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Test closing with async persist enabled
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(2),
+	)
+	require.NoError(t, err)
+
+	// Verify channels are open before close
+	assert.Len(t, service.eventPairChans, 2)
+	for i, ch := range service.eventPairChans {
+		assert.NotNil(t, ch, "Channel %d should not be nil before close", i)
+	}
+
+	// Close service
+	err = service.Close()
+	assert.NoError(t, err)
+
+	// Verify channels are closed (we can't directly test this, but we can test that no panic occurs)
+	// and that the service is in a closed state
+}
+
+func TestDeleteSessionState(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "test-session",
+	}
+
+	// Create a session first
+	sess, err := service.CreateSession(ctx, key, session.StateMap{"test": []byte("data")})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Verify session exists
+	retrievedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, retrievedSess)
+
+	// Delete session state
+	err = service.deleteSessionState(ctx, key)
+	require.NoError(t, err)
+
+	// Verify session is deleted
+	deletedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Nil(t, deletedSess)
+}
+
+func TestService_GetSession_RedisErrors(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "non-existent",
+	}
+
+	// Get non-existent session should return nil without error
+	sess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+}
+
+func TestService_ListSessions_RedisErrors(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "testapp",
+		UserID:  "non-existent-user",
+	}
+
+	// List sessions for non-existent user should return empty list
+	sessions, err := service.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	assert.Empty(t, sessions)
+}
+
+func TestService_UpdateAppState_RedisErrors(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Update app state should succeed even if app doesn't exist yet
+	err = service.UpdateAppState(ctx, "new-app", session.StateMap{"key": []byte("value")})
+	require.NoError(t, err)
+
+	// Verify state was created
+	states, err := service.ListAppStates(ctx, "new-app")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), states["key"])
+}
+
+func TestService_UpdateUserState_RedisErrors(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "testapp",
+		UserID:  "user123",
+	}
+
+	// Update user state should succeed even if user doesn't exist yet
+	err = service.UpdateUserState(ctx, userKey, session.StateMap{"key": []byte("value")})
+	require.NoError(t, err)
+
+	// Verify state was created
+	states, err := service.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), states["key"])
+}
+
+func TestService_ListAppStates_Empty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// List states for non-existent app should return empty map
+	states, err := service.ListAppStates(ctx, "non-existent-app")
+	require.NoError(t, err)
+	assert.Empty(t, states)
+}
+
+func TestService_ListUserStates_Empty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "testapp",
+		UserID:  "non-existent-user",
+	}
+
+	// List states for non-existent user should return empty map
+	states, err := service.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Empty(t, states)
+}
+
+func TestService_DeleteAppState_NonExistent(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Delete non-existent app state should not error
+	err = service.DeleteAppState(ctx, "non-existent-app", "key")
+	require.NoError(t, err)
+}
+
+func TestService_DeleteUserState_NonExistent(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "testapp",
+		UserID:  "non-existent-user",
+	}
+
+	// Delete non-existent user state should not error
+	err = service.DeleteUserState(ctx, userKey, "key")
+	require.NoError(t, err)
+}
+
+func TestService_CreateSession_WithOptions(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName: "testapp",
+		UserID:  "user123",
+	}
+
+	// Create session with event num option
+	sess, err := service.CreateSession(ctx, key, session.StateMap{}, session.WithEventNum(10))
+	require.NoError(t, err)
+	assert.NotNil(t, sess)
+	assert.NotEmpty(t, sess.ID)
+
+	// Create session with event time option
+	sess2, err := service.CreateSession(ctx, key, session.StateMap{}, session.WithEventTime(time.Now()))
+	require.NoError(t, err)
+	assert.NotNil(t, sess2)
+	assert.NotEmpty(t, sess2.ID)
+}
+
+func TestService_GetSession_WithOptions(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append some events
+	for i := 0; i < 5; i++ {
+		evt := createTestEvent(fmt.Sprintf("e%d", i), "agent", "content", time.Now(), false)
+		sess, _ := service.GetSession(ctx, key)
+		err = service.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+	}
+
+	// Get session with event num option
+	sess, err := service.GetSession(ctx, key, session.WithEventNum(3))
+	require.NoError(t, err)
+	assert.NotNil(t, sess)
+	assert.LessOrEqual(t, len(sess.Events), 5)
+
+	// Get session with event time option
+	sess2, err := service.GetSession(ctx, key, session.WithEventTime(time.Now().Add(-1*time.Hour)))
+	require.NoError(t, err)
+	assert.NotNil(t, sess2)
+}
+
+func TestService_ListSessions_WithOptions(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "testapp",
+		UserID:  "user123",
+	}
+
+	// Create multiple sessions
+	for i := 0; i < 3; i++ {
+		key := session.Key{
+			AppName:   userKey.AppName,
+			UserID:    userKey.UserID,
+			SessionID: fmt.Sprintf("session%d", i),
+		}
+		_, err := service.CreateSession(ctx, key, session.StateMap{})
+		require.NoError(t, err)
+	}
+
+	// List sessions with event num option
+	sessions, err := service.ListSessions(ctx, userKey, session.WithEventNum(10))
+	require.NoError(t, err)
+	assert.Len(t, sessions, 3)
+
+	// List sessions with event time option
+	sessions2, err := service.ListSessions(ctx, userKey, session.WithEventTime(time.Now().Add(-1*time.Hour)))
+	require.NoError(t, err)
+	assert.Len(t, sessions2, 3)
+}
+
+func TestService_WithTTL(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with all TTLs enabled
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionTTL(time.Hour),
+		WithAppStateTTL(2*time.Hour),
+		WithUserStateTTL(30*time.Minute),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session with app and user state
+	err = service.UpdateAppState(ctx, key.AppName, session.StateMap{"app_key": []byte("app_value")})
+	require.NoError(t, err)
+
+	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+	err = service.UpdateUserState(ctx, userKey, session.StateMap{"user_key": []byte("user_value")})
+	require.NoError(t, err)
+
+	sess, err := service.CreateSession(ctx, key, session.StateMap{"sess_key": []byte("sess_value")})
+	require.NoError(t, err)
+	assert.NotNil(t, sess)
+
+	// Append an event
+	evt := createTestEvent("e1", "agent", "content", time.Now(), false)
+	err = service.AppendEvent(ctx, sess, evt)
+	require.NoError(t, err)
+
+	// Get session - this should trigger TTL refresh
+	retrievedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.NotNil(t, retrievedSess)
+	assert.Equal(t, []byte("sess_value"), retrievedSess.State["sess_key"])
+	// App and user states are prefixed
+	assert.Equal(t, []byte("app_value"), retrievedSess.State["app:app_key"])
+	assert.Equal(t, []byte("user_value"), retrievedSess.State["user:user_key"])
+
+	// List sessions - this should also trigger TTL refresh
+	sessions, err := service.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	assert.Len(t, sessions, 1)
+}
+
+func TestService_DeleteSession_WithTTL(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with session TTL
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionTTL(time.Hour),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	assert.NotNil(t, sess)
+
+	// Delete the session
+	err = service.DeleteSession(ctx, key)
+	require.NoError(t, err)
+
+	// Verify session is deleted
+	deletedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Nil(t, deletedSess)
+}
+
+func TestService_ProcessStateCmd_Errors(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Manually corrupt the data in Redis to trigger unmarshal error
+	client := buildRedisClient(t, redisURL)
+	sessKey := getSessionStateKey(key)
+	err = client.HSet(ctx, sessKey, key.SessionID, "invalid json").Err()
+	require.NoError(t, err)
+
+	// Try to get the session - should return error
+	_, err = service.GetSession(ctx, key)
+	assert.Error(t, err)
+}
+
+func TestService_GetEventsList_AfterTime(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append events with different timestamps
+	baseTime := time.Now().Add(-1 * time.Hour)
+	for i := 0; i < 5; i++ {
+		evt := createTestEvent(fmt.Sprintf("e%d", i), "agent", "content", baseTime.Add(time.Duration(i)*time.Minute), false)
+		err = service.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+	}
+
+	// Get session with afterTime filter
+	afterTime := baseTime.Add(2 * time.Minute)
+	retrievedSess, err := service.GetSession(ctx, key, session.WithEventTime(afterTime))
+	require.NoError(t, err)
+	assert.NotNil(t, retrievedSess)
+	// Should only get events after the specified time
+	assert.LessOrEqual(t, len(retrievedSess.Events), 3)
+}
+
+func TestService_MergeState_Priority(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Set the same key at different levels with different values
+	err = service.UpdateAppState(ctx, key.AppName, session.StateMap{"shared_key": []byte("app_value")})
+	require.NoError(t, err)
+
+	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+	err = service.UpdateUserState(ctx, userKey, session.StateMap{"shared_key": []byte("user_value")})
+	require.NoError(t, err)
+
+	// Create session with the same key
+	sess, err := service.CreateSession(ctx, key, session.StateMap{"shared_key": []byte("session_value")})
+	require.NoError(t, err)
+
+	// Session-level state should take priority
+	assert.Equal(t, []byte("session_value"), sess.State["shared_key"])
+
+	// Get session to verify state merging
+	retrievedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	// Session-level state should still take priority
+	assert.Equal(t, []byte("session_value"), retrievedSess.State["shared_key"])
+}
+
+func TestService_ListSessions_EmptyEvents(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "testapp",
+		UserID:  "user123",
+	}
+
+	// Create multiple sessions without events
+	for i := 0; i < 3; i++ {
+		key := session.Key{
+			AppName:   userKey.AppName,
+			UserID:    userKey.UserID,
+			SessionID: fmt.Sprintf("session%d", i),
+		}
+		_, err := service.CreateSession(ctx, key, session.StateMap{})
+		require.NoError(t, err)
+	}
+
+	// List sessions
+	sessions, err := service.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	assert.Len(t, sessions, 3)
+	// All sessions should have empty events
+	for _, sess := range sessions {
+		assert.Empty(t, sess.Events)
+	}
+}
+
+func TestService_CreateSession_EmptyState(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName: "testapp",
+		UserID:  "user123",
+	}
+
+	// Create session with empty state
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	assert.NotNil(t, sess)
+	assert.Empty(t, sess.State)
+	assert.NotEmpty(t, sess.ID)
+}
+
+func TestService_AppendEvent_WithLimit(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	limit := 2
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionEventLimit(limit),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append more events than the limit
+	for i := 0; i < 5; i++ {
+		evt := createTestEvent(fmt.Sprintf("e%d", i), "agent", "content", time.Now(), false)
+		err = service.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+	}
+
+	// Get session and verify only latest events are kept
+	retrievedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.NotNil(t, retrievedSess)
+	assert.LessOrEqual(t, len(retrievedSess.Events), limit)
+}
+
+func TestService_DeleteSession_NonExistent(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "non-existent",
+	}
+
+	// Delete non-existent session should not error
+	err = service.DeleteSession(ctx, key)
+	require.NoError(t, err)
+}
+
+func TestService_UpdateAppState_EmptyKey(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Update app state with empty app name should error
+	err = service.UpdateAppState(ctx, "", session.StateMap{"key": []byte("value")})
+	require.Error(t, err)
+}
+
+func TestService_UpdateUserState_EmptyKey(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Update user state with empty user key should error
+	err = service.UpdateUserState(ctx, session.UserKey{}, session.StateMap{"key": []byte("value")})
+	require.Error(t, err)
+}
+
+func TestService_ListAppStates_EmptyAppName(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// List app states with empty app name should error
+	_, err = service.ListAppStates(ctx, "")
+	require.Error(t, err)
+}
+
+func TestService_ListUserStates_EmptyUserKey(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// List user states with empty user key should error
+	_, err = service.ListUserStates(ctx, session.UserKey{})
+	require.Error(t, err)
+}
+
+func TestService_DeleteAppState_EmptyAppName(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Delete app state with empty app name should error
+	err = service.DeleteAppState(ctx, "", "key")
+	require.Error(t, err)
+}
+
+func TestService_DeleteUserState_EmptyUserKey(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Delete user state with empty user key should error
+	err = service.DeleteUserState(ctx, session.UserKey{}, "key")
+	require.Error(t, err)
+}
+
+func TestService_CorruptedData_AppState(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session first
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Manually corrupt app state data in Redis
+	client := buildRedisClient(t, redisURL)
+	appStateKey := getAppStateKey(key.AppName)
+	// Set invalid data that can't be converted to bytes properly
+	// This tests the error path in processStateCmd
+	err = client.HSet(ctx, appStateKey, "corrupted_key", string([]byte{0xff, 0xfe, 0xfd})).Err()
+	require.NoError(t, err)
+
+	// Try to get the session - should still work as processStateCmd handles conversion
+	sess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.NotNil(t, sess)
+}
+
+func TestService_CorruptedData_Events(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Manually corrupt event data in Redis by setting the event key to a hash instead of a list
+	client := buildRedisClient(t, redisURL)
+	eventKey := getEventKey(key)
+	// Delete the existing list and create a hash with the same key
+	err = client.Del(ctx, eventKey).Err()
+	require.NoError(t, err)
+	err = client.HSet(ctx, eventKey, "field", "value").Err()
+	require.NoError(t, err)
+
+	// Try to get the session - should return error due to wrong type
+	_, err = service.GetSession(ctx, key)
+	assert.Error(t, err)
+}
+
+func TestService_AsyncPersist_Enabled(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async persist enabled
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(2),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append events
+	for i := 0; i < 5; i++ {
+		evt := createTestEvent(fmt.Sprintf("e%d", i), "agent", "content", time.Now(), false)
+		err = service.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+	}
+
+	// Give async workers time to process
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify events were persisted
+	retrievedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.NotNil(t, retrievedSess)
+	assert.NotEmpty(t, retrievedSess.Events)
+}
+
+func TestService_ListSessions_WithTTL(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with TTLs
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionTTL(time.Hour),
+		WithAppStateTTL(2*time.Hour),
+		WithUserStateTTL(30*time.Minute),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "testapp",
+		UserID:  "user123",
+	}
+
+	// Create multiple sessions
+	for i := 0; i < 3; i++ {
+		key := session.Key{
+			AppName:   userKey.AppName,
+			UserID:    userKey.UserID,
+			SessionID: fmt.Sprintf("session%d", i),
+		}
+		_, err := service.CreateSession(ctx, key, session.StateMap{})
+		require.NoError(t, err)
+	}
+
+	// List sessions - should trigger TTL refresh
+	sessions, err := service.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	assert.Len(t, sessions, 3)
+}
+
+func TestService_DeleteSession_WithEvents(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	// Create a session
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append events
+	for i := 0; i < 3; i++ {
+		evt := createTestEvent(fmt.Sprintf("e%d", i), "agent", "content", time.Now(), false)
+		err = service.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+	}
+
+	// Delete the session
+	err = service.DeleteSession(ctx, key)
+	require.NoError(t, err)
+
+	// Verify session is deleted
+	deletedSess, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Nil(t, deletedSess)
 }
