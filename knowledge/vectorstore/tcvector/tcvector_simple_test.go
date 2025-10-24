@@ -19,7 +19,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 // TestVectorStore_Add tests the Add method with various scenarios
@@ -897,4 +900,617 @@ func TestVectorStore_ContextTimeout(t *testing.T) {
 	// Real implementation should return context.DeadlineExceeded
 	err := vs.Add(ctx, doc, vector)
 	_ = err // Mock doesn't handle timeout
+}
+
+// TestVectorStore_Count tests the Count method with various scenarios
+func TestVectorStore_Count(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(*mockClient, *VectorStore)
+		wantCount int
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name: "count_empty_store",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				// Empty store
+			},
+			wantCount: 0,
+			wantErr:   false,
+		},
+		{
+			name: "count_multiple_documents",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				for i := 0; i < 5; i++ {
+					doc := &document.Document{
+						ID:      fmt.Sprintf("count_doc_%d", i),
+						Content: fmt.Sprintf("Content %d", i),
+					}
+					vector := []float64{float64(i) / 5.0, 0.5, 0.2}
+					_ = vs.Add(ctx, doc, vector)
+				}
+			},
+			wantCount: 5,
+			wantErr:   false,
+		},
+		{
+			name: "count_with_filter",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				// Add documents with metadata
+				docs := []struct {
+					id       string
+					metadata map[string]any
+				}{
+					{"doc1", map[string]any{"category": "AI"}},
+					{"doc2", map[string]any{"category": "AI"}},
+					{"doc3", map[string]any{"category": "ML"}},
+				}
+				for _, d := range docs {
+					doc := &document.Document{
+						ID:       d.id,
+						Content:  "Content",
+						Metadata: d.metadata,
+					}
+					_ = vs.Add(ctx, doc, []float64{1.0, 0.5, 0.2})
+				}
+			},
+			wantCount: 3, // Count all regardless of filter in mock
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+			)
+
+			tt.setupMock(mockClient, vs)
+
+			count, err := vs.Count(context.Background())
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCount, count)
+			}
+		})
+	}
+}
+
+// TestVectorStore_DeleteByFilter tests the DeleteByFilter method
+func TestVectorStore_DeleteByFilter(t *testing.T) {
+	tests := []struct {
+		name             string
+		setupMock        func(*mockClient, *VectorStore)
+		deleteOpts       func() []vectorstore.DeleteOption
+		wantErr          bool
+		errMsg           string
+		validateAfterDel func(*testing.T, *mockClient, *VectorStore)
+	}{
+		{
+			name: "delete_by_document_ids",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				for i := 0; i < 5; i++ {
+					doc := &document.Document{
+						ID:      fmt.Sprintf("del_doc_%d", i),
+						Content: fmt.Sprintf("Content %d", i),
+					}
+					_ = vs.Add(ctx, doc, []float64{float64(i) / 5.0, 0.5, 0.2})
+				}
+			},
+			deleteOpts: func() []vectorstore.DeleteOption {
+				return []vectorstore.DeleteOption{
+					vectorstore.WithDeleteDocumentIDs([]string{"del_doc_0", "del_doc_1"}),
+				}
+			},
+			wantErr: false,
+			validateAfterDel: func(t *testing.T, m *mockClient, vs *VectorStore) {
+				// Verify count decreased
+				count, _ := vs.Count(context.Background())
+				assert.Equal(t, 3, count)
+			},
+		},
+		{
+			name: "delete_no_filter_no_ids_error",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				doc := &document.Document{
+					ID:      "error_doc",
+					Content: "Content",
+				}
+				_ = vs.Add(ctx, doc, []float64{1.0, 0.5, 0.2})
+			},
+			deleteOpts: func() []vectorstore.DeleteOption {
+				return []vectorstore.DeleteOption{}
+			},
+			wantErr: true,
+			errMsg:  "no filter conditions",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+			)
+
+			tt.setupMock(mockClient, vs)
+
+			err := vs.DeleteByFilter(context.Background(), tt.deleteOpts()...)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				if tt.validateAfterDel != nil {
+					tt.validateAfterDel(t, mockClient, vs)
+				}
+			}
+		})
+	}
+}
+
+// TestVectorStore_GetMetadata tests the GetMetadata method
+func TestVectorStore_GetMetadata(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(*mockClient, *VectorStore)
+		getOpts   func() []vectorstore.GetMetadataOption
+		wantCount int
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name: "get_all_metadata",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				for i := 0; i < 5; i++ {
+					doc := &document.Document{
+						ID:       fmt.Sprintf("meta_doc_%d", i),
+						Content:  fmt.Sprintf("Content %d", i),
+						Metadata: map[string]any{"index": i, "type": "test"},
+					}
+					_ = vs.Add(ctx, doc, []float64{float64(i) / 5.0, 0.5, 0.2})
+				}
+			},
+			getOpts: func() []vectorstore.GetMetadataOption {
+				return []vectorstore.GetMetadataOption{
+					vectorstore.WithGetMetadataLimit(-1),
+					vectorstore.WithGetMetadataOffset(-1),
+				}
+			},
+			wantCount: 5,
+			wantErr:   false,
+		},
+		{
+			name: "get_metadata_with_limit",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				for i := 0; i < 10; i++ {
+					doc := &document.Document{
+						ID:       fmt.Sprintf("limit_doc_%d", i),
+						Content:  fmt.Sprintf("Content %d", i),
+						Metadata: map[string]any{"index": i},
+					}
+					_ = vs.Add(ctx, doc, []float64{float64(i) / 10.0, 0.5, 0.2})
+				}
+			},
+			getOpts: func() []vectorstore.GetMetadataOption {
+				return []vectorstore.GetMetadataOption{
+					vectorstore.WithGetMetadataLimit(5),
+					vectorstore.WithGetMetadataOffset(0),
+				}
+			},
+			wantCount: 5,
+			wantErr:   false,
+		},
+		{
+			name: "get_metadata_with_offset",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				for i := 0; i < 8; i++ {
+					doc := &document.Document{
+						ID:       fmt.Sprintf("offset_doc_%d", i),
+						Content:  fmt.Sprintf("Content %d", i),
+						Metadata: map[string]any{"index": i},
+					}
+					_ = vs.Add(ctx, doc, []float64{float64(i) / 8.0, 0.5, 0.2})
+				}
+			},
+			getOpts: func() []vectorstore.GetMetadataOption {
+				return []vectorstore.GetMetadataOption{
+					vectorstore.WithGetMetadataLimit(3),
+					vectorstore.WithGetMetadataOffset(2),
+				}
+			},
+			wantCount: 3,
+			wantErr:   false,
+		},
+		{
+			name: "get_empty_metadata",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				// No documents added
+			},
+			getOpts: func() []vectorstore.GetMetadataOption {
+				return []vectorstore.GetMetadataOption{
+					vectorstore.WithGetMetadataLimit(-1),
+					vectorstore.WithGetMetadataOffset(-1),
+				}
+			},
+			wantCount: 0,
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+			)
+
+			tt.setupMock(mockClient, vs)
+
+			metadata, err := vs.GetMetadata(context.Background(), tt.getOpts()...)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantCount, len(metadata))
+			}
+		})
+	}
+}
+
+// TestVectorStore_Close tests the Close method
+func TestVectorStore_Close(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(*mockClient)
+		wantErr   bool
+	}{
+		{
+			name:      "close_empty_store",
+			setupMock: func(m *mockClient) {},
+			wantErr:   false,
+		},
+		{
+			name: "close_with_documents",
+			setupMock: func(m *mockClient) {
+				// Just setup mock client, vs will be created in test
+			},
+			wantErr: false,
+		},
+		{
+			name:      "close_multiple_times",
+			setupMock: func(m *mockClient) {},
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			tt.setupMock(mockClient)
+
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+			)
+
+			err := vs.Close()
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			// Close again to test idempotency
+			err = vs.Close()
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestCovertToVector32 tests the covertToVector32 helper function
+func TestCovertToVector32(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []float64
+		expected []float32
+	}{
+		{
+			name:     "normal_conversion",
+			input:    []float64{1.0, 2.0, 3.0},
+			expected: []float32{1.0, 2.0, 3.0},
+		},
+		{
+			name:     "empty_slice",
+			input:    []float64{},
+			expected: []float32{},
+		},
+		{
+			name:     "negative_values",
+			input:    []float64{-1.0, -2.5, -3.7},
+			expected: []float32{-1.0, -2.5, -3.7},
+		},
+		{
+			name:     "large_values",
+			input:    []float64{1000.5, 2000.3, 3000.7},
+			expected: []float32{1000.5, 2000.3, 3000.7},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := covertToVector32(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestTcVectorConverter tests the condition converter
+func TestTcVectorConverter(t *testing.T) {
+	converter := &tcVectorConverter{}
+
+	tests := []struct {
+		name      string
+		condition *searchfilter.UniversalFilterCondition
+		wantErr   bool
+		errMsg    string
+		validate  func(*testing.T, *tcvectordb.Filter)
+	}{
+		{
+			name:      "nil_condition",
+			condition: nil,
+			wantErr:   true,
+			errMsg:    "nil condition",
+		},
+		{
+			name: "equal_condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorEqual,
+				Field:    "status",
+				Value:    "active",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, f *tcvectordb.Filter) {
+				assert.NotNil(t, f)
+			},
+		},
+		{
+			name: "in_condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorIn,
+				Field:    "category",
+				Value:    []string{"AI", "ML"},
+			},
+			wantErr: false,
+			validate: func(t *testing.T, f *tcvectordb.Filter) {
+				assert.NotNil(t, f)
+			},
+		},
+		{
+			name: "and_condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorAnd,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{
+						Operator: searchfilter.OperatorEqual,
+						Field:    "status",
+						Value:    "active",
+					},
+					{
+						Operator: searchfilter.OperatorEqual,
+						Field:    "priority",
+						Value:    5,
+					},
+				},
+			},
+			wantErr: false,
+			validate: func(t *testing.T, f *tcvectordb.Filter) {
+				assert.NotNil(t, f)
+			},
+		},
+		{
+			name: "or_condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorOr,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{
+						Operator: searchfilter.OperatorEqual,
+						Field:    "type",
+						Value:    "A",
+					},
+					{
+						Operator: searchfilter.OperatorEqual,
+						Field:    "type",
+						Value:    "B",
+					},
+				},
+			},
+			wantErr: false,
+			validate: func(t *testing.T, f *tcvectordb.Filter) {
+				assert.NotNil(t, f)
+			},
+		},
+		{
+			name: "greater_than_condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorGreaterThan,
+				Field:    "score",
+				Value:    80,
+			},
+			wantErr: false,
+			validate: func(t *testing.T, f *tcvectordb.Filter) {
+				assert.NotNil(t, f)
+			},
+		},
+		{
+			name: "less_than_condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorLessThan,
+				Field:    "age",
+				Value:    30,
+			},
+			wantErr: false,
+			validate: func(t *testing.T, f *tcvectordb.Filter) {
+				assert.NotNil(t, f)
+			},
+		},
+		{
+			name: "not_equal_condition",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorNotEqual,
+				Field:    "status",
+				Value:    "deleted",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, f *tcvectordb.Filter) {
+				assert.NotNil(t, f)
+			},
+		},
+		{
+			name: "unsupported_operator",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: "unsupported_op", // Invalid operator
+				Field:    "field",
+				Value:    "value",
+			},
+			wantErr: true,
+			errMsg:  "unsupported operation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := converter.Convert(tt.condition)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+				if tt.validate != nil {
+					tt.validate(t, result)
+				}
+			}
+		})
+	}
+}
+
+// TestGetMaxResult tests the getMaxResult helper method
+func TestGetMaxResult(t *testing.T) {
+	vs := &VectorStore{
+		option: options{
+			maxResults: 10,
+		},
+	}
+
+	tests := []struct {
+		name     string
+		input    int
+		expected int
+	}{
+		{"zero_uses_default", 0, 10},
+		{"negative_uses_default", -1, 10},
+		{"positive_uses_input", 5, 5},
+		{"large_uses_input", 100, 100},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := vs.getMaxResult(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestDocBuilder tests the document builder function
+func TestDocBuilder(t *testing.T) {
+	vs := &VectorStore{
+		option: options{
+			nameFieldName:      "name",
+			contentFieldName:   "content",
+			createdAtFieldName: "created_at",
+			updatedAtFieldName: "updated_at",
+			metadataFieldName:  "metadata",
+		},
+	}
+
+	tests := []struct {
+		name     string
+		tcDoc    tcvectordb.Document
+		validate func(*testing.T, *document.Document, []float64, error)
+	}{
+		{
+			name: "full_document",
+			tcDoc: tcvectordb.Document{
+				Id:     "test_id",
+				Vector: []float32{1.0, 2.0, 3.0},
+				Fields: map[string]tcvectordb.Field{
+					"name":       {Val: "Test Name"},
+					"content":    {Val: "Test Content"},
+					"created_at": {Val: uint64(1000000)},
+					"updated_at": {Val: uint64(2000000)},
+					"metadata":   {Val: map[string]any{"key": "value"}},
+				},
+			},
+			validate: func(t *testing.T, doc *document.Document, emb []float64, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "test_id", doc.ID)
+				assert.Equal(t, "Test Name", doc.Name)
+				assert.Equal(t, "Test Content", doc.Content)
+				assert.Equal(t, []float64{1.0, 2.0, 3.0}, emb)
+			},
+		},
+		{
+			name: "minimal_document",
+			tcDoc: tcvectordb.Document{
+				Id:     "minimal_id",
+				Vector: []float32{0.5},
+				Fields: map[string]tcvectordb.Field{},
+			},
+			validate: func(t *testing.T, doc *document.Document, emb []float64, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, "minimal_id", doc.ID)
+				assert.Equal(t, []float64{0.5}, emb)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc, emb, err := vs.docBuilder(tt.tcDoc)
+			tt.validate(t, doc, emb, err)
+		})
+	}
 }

@@ -203,11 +203,46 @@ func (m *mockClient) Query(ctx context.Context, db, collection string, ids []str
 	}
 
 	var docs []tcvectordb.Document
-	for _, id := range ids {
-		if doc, ok := m.documents[id]; ok {
+	if len(ids) > 0 {
+		// Query by specific IDs
+		for _, id := range ids {
+			if doc, ok := m.documents[id]; ok {
+				docs = append(docs, doc)
+			}
+		}
+	} else {
+		// Query all documents (for GetMetadata)
+		for _, doc := range m.documents {
 			docs = append(docs, doc)
 		}
 	}
+
+	// Apply offset and limit
+	offset := 0
+	limit := len(docs)
+	if len(params) > 0 && params[0] != nil {
+		if params[0].Offset > 0 {
+			offset = int(params[0].Offset)
+		}
+		if params[0].Limit > 0 {
+			limit = int(params[0].Limit)
+		}
+	}
+
+	// Apply pagination
+	if offset >= len(docs) {
+		return &tcvectordb.QueryDocumentResult{
+			Documents:     []tcvectordb.Document{},
+			AffectedCount: 0,
+		}, nil
+	}
+
+	end := offset + limit
+	if end > len(docs) {
+		end = len(docs)
+	}
+
+	docs = docs[offset:end]
 
 	return &tcvectordb.QueryDocumentResult{
 		Documents:     docs,
@@ -359,6 +394,27 @@ func (m *mockClient) HybridSearch(ctx context.Context, db, collection string, pa
 	return &tcvectordb.SearchDocumentResult{Documents: [][]tcvectordb.Document{batch}}, nil
 }
 
+func (m *mockClient) FullTextSearch(ctx context.Context, db, collection string, params tcvectordb.FullTextSearchParams) (*tcvectordb.SearchDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Return all documents for keyword search in mock
+	var batch []tcvectordb.Document
+	for _, doc := range m.documents {
+		batch = append(batch, doc)
+	}
+
+	return &tcvectordb.SearchDocumentResult{Documents: [][]tcvectordb.Document{batch}}, nil
+}
+
+func (m *mockClient) Count(ctx context.Context, db, collection string, params ...tcvectordb.CountDocumentParams) (*tcvectordb.CountDocumentResult, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := len(m.documents)
+	return &tcvectordb.CountDocumentResult{Count: uint64(count)}, nil
+}
+
 func (m *mockClient) SearchByContents(ctx context.Context, db, collection string, contents []string, params ...*tcvectordb.SearchDocumentParams) (*tcvectordb.SearchDocumentResult, error) {
 	// Delegate to Search for simplicity
 	return m.Search(ctx, db, collection, nil, params...)
@@ -372,6 +428,11 @@ func (m *mockClient) RebuildIndex(ctx context.Context, db, collection string, pa
 	}
 
 	return &tcvectordb.RebuildIndexResult{}, nil
+}
+
+// Close closes the connection to the vector store.
+func (m *mockClient) Close() {
+	// No-op for mock
 }
 
 // Database operations (minimal implementation for testing)
@@ -404,6 +465,16 @@ func (m *mockClient) ListDatabases(ctx context.Context) ([]*tcvectordb.Database,
 func (m *mockClient) Database(dbName string) *tcvectordb.Database {
 	// Return a mock database that has the required methods
 	return &tcvectordb.Database{DatabaseName: dbName}
+}
+
+// TruncateCollection truncates a collection (for DeleteAll support).
+func (m *mockClient) TruncateCollection(ctx context.Context, dbName, collectionName string) (*tcvectordb.TruncateCollectionResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Clear all documents
+	m.documents = make(map[string]tcvectordb.Document)
+	return &tcvectordb.TruncateCollectionResult{}, nil
 }
 
 // defaultMockDocBuilder creates a default document builder for mock testing

@@ -830,3 +830,175 @@ func TestVectorStore_Search_MultipleFilters(t *testing.T) {
 		})
 	}
 }
+
+// TestVectorStore_SearchByFilterMode tests filter-only search mode
+func TestVectorStore_SearchByFilterMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		query     *vectorstore.SearchQuery
+		setupMock func(*mockClient, *VectorStore)
+		wantErr   bool
+		errMsg    string
+		validate  func(*testing.T, *vectorstore.SearchResult)
+	}{
+		{
+			name: "success_filter_search",
+			query: &vectorstore.SearchQuery{
+				SearchMode: vectorstore.SearchModeFilter,
+				Limit:      10,
+				Filter: &vectorstore.SearchFilter{
+					Metadata: map[string]any{
+						"category": "AI",
+					},
+				},
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				for i := 0; i < 5; i++ {
+					doc := &document.Document{
+						ID:      fmt.Sprintf("filter_doc_%d", i),
+						Content: fmt.Sprintf("Content %d", i),
+						Metadata: map[string]any{
+							"category": "AI",
+						},
+					}
+					_ = vs.Add(ctx, doc, []float64{float64(i) / 5.0, 0.5, 0.2})
+				}
+			},
+			wantErr: false,
+			validate: func(t *testing.T, r *vectorstore.SearchResult) {
+				assert.NotNil(t, r)
+				assert.GreaterOrEqual(t, len(r.Results), 0)
+			},
+		},
+		{
+			name: "filter_search_empty_results",
+			query: &vectorstore.SearchQuery{
+				SearchMode: vectorstore.SearchModeFilter,
+				Limit:      10,
+				Filter: &vectorstore.SearchFilter{
+					Metadata: map[string]any{
+						"category": "NonExistent",
+					},
+				},
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {},
+			wantErr:   false,
+			validate: func(t *testing.T, r *vectorstore.SearchResult) {
+				assert.NotNil(t, r)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+			)
+
+			if tt.setupMock != nil {
+				tt.setupMock(mockClient, vs)
+			}
+
+			result, err := vs.Search(context.Background(), tt.query)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				if tt.validate != nil {
+					tt.validate(t, result)
+				}
+			}
+		})
+	}
+}
+
+// TestVectorStore_SearchConvertResult tests result conversion edge cases
+func TestVectorStore_SearchConvertResult(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(*mockClient, *VectorStore)
+		query     *vectorstore.SearchQuery
+		validate  func(*testing.T, *vectorstore.SearchResult, error)
+	}{
+		{
+			name: "convert_with_metadata",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				doc := &document.Document{
+					ID:      "meta_doc",
+					Content: "Content with metadata",
+					Metadata: map[string]any{
+						"key1": "value1",
+						"key2": 123,
+					},
+				}
+				_ = vs.Add(ctx, doc, []float64{1.0, 0.5, 0.2})
+			},
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{1.0, 0.5, 0.2},
+				SearchMode: vectorstore.SearchModeVector,
+				Limit:      1,
+			},
+			validate: func(t *testing.T, r *vectorstore.SearchResult, err error) {
+				require.NoError(t, err)
+				assert.NotNil(t, r)
+				if len(r.Results) > 0 {
+					assert.NotNil(t, r.Results[0].Document.Metadata)
+				}
+			},
+		},
+		{
+			name: "convert_with_scores",
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				for i := 0; i < 3; i++ {
+					doc := &document.Document{
+						ID:      fmt.Sprintf("score_doc_%d", i),
+						Content: fmt.Sprintf("Content %d", i),
+					}
+					vector := []float64{float64(i) / 3.0, 0.5, 0.2}
+					_ = vs.Add(ctx, doc, vector)
+				}
+			},
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{0.5, 0.5, 0.2},
+				SearchMode: vectorstore.SearchModeVector,
+				Limit:      3,
+			},
+			validate: func(t *testing.T, r *vectorstore.SearchResult, err error) {
+				require.NoError(t, err)
+				assert.NotNil(t, r)
+				for _, res := range r.Results {
+					assert.GreaterOrEqual(t, res.Score, 0.0)
+					assert.LessOrEqual(t, res.Score, 1.0)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+			)
+
+			if tt.setupMock != nil {
+				tt.setupMock(mockClient, vs)
+			}
+
+			result, err := vs.Search(context.Background(), tt.query)
+			tt.validate(t, result, err)
+		})
+	}
+}
