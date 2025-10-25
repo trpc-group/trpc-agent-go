@@ -516,6 +516,12 @@ agent := llmagent.New("ai-assistant",
 )
 ```
 
+Graph workflows can also enable parallelism for a Tools node:
+
+```go
+stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
+```
+
 **Parallel execution effect:**
 
 ```bash

@@ -516,6 +516,12 @@ agent := llmagent.New("ai-assistant",
 )
 ```
 
+Graph 工作流下也可以在工具节点开启并行：
+
+```go
+stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
+```
+
 **并行执行效果：**
 
 ```bash

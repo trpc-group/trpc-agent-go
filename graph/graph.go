@@ -115,6 +115,11 @@ type Node struct {
 	// just for tool node.
 	toolCallbacks *tool.Callbacks
 
+	// enableParallelTools toggles parallel execution for Tools nodes.
+	// When true, multiple tool calls in a single assistant response are executed concurrently.
+	// Default is false (serial execution) for compatibility and safety.
+	enableParallelTools bool
+
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
 	llmGenerationConfig *model.GenerationConfig
