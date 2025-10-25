@@ -44,3 +44,49 @@ func TestStatsAddAndAvg(t *testing.T) {
 		t.Errorf("last bucket count incorrect: %+v", s.bucketCnts)
 	}
 }
+
+// TestStats_AvgZero tests Avg function with zero documents.
+func TestStats_AvgZero(t *testing.T) {
+	buckets := []int{100, 200}
+	s := NewStats(buckets)
+
+	// Avg should return 0 when there are no documents
+	if avg := s.Avg(); avg != 0 {
+		t.Errorf("expected avg 0 for empty stats, got %.2f", avg)
+	}
+}
+
+// TestStats_Log tests Log function to ensure it doesn't panic.
+func TestStats_Log(t *testing.T) {
+	buckets := []int{256, 512, 1024}
+	s := NewStats(buckets)
+
+	// Add some data
+	s.Add(100, buckets)
+	s.Add(300, buckets)
+	s.Add(600, buckets)
+
+	// Log should not panic (we can't easily test log output, but at least ensure no crash)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Log() panicked: %v", r)
+		}
+	}()
+
+	s.Log(buckets)
+}
+
+// TestStats_LogEmpty tests Log function with empty stats.
+func TestStats_LogEmpty(t *testing.T) {
+	buckets := []int{100, 200}
+	s := NewStats(buckets)
+
+	// Log should not panic even with no data
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Log() panicked with empty stats: %v", r)
+		}
+	}()
+
+	s.Log(buckets)
+}

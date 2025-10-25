@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -978,4 +979,483 @@ func TestUserIDHeaderInRequest(t *testing.T) {
 // Helper function to create bool pointer
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// TestStreamingConfiguration tests streaming-related configuration
+func TestStreamingConfiguration(t *testing.T) {
+	t.Run("handler_execution", func(t *testing.T) {
+		handler := func(resp *model.Response) (string, error) {
+			if len(resp.Choices) > 0 {
+				return "processed:" + resp.Choices[0].Delta.Content, nil
+			}
+			return "empty", nil
+		}
+
+		agent := &A2AAgent{
+			streamingRespHandler: handler,
+		}
+
+		if agent.streamingRespHandler == nil {
+			t.Error("streaming response handler should be set")
+		}
+
+		// Test handler with empty response
+		result, err := agent.streamingRespHandler(&model.Response{})
+		if err != nil {
+			t.Errorf("handler should not error: %v", err)
+		}
+		if result != "empty" {
+			t.Errorf("expected 'empty', got '%s'", result)
+		}
+
+		// Test handler with content
+		result, err = agent.streamingRespHandler(&model.Response{
+			Choices: []model.Choice{{Delta: model.Message{Content: "test"}}},
+		})
+		if err != nil {
+			t.Errorf("handler should not error: %v", err)
+		}
+		if result != "processed:test" {
+			t.Errorf("expected 'processed:test', got '%s'", result)
+		}
+	})
+}
+
+// TestOptionFunctions tests uncovered option functions
+func TestOptionFunctions(t *testing.T) {
+	t.Run("WithCustomEventConverter", func(t *testing.T) {
+		converter := &defaultA2AEventConverter{}
+		agent := &A2AAgent{}
+		WithCustomEventConverter(converter)(agent)
+		if agent.eventConverter != converter {
+			t.Error("custom event converter not set")
+		}
+	})
+
+	t.Run("WithCustomA2AConverter", func(t *testing.T) {
+		converter := &defaultEventA2AConverter{}
+		agent := &A2AAgent{}
+		WithCustomA2AConverter(converter)(agent)
+		if agent.a2aMessageConverter != converter {
+			t.Error("custom A2A converter not set")
+		}
+	})
+
+	t.Run("WithA2AClientExtraOptions", func(t *testing.T) {
+		agent := &A2AAgent{}
+		opt1 := client.WithTimeout(10 * time.Second)
+		opt2 := client.WithTimeout(5 * time.Second)
+		WithA2AClientExtraOptions(opt1, opt2)(agent)
+		if len(agent.extraA2AOptions) != 2 {
+			t.Errorf("expected 2 extra options, got %d", len(agent.extraA2AOptions))
+		}
+	})
+
+	t.Run("WithStreamingChannelBufSize", func(t *testing.T) {
+		agent := &A2AAgent{}
+		WithStreamingChannelBufSize(2048)(agent)
+		if agent.streamingBufSize != 2048 {
+			t.Errorf("expected buffer size 2048, got %d", agent.streamingBufSize)
+		}
+	})
+
+	t.Run("WithEnableStreaming", func(t *testing.T) {
+		agent := &A2AAgent{}
+		WithEnableStreaming(true)(agent)
+		if agent.enableStreaming == nil || !*agent.enableStreaming {
+			t.Error("streaming should be enabled")
+		}
+
+		agent2 := &A2AAgent{}
+		WithEnableStreaming(false)(agent2)
+		if agent2.enableStreaming == nil || *agent2.enableStreaming {
+			t.Error("streaming should be disabled")
+		}
+	})
+}
+
+// TestShouldUseStreaming_WithExplicitOption tests the explicit streaming option
+func TestShouldUseStreaming_WithExplicitOption(t *testing.T) {
+	tests := []struct {
+		name            string
+		enableStreaming *bool
+		agentCard       *server.AgentCard
+		expected        bool
+	}{
+		{
+			name:            "explicit_true_overrides_card",
+			enableStreaming: boolPtr(true),
+			agentCard: &server.AgentCard{
+				Capabilities: server.AgentCapabilities{
+					Streaming: boolPtr(false),
+				},
+			},
+			expected: true,
+		},
+		{
+			name:            "explicit_false_overrides_card",
+			enableStreaming: boolPtr(false),
+			agentCard: &server.AgentCard{
+				Capabilities: server.AgentCapabilities{
+					Streaming: boolPtr(true),
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := &A2AAgent{
+				enableStreaming: tt.enableStreaming,
+				agentCard:       tt.agentCard,
+			}
+			result := agent.shouldUseStreaming()
+			if result != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestConverterEdgeCases tests edge cases in converter functions
+func TestConverterEdgeCases(t *testing.T) {
+	t.Run("ConvertToEvent_with_nil_result", func(t *testing.T) {
+		converter := &defaultA2AEventConverter{}
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+		// Nil result should be handled gracefully
+		result := protocol.MessageResult{
+			Result: nil,
+		}
+		evt, err := converter.ConvertToEvent(result, "test-agent", invocation)
+		if err != nil {
+			t.Errorf("should handle nil result gracefully, got error: %v", err)
+		}
+		if evt == nil {
+			t.Error("expected event, got nil")
+		}
+	})
+
+	t.Run("ConvertStreamingToEvent_with_nil_result", func(t *testing.T) {
+		converter := &defaultA2AEventConverter{}
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+		result := protocol.StreamingMessageEvent{
+			Result: nil,
+		}
+		evt, err := converter.ConvertStreamingToEvent(result, "test-agent", invocation)
+		if err != nil {
+			t.Errorf("should handle nil result gracefully, got error: %v", err)
+		}
+		// evt could be nil for unknown types
+		_ = evt
+	})
+
+	t.Run("ConvertToA2AMessage_with_all_content_types", func(t *testing.T) {
+		converter := &defaultEventA2AConverter{}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "main content",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: stringPtr("text part"),
+					},
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							Data:   []byte("image-data"),
+							Format: "png",
+						},
+					},
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							URL:    "http://example.com/image.jpg",
+							Format: "jpg",
+						},
+					},
+					{
+						Type: model.ContentTypeAudio,
+						Audio: &model.Audio{
+							Data:   []byte("audio-data"),
+							Format: "mp3",
+						},
+					},
+					{
+						Type: model.ContentTypeFile,
+						File: &model.File{
+							Name:     "test.txt",
+							Data:     []byte("file-data"),
+							MimeType: "text/plain",
+						},
+					},
+					{
+						Type: model.ContentTypeFile,
+						File: &model.File{
+							Data:     []byte("unnamed-file"),
+							MimeType: "application/octet-stream",
+						},
+					},
+				},
+			},
+			Session: &session.Session{
+				ID: "session-123",
+			},
+		}
+
+		msg, err := converter.ConvertToA2AMessage(false, "test-agent", invocation)
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage failed: %v", err)
+		}
+		if msg == nil {
+			t.Fatal("expected message, got nil")
+		}
+
+		// Should have multiple parts
+		if len(msg.Parts) < 5 {
+			t.Errorf("expected at least 5 parts, got %d", len(msg.Parts))
+		}
+
+		// Check context ID
+		if msg.ContextID == nil || *msg.ContextID != "session-123" {
+			t.Error("context ID not set correctly")
+		}
+	})
+
+	t.Run("ConvertToA2AMessage_with_empty_content", func(t *testing.T) {
+		converter := &defaultEventA2AConverter{}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role: model.RoleUser,
+			},
+		}
+
+		msg, err := converter.ConvertToA2AMessage(false, "test-agent", invocation)
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage failed: %v", err)
+		}
+		if msg == nil {
+			t.Fatal("expected message, got nil")
+		}
+
+		// Should have at least one empty text part
+		if len(msg.Parts) == 0 {
+			t.Error("expected at least one part for empty content")
+		}
+	})
+}
+
+// TestRunNonStreaming_AdditionalCases tests additional non-streaming scenarios
+func TestRunNonStreaming_AdditionalCases(t *testing.T) {
+	t.Run("non_streaming_with_error_response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/.well-known/agent-card.json" {
+				agentCard := server.AgentCard{
+					Name: "test-agent",
+					URL:  "http://test.com",
+					Capabilities: server.AgentCapabilities{
+						Streaming: boolPtr(false),
+					},
+				}
+				json.NewEncoder(w).Encode(agentCard)
+				return
+			}
+			// Return error response
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("internal error"))
+		}))
+		defer server.Close()
+
+		a2aAgent, err := New(WithAgentCardURL(server.URL))
+		if err != nil {
+			t.Fatalf("Failed to create A2A agent: %v", err)
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+			Message:      model.Message{Role: model.RoleUser, Content: "test"},
+		}
+
+		eventChan, err := a2aAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("Run() failed: %v", err)
+		}
+
+		var hasError bool
+		for evt := range eventChan {
+			if evt.Response != nil && evt.Response.Error != nil {
+				hasError = true
+			}
+		}
+
+		if !hasError {
+			t.Error("expected error event, got none")
+		}
+	})
+
+	t.Run("non_streaming_with_task_response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/.well-known/agent-card.json" {
+				agentCard := server.AgentCard{
+					Name: "test-agent",
+					URL:  "http://test.com",
+					Capabilities: server.AgentCapabilities{
+						Streaming: boolPtr(false),
+					},
+				}
+				json.NewEncoder(w).Encode(agentCard)
+				return
+			}
+			// Return task response
+			task := protocol.Task{
+				Artifacts: []protocol.Artifact{
+					{
+						Parts: []protocol.Part{
+							protocol.NewTextPart("task result"),
+						},
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(task)
+		}))
+		defer server.Close()
+
+		a2aAgent, err := New(WithAgentCardURL(server.URL))
+		if err != nil {
+			t.Fatalf("Failed to create A2A agent: %v", err)
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+			Message:      model.Message{Role: model.RoleUser, Content: "test"},
+		}
+
+		eventChan, err := a2aAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("Run() failed: %v", err)
+		}
+
+		var events []*event.Event
+		for evt := range eventChan {
+			events = append(events, evt)
+		}
+
+		if len(events) == 0 {
+			t.Error("expected at least one event")
+		}
+	})
+}
+
+// TestNew_URLChanges tests New when agent card URL differs from initial URL
+func TestNew_URLChanges(t *testing.T) {
+	t.Run("agent_card_url_differs_from_initial", func(t *testing.T) {
+		initialURL := ""
+		finalURL := ""
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/.well-known/agent-card.json" {
+				// Return agent card with a different URL
+				agentCard := server.AgentCard{
+					Name:        "test-agent",
+					Description: "Test agent",
+					URL:         finalURL, // Different URL
+					Capabilities: server.AgentCapabilities{
+						Streaming: boolPtr(false),
+					},
+				}
+				json.NewEncoder(w).Encode(agentCard)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		initialURL = server.URL
+		finalURL = server.URL + "/v2" // Different URL path
+
+		agent, err := New(WithAgentCardURL(initialURL))
+		if err != nil {
+			t.Fatalf("Failed to create A2A agent: %v", err)
+		}
+
+		if agent == nil {
+			t.Fatal("expected agent, got nil")
+		}
+
+		// The agent should have been recreated with the new URL
+		if agent.agentCard == nil {
+			t.Error("expected agent card to be set")
+		}
+	})
+
+	t.Run("agent_card_empty_url", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/.well-known/agent-card.json" {
+				// Return agent card with empty URL
+				agentCard := server.AgentCard{
+					Name:        "test-agent",
+					Description: "Test agent",
+					URL:         "", // Empty URL
+				}
+				json.NewEncoder(w).Encode(agentCard)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		agent, err := New(WithAgentCardURL(server.URL))
+		if err != nil {
+			t.Fatalf("Failed to create A2A agent: %v", err)
+		}
+
+		// Should use the initial URL
+		if agent.agentCard.URL != server.URL {
+			t.Errorf("expected agent card URL to be %s, got %s", server.URL, agent.agentCard.URL)
+		}
+	})
+}
+
+// TestValidateA2ARequestOptions tests validation logic for A2A request options
+func TestValidateA2ARequestOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		options     []any
+		expectError bool
+	}{
+		{
+			name:        "nil_options",
+			options:     nil,
+			expectError: false,
+		},
+		{
+			name:        "empty_options",
+			options:     []any{},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &A2AAgent{}
+			invocation := &agent.Invocation{
+				RunOptions: agent.RunOptions{
+					A2ARequestOptions: tt.options,
+				},
+			}
+
+			err := a.validateA2ARequestOptions(invocation)
+			if tt.expectError && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("expected no error, got %v", err)
+			}
+		})
+	}
 }

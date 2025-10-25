@@ -16,6 +16,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
@@ -542,4 +543,39 @@ func newVectorStoreWithMockClient(mockClient *mockClient, opts ...Option) *Vecto
 	}
 
 	return vs
+}
+
+// mockSparseEncoder is a mock implementation of sparseEncoder interface for testing.
+type mockSparseEncoder struct{}
+
+// newMockSparseEncoder creates a new mock sparse encoder.
+func newMockSparseEncoder() *mockSparseEncoder {
+	return &mockSparseEncoder{}
+}
+
+// EncodeText encodes a single text into sparse vector format.
+func (m *mockSparseEncoder) EncodeText(text string) ([]encoder.SparseVecItem, error) {
+	// Return a simple mock sparse vector
+	return []encoder.SparseVecItem{
+		{TermId: 1, Score: 0.8},
+		{TermId: 2, Score: 0.6},
+	}, nil
+}
+
+// EncodeQuery encodes a single query into sparse vector format.
+func (m *mockSparseEncoder) EncodeQuery(query string) ([]encoder.SparseVecItem, error) {
+	return m.EncodeText(query)
+}
+
+// EncodeQueries encodes multiple queries into sparse vector format.
+func (m *mockSparseEncoder) EncodeQueries(queries []string) ([][]encoder.SparseVecItem, error) {
+	result := make([][]encoder.SparseVecItem, len(queries))
+	for i, query := range queries {
+		sparseVec, err := m.EncodeText(query)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = sparseVec
+	}
+	return result, nil
 }

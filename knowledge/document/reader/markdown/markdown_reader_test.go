@@ -78,3 +78,100 @@ func TestMarkdownReader_ChunkError(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
+
+// TestMarkdownReader_SupportedExtensions verifies the list of supported extensions.
+func TestMarkdownReader_SupportedExtensions(t *testing.T) {
+	rdr := New()
+	exts := rdr.SupportedExtensions()
+
+	if len(exts) == 0 {
+		t.Fatal("expected non-empty supported extensions")
+	}
+
+	// Markdown reader should support .md and .markdown extensions
+	expectedExts := map[string]bool{
+		".md":       false,
+		".markdown": false,
+	}
+
+	for _, ext := range exts {
+		if _, ok := expectedExts[ext]; ok {
+			expectedExts[ext] = true
+		}
+	}
+
+	for ext, found := range expectedExts {
+		if !found {
+			t.Errorf("expected extension %q in supported extensions", ext)
+		}
+	}
+}
+
+// TestMarkdownReader_ReadFromFileError verifies error handling for non-existent files.
+func TestMarkdownReader_ReadFromFileError(t *testing.T) {
+	rdr := New()
+	_, err := rdr.ReadFromFile("/nonexistent/path/file.md")
+	if err == nil {
+		t.Error("expected error for non-existent file")
+	}
+}
+
+// TestMarkdownReader_ReadFromURLErrors verifies error handling for invalid URLs.
+func TestMarkdownReader_ReadFromURLErrors(t *testing.T) {
+	rdr := New()
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"invalid_scheme_ftp", "ftp://example.com/file.md"},
+		{"invalid_scheme_file", "file:///local/file.md"},
+		{"malformed_url", "://invalid-url"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := rdr.ReadFromURL(tt.url)
+			if err == nil {
+				t.Errorf("expected error for %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestMarkdownReader_ChunkDocumentDefaultStrategy verifies default chunking strategy initialization.
+func TestMarkdownReader_ChunkDocumentDefaultStrategy(t *testing.T) {
+	rdr := New(WithChunking(true))
+
+	docs, err := rdr.ReadFromReader("test", strings.NewReader("# Test\n\nContent"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Error("expected at least one document")
+	}
+}
+
+// TestMarkdownReader_ExtractFileNameFromURL tests URL filename extraction.
+func TestMarkdownReader_ExtractFileNameFromURL(t *testing.T) {
+	rdr := New()
+
+	tests := []struct {
+		name     string
+		url      string
+		expected string
+	}{
+		{"simple_filename", "https://example.com/README.md", "README"},
+		{"with_query_params", "https://example.com/doc.md?v=1", "doc"},
+		{"root_path", "https://example.com/", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := rdr.extractFileNameFromURL(tt.url)
+			if result != tt.expected {
+				t.Errorf("extractFileNameFromURL(%q) = %q, want %q", tt.url, result, tt.expected)
+			}
+		})
+	}
+}

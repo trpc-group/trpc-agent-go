@@ -43,11 +43,22 @@ const (
 	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
 )
 
+// sparseVecEncoder is an interface for encoding text into sparse vectors for keyword search.
+// This interface abstracts the encoder dependency to make testing easier.
+type sparseVecEncoder interface {
+	// EncodeText encodes a single text into sparse vector format.
+	EncodeText(text string) ([]encoder.SparseVecItem, error)
+	// EncodeQuery encodes a single query into sparse vector format.
+	EncodeQuery(query string) ([]encoder.SparseVecItem, error)
+	// EncodeQueries encodes multiple queries into sparse vector format.
+	EncodeQueries(queries []string) ([][]encoder.SparseVecItem, error)
+}
+
 // VectorStore is the vector store for tcvectordb.
 type VectorStore struct {
 	client          storage.ClientInterface
 	option          options
-	sparseEncoder   encoder.SparseEncoder
+	sparseEncoder   sparseVecEncoder
 	filterConverter searchfilter.Converter[*tcvectordb.Filter]
 }
 

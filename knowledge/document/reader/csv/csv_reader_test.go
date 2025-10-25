@@ -108,3 +108,96 @@ func TestCSVReader_ReadFromFileAndURL(t *testing.T) {
 		t.Errorf("expected extracted name 'sample', got %s", docsURL[0].Name)
 	}
 }
+
+// TestCSVReader_SupportedExtensions verifies the list of supported extensions.
+func TestCSVReader_SupportedExtensions(t *testing.T) {
+	rdr := New()
+	exts := rdr.SupportedExtensions()
+
+	if len(exts) == 0 {
+		t.Fatal("expected non-empty supported extensions")
+	}
+
+	// CSV reader should support .csv extension
+	found := false
+	for _, ext := range exts {
+		if ext == ".csv" {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Error("expected '.csv' in supported extensions")
+	}
+}
+
+// TestCSVReader_ReadFromFileError verifies error handling for non-existent files.
+func TestCSVReader_ReadFromFileError(t *testing.T) {
+	rdr := New()
+	_, err := rdr.ReadFromFile("/nonexistent/path/file.csv")
+	if err == nil {
+		t.Error("expected error for non-existent file")
+	}
+}
+
+// TestCSVReader_ReadFromURLErrors verifies error handling for invalid URLs.
+func TestCSVReader_ReadFromURLErrors(t *testing.T) {
+	rdr := New()
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"invalid_scheme_ftp", "ftp://example.com/data.csv"},
+		{"invalid_scheme_file", "file:///local/data.csv"},
+		{"malformed_url", "://invalid-url"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := rdr.ReadFromURL(tt.url)
+			if err == nil {
+				t.Errorf("expected error for %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestCSVReader_ChunkDocumentDefaultStrategy verifies default chunking strategy initialization.
+func TestCSVReader_ChunkDocumentDefaultStrategy(t *testing.T) {
+	rdr := New(WithChunking(true))
+
+	csvData := "name,age\nAlice,30\nBob,25\n"
+	docs, err := rdr.ReadFromReader("test", strings.NewReader(csvData))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Error("expected at least one document")
+	}
+}
+
+// TestCSVReader_ExtractFileNameFromURL tests URL filename extraction.
+func TestCSVReader_ExtractFileNameFromURL(t *testing.T) {
+	rdr := New()
+
+	tests := []struct {
+		name     string
+		url      string
+		expected string
+	}{
+		{"simple_filename", "https://example.com/data.csv", "data"},
+		{"with_query_params", "https://example.com/export.csv?format=csv", "export"},
+		{"root_path", "https://example.com/", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := rdr.extractFileNameFromURL(tt.url)
+			if result != tt.expected {
+				t.Errorf("extractFileNameFromURL(%q) = %q, want %q", tt.url, result, tt.expected)
+			}
+		})
+	}
+}

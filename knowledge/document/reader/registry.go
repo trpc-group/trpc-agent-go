@@ -49,32 +49,30 @@ func RegisterReader(extensions []string, constructor Constructor) {
 // Returns nil and false if no reader is registered for the extension.
 func GetReader(extension string) (Reader, bool) {
 	globalRegistry.mu.RLock()
-	defer globalRegistry.mu.RUnlock()
-
-	// Normalize extension to lowercase.
 	normalizedExt := strings.ToLower(extension)
 
 	// Check if we have a cached instance.
 	if reader, exists := globalRegistry.initialized[normalizedExt]; exists {
+		globalRegistry.mu.RUnlock()
 		return reader, true
 	}
 
 	// Check if we have a constructor.
 	constructor, exists := globalRegistry.readers[normalizedExt]
 	if !exists {
+		globalRegistry.mu.RUnlock()
 		return nil, false
 	}
 
-	// Create a new instance.
-	// Note: We're still holding the read lock here, which could be
-	// optimized if reader construction is expensive.
+	// Release read lock before creating instance to avoid holding lock during construction.
+	globalRegistry.mu.RUnlock()
+
+	// Create a new instance without holding any lock.
 	reader := constructor()
 
-	// Upgrade to write lock to cache the instance.
-	globalRegistry.mu.RUnlock()
+	// Acquire write lock to cache the instance.
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
-	defer globalRegistry.mu.RLock()
 
 	// Double-check that another goroutine didn't already create it.
 	if cachedReader, exists := globalRegistry.initialized[normalizedExt]; exists {
@@ -89,13 +87,20 @@ func GetReader(extension string) (Reader, bool) {
 // The returned map uses simplified type names (e.g., "text", "pdf") as keys.
 func GetAllReaders() map[string]Reader {
 	globalRegistry.mu.RLock()
-	defer globalRegistry.mu.RUnlock()
 
-	result := make(map[string]Reader)
+	// Build a list of extensions and constructors to process.
+	type readerInfo struct {
+		ext         string
+		constructor Constructor
+		typeName    string
+		cached      Reader
+		hasCached   bool
+	}
+
+	var toProcess []readerInfo
 	processedTypes := make(map[string]bool)
 
 	for ext, constructor := range globalRegistry.readers {
-		// Convert extension to type name.
 		typeName := extensionToType(ext)
 
 		// Skip if we've already processed this type.
@@ -104,19 +109,33 @@ func GetAllReaders() map[string]Reader {
 		}
 		processedTypes[typeName] = true
 
-		// Check if we have a cached instance.
-		if reader, exists := globalRegistry.initialized[ext]; exists {
-			result[typeName] = reader
+		reader, hasCached := globalRegistry.initialized[ext]
+		toProcess = append(toProcess, readerInfo{
+			ext:         ext,
+			constructor: constructor,
+			typeName:    typeName,
+			cached:      reader,
+			hasCached:   hasCached,
+		})
+	}
+
+	globalRegistry.mu.RUnlock()
+
+	// Process each reader without holding the lock.
+	result := make(map[string]Reader)
+	for _, info := range toProcess {
+		if info.hasCached {
+			result[info.typeName] = info.cached
 		} else {
-			// Create a new instance.
-			reader := constructor()
+			// Create a new instance without holding any lock.
+			reader := info.constructor()
+
 			// Cache it for future use.
-			globalRegistry.mu.RUnlock()
 			globalRegistry.mu.Lock()
-			globalRegistry.initialized[ext] = reader
+			globalRegistry.initialized[info.ext] = reader
 			globalRegistry.mu.Unlock()
-			globalRegistry.mu.RLock()
-			result[typeName] = reader
+
+			result[info.typeName] = reader
 		}
 	}
 	return result

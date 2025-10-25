@@ -639,6 +639,106 @@ func BenchmarkDetectEncoding(b *testing.B) {
 	}
 }
 
+// TestDetectNonUTF8Encoding tests non-UTF8 encoding detection based on byte patterns.
+func TestDetectNonUTF8Encoding(t *testing.T) {
+	tests := []struct {
+		name             string
+		bytes            []byte
+		expectedEncoding Encoding
+		minConfidence    float64
+	}{
+		{
+			name: "GBK pattern - multiple valid sequences",
+			// Construct bytes matching GBK pattern: first byte 0x81-0xFE, second byte 0x40-0xFE
+			bytes:            []byte{0xB0, 0xA1, 0xB3, 0xC9, 0xD6, 0xD0},
+			expectedEncoding: EncodingGBK,
+			minConfidence:    0.6,
+		},
+		{
+			name: "Big5 pattern - may detect as GBK due to range overlap",
+			// Note: Big5 byte ranges overlap with GBK, so GBK detection takes priority
+			// This test verifies that multi-byte encoding is detected, not specifically Big5
+			bytes:            []byte{0xA1, 0x40, 0xA2, 0x50},
+			expectedEncoding: EncodingGBK, // GBK has priority in detection
+			minConfidence:    0.6,
+		},
+		{
+			name: "Shift_JIS pattern - specific range",
+			// Use Shift_JIS specific range that minimizes GBK false positive
+			bytes:            []byte{0x88, 0xEA, 0x00}, // Add 0x00 to break GBK pattern
+			expectedEncoding: EncodingShiftJIS,
+			minConfidence:    0.6,
+		},
+		{
+			name: "EUC-KR pattern - both bytes high",
+			// EUC-KR: both bytes 0xA1-0xFE
+			bytes:            []byte{0xC7, 0xD1, 0xB1, 0xDB, 0x00}, // Add 0x00 to break GBK pattern
+			expectedEncoding: EncodingEUCKR,
+			minConfidence:    0.6,
+		},
+		{
+			name: "Unknown pattern - no valid multi-byte sequences",
+			// Bytes that don't match any known pattern
+			bytes:            []byte{0x01, 0x02, 0x03, 0x04},
+			expectedEncoding: EncodingUnknown,
+			minConfidence:    0.0,
+		},
+		{
+			name: "Too short - single high byte",
+			// Single byte, can't form multi-byte pattern
+			bytes:            []byte{0xB0},
+			expectedEncoding: EncodingUnknown,
+			minConfidence:    0.0,
+		},
+		{
+			name: "ASCII only - no multi-byte sequences",
+			// Pure ASCII should return unknown
+			bytes:            []byte("Hello World"),
+			expectedEncoding: EncodingUnknown,
+			minConfidence:    0.0,
+		},
+		{
+			name:             "Empty string",
+			bytes:            []byte{},
+			expectedEncoding: EncodingUnknown,
+			minConfidence:    0.0,
+		},
+		{
+			name: "Incomplete multi-byte sequence",
+			// High byte without valid second byte
+			bytes:            []byte{0x81, 0x20, 0x82, 0x30},
+			expectedEncoding: EncodingUnknown,
+			minConfidence:    0.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := detectNonUTF8Encoding(string(tt.bytes))
+
+			if info.Encoding != tt.expectedEncoding {
+				t.Errorf("detectNonUTF8Encoding() encoding = %s, want %s",
+					info.Encoding, tt.expectedEncoding)
+			}
+
+			if info.Confidence < tt.minConfidence {
+				t.Errorf("detectNonUTF8Encoding() confidence = %.2f, want >= %.2f",
+					info.Confidence, tt.minConfidence)
+			}
+
+			// For non-unknown encodings, IsValid should be false (needs conversion)
+			if tt.expectedEncoding != EncodingUnknown && info.IsValid {
+				t.Errorf("detectNonUTF8Encoding() IsValid = true, expected false for non-UTF8")
+			}
+
+			// Description should not be empty
+			if info.Description == "" {
+				t.Error("detectNonUTF8Encoding() returned empty description")
+			}
+		})
+	}
+}
+
 // BenchmarkSmartProcessText benchmarks the smart text processing performance.
 func BenchmarkSmartProcessText(b *testing.B) {
 	text := "人工智能机器学习深度学习神经网络自然语言处理计算机视觉"
