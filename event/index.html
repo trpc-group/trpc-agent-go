@@ -913,6 +913,30 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#filtering-transfer-announcements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Filtering Transfer Announcements
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Filtering Transfer Announcements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#helper-detect-runner-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helper: Detect Runner Completion
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#event-creation" class="md-nav__link">
     <span class="md-ellipsis">
       Event Creation
@@ -925,6 +949,15 @@
   <a href="#tool-response-streaming-including-agenttool-forwarding" class="md-nav__link">
     <span class="md-ellipsis">
       Tool Response Streaming (including AgentTool forwarding)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tags
     </span>
   </a>
   
@@ -1218,6 +1251,30 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#filtering-transfer-announcements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Filtering Transfer Announcements
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Filtering Transfer Announcements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#helper-detect-runner-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helper: Detect Runner Completion
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#event-creation" class="md-nav__link">
     <span class="md-ellipsis">
       Event Creation
@@ -1230,6 +1287,15 @@
   <a href="#tool-response-streaming-including-agenttool-forwarding" class="md-nav__link">
     <span class="md-ellipsis">
       Tool Response Streaming (including AgentTool forwarding)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tags
     </span>
   </a>
   
@@ -1655,24 +1721,41 @@
 </span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23"></a><span class="w">    </span><span class="nx">ObjectTypeRunnerCompletion</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;runner.completion&quot;</span>
 </span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="event-creation">Event Creation</h3>
-<p>When developing custom Agent types or Processors, you need to create Events.</p>
-<p>Event provides three creation methods, suitable for different scenarios. Prefer these helpers instead of constructing <code>&amp;event.Event{}</code> directly.</p>
+<h3 id="filtering-transfer-announcements">Filtering Transfer Announcements</h3>
+<p>Transfer announcements (Agent delegation notices) are emitted as Events with <code>Response.Object == "agent.transfer"</code>.</p>
+<p>This typically appears as a handoff notice: "Transferring control to agent: <name>".</p>
+<p>If your UI should not display these system-level notices, you have two compatible strategies:
+ - Filter by <code>Object</code>: hide events where <code>Response.Object == "agent.transfer"</code>.
+ - Filter by <code>Tag</code>: hide events whose <code>Event.Tag</code> contains the <code>transfer</code> tag. The framework adds this tag to delegation-related events (including transfer tool results), so filtering by tag avoids breaking ToolCall/ToolResult alignment.</p>
+<p>Tags are appended using a semicolon delimiter (<code>;</code>). Use <code>event.WithTag(tag)</code> when creating custom events; multiple tags are stored as <code>tag1;tag2;...</code>.</p>
+<h4 id="helper-detect-runner-completion">Helper: Detect Runner Completion</h4>
+<p>Use the convenience method to detect when the whole run has finished regardless of Agent type:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
 <span class="normal"><a href="#__codelineno-3-2">2</a></span>
 <span class="normal"><a href="#__codelineno-3-3">3</a></span>
-<span class="normal"><a href="#__codelineno-3-4">4</a></span>
-<span class="normal"><a href="#__codelineno-3-5">5</a></span>
-<span class="normal"><a href="#__codelineno-3-6">6</a></span>
-<span class="normal"><a href="#__codelineno-3-7">7</a></span>
-<span class="normal"><a href="#__codelineno-3-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="c1">// Create new event.</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">invocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">author</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="c1">// Create error event.</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewErrorEvent</span><span class="p">(</span><span class="nx">invocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">author</span><span class="p">,</span><span class="w"> </span><span class="nx">errorType</span><span class="p">,</span><span class="w"> </span><span class="nx">errorMessage</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="c1">// Create event from response.</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewResponseEvent</span><span class="p">(</span><span class="nx">invocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">author</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="c1">// e.IsRunnerCompletion() returns true for the terminal runner-completion event.</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="c1">// Safe point to stop reading the channel</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="event-creation">Event Creation</h3>
+<p>When developing custom Agent types or Processors, you need to create Events.</p>
+<p>Event provides three creation methods, suitable for different scenarios. Prefer these helpers instead of constructing <code>&amp;event.Event{}</code> directly.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span>
+<span class="normal"><a href="#__codelineno-4-6">6</a></span>
+<span class="normal"><a href="#__codelineno-4-7">7</a></span>
+<span class="normal"><a href="#__codelineno-4-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="c1">// Create new event.</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">invocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">author</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="c1">// Create error event.</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewErrorEvent</span><span class="p">(</span><span class="nx">invocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">author</span><span class="p">,</span><span class="w"> </span><span class="nx">errorType</span><span class="p">,</span><span class="w"> </span><span class="nx">errorMessage</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="c1">// Create event from response.</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewResponseEvent</span><span class="p">(</span><span class="nx">invocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">author</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Parameter Description:</strong></p>
 <ul>
@@ -1690,37 +1773,37 @@
 <li><code>WithObject(o string)</code>: Set event type</li>
 </ul>
 <p><strong>Example:</strong>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-4-10">10</a></span>
-<span class="normal"><a href="#__codelineno-4-11">11</a></span>
-<span class="normal"><a href="#__codelineno-4-12">12</a></span>
-<span class="normal"><a href="#__codelineno-4-13">13</a></span>
-<span class="normal"><a href="#__codelineno-4-14">14</a></span>
-<span class="normal"><a href="#__codelineno-4-15">15</a></span>
-<span class="normal"><a href="#__codelineno-4-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="c1">// Create basic event.</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;invoke-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;agent&quot;</span><span class="p">)</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="c1">// Create event with branch.</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;invoke-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">WithBranch</span><span class="p">(</span><span class="s">&quot;main&quot;</span><span class="p">))</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="c1">// Create error event.</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">NewErrorEvent</span><span class="p">(</span><span class="s">&quot;invoke-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;api_error&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Request timeout&quot;</span><span class="p">)</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="c1">// Create event from response.</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="nx">response</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">{</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="nx">Object</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;chat.completion&quot;</span><span class="p">,</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="w">    </span><span class="nx">Done</span><span class="p">:</span><span class="w">   </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="w">    </span><span class="nx">Choices</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Choice</span><span class="p">{{</span><span class="nx">Message</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span><span class="nx">Role</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Hello!&quot;</span><span class="p">}}},</span>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="p">}</span>
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">NewResponseEvent</span><span class="p">(</span><span class="s">&quot;invoke-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span>
+<span class="normal"><a href="#__codelineno-5-13">13</a></span>
+<span class="normal"><a href="#__codelineno-5-14">14</a></span>
+<span class="normal"><a href="#__codelineno-5-15">15</a></span>
+<span class="normal"><a href="#__codelineno-5-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="c1">// Create basic event.</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;invoke-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;agent&quot;</span><span class="p">)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="c1">// Create event with branch.</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;invoke-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">WithBranch</span><span class="p">(</span><span class="s">&quot;main&quot;</span><span class="p">))</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="c1">// Create error event.</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">NewErrorEvent</span><span class="p">(</span><span class="s">&quot;invoke-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;api_error&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Request timeout&quot;</span><span class="p">)</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="c1">// Create event from response.</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="nx">response</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">{</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">    </span><span class="nx">Object</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;chat.completion&quot;</span><span class="p">,</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="w">    </span><span class="nx">Done</span><span class="p">:</span><span class="w">   </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="w">    </span><span class="nx">Choices</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Choice</span><span class="p">{{</span><span class="nx">Message</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span><span class="nx">Role</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Hello!&quot;</span><span class="p">}}},</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="p">}</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">NewResponseEvent</span><span class="p">(</span><span class="s">&quot;invoke-123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div></p>
 <h3 id="tool-response-streaming-including-agenttool-forwarding">Tool Response Streaming (including AgentTool forwarding)</h3>
 <p>When a Streamable tool is invoked (including AgentTool), the framework emits <code>tool.response</code> events. In streaming mode:</p>
@@ -1735,36 +1818,43 @@
 </ul>
 <p>Runner automatically sends completion signals for events requiring them (<code>RequiresCompletion=true</code>), so manual handling is not needed.</p>
 <p>Example handling in an event loop:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-5-10">10</a></span>
-<span class="normal"><a href="#__codelineno-5-11">11</a></span>
-<span class="normal"><a href="#__codelineno-5-12">12</a></span>
-<span class="normal"><a href="#__codelineno-5-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Object</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ObjectTypeToolResponse</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">ch</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">ch</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// partial</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">ch</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">            </span><span class="k">continue</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">ch</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Role</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleTool</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">ch</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// final</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">strings</span><span class="p">.</span><span class="nx">TrimSpace</span><span class="p">(</span><span class="nx">ch</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="p">))</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">    </span><span class="c1">// Continue to next event; don&#39;t treat as assistant content</span>
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">    </span><span class="k">continue</span>
-</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span>
+<span class="normal"><a href="#__codelineno-6-12">12</a></span>
+<span class="normal"><a href="#__codelineno-6-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Object</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ObjectTypeToolResponse</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">ch</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">ch</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// partial</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">ch</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">            </span><span class="k">continue</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">ch</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Role</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleTool</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">ch</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// final</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">strings</span><span class="p">.</span><span class="nx">TrimSpace</span><span class="p">(</span><span class="nx">ch</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="p">))</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">    </span><span class="c1">// Continue to next event; don&#39;t treat as assistant content</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="k">continue</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Tip: For custom events, always use <code>event.New(...)</code> with <code>WithResponse</code>, <code>WithBranch</code>, etc., to ensure IDs and timestamps are set consistently.</p>
+<h3 id="tags">Tags</h3>
+<p>Events support simple tagging via <code>Event.Tag</code> to annotate business labels for filtering and analytics:</p>
+<ul>
+<li>Delimiter: <code>;</code> (semicolon). Multiple tags concatenate as <code>tag1;tag2</code>.</li>
+<li>Helper: <code>event.WithTag("&lt;tag&gt;")</code> to append a tag without losing existing ones.</li>
+<li>Built-in usage: delegation-related events are tagged with <code>transfer</code>. UIs can hide these internal messages while preserving the complete event stream for debugging and processing.</li>
+</ul>
 <h3 id="event-methods">Event Methods</h3>
 <p>Event provides the <code>Clone</code> method for creating deep copies of Events.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="nx">Clone</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="nx">Clone</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Event</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="event-usage-examples">Event Usage Examples</h2>
 <p>This example demonstrates how to use Event in real applications to handle Agent streaming responses, tool calls, and error handling.</p>
@@ -1776,305 +1866,305 @@
 <li><strong>Visual Output</strong>: Provide user-friendly interactive experience</li>
 </ol>
 <h3 id="code-example">Code Example</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">  1</a></span>
-<span class="normal"><a href="#__codelineno-7-2">  2</a></span>
-<span class="normal"><a href="#__codelineno-7-3">  3</a></span>
-<span class="normal"><a href="#__codelineno-7-4">  4</a></span>
-<span class="normal"><a href="#__codelineno-7-5">  5</a></span>
-<span class="normal"><a href="#__codelineno-7-6">  6</a></span>
-<span class="normal"><a href="#__codelineno-7-7">  7</a></span>
-<span class="normal"><a href="#__codelineno-7-8">  8</a></span>
-<span class="normal"><a href="#__codelineno-7-9">  9</a></span>
-<span class="normal"><a href="#__codelineno-7-10"> 10</a></span>
-<span class="normal"><a href="#__codelineno-7-11"> 11</a></span>
-<span class="normal"><a href="#__codelineno-7-12"> 12</a></span>
-<span class="normal"><a href="#__codelineno-7-13"> 13</a></span>
-<span class="normal"><a href="#__codelineno-7-14"> 14</a></span>
-<span class="normal"><a href="#__codelineno-7-15"> 15</a></span>
-<span class="normal"><a href="#__codelineno-7-16"> 16</a></span>
-<span class="normal"><a href="#__codelineno-7-17"> 17</a></span>
-<span class="normal"><a href="#__codelineno-7-18"> 18</a></span>
-<span class="normal"><a href="#__codelineno-7-19"> 19</a></span>
-<span class="normal"><a href="#__codelineno-7-20"> 20</a></span>
-<span class="normal"><a href="#__codelineno-7-21"> 21</a></span>
-<span class="normal"><a href="#__codelineno-7-22"> 22</a></span>
-<span class="normal"><a href="#__codelineno-7-23"> 23</a></span>
-<span class="normal"><a href="#__codelineno-7-24"> 24</a></span>
-<span class="normal"><a href="#__codelineno-7-25"> 25</a></span>
-<span class="normal"><a href="#__codelineno-7-26"> 26</a></span>
-<span class="normal"><a href="#__codelineno-7-27"> 27</a></span>
-<span class="normal"><a href="#__codelineno-7-28"> 28</a></span>
-<span class="normal"><a href="#__codelineno-7-29"> 29</a></span>
-<span class="normal"><a href="#__codelineno-7-30"> 30</a></span>
-<span class="normal"><a href="#__codelineno-7-31"> 31</a></span>
-<span class="normal"><a href="#__codelineno-7-32"> 32</a></span>
-<span class="normal"><a href="#__codelineno-7-33"> 33</a></span>
-<span class="normal"><a href="#__codelineno-7-34"> 34</a></span>
-<span class="normal"><a href="#__codelineno-7-35"> 35</a></span>
-<span class="normal"><a href="#__codelineno-7-36"> 36</a></span>
-<span class="normal"><a href="#__codelineno-7-37"> 37</a></span>
-<span class="normal"><a href="#__codelineno-7-38"> 38</a></span>
-<span class="normal"><a href="#__codelineno-7-39"> 39</a></span>
-<span class="normal"><a href="#__codelineno-7-40"> 40</a></span>
-<span class="normal"><a href="#__codelineno-7-41"> 41</a></span>
-<span class="normal"><a href="#__codelineno-7-42"> 42</a></span>
-<span class="normal"><a href="#__codelineno-7-43"> 43</a></span>
-<span class="normal"><a href="#__codelineno-7-44"> 44</a></span>
-<span class="normal"><a href="#__codelineno-7-45"> 45</a></span>
-<span class="normal"><a href="#__codelineno-7-46"> 46</a></span>
-<span class="normal"><a href="#__codelineno-7-47"> 47</a></span>
-<span class="normal"><a href="#__codelineno-7-48"> 48</a></span>
-<span class="normal"><a href="#__codelineno-7-49"> 49</a></span>
-<span class="normal"><a href="#__codelineno-7-50"> 50</a></span>
-<span class="normal"><a href="#__codelineno-7-51"> 51</a></span>
-<span class="normal"><a href="#__codelineno-7-52"> 52</a></span>
-<span class="normal"><a href="#__codelineno-7-53"> 53</a></span>
-<span class="normal"><a href="#__codelineno-7-54"> 54</a></span>
-<span class="normal"><a href="#__codelineno-7-55"> 55</a></span>
-<span class="normal"><a href="#__codelineno-7-56"> 56</a></span>
-<span class="normal"><a href="#__codelineno-7-57"> 57</a></span>
-<span class="normal"><a href="#__codelineno-7-58"> 58</a></span>
-<span class="normal"><a href="#__codelineno-7-59"> 59</a></span>
-<span class="normal"><a href="#__codelineno-7-60"> 60</a></span>
-<span class="normal"><a href="#__codelineno-7-61"> 61</a></span>
-<span class="normal"><a href="#__codelineno-7-62"> 62</a></span>
-<span class="normal"><a href="#__codelineno-7-63"> 63</a></span>
-<span class="normal"><a href="#__codelineno-7-64"> 64</a></span>
-<span class="normal"><a href="#__codelineno-7-65"> 65</a></span>
-<span class="normal"><a href="#__codelineno-7-66"> 66</a></span>
-<span class="normal"><a href="#__codelineno-7-67"> 67</a></span>
-<span class="normal"><a href="#__codelineno-7-68"> 68</a></span>
-<span class="normal"><a href="#__codelineno-7-69"> 69</a></span>
-<span class="normal"><a href="#__codelineno-7-70"> 70</a></span>
-<span class="normal"><a href="#__codelineno-7-71"> 71</a></span>
-<span class="normal"><a href="#__codelineno-7-72"> 72</a></span>
-<span class="normal"><a href="#__codelineno-7-73"> 73</a></span>
-<span class="normal"><a href="#__codelineno-7-74"> 74</a></span>
-<span class="normal"><a href="#__codelineno-7-75"> 75</a></span>
-<span class="normal"><a href="#__codelineno-7-76"> 76</a></span>
-<span class="normal"><a href="#__codelineno-7-77"> 77</a></span>
-<span class="normal"><a href="#__codelineno-7-78"> 78</a></span>
-<span class="normal"><a href="#__codelineno-7-79"> 79</a></span>
-<span class="normal"><a href="#__codelineno-7-80"> 80</a></span>
-<span class="normal"><a href="#__codelineno-7-81"> 81</a></span>
-<span class="normal"><a href="#__codelineno-7-82"> 82</a></span>
-<span class="normal"><a href="#__codelineno-7-83"> 83</a></span>
-<span class="normal"><a href="#__codelineno-7-84"> 84</a></span>
-<span class="normal"><a href="#__codelineno-7-85"> 85</a></span>
-<span class="normal"><a href="#__codelineno-7-86"> 86</a></span>
-<span class="normal"><a href="#__codelineno-7-87"> 87</a></span>
-<span class="normal"><a href="#__codelineno-7-88"> 88</a></span>
-<span class="normal"><a href="#__codelineno-7-89"> 89</a></span>
-<span class="normal"><a href="#__codelineno-7-90"> 90</a></span>
-<span class="normal"><a href="#__codelineno-7-91"> 91</a></span>
-<span class="normal"><a href="#__codelineno-7-92"> 92</a></span>
-<span class="normal"><a href="#__codelineno-7-93"> 93</a></span>
-<span class="normal"><a href="#__codelineno-7-94"> 94</a></span>
-<span class="normal"><a href="#__codelineno-7-95"> 95</a></span>
-<span class="normal"><a href="#__codelineno-7-96"> 96</a></span>
-<span class="normal"><a href="#__codelineno-7-97"> 97</a></span>
-<span class="normal"><a href="#__codelineno-7-98"> 98</a></span>
-<span class="normal"><a href="#__codelineno-7-99"> 99</a></span>
-<span class="normal"><a href="#__codelineno-7-100">100</a></span>
-<span class="normal"><a href="#__codelineno-7-101">101</a></span>
-<span class="normal"><a href="#__codelineno-7-102">102</a></span>
-<span class="normal"><a href="#__codelineno-7-103">103</a></span>
-<span class="normal"><a href="#__codelineno-7-104">104</a></span>
-<span class="normal"><a href="#__codelineno-7-105">105</a></span>
-<span class="normal"><a href="#__codelineno-7-106">106</a></span>
-<span class="normal"><a href="#__codelineno-7-107">107</a></span>
-<span class="normal"><a href="#__codelineno-7-108">108</a></span>
-<span class="normal"><a href="#__codelineno-7-109">109</a></span>
-<span class="normal"><a href="#__codelineno-7-110">110</a></span>
-<span class="normal"><a href="#__codelineno-7-111">111</a></span>
-<span class="normal"><a href="#__codelineno-7-112">112</a></span>
-<span class="normal"><a href="#__codelineno-7-113">113</a></span>
-<span class="normal"><a href="#__codelineno-7-114">114</a></span>
-<span class="normal"><a href="#__codelineno-7-115">115</a></span>
-<span class="normal"><a href="#__codelineno-7-116">116</a></span>
-<span class="normal"><a href="#__codelineno-7-117">117</a></span>
-<span class="normal"><a href="#__codelineno-7-118">118</a></span>
-<span class="normal"><a href="#__codelineno-7-119">119</a></span>
-<span class="normal"><a href="#__codelineno-7-120">120</a></span>
-<span class="normal"><a href="#__codelineno-7-121">121</a></span>
-<span class="normal"><a href="#__codelineno-7-122">122</a></span>
-<span class="normal"><a href="#__codelineno-7-123">123</a></span>
-<span class="normal"><a href="#__codelineno-7-124">124</a></span>
-<span class="normal"><a href="#__codelineno-7-125">125</a></span>
-<span class="normal"><a href="#__codelineno-7-126">126</a></span>
-<span class="normal"><a href="#__codelineno-7-127">127</a></span>
-<span class="normal"><a href="#__codelineno-7-128">128</a></span>
-<span class="normal"><a href="#__codelineno-7-129">129</a></span>
-<span class="normal"><a href="#__codelineno-7-130">130</a></span>
-<span class="normal"><a href="#__codelineno-7-131">131</a></span>
-<span class="normal"><a href="#__codelineno-7-132">132</a></span>
-<span class="normal"><a href="#__codelineno-7-133">133</a></span>
-<span class="normal"><a href="#__codelineno-7-134">134</a></span>
-<span class="normal"><a href="#__codelineno-7-135">135</a></span>
-<span class="normal"><a href="#__codelineno-7-136">136</a></span>
-<span class="normal"><a href="#__codelineno-7-137">137</a></span>
-<span class="normal"><a href="#__codelineno-7-138">138</a></span>
-<span class="normal"><a href="#__codelineno-7-139">139</a></span>
-<span class="normal"><a href="#__codelineno-7-140">140</a></span>
-<span class="normal"><a href="#__codelineno-7-141">141</a></span>
-<span class="normal"><a href="#__codelineno-7-142">142</a></span>
-<span class="normal"><a href="#__codelineno-7-143">143</a></span>
-<span class="normal"><a href="#__codelineno-7-144">144</a></span>
-<span class="normal"><a href="#__codelineno-7-145">145</a></span>
-<span class="normal"><a href="#__codelineno-7-146">146</a></span>
-<span class="normal"><a href="#__codelineno-7-147">147</a></span>
-<span class="normal"><a href="#__codelineno-7-148">148</a></span>
-<span class="normal"><a href="#__codelineno-7-149">149</a></span>
-<span class="normal"><a href="#__codelineno-7-150">150</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="c1">// processMessage handles single message interaction.</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">processMessage</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nx">message</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="nx">userMessage</span><span class="p">)</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="c1">// Run agent through runner.</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to run agent: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="c1">// Handle response.</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">processResponse</span><span class="p">(</span><span class="nx">eventChan</span><span class="p">)</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="p">}</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="c1">// processResponse handles response, including streaming response and tool call visualization.</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">processResponse</span><span class="p">(</span><span class="nx">eventChan</span><span class="w"> </span><span class="o">&lt;-</span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="s">&quot;🤖 Assistant: &quot;</span><span class="p">)</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">        </span><span class="nx">fullContent</span><span class="w">       </span><span class="kt">string</span><span class="w">        </span><span class="c1">// Accumulated complete content.</span>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">        </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="kt">bool</span><span class="w">          </span><span class="c1">// Whether tool calls are detected.</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">        </span><span class="nx">assistantStarted</span><span class="w">  </span><span class="kt">bool</span><span class="w">          </span><span class="c1">// Whether Assistant has started replying.</span>
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a>
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="w">        </span><span class="c1">// Handle single event.</span>
-</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">handleEvent</span><span class="p">(</span><span class="nx">event</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">toolCallsDetected</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">assistantStarted</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">fullContent</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30"></a><span class="w">        </span><span class="c1">// Check if it&#39;s the final event.</span>
-</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">IsFinalResponse</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
-</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33"></a><span class="w">            </span><span class="k">break</span>
-</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a>
-</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="p">}</span>
-</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a>
-</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a><span class="c1">// handleEvent handles single event.</span>
-</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">handleEvent</span><span class="p">(</span>
-</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="w">    </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span>
-</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="w">    </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
-</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="nx">assistantStarted</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
-</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="w">    </span><span class="nx">fullContent</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="p">,</span>
-</span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-47"><a id="__codelineno-7-47" name="__codelineno-7-47"></a><span class="w">    </span><span class="c1">// 1. Handle error events.</span>
-</span><span id="__span-7-48"><a id="__codelineno-7-48" name="__codelineno-7-48"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-49"><a id="__codelineno-7-49" name="__codelineno-7-49"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n❌ Error: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-7-50"><a id="__codelineno-7-50" name="__codelineno-7-50"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-51"><a id="__codelineno-7-51" name="__codelineno-7-51"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-52"><a id="__codelineno-7-52" name="__codelineno-7-52"></a>
-</span><span id="__span-7-53"><a id="__codelineno-7-53" name="__codelineno-7-53"></a><span class="w">    </span><span class="c1">// 2. Handle tool calls.</span>
-</span><span id="__span-7-54"><a id="__codelineno-7-54" name="__codelineno-7-54"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">handleToolCalls</span><span class="p">(</span><span class="nx">event</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCallsDetected</span><span class="p">,</span><span class="w"> </span><span class="nx">assistantStarted</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-55"><a id="__codelineno-7-55" name="__codelineno-7-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-56"><a id="__codelineno-7-56" name="__codelineno-7-56"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-57"><a id="__codelineno-7-57" name="__codelineno-7-57"></a>
-</span><span id="__span-7-58"><a id="__codelineno-7-58" name="__codelineno-7-58"></a><span class="w">    </span><span class="c1">// 3. Handle tool responses.</span>
-</span><span id="__span-7-59"><a id="__codelineno-7-59" name="__codelineno-7-59"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">handleToolResponses</span><span class="p">(</span><span class="nx">event</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-60"><a id="__codelineno-7-60" name="__codelineno-7-60"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-61"><a id="__codelineno-7-61" name="__codelineno-7-61"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-62"><a id="__codelineno-7-62" name="__codelineno-7-62"></a>
-</span><span id="__span-7-63"><a id="__codelineno-7-63" name="__codelineno-7-63"></a><span class="w">    </span><span class="c1">// 4. Handle content.</span>
-</span><span id="__span-7-64"><a id="__codelineno-7-64" name="__codelineno-7-64"></a><span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">handleContent</span><span class="p">(</span><span class="nx">event</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCallsDetected</span><span class="p">,</span><span class="w"> </span><span class="nx">assistantStarted</span><span class="p">,</span><span class="w"> </span><span class="nx">fullContent</span><span class="p">)</span>
-</span><span id="__span-7-65"><a id="__codelineno-7-65" name="__codelineno-7-65"></a>
-</span><span id="__span-7-66"><a id="__codelineno-7-66" name="__codelineno-7-66"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-67"><a id="__codelineno-7-67" name="__codelineno-7-67"></a><span class="p">}</span>
-</span><span id="__span-7-68"><a id="__codelineno-7-68" name="__codelineno-7-68"></a>
-</span><span id="__span-7-69"><a id="__codelineno-7-69" name="__codelineno-7-69"></a><span class="c1">// handleToolCalls detects and displays tool calls.</span>
-</span><span id="__span-7-70"><a id="__codelineno-7-70" name="__codelineno-7-70"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">handleToolCalls</span><span class="p">(</span>
-</span><span id="__span-7-71"><a id="__codelineno-7-71" name="__codelineno-7-71"></a><span class="w">    </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span>
-</span><span id="__span-7-72"><a id="__codelineno-7-72" name="__codelineno-7-72"></a><span class="w">    </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
-</span><span id="__span-7-73"><a id="__codelineno-7-73" name="__codelineno-7-73"></a><span class="w">    </span><span class="nx">assistantStarted</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
-</span><span id="__span-7-74"><a id="__codelineno-7-74" name="__codelineno-7-74"></a><span class="p">)</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-75"><a id="__codelineno-7-75" name="__codelineno-7-75"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-76"><a id="__codelineno-7-76" name="__codelineno-7-76"></a><span class="w">        </span><span class="o">*</span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-7-77"><a id="__codelineno-7-77" name="__codelineno-7-77"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">*</span><span class="nx">assistantStarted</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-78"><a id="__codelineno-7-78" name="__codelineno-7-78"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
-</span><span id="__span-7-79"><a id="__codelineno-7-79" name="__codelineno-7-79"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-7-80"><a id="__codelineno-7-80" name="__codelineno-7-80"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;🔧 Tool calls initiated:\n&quot;</span><span class="p">)</span>
-</span><span id="__span-7-81"><a id="__codelineno-7-81" name="__codelineno-7-81"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-82"><a id="__codelineno-7-82" name="__codelineno-7-82"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;   • %s (ID: %s)\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">ID</span><span class="p">)</span>
-</span><span id="__span-7-83"><a id="__codelineno-7-83" name="__codelineno-7-83"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-84"><a id="__codelineno-7-84" name="__codelineno-7-84"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;     Args: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">))</span>
-</span><span id="__span-7-85"><a id="__codelineno-7-85" name="__codelineno-7-85"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-7-86"><a id="__codelineno-7-86" name="__codelineno-7-86"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-7-87"><a id="__codelineno-7-87" name="__codelineno-7-87"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n🔄 Executing tools...\n&quot;</span><span class="p">)</span>
-</span><span id="__span-7-88"><a id="__codelineno-7-88" name="__codelineno-7-88"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-7-89"><a id="__codelineno-7-89" name="__codelineno-7-89"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-90"><a id="__codelineno-7-90" name="__codelineno-7-90"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span>
-</span><span id="__span-7-91"><a id="__codelineno-7-91" name="__codelineno-7-91"></a><span class="p">}</span>
-</span><span id="__span-7-92"><a id="__codelineno-7-92" name="__codelineno-7-92"></a>
-</span><span id="__span-7-93"><a id="__codelineno-7-93" name="__codelineno-7-93"></a><span class="c1">// handleToolResponses detects and displays tool responses.</span>
-</span><span id="__span-7-94"><a id="__codelineno-7-94" name="__codelineno-7-94"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">handleToolResponses</span><span class="p">(</span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-95"><a id="__codelineno-7-95" name="__codelineno-7-95"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-96"><a id="__codelineno-7-96" name="__codelineno-7-96"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">choice</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-97"><a id="__codelineno-7-97" name="__codelineno-7-97"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Role</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleTool</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolID</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-98"><a id="__codelineno-7-98" name="__codelineno-7-98"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;✅ Tool response (ID: %s): %s\n&quot;</span><span class="p">,</span>
-</span><span id="__span-7-99"><a id="__codelineno-7-99" name="__codelineno-7-99"></a><span class="w">                    </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolID</span><span class="p">,</span>
-</span><span id="__span-7-100"><a id="__codelineno-7-100" name="__codelineno-7-100"></a><span class="w">                    </span><span class="nx">strings</span><span class="p">.</span><span class="nx">TrimSpace</span><span class="p">(</span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="p">))</span>
-</span><span id="__span-7-101"><a id="__codelineno-7-101" name="__codelineno-7-101"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-7-102"><a id="__codelineno-7-102" name="__codelineno-7-102"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-7-103"><a id="__codelineno-7-103" name="__codelineno-7-103"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-7-104"><a id="__codelineno-7-104" name="__codelineno-7-104"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-105"><a id="__codelineno-7-105" name="__codelineno-7-105"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span>
-</span><span id="__span-7-106"><a id="__codelineno-7-106" name="__codelineno-7-106"></a><span class="p">}</span>
-</span><span id="__span-7-107"><a id="__codelineno-7-107" name="__codelineno-7-107"></a>
-</span><span id="__span-7-108"><a id="__codelineno-7-108" name="__codelineno-7-108"></a><span class="c1">// handleContent handles and displays content.</span>
-</span><span id="__span-7-109"><a id="__codelineno-7-109" name="__codelineno-7-109"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">handleContent</span><span class="p">(</span>
-</span><span id="__span-7-110"><a id="__codelineno-7-110" name="__codelineno-7-110"></a><span class="w">    </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span>
-</span><span id="__span-7-111"><a id="__codelineno-7-111" name="__codelineno-7-111"></a><span class="w">    </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
-</span><span id="__span-7-112"><a id="__codelineno-7-112" name="__codelineno-7-112"></a><span class="w">    </span><span class="nx">assistantStarted</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
-</span><span id="__span-7-113"><a id="__codelineno-7-113" name="__codelineno-7-113"></a><span class="w">    </span><span class="nx">fullContent</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="p">,</span>
-</span><span id="__span-7-114"><a id="__codelineno-7-114" name="__codelineno-7-114"></a><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-115"><a id="__codelineno-7-115" name="__codelineno-7-115"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-116"><a id="__codelineno-7-116" name="__codelineno-7-116"></a><span class="w">        </span><span class="nx">choice</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="__span-7-117"><a id="__codelineno-7-117" name="__codelineno-7-117"></a><span class="w">        </span><span class="nx">content</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">extractContent</span><span class="p">(</span><span class="nx">choice</span><span class="p">)</span>
-</span><span id="__span-7-118"><a id="__codelineno-7-118" name="__codelineno-7-118"></a>
-</span><span id="__span-7-119"><a id="__codelineno-7-119" name="__codelineno-7-119"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-120"><a id="__codelineno-7-120" name="__codelineno-7-120"></a><span class="w">            </span><span class="nx">c</span><span class="p">.</span><span class="nx">displayContent</span><span class="p">(</span><span class="nx">content</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCallsDetected</span><span class="p">,</span><span class="w"> </span><span class="nx">assistantStarted</span><span class="p">,</span><span class="w"> </span><span class="nx">fullContent</span><span class="p">)</span>
-</span><span id="__span-7-121"><a id="__codelineno-7-121" name="__codelineno-7-121"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-7-122"><a id="__codelineno-7-122" name="__codelineno-7-122"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-123"><a id="__codelineno-7-123" name="__codelineno-7-123"></a><span class="p">}</span>
-</span><span id="__span-7-124"><a id="__codelineno-7-124" name="__codelineno-7-124"></a>
-</span><span id="__span-7-125"><a id="__codelineno-7-125" name="__codelineno-7-125"></a><span class="c1">// extractContent extracts content based on streaming mode.</span>
-</span><span id="__span-7-126"><a id="__codelineno-7-126" name="__codelineno-7-126"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">extractContent</span><span class="p">(</span><span class="nx">choice</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Choice</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-127"><a id="__codelineno-7-127" name="__codelineno-7-127"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">streaming</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-128"><a id="__codelineno-7-128" name="__codelineno-7-128"></a><span class="w">        </span><span class="c1">// Streaming mode: use incremental content.</span>
-</span><span id="__span-7-129"><a id="__codelineno-7-129" name="__codelineno-7-129"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span>
-</span><span id="__span-7-130"><a id="__codelineno-7-130" name="__codelineno-7-130"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-131"><a id="__codelineno-7-131" name="__codelineno-7-131"></a><span class="w">    </span><span class="c1">// Non-streaming mode: use complete message content.</span>
-</span><span id="__span-7-132"><a id="__codelineno-7-132" name="__codelineno-7-132"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span>
-</span><span id="__span-7-133"><a id="__codelineno-7-133" name="__codelineno-7-133"></a><span class="p">}</span>
-</span><span id="__span-7-134"><a id="__codelineno-7-134" name="__codelineno-7-134"></a>
-</span><span id="__span-7-135"><a id="__codelineno-7-135" name="__codelineno-7-135"></a><span class="c1">// displayContent prints content to console.</span>
-</span><span id="__span-7-136"><a id="__codelineno-7-136" name="__codelineno-7-136"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">displayContent</span><span class="p">(</span>
-</span><span id="__span-7-137"><a id="__codelineno-7-137" name="__codelineno-7-137"></a><span class="w">    </span><span class="nx">content</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span>
-</span><span id="__span-7-138"><a id="__codelineno-7-138" name="__codelineno-7-138"></a><span class="w">    </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
-</span><span id="__span-7-139"><a id="__codelineno-7-139" name="__codelineno-7-139"></a><span class="w">    </span><span class="nx">assistantStarted</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
-</span><span id="__span-7-140"><a id="__codelineno-7-140" name="__codelineno-7-140"></a><span class="w">    </span><span class="nx">fullContent</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="p">,</span>
-</span><span id="__span-7-141"><a id="__codelineno-7-141" name="__codelineno-7-141"></a><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-142"><a id="__codelineno-7-142" name="__codelineno-7-142"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="o">*</span><span class="nx">assistantStarted</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-143"><a id="__codelineno-7-143" name="__codelineno-7-143"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">*</span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-144"><a id="__codelineno-7-144" name="__codelineno-7-144"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n🤖 Assistant: &quot;</span><span class="p">)</span>
-</span><span id="__span-7-145"><a id="__codelineno-7-145" name="__codelineno-7-145"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-7-146"><a id="__codelineno-7-146" name="__codelineno-7-146"></a><span class="w">        </span><span class="o">*</span><span class="nx">assistantStarted</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-7-147"><a id="__codelineno-7-147" name="__codelineno-7-147"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-148"><a id="__codelineno-7-148" name="__codelineno-7-148"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">content</span><span class="p">)</span>
-</span><span id="__span-7-149"><a id="__codelineno-7-149" name="__codelineno-7-149"></a><span class="w">    </span><span class="o">*</span><span class="nx">fullContent</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">content</span>
-</span><span id="__span-7-150"><a id="__codelineno-7-150" name="__codelineno-7-150"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">  1</a></span>
+<span class="normal"><a href="#__codelineno-8-2">  2</a></span>
+<span class="normal"><a href="#__codelineno-8-3">  3</a></span>
+<span class="normal"><a href="#__codelineno-8-4">  4</a></span>
+<span class="normal"><a href="#__codelineno-8-5">  5</a></span>
+<span class="normal"><a href="#__codelineno-8-6">  6</a></span>
+<span class="normal"><a href="#__codelineno-8-7">  7</a></span>
+<span class="normal"><a href="#__codelineno-8-8">  8</a></span>
+<span class="normal"><a href="#__codelineno-8-9">  9</a></span>
+<span class="normal"><a href="#__codelineno-8-10"> 10</a></span>
+<span class="normal"><a href="#__codelineno-8-11"> 11</a></span>
+<span class="normal"><a href="#__codelineno-8-12"> 12</a></span>
+<span class="normal"><a href="#__codelineno-8-13"> 13</a></span>
+<span class="normal"><a href="#__codelineno-8-14"> 14</a></span>
+<span class="normal"><a href="#__codelineno-8-15"> 15</a></span>
+<span class="normal"><a href="#__codelineno-8-16"> 16</a></span>
+<span class="normal"><a href="#__codelineno-8-17"> 17</a></span>
+<span class="normal"><a href="#__codelineno-8-18"> 18</a></span>
+<span class="normal"><a href="#__codelineno-8-19"> 19</a></span>
+<span class="normal"><a href="#__codelineno-8-20"> 20</a></span>
+<span class="normal"><a href="#__codelineno-8-21"> 21</a></span>
+<span class="normal"><a href="#__codelineno-8-22"> 22</a></span>
+<span class="normal"><a href="#__codelineno-8-23"> 23</a></span>
+<span class="normal"><a href="#__codelineno-8-24"> 24</a></span>
+<span class="normal"><a href="#__codelineno-8-25"> 25</a></span>
+<span class="normal"><a href="#__codelineno-8-26"> 26</a></span>
+<span class="normal"><a href="#__codelineno-8-27"> 27</a></span>
+<span class="normal"><a href="#__codelineno-8-28"> 28</a></span>
+<span class="normal"><a href="#__codelineno-8-29"> 29</a></span>
+<span class="normal"><a href="#__codelineno-8-30"> 30</a></span>
+<span class="normal"><a href="#__codelineno-8-31"> 31</a></span>
+<span class="normal"><a href="#__codelineno-8-32"> 32</a></span>
+<span class="normal"><a href="#__codelineno-8-33"> 33</a></span>
+<span class="normal"><a href="#__codelineno-8-34"> 34</a></span>
+<span class="normal"><a href="#__codelineno-8-35"> 35</a></span>
+<span class="normal"><a href="#__codelineno-8-36"> 36</a></span>
+<span class="normal"><a href="#__codelineno-8-37"> 37</a></span>
+<span class="normal"><a href="#__codelineno-8-38"> 38</a></span>
+<span class="normal"><a href="#__codelineno-8-39"> 39</a></span>
+<span class="normal"><a href="#__codelineno-8-40"> 40</a></span>
+<span class="normal"><a href="#__codelineno-8-41"> 41</a></span>
+<span class="normal"><a href="#__codelineno-8-42"> 42</a></span>
+<span class="normal"><a href="#__codelineno-8-43"> 43</a></span>
+<span class="normal"><a href="#__codelineno-8-44"> 44</a></span>
+<span class="normal"><a href="#__codelineno-8-45"> 45</a></span>
+<span class="normal"><a href="#__codelineno-8-46"> 46</a></span>
+<span class="normal"><a href="#__codelineno-8-47"> 47</a></span>
+<span class="normal"><a href="#__codelineno-8-48"> 48</a></span>
+<span class="normal"><a href="#__codelineno-8-49"> 49</a></span>
+<span class="normal"><a href="#__codelineno-8-50"> 50</a></span>
+<span class="normal"><a href="#__codelineno-8-51"> 51</a></span>
+<span class="normal"><a href="#__codelineno-8-52"> 52</a></span>
+<span class="normal"><a href="#__codelineno-8-53"> 53</a></span>
+<span class="normal"><a href="#__codelineno-8-54"> 54</a></span>
+<span class="normal"><a href="#__codelineno-8-55"> 55</a></span>
+<span class="normal"><a href="#__codelineno-8-56"> 56</a></span>
+<span class="normal"><a href="#__codelineno-8-57"> 57</a></span>
+<span class="normal"><a href="#__codelineno-8-58"> 58</a></span>
+<span class="normal"><a href="#__codelineno-8-59"> 59</a></span>
+<span class="normal"><a href="#__codelineno-8-60"> 60</a></span>
+<span class="normal"><a href="#__codelineno-8-61"> 61</a></span>
+<span class="normal"><a href="#__codelineno-8-62"> 62</a></span>
+<span class="normal"><a href="#__codelineno-8-63"> 63</a></span>
+<span class="normal"><a href="#__codelineno-8-64"> 64</a></span>
+<span class="normal"><a href="#__codelineno-8-65"> 65</a></span>
+<span class="normal"><a href="#__codelineno-8-66"> 66</a></span>
+<span class="normal"><a href="#__codelineno-8-67"> 67</a></span>
+<span class="normal"><a href="#__codelineno-8-68"> 68</a></span>
+<span class="normal"><a href="#__codelineno-8-69"> 69</a></span>
+<span class="normal"><a href="#__codelineno-8-70"> 70</a></span>
+<span class="normal"><a href="#__codelineno-8-71"> 71</a></span>
+<span class="normal"><a href="#__codelineno-8-72"> 72</a></span>
+<span class="normal"><a href="#__codelineno-8-73"> 73</a></span>
+<span class="normal"><a href="#__codelineno-8-74"> 74</a></span>
+<span class="normal"><a href="#__codelineno-8-75"> 75</a></span>
+<span class="normal"><a href="#__codelineno-8-76"> 76</a></span>
+<span class="normal"><a href="#__codelineno-8-77"> 77</a></span>
+<span class="normal"><a href="#__codelineno-8-78"> 78</a></span>
+<span class="normal"><a href="#__codelineno-8-79"> 79</a></span>
+<span class="normal"><a href="#__codelineno-8-80"> 80</a></span>
+<span class="normal"><a href="#__codelineno-8-81"> 81</a></span>
+<span class="normal"><a href="#__codelineno-8-82"> 82</a></span>
+<span class="normal"><a href="#__codelineno-8-83"> 83</a></span>
+<span class="normal"><a href="#__codelineno-8-84"> 84</a></span>
+<span class="normal"><a href="#__codelineno-8-85"> 85</a></span>
+<span class="normal"><a href="#__codelineno-8-86"> 86</a></span>
+<span class="normal"><a href="#__codelineno-8-87"> 87</a></span>
+<span class="normal"><a href="#__codelineno-8-88"> 88</a></span>
+<span class="normal"><a href="#__codelineno-8-89"> 89</a></span>
+<span class="normal"><a href="#__codelineno-8-90"> 90</a></span>
+<span class="normal"><a href="#__codelineno-8-91"> 91</a></span>
+<span class="normal"><a href="#__codelineno-8-92"> 92</a></span>
+<span class="normal"><a href="#__codelineno-8-93"> 93</a></span>
+<span class="normal"><a href="#__codelineno-8-94"> 94</a></span>
+<span class="normal"><a href="#__codelineno-8-95"> 95</a></span>
+<span class="normal"><a href="#__codelineno-8-96"> 96</a></span>
+<span class="normal"><a href="#__codelineno-8-97"> 97</a></span>
+<span class="normal"><a href="#__codelineno-8-98"> 98</a></span>
+<span class="normal"><a href="#__codelineno-8-99"> 99</a></span>
+<span class="normal"><a href="#__codelineno-8-100">100</a></span>
+<span class="normal"><a href="#__codelineno-8-101">101</a></span>
+<span class="normal"><a href="#__codelineno-8-102">102</a></span>
+<span class="normal"><a href="#__codelineno-8-103">103</a></span>
+<span class="normal"><a href="#__codelineno-8-104">104</a></span>
+<span class="normal"><a href="#__codelineno-8-105">105</a></span>
+<span class="normal"><a href="#__codelineno-8-106">106</a></span>
+<span class="normal"><a href="#__codelineno-8-107">107</a></span>
+<span class="normal"><a href="#__codelineno-8-108">108</a></span>
+<span class="normal"><a href="#__codelineno-8-109">109</a></span>
+<span class="normal"><a href="#__codelineno-8-110">110</a></span>
+<span class="normal"><a href="#__codelineno-8-111">111</a></span>
+<span class="normal"><a href="#__codelineno-8-112">112</a></span>
+<span class="normal"><a href="#__codelineno-8-113">113</a></span>
+<span class="normal"><a href="#__codelineno-8-114">114</a></span>
+<span class="normal"><a href="#__codelineno-8-115">115</a></span>
+<span class="normal"><a href="#__codelineno-8-116">116</a></span>
+<span class="normal"><a href="#__codelineno-8-117">117</a></span>
+<span class="normal"><a href="#__codelineno-8-118">118</a></span>
+<span class="normal"><a href="#__codelineno-8-119">119</a></span>
+<span class="normal"><a href="#__codelineno-8-120">120</a></span>
+<span class="normal"><a href="#__codelineno-8-121">121</a></span>
+<span class="normal"><a href="#__codelineno-8-122">122</a></span>
+<span class="normal"><a href="#__codelineno-8-123">123</a></span>
+<span class="normal"><a href="#__codelineno-8-124">124</a></span>
+<span class="normal"><a href="#__codelineno-8-125">125</a></span>
+<span class="normal"><a href="#__codelineno-8-126">126</a></span>
+<span class="normal"><a href="#__codelineno-8-127">127</a></span>
+<span class="normal"><a href="#__codelineno-8-128">128</a></span>
+<span class="normal"><a href="#__codelineno-8-129">129</a></span>
+<span class="normal"><a href="#__codelineno-8-130">130</a></span>
+<span class="normal"><a href="#__codelineno-8-131">131</a></span>
+<span class="normal"><a href="#__codelineno-8-132">132</a></span>
+<span class="normal"><a href="#__codelineno-8-133">133</a></span>
+<span class="normal"><a href="#__codelineno-8-134">134</a></span>
+<span class="normal"><a href="#__codelineno-8-135">135</a></span>
+<span class="normal"><a href="#__codelineno-8-136">136</a></span>
+<span class="normal"><a href="#__codelineno-8-137">137</a></span>
+<span class="normal"><a href="#__codelineno-8-138">138</a></span>
+<span class="normal"><a href="#__codelineno-8-139">139</a></span>
+<span class="normal"><a href="#__codelineno-8-140">140</a></span>
+<span class="normal"><a href="#__codelineno-8-141">141</a></span>
+<span class="normal"><a href="#__codelineno-8-142">142</a></span>
+<span class="normal"><a href="#__codelineno-8-143">143</a></span>
+<span class="normal"><a href="#__codelineno-8-144">144</a></span>
+<span class="normal"><a href="#__codelineno-8-145">145</a></span>
+<span class="normal"><a href="#__codelineno-8-146">146</a></span>
+<span class="normal"><a href="#__codelineno-8-147">147</a></span>
+<span class="normal"><a href="#__codelineno-8-148">148</a></span>
+<span class="normal"><a href="#__codelineno-8-149">149</a></span>
+<span class="normal"><a href="#__codelineno-8-150">150</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="c1">// processMessage handles single message interaction.</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">processMessage</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="nx">message</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="nx">userMessage</span><span class="p">)</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">    </span><span class="c1">// Run agent through runner.</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to run agent: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">    </span><span class="c1">// Handle response.</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">processResponse</span><span class="p">(</span><span class="nx">eventChan</span><span class="p">)</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="p">}</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="c1">// processResponse handles response, including streaming response and tool call visualization.</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">processResponse</span><span class="p">(</span><span class="nx">eventChan</span><span class="w"> </span><span class="o">&lt;-</span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="s">&quot;🤖 Assistant: &quot;</span><span class="p">)</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18"></a>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19"></a><span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20"></a><span class="w">        </span><span class="nx">fullContent</span><span class="w">       </span><span class="kt">string</span><span class="w">        </span><span class="c1">// Accumulated complete content.</span>
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21"></a><span class="w">        </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="kt">bool</span><span class="w">          </span><span class="c1">// Whether tool calls are detected.</span>
+</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22"></a><span class="w">        </span><span class="nx">assistantStarted</span><span class="w">  </span><span class="kt">bool</span><span class="w">          </span><span class="c1">// Whether Assistant has started replying.</span>
+</span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24"></a>
+</span><span id="__span-8-25"><a id="__codelineno-8-25" name="__codelineno-8-25"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-26"><a id="__codelineno-8-26" name="__codelineno-8-26"></a><span class="w">        </span><span class="c1">// Handle single event.</span>
+</span><span id="__span-8-27"><a id="__codelineno-8-27" name="__codelineno-8-27"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">handleEvent</span><span class="p">(</span><span class="nx">event</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">toolCallsDetected</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">assistantStarted</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">fullContent</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-28"><a id="__codelineno-8-28" name="__codelineno-8-28"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-8-29"><a id="__codelineno-8-29" name="__codelineno-8-29"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-8-30"><a id="__codelineno-8-30" name="__codelineno-8-30"></a><span class="w">        </span><span class="c1">// Check if it&#39;s the final event.</span>
+</span><span id="__span-8-31"><a id="__codelineno-8-31" name="__codelineno-8-31"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">IsFinalResponse</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-32"><a id="__codelineno-8-32" name="__codelineno-8-32"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+</span><span id="__span-8-33"><a id="__codelineno-8-33" name="__codelineno-8-33"></a><span class="w">            </span><span class="k">break</span>
+</span><span id="__span-8-34"><a id="__codelineno-8-34" name="__codelineno-8-34"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-8-35"><a id="__codelineno-8-35" name="__codelineno-8-35"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-36"><a id="__codelineno-8-36" name="__codelineno-8-36"></a>
+</span><span id="__span-8-37"><a id="__codelineno-8-37" name="__codelineno-8-37"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-8-38"><a id="__codelineno-8-38" name="__codelineno-8-38"></a><span class="p">}</span>
+</span><span id="__span-8-39"><a id="__codelineno-8-39" name="__codelineno-8-39"></a>
+</span><span id="__span-8-40"><a id="__codelineno-8-40" name="__codelineno-8-40"></a><span class="c1">// handleEvent handles single event.</span>
+</span><span id="__span-8-41"><a id="__codelineno-8-41" name="__codelineno-8-41"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">handleEvent</span><span class="p">(</span>
+</span><span id="__span-8-42"><a id="__codelineno-8-42" name="__codelineno-8-42"></a><span class="w">    </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span>
+</span><span id="__span-8-43"><a id="__codelineno-8-43" name="__codelineno-8-43"></a><span class="w">    </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
+</span><span id="__span-8-44"><a id="__codelineno-8-44" name="__codelineno-8-44"></a><span class="w">    </span><span class="nx">assistantStarted</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
+</span><span id="__span-8-45"><a id="__codelineno-8-45" name="__codelineno-8-45"></a><span class="w">    </span><span class="nx">fullContent</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="p">,</span>
+</span><span id="__span-8-46"><a id="__codelineno-8-46" name="__codelineno-8-46"></a><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-47"><a id="__codelineno-8-47" name="__codelineno-8-47"></a><span class="w">    </span><span class="c1">// 1. Handle error events.</span>
+</span><span id="__span-8-48"><a id="__codelineno-8-48" name="__codelineno-8-48"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-49"><a id="__codelineno-8-49" name="__codelineno-8-49"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n❌ Error: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-8-50"><a id="__codelineno-8-50" name="__codelineno-8-50"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-8-51"><a id="__codelineno-8-51" name="__codelineno-8-51"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-52"><a id="__codelineno-8-52" name="__codelineno-8-52"></a>
+</span><span id="__span-8-53"><a id="__codelineno-8-53" name="__codelineno-8-53"></a><span class="w">    </span><span class="c1">// 2. Handle tool calls.</span>
+</span><span id="__span-8-54"><a id="__codelineno-8-54" name="__codelineno-8-54"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">handleToolCalls</span><span class="p">(</span><span class="nx">event</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCallsDetected</span><span class="p">,</span><span class="w"> </span><span class="nx">assistantStarted</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-55"><a id="__codelineno-8-55" name="__codelineno-8-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-8-56"><a id="__codelineno-8-56" name="__codelineno-8-56"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-57"><a id="__codelineno-8-57" name="__codelineno-8-57"></a>
+</span><span id="__span-8-58"><a id="__codelineno-8-58" name="__codelineno-8-58"></a><span class="w">    </span><span class="c1">// 3. Handle tool responses.</span>
+</span><span id="__span-8-59"><a id="__codelineno-8-59" name="__codelineno-8-59"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">handleToolResponses</span><span class="p">(</span><span class="nx">event</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-60"><a id="__codelineno-8-60" name="__codelineno-8-60"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-8-61"><a id="__codelineno-8-61" name="__codelineno-8-61"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-62"><a id="__codelineno-8-62" name="__codelineno-8-62"></a>
+</span><span id="__span-8-63"><a id="__codelineno-8-63" name="__codelineno-8-63"></a><span class="w">    </span><span class="c1">// 4. Handle content.</span>
+</span><span id="__span-8-64"><a id="__codelineno-8-64" name="__codelineno-8-64"></a><span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">handleContent</span><span class="p">(</span><span class="nx">event</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCallsDetected</span><span class="p">,</span><span class="w"> </span><span class="nx">assistantStarted</span><span class="p">,</span><span class="w"> </span><span class="nx">fullContent</span><span class="p">)</span>
+</span><span id="__span-8-65"><a id="__codelineno-8-65" name="__codelineno-8-65"></a>
+</span><span id="__span-8-66"><a id="__codelineno-8-66" name="__codelineno-8-66"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-8-67"><a id="__codelineno-8-67" name="__codelineno-8-67"></a><span class="p">}</span>
+</span><span id="__span-8-68"><a id="__codelineno-8-68" name="__codelineno-8-68"></a>
+</span><span id="__span-8-69"><a id="__codelineno-8-69" name="__codelineno-8-69"></a><span class="c1">// handleToolCalls detects and displays tool calls.</span>
+</span><span id="__span-8-70"><a id="__codelineno-8-70" name="__codelineno-8-70"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">handleToolCalls</span><span class="p">(</span>
+</span><span id="__span-8-71"><a id="__codelineno-8-71" name="__codelineno-8-71"></a><span class="w">    </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span>
+</span><span id="__span-8-72"><a id="__codelineno-8-72" name="__codelineno-8-72"></a><span class="w">    </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
+</span><span id="__span-8-73"><a id="__codelineno-8-73" name="__codelineno-8-73"></a><span class="w">    </span><span class="nx">assistantStarted</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
+</span><span id="__span-8-74"><a id="__codelineno-8-74" name="__codelineno-8-74"></a><span class="p">)</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-75"><a id="__codelineno-8-75" name="__codelineno-8-75"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-76"><a id="__codelineno-8-76" name="__codelineno-8-76"></a><span class="w">        </span><span class="o">*</span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-8-77"><a id="__codelineno-8-77" name="__codelineno-8-77"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">*</span><span class="nx">assistantStarted</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-78"><a id="__codelineno-8-78" name="__codelineno-8-78"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+</span><span id="__span-8-79"><a id="__codelineno-8-79" name="__codelineno-8-79"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-8-80"><a id="__codelineno-8-80" name="__codelineno-8-80"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;🔧 Tool calls initiated:\n&quot;</span><span class="p">)</span>
+</span><span id="__span-8-81"><a id="__codelineno-8-81" name="__codelineno-8-81"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-82"><a id="__codelineno-8-82" name="__codelineno-8-82"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;   • %s (ID: %s)\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">ID</span><span class="p">)</span>
+</span><span id="__span-8-83"><a id="__codelineno-8-83" name="__codelineno-8-83"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-84"><a id="__codelineno-8-84" name="__codelineno-8-84"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;     Args: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">))</span>
+</span><span id="__span-8-85"><a id="__codelineno-8-85" name="__codelineno-8-85"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-8-86"><a id="__codelineno-8-86" name="__codelineno-8-86"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-8-87"><a id="__codelineno-8-87" name="__codelineno-8-87"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n🔄 Executing tools...\n&quot;</span><span class="p">)</span>
+</span><span id="__span-8-88"><a id="__codelineno-8-88" name="__codelineno-8-88"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-8-89"><a id="__codelineno-8-89" name="__codelineno-8-89"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-90"><a id="__codelineno-8-90" name="__codelineno-8-90"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-8-91"><a id="__codelineno-8-91" name="__codelineno-8-91"></a><span class="p">}</span>
+</span><span id="__span-8-92"><a id="__codelineno-8-92" name="__codelineno-8-92"></a>
+</span><span id="__span-8-93"><a id="__codelineno-8-93" name="__codelineno-8-93"></a><span class="c1">// handleToolResponses detects and displays tool responses.</span>
+</span><span id="__span-8-94"><a id="__codelineno-8-94" name="__codelineno-8-94"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">handleToolResponses</span><span class="p">(</span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-95"><a id="__codelineno-8-95" name="__codelineno-8-95"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-96"><a id="__codelineno-8-96" name="__codelineno-8-96"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">choice</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-97"><a id="__codelineno-8-97" name="__codelineno-8-97"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Role</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleTool</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolID</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-98"><a id="__codelineno-8-98" name="__codelineno-8-98"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;✅ Tool response (ID: %s): %s\n&quot;</span><span class="p">,</span>
+</span><span id="__span-8-99"><a id="__codelineno-8-99" name="__codelineno-8-99"></a><span class="w">                    </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolID</span><span class="p">,</span>
+</span><span id="__span-8-100"><a id="__codelineno-8-100" name="__codelineno-8-100"></a><span class="w">                    </span><span class="nx">strings</span><span class="p">.</span><span class="nx">TrimSpace</span><span class="p">(</span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="p">))</span>
+</span><span id="__span-8-101"><a id="__codelineno-8-101" name="__codelineno-8-101"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-8-102"><a id="__codelineno-8-102" name="__codelineno-8-102"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-8-103"><a id="__codelineno-8-103" name="__codelineno-8-103"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-8-104"><a id="__codelineno-8-104" name="__codelineno-8-104"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-105"><a id="__codelineno-8-105" name="__codelineno-8-105"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-8-106"><a id="__codelineno-8-106" name="__codelineno-8-106"></a><span class="p">}</span>
+</span><span id="__span-8-107"><a id="__codelineno-8-107" name="__codelineno-8-107"></a>
+</span><span id="__span-8-108"><a id="__codelineno-8-108" name="__codelineno-8-108"></a><span class="c1">// handleContent handles and displays content.</span>
+</span><span id="__span-8-109"><a id="__codelineno-8-109" name="__codelineno-8-109"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">handleContent</span><span class="p">(</span>
+</span><span id="__span-8-110"><a id="__codelineno-8-110" name="__codelineno-8-110"></a><span class="w">    </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span>
+</span><span id="__span-8-111"><a id="__codelineno-8-111" name="__codelineno-8-111"></a><span class="w">    </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
+</span><span id="__span-8-112"><a id="__codelineno-8-112" name="__codelineno-8-112"></a><span class="w">    </span><span class="nx">assistantStarted</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
+</span><span id="__span-8-113"><a id="__codelineno-8-113" name="__codelineno-8-113"></a><span class="w">    </span><span class="nx">fullContent</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="p">,</span>
+</span><span id="__span-8-114"><a id="__codelineno-8-114" name="__codelineno-8-114"></a><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-115"><a id="__codelineno-8-115" name="__codelineno-8-115"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-116"><a id="__codelineno-8-116" name="__codelineno-8-116"></a><span class="w">        </span><span class="nx">choice</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="__span-8-117"><a id="__codelineno-8-117" name="__codelineno-8-117"></a><span class="w">        </span><span class="nx">content</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">extractContent</span><span class="p">(</span><span class="nx">choice</span><span class="p">)</span>
+</span><span id="__span-8-118"><a id="__codelineno-8-118" name="__codelineno-8-118"></a>
+</span><span id="__span-8-119"><a id="__codelineno-8-119" name="__codelineno-8-119"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-120"><a id="__codelineno-8-120" name="__codelineno-8-120"></a><span class="w">            </span><span class="nx">c</span><span class="p">.</span><span class="nx">displayContent</span><span class="p">(</span><span class="nx">content</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCallsDetected</span><span class="p">,</span><span class="w"> </span><span class="nx">assistantStarted</span><span class="p">,</span><span class="w"> </span><span class="nx">fullContent</span><span class="p">)</span>
+</span><span id="__span-8-121"><a id="__codelineno-8-121" name="__codelineno-8-121"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-8-122"><a id="__codelineno-8-122" name="__codelineno-8-122"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-123"><a id="__codelineno-8-123" name="__codelineno-8-123"></a><span class="p">}</span>
+</span><span id="__span-8-124"><a id="__codelineno-8-124" name="__codelineno-8-124"></a>
+</span><span id="__span-8-125"><a id="__codelineno-8-125" name="__codelineno-8-125"></a><span class="c1">// extractContent extracts content based on streaming mode.</span>
+</span><span id="__span-8-126"><a id="__codelineno-8-126" name="__codelineno-8-126"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">extractContent</span><span class="p">(</span><span class="nx">choice</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Choice</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-127"><a id="__codelineno-8-127" name="__codelineno-8-127"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">streaming</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-128"><a id="__codelineno-8-128" name="__codelineno-8-128"></a><span class="w">        </span><span class="c1">// Streaming mode: use incremental content.</span>
+</span><span id="__span-8-129"><a id="__codelineno-8-129" name="__codelineno-8-129"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span>
+</span><span id="__span-8-130"><a id="__codelineno-8-130" name="__codelineno-8-130"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-131"><a id="__codelineno-8-131" name="__codelineno-8-131"></a><span class="w">    </span><span class="c1">// Non-streaming mode: use complete message content.</span>
+</span><span id="__span-8-132"><a id="__codelineno-8-132" name="__codelineno-8-132"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span>
+</span><span id="__span-8-133"><a id="__codelineno-8-133" name="__codelineno-8-133"></a><span class="p">}</span>
+</span><span id="__span-8-134"><a id="__codelineno-8-134" name="__codelineno-8-134"></a>
+</span><span id="__span-8-135"><a id="__codelineno-8-135" name="__codelineno-8-135"></a><span class="c1">// displayContent prints content to console.</span>
+</span><span id="__span-8-136"><a id="__codelineno-8-136" name="__codelineno-8-136"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">multiTurnChat</span><span class="p">)</span><span class="w"> </span><span class="nx">displayContent</span><span class="p">(</span>
+</span><span id="__span-8-137"><a id="__codelineno-8-137" name="__codelineno-8-137"></a><span class="w">    </span><span class="nx">content</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span>
+</span><span id="__span-8-138"><a id="__codelineno-8-138" name="__codelineno-8-138"></a><span class="w">    </span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
+</span><span id="__span-8-139"><a id="__codelineno-8-139" name="__codelineno-8-139"></a><span class="w">    </span><span class="nx">assistantStarted</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span><span class="p">,</span>
+</span><span id="__span-8-140"><a id="__codelineno-8-140" name="__codelineno-8-140"></a><span class="w">    </span><span class="nx">fullContent</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span><span class="p">,</span>
+</span><span id="__span-8-141"><a id="__codelineno-8-141" name="__codelineno-8-141"></a><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-142"><a id="__codelineno-8-142" name="__codelineno-8-142"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="o">*</span><span class="nx">assistantStarted</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-143"><a id="__codelineno-8-143" name="__codelineno-8-143"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">*</span><span class="nx">toolCallsDetected</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-144"><a id="__codelineno-8-144" name="__codelineno-8-144"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;\n🤖 Assistant: &quot;</span><span class="p">)</span>
+</span><span id="__span-8-145"><a id="__codelineno-8-145" name="__codelineno-8-145"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-8-146"><a id="__codelineno-8-146" name="__codelineno-8-146"></a><span class="w">        </span><span class="o">*</span><span class="nx">assistantStarted</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-8-147"><a id="__codelineno-8-147" name="__codelineno-8-147"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-148"><a id="__codelineno-8-148" name="__codelineno-8-148"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">content</span><span class="p">)</span>
+</span><span id="__span-8-149"><a id="__codelineno-8-149" name="__codelineno-8-149"></a><span class="w">    </span><span class="o">*</span><span class="nx">fullContent</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">content</span>
+</span><span id="__span-8-150"><a id="__codelineno-8-150" name="__codelineno-8-150"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="relationship-and-usage-scenarios-of-requestid-parentinvocationid-and-invocationid">Relationship and Usage Scenarios of RequestID, ParentInvocationID, and InvocationID</h3>
 <ul>
@@ -2117,7 +2207,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="October 10, 2025 12:05:22 UTC">2025-10-10 12:05:22</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="October 24, 2025 03:37:30 UTC">2025-10-24 03:37:30</span>
   </span>
 
     
