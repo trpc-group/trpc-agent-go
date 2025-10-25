@@ -1002,3 +1002,246 @@ func TestVectorStore_SearchConvertResult(t *testing.T) {
 		})
 	}
 }
+
+// TestVectorStore_SearchByKeyword tests searchByKeyword method directly.
+func TestVectorStore_SearchByKeyword(t *testing.T) {
+	tests := []struct {
+		name      string
+		query     *vectorstore.SearchQuery
+		setupMock func(*mockClient, *VectorStore)
+		wantErr   bool
+		errMsg    string
+		validate  func(*testing.T, *vectorstore.SearchResult)
+	}{
+		{
+			name: "success_keyword_search",
+			query: &vectorstore.SearchQuery{
+				Query:      "machine learning",
+				SearchMode: vectorstore.SearchModeKeyword,
+				Limit:      5,
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				// Add documents with content
+				ctx := context.Background()
+				docs := []struct {
+					id      string
+					content string
+					vector  []float64
+				}{
+					{"doc1", "machine learning basics", []float64{1.0, 0.5, 0.2}},
+					{"doc2", "deep learning tutorial", []float64{0.8, 0.6, 0.3}},
+				}
+				for _, d := range docs {
+					doc := &document.Document{
+						ID:      d.id,
+						Content: d.content,
+					}
+					_ = vs.Add(ctx, doc, d.vector)
+				}
+			},
+			wantErr: false,
+			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+				assert.NotNil(t, result)
+				assert.GreaterOrEqual(t, len(result.Results), 0)
+			},
+		},
+		{
+			name: "empty_query_keyword",
+			query: &vectorstore.SearchQuery{
+				Query:      "",
+				SearchMode: vectorstore.SearchModeKeyword,
+				Limit:      5,
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {},
+			wantErr:   true,
+			errMsg:    "keyword is required",
+		},
+		{
+			name: "keyword_search_with_filter",
+			query: &vectorstore.SearchQuery{
+				Query:      "artificial intelligence",
+				SearchMode: vectorstore.SearchModeKeyword,
+				Limit:      10,
+				Filter: &vectorstore.SearchFilter{
+					Metadata: map[string]any{
+						"category": "AI",
+					},
+				},
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				doc := &document.Document{
+					ID:       "ai_doc",
+					Content:  "artificial intelligence overview",
+					Metadata: map[string]any{"category": "AI"},
+				}
+				_ = vs.Add(ctx, doc, []float64{1.0, 0.5, 0.2})
+			},
+			wantErr: false,
+			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+				assert.NotNil(t, result)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+			)
+			// Inject mock sparse encoder
+			vs.sparseEncoder = newMockSparseEncoder()
+			// Enable TSVector option
+			vs.option.enableTSVector = true
+
+			if tt.setupMock != nil {
+				tt.setupMock(mockClient, vs)
+			}
+
+			result, err := vs.searchByKeyword(context.Background(), tt.query)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				if tt.validate != nil {
+					tt.validate(t, result)
+				}
+			}
+		})
+	}
+}
+
+// TestVectorStore_SearchByHybrid tests searchByHybrid method directly.
+func TestVectorStore_SearchByHybrid(t *testing.T) {
+	tests := []struct {
+		name      string
+		query     *vectorstore.SearchQuery
+		setupMock func(*mockClient, *VectorStore)
+		wantErr   bool
+		errMsg    string
+		validate  func(*testing.T, *vectorstore.SearchResult)
+	}{
+		{
+			name: "success_hybrid_search_with_both",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{1.0, 0.5, 0.2},
+				Query:      "machine learning",
+				SearchMode: vectorstore.SearchModeHybrid,
+				Limit:      5,
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				doc := &document.Document{
+					ID:      "hybrid_doc",
+					Content: "machine learning and AI",
+				}
+				_ = vs.Add(ctx, doc, []float64{1.0, 0.5, 0.2})
+			},
+			wantErr: false,
+			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+				assert.NotNil(t, result)
+				assert.GreaterOrEqual(t, len(result.Results), 0)
+			},
+		},
+		{
+			name: "hybrid_search_vector_only",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{1.0, 0.5, 0.2},
+				Query:      "",
+				SearchMode: vectorstore.SearchModeHybrid,
+				Limit:      5,
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				doc := &document.Document{
+					ID:      "vector_only_doc",
+					Content: "test content",
+				}
+				_ = vs.Add(ctx, doc, []float64{0.9, 0.5, 0.2})
+			},
+			wantErr: false,
+			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+				assert.NotNil(t, result)
+			},
+		},
+		{
+			name: "hybrid_search_missing_vector",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{},
+				Query:      "test query",
+				SearchMode: vectorstore.SearchModeHybrid,
+				Limit:      5,
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {},
+			wantErr:   true,
+			errMsg:    "vector is required",
+		},
+		{
+			name: "hybrid_search_with_filter",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{1.0, 0.5, 0.2},
+				Query:      "deep learning",
+				SearchMode: vectorstore.SearchModeHybrid,
+				Limit:      10,
+				Filter: &vectorstore.SearchFilter{
+					Metadata: map[string]any{
+						"topic": "ML",
+					},
+				},
+			},
+			setupMock: func(m *mockClient, vs *VectorStore) {
+				ctx := context.Background()
+				doc := &document.Document{
+					ID:       "filtered_doc",
+					Content:  "deep learning fundamentals",
+					Metadata: map[string]any{"topic": "ML"},
+				}
+				_ = vs.Add(ctx, doc, []float64{1.0, 0.5, 0.2})
+			},
+			wantErr: false,
+			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+				assert.NotNil(t, result)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+			)
+			// Inject mock sparse encoder
+			vs.sparseEncoder = newMockSparseEncoder()
+			// Enable TSVector option
+			vs.option.enableTSVector = true
+
+			if tt.setupMock != nil {
+				tt.setupMock(mockClient, vs)
+			}
+
+			result, err := vs.searchByHybrid(context.Background(), tt.query)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				if tt.validate != nil {
+					tt.validate(t, result)
+				}
+			}
+		})
+	}
+}

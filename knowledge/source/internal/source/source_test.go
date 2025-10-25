@@ -41,13 +41,33 @@ func TestGetFileTypeFromContentType(t *testing.T) {
 		fileName    string
 		want        string
 	}{
+		// Content type based detection
 		{"text/html; charset=utf-8", "", "text"},
+		{"text/plain", "", "text"},
+		{"text/plain; charset=utf-8", "", "text"},
 		{"application/json", "", "json"},
+		{"application/json; charset=utf-8", "", "json"},
 		{"text/csv", "", "csv"},
 		{"application/pdf", "", "pdf"},
 		{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "", "docx"},
+
+		// File extension based detection
 		{"", "file.md", "markdown"},
+		{"", "file.markdown", "markdown"},
+		{"", "file.txt", "text"},
+		{"", "file.text", "text"},
+		{"", "file.html", "text"},
+		{"", "file.htm", "text"},
+		{"", "file.json", "json"},
+		{"", "file.csv", "csv"},
+		{"", "file.pdf", "pdf"},
+		{"", "file.docx", "docx"},
+		{"", "file.doc", "docx"},
 		{"", "fallback.unknown", "text"},
+
+		// Content type takes precedence over file extension
+		{"application/json", "file.txt", "json"},
+		{"text/csv", "file.json", "csv"},
 	}
 
 	for _, c := range cases {

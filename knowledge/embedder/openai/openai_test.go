@@ -58,6 +58,20 @@ func TestNewEmbedder(t *testing.T) {
 				apiKey:         "test-key",
 			},
 		},
+		{
+			name: "with organization and base URL",
+			opts: []Option{
+				WithOrganization("test-org"),
+				WithBaseURL("https://api.example.com"),
+			},
+			expected: &Embedder{
+				model:          DefaultModel,
+				dimensions:     DefaultDimensions,
+				encodingFormat: DefaultEncodingFormat,
+				organization:   "test-org",
+				baseURL:        "https://api.example.com",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -79,7 +93,29 @@ func TestNewEmbedder(t *testing.T) {
 			if e.apiKey != tt.expected.apiKey {
 				t.Errorf("expected apiKey %s, got %s", tt.expected.apiKey, e.apiKey)
 			}
+			if e.organization != tt.expected.organization {
+				t.Errorf("expected organization %s, got %s", tt.expected.organization, e.organization)
+			}
+			if e.baseURL != tt.expected.baseURL {
+				t.Errorf("expected baseURL %s, got %s", tt.expected.baseURL, e.baseURL)
+			}
 		})
+	}
+}
+
+// TestWithRequestOptions tests the WithRequestOptions option function.
+func TestWithRequestOptions(t *testing.T) {
+	// Test that WithRequestOptions can be called and doesn't panic.
+	// We don't need to test the actual OpenAI options behavior here,
+	// just ensure the option function works.
+	e := New(WithRequestOptions())
+	if e == nil {
+		t.Fatal("expected non-nil embedder")
+	}
+
+	// Verify other fields still have default values.
+	if e.model != DefaultModel {
+		t.Errorf("expected default model %s, got %s", DefaultModel, e.model)
 	}
 }
 
