@@ -527,10 +527,10 @@ stateGraph.AddLLMNode("answer", mdl,
 占位符与会话状态的最佳实践
 
 - 短期 vs 持久：只用于本轮提示词组装的数据写到 `session.State` 的 `temp:*`；需要跨轮/跨会话保留的配置，请通过 SessionService（会话服务）更新 `user:*`/`app:*`。
-- 为什么可以直接写：LLM 节点从图状态里的会话对象读取并展开占位符，见 [graph/state_graph.go](graph/state_graph.go)；GraphAgent 在启动时把会话对象放入图状态，见 [agent/graphagent/graph_agent.go](agent/graphagent/graph_agent.go)。
-- 服务侧护栏：内存实现禁止通过“更新用户态”的接口写 `temp:*`（以及 `app:*` via user updater），见 [session/inmemory/service.go](session/inmemory/service.go)。
+- 为什么可以直接写：LLM 节点从图状态里的会话对象读取并展开占位符，见 [graph/state_graph.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/state_graph.go)；GraphAgent 在启动时把会话对象放入图状态，见 [agent/graphagent/graph_agent.go](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/graphagent/graph_agent.go)。
+- 服务侧护栏：内存实现禁止通过“更新用户态”的接口写 `temp:*`（以及 `app:*` via user updater），见 [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go)。
 - 并发建议：并行分支不要同时改同一批 `session.State` 键；建议汇总到单节点合并后一次写入，或先放图状态再一次写到 `temp:*`。
-- 可观测性：若希望在完成事件中看到摘要，可额外把精简信息放入图状态（如 `metadata`）；最终事件会序列化非内部的最终状态，见 [graph/events.go](graph/events.go)。
+- 可观测性：若希望在完成事件中看到摘要，可额外把精简信息放入图状态（如 `metadata`）；最终事件会序列化非内部的最终状态，见 [graph/events.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go)。
 
 #### 通过 Reducer 与 MessageOp 实现的原子更新
 
@@ -1164,14 +1164,14 @@ sg.AddLLMNode(llmNodeAssistant, model, llmSystemPrompt, tools)
 - 清理：`ClearCache(nodes ...string)` 按节点清理缓存命名空间
 
 参考：
-- Graph 接口（缓存与策略的访问/设置）：[graph/graph.go](graph/graph.go)
+- Graph 接口（缓存与策略的访问/设置）：[graph/graph.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/graph.go)
 - 默认策略与内存后端实现：
-  - 接口/策略与默认键函数（规范化 JSON + SHA‑256）：[graph/cache.go](graph/cache.go)
-  - 内存缓存（InMemoryCache）并发安全实现（读写锁 + 深拷贝）：[graph/cache.go](graph/cache.go)
+  - 接口/策略与默认键函数（规范化 JSON + SHA‑256）：[graph/cache.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache.go)
+  - 内存缓存（InMemoryCache）并发安全实现（读写锁 + 深拷贝）：[graph/cache.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache.go)
 - 执行器：
-  - 节点执行前尝试 Get，命中则跳过节点函数执行，仅触发 after 回调与写出（Writes）：[graph/executor.go](graph/executor.go)
-  - 正常执行成功后写入缓存（Set）：[graph/executor.go](graph/executor.go)
-  - 节点完成事件中附带 `_cache_hit` 观察标记（命中时插入 `StateDelta["_cache_hit"]=true`）：[graph/executor.go](graph/executor.go)
+  - 节点执行前尝试 Get，命中则跳过节点函数执行，仅触发 after 回调与写出（Writes）：[graph/executor.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go)
+  - 正常执行成功后写入缓存（Set）：[graph/executor.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go)
+  - 节点完成事件中附带 `_cache_hit` 观察标记（命中时插入 `StateDelta["_cache_hit"]=true`）：[graph/executor.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go)
 
 最小用法：
 
@@ -1358,7 +1358,7 @@ func runAndReadHits(executor *graph.Executor, initial graph.State) error {
 注意事项：
 - 仅对“纯函数（相同输入→相同输出，无外部副作用）”节点开启缓存，避免语义错误。
 - TTL（Time To Live）为 0 表示不过期，需防止内存增长；生产建议使用持久化后端（如 Redis/SQLite）与定期清理。
-- 键函数会“净化输入”后再规范化序列化，避免把会话、执行上下文等“易变/不可序列化”值纳入键，提升命中率、避免错误（见 [graph/cache_key.go](graph/cache_key.go)）。
+- 键函数会“净化输入”后再规范化序列化，避免把会话、执行上下文等“易变/不可序列化”值纳入键，提升命中率、避免错误（见 [graph/cache_key.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache_key.go)）。
 - 代码更新后可调用 `ClearCache("nodeID")` 清理旧缓存，或在键/命名空间中引入“函数标识符/版本”维度。
 
 Runner + GraphAgent 环境使用示例：
@@ -1435,7 +1435,7 @@ func atoi(s string) int { var n int; fmt.Sscanf(s, "%d", &n); return n }
 ```
 
 示例：
-- 交互式（Interactive）+ Runner + GraphAgent 演示：`examples/graph/nodecache`，入口 [examples/graph/nodecache/main.go](examples/graph/nodecache/main.go)
+- 交互式（Interactive）+ Runner + GraphAgent 演示：`examples/graph/nodecache`，入口 [examples/graph/nodecache/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/graph/nodecache/main.go)
 
 #### Tools 节点
 执行工具调用，注意是**顺序执行**：
@@ -2616,7 +2616,7 @@ func buildGraph() (*graph.Graph, error) {
 
 建议：
 - 仅输出必要键，控制负载与敏感信息；
-- 内部/易变键不会被序列化到最终快照，亦不建议外发（参考 [graph/internal_keys.go:16](graph/internal_keys.go:16)）；
+- 内部/易变键不会被序列化到最终快照，亦不建议外发（参考 [graph/internal_keys.go:16](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16)）；
 - 文本类中间结果优先复用模型流式事件（`choice.Delta.Content`）。
 
 也可以在 Agent 级别配置回调：
