@@ -83,3 +83,11 @@ func TestMessagesEqual_ReasoningContent(t *testing.T) {
 		t.Fatalf("expected not equal when reasoning content differs")
 	}
 }
+
+func TestMessagesEqual_ToolNameDiffers(t *testing.T) {
+	a := Message{Role: RoleTool, ToolID: "1", ToolName: "fn1", Content: "res"}
+	b := Message{Role: RoleTool, ToolID: "1", ToolName: "fn2", Content: "res"}
+	if MessagesEqual(a, b) {
+		t.Fatalf("expected not equal when tool name differs")
+	}
+}
