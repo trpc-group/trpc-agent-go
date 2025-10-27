@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -503,4 +504,228 @@ func TestGraphAgent_InvocationContextAccess(t *testing.T) {
 	// The agent should have been able to run successfully, which means
 	// it could access the invocation from context for any internal operations.
 	t.Logf("GraphAgent successfully executed with %d events, confirming invocation context access", len(events))
+}
+
+// TestGraphAgent_WithCheckpointSaver tests the WithCheckpointSaver option.
+func TestGraphAgent_WithCheckpointSaver(t *testing.T) {
+	// Create a mock checkpoint saver.
+	saver := &mockCheckpointSaver{}
+
+	// Create a simple graph.
+	schema := graph.NewStateSchema().
+		AddField("counter", graph.StateField{
+			Type:    reflect.TypeOf(0),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("increment", func(ctx context.Context, state graph.State) (any, error) {
+			counter, _ := state["counter"].(int)
+			return graph.State{"counter": counter + 1}, nil
+		}).
+		SetEntryPoint("increment").
+		SetFinishPoint("increment").
+		Compile()
+
+	require.NoError(t, err)
+
+	// Create graph agent with checkpoint saver.
+	graphAgent, err := New("test-agent", g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+	require.NotNil(t, graphAgent)
+
+	// Verify the executor is accessible.
+	executor := graphAgent.Executor()
+	require.NotNil(t, executor)
+}
+
+// TestGraphAgent_Tools tests the Tools method.
+func TestGraphAgent_Tools(t *testing.T) {
+	// Create a simple graph.
+	schema := graph.NewStateSchema().
+		AddField("input", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "done"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	// GraphAgent should return nil for tools.
+	tools := graphAgent.Tools()
+	require.Nil(t, tools)
+}
+
+// TestGraphAgent_CreateInitialStateWithSession tests createInitialState with session.
+func TestGraphAgent_CreateInitialStateWithSession(t *testing.T) {
+	// Create a simple graph.
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			// Check if messages from session were added.
+			messages, ok := state[graph.StateKeyMessages]
+			if !ok {
+				return nil, fmt.Errorf("messages not found in state")
+			}
+			msgSlice, ok := messages.([]model.Message)
+			if !ok || len(msgSlice) == 0 {
+				return nil, fmt.Errorf("expected non-empty messages")
+			}
+			return graph.State{"status": "success"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	// Create session with some events.
+	sess := &session.Session{
+		ID: "test-session",
+		Events: []event.Event{
+			{
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{Role: model.RoleUser, Content: "Hello"},
+					}},
+				},
+			},
+		},
+	}
+
+	// Create invocation with session.
+	invocation := &agent.Invocation{
+		Message: model.NewUserMessage("Test message"),
+		Session: sess,
+	}
+
+	// Run the agent.
+	eventChan, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	// Collect events.
+	eventCount := 0
+	for range eventChan {
+		eventCount++
+	}
+
+	require.Greater(t, eventCount, 0)
+}
+
+// TestGraphAgent_CreateInitialStateWithResume tests checkpoint resume behavior.
+func TestGraphAgent_CreateInitialStateWithResume(t *testing.T) {
+	// Create a simple graph.
+	schema := graph.NewStateSchema().
+		AddField("user_input", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			// Check if user_input is present or not based on resume signal.
+			userInput, hasInput := state[graph.StateKeyUserInput]
+			if hasInput {
+				return graph.State{"processed": userInput}, nil
+			}
+			return graph.State{"processed": "no input"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	// Test resume with "resume" message - should skip adding user_input.
+	invocation := &agent.Invocation{
+		Message: model.NewUserMessage("resume"),
+		RunOptions: agent.RunOptions{
+			RuntimeState: graph.State{
+				graph.CfgKeyCheckpointID: "checkpoint-123",
+			},
+		},
+	}
+
+	eventChan, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	// Collect events.
+	for range eventChan {
+		// Just drain the channel.
+	}
+
+	// Test resume with meaningful message - should add user_input.
+	invocation2 := &agent.Invocation{
+		Message: model.NewUserMessage("meaningful input"),
+		RunOptions: agent.RunOptions{
+			RuntimeState: graph.State{
+				graph.CfgKeyCheckpointID: "checkpoint-123",
+			},
+		},
+	}
+
+	eventChan2, err := graphAgent.Run(context.Background(), invocation2)
+	require.NoError(t, err)
+
+	// Collect events.
+	for range eventChan2 {
+		// Just drain the channel.
+	}
+}
+
+// mockCheckpointSaver is a mock implementation of graph.CheckpointSaver.
+type mockCheckpointSaver struct{}
+
+func (m *mockCheckpointSaver) Get(ctx context.Context, config map[string]any) (*graph.Checkpoint, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) GetTuple(ctx context.Context, config map[string]any) (*graph.CheckpointTuple, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) List(ctx context.Context, config map[string]any, filter *graph.CheckpointFilter) ([]*graph.CheckpointTuple, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error {
+	return nil
+}
+
+func (m *mockCheckpointSaver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[string]any, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) DeleteLineage(ctx context.Context, lineageID string) error {
+	return nil
+}
+
+func (m *mockCheckpointSaver) Close() error {
+	return nil
 }
