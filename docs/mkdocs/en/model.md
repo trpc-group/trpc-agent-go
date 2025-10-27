@@ -748,9 +748,13 @@ For a complete interactive example, see [examples/model/retry](https://github.co
 
 ### 4. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: directly setting a model instance via `SetModel`, or pre-registering multiple models with `WithModels` and switching by name using `SetModelByName`.
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides three approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
 
-#### Approach 1: Direct Model Instance
+#### Agent-level Switching
+
+Agent-level switching changes the Agent's default model, affecting all subsequent requests.
+
+##### Approach 1: Direct Model Instance
 
 Set the model directly by passing a model instance to `SetModel`:
 
@@ -780,7 +784,7 @@ if isComplexTask {
 }
 ```
 
-#### Approach 2: Switch by Name (Recommended)
+##### Approach 2: Switch by Name
 
 Pre-register multiple models with `WithModels`, then switch by name using `SetModelByName`:
 
@@ -843,6 +847,69 @@ if hour >= 22 || hour < 8 {
 }
 ```
 
+#### Per-request Switching
+
+Per-request switching allows temporarily specifying a model for a single request without affecting the Agent's default model or other requests. This is useful for scenarios where different models are needed for specific tasks.
+
+##### Approach 1: Using WithModel Option
+
+Use `agent.WithModel` to specify a model instance for a single request:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// Use a specific model for this request only.
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithModel(openai.New("gpt-4o")),
+)
+```
+
+##### Approach 2: Using WithModelName Option (Recommended)
+
+Use `agent.WithModelName` to specify a pre-registered model name for a single request:
+
+```go
+// Pre-register multiple models when creating the Agent.
+agent := llmagent.New("my-agent",
+    llmagent.WithModels(map[string]model.Model{
+        "smart": openai.New("gpt-4o"),
+        "fast":  openai.New("gpt-4o-mini"),
+        "cheap": openai.New("deepseek-chat"),
+    }),
+    llmagent.WithModel(openai.New("gpt-4o-mini")), // Default model.
+)
+
+runner := runner.NewRunner("app", agent)
+
+// Temporarily use "smart" model for this request only.
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithModelName("smart"),
+)
+
+// Next request still uses the default model "gpt-4o-mini".
+eventChan2, err := runner.Run(ctx, userID, sessionID, message2)
+```
+
+**Use Cases**:
+
+```go
+// Dynamically select model based on message complexity.
+var opts []agent.RunOption
+if isComplexQuery(message) {
+    opts = append(opts, agent.WithModelName("smart")) // Use powerful model for complex queries.
+}
+
+eventChan, err := runner.Run(ctx, userID, sessionID, message, opts...)
+
+// Use specialized reasoning model for reasoning tasks.
+eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
+    agent.WithModelName("deepseek-reasoner"),
+)
+```
+
 #### Configuration Details
 
 **WithModels Option**:
@@ -858,7 +925,25 @@ if hour >= 22 || hour < 8 {
 - Returns: error if the model name is not found
 - The model must be pre-registered via `WithModels`
 
-#### Comparison of Approaches
+**Per-request Options**:
+
+- `agent.RunOptions.Model`: Directly specify a model instance
+- `agent.RunOptions.ModelName`: Specify a pre-registered model name
+- Priority: `Model` > `ModelName` > Agent default model
+- If the model specified by `ModelName` is not found, it falls back to the Agent's default model
+
+#### Agent-level vs Per-request Comparison
+
+| Feature          | Agent-level Switching        | Per-request Switching          |
+| ---------------- | ---------------------------- | ------------------------------ |
+| Scope            | All subsequent requests      | Current request only           |
+| Usage            | `SetModel`/`SetModelByName`  | `RunOptions.Model`/`ModelName` |
+| State Change     | Changes Agent default model  | Does not change Agent state    |
+| Use Case         | Global strategy adjustment   | Specific task temporary needs  |
+| Concurrency      | Affects all concurrent reqs  | Does not affect other requests |
+| Typical Examples | User tier, time-based policy | Complex queries, reasoning     |
+
+#### Agent-level Approach Comparison
 
 | Feature          | SetModel                     | SetModelByName                            |
 | ---------------- | ---------------------------- | ----------------------------------------- |
@@ -870,14 +955,23 @@ if hour >= 22 || hour < 8 {
 
 #### Important Notes
 
+**Agent-level Switching**:
+
 - **Immediate Effect**: After calling `SetModel` or `SetModelByName`, the next request immediately uses the new model
 - **Session Persistence**: Switching models does not clear session history
 - **Independent Configuration**: Each model retains its own configuration (temperature, max tokens, etc.)
 - **Concurrency Safe**: Both switching approaches are concurrency-safe
 
+**Per-request Switching**:
+
+- **Temporary Override**: Only affects the current request, does not change the Agent's default model
+- **Higher Priority**: Per-request model settings take precedence over the Agent's default model
+- **No Side Effects**: Does not affect other concurrent requests or subsequent requests
+- **Flexible Combination**: Can be used in combination with agent-level switching
+
 #### Usage Example
 
-For a complete interactive example, see [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch).
+For a complete interactive example, see [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch), which demonstrates both agent-level and per-request switching approaches.
 
 ### 5. Token Tailoring
 

@@ -35,6 +35,27 @@ func newDummyModel() model.Model {
 	return openai.New("dummy-model")
 }
 
+// mockModelWithResponse is a mock model that returns a predefined response.
+type mockModelWithResponse struct {
+	response *model.Response
+}
+
+func (m *mockModelWithResponse) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	if m.response != nil {
+		ch <- m.response
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockModelWithResponse) Info() model.Info {
+	return model.Info{Name: "mock-model"}
+}
+
 func TestLLMAgent_SubAgents(t *testing.T) {
 	sub := New("sub", WithDescription("subdesc"))
 	agt := New("main", WithSubAgents([]agent.Agent{sub}))
@@ -999,4 +1020,211 @@ func TestInitializeModels_WithModelInModelsMap(t *testing.T) {
 	require.Equal(t, 2, len(models))
 	_, hasDefault := models[defaultModelName]
 	require.False(t, hasDefault)
+}
+
+// TestLLMAgent_RunWithModel tests per-request model switching using WithModel.
+func TestLLMAgent_RunWithModel(t *testing.T) {
+	// Create two mock models with different responses.
+	defaultModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from default model",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 100},
+		},
+	}
+
+	customModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from custom model",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 200},
+		},
+	}
+
+	// Create agent with default model.
+	llmAgent := New(
+		"test-agent",
+		WithModel(defaultModel),
+	)
+
+	// Test 1: Verify setupInvocation uses default model when no RunOptions.Model is set.
+	inv1 := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message 1"),
+		RunOptions:   agent.RunOptions{},
+	}
+
+	llmAgent.setupInvocation(inv1)
+	require.Equal(t, defaultModel, inv1.Model)
+
+	// Test 2: Verify setupInvocation uses custom model when RunOptions.Model is set.
+	inv2 := &agent.Invocation{
+		InvocationID: "test-2",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message 2"),
+		RunOptions: agent.RunOptions{
+			Model: customModel,
+		},
+	}
+
+	llmAgent.setupInvocation(inv2)
+	require.Equal(t, customModel, inv2.Model)
+
+	// Verify that the agent's default model is unchanged.
+	require.Equal(t, defaultModel, llmAgent.model)
+}
+
+// TestLLMAgent_RunWithModelName tests per-request model switching using WithModelName.
+func TestLLMAgent_RunWithModelName(t *testing.T) {
+	// Create multiple mock models.
+	gpt4Model := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from GPT-4",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 150},
+		},
+	}
+
+	gpt35Model := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from GPT-3.5",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 80},
+		},
+	}
+
+	// Create agent with multiple models registered.
+	llmAgent := New(
+		"test-agent",
+		WithModels(map[string]model.Model{
+			"gpt-4":   gpt4Model,
+			"gpt-3.5": gpt35Model,
+		}),
+	)
+
+	// Test 1: Verify setupInvocation uses gpt-4 model when ModelName is "gpt-4".
+	inv1 := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message 1"),
+		RunOptions: agent.RunOptions{
+			ModelName: "gpt-4",
+		},
+	}
+
+	llmAgent.setupInvocation(inv1)
+	require.Equal(t, gpt4Model, inv1.Model)
+
+	// Test 2: Verify setupInvocation uses gpt-3.5 model when ModelName is "gpt-3.5".
+	inv2 := &agent.Invocation{
+		InvocationID: "test-2",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message 2"),
+		RunOptions: agent.RunOptions{
+			ModelName: "gpt-3.5",
+		},
+	}
+
+	llmAgent.setupInvocation(inv2)
+	require.Equal(t, gpt35Model, inv2.Model)
+}
+
+// TestLLMAgent_RunWithModelName_NotFound tests fallback when model name is not found.
+func TestLLMAgent_RunWithModelName_NotFound(t *testing.T) {
+	defaultModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from default model",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 100},
+		},
+	}
+
+	// Create agent with a default model.
+	llmAgent := New(
+		"test-agent",
+		WithModel(defaultModel),
+	)
+
+	// Verify setupInvocation falls back to default model when model name is not found.
+	inv := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message"),
+		RunOptions: agent.RunOptions{
+			ModelName: "non-existent-model",
+		},
+	}
+
+	llmAgent.setupInvocation(inv)
+	require.Equal(t, defaultModel, inv.Model)
+}
+
+// TestLLMAgent_RunWithModel_Priority tests that WithModel takes priority over WithModelName.
+func TestLLMAgent_RunWithModel_Priority(t *testing.T) {
+	modelFromWithModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from WithModel",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 300},
+		},
+	}
+
+	namedModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from named model",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 250},
+		},
+	}
+
+	// Create agent with named models.
+	llmAgent := New(
+		"test-agent",
+		WithModels(map[string]model.Model{
+			"named-model": namedModel,
+		}),
+	)
+
+	// Verify setupInvocation prioritizes Model over ModelName.
+	inv := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message"),
+		RunOptions: agent.RunOptions{
+			Model:     modelFromWithModel,
+			ModelName: "named-model",
+		},
+	}
+
+	llmAgent.setupInvocation(inv)
+	require.Equal(t, modelFromWithModel, inv.Model)
 }

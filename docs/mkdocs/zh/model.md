@@ -749,9 +749,13 @@ llm := openai.New("gpt-4o-mini",
 
 ### 4. 模型切换（Model Switching）
 
-模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。框架提供两种方式：通过 `SetModel` 方法直接设置模型实例，或通过 `WithModels` 预注册多个模型后使用 `SetModelByName` 按名称切换。
+模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。框架提供三种方式：Agent 级别切换（影响所有后续请求）和请求级别切换（仅影响单次请求）。
 
-#### 方式一：直接设置模型实例
+#### Agent 级别切换
+
+Agent 级别切换会改变 Agent 的默认模型，影响所有后续请求。
+
+##### 方式一：直接设置模型实例
 
 通过 `SetModel` 方法直接传入模型实例：
 
@@ -781,7 +785,7 @@ if isComplexTask {
 }
 ```
 
-#### 方式二：按名称切换模型（推荐）
+##### 方式二：按名称切换模型
 
 通过 `WithModels` 预注册多个模型，然后使用 `SetModelByName` 按名称切换：
 
@@ -844,6 +848,69 @@ if hour >= 22 || hour < 8 {
 }
 ```
 
+#### 请求级别切换
+
+请求级别切换允许为单次请求临时指定模型，不影响 Agent 的默认模型和其他请求。这对于需要针对特定任务使用不同模型的场景非常有用。
+
+##### 方式一：使用 WithModel 选项
+
+通过 `agent.WithModel` 为单次请求指定模型实例：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// 为这次请求使用特定模型.
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithModel(openai.New("gpt-4o")),
+)
+```
+
+##### 方式二：使用 WithModelName 选项（推荐）
+
+通过 `agent.WithModelName` 为单次请求指定预注册的模型名称：
+
+```go
+// 创建 Agent 时预注册多个模型.
+agent := llmagent.New("my-agent",
+    llmagent.WithModels(map[string]model.Model{
+        "smart": openai.New("gpt-4o"),
+        "fast":  openai.New("gpt-4o-mini"),
+        "cheap": openai.New("deepseek-chat"),
+    }),
+    llmagent.WithModel(openai.New("gpt-4o-mini")), // 默认模型.
+)
+
+runner := runner.NewRunner("app", agent)
+
+// 为这次请求临时使用 "smart" 模型.
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithModelName("smart"),
+)
+
+// 下一次请求仍然使用默认模型 "gpt-4o-mini".
+eventChan2, err := runner.Run(ctx, userID, sessionID, message2)
+```
+
+**使用场景**：
+
+```go
+// 根据消息复杂度动态选择模型.
+var opts []agent.RunOption
+if isComplexQuery(message) {
+    opts = append(opts, agent.WithModelName("smart")) // 复杂查询使用强大模型.
+}
+
+eventChan, err := runner.Run(ctx, userID, sessionID, message, opts...)
+
+// 为推理任务使用专门的推理模型.
+eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
+    agent.WithModelName("deepseek-reasoner"),
+)
+```
+
 #### 配置说明
 
 **WithModels 选项**：
@@ -859,7 +926,25 @@ if hour >= 22 || hour < 8 {
 - 返回：如果模型名称不存在，返回错误
 - 模型必须是通过 `WithModels` 预先注册的
 
-#### 两种方式对比
+**请求级别选项**：
+
+- `agent.RunOptions.Model`：直接指定模型实例
+- `agent.RunOptions.ModelName`：指定预注册的模型名称
+- 优先级：`Model` > `ModelName` > Agent 默认模型
+- 如果 `ModelName` 指定的模型不存在，将回退到 Agent 默认模型
+
+#### Agent 级别 vs 请求级别对比
+
+| 特性     | Agent 级别切换              | 请求级别切换                   |
+| -------- | --------------------------- | ------------------------------ |
+| 影响范围 | 所有后续请求                | 仅当前请求                     |
+| 使用方式 | `SetModel`/`SetModelByName` | `RunOptions.Model`/`ModelName` |
+| 状态变化 | 改变 Agent 默认模型         | 不改变 Agent 状态              |
+| 适用场景 | 全局策略调整                | 特定任务临时需求               |
+| 并发影响 | 影响所有并发请求            | 不影响其他请求                 |
+| 典型用例 | 用户等级、时间段策略        | 复杂查询、推理任务             |
+
+#### Agent 级别切换方式对比
 
 | 特性     | SetModel         | SetModelByName       |
 | -------- | ---------------- | -------------------- |
@@ -871,14 +956,23 @@ if hour >= 22 || hour < 8 {
 
 #### 重要说明
 
+**Agent 级别切换**：
+
 - **即时生效**：调用 `SetModel` 或 `SetModelByName` 后，下一次请求立即使用新模型
 - **会话保持**：切换模型不会清除会话历史
 - **配置独立**：每个模型保留自己的配置（温度、最大 token 等）
 - **并发安全**：两种切换方式都是并发安全的
 
+**请求级别切换**：
+
+- **临时覆盖**：仅影响当前请求，不改变 Agent 的默认模型
+- **优先级高**：请求级别的模型设置优先于 Agent 默认模型
+- **无副作用**：不影响其他并发请求或后续请求
+- **灵活组合**：可以与 Agent 级别切换配合使用
+
 #### 使用示例
 
-完整的交互式示例请参考 [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch)。
+完整的交互式示例请参考 [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch)，该示例演示了 Agent 级别和请求级别两种切换方式。
 
 ### 5. Token 裁剪（Token Tailoring）
 

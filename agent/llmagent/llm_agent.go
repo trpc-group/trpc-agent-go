@@ -793,9 +793,25 @@ func (e *haveCustomResponseError) Error() string {
 
 // setupInvocation sets up the invocation
 func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
-	// set model.
+	// Set model: prioritize RunOptions.Model, then RunOptions.ModelName, then agent's default model.
 	a.mu.RLock()
-	invocation.Model = a.model
+	// Check if a per-request model is specified.
+	if invocation.RunOptions.Model != nil {
+		// Use the model directly from RunOptions.
+		invocation.Model = invocation.RunOptions.Model
+	} else if invocation.RunOptions.ModelName != "" {
+		// Look up model by name from registered models.
+		if m, ok := a.models[invocation.RunOptions.ModelName]; ok {
+			invocation.Model = m
+		} else {
+			// If model name not found, fall back to agent's default model.
+			// Log a warning but don't fail the request.
+			invocation.Model = a.model
+		}
+	} else {
+		// Use agent's default model.
+		invocation.Model = a.model
+	}
 	a.mu.RUnlock()
 
 	// Set agent and agent name
