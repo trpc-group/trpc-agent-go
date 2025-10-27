@@ -64,9 +64,6 @@ func (c *Callbacks) RunBeforeAgent(
 	ctx context.Context,
 	invocation *Invocation,
 ) (*model.Response, error) {
-	// Inject callback message into context.
-	ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
-
 	for _, cb := range c.BeforeAgent {
 		customResponse, err := cb(ctx, invocation)
 		if err != nil {
@@ -87,11 +84,6 @@ func (c *Callbacks) RunAfterAgent(
 	invocation *Invocation,
 	runErr error,
 ) (*model.Response, error) {
-	// Ensure callback message exists in context.
-	if CallbackMessage(ctx) == nil {
-		ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
-	}
-
 	for _, cb := range c.AfterAgent {
 		customResponse, err := cb(ctx, invocation, runErr)
 		if err != nil {
@@ -114,4 +106,10 @@ func CallbackMessage(ctx context.Context) callback.Message {
 		return msg
 	}
 	return nil
+}
+
+// WithCallbackMessage injects a callback message into context.
+// This should be called before running agent callbacks.
+func WithCallbackMessage(ctx context.Context) context.Context {
+	return context.WithValue(ctx, contextKey{}, callback.NewMessage())
 }

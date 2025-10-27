@@ -13,6 +13,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -185,4 +186,71 @@ func TestCallbacksChainRegistration(t *testing.T) {
 	if len(callbacks.AfterAgent) != 1 {
 		t.Errorf("Expected 1 after agent callback, got %d", len(callbacks.AfterAgent))
 	}
+}
+
+// TestCallbackMessage_SharedBetweenBeforeAndAfter verifies that the callback
+// message created in BeforeAgent is the same instance in AfterAgent.
+func TestCallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
+	callbacks := NewCallbacks()
+	invocation := &Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
+		Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+	}
+
+	// Track the message from Before callback.
+	var beforeMsg interface{}
+
+	// Register Before callback that stores data in message.
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *Invocation) (*model.Response, error) {
+		msg := CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in BeforeAgent")
+
+		// Store the message for comparison.
+		beforeMsg = msg
+
+		// Store test values.
+		msg.Set("test_key", "test_value")
+		msg.Set("invocation_id", inv.InvocationID)
+
+		// Verify we can retrieve it immediately.
+		val, ok := msg.Get("test_key")
+		require.True(t, ok, "should be able to get the value we just set")
+		require.Equal(t, "test_value", val.(string))
+
+		return nil, nil
+	})
+
+	// Register After callback that retrieves data from message.
+	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *Invocation, runErr error) (*model.Response, error) {
+		msg := CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in AfterAgent")
+
+		// Check if it's the same message instance by comparing pointers.
+		assert.Same(t, beforeMsg, msg,
+			"callback message in AfterAgent should be the same instance as in BeforeAgent")
+
+		// Retrieve the value stored in Before callback.
+		val, ok := msg.Get("test_key")
+		require.True(t, ok, "should be able to get the value set in BeforeAgent")
+		require.Equal(t, "test_value", val.(string))
+
+		// Verify invocation_id matches.
+		invID, ok := msg.Get("invocation_id")
+		require.True(t, ok)
+		require.Equal(t, inv.InvocationID, invID.(string))
+
+		return nil, nil
+	})
+
+	// Inject callback message into context (simulating what agent.Run() does).
+	ctx := WithCallbackMessage(context.Background())
+
+	// Run Before callback.
+	_, err := callbacks.RunBeforeAgent(ctx, invocation)
+	require.NoError(t, err)
+
+	// Run After callback.
+	_, err = callbacks.RunAfterAgent(ctx, invocation, nil)
+	require.NoError(t, err)
 }

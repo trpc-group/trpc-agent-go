@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -512,4 +513,75 @@ func TestChainAgent_BeforeCallbackError(t *testing.T) {
 		require.Equal(t, agent.ErrorTypeAgentCallbackError, e.Error.Type)
 	}
 	require.Equal(t, 1, cnt)
+}
+
+// TestChainAgent_CallbackMessage_SharedBetweenBeforeAndAfter verifies that
+// the callback message created in BeforeAgent is the same instance in AfterAgent.
+func TestChainAgent_CallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
+	// Track the message from Before callback.
+	var beforeMsg interface{}
+
+	// Create agent callbacks.
+	callbacks := agent.NewCallbacks()
+
+	// Register Before callback that stores data in message.
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		msg := agent.CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in BeforeAgent")
+
+		// Store the message for comparison.
+		beforeMsg = msg
+
+		// Store test values.
+		msg.Set("test_key", "test_value")
+		msg.Set("invocation_id", inv.InvocationID)
+
+		return nil, nil
+	})
+
+	// Register After callback that retrieves data from message.
+	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+		msg := agent.CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in AfterAgent")
+
+		// Check if it's the same message instance.
+		assert.Same(t, beforeMsg, msg,
+			"callback message in AfterAgent should be the same instance as in BeforeAgent")
+
+		// Retrieve the value stored in Before callback.
+		val, ok := msg.Get("test_key")
+		require.True(t, ok, "should be able to get the value set in BeforeAgent")
+		require.Equal(t, "test_value", val.(string))
+
+		// Verify invocation_id matches.
+		invID, ok := msg.Get("invocation_id")
+		require.True(t, ok)
+		require.Equal(t, inv.InvocationID, invID.(string))
+
+		return nil, nil
+	})
+
+	// Create chain agent with callbacks.
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{&mockAgent{name: "agent1"}, &mockAgent{name: "agent2"}}),
+		WithAgentCallbacks(callbacks),
+	)
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-chain",
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "test",
+		},
+	}
+
+	ctx := context.Background()
+	eventChan, err := chainAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	// Drain the event channel.
+	for range eventChan {
+	}
 }

@@ -661,6 +661,10 @@ func registerTools(options *Options) []tool.Tool {
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
 
+	// Inject callback message into context for agent callbacks.
+	// Do this regardless of whether callbacks exist, so the context is consistent.
+	ctx = agent.WithCallbackMessage(ctx)
+
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, &a.genConfig)
 

@@ -178,7 +178,7 @@ func (f *Flow) runOneStep(
 	defer span.End()
 
 	// 2. Call LLM (get response channel).
-	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
+	responseChan, ctx, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -314,30 +314,35 @@ func (f *Flow) preprocess(
 }
 
 // callLLM performs the actual LLM call using core/model.
+// Returns (responseChan, modifiedCtx, error).
 func (f *Flow) callLLM(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
-) (<-chan *model.Response, error) {
+) (<-chan *model.Response, context.Context, error) {
 	if invocation.Model == nil {
-		return nil, errors.New("no model available for LLM call")
+		return nil, ctx, errors.New("no model available for LLM call")
 	}
 
 	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
+
+	// Inject callback message into context for model callbacks.
+	// Do this regardless of whether callbacks exist, so the context is consistent.
+	ctx = model.WithCallbackMessage(ctx)
 
 	// Run before model callbacks if they exist.
 	if f.modelCallbacks != nil {
 		customResponse, err := f.modelCallbacks.RunBeforeModel(ctx, llmRequest)
 		if err != nil {
 			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
-			return nil, err
+			return nil, ctx, err
 		}
 		if customResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			responseChan := make(chan *model.Response, 1)
 			responseChan <- customResponse
 			close(responseChan)
-			return responseChan, nil
+			return responseChan, ctx, nil
 		}
 	}
 
@@ -345,10 +350,10 @@ func (f *Flow) callLLM(
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
 		log.Errorf("LLM call failed for agent %s: %v", invocation.AgentName, err)
-		return nil, err
+		return nil, ctx, err
 	}
 
-	return responseChan, nil
+	return responseChan, ctx, nil
 }
 
 // postprocess handles post-LLM call processing using response processors.

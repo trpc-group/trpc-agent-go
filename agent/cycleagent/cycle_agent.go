@@ -312,6 +312,10 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 // Run implements the agent.Agent interface.
 // It executes sub-agents in a loop until escalation or max iterations.
 func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	// Inject callback message into context for agent callbacks.
+	// Do this regardless of whether callbacks exist, so the context is consistent.
+	ctx = agent.WithCallbackMessage(ctx)
+
 	eventChan := make(chan *event.Event, a.channelBufferSize)
 
 	// Setup invocation.

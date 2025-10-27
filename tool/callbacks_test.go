@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -538,4 +539,84 @@ func TestCallbacksChainRegistration(t *testing.T) {
 	if len(callbacks.AfterTool) != 1 {
 		t.Errorf("Expected 1 after tool callback, got %d", len(callbacks.AfterTool))
 	}
+}
+
+// TestCallbackMessage_SharedBetweenBeforeAndAfter verifies that the callback
+// message created in BeforeTool is the same instance in AfterTool.
+func TestCallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	toolName := "test-tool"
+	toolDeclaration := &tool.Declaration{
+		Name:        toolName,
+		Description: "A test tool",
+	}
+	args := []byte(`{"arg1": "value1"}`)
+
+	// Track the message from Before callback.
+	var beforeMsg interface{}
+
+	// Register Before callback that stores data in message.
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		name string,
+		decl *tool.Declaration,
+		jsonArgs *[]byte,
+	) (any, error) {
+		msg := tool.CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in BeforeTool")
+
+		// Store the message for comparison.
+		beforeMsg = msg
+
+		// Store test values.
+		msg.Set("test_key", "test_value")
+		msg.Set("tool_name", name)
+
+		// Verify we can retrieve it immediately.
+		val, ok := msg.Get("test_key")
+		require.True(t, ok, "should be able to get the value we just set")
+		require.Equal(t, "test_value", val.(string))
+
+		return nil, nil
+	})
+
+	// Register After callback that retrieves data from message.
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		name string,
+		decl *tool.Declaration,
+		jsonArgs []byte,
+		result any,
+		runErr error,
+	) (any, error) {
+		msg := tool.CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in AfterTool")
+
+		// Check if it's the same message instance by comparing pointers.
+		assert.Same(t, beforeMsg, msg,
+			"callback message in AfterTool should be the same instance as in BeforeTool")
+
+		// Retrieve the value stored in Before callback.
+		val, ok := msg.Get("test_key")
+		require.True(t, ok, "should be able to get the value set in BeforeTool")
+		require.Equal(t, "test_value", val.(string))
+
+		// Verify tool_name matches.
+		toolNameVal, ok := msg.Get("tool_name")
+		require.True(t, ok)
+		require.Equal(t, name, toolNameVal.(string))
+
+		return nil, nil
+	})
+
+	// Inject callback message into context (simulating what executeToolWithCallbacks() does).
+	ctx := tool.WithCallbackMessage(context.Background())
+
+	// Run Before callback.
+	_, err := callbacks.RunBeforeTool(ctx, toolName, toolDeclaration, &args)
+	require.NoError(t, err)
+
+	// Run After callback.
+	_, err = callbacks.RunAfterTool(ctx, toolName, toolDeclaration, args, "result", nil)
+	require.NoError(t, err)
 }

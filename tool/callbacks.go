@@ -62,9 +62,6 @@ func (c *Callbacks) RunBeforeTool(
 	toolDeclaration *Declaration,
 	jsonArgs *[]byte,
 ) (any, error) {
-	// Inject callback message into context.
-	ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
-
 	for _, cb := range c.BeforeTool {
 		customResult, err := cb(ctx, toolName, toolDeclaration, jsonArgs)
 		if err != nil {
@@ -93,11 +90,6 @@ func (c *Callbacks) RunAfterTool(
 		return result, runErr
 	}
 
-	// Ensure callback message exists in context.
-	if CallbackMessage(ctx) == nil {
-		ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
-	}
-
 	for _, cb := range c.AfterTool {
 		customResult, err := cb(ctx, toolName, toolDeclaration, jsonArgs, result, runErr)
 		if err != nil {
@@ -120,4 +112,10 @@ func CallbackMessage(ctx context.Context) callback.Message {
 		return msg
 	}
 	return nil
+}
+
+// WithCallbackMessage injects a callback message into context.
+// This should be called before running tool callbacks.
+func WithCallbackMessage(ctx context.Context) context.Context {
+	return context.WithValue(ctx, contextKey{}, callback.NewMessage())
 }

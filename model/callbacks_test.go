@@ -14,6 +14,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -260,4 +261,75 @@ func TestCallbacks_AfterModel_PassThrough(t *testing.T) {
 	resp, err := callbacks.RunAfterModel(context.Background(), req, originalResponse, nil)
 	require.NoError(t, err)
 	require.Nil(t, resp)
+}
+
+// TestCallbackMessage_SharedBetweenBeforeAndAfter verifies that the callback
+// message created in BeforeModel is the same instance in AfterModel.
+func TestCallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
+	callbacks := NewCallbacks()
+	req := &Request{
+		Messages: []Message{
+			NewUserMessage("Hello"),
+		},
+	}
+	rsp := &Response{
+		ID:    "test-response",
+		Model: "test-model",
+	}
+
+	// Track the message from Before callback.
+	var beforeMsg interface{}
+
+	// Register Before callback that stores data in message.
+	callbacks.RegisterBeforeModel(func(ctx context.Context, r *Request) (*Response, error) {
+		msg := CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in BeforeModel")
+
+		// Store the message for comparison.
+		beforeMsg = msg
+
+		// Store test values.
+		msg.Set("test_key", "test_value")
+		msg.Set("message_count", len(r.Messages))
+
+		// Verify we can retrieve it immediately.
+		val, ok := msg.Get("test_key")
+		require.True(t, ok, "should be able to get the value we just set")
+		require.Equal(t, "test_value", val.(string))
+
+		return nil, nil
+	})
+
+	// Register After callback that retrieves data from message.
+	callbacks.RegisterAfterModel(func(ctx context.Context, r *Request, resp *Response, modelErr error) (*Response, error) {
+		msg := CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in AfterModel")
+
+		// Check if it's the same message instance by comparing pointers.
+		assert.Same(t, beforeMsg, msg,
+			"callback message in AfterModel should be the same instance as in BeforeModel")
+
+		// Retrieve the value stored in Before callback.
+		val, ok := msg.Get("test_key")
+		require.True(t, ok, "should be able to get the value set in BeforeModel")
+		require.Equal(t, "test_value", val.(string))
+
+		// Verify message_count matches.
+		count, ok := msg.Get("message_count")
+		require.True(t, ok)
+		require.Equal(t, len(r.Messages), count.(int))
+
+		return nil, nil
+	})
+
+	// Inject callback message into context (simulating what callLLM() does).
+	ctx := WithCallbackMessage(context.Background())
+
+	// Run Before callback.
+	_, err := callbacks.RunBeforeModel(ctx, req)
+	require.NoError(t, err)
+
+	// Run After callback.
+	_, err = callbacks.RunAfterModel(ctx, req, rsp, nil)
+	require.NoError(t, err)
 }

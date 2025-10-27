@@ -136,6 +136,10 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	// Inject callback message into context for agent callbacks.
+	// Do this regardless of whether callbacks exist, so the context is consistent.
+	ctx = agent.WithCallbackMessage(ctx)
+
 	// Setup invocation.
 	ga.setupInvocation(invocation)
 

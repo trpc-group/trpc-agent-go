@@ -559,6 +559,11 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	eventChan chan<- *event.Event,
 ) (any, []byte, error) {
 	toolDeclaration := tl.Declaration()
+
+	// Inject callback message into context for tool callbacks.
+	// Do this regardless of whether callbacks exist, so the context is consistent.
+	ctx = tool.WithCallbackMessage(ctx)
+
 	// Run before tool callbacks if they exist.
 	if p.toolCallbacks != nil {
 		customResult, callbackErr := p.toolCallbacks.RunBeforeTool(

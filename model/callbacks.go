@@ -57,9 +57,6 @@ func (c *Callbacks) RegisterAfterModel(cb AfterModelCallback) *Callbacks {
 // Returns (customResponse, error).
 // If any callback returns a custom response, stop and return.
 func (c *Callbacks) RunBeforeModel(ctx context.Context, req *Request) (*Response, error) {
-	// Inject callback message into context.
-	ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
-
 	for _, cb := range c.BeforeModel {
 		customResponse, err := cb(ctx, req)
 		if err != nil {
@@ -78,11 +75,6 @@ func (c *Callbacks) RunBeforeModel(ctx context.Context, req *Request) (*Response
 func (c *Callbacks) RunAfterModel(
 	ctx context.Context, req *Request, rsp *Response, modelErr error,
 ) (*Response, error) {
-	// Ensure callback message exists in context.
-	if CallbackMessage(ctx) == nil {
-		ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
-	}
-
 	for _, cb := range c.AfterModel {
 		customResponse, err := cb(ctx, req, rsp, modelErr)
 		if err != nil {
@@ -105,4 +97,10 @@ func CallbackMessage(ctx context.Context) callback.Message {
 		return msg
 	}
 	return nil
+}
+
+// WithCallbackMessage injects a callback message into context.
+// This should be called before running model callbacks.
+func WithCallbackMessage(ctx context.Context) context.Context {
+	return context.WithValue(ctx, contextKey{}, callback.NewMessage())
 }

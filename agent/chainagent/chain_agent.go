@@ -110,6 +110,10 @@ func (a *ChainAgent) createSubAgentInvocation(
 // Run implements the agent.Agent interface.
 // It executes sub-agents in sequence, passing events through as they are generated.
 func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
+	// Inject callback message into context for agent callbacks.
+	// Do this regardless of whether callbacks exist, so the context is consistent.
+	ctx = agent.WithCallbackMessage(ctx)
+
 	eventChan := make(chan *event.Event, a.channelBufferSize)
 	go func() {
 		defer close(eventChan)
