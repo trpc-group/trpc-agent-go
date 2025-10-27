@@ -2,6 +2,8 @@ module trpc.group/trpc-go/trpc-agent-go/model/tiktoken
 
 go 1.23
 
+toolchain go1.24.9
+
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
 require (
