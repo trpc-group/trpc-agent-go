@@ -782,3 +782,187 @@ func TestResponse_Clone(t *testing.T) {
 		})
 	}
 }
+
+// TestResponse_IsToolCallResponse tests the IsToolCallResponse method with additional scenarios.
+func TestResponse_IsToolCallResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}{
+		{
+			name:     "nil response",
+			rsp:      nil,
+			expected: false,
+		},
+		{
+			name: "empty choices",
+			rsp: &Response{
+				Choices: []Choice{},
+			},
+			expected: false,
+		},
+		{
+			name: "choices with no tool calls",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{
+							Content: "Regular message",
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "choices with tool calls",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{
+							ToolCalls: []ToolCall{
+								{ID: "tool1"},
+							},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rsp.IsToolCallResponse()
+			if got != tt.expected {
+				t.Errorf("IsToolCallResponse() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestResponse_IsPartialResponse tests the IsPartial field.
+func TestResponse_IsPartialResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}{
+		{
+			name: "partial response",
+			rsp: &Response{
+				IsPartial: true,
+			},
+			expected: true,
+		},
+		{
+			name: "complete response",
+			rsp: &Response{
+				IsPartial: false,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.rsp.IsPartial != tt.expected {
+				t.Errorf("IsPartial = %v, want %v", tt.rsp.IsPartial, tt.expected)
+			}
+		})
+	}
+}
+
+// TestObjectTypeConstants tests all object type constants.
+func TestObjectTypeConstants(t *testing.T) {
+	tests := []struct {
+		name     string
+		constant string
+		expected string
+	}{
+		{
+			name:     "error type",
+			constant: ObjectTypeError,
+			expected: "error",
+		},
+		{
+			name:     "tool response type",
+			constant: ObjectTypeToolResponse,
+			expected: "tool.response",
+		},
+		{
+			name:     "preprocessing basic type",
+			constant: ObjectTypePreprocessingBasic,
+			expected: "preprocessing.basic",
+		},
+		{
+			name:     "preprocessing content type",
+			constant: ObjectTypePreprocessingContent,
+			expected: "preprocessing.content",
+		},
+		{
+			name:     "preprocessing identity type",
+			constant: ObjectTypePreprocessingIdentity,
+			expected: "preprocessing.identity",
+		},
+		{
+			name:     "preprocessing instruction type",
+			constant: ObjectTypePreprocessingInstruction,
+			expected: "preprocessing.instruction",
+		},
+		{
+			name:     "preprocessing planning type",
+			constant: ObjectTypePreprocessingPlanning,
+			expected: "preprocessing.planning",
+		},
+		{
+			name:     "postprocessing planning type",
+			constant: ObjectTypePostprocessingPlanning,
+			expected: "postprocessing.planning",
+		},
+		{
+			name:     "postprocessing code execution type",
+			constant: ObjectTypePostprocessingCodeExecution,
+			expected: "postprocessing.code_execution",
+		},
+		{
+			name:     "transfer type",
+			constant: ObjectTypeTransfer,
+			expected: "agent.transfer",
+		},
+		{
+			name:     "runner completion type",
+			constant: ObjectTypeRunnerCompletion,
+			expected: "runner.completion",
+		},
+		{
+			name:     "state update type",
+			constant: ObjectTypeStateUpdate,
+			expected: "state.update",
+		},
+		{
+			name:     "chat completion chunk type",
+			constant: ObjectTypeChatCompletionChunk,
+			expected: "chat.completion.chunk",
+		},
+		{
+			name:     "chat completion type",
+			constant: ObjectTypeChatCompletion,
+			expected: "chat.completion",
+		},
+		{
+			name:     "flow error type",
+			constant: ErrorTypeFlowError,
+			expected: "flow_error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.constant != tt.expected {
+				t.Errorf("Constant = %v, want %v", tt.constant, tt.expected)
+			}
+		})
+	}
+}
