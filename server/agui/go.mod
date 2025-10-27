@@ -3,7 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go/server/agui
 go 1.24.4
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251010213829-13eb1f218b38
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251023014556-5eaa5fba9ad5
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 )
