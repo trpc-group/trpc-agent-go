@@ -11,10 +11,14 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -62,6 +66,264 @@ func TestBuilderAddFunctionNode(t *testing.T) {
 	if node.Function == nil {
 		t.Error("Expected node to have function")
 	}
+}
+
+// blockingTool is a test tool that blocks until allowed, reporting start and
+// optionally respecting context cancellation.
+type blockingTool struct {
+	name       string
+	startedCh  chan<- string
+	proceedCh  <-chan struct{}
+	result     any
+	returnErr  error
+	respectCtx bool
+}
+
+func (b *blockingTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: b.name} }
+
+func (b *blockingTool) Call(ctx context.Context, _ []byte) (any, error) {
+	if b.startedCh != nil {
+		b.startedCh <- b.name
+	}
+	if b.returnErr != nil {
+		return nil, b.returnErr
+	}
+	if b.proceedCh != nil {
+		if b.respectCtx {
+			select {
+			case <-b.proceedCh:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		} else {
+			<-b.proceedCh
+		}
+	}
+	return b.result, nil
+}
+
+// helper to build tool calls with fixed IDs and names.
+func makeToolCalls(names ...string) []model.ToolCall {
+	calls := make([]model.ToolCall, 0, len(names))
+	for _, n := range names {
+		calls = append(calls, model.ToolCall{
+			Type: "function",
+			ID:   "call_" + n,
+			Function: model.FunctionDefinitionParam{
+				Name:      n,
+				Arguments: []byte(`{}`),
+			},
+		})
+	}
+	return calls
+}
+
+func TestProcessToolCalls_SerialVsParallel(t *testing.T) {
+	t.Run("serial executes strictly one-by-one", func(t *testing.T) {
+		started := make(chan string, 2)
+		allowA := make(chan struct{})
+		allowB := make(chan struct{})
+
+		tools := map[string]tool.Tool{
+			"A": &blockingTool{name: "A", startedCh: started, proceedCh: allowA, result: map[string]string{"v": "A"}},
+			"B": &blockingTool{name: "B", startedCh: started, proceedCh: allowB, result: map[string]string{"v": "B"}},
+		}
+		calls := makeToolCalls("A", "B")
+
+		done := make(chan []model.Message, 1)
+		go func() {
+			msgs, err := processToolCalls(context.Background(), toolCallsConfig{
+				ToolCalls:      calls,
+				Tools:          tools,
+				InvocationID:   "inv",
+				EventChan:      nil,
+				Span:           nil,
+				State:          State{},
+				EnableParallel: false,
+			})
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			done <- msgs
+		}()
+
+		// Expect only A to have started initially.
+		select {
+		case got := <-started:
+			if got != "A" {
+				t.Fatalf("first started tool = %s, want A", got)
+			}
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("timeout waiting for first tool start in serial case")
+		}
+		// B should not have started yet (non-blocking check).
+		select {
+		case s := <-started:
+			t.Fatalf("unexpected second start before allowing A; got %s", s)
+		default:
+		}
+		// Allow A to finish, then B should start.
+		close(allowA)
+		select {
+		case got := <-started:
+			if got != "B" {
+				t.Fatalf("second started tool = %s, want B", got)
+			}
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("timeout waiting for second tool start in serial case")
+		}
+		close(allowB)
+
+		msgs := <-done
+		if len(msgs) != 2 {
+			t.Fatalf("messages length = %d, want 2", len(msgs))
+		}
+		// Verify order and JSON content preserved.
+		if msgs[0].ToolName != "A" || msgs[0].ToolID != "call_A" {
+			t.Fatalf("first msg tool mismatch: %+v", msgs[0])
+		}
+		if msgs[1].ToolName != "B" || msgs[1].ToolID != "call_B" {
+			t.Fatalf("second msg tool mismatch: %+v", msgs[1])
+		}
+		// Content is JSON string of the result.
+		var c0 map[string]string
+		if err := json.Unmarshal([]byte(msgs[0].Content), &c0); err != nil || c0["v"] != "A" {
+			t.Fatalf("first msg content = %q, parsed = %v, err = %v", msgs[0].Content, c0, err)
+		}
+		var c1 map[string]string
+		if err := json.Unmarshal([]byte(msgs[1].Content), &c1); err != nil || c1["v"] != "B" {
+			t.Fatalf("second msg content = %q, parsed = %v, err = %v", msgs[1].Content, c1, err)
+		}
+	})
+
+	t.Run("parallel starts both before completion and preserves order", func(t *testing.T) {
+		started := make(chan string, 2)
+		allowA := make(chan struct{})
+		allowB := make(chan struct{})
+
+		tools := map[string]tool.Tool{
+			"A": &blockingTool{name: "A", startedCh: started, proceedCh: allowA, result: map[string]int{"i": 1}},
+			"B": &blockingTool{name: "B", startedCh: started, proceedCh: allowB, result: map[string]int{"i": 2}},
+		}
+		calls := makeToolCalls("A", "B")
+
+		done := make(chan []model.Message, 1)
+		go func() {
+			msgs, err := processToolCalls(context.Background(), toolCallsConfig{
+				ToolCalls:      calls,
+				Tools:          tools,
+				InvocationID:   "inv",
+				EventChan:      nil,
+				Span:           nil,
+				State:          State{},
+				EnableParallel: true,
+			})
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			done <- msgs
+		}()
+
+		// Expect both to start before we allow either to proceed.
+		saw := map[string]bool{}
+		for i := 0; i < 2; i++ {
+			select {
+			case nm := <-started:
+				saw[nm] = true
+			case <-time.After(500 * time.Millisecond):
+				t.Fatal("timeout waiting for parallel tool starts")
+			}
+		}
+		if !saw["A"] || !saw["B"] {
+			t.Fatalf("parallel start saw=%v, want both A and B", saw)
+		}
+		close(allowA)
+		close(allowB)
+		msgs := <-done
+		if len(msgs) != 2 {
+			t.Fatalf("messages length = %d, want 2", len(msgs))
+		}
+		if msgs[0].ToolName != "A" || msgs[1].ToolName != "B" {
+			t.Fatalf("order not preserved: %s then %s", msgs[0].ToolName, msgs[1].ToolName)
+		}
+	})
+}
+
+func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
+	started := make(chan string, 2)
+	// Tool X errors immediately; Tool Y waits but respects context and should be canceled.
+	tools := map[string]tool.Tool{
+		"X": &blockingTool{name: "X", startedCh: started, returnErr: assertAnError{}},
+		"Y": &blockingTool{name: "Y", startedCh: started, proceedCh: make(chan struct{}), respectCtx: true, result: "ok"},
+	}
+	calls := makeToolCalls("X", "Y")
+	_, err := processToolCalls(context.Background(), toolCallsConfig{
+		ToolCalls:      calls,
+		Tools:          tools,
+		InvocationID:   "inv",
+		EventChan:      nil,
+		Span:           oteltrace.SpanFromContext(context.Background()),
+		State:          State{},
+		EnableParallel: true,
+	})
+	if err == nil {
+		t.Fatal("expected error when one tool fails in parallel execution")
+	}
+}
+
+type assertAnError struct{}
+
+func (assertAnError) Error() string { return "boom" }
+
+func TestNewToolsNodeFunc_WithEnableParallelTools(t *testing.T) {
+	started := make(chan string, 2)
+	allowA, allowB := make(chan struct{}), make(chan struct{})
+	tools := map[string]tool.Tool{
+		"A": &blockingTool{name: "A", startedCh: started, proceedCh: allowA, result: 1},
+		"B": &blockingTool{name: "B", startedCh: started, proceedCh: allowB, result: 2},
+	}
+	// Build a node func with parallel enabled via option.
+	nf := NewToolsNodeFunc(tools, WithEnableParallelTools(true))
+
+	// Prepare state with last assistant message containing tool calls.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("A", "B"),
+		}},
+	}
+
+	// Run node function.
+	done := make(chan State, 1)
+	go func() {
+		res, err := nf(context.Background(), state)
+		if err != nil {
+			t.Errorf("unexpected error running tools node: %v", err)
+		}
+		if res == nil {
+			t.Errorf("unexpected nil result from tools node")
+		} else if _, ok := res.(State)[StateKeyMessages].([]model.Message); !ok {
+			t.Errorf("tools node did not return messages state")
+		}
+		done <- res.(State)
+	}()
+
+	// Expect both starts before proceeding (parallel honored).
+	saw := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		select {
+		case nm := <-started:
+			saw[nm] = true
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("timeout waiting for parallel starts via node func")
+		}
+	}
+	if !saw["A"] || !saw["B"] {
+		t.Fatalf("expected both A and B to start, got %v", saw)
+	}
+	close(allowA)
+	close(allowB)
+	<-done
 }
 
 func TestBuilderEdges(t *testing.T) {
