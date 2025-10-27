@@ -103,10 +103,22 @@ type Node struct {
 	// Keys are target node IDs; values are optional labels.
 	destinations map[string]string
 
+	// ends holds per-node named ends mapping for stronger branch semantics.
+	// Keys are symbolic branch names returned by node logic (e.g. "approved",
+	// "rejected"). Values are destination node IDs (or the special End).
+	// This allows nodes to route via Command.GoTo using symbolic names and for
+	// conditional branches to resolve results with clearer, local semantics.
+	ends map[string]string
+
 	// It's effect just for LLM node
 	modelCallbacks *model.Callbacks
 	// just for tool node.
 	toolCallbacks *tool.Callbacks
+
+	// enableParallelTools toggles parallel execution for Tools nodes.
+	// When true, multiple tool calls in a single assistant response are executed concurrently.
+	// Default is false (serial execution) for compatibility and safety.
+	enableParallelTools bool
 
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
@@ -117,6 +129,13 @@ type Node struct {
 	agentOutputMapper     SubgraphOutputMapper
 	agentIsolatedMessages bool
 	agentEventScope       string
+	// agentInputFromLastResponse indicates whether the agent node should
+	// construct the child invocation's user input from the parent's
+	// StateKeyLastResponse. When true, the framework will map
+	// last_response -> user_input for this agent node before invoking the
+	// sub-agent. This provides a concise way to implement "pass only the
+	// result" pipelines between agent nodes without extra glue nodes.
+	agentInputFromLastResponse bool
 }
 
 // Edge represents an edge in the graph.
@@ -282,14 +301,27 @@ func (g *Graph) validate() error {
 	// Validate declared destinations exist.
 	for _, n := range g.nodes {
 		if n == nil || n.destinations == nil || len(n.destinations) == 0 {
-			continue
+			// fallthrough to ends check
 		}
-		for to := range n.destinations {
-			if to == End {
-				continue
+		if n != nil && n.destinations != nil {
+			for to := range n.destinations {
+				if to == End {
+					continue
+				}
+				if _, ok := g.nodes[to]; !ok {
+					return fmt.Errorf("node %s declares destination %s which does not exist", n.ID, to)
+				}
 			}
-			if _, ok := g.nodes[to]; !ok {
-				return fmt.Errorf("node %s declares destination %s which does not exist", n.ID, to)
+		}
+		// Validate per-node ends mapping targets exist.
+		if n != nil && n.ends != nil {
+			for _, target := range n.ends {
+				if target == End {
+					continue
+				}
+				if _, ok := g.nodes[target]; !ok {
+					return fmt.Errorf("node %s declares end target %s which does not exist", n.ID, target)
+				}
 			}
 		}
 	}

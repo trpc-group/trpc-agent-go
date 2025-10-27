@@ -576,3 +576,393 @@ func TestResponse_IsFinalResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestResponse_Clone(t *testing.T) {
+	tests := []struct {
+		name     string
+		response *Response
+	}{
+		{
+			name:     "clone nil response",
+			response: nil,
+		},
+		{
+			name: "clone simple response",
+			response: &Response{
+				ID:      "resp-123",
+				Object:  "chat.completion",
+				Created: 1234567890,
+				Model:   "gpt-4",
+				Choices: []Choice{
+					{
+						Index: 0,
+						Message: Message{
+							Role:    RoleAssistant,
+							Content: "Hello!",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "clone response with usage",
+			response: &Response{
+				ID:    "resp-456",
+				Model: "gpt-3.5-turbo",
+				Usage: &Usage{
+					PromptTokens:     10,
+					CompletionTokens: 20,
+					TotalTokens:      30,
+				},
+			},
+		},
+		{
+			name: "clone response with error",
+			response: &Response{
+				ID: "resp-789",
+				Error: &ResponseError{
+					Message: "API error",
+					Type:    "invalid_request_error",
+					Param:   func() *string { s := "messages"; return &s }(),
+					Code:    func() *string { s := "invalid_value"; return &s }(),
+				},
+			},
+		},
+		{
+			name: "clone response with system fingerprint",
+			response: &Response{
+				ID: "resp-abc",
+				SystemFingerprint: func() *string {
+					s := "fp_123456"
+					return &s
+				}(),
+			},
+		},
+		{
+			name: "clone response with all fields",
+			response: &Response{
+				ID:      "resp-full",
+				Object:  "chat.completion",
+				Created: 9876543210,
+				Model:   "gpt-4-turbo",
+				Choices: []Choice{
+					{
+						Index: 0,
+						Message: Message{
+							Role:    RoleAssistant,
+							Content: "First message",
+						},
+					},
+					{
+						Index: 1,
+						Message: Message{
+							Role:    RoleAssistant,
+							Content: "Second message",
+						},
+					},
+				},
+				Usage: &Usage{
+					PromptTokens:     100,
+					CompletionTokens: 200,
+					TotalTokens:      300,
+				},
+				Error: &ResponseError{
+					Message: "Test error",
+					Type:    "test_error",
+					Param:   func() *string { s := "test_param"; return &s }(),
+					Code:    func() *string { s := "test_code"; return &s }(),
+				},
+				SystemFingerprint: func() *string {
+					s := "fp_abcdef"
+					return &s
+				}(),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clone := tt.response.Clone()
+
+			// Test nil case
+			if tt.response == nil {
+				if clone != nil {
+					t.Errorf("Clone of nil should return nil, got %v", clone)
+				}
+				return
+			}
+
+			// Verify it's a different object
+			if tt.response == clone {
+				t.Error("Clone should return a different object")
+			}
+
+			// Verify all fields are equal
+			if clone.ID != tt.response.ID {
+				t.Errorf("ID mismatch: got %v, want %v", clone.ID, tt.response.ID)
+			}
+			if clone.Object != tt.response.Object {
+				t.Errorf("Object mismatch: got %v, want %v", clone.Object, tt.response.Object)
+			}
+			if clone.Created != tt.response.Created {
+				t.Errorf("Created mismatch: got %v, want %v", clone.Created, tt.response.Created)
+			}
+			if clone.Model != tt.response.Model {
+				t.Errorf("Model mismatch: got %v, want %v", clone.Model, tt.response.Model)
+			}
+
+			// Verify Choices is a deep copy
+			if len(clone.Choices) != len(tt.response.Choices) {
+				t.Errorf("Choices length mismatch: got %v, want %v", len(clone.Choices), len(tt.response.Choices))
+			}
+			if len(clone.Choices) > 0 && &clone.Choices[0] == &tt.response.Choices[0] {
+				t.Error("Choices should be deep copied")
+			}
+			for i := range clone.Choices {
+				if !reflect.DeepEqual(clone.Choices[i], tt.response.Choices[i]) {
+					t.Errorf("Choice %d mismatch: got %+v, want %+v", i, clone.Choices[i], tt.response.Choices[i])
+				}
+			}
+
+			// Verify Usage is deep copied
+			if tt.response.Usage != nil {
+				if clone.Usage == nil {
+					t.Error("Usage should be copied")
+				} else {
+					if clone.Usage == tt.response.Usage {
+						t.Error("Usage should be deep copied")
+					}
+					if !reflect.DeepEqual(clone.Usage, tt.response.Usage) {
+						t.Errorf("Usage mismatch: got %+v, want %+v", clone.Usage, tt.response.Usage)
+					}
+				}
+			} else if clone.Usage != nil {
+				t.Error("Usage should be nil")
+			}
+
+			// Verify Error is deep copied
+			if tt.response.Error != nil {
+				if clone.Error == nil {
+					t.Error("Error should be copied")
+				} else {
+					if clone.Error == tt.response.Error {
+						t.Error("Error should be deep copied")
+					}
+					if !reflect.DeepEqual(clone.Error, tt.response.Error) {
+						t.Errorf("Error mismatch: got %+v, want %+v", clone.Error, tt.response.Error)
+					}
+				}
+			} else if clone.Error != nil {
+				t.Error("Error should be nil")
+			}
+
+			// Verify SystemFingerprint is deep copied
+			if tt.response.SystemFingerprint != nil {
+				if clone.SystemFingerprint == nil {
+					t.Error("SystemFingerprint should be copied")
+				} else {
+					if clone.SystemFingerprint == tt.response.SystemFingerprint {
+						t.Error("SystemFingerprint should be deep copied")
+					}
+					if *clone.SystemFingerprint != *tt.response.SystemFingerprint {
+						t.Errorf("SystemFingerprint mismatch: got %v, want %v", *clone.SystemFingerprint, *tt.response.SystemFingerprint)
+					}
+				}
+			} else if clone.SystemFingerprint != nil {
+				t.Error("SystemFingerprint should be nil")
+			}
+
+			// Verify modifying clone doesn't affect original
+			if len(clone.Choices) > 0 {
+				clone.Choices[0].Message.Content = "Modified"
+				if tt.response.Choices[0].Message.Content == "Modified" {
+					t.Error("Modifying clone should not affect original")
+				}
+			}
+		})
+	}
+}
+
+// TestResponse_IsToolCallResponse tests the IsToolCallResponse method with additional scenarios.
+func TestResponse_IsToolCallResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}{
+		{
+			name:     "nil response",
+			rsp:      nil,
+			expected: false,
+		},
+		{
+			name: "empty choices",
+			rsp: &Response{
+				Choices: []Choice{},
+			},
+			expected: false,
+		},
+		{
+			name: "choices with no tool calls",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{
+							Content: "Regular message",
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "choices with tool calls",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{
+							ToolCalls: []ToolCall{
+								{ID: "tool1"},
+							},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rsp.IsToolCallResponse()
+			if got != tt.expected {
+				t.Errorf("IsToolCallResponse() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestResponse_IsPartialResponse tests the IsPartial field.
+func TestResponse_IsPartialResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}{
+		{
+			name: "partial response",
+			rsp: &Response{
+				IsPartial: true,
+			},
+			expected: true,
+		},
+		{
+			name: "complete response",
+			rsp: &Response{
+				IsPartial: false,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.rsp.IsPartial != tt.expected {
+				t.Errorf("IsPartial = %v, want %v", tt.rsp.IsPartial, tt.expected)
+			}
+		})
+	}
+}
+
+// TestObjectTypeConstants tests all object type constants.
+func TestObjectTypeConstants(t *testing.T) {
+	tests := []struct {
+		name     string
+		constant string
+		expected string
+	}{
+		{
+			name:     "error type",
+			constant: ObjectTypeError,
+			expected: "error",
+		},
+		{
+			name:     "tool response type",
+			constant: ObjectTypeToolResponse,
+			expected: "tool.response",
+		},
+		{
+			name:     "preprocessing basic type",
+			constant: ObjectTypePreprocessingBasic,
+			expected: "preprocessing.basic",
+		},
+		{
+			name:     "preprocessing content type",
+			constant: ObjectTypePreprocessingContent,
+			expected: "preprocessing.content",
+		},
+		{
+			name:     "preprocessing identity type",
+			constant: ObjectTypePreprocessingIdentity,
+			expected: "preprocessing.identity",
+		},
+		{
+			name:     "preprocessing instruction type",
+			constant: ObjectTypePreprocessingInstruction,
+			expected: "preprocessing.instruction",
+		},
+		{
+			name:     "preprocessing planning type",
+			constant: ObjectTypePreprocessingPlanning,
+			expected: "preprocessing.planning",
+		},
+		{
+			name:     "postprocessing planning type",
+			constant: ObjectTypePostprocessingPlanning,
+			expected: "postprocessing.planning",
+		},
+		{
+			name:     "postprocessing code execution type",
+			constant: ObjectTypePostprocessingCodeExecution,
+			expected: "postprocessing.code_execution",
+		},
+		{
+			name:     "transfer type",
+			constant: ObjectTypeTransfer,
+			expected: "agent.transfer",
+		},
+		{
+			name:     "runner completion type",
+			constant: ObjectTypeRunnerCompletion,
+			expected: "runner.completion",
+		},
+		{
+			name:     "state update type",
+			constant: ObjectTypeStateUpdate,
+			expected: "state.update",
+		},
+		{
+			name:     "chat completion chunk type",
+			constant: ObjectTypeChatCompletionChunk,
+			expected: "chat.completion.chunk",
+		},
+		{
+			name:     "chat completion type",
+			constant: ObjectTypeChatCompletion,
+			expected: "chat.completion",
+		},
+		{
+			name:     "flow error type",
+			constant: ErrorTypeFlowError,
+			expected: "flow_error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.constant != tt.expected {
+				t.Errorf("Constant = %v, want %v", tt.constant, tt.expected)
+			}
+		})
+	}
+}

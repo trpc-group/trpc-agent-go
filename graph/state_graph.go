@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -94,6 +95,16 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithEnableParallelTools enables parallel tool execution for a Tools node.
+// When enabled, if the last assistant message contains multiple tool calls,
+// they will be executed concurrently and their responses will be merged in
+// the original order. By default, tools run serially for compatibility.
+func WithEnableParallelTools(enable bool) Option {
+	return func(node *Node) {
+		node.enableParallelTools = enable
+	}
+}
+
 // WithCacheKeyFields sets a cache key selector that derives the cache key
 // input from a subset of fields in the sanitized input map. This helps avoid
 // including unrelated or volatile keys in the cache key.
@@ -165,6 +176,35 @@ func WithDestinations(dests map[string]string) Option {
 		}
 		for k, v := range dests {
 			node.destinations[k] = v
+		}
+	}
+}
+
+// WithEndsMap declares per-node named ends and their concrete destinations.
+// The map keys are local symbolic names (e.g., "approved"), and values are
+// concrete node IDs (or the special End) this node may route to.
+// These ends are used at runtime to resolve Command.GoTo and conditional
+// branch results, and at compile time for stronger validation.
+func WithEndsMap(ends map[string]string) Option {
+	return func(node *Node) {
+		if node.ends == nil {
+			node.ends = make(map[string]string)
+		}
+		for k, v := range ends {
+			node.ends[k] = v
+		}
+	}
+}
+
+// WithEnds declares per-node named ends where the symbolic names are also the
+// destination node IDs. Equivalent to WithEndsMap({name: name}).
+func WithEnds(names ...string) Option {
+	return func(node *Node) {
+		if node.ends == nil {
+			node.ends = make(map[string]string)
+		}
+		for _, n := range names {
+			node.ends[n] = n
 		}
 	}
 }
@@ -284,6 +324,22 @@ func WithSubgraphOutputMapper(f SubgraphOutputMapper) Option {
 func WithSubgraphIsolatedMessages(isolate bool) Option {
 	return func(node *Node) {
 		node.agentIsolatedMessages = isolate
+	}
+}
+
+// WithSubgraphInputFromLastResponse maps the parent's last_response to the
+// child sub-agent's user_input for this agent node.
+//
+// Use this option when you want the downstream agent to consume only the
+// upstream agent's result as its current-round input, without injecting the
+// session history. This keeps agent nodes as black boxes while enabling
+// explicit result passing.
+//
+// Note: For even stricter isolation from session history, combine with
+// WithSubgraphIsolatedMessages(true).
+func WithSubgraphInputFromLastResponse() Option {
+	return func(node *Node) {
+		node.agentInputFromLastResponse = true
 	}
 }
 
@@ -946,6 +1002,9 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			tools[t.Declaration().Name] = t
 		}
 	}
+	// Capture whether to execute tools in parallel.
+	parallel := node.enableParallelTools
+
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "execute_tools_node")
 		defer span.End()
@@ -961,12 +1020,13 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
-			ToolCalls:    toolCalls,
-			Tools:        tools,
-			InvocationID: invocationID,
-			EventChan:    eventChan,
-			Span:         span,
-			State:        state,
+			ToolCalls:      toolCalls,
+			Tools:          tools,
+			InvocationID:   invocationID,
+			EventChan:      eventChan,
+			Span:           span,
+			State:          state,
+			EnableParallel: parallel,
 		})
 		if err != nil {
 			return nil, err
@@ -1011,6 +1071,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	outputMapper := dummyNode.agentOutputMapper
 	isolated := dummyNode.agentIsolatedMessages
 	scope := dummyNode.agentEventScope
+	inputFromLast := dummyNode.agentInputFromLastResponse
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "agent_node_execution")
 		defer span.End()
@@ -1058,8 +1119,21 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			childState[CfgKeyIncludeContents] = "none"
 		}
 
+		// Optionally map parent's last_response to user_input for this agent node.
+		parentForInput := state
+		if inputFromLast {
+			if lr, ok := state[StateKeyLastResponse]; ok {
+				if v, ok2 := lr.(string); ok2 && v != "" {
+					// Clone a shallow copy to avoid mutating the original state view.
+					cloned := state.Clone()
+					cloned[StateKeyUserInput] = v
+					parentForInput = cloned
+				}
+			}
+		}
+
 		// Build invocation for the target agent with custom runtime state and scope.
-		invocation := buildAgentInvocationWithStateAndScope(ctx, state, childState, targetAgent, scope)
+		invocation := buildAgentInvocationWithStateAndScope(ctx, parentForInput, childState, targetAgent, scope)
 
 		// Emit agent execution start event.
 		startTime := time.Now()
@@ -1440,30 +1514,99 @@ type toolCallsConfig struct {
 	EventChan    chan<- *event.Event
 	Span         oteltrace.Span
 	State        State
+	// EnableParallel controls whether multiple tool calls are executed concurrently.
+	// When false or when there is only one tool call, execution is serial.
+	EnableParallel bool
 }
 
 // processToolCalls executes all tool calls and returns the resulting messages.
 func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
 	toolCallbacks, _ := extractToolCallbacks(config.State)
-	newMessages := make([]model.Message, 0, len(config.ToolCalls))
-
-	for _, toolCall := range config.ToolCalls {
-		toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
-			ToolCall:      toolCall,
-			Tools:         config.Tools,
-			InvocationID:  config.InvocationID,
-			EventChan:     config.EventChan,
-			Span:          config.Span,
-			ToolCallbacks: toolCallbacks,
-			State:         config.State,
-		})
-		if err != nil {
-			return nil, err
+	// Serial path or single tool call.
+	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
+		newMessages := make([]model.Message, 0, len(config.ToolCalls))
+		for _, toolCall := range config.ToolCalls {
+			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
+				ToolCall:      toolCall,
+				Tools:         config.Tools,
+				InvocationID:  config.InvocationID,
+				EventChan:     config.EventChan,
+				Span:          config.Span,
+				ToolCallbacks: toolCallbacks,
+				State:         config.State,
+			})
+			if err != nil {
+				return nil, err
+			}
+			newMessages = append(newMessages, toolMessage)
 		}
-		newMessages = append(newMessages, toolMessage)
+		return newMessages, nil
 	}
 
-	return newMessages, nil
+	// Parallel path: execute each tool call in its own goroutine while
+	// preserving the original order in the resulting messages slice.
+	type result struct {
+		idx int
+		msg model.Message
+		err error
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan result, len(config.ToolCalls))
+	var wg sync.WaitGroup
+	wg.Add(len(config.ToolCalls))
+
+	for i, tc := range config.ToolCalls {
+		i, tc := i, tc
+		go func() {
+			defer wg.Done()
+			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
+				ToolCall:      tc,
+				Tools:         config.Tools,
+				InvocationID:  config.InvocationID,
+				EventChan:     config.EventChan,
+				Span:          config.Span,
+				ToolCallbacks: toolCallbacks,
+				State:         config.State,
+			})
+			// On error, cancel siblings but still report result so collector can exit cleanly.
+			if err != nil {
+				cancel()
+				results <- result{idx: i, err: err}
+				return
+			}
+			results <- result{idx: i, msg: msg}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Aggregate while preserving order.
+	out := make([]model.Message, len(config.ToolCalls))
+	var firstErr error
+	received := 0
+	for r := range results {
+		received++
+		if r.err != nil && firstErr == nil {
+			firstErr = r.err
+		}
+		// Only set when message exists; zero value is fine otherwise.
+		if r.err == nil {
+			out[r.idx] = r.msg
+		}
+		if received == len(config.ToolCalls) {
+			break
+		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
 }
 
 // singleToolCallConfig contains configuration for executing a single tool call.
@@ -1490,10 +1633,18 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Extract current node ID from state for event authoring.
 	var nodeID string
+	sessInfo := &session.Session{}
 	if state := config.State; state != nil {
 		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
 			if id, ok := nodeIDData.(string); ok {
 				nodeID = id
+			}
+		}
+		if sess, ok := state[StateKeySession]; ok {
+			if s, ok := sess.(*session.Session); ok && s != nil {
+				sessInfo.ID = s.ID
+				sessInfo.AppName = s.AppName
+				sessInfo.UserID = s.UserID
 			}
 		}
 	}
@@ -1519,7 +1670,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Error:        err,
 		Arguments:    modifiedArgs,
 	})
-	itelemetry.TraceToolCall(span, t.Declaration(), modifiedArgs, event)
+	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event)
 	span.End()
 
 	if err != nil {

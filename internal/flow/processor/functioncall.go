@@ -24,6 +24,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -63,6 +64,16 @@ type toolResult struct {
 	err   error
 }
 
+// Default message used when transferring to a sub-agent without an explicit message.
+// Users can override or disable it via SetDefaultTransferMessage.
+var defaultTransferMessage = "Task delegated from coordinator"
+
+// SetDefaultTransferMessage configures the message to inject when a sub-agent is
+// called without an explicit message (model directly calls the sub-agent name).
+func SetDefaultTransferMessage(message string) {
+	defaultTransferMessage = message
+}
+
 // subAgentCall defines the input format for direct sub-agent tool calls.
 // This handles cases where models call sub-agent names directly instead of using transfer_to_agent.
 type subAgentCall struct {
@@ -93,7 +104,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if invocation == nil || !rsp.IsToolCallResponse() {
+	if invocation == nil || rsp == nil || rsp.IsPartial || !rsp.IsToolCallResponse() {
 		return
 	}
 
@@ -214,8 +225,13 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		p.annotateSkipSummarization(toolEvent, tl)
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
+
+	var sess *session.Session
+	if invocation != nil {
+		sess = invocation.Session
+	}
 	itelemetry.TraceToolCall(
-		span, decl, modifiedArgs, toolEvent,
+		span, sess, decl, modifiedArgs, toolEvent,
 	)
 	return toolEvent, nil
 }
@@ -336,7 +352,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}
 	// Include declaration for telemetry even when tool is missing.
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
-	itelemetry.TraceToolCall(span, decl, modifiedArgs, toolCallResponseEvent)
+
+	var sess *session.Session
+	if invocation != nil {
+		sess = invocation.Session
+	}
+	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent)
 	// Send result back to aggregator.
 	p.sendToolResult(
 		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},
@@ -899,7 +920,7 @@ func convertToolArguments(originalName string, originalArgs []byte, targetName s
 
 	message := input.Message
 	if message == "" {
-		message = "Task delegated from coordinator"
+		message = defaultTransferMessage
 	}
 
 	req := &transfer.Request{

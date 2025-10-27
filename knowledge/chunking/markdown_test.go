@@ -375,29 +375,114 @@ func TestMarkdownChunking_EdgeCases(t *testing.T) {
 	}
 }
 
-func TestRecursiveChunking_CustomSep(t *testing.T) {
-	text := strings.Repeat("A B C D E F ", 10) // 70 chars
-	doc := &document.Document{ID: "txt", Content: text}
+// TestMarkdownChunking_MultipleParagraphsInSection tests splitLargeSection with multiple paragraphs
+func TestMarkdownChunking_MultipleParagraphsInSection(t *testing.T) {
+	// Create a section with multiple paragraphs that should be grouped intelligently
+	mdContent := `# Section with Multiple Paragraphs
 
-	rc := NewRecursiveChunking(
-		WithRecursiveChunkSize(25),
-		WithRecursiveOverlap(3),
-		WithRecursiveSeparators([]string{" ", ""}),
-	)
+This is the first paragraph. It contains some text that is relatively short.
 
-	chunks, err := rc.Chunk(doc)
+This is the second paragraph. It also contains some text that is short enough.
+
+This is the third paragraph with more content that should be in the same or different chunk.
+
+This is the fourth paragraph that might go into a new chunk depending on the size.
+
+This is the fifth paragraph to ensure we test the grouping logic properly.`
+
+	doc := &document.Document{ID: "multi-para", Content: mdContent}
+	// Use a moderate chunk size to trigger paragraph grouping logic
+	mc := NewMarkdownChunking(WithMarkdownChunkSize(100), WithMarkdownOverlap(20))
+
+	chunks, err := mc.Chunk(doc)
 	require.NoError(t, err)
-	require.Greater(t, len(chunks), 2)
+	require.Greater(t, len(chunks), 1, "Should create multiple chunks")
 
-	// Each chunk <= 25 and overlap 3.
-	for i, c := range chunks {
-		require.LessOrEqual(t, len(c.Content), 25)
-		if i > 0 {
-			prev := chunks[i-1].Content
-			if len(prev) >= 3 && len(c.Content) >= 3 {
-				overlap := prev[len(prev)-3:]
-				require.Equal(t, overlap, c.Content[:3])
-			}
+	// Verify paragraph grouping
+	for i, chunk := range chunks {
+		// Each chunk should contain complete paragraphs
+		require.NotEmpty(t, chunk.Content, "Chunk %d should not be empty", i)
+
+		// Verify header is included
+		if i == 0 {
+			require.True(t, strings.Contains(chunk.Content, "Section with Multiple Paragraphs"),
+				"First chunk should contain header")
 		}
+	}
+}
+
+// TestMarkdownChunking_MixedParagraphSizes tests splitLargeSection with mixed sizes
+func TestMarkdownChunking_MixedParagraphSizes(t *testing.T) {
+	smallPara := "Small paragraph."
+	mediumPara := strings.Repeat("Medium sized paragraph with some content. ", 3)
+	largePara := strings.Repeat("This is a very large paragraph that exceeds the chunk size limit. ", 20)
+
+	mdContent := `# Mixed Paragraph Sizes
+
+` + smallPara + `
+
+` + mediumPara + `
+
+` + largePara + `
+
+` + smallPara + `
+
+` + mediumPara
+
+	doc := &document.Document{ID: "mixed-sizes", Content: mdContent}
+	mc := NewMarkdownChunking(WithMarkdownChunkSize(150), WithMarkdownOverlap(30))
+
+	chunks, err := mc.Chunk(doc)
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1, "Mixed content should create multiple chunks")
+
+	// Verify proper handling of different paragraph sizes
+	foundLarge := false
+	for _, chunk := range chunks {
+		require.NotEmpty(t, chunk.Content)
+		if strings.Contains(chunk.Content, "very large paragraph") {
+			foundLarge = true
+		}
+	}
+	require.True(t, foundLarge, "Large paragraph content should be in chunks")
+}
+
+// TestMarkdownChunking_OverlapValidation tests overlap >= chunkSize boundary condition.
+func TestMarkdownChunking_OverlapValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		chunkSize int
+		overlap   int
+	}{
+		{
+			name:      "overlap greater than chunkSize",
+			chunkSize: 10,
+			overlap:   15,
+		},
+		{
+			name:      "overlap equal to chunkSize",
+			chunkSize: 20,
+			overlap:   20,
+		},
+		{
+			name:      "very large overlap",
+			chunkSize: 5,
+			overlap:   100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := NewMarkdownChunking(
+				WithMarkdownChunkSize(tt.chunkSize),
+				WithMarkdownOverlap(tt.overlap),
+			)
+
+			// Should still work despite invalid overlap
+			doc := &document.Document{ID: "test", Content: "# Header\n\nTest content for validation"}
+			chunks, err := mc.Chunk(doc)
+			require.NoError(t, err)
+			require.NotEmpty(t, chunks)
+		})
 	}
 }

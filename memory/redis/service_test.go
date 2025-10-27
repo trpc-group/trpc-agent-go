@@ -11,6 +11,7 @@ package redis
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -425,4 +426,312 @@ func TestService_InvalidKeys(t *testing.T) {
 	err = svc.UpdateMemory(ctx, memory.Key{AppName: "a", UserID: "u", MemoryID: ""}, "m", nil)
 	require.Error(t, err)
 	assert.Equal(t, memory.ErrMemoryIDRequired, err)
+}
+
+func TestService_DeleteMemory_Errors(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Test with invalid key.
+	err := svc.DeleteMemory(ctx, memory.Key{AppName: "", UserID: "u", MemoryID: "id"})
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	// Test with empty memory id.
+	err = svc.DeleteMemory(ctx, memory.Key{AppName: "a", UserID: "u", MemoryID: ""})
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrMemoryIDRequired, err)
+
+	// Test deleting non-existent memory (should not error).
+	err = svc.DeleteMemory(ctx, memory.Key{AppName: "a", UserID: "u", MemoryID: "non-existent"})
+	require.NoError(t, err)
+}
+
+func TestService_ClearMemories_Errors(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Test with invalid key.
+	err := svc.ClearMemories(ctx, memory.UserKey{AppName: "", UserID: "u"})
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	// Test with empty user id.
+	err = svc.ClearMemories(ctx, memory.UserKey{AppName: "a", UserID: ""})
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrUserIDRequired, err)
+
+	// Test clearing non-existent user (should not error).
+	err = svc.ClearMemories(ctx, memory.UserKey{AppName: "a", UserID: "non-existent"})
+	require.NoError(t, err)
+}
+
+func TestService_ReadMemories_Errors(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Test with invalid key.
+	_, err := svc.ReadMemories(ctx, memory.UserKey{AppName: "", UserID: "u"}, 10)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	// Test with empty user id.
+	_, err = svc.ReadMemories(ctx, memory.UserKey{AppName: "a", UserID: ""}, 10)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrUserIDRequired, err)
+
+	// Test reading non-existent user (should return empty list).
+	entries, err := svc.ReadMemories(ctx, memory.UserKey{AppName: "a", UserID: "non-existent"}, 10)
+	require.NoError(t, err)
+	assert.Len(t, entries, 0)
+}
+
+func TestService_SearchMemories_Errors(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Test with invalid key.
+	_, err := svc.SearchMemories(ctx, memory.UserKey{AppName: "", UserID: "u"}, "query")
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	// Test with empty user id.
+	_, err = svc.SearchMemories(ctx, memory.UserKey{AppName: "a", UserID: ""}, "query")
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrUserIDRequired, err)
+
+	// Test searching non-existent user (should return empty list).
+	results, err := svc.SearchMemories(ctx, memory.UserKey{AppName: "a", UserID: "non-existent"}, "query")
+	require.NoError(t, err)
+	assert.Len(t, results, 0)
+}
+
+func TestService_UpdateMemory_Errors(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Test with invalid key.
+	err := svc.UpdateMemory(ctx, memory.Key{AppName: "", UserID: "u", MemoryID: "id"}, "test", nil)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	// Test updating non-existent memory.
+	err = svc.UpdateMemory(ctx, memory.Key{AppName: "a", UserID: "u", MemoryID: "non-existent"}, "test", nil)
+	require.Error(t, err)
+}
+
+func TestWithExtraOptions(t *testing.T) {
+	opts := ServiceOpts{}
+	opt1 := "option1"
+	opt2 := "option2"
+
+	WithExtraOptions(opt1, opt2)(&opts)
+
+	assert.Len(t, opts.extraOptions, 2)
+	assert.Equal(t, opt1, opts.extraOptions[0])
+	assert.Equal(t, opt2, opts.extraOptions[1])
+
+	// Test appending more options.
+	opt3 := "option3"
+	WithExtraOptions(opt3)(&opts)
+
+	assert.Len(t, opts.extraOptions, 3)
+	assert.Equal(t, opt3, opts.extraOptions[2])
+}
+
+func TestNewService_InstanceName(t *testing.T) {
+	// Test with non-existent instance name.
+	_, err := NewService(WithRedisInstance("non-existent-instance"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redis instance")
+}
+
+func TestService_ReadMemoriesWithLimit(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Add multiple memories.
+	for i := 0; i < 5; i++ {
+		err := svc.AddMemory(ctx, userKey, fmt.Sprintf("memory %d", i), nil)
+		require.NoError(t, err)
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Test with limit.
+	entries, err := svc.ReadMemories(ctx, userKey, 3)
+	require.NoError(t, err)
+	assert.Len(t, entries, 3)
+
+	// Test without limit.
+	entries, err = svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	assert.Len(t, entries, 5)
+}
+
+func TestService_AddMemory_InvalidKey(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Test with empty user id.
+	err := svc.AddMemory(ctx, memory.UserKey{AppName: "app", UserID: ""}, "test", nil)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrUserIDRequired, err)
+}
+
+func TestService_AddMemory_RedisError(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(url), WithMemoryLimit(2))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Add memories up to the limit
+	require.NoError(t, svc.AddMemory(ctx, userKey, "memory1", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "memory2", nil))
+
+	// This should fail due to limit
+	err = svc.AddMemory(ctx, userKey, "memory3", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "memory limit exceeded")
+}
+
+func TestService_SearchMemories_RedisNil(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Search for non-existent user should return empty list, not error
+	userKey := memory.UserKey{AppName: "test-app", UserID: "non-existent"}
+	results, err := svc.SearchMemories(ctx, userKey, "query")
+	require.NoError(t, err)
+	assert.Len(t, results, 0)
+}
+
+func TestService_ReadMemories_RedisNil(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Read for non-existent user should return empty list, not error
+	userKey := memory.UserKey{AppName: "test-app", UserID: "non-existent"}
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	assert.Len(t, entries, 0)
+}
+
+func TestService_Tools_Caching(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	// First call should create tools
+	tools1 := svc.Tools()
+	require.NotEmpty(t, tools1)
+
+	// Second call should return cached tools
+	tools2 := svc.Tools()
+	require.NotEmpty(t, tools2)
+
+	// Should be the same length
+	assert.Equal(t, len(tools1), len(tools2))
+}
+
+func TestService_Tools_DisabledTools(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Disable a tool
+	svc, err := NewService(
+		WithRedisClientURL(url),
+		WithToolEnabled(memory.SearchToolName, false),
+	)
+	require.NoError(t, err)
+
+	tools := svc.Tools()
+
+	// Search tool should not be in the list
+	for _, tl := range tools {
+		if decl := tl.Declaration(); decl != nil {
+			assert.NotEqual(t, memory.SearchToolName, decl.Name)
+		}
+	}
+}
+
+func TestService_UpdateMemory_UnmarshalError(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(url))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Add a memory
+	require.NoError(t, svc.AddMemory(ctx, userKey, "original", nil))
+
+	// Get the memory ID
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// Manually corrupt the data in Redis to trigger unmarshal error
+	key := getUserMemKey(userKey)
+	svc.redisClient.HSet(ctx, key, entries[0].ID, []byte("invalid json"))
+
+	// Try to update - should get unmarshal error
+	memKey := memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: entries[0].ID}
+	err = svc.UpdateMemory(ctx, memKey, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal")
+}
+
+func TestService_ReadMemories_UnmarshalError(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(url))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Manually add corrupted data to Redis
+	key := getUserMemKey(userKey)
+	svc.redisClient.HSet(ctx, key, "corrupt-id", []byte("invalid json"))
+
+	// Try to read - should get unmarshal error
+	_, err = svc.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal")
+}
+
+func TestService_SearchMemories_UnmarshalError(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(url))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Manually add corrupted data to Redis
+	key := getUserMemKey(userKey)
+	svc.redisClient.HSet(ctx, key, "corrupt-id", []byte("invalid json"))
+
+	// Try to search - should get unmarshal error
+	_, err = svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal")
 }

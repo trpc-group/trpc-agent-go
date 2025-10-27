@@ -1170,3 +1170,196 @@ func BenchmarkTokenTailoring_PerformanceComparison(b *testing.B) {
 		})
 	}
 }
+
+// TestMiddleOutStrategy_EmptyMessages tests with empty message list
+func TestMiddleOutStrategy_EmptyMessages(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	strategy := NewMiddleOutStrategy(counter)
+
+	result, err := strategy.TailorMessages(context.Background(), []Message{}, 100)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+// TestHeadOutStrategy_EmptyMessages tests with empty message list
+func TestHeadOutStrategy_EmptyMessages(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	strategy := NewHeadOutStrategy(counter)
+
+	result, err := strategy.TailorMessages(context.Background(), []Message{}, 100)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+// TestTailOutStrategy_EmptyMessages tests with empty message list
+func TestTailOutStrategy_EmptyMessages(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	strategy := NewTailOutStrategy(counter)
+
+	result, err := strategy.TailorMessages(context.Background(), []Message{}, 100)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+// TestBuildPrefixSum_WithCountTokensError tests error handling in buildPrefixSum
+func TestBuildPrefixSum_WithCountTokensError(t *testing.T) {
+	// Use SimpleTokenCounter which doesn't return errors, but test the fallback logic
+	counter := NewSimpleTokenCounter()
+	messages := []Message{
+		NewSystemMessage("System prompt"),
+		NewUserMessage("User message with some content that would normally be counted"),
+	}
+
+	// This test verifies that buildPrefixSum completes without panicking
+	// even when errors might occur (though SimpleTokenCounter doesn't error)
+	prefixSum := buildPrefixSum(context.Background(), counter, messages)
+
+	// Verify prefix sum array has correct length
+	require.Len(t, prefixSum, len(messages)+1)
+	require.Equal(t, 0, prefixSum[0])               // First element should be 0
+	require.Greater(t, prefixSum[len(messages)], 0) // Total should be positive
+}
+
+// mockErrorTokenCounter is a token counter that returns errors
+type mockErrorTokenCounter struct{}
+
+func (c *mockErrorTokenCounter) CountTokens(ctx context.Context, message Message) (int, error) {
+	return 0, fmt.Errorf("mock error")
+}
+
+func (c *mockErrorTokenCounter) CountTokensRange(ctx context.Context, messages []Message, start, end int) (int, error) {
+	return 0, fmt.Errorf("mock error")
+}
+
+// TestBuildPrefixSum_WithActualError tests the error handling path in buildPrefixSum
+func TestBuildPrefixSum_WithActualError(t *testing.T) {
+	counter := &mockErrorTokenCounter{}
+	messages := []Message{
+		NewSystemMessage("System prompt with some content"),
+		NewUserMessage("User message with some content"),
+	}
+
+	// buildPrefixSum should handle errors gracefully with fallback estimation
+	prefixSum := buildPrefixSum(context.Background(), counter, messages)
+
+	// Verify prefix sum array has correct length
+	require.Len(t, prefixSum, len(messages)+1)
+	require.Equal(t, 0, prefixSum[0]) // First element should be 0
+	// When errors occur, fallback uses rune-based estimation
+	require.Greater(t, prefixSum[len(messages)], 0) // Total should be positive
+}
+
+// TestBuildPreservedOnlyResult_EdgeCases tests edge cases in buildPreservedOnlyResult
+func TestBuildPreservedOnlyResult_EdgeCases(t *testing.T) {
+	t.Run("preserved segments exceed message count", func(t *testing.T) {
+		messages := []Message{
+			NewSystemMessage("System"),
+			NewUserMessage("User"),
+		}
+
+		// Request more tail messages than available after head
+		result := buildPreservedOnlyResult(messages, 1, 5)
+		require.NotNil(t, result)
+		// Should adjust preservedTail to not exceed available messages
+		require.LessOrEqual(t, len(result), len(messages))
+	})
+
+	t.Run("starts with tool message", func(t *testing.T) {
+		messages := []Message{
+			NewToolMessage("tool1", "func1", "result"),
+			NewUserMessage("User"),
+		}
+
+		result := buildPreservedOnlyResult(messages, 0, 2)
+		// Tool message at start should be removed
+		require.Len(t, result, 1)
+		require.Equal(t, RoleUser, result[0].Role)
+	})
+}
+
+// TestCalculatePreservedTailCount_EdgeCases tests edge cases in calculatePreservedTailCount
+func TestCalculatePreservedTailCount_EdgeCases(t *testing.T) {
+	t.Run("empty messages", func(t *testing.T) {
+		count := calculatePreservedTailCount([]Message{})
+		require.Equal(t, 0, count)
+	})
+
+	t.Run("only system message", func(t *testing.T) {
+		messages := []Message{
+			NewSystemMessage("System"),
+		}
+		count := calculatePreservedTailCount(messages)
+		require.Equal(t, 1, count) // Should preserve last message
+	})
+
+	t.Run("system then user message", func(t *testing.T) {
+		messages := []Message{
+			NewSystemMessage("System"),
+			NewUserMessage("User"),
+		}
+		count := calculatePreservedTailCount(messages)
+		require.Equal(t, 1, count) // Should preserve last message (no assistant found)
+	})
+
+	t.Run("assistant without preceding user", func(t *testing.T) {
+		messages := []Message{
+			NewSystemMessage("System"),
+			NewAssistantMessage("Assistant"),
+		}
+		count := calculatePreservedTailCount(messages)
+		require.Equal(t, 1, count) // Should preserve assistant message
+	})
+
+	t.Run("assistant at start", func(t *testing.T) {
+		messages := []Message{
+			NewAssistantMessage("Assistant"),
+		}
+		count := calculatePreservedTailCount(messages)
+		require.Equal(t, 1, count) // Should preserve all messages
+	})
+}
+
+// TestSimpleTokenCounter_CountTokensRange_InvalidRange tests error cases
+func TestSimpleTokenCounter_CountTokensRange_InvalidRange(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	messages := []Message{
+		NewUserMessage("Message 1"),
+		NewUserMessage("Message 2"),
+		NewUserMessage("Message 3"),
+	}
+
+	tests := []struct {
+		name  string
+		start int
+		end   int
+	}{
+		{
+			name:  "negative start",
+			start: -1,
+			end:   2,
+		},
+		{
+			name:  "end exceeds length",
+			start: 0,
+			end:   10,
+		},
+		{
+			name:  "start >= end",
+			start: 2,
+			end:   2,
+		},
+		{
+			name:  "start > end",
+			start: 2,
+			end:   1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := counter.CountTokensRange(context.Background(), messages, tt.start, tt.end)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "invalid range")
+		})
+	}
+}

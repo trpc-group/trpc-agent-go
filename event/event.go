@@ -245,6 +245,15 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		return nil
 	}
 
+	// If the context is already cancelled, prefer returning immediately
+	// rather than attempting to send. This avoids a racy select where both
+	// the send and the ctx.Done() cases are ready, which could otherwise
+	// result in emitting an event after cancellation.
+	if err := ctx.Err(); err != nil {
+		log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
+		return err
+	}
+
 	log.Debugf("[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
 		e.RequestID, cap(ch), len(ch), e.Branch)
 

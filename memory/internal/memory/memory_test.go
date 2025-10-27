@@ -292,3 +292,269 @@ func TestMatchMemoryEntry_EdgeCases(t *testing.T) {
 		assert.True(t, MatchMemoryEntry(entry, "multilingual"))
 	})
 }
+
+func TestDedupStrings_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "empty slice",
+			input:    []string{},
+			expected: []string{},
+		},
+		{
+			name:     "no duplicates",
+			input:    []string{"a", "b", "c"},
+			expected: []string{"a", "b", "c"},
+		},
+		{
+			name:     "with duplicates",
+			input:    []string{"a", "b", "a", "c", "b"},
+			expected: []string{"a", "b", "c"},
+		},
+		{
+			name:     "with empty strings",
+			input:    []string{"a", "", "b", "", "c"},
+			expected: []string{"a", "b", "c"},
+		},
+		{
+			name:     "all empty strings",
+			input:    []string{"", "", ""},
+			expected: []string{},
+		},
+		{
+			name:     "all same strings",
+			input:    []string{"a", "a", "a"},
+			expected: []string{"a"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := dedupStrings(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsCJK_Coverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		r        rune
+		expected bool
+	}{
+		{"chinese character", '中', true},
+		{"english letter", 'a', false},
+		{"number", '1', false},
+		{"space", ' ', false},
+		{"punctuation", ',', false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isCJK(tt.r)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsPunct_Coverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		r        rune
+		expected bool
+	}{
+		{"punctuation comma", ',', true},
+		{"punctuation period", '.', true},
+		{"symbol", '$', true},
+		{"letter", 'a', false},
+		{"number", '1', false},
+		{"space", ' ', false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isPunct(tt.r)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsStopword_Coverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		s        string
+		expected bool
+	}{
+		{"stopword a", "a", true},
+		{"stopword the", "the", true},
+		{"stopword and", "and", true},
+		{"stopword or", "or", true},
+		{"stopword of", "of", true},
+		{"stopword in", "in", true},
+		{"stopword on", "on", true},
+		{"stopword to", "to", true},
+		{"stopword for", "for", true},
+		{"stopword with", "with", true},
+		{"stopword is", "is", true},
+		{"stopword are", "are", true},
+		{"stopword am", "am", true},
+		{"stopword be", "be", true},
+		{"stopword an", "an", true},
+		{"not stopword", "hello", false},
+		{"empty string", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isStopword(tt.s)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestMatchMemoryEntry_TokensWithTopics(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "This is a simple test",
+			Topics: []string{"simple", "example"},
+		},
+	}
+
+	// Test matching topic via token.
+	result := MatchMemoryEntry(entry, "example")
+	assert.True(t, result)
+
+	// Test matching content via token.
+	result = MatchMemoryEntry(entry, "simple")
+	assert.True(t, result)
+
+	// Test non-matching token.
+	result = MatchMemoryEntry(entry, "complex")
+	assert.False(t, result)
+}
+
+func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test content",
+			Topics: []string{"topic"},
+		},
+	}
+
+	// Query that produces no tokens (only punctuation).
+	result := MatchMemoryEntry(entry, "!@#$%")
+	assert.False(t, result)
+}
+
+func TestBuildSearchTokens_Duplicates(t *testing.T) {
+	// Test deduplication in bigrams.
+	result := BuildSearchTokens("中中中中")
+	assert.NotNil(t, result)
+	// Should have deduplicated "中中" bigram.
+	assert.Len(t, result, 1)
+	assert.Equal(t, "中中", result[0])
+}
+
+func TestMatchMemoryEntry_EmptyTokensWithTopics(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test content",
+			Topics: []string{"topic1", "topic2"},
+		},
+	}
+
+	// Query that produces empty tokens after filtering
+	result := MatchMemoryEntry(entry, "   ")
+	assert.False(t, result)
+}
+
+func TestMatchMemoryEntry_TokenMatchInTopics(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some content",
+			Topics: []string{"important", "keyword"},
+		},
+	}
+
+	// Query that matches a topic
+	result := MatchMemoryEntry(entry, "keyword")
+	assert.True(t, result)
+}
+
+func TestMatchMemoryEntry_NoTokensButTopicMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some content",
+			Topics: []string{"special!topic"},
+		},
+	}
+
+	// Query with only punctuation that produces no tokens, but matches topic in fallback
+	result := MatchMemoryEntry(entry, "special!")
+	assert.True(t, result)
+}
+
+func TestMatchMemoryEntry_EmptyTokenInList(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test content with keyword",
+			Topics: []string{},
+		},
+	}
+
+	// This should match the content
+	result := MatchMemoryEntry(entry, "keyword")
+	assert.True(t, result)
+}
+
+func TestBuildSearchTokens_MixedContent(t *testing.T) {
+	// Test with mixed CJK and English
+	result := BuildSearchTokens("hello世界test")
+	assert.NotNil(t, result)
+	// Should have both English words and CJK bigrams
+	assert.NotEmpty(t, result)
+}
+
+func TestBuildSearchTokens_OnlyPunctuation(t *testing.T) {
+	// Test with only punctuation
+	result := BuildSearchTokens("!@#$%^&*()")
+	// Should return empty or minimal tokens
+	assert.NotNil(t, result)
+}
+
+func TestBuildSearchTokens_StopwordsOnly(t *testing.T) {
+	// Test with only stopwords
+	result := BuildSearchTokens("the a an")
+	// Should filter out stopwords
+	assert.NotNil(t, result)
+	// Stopwords should be filtered
+	for _, token := range result {
+		assert.NotEqual(t, "the", token)
+		assert.NotEqual(t, "a", token)
+		assert.NotEqual(t, "an", token)
+	}
+}
+
+func TestMatchMemoryEntry_NilMemory(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: nil,
+	}
+
+	result := MatchMemoryEntry(entry, "test")
+	assert.False(t, result)
+}
+
+func TestMatchMemoryEntry_WhitespaceQuery(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test content",
+			Topics: []string{"topic"},
+		},
+	}
+
+	result := MatchMemoryEntry(entry, "   \t\n  ")
+	assert.False(t, result)
+}

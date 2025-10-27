@@ -12,6 +12,8 @@ package tool
 import (
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Test structs for struct concatenation tests
@@ -437,6 +439,141 @@ func TestMerge_BooleanFields(t *testing.T) {
 	// For unsupported types like bool in struct fields, Merge returns the first value
 	if result.Flag != true {
 		t.Errorf("Boolean field: Expected true (first value for unsupported type), got %v", result.Flag)
+	}
+}
+
+func TestMerge_Structs_EmptyAndSingle(t *testing.T) {
+	type simpleStruct struct {
+		Value int
+	}
+
+	var empty []simpleStruct
+	resultEmpty := Merge(empty)
+	if resultEmpty != (simpleStruct{}) {
+		t.Errorf("Empty structs: Expected zero value, got %+v", resultEmpty)
+	}
+
+	single := []simpleStruct{{Value: 42}}
+	resultSingle := Merge(single)
+	if resultSingle != single[0] {
+		t.Errorf("Single struct: Expected %+v, got %+v", single[0], resultSingle)
+	}
+}
+
+func TestMerge_Structs_UnexportedField(t *testing.T) {
+	type structWithSecret struct {
+		Name   string
+		a      int
+		secret string
+	}
+
+	structs := []structWithSecret{
+		{Name: "Alpha", a: 5, secret: "top-secret"},
+		{Name: " Beta", a: 10, secret: "should-not-overwrite"},
+	}
+	require.Panics(t, func() {
+		Merge(structs)
+	}, "Merge should panic on unexported fields")
+}
+
+func TestMerge_Structs_PointerField(t *testing.T) {
+	type structWithPointer struct {
+		Info  *TestAddress
+		Score int
+	}
+
+	structs := []structWithPointer{
+		{Info: nil, Score: 10},
+		{
+			Info:  &TestAddress{Street: "Second", Number: 200},
+			Score: 20,
+		},
+	}
+
+	result := Merge(structs)
+
+	if result.Score != 30 {
+		t.Errorf("Score: Expected 30, got %d", result.Score)
+	}
+	if result.Info != nil {
+		t.Errorf("Pointer field: Expected nil (first value retained), got %+v", result.Info)
+	}
+}
+
+func TestMerge_Structs_MixedKinds(t *testing.T) {
+	type complexStruct struct {
+		Name    string
+		Numbers []int
+		Counts  map[string]int
+		Data    []byte
+	}
+
+	structs := []complexStruct{
+		{
+			Name:    "First",
+			Numbers: []int{1, 2},
+			Counts:  map[string]int{"a": 1},
+			Data:    []byte{1, 2},
+		},
+		{
+			Name:    " Second",
+			Numbers: []int{3},
+			Counts:  map[string]int{"b": 2},
+			Data:    []byte{3, 4},
+		},
+	}
+
+	result := Merge(structs)
+
+	if result.Name != "First Second" {
+		t.Errorf("Name: Expected 'First Second', got %q", result.Name)
+	}
+	expectedNumbers := []int{1, 2, 3}
+	if !reflect.DeepEqual(result.Numbers, expectedNumbers) {
+		t.Errorf("Numbers: Expected %v, got %v", expectedNumbers, result.Numbers)
+	}
+	expectedCounts := map[string]int{"a": 1, "b": 2}
+	if !reflect.DeepEqual(result.Counts, expectedCounts) {
+		t.Errorf("Counts: Expected %v, got %v", expectedCounts, result.Counts)
+	}
+	expectedData := []byte{1, 2, 3, 4}
+	if !reflect.DeepEqual(result.Data, expectedData) {
+		t.Errorf("Data: Expected %v, got %v", expectedData, result.Data)
+	}
+}
+
+func TestMerge_Slices_EmptyInput(t *testing.T) {
+	var slices [][]int
+	result := Merge(slices)
+	if result != nil {
+		t.Errorf("Empty slices: Expected nil slice, got %v", result)
+	}
+
+	single := [][]int{{1, 2, 3}}
+	singleResult := Merge(single)
+	if !reflect.DeepEqual(singleResult, single[0]) {
+		t.Errorf("Single slice: Expected %v, got %v", single[0], singleResult)
+	}
+}
+
+func TestMerge_Maps_EmptyInput(t *testing.T) {
+	var maps []map[string]int
+	result := Merge(maps)
+	if result != nil {
+		t.Errorf("Empty maps: Expected nil map, got %v", result)
+	}
+}
+
+func TestMerge_ComplexNumbers(t *testing.T) {
+	values := []complex128{
+		complex(1, 2),
+		complex(3, 4),
+	}
+
+	result := Merge(values)
+	expected := complex(1, 2)
+	if result != expected {
+		t.Errorf("Complex numbers: Expected %v, got %v", expected, result)
 	}
 }
 

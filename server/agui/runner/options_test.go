@@ -33,6 +33,11 @@ func TestNewOptionsDefaults(t *testing.T) {
 	tr := opts.TranslatorFactory(input)
 	assert.NotNil(t, tr)
 	assert.IsType(t, translator.New("", ""), tr)
+
+	assert.NotNil(t, opts.RunAgentInputHook)
+	modified, err := opts.RunAgentInputHook(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Same(t, input, modified)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -70,4 +75,22 @@ func TestWithTranslateCallbacks(t *testing.T) {
 	cb := translator.NewCallbacks()
 	opts := NewOptions(WithTranslateCallbacks(cb))
 	assert.Same(t, cb, opts.TranslateCallbacks)
+}
+
+func TestWithRunAgentInputHook(t *testing.T) {
+	called := false
+	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
+	custom := &adapter.RunAgentInput{ThreadID: "other-thread", RunID: "other-run"}
+	hook := func(ctx context.Context, in *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
+		called = true
+		assert.Same(t, input, in)
+		return custom, nil
+	}
+
+	opts := NewOptions(WithRunAgentInputHook(hook))
+
+	got, err := opts.RunAgentInputHook(context.Background(), input)
+	assert.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, custom, got)
 }

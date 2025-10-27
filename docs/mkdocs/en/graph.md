@@ -542,6 +542,65 @@ stateGraph.AddConditionalEdges("analyze", complexityCondition, map[string]string
 })
 ```
 
+### 4.1 Named Ends (Per‑node Ends)
+
+When a node produces business outcomes (e.g., `approve`/`reject`/`manual_review`) and you want to route by those semantic labels, declare node‑local Named Ends (Ends).
+
+Why this helps:
+- Central, declarative mapping from labels to concrete targets at the node site.
+- Compile‑time validation: `Compile()` verifies every end target exists (or is the special `graph.End`).
+- Unified routing: reused by both `Command.GoTo` and conditional edges.
+- Decoupling: nodes express outcomes in business terms; the mapping ties outcomes to graph structure.
+
+API:
+
+```go
+// Declare Ends on a node (label -> concrete target)
+sg.AddNode("decision", decideNode,
+    graph.WithEndsMap(map[string]string{
+        "approve": "approved",
+        "reject":  "rejected",
+        // You may map a label to the terminal End
+        // "drop":  graph.End,
+    }),
+)
+
+// Short form: label equals the target node ID
+sg.AddNode("router", routerNode, graph.WithEnds("nodeB", "nodeC"))
+```
+
+Command‑style routing (Command.GoTo):
+
+```go
+func decideNode(ctx context.Context, s graph.State) (any, error) {
+    switch s["decision"].(string) {
+    case "approve":
+        return &graph.Command{GoTo: "approve"}, nil // label
+    case "reject":
+        return &graph.Command{GoTo: "reject"}, nil
+    default:
+        return &graph.Command{GoTo: "reject"}, nil
+    }
+}
+```
+
+Conditional edges can reuse Ends: when `AddConditionalEdges(from, condition, pathMap)` receives a `nil` `pathMap` or no match is found, the executor tries the node’s Ends; if still no match, the return string is treated as a concrete node ID.
+
+Resolution precedence:
+1. Explicit mapping in the conditional edge’s `pathMap`.
+2. The node’s Ends mapping (label → concrete target).
+3. Treat the return string as a node ID.
+
+Compile‑time checks:
+- `WithEndsMap/WithEnds` targets are validated in `Compile()`.
+- Targets must exist in the graph or be the special constant `graph.End`.
+
+Notes:
+- Use the constant `graph.End` to terminate; do not use the string "END".
+- With `Command.GoTo`, you don’t need to add a static `AddEdge(from, to)` for the target; ensure the target exists and set `SetFinishPoint(target)` if it should end the graph.
+
+Runnable example: `examples/graph/multiends`.
+
 ### 5. Tool Node Integration
 
 ```go
@@ -558,6 +617,17 @@ stateGraph.AddToolsNode("tools", tools)
 stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 ```
 
+Enable parallel tool execution for the Tools node (aligns with LLMAgent’s option):
+
+```go
+// Tools node runs tool calls concurrently when multiple tool_calls are present.
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithEnableParallelTools(true), // optional; default is serial
+)
+```
+
 Tool-call pairing and second entry into LLM:
 
 - Scan `messages` backward from the tail to find the most recent `assistant(tool_calls)`; stop at `user` to ensure correct pairing.
@@ -565,11 +635,11 @@ Tool-call pairing and second entry into LLM:
 
 #### Placeholder Variables in LLM Instructions
 
-LLM nodes support placeholder injection in their `instruction` string (same rules as LLMAgent):
+LLM nodes support placeholder injection in their `instruction` string (same rules as LLMAgent). Both native `{key}` and Mustache `{{key}}` syntaxes are accepted (Mustache is normalized to the native form automatically):
 
-- `{key}` → replaced by `session.State["key"]`
-- `{key?}` → optional; missing values become empty
-- `{user:subkey}`, `{app:subkey}`, `{temp:subkey}` → access user/app/temp scopes (session services merge app/user state into session with these prefixes)
+- `{key}` / `{{key}}` → replaced by `session.State["key"]`
+- `{key?}` / `{{key?}}` → optional; missing values become empty
+- `{user:subkey}`, `{app:subkey}`, `{temp:subkey}` (and their Mustache forms) → access user/app/temp scopes (session services merge app/user state into session with these prefixes)
 
 Notes:
 
@@ -621,10 +691,10 @@ Example: `examples/graph/retrieval_placeholder`.
 Best practices for placeholders and session state
 
 - Ephemeral vs persistent: write per‑turn values to `temp:*` on `session.State` (session state). Persistent configuration should go through `SessionService` with `user:*`/`app:*`.
-- Why direct write is OK: LLM nodes expand placeholders from the session object present in graph state; see [graph/state_graph.go](graph/state_graph.go). GraphAgent puts the session into state; see [agent/graphagent/graph_agent.go](agent/graphagent/graph_agent.go).
-- Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](session/inmemory/service.go).
+- Why direct write is OK: LLM nodes expand placeholders from the session object present in graph state; see [graph/state_graph.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/state_graph.go). GraphAgent puts the session into state; see [agent/graphagent/graph_agent.go](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/graphagent/graph_agent.go).
+- Service guardrails: the in‑memory service intentionally disallows writing `temp:*` (and `app:*` via user updater); see [session/inmemory/service.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/inmemory/service.go).
 - Concurrency: when multiple branches run in parallel, avoid multiple nodes mutating the same `session.State` keys. Prefer composing in a single node before the LLM, or store intermediate values in graph state then write once to `temp:*`.
-- Observability: if you want parts of the prompt to appear in completion events, also store a compact summary in graph state (e.g., under `metadata`). The final event serializes non‑internal final state; see [graph/events.go](graph/events.go).
+- Observability: if you want parts of the prompt to appear in completion events, also store a compact summary in graph state (e.g., under `metadata`). The final event serializes non‑internal final state; see [graph/events.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go).
 
 ### 6. Node Retry & Backoff
 
@@ -1092,14 +1162,14 @@ Enable caching for pure function-like nodes to avoid repeated computation.
 - Clear by nodes: `ClearCache(nodes ...string)`
 
 References:
-- Graph accessors and setters: [graph/graph.go](graph/graph.go)
+- Graph accessors and setters: [graph/graph.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/graph.go)
 - Defaults and in-memory backend:
-  - Interface/policy + canonical JSON + SHA‑256: [graph/cache.go](graph/cache.go)
-  - In-memory cache with read-write lock and deep copy: [graph/cache.go](graph/cache.go)
+  - Interface/policy + canonical JSON + SHA‑256: [graph/cache.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache.go)
+  - In-memory cache with read-write lock and deep copy: [graph/cache.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache.go)
 - Executor:
-  - Try Get before executing a node; on hit, skip the node function and only run callbacks + writes: [graph/executor.go](graph/executor.go)
-  - Persist Set after successful execution: [graph/executor.go](graph/executor.go)
-  - Attach `_cache_hit` flag on node.complete events: [graph/executor.go](graph/executor.go)
+  - Try Get before executing a node; on hit, skip the node function and only run callbacks + writes: [graph/executor.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go)
+  - Persist Set after successful execution: [graph/executor.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go)
+  - Attach `_cache_hit` flag on node.complete events: [graph/executor.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go)
 
 Minimal usage:
 
@@ -1289,7 +1359,7 @@ Advanced usage:
 Notes:
 - Prefer caching only pure functions (no side effects)
 - TTL=0 means no expiration; consider a persistent backend (Redis/SQLite) in production
-- Key function sanitizes input to avoid volatile/non-serializable fields being part of the key: [graph/cache_key.go](graph/cache_key.go)
+- Key function sanitizes input to avoid volatile/non-serializable fields being part of the key: [graph/cache_key.go](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache_key.go)
 - Call `ClearCache("nodeID")` after code changes or include a function identifier/version in the key
 
 Runner + GraphAgent usage example:
@@ -1366,7 +1436,7 @@ func atoi(s string) int { var n int; fmt.Sscanf(s, "%d", &n); return n }
 ```
 
 Example:
-- Interactive + Runner + GraphAgent: [examples/graph/nodecache/main.go](examples/graph/nodecache/main.go)
+- Interactive + Runner + GraphAgent: [examples/graph/nodecache/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/graph/nodecache/main.go)
 
 #### Tools Node
 Executes tool calls in sequence:
@@ -1901,6 +1971,38 @@ graphAgent, _ := graphagent.New("workflow", g,
 // graph.StateKeyLastResponse and graph.StateKeyNodeResponses[nodeID]
 ```
 
+#### Passing only results: map last_response to downstream user_input
+
+> Scenario: A → B → C as black boxes. Downstream should only consume upstream’s result text as this turn’s input, without pulling full session history.
+
+- Approach 1 (dependency‑free, universally available): add a pre‑node callback to the target Agent node that assigns parent `last_response` to `user_input`. Optionally isolate messages.
+
+```go
+sg.AddAgentNode("orchestrator",
+    // Map upstream last_response → this turn's user_input
+    graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
+        if v, ok := s[graph.StateKeyLastResponse].(string); ok && v != "" {
+            s[graph.StateKeyUserInput] = v
+        }
+        return nil, nil
+    }),
+    // Optional: isolate child sub‑agent from session contents
+    graph.WithSubgraphIsolatedMessages(true),
+)
+```
+
+- Approach 2 (enhanced option, more concise):
+
+```go
+// Declarative option that automatically maps last_response → user_input
+sg.AddAgentNode("orchestrator",
+    graph.WithSubgraphInputFromLastResponse(),
+    graph.WithSubgraphIsolatedMessages(true), // optional: isolate for true "pass only results"
+)
+```
+
+Notes: Both approaches ensure B only sees A’s result, and C only sees B’s. The option is more concise when available; the callback is zero‑dependency and works everywhere.
+
 ### Hybrid Pattern Example
 
 Embed dynamic decision‑making within a structured flow:
@@ -2429,7 +2531,7 @@ for ev := range events {
 
 #### Emit selected values from node callbacks
 
-By default, mid‑run events like `graph.state.update` report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final `graph.execution` event’s `StateDelta` carries the serialized final snapshot of allowed keys (see implementations in [graph/executor.go:2001](graph/executor.go:2001), [graph/events.go:1276](graph/events.go:1276), [graph/events.go:1330](graph/events.go:1330)).
+By default, mid‑run events like `graph.state.update` report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final `graph.execution` event’s `StateDelta` carries the serialized final snapshot of allowed keys (see implementations in [graph/executor.go:2001](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go#L2001), [graph/events.go:1276](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1276), [graph/events.go:1330](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1330)).
 
 If you only need to surface a few values from the result of a specific node right after it completes, register an After‑node callback and emit a small custom event containing just those values:
 
@@ -2498,7 +2600,7 @@ func buildGraph() (*graph.Graph, error) {
 
 Recommendations:
 - Emit only necessary keys to control bandwidth and avoid leaking sensitive data.
-- Internal/volatile keys are filtered from final snapshots and should not be emitted (see [graph/internal_keys.go:16](graph/internal_keys.go:16)).
+- Internal/volatile keys are filtered from final snapshots and should not be emitted (see [graph/internal_keys.go:16](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16)).
 - For textual intermediate outputs, prefer existing model streaming events (`choice.Delta.Content`).
 
 You can also configure agent‑level callbacks:

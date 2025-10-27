@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
@@ -470,13 +471,6 @@ func TestWithOptions(t *testing.T) {
 			tt.validate(t, opts)
 		})
 	}
-}
-
-// Mock assert for testing
-var assert = struct {
-	AnError error
-}{
-	AnError: &mockError{msg: "test error"},
 }
 
 type mockError struct {

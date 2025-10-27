@@ -145,6 +145,25 @@ main.agui-chat {
   color: inherit;
 }
 
+.agui-chat .copilotKitMessage code {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+}
+
+.agui-chat .copilotKitMessage pre {
+  background: #1b1b1b;
+  padding: 1rem;
+  border-radius: 12px;
+  overflow-x: auto;
+}
+
+.agui-chat .copilotKitMessage pre code {
+  background: transparent;
+  padding: 0;
+}
+
 .agui-chat .copilotKitMessageControls {
   margin-top: 0.75rem;
   display: flex;

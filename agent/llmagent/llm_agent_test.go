@@ -18,7 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -406,9 +408,11 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 		require.PanicsWithValue(t,
 			"Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty",
 			func() {
+				// Use a simple tool that implements tool.Tool interface.
+				simpleTool := dummyTool{decl: &tool.Declaration{Name: "test"}}
 				_ = New("test",
 					WithOutputSchema(schema),
-					WithTools([]tool.Tool{dummyTool{}}),
+					WithTools([]tool.Tool{simpleTool}),
 				)
 			},
 		)
@@ -418,9 +422,10 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 		require.PanicsWithValue(t,
 			"Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty",
 			func() {
+				toolset := dummyToolSet{name: "test-toolset"}
 				_ = New("test",
 					WithOutputSchema(schema),
-					WithToolSets([]tool.ToolSet{dummyToolSet{}}),
+					WithToolSets([]tool.ToolSet{toolset}),
 				)
 			},
 		)
@@ -488,4 +493,251 @@ func TestLLMAgent_InvocationContextAccess(t *testing.T) {
 	// The agent should have been able to run successfully, which means
 	// it could access the invocation from context for any internal operations.
 	t.Logf("LLMAgent successfully executed with %d events, confirming invocation context access", len(events))
+}
+
+// fakeInvocation creates an invocation carrying a runtime state include_contents flag.
+func fakeInvocation(include string) *agent.Invocation {
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("u")),
+	)
+	st := map[string]any{graph.CfgKeyIncludeContents: include}
+	inv.RunOptions = agent.RunOptions{RuntimeState: st}
+	return inv
+}
+
+// Test that buildRequestProcessors honors include_contents from runtime state
+// by constructing the content processor with the expected mode.
+func TestBuildRequestProcessors_IncludeContentsHonored(t *testing.T) {
+	opts := &Options{}
+
+	// Case 1: none
+	{
+		inv := fakeInvocation("none")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		if ctx == nil {
+			t.Fatalf("context should not be nil")
+		}
+
+		procs := buildRequestProcessors("tester", opts)
+		// Last processor is content processor created with include mode.
+		// We cannot access internals directly; instead, simulate request processing:
+		// When include=none and session is nil, invocation message should be appended.
+		req := &model.Request{}
+		for _, p := range procs {
+			p.ProcessRequest(ctx, inv, req, nil)
+		}
+		// Expect at least the invocation message present (role=user, content="u").
+		if len(req.Messages) == 0 {
+			t.Fatalf("expected invocation message appended")
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleUser || last.Content != "u" {
+			t.Fatalf("unexpected last message: %+v", last)
+		}
+	}
+
+	// Case 2: filtered
+	{
+		inv := fakeInvocation("filtered")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		procs := buildRequestProcessors("tester", opts)
+		req := &model.Request{}
+		for _, p := range procs {
+			p.ProcessRequest(ctx, inv, req, nil)
+		}
+		// With no session, behavior equals none: invocation message appended.
+		if len(req.Messages) == 0 {
+			t.Fatalf("expected invocation message appended (filtered)")
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleUser || last.Content != "u" {
+			t.Fatalf("unexpected last message (filtered): %+v", last)
+		}
+	}
+
+	// Case 3: all (same expectation with empty session)
+	{
+		inv := fakeInvocation("all")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		procs := buildRequestProcessors("tester", opts)
+		req := &model.Request{}
+		for _, p := range procs {
+			p.ProcessRequest(ctx, inv, req, nil)
+		}
+		if len(req.Messages) == 0 {
+			t.Fatalf("expected invocation message appended (all)")
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleUser || last.Content != "u" {
+			t.Fatalf("unexpected last message (all): %+v", last)
+		}
+	}
+
+	// Case 4: invalid -> defaults to filtered (still works with empty session)
+	{
+		inv := fakeInvocation("invalid")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		procs := buildRequestProcessors("tester", opts)
+		req := &model.Request{}
+		for _, p := range procs {
+			p.ProcessRequest(ctx, inv, req, nil)
+		}
+		if len(req.Messages) == 0 {
+			t.Fatalf("expected invocation message appended (invalid->filtered)")
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleUser || last.Content != "u" {
+			t.Fatalf("unexpected last message (invalid->filtered): %+v", last)
+		}
+	}
+}
+
+// TestLLMAgent_OptionsWithCodeExecutor tests WithCodeExecutor option.
+func TestLLMAgent_OptionsWithCodeExecutor(t *testing.T) {
+	mockCE := &mockCodeExecutor{}
+	agt := New("test", WithCodeExecutor(mockCE))
+	require.Equal(t, mockCE, agt.CodeExecutor())
+}
+
+// TestLLMAgent_OptionsWithOutputKey tests WithOutputKey option.
+func TestLLMAgent_OptionsWithOutputKey(t *testing.T) {
+	agt := New("test", WithOutputKey("my_output"))
+	require.Equal(t, "my_output", agt.outputKey)
+}
+
+// TestLLMAgent_OptionsWithInputSchema tests WithInputSchema option.
+func TestLLMAgent_OptionsWithInputSchema(t *testing.T) {
+	schema := map[string]any{"type": "object"}
+	agt := New("test", WithInputSchema(schema))
+	info := agt.Info()
+	require.Equal(t, schema, info.InputSchema)
+}
+
+// TestLLMAgent_OptionsWithAddNameToInstruction tests WithAddNameToInstruction option.
+func TestLLMAgent_OptionsWithAddNameToInstruction(t *testing.T) {
+	opts := &Options{}
+	WithAddNameToInstruction(true)(opts)
+	require.True(t, opts.AddNameToInstruction)
+}
+
+// TestLLMAgent_OptionsWithDefaultTransferMessage tests WithDefaultTransferMessage option.
+func TestLLMAgent_OptionsWithDefaultTransferMessage(t *testing.T) {
+	opts := &Options{}
+	WithDefaultTransferMessage("custom message")(opts)
+	require.NotNil(t, opts.DefaultTransferMessage)
+	require.Equal(t, "custom message", *opts.DefaultTransferMessage)
+}
+
+// TestLLMAgent_OptionsWithStructuredOutputJSON tests WithStructuredOutputJSON option.
+func TestLLMAgent_OptionsWithStructuredOutputJSON(t *testing.T) {
+	type MyStruct struct {
+		Field1 string `json:"field1"`
+		Field2 int    `json:"field2"`
+	}
+	opts := &Options{}
+	WithStructuredOutputJSON(new(MyStruct), true, "test description")(opts)
+	require.NotNil(t, opts.StructuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, opts.StructuredOutput.Type)
+	require.NotNil(t, opts.StructuredOutput.JSONSchema)
+	require.Equal(t, "MyStruct", opts.StructuredOutput.JSONSchema.Name)
+	require.True(t, opts.StructuredOutput.JSONSchema.Strict)
+	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
+}
+
+// TestLLMAgent_OptionsWithAddCurrentTime tests WithAddCurrentTime option.
+func TestLLMAgent_OptionsWithAddCurrentTime(t *testing.T) {
+	opts := &Options{}
+	WithAddCurrentTime(true)(opts)
+	require.True(t, opts.AddCurrentTime)
+}
+
+// TestLLMAgent_OptionsWithTimezone tests WithTimezone option.
+func TestLLMAgent_OptionsWithTimezone(t *testing.T) {
+	opts := &Options{}
+	WithTimezone("Asia/Shanghai")(opts)
+	require.Equal(t, "Asia/Shanghai", opts.Timezone)
+}
+
+// TestLLMAgent_OptionsWithTimeFormat tests WithTimeFormat option.
+func TestLLMAgent_OptionsWithTimeFormat(t *testing.T) {
+	opts := &Options{}
+	WithTimeFormat("2006-01-02 15:04:05")(opts)
+	require.Equal(t, "2006-01-02 15:04:05", opts.TimeFormat)
+}
+
+// TestLLMAgent_OptionsWithAddContextPrefix tests WithAddContextPrefix option.
+func TestLLMAgent_OptionsWithAddContextPrefix(t *testing.T) {
+	opts := &Options{}
+	WithAddContextPrefix(true)(opts)
+	require.True(t, opts.AddContextPrefix)
+}
+
+// TestLLMAgent_OptionsWithKnowledgeFilter tests WithKnowledgeFilter option.
+func TestLLMAgent_OptionsWithKnowledgeFilter(t *testing.T) {
+	filter := map[string]any{"category": "tech"}
+	opts := &Options{}
+	WithKnowledgeFilter(filter)(opts)
+	require.Equal(t, filter, opts.KnowledgeFilter)
+}
+
+// TestLLMAgent_OptionsWithKnowledgeAgenticFilterInfo tests WithKnowledgeAgenticFilterInfo option.
+func TestLLMAgent_OptionsWithKnowledgeAgenticFilterInfo(t *testing.T) {
+	filterInfo := map[string][]any{"tags": {"ai", "ml"}}
+	opts := &Options{}
+	WithKnowledgeAgenticFilterInfo(filterInfo)(opts)
+	require.Equal(t, filterInfo, opts.AgenticFilterInfo)
+}
+
+// TestLLMAgent_OptionsWithEnableKnowledgeAgenticFilter tests WithEnableKnowledgeAgenticFilter option.
+func TestLLMAgent_OptionsWithEnableKnowledgeAgenticFilter(t *testing.T) {
+	opts := &Options{}
+	WithEnableKnowledgeAgenticFilter(true)(opts)
+	require.True(t, opts.EnableKnowledgeAgenticFilter)
+}
+
+// TestLLMAgent_OptionsWithEndInvocationAfterTransfer tests WithEndInvocationAfterTransfer option.
+func TestLLMAgent_OptionsWithEndInvocationAfterTransfer(t *testing.T) {
+	opts := &Options{}
+	WithEndInvocationAfterTransfer(false)(opts)
+	require.False(t, opts.EndInvocationAfterTransfer)
+}
+
+// TestLLMAgent_SetInstruction tests SetInstruction method.
+func TestLLMAgent_SetInstruction(t *testing.T) {
+	agt := New("test", WithInstruction("initial instruction"))
+	require.Equal(t, "initial instruction", agt.getInstruction())
+
+	agt.SetInstruction("updated instruction")
+	require.Equal(t, "updated instruction", agt.getInstruction())
+}
+
+// TestLLMAgent_SetGlobalInstruction tests SetGlobalInstruction method.
+func TestLLMAgent_SetGlobalInstruction(t *testing.T) {
+	agt := New("test", WithGlobalInstruction("initial global"))
+	require.Equal(t, "initial global", agt.getSystemPrompt())
+
+	agt.SetGlobalInstruction("updated global")
+	require.Equal(t, "updated global", agt.getSystemPrompt())
+}
+
+// TestHaveCustomResponseError tests the Error method of haveCustomResponseError.
+func TestHaveCustomResponseError(t *testing.T) {
+	err := &haveCustomResponseError{EventChan: make(<-chan *event.Event)}
+	require.Equal(t, "custom response provided, returning early", err.Error())
+}
+
+// mockCodeExecutor is a mock implementation of CodeExecutor for testing.
+type mockCodeExecutor struct{}
+
+func (m *mockCodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{
+		Output: "executed",
+	}, nil
+}
+
+func (m *mockCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{
+		Start: "```",
+		End:   "```",
+	}
 }

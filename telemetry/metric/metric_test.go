@@ -43,23 +43,120 @@ func TestGRPCMetricsEndpoint(t *testing.T) {
 
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	if ep := metricsEndpoint("grpc"); ep == "" {
-		t.Fatalf("expected non-empty default endpoint")
+	if ep := metricsEndpoint("grpc"); ep != "localhost:4317" {
+		t.Fatalf("expected default gRPC endpoint localhost:4317, got %s", ep)
+	}
+
+	if ep := metricsEndpoint("http"); ep != "localhost:4318" {
+		t.Fatalf("expected default HTTP endpoint localhost:4318, got %s", ep)
 	}
 }
 
-// TestStartAndClean exercises the happy-path of Start and returned cleanup.
+// TestStartAndClean exercises various Start configurations and cleanup.
 func TestStartAndClean(t *testing.T) {
-	const (
-		metricEP = "localhost:4318"
-	)
-
-	ctx := context.Background()
-	mp, err := NewMeterProvider(ctx,
-		WithEndpoint(metricEP),
-	)
-	if err != nil {
-		t.Fatalf("NewMeterProvider returned error: %v", err)
+	tests := []struct {
+		name        string
+		opts        []Option
+		expectError bool
+	}{
+		{
+			name: "gRPC endpoint",
+			opts: []Option{
+				WithEndpoint("localhost:4317"),
+				WithProtocol("grpc"),
+			},
+		},
+		{
+			name: "HTTP endpoint",
+			opts: []Option{
+				WithEndpoint("localhost:4318"),
+				WithProtocol("http"),
+			},
+		},
+		{
+			name: "default options",
+			opts: []Option{},
+		},
+		{
+			name: "custom endpoint",
+			opts: []Option{
+				WithEndpoint("custom:4317"),
+			},
+		},
+		{
+			name: "resilient to empty endpoint",
+			opts: []Option{
+				WithEndpoint(""),
+			},
+		},
+		{
+			name: "resilient to invalid protocol",
+			opts: []Option{
+				WithProtocol("invalid"),
+			},
+		},
 	}
-	defer mp.Shutdown(ctx)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			mp, err := NewMeterProvider(ctx, tt.opts...)
+			if err != nil {
+				t.Fatalf("NewMeterProvider returned error: %v", err)
+			}
+
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+
+			if err := mp.Shutdown(ctx); err != nil {
+				t.Logf("Shutdown returned error: %v", err)
+			}
+		})
+	}
+}
+
+// TestOptions validates option functions
+func TestOptions(t *testing.T) {
+	opts := &options{
+		protocol:    "grpc",
+		serviceName: "original",
+	}
+
+	tests := []struct {
+		name     string
+		option   Option
+		validate func(*testing.T, *options)
+	}{
+		{
+			name:   "WithEndpoint",
+			option: WithEndpoint("test:4317"),
+			validate: func(t *testing.T, opts *options) {
+				if opts.metricsEndpoint != "test:4317" {
+					t.Errorf("expected endpoint test:4317, got %s", opts.metricsEndpoint)
+				}
+			},
+		},
+		{
+			name:   "WithProtocol",
+			option: WithProtocol("http"),
+			validate: func(t *testing.T, opts *options) {
+				if opts.protocol != "http" {
+					t.Errorf("expected protocol http, got %s", opts.protocol)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a copy of original options for each test
+			testOpts := *opts
+			tt.option(&testOpts)
+			tt.validate(t, &testOpts)
+		})
+	}
 }

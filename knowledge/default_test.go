@@ -71,42 +71,7 @@ func (m *mockSource) GetMetadata() map[string]any {
 	}
 }
 
-func TestBuiltinKnowledge_LoadOptions(t *testing.T) {
-	// Create a knowledge instance with mock sources.
-	kb := New(
-		WithSources([]source.Source{
-			&mockSource{name: "test-source-1", docCount: 5},
-			&mockSource{name: "test-source-2", docCount: 3},
-		}),
-	)
-	kb.vectorStore = &stubVectorStore{}
-
-	ctx := context.Background()
-
-	// Test with default options (should show progress).
-	err := kb.Load(ctx)
-	if err != nil {
-		t.Errorf("Load with default options failed: %v", err)
-	}
-
-	// Test with progress disabled.
-	err = kb.Load(ctx, WithShowProgress(false))
-	if err != nil {
-		t.Errorf("Load with progress disabled failed: %v", err)
-	}
-
-	// Test with custom progress step size.
-	err = kb.Load(ctx, WithProgressStepSize(2))
-	if err != nil {
-		t.Errorf("Load with custom progress step size failed: %v", err)
-	}
-
-	// Test with multiple options.
-	err = kb.Load(ctx, WithShowProgress(true), WithProgressStepSize(1))
-	if err != nil {
-		t.Errorf("Load with multiple options failed: %v", err)
-	}
-}
+// TestBuiltinKnowledge_LoadOptions is redundant with TestLoadOptions, removed
 
 func TestBuiltinKnowledge_LoadNoSources(t *testing.T) {
 	// Create a knowledge instance with no sources.
@@ -551,7 +516,7 @@ func TestBuiltinKnowledge_SearchTableDriven(t *testing.T) {
 					t.Errorf("Expected error but got none")
 					return
 				}
-				if !containsString(err.Error(), tt.expectedErrMsg) {
+				if !strings.Contains(err.Error(), tt.expectedErrMsg) {
 					t.Errorf("Expected error containing '%s', got: %v", tt.expectedErrMsg, err)
 				}
 			} else {
@@ -615,7 +580,7 @@ func TestBuiltinKnowledge_Close(t *testing.T) {
 					t.Errorf("Expected error but got none")
 					return
 				}
-				if !containsString(err.Error(), tt.expectedErrMsg) {
+				if !strings.Contains(err.Error(), tt.expectedErrMsg) {
 					t.Errorf("Expected error containing '%s', got: %v", tt.expectedErrMsg, err)
 				}
 			} else {
@@ -737,7 +702,7 @@ func TestAddDocument(t *testing.T) {
 					t.Errorf("Expected error but got none")
 					return
 				}
-				if !containsString(err.Error(), tt.expectedErrMsg) {
+				if !strings.Contains(err.Error(), tt.expectedErrMsg) {
 					t.Errorf("Expected error containing '%s', got: %v", tt.expectedErrMsg, err)
 				}
 			} else {
@@ -749,10 +714,7 @@ func TestAddDocument(t *testing.T) {
 	}
 }
 
-// Helper function to check if string contains substring
-func containsString(s, substr string) bool {
-	return strings.Contains(s, substr)
-}
+// containsString helper removed - use strings.Contains directly
 
 // Mock implementations for testing
 
@@ -1267,6 +1229,512 @@ func TestIncrementalSyncFunctions(t *testing.T) {
 	kb.clearVectorStoreMetadata()
 	if len(kb.cacheMetaInfo) != 0 {
 		t.Error("Expected cacheMetaInfo to be cleared")
+	}
+}
+
+// TestConvertMetaToDocumentInfo_EdgeCases tests convertMetaToDocumentInfo with various edge cases
+func TestConvertMetaToDocumentInfo_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		docID    string
+		meta     *vectorstore.DocumentMetadata
+		validate func(*testing.T, BuiltinDocumentInfo)
+	}{
+		{
+			name:  "missing_uri",
+			docID: "doc-1",
+			meta: &vectorstore.DocumentMetadata{
+				Metadata: map[string]any{
+					source.MetaSourceName: "test-source",
+					source.MetaChunkIndex: 0,
+				},
+			},
+			validate: func(t *testing.T, info BuiltinDocumentInfo) {
+				if info.URI != "" {
+					t.Errorf("Expected empty URI, got '%s'", info.URI)
+				}
+			},
+		},
+		{
+			name:  "missing_source_name",
+			docID: "doc-2",
+			meta: &vectorstore.DocumentMetadata{
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaChunkIndex: 1,
+				},
+			},
+			validate: func(t *testing.T, info BuiltinDocumentInfo) {
+				if info.SourceName != "" {
+					t.Errorf("Expected empty SourceName, got '%s'", info.SourceName)
+				}
+			},
+		},
+		{
+			name:  "missing_chunk_index",
+			docID: "doc-3",
+			meta: &vectorstore.DocumentMetadata{
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaSourceName: "test-source",
+				},
+			},
+			validate: func(t *testing.T, info BuiltinDocumentInfo) {
+				if info.ChunkIndex != 0 {
+					t.Errorf("Expected ChunkIndex 0, got %d", info.ChunkIndex)
+				}
+			},
+		},
+		{
+			name:  "float64_chunk_index",
+			docID: "doc-4",
+			meta: &vectorstore.DocumentMetadata{
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaSourceName: "test-source",
+					source.MetaChunkIndex: float64(5),
+				},
+			},
+			validate: func(t *testing.T, info BuiltinDocumentInfo) {
+				if info.ChunkIndex != 5 {
+					t.Errorf("Expected ChunkIndex 5, got %d", info.ChunkIndex)
+				}
+			},
+		},
+		{
+			name:  "string_chunk_index",
+			docID: "doc-5",
+			meta: &vectorstore.DocumentMetadata{
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaSourceName: "test-source",
+					source.MetaChunkIndex: "10",
+				},
+			},
+			validate: func(t *testing.T, info BuiltinDocumentInfo) {
+				if info.ChunkIndex != 10 {
+					t.Errorf("Expected ChunkIndex 10, got %d", info.ChunkIndex)
+				}
+			},
+		},
+		{
+			name:  "invalid_chunk_index",
+			docID: "doc-6",
+			meta: &vectorstore.DocumentMetadata{
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaSourceName: "test-source",
+					source.MetaChunkIndex: "invalid",
+				},
+			},
+			validate: func(t *testing.T, info BuiltinDocumentInfo) {
+				if info.ChunkIndex != 0 {
+					t.Errorf("Expected ChunkIndex 0, got %d", info.ChunkIndex)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := convertMetaToDocumentInfo(tt.docID, tt.meta)
+			if info.DocumentID != tt.docID {
+				t.Errorf("Expected DocumentID '%s', got '%s'", tt.docID, info.DocumentID)
+			}
+			if tt.validate != nil {
+				tt.validate(t, info)
+			}
+		})
+	}
+}
+
+// TestLoad_WithRecreate tests Load with recreate option
+func TestLoad_WithRecreate(t *testing.T) {
+	kb := New(
+		WithSources([]source.Source{
+			&mockSource{name: "test-source", docCount: 3},
+		}),
+		WithEnableSourceSync(true),
+	)
+	store := newSyncMockVectorStore()
+	kb.vectorStore = store
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+
+	// Load first time with recreate
+	err := kb.Load(ctx, WithRecreate(true))
+	if err != nil {
+		t.Fatalf("Load with recreate failed: %v", err)
+	}
+
+	// Verify documents were added
+	count, err := store.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("Expected 3 documents, got %d", count)
+	}
+
+	// Load again with recreate
+	err = kb.Load(ctx, WithRecreate(true))
+	if err != nil {
+		t.Fatalf("Second load with recreate failed: %v", err)
+	}
+}
+
+// TestLoad_WithSync tests Load with sync enabled
+func TestLoad_WithSync(t *testing.T) {
+	kb := New(
+		WithSources([]source.Source{
+			&mockSource{name: "test-source", docCount: 2},
+		}),
+		WithEnableSourceSync(true),
+	)
+	store := newSyncMockVectorStore()
+	kb.vectorStore = store
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+
+	// Load first time
+	err := kb.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Verify documents were added
+	count, err := store.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("Expected 2 documents, got %d", count)
+	}
+
+	// Load again (should handle incremental sync)
+	err = kb.Load(ctx)
+	if err != nil {
+		t.Fatalf("Second load failed: %v", err)
+	}
+}
+
+// TestResetDocumentID tests resetDocumentID edge cases
+func TestResetDocumentID(t *testing.T) {
+	src := &mockSource{name: "test-source", docCount: 1}
+
+	tests := []struct {
+		name        string
+		doc         *document.Document
+		expectError bool
+		errContains string
+	}{
+		{
+			name: "nil_metadata",
+			doc: &document.Document{
+				ID:       "doc-1",
+				Content:  "test",
+				Metadata: nil,
+			},
+			expectError: true,
+			errContains: "metadata is nil",
+		},
+		{
+			name: "missing_uri",
+			doc: &document.Document{
+				ID:      "doc-2",
+				Content: "test",
+				Metadata: map[string]any{
+					source.MetaChunkIndex: 0,
+				},
+			},
+			expectError: true,
+			errContains: "missing URI metadata",
+		},
+		{
+			name: "missing_chunk_index",
+			doc: &document.Document{
+				ID:      "doc-3",
+				Content: "test",
+				Metadata: map[string]any{
+					source.MetaURI: "test://uri",
+				},
+			},
+			expectError: true,
+			errContains: "missing chunk index metadata",
+		},
+		{
+			name: "invalid_chunk_index_type",
+			doc: &document.Document{
+				ID:      "doc-4",
+				Content: "test",
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaChunkIndex: []int{1, 2, 3}, // invalid type
+				},
+			},
+			expectError: true,
+			errContains: "chunk index is not an integer",
+		},
+		{
+			name: "success",
+			doc: &document.Document{
+				ID:      "doc-5",
+				Content: "test",
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaChunkIndex: 0,
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kb := New()
+			err := kb.resetDocumentID(tt.doc, src)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Expected error containing '%s', got: %v", tt.errContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				// Verify document ID was set
+				if tt.doc.ID == "" {
+					t.Error("Expected document ID to be set")
+				}
+				// Verify source name was set
+				if tt.doc.Metadata[source.MetaSourceName] != src.Name() {
+					t.Errorf("Expected source name '%s', got '%v'", src.Name(), tt.doc.Metadata[source.MetaSourceName])
+				}
+			}
+		})
+	}
+}
+
+// TestShouldProcessDocument tests shouldProcessDocument edge cases
+func TestShouldProcessDocument(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupKB       func() *BuiltinKnowledge
+		doc           *document.Document
+		expectError   bool
+		expectProcess bool
+		errContains   string
+	}{
+		{
+			name: "missing_uri",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithEnableSourceSync(true))
+				kb.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
+				kb.cacheURIInfo = make(map[string][]BuiltinDocumentInfo)
+				return kb
+			},
+			doc: &document.Document{
+				ID: "doc-1",
+				Metadata: map[string]any{
+					source.MetaSourceName: "test-source",
+				},
+			},
+			expectError: true,
+			errContains: "missing or invalid URI metadata",
+		},
+		{
+			name: "missing_source_name",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithEnableSourceSync(true))
+				kb.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
+				kb.cacheURIInfo = make(map[string][]BuiltinDocumentInfo)
+				return kb
+			},
+			doc: &document.Document{
+				ID: "doc-2",
+				Metadata: map[string]any{
+					source.MetaURI: "test://uri",
+				},
+			},
+			expectError: true,
+			errContains: "missing or invalid source name metadata",
+		},
+		{
+			name: "already_processed",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithEnableSourceSync(true))
+				kb.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
+				kb.cacheURIInfo = make(map[string][]BuiltinDocumentInfo)
+				kb.processedDocIDs.Store("doc-3", struct{}{})
+				return kb
+			},
+			doc: &document.Document{
+				ID: "doc-3",
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaSourceName: "test-source",
+				},
+			},
+			expectError:   false,
+			expectProcess: false,
+		},
+		{
+			name: "already_processing",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithEnableSourceSync(true))
+				kb.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
+				kb.cacheURIInfo = make(map[string][]BuiltinDocumentInfo)
+				kb.processingDocIDs.Store("doc-4", struct{}{})
+				return kb
+			},
+			doc: &document.Document{
+				ID: "doc-4",
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaSourceName: "test-source",
+				},
+			},
+			expectError:   false,
+			expectProcess: false,
+		},
+		{
+			name: "new_document",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithEnableSourceSync(true))
+				kb.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
+				kb.cacheURIInfo = make(map[string][]BuiltinDocumentInfo)
+				return kb
+			},
+			doc: &document.Document{
+				ID: "doc-5",
+				Metadata: map[string]any{
+					source.MetaURI:        "test://new-uri",
+					source.MetaSourceName: "test-source",
+				},
+			},
+			expectError:   false,
+			expectProcess: true,
+		},
+		{
+			name: "document_unchanged",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithEnableSourceSync(true))
+				kb.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
+				kb.cacheURIInfo = map[string][]BuiltinDocumentInfo{
+					"test://uri": {
+						{
+							DocumentID: "doc-6",
+							URI:        "test://uri",
+							SourceName: "test-source",
+						},
+					},
+				}
+				return kb
+			},
+			doc: &document.Document{
+				ID: "doc-6",
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaSourceName: "test-source",
+				},
+			},
+			expectError:   false,
+			expectProcess: false,
+		},
+		{
+			name: "document_changed",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithEnableSourceSync(true))
+				kb.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
+				kb.cacheURIInfo = map[string][]BuiltinDocumentInfo{
+					"test://uri": {
+						{
+							DocumentID: "doc-7-old",
+							URI:        "test://uri",
+							SourceName: "test-source",
+						},
+					},
+				}
+				return kb
+			},
+			doc: &document.Document{
+				ID: "doc-7-new",
+				Metadata: map[string]any{
+					source.MetaURI:        "test://uri",
+					source.MetaSourceName: "test-source",
+				},
+			},
+			expectError:   false,
+			expectProcess: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kb := tt.setupKB()
+			shouldProcess, err := kb.shouldProcessDocument(tt.doc)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Expected error containing '%s', got: %v", tt.errContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+					return
+				}
+				if shouldProcess != tt.expectProcess {
+					t.Errorf("Expected shouldProcess=%v, got %v", tt.expectProcess, shouldProcess)
+				}
+			}
+		})
+	}
+}
+
+// TestSerializeMetadata tests serializeMetadata with various types
+func TestSerializeMetadata(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+	}{
+		{name: "simple_map", input: map[string]any{"key": "value"}},
+		{name: "nested_map", input: map[string]any{"outer": map[string]any{"inner": "value"}}},
+		{name: "slice", input: []any{"a", "b", "c"}},
+		{name: "map_with_any_key", input: map[any]any{1: "one", "two": 2}},
+		{name: "nil_value", input: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Just verify it doesn't panic
+			result := serializeMetadata(tt.input)
+			if tt.input != nil && result == "" {
+				t.Error("Expected non-empty result for non-nil input")
+			}
+		})
+	}
+}
+
+// TestRebuildDocumentInfo_NilCache tests rebuildDocumentInfo with nil cache
+func TestRebuildDocumentInfo_NilCache(t *testing.T) {
+	kb := New()
+	kb.cacheMetaInfo = nil
+
+	// Should not panic
+	kb.rebuildDocumentInfo()
+
+	if kb.cacheURIInfo != nil || kb.cacheSourceInfo != nil {
+		t.Error("Expected caches to remain nil")
 	}
 }
 

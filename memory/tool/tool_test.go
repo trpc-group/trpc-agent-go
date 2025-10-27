@@ -816,3 +816,234 @@ func TestGetMemoryServiceFromContext(t *testing.T) {
 		assert.Equal(t, service, memoryService, "Expected the same memory service instance")
 	})
 }
+
+func TestMemoryTool_UpdateMemory_GetMemoryServiceError(t *testing.T) {
+	tool := NewUpdateTool()
+	// Use context without invocation context.
+	ctx := context.Background()
+
+	args := map[string]any{
+		"memory_id": "test-id",
+		"memory":    "Updated content",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error for context without invocation")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_AddMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil, // No session, which will cause GetAppAndUserFromContext to fail.
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewAddTool()
+	args := map[string]any{
+		"memory": "Test memory",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_SearchMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil,
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewSearchTool()
+	args := map[string]any{
+		"query": "test query",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_LoadMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil,
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewLoadTool()
+	args := map[string]any{
+		"limit": 10,
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_ClearMemory_GetMemoryServiceError(t *testing.T) {
+	tool := NewClearTool()
+	// Use context without invocation context.
+	ctx := context.Background()
+
+	args := map[string]any{}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error for context without invocation")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_DeleteMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil,
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewDeleteTool()
+	args := map[string]any{
+		"memory_id": "test-id",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_ClearMemory_GetAppAndUserError(t *testing.T) {
+	service := newMockMemoryService()
+	mockInvocation := &agent.Invocation{
+		AgentName:     "test-agent",
+		Session:       nil,
+		MemoryService: service,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+	tool := NewClearTool()
+	args := map[string]any{}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error when session is missing")
+	assert.Nil(t, result, "Expected nil result on error")
+}
+
+func TestMemoryTool_AddMemory_ServiceError(t *testing.T) {
+	service := &mockMemoryServiceWithError{}
+	tool := NewAddTool()
+	ctx := createMockContext("test-app", "test-user", service)
+
+	args := map[string]any{
+		"memory": "test memory",
+		"topics": []string{"test"},
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error from service")
+	assert.Nil(t, result, "Expected nil result on error")
+	assert.Contains(t, err.Error(), "failed to add memory")
+}
+
+func TestMemoryTool_SearchMemory_ServiceError(t *testing.T) {
+	service := &mockMemoryServiceWithError{}
+	tool := NewSearchTool()
+	ctx := createMockContext("test-app", "test-user", service)
+
+	args := map[string]any{
+		"query": "test query",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error from service")
+	assert.Nil(t, result, "Expected nil result on error")
+	assert.Contains(t, err.Error(), "failed to search memories")
+}
+
+func TestMemoryTool_LoadMemory_ServiceError(t *testing.T) {
+	service := &mockMemoryServiceWithError{}
+	tool := NewLoadTool()
+	ctx := createMockContext("test-app", "test-user", service)
+
+	args := map[string]any{
+		"limit": 10,
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err, "Failed to marshal args")
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.Error(t, err, "Expected error from service")
+	assert.Nil(t, result, "Expected nil result on error")
+	assert.Contains(t, err.Error(), "failed to load memories")
+}
+
+// mockMemoryServiceWithError is a mock that returns errors
+type mockMemoryServiceWithError struct{}
+
+func (m *mockMemoryServiceWithError) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+	return fmt.Errorf("mock add error")
+}
+
+func (m *mockMemoryServiceWithError) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error {
+	return fmt.Errorf("mock update error")
+}
+
+func (m *mockMemoryServiceWithError) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
+	return fmt.Errorf("mock delete error")
+}
+
+func (m *mockMemoryServiceWithError) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+	return fmt.Errorf("mock clear error")
+}
+
+func (m *mockMemoryServiceWithError) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+	return nil, fmt.Errorf("mock read error")
+}
+
+func (m *mockMemoryServiceWithError) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+	return nil, fmt.Errorf("mock search error")
+}
+
+func (m *mockMemoryServiceWithError) Tools() []tool.Tool {
+	return []tool.Tool{}
+}
+
+func (m *mockMemoryServiceWithError) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
+	return "", false
+}
