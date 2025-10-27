@@ -11,6 +11,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -181,4 +182,82 @@ func TestCallbacksChainRegistration(t *testing.T) {
 	if len(callbacks.AfterModel) != 1 {
 		t.Errorf("Expected 1 after model callback, got %d", len(callbacks.AfterModel))
 	}
+}
+
+// TestCallbacks_BeforeModel_WithError tests error handling in before model callbacks.
+func TestCallbacks_BeforeModel_WithError(t *testing.T) {
+	callbacks := NewCallbacks()
+
+	// Register a callback that returns an error.
+	expectedErr := errors.New("test error")
+	callbacks.RegisterBeforeModel(func(ctx context.Context, req *Request) (*Response, error) {
+		return nil, expectedErr
+	})
+
+	req := &Request{
+		Messages: []Message{
+			NewUserMessage("Hello"),
+		},
+	}
+
+	resp, err := callbacks.RunBeforeModel(context.Background(), req)
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Equal(t, expectedErr, err)
+}
+
+// TestCallbacks_AfterModel_WithError tests error handling in after model callbacks.
+func TestCallbacks_AfterModel_WithError(t *testing.T) {
+	callbacks := NewCallbacks()
+
+	// Register a callback that returns an error.
+	expectedErr := errors.New("test error")
+	callbacks.RegisterAfterModel(func(
+		ctx context.Context, req *Request, rsp *Response, modelErr error,
+	) (*Response, error) {
+		return nil, expectedErr
+	})
+
+	req := &Request{
+		Messages: []Message{
+			NewUserMessage("Hello"),
+		},
+	}
+
+	originalResponse := &Response{
+		ID:    "original-response",
+		Model: "test-model",
+	}
+
+	resp, err := callbacks.RunAfterModel(context.Background(), req, originalResponse, nil)
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Equal(t, expectedErr, err)
+}
+
+// TestCallbacks_AfterModel_PassThrough tests when callbacks return nil (pass through).
+func TestCallbacks_AfterModel_PassThrough(t *testing.T) {
+	callbacks := NewCallbacks()
+
+	// Register callbacks that don't modify response.
+	callbacks.RegisterAfterModel(func(
+		ctx context.Context, req *Request, rsp *Response, modelErr error,
+	) (*Response, error) {
+		return nil, nil
+	})
+
+	req := &Request{
+		Messages: []Message{
+			NewUserMessage("Hello"),
+		},
+	}
+
+	originalResponse := &Response{
+		ID:    "original-response",
+		Model: "test-model",
+	}
+
+	resp, err := callbacks.RunAfterModel(context.Background(), req, originalResponse, nil)
+	require.NoError(t, err)
+	require.Nil(t, resp)
 }

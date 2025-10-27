@@ -949,3 +949,46 @@ func TestInferMimeType(t *testing.T) {
 		})
 	}
 }
+
+func TestFunctionDefinitionParam_UnmarshalJSON_InvalidJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		jsonData string
+	}{
+		{
+			name:     "invalid JSON syntax",
+			jsonData: `{name:"test", invalid}`,
+		},
+		{
+			name:     "unclosed braces",
+			jsonData: `{"name":"test"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result FunctionDefinitionParam
+			err := json.Unmarshal([]byte(tt.jsonData), &result)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestNewToolMessage(t *testing.T) {
+	toolID := "tool-123"
+	toolName := "test-tool"
+	content := "Tool execution result"
+
+	msg := NewToolMessage(toolID, toolName, content)
+
+	assert.Equal(t, RoleTool, msg.Role)
+	assert.Equal(t, toolID, msg.ToolID)
+	assert.Equal(t, toolName, msg.ToolName)
+	assert.Equal(t, content, msg.Content)
+}
+
+func TestRole_ToolRole(t *testing.T) {
+	role := RoleTool
+	assert.Equal(t, "tool", role.String())
+	assert.True(t, role.IsValid())
+}
