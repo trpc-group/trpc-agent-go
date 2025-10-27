@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -136,7 +137,7 @@ var (
 )
 
 // TraceToolCall traces the invocation of a tool call.
-func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, rspEvent *event.Event) {
+func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Declaration, args []byte, rspEvent *event.Event) {
 	span.SetAttributes(
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
@@ -145,6 +146,12 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 	)
 	if rspEvent != nil {
 		span.SetAttributes(attribute.String(KeyEventID, rspEvent.ID))
+	}
+	if sess != nil {
+		span.SetAttributes(
+			attribute.String(KeyGenAIConversationID, sess.ID),
+			attribute.String(KeyRunnerUserID, sess.UserID),
+		)
 	}
 
 	// args is json-encoded.
@@ -301,22 +308,21 @@ func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rs
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationChat),
-		attribute.String(KeyInvocationID, invoke.InvocationID),
 		attribute.String(KeyEventID, eventID),
 	}
 
 	// Add session ID if session exists
-	if invoke.Session != nil {
-		attrs = append(attrs, attribute.String(KeyGenAIConversationID, invoke.Session.ID))
-	} else {
-		attrs = append(attrs, attribute.String(KeyGenAIConversationID, ""))
-	}
-
-	// Add model name if model exists
-	if invoke.Model != nil {
-		attrs = append(attrs, attribute.String(KeyGenAIRequestModel, invoke.Model.Info().Name))
-	} else {
-		attrs = append(attrs, attribute.String(KeyGenAIRequestModel, ""))
+	if invoke != nil {
+		attrs = append(attrs, attribute.String(KeyInvocationID, invoke.InvocationID))
+		if invoke.Session != nil {
+			attrs = append(attrs,
+				attribute.String(KeyGenAIConversationID, invoke.Session.ID),
+				attribute.String(KeyRunnerUserID, invoke.Session.UserID),
+			)
+		}
+		if invoke.Model != nil {
+			attrs = append(attrs, attribute.String(KeyGenAIRequestModel, invoke.Model.Info().Name))
+		}
 	}
 
 	span.SetAttributes(attrs...)

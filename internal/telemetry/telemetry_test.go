@@ -115,7 +115,7 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	rspEvt := event.New("inv1", "author")
 
 	// 1. TraceToolCall should execute without panic and call SetAttributes.
-	TraceToolCall(span, decl, args, rspEvt)
+	TraceToolCall(span, nil, decl, args, rspEvt)
 	require.True(t, span.called, "expected SetAttributes to be called in TraceToolCall")
 
 	// Reset flag for next test.
@@ -167,7 +167,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	rsp2 := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "c1"}}}}}}
 	evt2 := event.New("eid2", "a", event.WithResponse(rsp2))
 	s3 := newRecordingSpan()
-	TraceToolCall(s3, decl, args, evt2)
+	TraceToolCall(s3, nil, decl, args, evt2)
 	if !hasAttr(s3.attrs, KeyGenAIToolCallID, "c1") {
 		t.Fatalf("missing call id")
 	}
@@ -203,9 +203,9 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 func TestTrace_AdditionalBranches(t *testing.T) {
 	// TraceToolCall with nil rspEvent and rspEvent without Response
 	s := newRecordingSpan()
-	TraceToolCall(s, &tool.Declaration{Name: "t"}, nil, nil)
+	TraceToolCall(s, nil, &tool.Declaration{Name: "t"}, nil, nil)
 	s2 := newRecordingSpan()
-	TraceToolCall(s2, &tool.Declaration{Name: "t"}, nil, event.New("id", "a"))
+	TraceToolCall(s2, nil, &tool.Declaration{Name: "t"}, nil, event.New("id", "a"))
 
 	// TraceMergedToolCalls with nil response
 	s3 := newRecordingSpan()
