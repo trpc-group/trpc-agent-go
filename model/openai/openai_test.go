@@ -2419,3 +2419,675 @@ func TestOpenAI_InitializationPriority(t *testing.T) {
 	assert.Equalf(t, userTokenCounter, client.tokenCounter, "expected user-provided tokenCounter to be preserved")
 	assert.Equalf(t, userTailoringStrategy, client.tailoringStrategy, "expected user-provided tailoringStrategy to be preserved")
 }
+
+// TestWithHTTPClientTransport tests the WithHTTPClientTransport option.
+func TestWithHTTPClientTransport(t *testing.T) {
+	// Create a custom transport
+	customTransport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+	}
+
+	// Test WithHTTPClientTransport option
+	clientOpt := WithHTTPClientTransport(customTransport)
+	require.NotNil(t, clientOpt, "expected WithHTTPClientTransport to return non-nil option")
+
+	// Apply the option
+	httpOpts := &HTTPClientOptions{}
+	WithHTTPClientTransport(customTransport)(httpOpts)
+
+	// Verify the transport was set
+	assert.Equal(t, customTransport, httpOpts.Transport, "expected transport to be set correctly")
+}
+
+// TestWithExtraFields tests the WithExtraFields option.
+func TestWithExtraFields(t *testing.T) {
+	t.Run("single extra fields", func(t *testing.T) {
+		extraFields := map[string]any{
+			"custom_field": "custom_value",
+			"session_id":   "abc123",
+		}
+
+		opts := &options{}
+		WithExtraFields(extraFields)(opts)
+
+		assert.NotNil(t, opts.ExtraFields, "expected ExtraFields to be set")
+		assert.Equal(t, "custom_value", opts.ExtraFields["custom_field"], "expected custom_field to be 'custom_value'")
+		assert.Equal(t, "abc123", opts.ExtraFields["session_id"], "expected session_id to be 'abc123'")
+	})
+
+	t.Run("multiple extra fields", func(t *testing.T) {
+		opts := &options{}
+
+		// Apply first set of fields
+		WithExtraFields(map[string]any{
+			"field1": "value1",
+		})(opts)
+
+		// Apply second set of fields
+		WithExtraFields(map[string]any{
+			"field2": "value2",
+		})(opts)
+
+		assert.Len(t, opts.ExtraFields, 2, "expected 2 extra fields")
+		assert.Equal(t, "value1", opts.ExtraFields["field1"], "expected field1 to be 'value1'")
+		assert.Equal(t, "value2", opts.ExtraFields["field2"], "expected field2 to be 'value2'")
+	})
+
+	t.Run("overwrite existing field", func(t *testing.T) {
+		opts := &options{}
+
+		// Set initial value
+		WithExtraFields(map[string]any{
+			"field": "initial",
+		})(opts)
+
+		// Overwrite
+		WithExtraFields(map[string]any{
+			"field": "overwritten",
+		})(opts)
+
+		assert.Equal(t, "overwritten", opts.ExtraFields["field"], "expected field to be overwritten")
+	})
+}
+
+// TestWithVariant tests the WithVariant option.
+func TestWithVariant(t *testing.T) {
+	t.Run("openai variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantOpenAI)(opts)
+
+		assert.Equal(t, VariantOpenAI, opts.Variant, "expected variant to be VariantOpenAI")
+	})
+
+	t.Run("hunyuan variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantHunyuan)(opts)
+
+		assert.Equal(t, VariantHunyuan, opts.Variant, "expected variant to be VariantHunyuan")
+	})
+
+	t.Run("variant in model creation", func(t *testing.T) {
+		m := New("test-model", WithAPIKey("test-key"), WithVariant(VariantHunyuan))
+		require.NotNil(t, m, "expected model to be created")
+
+		assert.Equal(t, VariantHunyuan, m.variant, "expected model variant to be VariantHunyuan")
+	})
+}
+
+// TestWithBatchCompletionWindow tests the WithBatchCompletionWindow option.
+func TestWithBatchCompletionWindow(t *testing.T) {
+	window := openai.BatchNewParamsCompletionWindow24h
+
+	opts := &options{}
+	WithBatchCompletionWindow(window)(opts)
+
+	assert.Equal(t, window, opts.BatchCompletionWindow, "expected BatchCompletionWindow to be set")
+}
+
+// TestWithBatchMetadata tests the WithBatchMetadata option.
+func TestWithBatchMetadata(t *testing.T) {
+	metadata := map[string]string{
+		"batch_id": "batch_123",
+		"user_id":  "user_456",
+	}
+
+	opts := &options{}
+	WithBatchMetadata(metadata)(opts)
+
+	assert.Equal(t, metadata, opts.BatchMetadata, "expected BatchMetadata to be set")
+	assert.Equal(t, "batch_123", opts.BatchMetadata["batch_id"], "expected batch_id to be 'batch_123'")
+	assert.Equal(t, "user_456", opts.BatchMetadata["user_id"], "expected user_id to be 'user_456'")
+}
+
+// TestInfo tests the Info method.
+func TestInfo(t *testing.T) {
+	modelName := "gpt-4"
+	m := New(modelName, WithAPIKey("test-key"))
+
+	info := m.Info()
+
+	assert.Equal(t, modelName, info.Name, "expected Info.Name to be %s, got %s", modelName, info.Name)
+}
+
+// TestConvertUserMessageContent_AllContentTypes tests all content types in user messages.
+func TestConvertUserMessageContent_AllContentTypes(t *testing.T) {
+	m := &Model{}
+
+	t.Run("multiple content parts", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("Hello")},
+				{Type: "text", Text: stringPtr("World")},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.Len(t, content.OfArrayOfContentParts, 2, "expected 2 content parts")
+	})
+
+	t.Run("empty content parts", func(t *testing.T) {
+		message := model.Message{
+			Role:         model.RoleUser,
+			ContentParts: []model.ContentPart{},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.Empty(t, content.OfArrayOfContentParts, "expected empty content parts")
+	})
+
+	t.Run("mixed content types", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("Text content")},
+				{
+					Type: "image",
+					Image: &model.Image{
+						URL:    "https://example.com/image.png",
+						Detail: "high",
+					},
+				},
+				{
+					Type: "audio",
+					Audio: &model.Audio{
+						Data:   []byte("audio data"),
+						Format: "wav",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.Len(t, content.OfArrayOfContentParts, 3, "expected 3 content parts")
+	})
+}
+
+// TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
+func TestBuildChatRequest_EdgeCases(t *testing.T) {
+	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
+
+	t.Run("empty messages", func(t *testing.T) {
+		req := &model.Request{
+			Messages:         []model.Message{},
+			GenerationConfig: model.GenerationConfig{},
+		}
+
+		chatReq, _ := m.buildChatRequest(req)
+		assert.Empty(t, chatReq.Messages, "expected empty messages")
+	})
+
+	t.Run("with all generation config options", func(t *testing.T) {
+		temperature := 0.8
+		maxTokens := 1000
+		topP := 0.9
+		frequencyPenalty := 0.5
+		presencePenalty := 0.3
+
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Temperature:      &temperature,
+				MaxTokens:        &maxTokens,
+				TopP:             &topP,
+				FrequencyPenalty: &frequencyPenalty,
+				PresencePenalty:  &presencePenalty,
+				Stream:           true,
+			},
+		}
+
+		chatReq, _ := m.buildChatRequest(req)
+		assert.Equal(t, "gpt-3.5-turbo", chatReq.Model, "expected model to be gpt-3.5-turbo")
+		// Verify at least one parameter is set
+		assert.NotEmpty(t, chatReq.Messages, "expected messages to be set")
+	})
+
+	t.Run("with tools", func(t *testing.T) {
+		tools := map[string]tool.Tool{
+			"test_tool": stubTool{
+				decl: &tool.Declaration{
+					Name:        "test_tool",
+					Description: "A test tool",
+					InputSchema: &tool.Schema{Type: "object"},
+				},
+			},
+		}
+
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test"),
+			},
+			Tools:            tools,
+			GenerationConfig: model.GenerationConfig{},
+		}
+
+		chatReq, _ := m.buildChatRequest(req)
+		assert.NotEmpty(t, chatReq.Tools, "expected tools to be present")
+	})
+}
+
+// TestConvertUserMessageContent_WithImage tests image content conversion.
+func TestConvertUserMessageContent_WithImage(t *testing.T) {
+	m := &Model{}
+
+	t.Run("image with URL", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: "image",
+					Image: &model.Image{
+						URL:    "https://example.com/image.png",
+						Detail: "high",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.Len(t, content.OfArrayOfContentParts, 1, "expected 1 content part")
+		assert.NotNil(t, content.OfArrayOfContentParts[0].OfImageURL, "expected image URL part")
+	})
+
+	t.Run("image with data", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: "image",
+					Image: &model.Image{
+						Data:   []byte("fake image data"),
+						Format: "png",
+						Detail: "low",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.Len(t, content.OfArrayOfContentParts, 1, "expected 1 content part")
+		assert.NotNil(t, content.OfArrayOfContentParts[0].OfImageURL, "expected image URL part")
+	})
+}
+
+// TestConvertUserMessageContent_WithFile tests file content conversion.
+func TestConvertUserMessageContent_WithFile(t *testing.T) {
+	m := &Model{}
+
+	t.Run("file with file ID", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: "file",
+					File: &model.File{
+						FileID: "file-abc123",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.Len(t, content.OfArrayOfContentParts, 1, "expected 1 content part")
+		assert.NotNil(t, content.OfArrayOfContentParts[0].OfFile, "expected file part")
+	})
+
+	t.Run("file with data", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: "file",
+					File: &model.File{
+						Name:     "document.pdf",
+						Data:     []byte("fake file data"),
+						MimeType: "application/pdf",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.Len(t, content.OfArrayOfContentParts, 1, "expected 1 content part")
+		assert.NotNil(t, content.OfArrayOfContentParts[0].OfFile, "expected file part")
+	})
+}
+
+// TestConvertTools_EmptyTools tests convertTools with empty tool map.
+func TestConvertTools_EmptyTools(t *testing.T) {
+	m := New("dummy")
+
+	tools := map[string]tool.Tool{}
+	params := m.convertTools(tools)
+
+	assert.Empty(t, params, "expected empty tools params")
+}
+
+// TestConvertTools_MultipleTools tests convertTools with multiple tools.
+func TestConvertTools_MultipleTools(t *testing.T) {
+	m := New("dummy")
+
+	tools := map[string]tool.Tool{
+		"tool1": stubTool{decl: &tool.Declaration{
+			Name:        "tool1",
+			Description: "First tool",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+		"tool2": stubTool{decl: &tool.Declaration{
+			Name:        "tool2",
+			Description: "Second tool",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+	}
+
+	params := m.convertTools(tools)
+
+	assert.Len(t, params, 2, "expected 2 tools")
+}
+
+// TestWithChatStreamCompleteCallback_OptionSetting tests that the callback is properly set.
+func TestWithChatStreamCompleteCallback_OptionSetting(t *testing.T) {
+	callbackFunc := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, acc *openaigo.ChatCompletionAccumulator, streamErr error) {
+		// Callback implementation
+	}
+
+	opts := &options{}
+	WithChatStreamCompleteCallback(callbackFunc)(opts)
+
+	assert.NotNil(t, opts.ChatStreamCompleteCallback, "expected ChatStreamCompleteCallback to be set")
+}
+
+// TestWithChannelBufferSize_EdgeCases tests WithChannelBufferSize with edge cases.
+func TestWithChannelBufferSize_EdgeCases(t *testing.T) {
+	t.Run("zero size should use default", func(t *testing.T) {
+		opts := &options{}
+		WithChannelBufferSize(0)(opts)
+		assert.Equal(t, defaultChannelBufferSize, opts.ChannelBufferSize, "expected default buffer size")
+	})
+
+	t.Run("negative size should use default", func(t *testing.T) {
+		opts := &options{}
+		WithChannelBufferSize(-10)(opts)
+		assert.Equal(t, defaultChannelBufferSize, opts.ChannelBufferSize, "expected default buffer size")
+	})
+
+	t.Run("positive size should be preserved", func(t *testing.T) {
+		opts := &options{}
+		WithChannelBufferSize(512)(opts)
+		assert.Equal(t, 512, opts.ChannelBufferSize, "expected buffer size to be 512")
+	})
+}
+
+// TestConvertUserMessageContent_EdgeCases tests edge cases in user message conversion.
+func TestConvertUserMessageContent_EdgeCases(t *testing.T) {
+	m := &Model{}
+
+	t.Run("message with only Content string", func(t *testing.T) {
+		message := model.Message{
+			Role:    model.RoleUser,
+			Content: "Simple text message",
+		}
+
+		content, _ := m.convertUserMessageContent(message)
+		assert.NotNil(t, content.OfString, "expected string content")
+	})
+
+	t.Run("message with nil image", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("Text")},
+				{Type: "image", Image: nil}, // nil image
+			},
+		}
+
+		content, _ := m.convertUserMessageContent(message)
+		// Should not panic and should skip nil image
+		assert.NotEmpty(t, content.OfArrayOfContentParts, "expected content parts")
+	})
+
+	t.Run("message with unknown content type", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("Text")},
+				{Type: "unknown_type"}, // unknown type
+			},
+		}
+
+		content, _ := m.convertUserMessageContent(message)
+		// Should handle unknown types gracefully
+		assert.NotEmpty(t, content.OfArrayOfContentParts, "expected content parts")
+	})
+}
+
+// TestBuildChatRequest_WithExtraFields tests buildChatRequest with extra fields.
+func TestBuildChatRequest_WithExtraFields(t *testing.T) {
+	extraFields := map[string]any{
+		"custom_field": "custom_value",
+		"session_id":   "abc123",
+	}
+	m := New("gpt-3.5-turbo", WithAPIKey("test-key"), WithExtraFields(extraFields))
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("test"),
+		},
+		GenerationConfig: model.GenerationConfig{},
+	}
+
+	chatReq, reqOpts := m.buildChatRequest(req)
+	assert.Equal(t, "gpt-3.5-turbo", chatReq.Model, "expected model to be gpt-3.5-turbo")
+	// Extra fields should be included in reqOpts
+	assert.NotEmpty(t, reqOpts, "expected request options to be present")
+}
+
+// TestNew_WithAllOptions tests creating a model with all available options.
+func TestNew_WithAllOptions(t *testing.T) {
+	m := New("gpt-4",
+		WithAPIKey("test-key"),
+		WithBaseURL("https://api.example.com"),
+		WithChannelBufferSize(512),
+		WithVariant(VariantOpenAI),
+		WithBatchCompletionWindow(openai.BatchNewParamsCompletionWindow24h),
+		WithBatchMetadata(map[string]string{"key": "value"}),
+		WithExtraFields(map[string]any{"field": "value"}),
+	)
+
+	require.NotNil(t, m, "expected model to be created")
+	assert.Equal(t, "gpt-4", m.name, "expected model name to be gpt-4")
+	assert.Equal(t, "test-key", m.apiKey, "expected API key to be test-key")
+	assert.Equal(t, "https://api.example.com", m.baseURL, "expected base URL to match")
+	assert.Equal(t, 512, m.channelBufferSize, "expected channel buffer size to be 512")
+	assert.Equal(t, VariantOpenAI, m.variant, "expected variant to be OpenAI")
+}
+
+// TestConvertUserMessageContent_WithContentAndParts tests content and parts together.
+func TestConvertUserMessageContent_WithContentAndParts(t *testing.T) {
+	m := &Model{}
+
+	t.Run("content string with content parts", func(t *testing.T) {
+		message := model.Message{
+			Role:    model.RoleUser,
+			Content: "Text content",
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("Additional text")},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		// Should include both Content and ContentParts
+		assert.NotEmpty(t, content.OfArrayOfContentParts, "expected content parts")
+		assert.Len(t, content.OfArrayOfContentParts, 2, "expected 2 content parts (Content + part)")
+	})
+}
+
+// TestConvertUserMessageContent_HunyuanVariant tests Hunyuan variant file handling.
+func TestConvertUserMessageContent_HunyuanVariant(t *testing.T) {
+	m := &Model{
+		variant:       VariantHunyuan,
+		variantConfig: variantConfigs[VariantHunyuan],
+	}
+
+	t.Run("file content with Hunyuan variant", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("Check this file")},
+				{
+					Type: "file",
+					File: &model.File{
+						FileID: "file-123",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		// Hunyuan variant should skip file type in content and add to extraFields
+		assert.NotEmpty(t, extraFields, "expected extra fields for Hunyuan variant")
+		fileIDs, ok := extraFields["file_ids"].([]string)
+		assert.True(t, ok, "expected file_ids in extra fields")
+		assert.Contains(t, fileIDs, "file-123", "expected file-123 in file_ids")
+		// File should not be in content parts
+		assert.Len(t, content.OfArrayOfContentParts, 1, "expected only text part in content")
+	})
+
+	t.Run("multiple files with Hunyuan variant", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: "file", File: &model.File{FileID: "file-1"}},
+				{Type: "file", File: &model.File{FileID: "file-2"}},
+			},
+		}
+
+		_, extraFields := m.convertUserMessageContent(message)
+		fileIDs, ok := extraFields["file_ids"].([]string)
+		assert.True(t, ok, "expected file_ids in extra fields")
+		assert.Len(t, fileIDs, 2, "expected 2 file IDs")
+		assert.Contains(t, fileIDs, "file-1", "expected file-1")
+		assert.Contains(t, fileIDs, "file-2", "expected file-2")
+	})
+}
+
+// TestConvertAssistantMessageContent_WithContentAndParts tests assistant message with both content and parts.
+func TestConvertAssistantMessageContent_WithContentAndParts(t *testing.T) {
+	m := &Model{}
+
+	t.Run("content string with text parts", func(t *testing.T) {
+		message := model.Message{
+			Role:    model.RoleAssistant,
+			Content: "Main content",
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("Additional text")},
+			},
+		}
+
+		content := m.convertAssistantMessageContent(message)
+		// Should include both Content and text ContentParts
+		assert.Len(t, content.OfArrayOfContentParts, 2, "expected 2 content parts")
+	})
+
+	t.Run("only content string", func(t *testing.T) {
+		message := model.Message{
+			Role:    model.RoleAssistant,
+			Content: "Simple content",
+		}
+
+		content := m.convertAssistantMessageContent(message)
+		assert.NotNil(t, content.OfString, "expected string content")
+	})
+}
+
+// TestConvertTools_ErrorCases tests error handling in convertTools.
+func TestConvertTools_ErrorCases(t *testing.T) {
+	m := New("dummy")
+
+	t.Run("valid tool schema", func(t *testing.T) {
+		tools := map[string]tool.Tool{
+			"valid_tool": stubTool{decl: &tool.Declaration{
+				Name:        "valid_tool",
+				Description: "A valid tool",
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"param1": {Type: "string"},
+					},
+				},
+			}},
+		}
+
+		params := m.convertTools(tools)
+		assert.Len(t, params, 1, "expected 1 tool")
+		assert.Equal(t, "valid_tool", params[0].Function.Name, "expected tool name to be valid_tool")
+	})
+
+	t.Run("tool with complex schema", func(t *testing.T) {
+		tools := map[string]tool.Tool{
+			"complex_tool": stubTool{decl: &tool.Declaration{
+				Name:        "complex_tool",
+				Description: "A complex tool",
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"nested": {
+							Type: "object",
+							Properties: map[string]*tool.Schema{
+								"field": {Type: "string"},
+							},
+						},
+						"array": {
+							Type:  "array",
+							Items: &tool.Schema{Type: "string"},
+						},
+					},
+					Required: []string{"nested"},
+				},
+			}},
+		}
+
+		params := m.convertTools(tools)
+		assert.Len(t, params, 1, "expected 1 tool")
+		assert.Equal(t, "complex_tool", params[0].Function.Name, "expected tool name")
+	})
+}
+
+// TestConvertSystemMessageContent_WithParts tests system message with content parts.
+func TestConvertSystemMessageContent_WithParts(t *testing.T) {
+	m := &Model{}
+
+	t.Run("system message with content parts", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleSystem,
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("System instruction 1")},
+				{Type: "text", Text: stringPtr("System instruction 2")},
+			},
+		}
+
+		content := m.convertSystemMessageContent(message)
+		assert.Len(t, content.OfArrayOfContentParts, 2, "expected 2 content parts")
+	})
+
+	t.Run("system message with content string", func(t *testing.T) {
+		message := model.Message{
+			Role:    model.RoleSystem,
+			Content: "System prompt",
+		}
+
+		content := m.convertSystemMessageContent(message)
+		assert.NotNil(t, content.OfString, "expected string content")
+	})
+}
