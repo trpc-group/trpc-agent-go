@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -31,6 +32,13 @@ const (
 	IncludeContentsAll      = "all"
 	IncludeContentsFiltered = "filtered"
 )
+
+// scratchpadPairsToKeep controls how many recent tool call/result pairs are
+// included as the minimal scratchpad when include_contents is set to "none".
+// A value of 1 keeps the latest assistant function call and its corresponding
+// merged tool result(s), which is sufficient for the model to continue the
+// current chain-of-thought without re-issuing the same tool calls.
+const scratchpadPairsToKeep = 1
 
 // ContentRequestProcessor implements content processing logic for agent requests.
 type ContentRequestProcessor struct {
@@ -111,6 +119,26 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 	return processor
 }
 
+// effectiveInclude resolves the effective include mode for this request.
+// Priority: runtime state (invocation.RunOptions[include_contents]) > static IncludeContents.
+func (p *ContentRequestProcessor) effectiveInclude(inv *agent.Invocation) string {
+	include := p.IncludeContents
+	if inv == nil || inv.RunOptions.RuntimeState == nil {
+		return include
+	}
+	if mode, ok := inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok && mode != "" {
+		switch strings.ToLower(mode) {
+		case IncludeContentsNone:
+			include = IncludeContentsNone
+		case IncludeContentsFiltered:
+			include = IncludeContentsFiltered
+		case IncludeContentsAll:
+			include = IncludeContentsAll
+		}
+	}
+	return include
+}
+
 // ProcessRequest implements the flow.RequestProcessor interface.
 // It handles adding messages from the session events to the request.
 func (p *ContentRequestProcessor) ProcessRequest(
@@ -128,9 +156,12 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
+	// Resolve effective include mode for this request.
+	include := p.effectiveInclude(invocation)
+
 	// 2) Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
-	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
+	if include != IncludeContentsNone && invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
 		if p.AddSessionSummary {
@@ -153,12 +184,76 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			invocation.Message.Role)
 	}
 
+	// When include=none, still preserve the current invocation's minimal scratchpad
+	// so tool call chains can continue. The scratchpad consists of the latest tool
+	// call and its corresponding tool result(s) within this invocation only.
+	if include == IncludeContentsNone && invocation.Session != nil {
+		sp := p.getScratchpadMessages(invocation)
+		if len(sp) > 0 {
+			req.Messages = append(req.Messages, sp...)
+			log.Debugf("Content request processor: appended %d scratchpad messages for current invocation", len(sp))
+		}
+	}
+
 	// Send a preprocessing event.
 	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingPlanning),
 	))
+}
+
+// getScratchpadMessages extracts the minimal necessary context for continuing
+// a tool call chain within the current invocation when history inclusion is
+// disabled (include_contents=none). It returns messages for the latest tool
+// call and its merged tool result(s), preserving original roles (assistant/tool).
+func (p *ContentRequestProcessor) getScratchpadMessages(inv *agent.Invocation) []model.Message {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+
+	// Collect complete, valid events belonging to the current invocation.
+	var evts []event.Event
+	inv.Session.EventMu.RLock()
+	for _, evt := range inv.Session.Events {
+		if evt.InvocationID != inv.InvocationID || evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+			continue
+		}
+		evts = append(evts, evt)
+	}
+	inv.Session.EventMu.RUnlock()
+
+	if len(evts) == 0 {
+		return nil
+	}
+
+	// Rearrange to focus on the latest function response and its call.
+	evts = p.rearrangeLatestFuncResp(evts)
+	if len(evts) == 0 || !evts[len(evts)-1].IsToolResultResponse() {
+		return nil
+	}
+
+	// Keep the latest N call/result pairs; each pair contributes up to 2 events
+	// (the assistant function call and its merged tool result). Clamp the
+	// window safely when fewer events exist.
+	keepEvents := scratchpadPairsToKeep * 2
+	if keepEvents <= 0 {
+		keepEvents = 1
+	}
+	start := len(evts) - keepEvents
+	if start < 0 {
+		start = 0
+	}
+	subset := evts[start:]
+
+	// Convert the selected events to model messages.
+	var messages []model.Message
+	for _, e := range subset {
+		for _, choice := range e.Choices {
+			messages = append(messages, choice.Message)
+		}
+	}
+	return messages
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
@@ -177,7 +272,7 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	}
 	filter := inv.GetEventFilterKey()
 	// For IncludeContentsAll, prefer the full-session summary under empty filter key.
-	if p.IncludeContents == IncludeContentsAll {
+	if p.effectiveInclude(inv) == IncludeContentsAll {
 		filter = ""
 	}
 	sum := inv.Session.Summaries[filter]
@@ -199,7 +294,7 @@ func (p *ContentRequestProcessor) getHistoryMessages(inv *agent.Invocation, sinc
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
 		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
-			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(filter)) &&
+			(p.effectiveInclude(inv) != IncludeContentsFiltered || evt.Filter(filter)) &&
 			(isZeroTime || evt.Timestamp.After(since)) {
 			events = append(events, evt)
 		}
