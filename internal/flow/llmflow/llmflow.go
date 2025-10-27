@@ -197,8 +197,37 @@ func (f *Flow) processStreamingResponses(
 	span oteltrace.Span,
 ) (*event.Event, error) {
 	var lastEvent *event.Event
+	start := time.Now()
+	isFirstToken := true
+	firstTokenTimeDuration := time.Duration(0)
+	firstCompleteToken := 0
+	totalCompletionTokens := 0
+	totalPromptTokens := 0
+	defer func() {
+		requestDuration := time.Since(start)
+		itelemetry.RecordChatRequestDuration(ctx, invocation.Model.Info().Name, invocation.Session, requestDuration)
+		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, invocation.Model.Info().Name, invocation.Session, firstTokenTimeDuration)
+		itelemetry.RecordChatInputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(totalPromptTokens))
+		itelemetry.RecordChatOutputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(totalCompletionTokens))
+		if tokens, duration := totalCompletionTokens-firstCompleteToken, requestDuration-firstTokenTimeDuration; tokens > 0 && duration > 0 {
+			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, invocation.Model.Info().Name, invocation.Session, duration/time.Duration(tokens))
+		} else if tokens == 0 {
+			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, invocation.Model.Info().Name, invocation.Session, requestDuration/time.Duration(totalCompletionTokens))
+		}
+	}()
 
 	for response := range responseChan {
+		if isFirstToken {
+			firstTokenTimeDuration = time.Since(start)
+			isFirstToken = false
+			if response.Usage != nil {
+				firstCompleteToken = response.Usage.CompletionTokens
+			}
+		}
+		if response.Usage != nil {
+			totalPromptTokens += response.Usage.PromptTokens
+			totalCompletionTokens += response.Usage.CompletionTokens
+		}
 		// Handle after model callbacks.
 		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
 		if err != nil {
@@ -224,10 +253,7 @@ func (f *Flow) processStreamingResponses(
 		}
 
 		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID)
-		if response.Usage != nil {
-			itelemetry.RecordChatInputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(response.Usage.PromptTokens))
-			itelemetry.RecordChatOutputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(response.Usage.CompletionTokens))
-		}
+
 	}
 
 	return lastEvent, nil
