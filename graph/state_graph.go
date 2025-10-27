@@ -1624,10 +1624,18 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Extract current node ID from state for event authoring.
 	var nodeID string
+	sessInfo := &session.Session{}
 	if state := config.State; state != nil {
 		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
 			if id, ok := nodeIDData.(string); ok {
 				nodeID = id
+			}
+		}
+		if sess, ok := state[StateKeySession]; ok {
+			if s, ok := sess.(*session.Session); ok && s != nil {
+				sessInfo.ID = s.ID
+				sessInfo.AppName = s.AppName
+				sessInfo.UserID = s.UserID
 			}
 		}
 	}
@@ -1653,7 +1661,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Error:        err,
 		Arguments:    modifiedArgs,
 	})
-	itelemetry.TraceToolCall(span, t.Declaration(), modifiedArgs, event)
+	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event)
 	span.End()
 
 	if err != nil {

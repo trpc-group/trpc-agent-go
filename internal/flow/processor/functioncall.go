@@ -24,6 +24,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -224,8 +225,13 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		p.annotateSkipSummarization(toolEvent, tl)
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
+
+	var sess *session.Session
+	if invocation != nil {
+		sess = invocation.Session
+	}
 	itelemetry.TraceToolCall(
-		span, decl, modifiedArgs, toolEvent,
+		span, sess, decl, modifiedArgs, toolEvent,
 	)
 	return toolEvent, nil
 }
@@ -346,7 +352,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}
 	// Include declaration for telemetry even when tool is missing.
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
-	itelemetry.TraceToolCall(span, decl, modifiedArgs, toolCallResponseEvent)
+
+	var sess *session.Session
+	if invocation != nil {
+		sess = invocation.Session
+	}
+	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent)
 	// Send result back to aggregator.
 	p.sendToolResult(
 		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},
