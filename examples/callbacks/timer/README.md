@@ -94,9 +94,16 @@ Each trace includes attributes like:
 
 ## Implementation Details
 
-### Timer Storage Strategy
+### Callback Message for Data Sharing
 
-Since callback interfaces don't support returning modified context, we use instance variables to store timing information (see `toolTimerExample` in `main.go`).
+The example uses the **callback message** feature to share data between `Before` and `After` callbacks. Each callback type (Agent, Model, Tool) automatically injects a mutable message object into the context, allowing callbacks to store and retrieve timing information and trace spans without needing instance variables.
+
+Key benefits:
+
+- **Clean separation**: No need for instance variables to store callback state
+- **Context-based**: Data is naturally scoped to each callback invocation
+- **Type-safe access**: Use `agent.CallbackMessage(ctx)`, `model.CallbackMessage(ctx)`, or `tool.CallbackMessage(ctx)` to access the message
+- **Flexible storage**: Store any type of data using `Set(key, value)` and retrieve with `Get(key)`
 
 ### Callback Registration
 

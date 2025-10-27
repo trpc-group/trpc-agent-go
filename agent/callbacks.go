@@ -13,6 +13,7 @@ package agent
 import (
 	"context"
 
+	"trpc.group/trpc-go/trpc-agent-go/callback"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -63,6 +64,9 @@ func (c *Callbacks) RunBeforeAgent(
 	ctx context.Context,
 	invocation *Invocation,
 ) (*model.Response, error) {
+	// Inject callback message into context.
+	ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
+
 	for _, cb := range c.BeforeAgent {
 		customResponse, err := cb(ctx, invocation)
 		if err != nil {
@@ -83,6 +87,11 @@ func (c *Callbacks) RunAfterAgent(
 	invocation *Invocation,
 	runErr error,
 ) (*model.Response, error) {
+	// Ensure callback message exists in context.
+	if CallbackMessage(ctx) == nil {
+		ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
+	}
+
 	for _, cb := range c.AfterAgent {
 		customResponse, err := cb(ctx, invocation, runErr)
 		if err != nil {
@@ -93,4 +102,16 @@ func (c *Callbacks) RunAfterAgent(
 		}
 	}
 	return nil, nil
+}
+
+// contextKey is the type for agent callback context key.
+type contextKey struct{}
+
+// CallbackMessage returns the callback message from context.
+// Returns nil if not found.
+func CallbackMessage(ctx context.Context) callback.Message {
+	if msg, ok := ctx.Value(contextKey{}).(callback.Message); ok {
+		return msg
+	}
+	return nil
 }

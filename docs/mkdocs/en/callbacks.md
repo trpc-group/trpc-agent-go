@@ -190,6 +190,210 @@ the presence of an invocation.
 
 ---
 
+## Sharing Data Between Before and After Callbacks
+
+The callback system provides a **callback message** mechanism to share mutable
+data between Before and After callbacks. Since `context.Context` is immutable
+in Go, the framework automatically injects a message object into the context
+that you can use to store and retrieve data.
+
+### Why Callback Message?
+
+Without callback message, you would need to maintain external state (e.g.,
+instance variables) to share data between callbacks:
+
+```go
+// Without callback message (not recommended).
+type example struct {
+    startTimes map[string]time.Time
+}
+
+func (e *example) beforeCallback(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+    e.startTimes[inv.InvocationID] = time.Now()
+    return nil, nil
+}
+
+func (e *example) afterCallback(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+    if startTime, ok := e.startTimes[inv.InvocationID]; ok {
+        duration := time.Since(startTime)
+        fmt.Printf("Duration: %v\n", duration)
+        delete(e.startTimes, inv.InvocationID)
+    }
+    return nil, nil
+}
+```
+
+With callback message, data is naturally scoped to each callback invocation:
+
+```go
+// With callback message (recommended).
+func beforeCallback(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+    msg := agent.CallbackMessage(ctx)
+    msg.Set("start_time", time.Now())
+    return nil, nil
+}
+
+func afterCallback(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+    msg := agent.CallbackMessage(ctx)
+    if startTimeVal, ok := msg.Get("start_time"); ok {
+        if startTime, ok := startTimeVal.(time.Time); ok {
+            duration := time.Since(startTime)
+            fmt.Printf("Duration: %v\n", duration)
+        }
+    }
+    return nil, nil
+}
+```
+
+### Message API
+
+The `callback.Message` interface provides four methods:
+
+```go
+type Message interface {
+    // Set stores a value with the given key.
+    Set(key string, value any)
+
+    // Get retrieves a value by key.
+    // Returns (value, true) if found, otherwise (nil, false).
+    Get(key string) (any, bool)
+
+    // Delete removes a value by key.
+    Delete(key string)
+
+    // Clear removes all stored values.
+    Clear()
+}
+```
+
+### Accessing Callback Message
+
+Each callback type has its own accessor:
+
+- **Agent callbacks**: `agent.CallbackMessage(ctx)`
+- **Model callbacks**: `model.CallbackMessage(ctx)`
+- **Tool callbacks**: `tool.CallbackMessage(ctx)`
+
+All accessors return `nil` if the message is not found in the context.
+
+### Complete Example
+
+Here's a complete example showing how to measure execution time using callback
+message:
+
+```go
+// Agent callbacks.
+agentCallbacks := agent.NewCallbacks().
+    RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+        msg := agent.CallbackMessage(ctx)
+        if msg != nil {
+            msg.Set("start_time", time.Now())
+            msg.Set("invocation_id", inv.InvocationID)
+        }
+        return nil, nil
+    }).
+    RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+        msg := agent.CallbackMessage(ctx)
+        if msg == nil {
+            return nil, nil
+        }
+
+        startTimeVal, ok := msg.Get("start_time")
+        if !ok {
+            return nil, nil
+        }
+
+        startTime, ok := startTimeVal.(time.Time)
+        if !ok {
+            return nil, nil
+        }
+
+        duration := time.Since(startTime)
+        fmt.Printf("⏱️  Agent execution took %v\n", duration)
+
+        return nil, nil
+    })
+
+// Model callbacks.
+modelCallbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+        msg := model.CallbackMessage(ctx)
+        if msg != nil {
+            msg.Set("start_time", time.Now())
+        }
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+        msg := model.CallbackMessage(ctx)
+        if msg == nil {
+            return nil, nil
+        }
+
+        if startTimeVal, ok := msg.Get("start_time"); ok {
+            if startTime, ok := startTimeVal.(time.Time); ok {
+                duration := time.Since(startTime)
+                fmt.Printf("⏱️  Model inference took %v\n", duration)
+            }
+        }
+
+        return nil, nil
+    })
+
+// Tool callbacks.
+toolCallbacks := tool.NewCallbacks().
+    RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
+        msg := tool.CallbackMessage(ctx)
+        if msg != nil {
+            msg.Set("start_time", time.Now())
+            msg.Set("tool_name", toolName)
+        }
+        return nil, nil
+    }).
+    RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+        msg := tool.CallbackMessage(ctx)
+        if msg == nil {
+            return nil, nil
+        }
+
+        if startTimeVal, ok := msg.Get("start_time"); ok {
+            if startTime, ok := startTimeVal.(time.Time); ok {
+                duration := time.Since(startTime)
+                fmt.Printf("⏱️  Tool %s took %v\n", toolName, duration)
+            }
+        }
+
+        return nil, nil
+    })
+```
+
+### Best Practices
+
+1. **Always check for nil**: The message may not be present if callbacks are
+   not properly configured.
+
+2. **Use type assertions**: The `Get` method returns `any`, so you need to
+   assert the type.
+
+3. **Use meaningful keys**: Use descriptive keys to avoid conflicts.
+
+4. **Clean up when needed**: Use `Delete` or `Clear` to remove data when it's
+   no longer needed.
+
+### Thread Safety Note
+
+The callback message implementation is **not thread-safe**. For typical
+callback scenarios where Before and After callbacks run sequentially in the
+same goroutine, this is not an issue. If you need to access the message from
+multiple goroutines, add your own synchronization.
+
+### Timer Example
+
+See the [timer example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
+for a complete working example that uses callback messages to measure execution
+time and report to OpenTelemetry.
+
+---
+
 ## Global Callbacks and Chain Registration
 
 You can define reusable global callbacks using chain registration.

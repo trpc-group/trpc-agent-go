@@ -12,6 +12,8 @@ package model
 
 import (
 	"context"
+
+	"trpc.group/trpc-go/trpc-agent-go/callback"
 )
 
 // BeforeModelCallback is called before the model is invoked. It can mutate the request.
@@ -55,6 +57,9 @@ func (c *Callbacks) RegisterAfterModel(cb AfterModelCallback) *Callbacks {
 // Returns (customResponse, error).
 // If any callback returns a custom response, stop and return.
 func (c *Callbacks) RunBeforeModel(ctx context.Context, req *Request) (*Response, error) {
+	// Inject callback message into context.
+	ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
+
 	for _, cb := range c.BeforeModel {
 		customResponse, err := cb(ctx, req)
 		if err != nil {
@@ -73,6 +78,11 @@ func (c *Callbacks) RunBeforeModel(ctx context.Context, req *Request) (*Response
 func (c *Callbacks) RunAfterModel(
 	ctx context.Context, req *Request, rsp *Response, modelErr error,
 ) (*Response, error) {
+	// Ensure callback message exists in context.
+	if CallbackMessage(ctx) == nil {
+		ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
+	}
+
 	for _, cb := range c.AfterModel {
 		customResponse, err := cb(ctx, req, rsp, modelErr)
 		if err != nil {
@@ -83,4 +93,16 @@ func (c *Callbacks) RunAfterModel(
 		}
 	}
 	return nil, nil
+}
+
+// contextKey is the type for model callback context key.
+type contextKey struct{}
+
+// CallbackMessage returns the callback message from context.
+// Returns nil if not found.
+func CallbackMessage(ctx context.Context) callback.Message {
+	if msg, ok := ctx.Value(contextKey{}).(callback.Message); ok {
+		return msg
+	}
+	return nil
 }

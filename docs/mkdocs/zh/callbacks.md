@@ -241,6 +241,197 @@ if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 
 ---
 
+## 在 Before 和 After 回调之间共享数据
+
+回调系统提供了 **callback message** 机制，用于在 Before 和 After 回调之间共享可变数据。由于 Go 中的 `context.Context` 是不可变的，框架会自动向 context 中注入一个 message 对象，你可以使用它来存储和检索数据。
+
+### 为什么需要 Callback Message？
+
+如果没有 callback message，你需要维护外部状态（例如实例变量）来在回调之间共享数据：
+
+```go
+// 没有 callback message（不推荐）
+type example struct {
+    startTimes map[string]time.Time
+}
+
+func (e *example) beforeCallback(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+    e.startTimes[inv.InvocationID] = time.Now()
+    return nil, nil
+}
+
+func (e *example) afterCallback(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+    if startTime, ok := e.startTimes[inv.InvocationID]; ok {
+        duration := time.Since(startTime)
+        fmt.Printf("Duration: %v\n", duration)
+        delete(e.startTimes, inv.InvocationID)
+    }
+    return nil, nil
+}
+```
+
+使用 callback message，数据自然地限定在每次回调调用的作用域内：
+
+```go
+// 使用 callback message（推荐）
+func beforeCallback(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+    msg := agent.CallbackMessage(ctx)
+    msg.Set("start_time", time.Now())
+    return nil, nil
+}
+
+func afterCallback(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+    msg := agent.CallbackMessage(ctx)
+    if startTimeVal, ok := msg.Get("start_time"); ok {
+        if startTime, ok := startTimeVal.(time.Time); ok {
+            duration := time.Since(startTime)
+            fmt.Printf("Duration: %v\n", duration)
+        }
+    }
+    return nil, nil
+}
+```
+
+### Message API
+
+`callback.Message` 接口提供四个方法：
+
+```go
+type Message interface {
+    // Set 使用给定的 key 存储值
+    Set(key string, value any)
+
+    // Get 通过 key 检索值
+    // 如果找到则返回 (value, true)，否则返回 (nil, false)
+    Get(key string) (any, bool)
+
+    // Delete 通过 key 删除值
+    Delete(key string)
+
+    // Clear 删除所有存储的值
+    Clear()
+}
+```
+
+### 访问 Callback Message
+
+每种回调类型都有自己的访问器：
+
+- **Agent 回调**：`agent.CallbackMessage(ctx)`
+- **Model 回调**：`model.CallbackMessage(ctx)`
+- **Tool 回调**：`tool.CallbackMessage(ctx)`
+
+如果在 context 中找不到 message，所有访问器都会返回 `nil`。
+
+### 完整示例
+
+以下是一个完整示例，展示如何使用 callback message 测量执行时间：
+
+```go
+// Agent 回调
+agentCallbacks := agent.NewCallbacks().
+    RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+        msg := agent.CallbackMessage(ctx)
+        if msg != nil {
+            msg.Set("start_time", time.Now())
+            msg.Set("invocation_id", inv.InvocationID)
+        }
+        return nil, nil
+    }).
+    RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+        msg := agent.CallbackMessage(ctx)
+        if msg == nil {
+            return nil, nil
+        }
+
+        startTimeVal, ok := msg.Get("start_time")
+        if !ok {
+            return nil, nil
+        }
+
+        startTime, ok := startTimeVal.(time.Time)
+        if !ok {
+            return nil, nil
+        }
+
+        duration := time.Since(startTime)
+        fmt.Printf("⏱️  Agent 执行耗时 %v\n", duration)
+
+        return nil, nil
+    })
+
+// Model 回调
+modelCallbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+        msg := model.CallbackMessage(ctx)
+        if msg != nil {
+            msg.Set("start_time", time.Now())
+        }
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+        msg := model.CallbackMessage(ctx)
+        if msg == nil {
+            return nil, nil
+        }
+
+        if startTimeVal, ok := msg.Get("start_time"); ok {
+            if startTime, ok := startTimeVal.(time.Time); ok {
+                duration := time.Since(startTime)
+                fmt.Printf("⏱️  模型推理耗时 %v\n", duration)
+            }
+        }
+
+        return nil, nil
+    })
+
+// Tool 回调
+toolCallbacks := tool.NewCallbacks().
+    RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
+        msg := tool.CallbackMessage(ctx)
+        if msg != nil {
+            msg.Set("start_time", time.Now())
+            msg.Set("tool_name", toolName)
+        }
+        return nil, nil
+    }).
+    RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+        msg := tool.CallbackMessage(ctx)
+        if msg == nil {
+            return nil, nil
+        }
+
+        if startTimeVal, ok := msg.Get("start_time"); ok {
+            if startTime, ok := startTimeVal.(time.Time); ok {
+                duration := time.Since(startTime)
+                fmt.Printf("⏱️  工具 %s 执行耗时 %v\n", toolName, duration)
+            }
+        }
+
+        return nil, nil
+    })
+```
+
+### 最佳实践
+
+1. **始终检查 nil**：如果回调配置不正确，message 可能不存在。
+
+2. **使用类型断言**：`Get` 方法返回 `any`，因此需要进行类型断言。
+
+3. **使用有意义的 key**：使用描述性的 key 以避免冲突。
+
+4. **需要时清理**：使用 `Delete` 或 `Clear` 在不再需要时删除数据。
+
+### 线程安全说明
+
+callback message 实现**不是线程安全的**。对于典型的回调场景，Before 和 After 回调在同一个 goroutine 中顺序执行，这不是问题。如果需要从多个 goroutine 访问 message，请添加自己的同步机制。
+
+### Timer 示例
+
+参见 [timer 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)，这是一个完整的工作示例，使用 callback message 测量执行时间并上报到 OpenTelemetry。
+
+---
+
 ## 全局回调与链式注册
 
 可通过链式注册构建可复用的全局回调配置。

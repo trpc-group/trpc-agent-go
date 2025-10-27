@@ -30,7 +30,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -65,23 +64,13 @@ type toolTimerExample struct {
 	runner    runner.Runner
 	userID    string
 	sessionID string
-	// Add maps to store start times for different components.
-	toolStartTimes  map[string]time.Time
-	agentStartTimes map[string]time.Time
-	modelStartTimes map[string]time.Time
-	// Add a field to store the current model key for timing.
-	currentModelKey string
-	// Add telemetry metrics.
+	// Telemetry metrics.
 	agentDurationHistogram metric.Float64Histogram
 	toolDurationHistogram  metric.Float64Histogram
 	modelDurationHistogram metric.Float64Histogram
 	agentCounter           metric.Int64Counter
 	toolCounter            metric.Int64Counter
 	modelCounter           metric.Int64Counter
-	// Add fields to store spans for later use.
-	agentSpans map[string]trace.Span
-	modelSpans map[string]trace.Span
-	toolSpans  map[string]trace.Span
 }
 
 // run executes the tool timer example.

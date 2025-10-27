@@ -12,6 +12,8 @@ package tool
 
 import (
 	"context"
+
+	"trpc.group/trpc-go/trpc-agent-go/callback"
 )
 
 // BeforeToolCallback is called before a tool is executed.
@@ -60,6 +62,9 @@ func (c *Callbacks) RunBeforeTool(
 	toolDeclaration *Declaration,
 	jsonArgs *[]byte,
 ) (any, error) {
+	// Inject callback message into context.
+	ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
+
 	for _, cb := range c.BeforeTool {
 		customResult, err := cb(ctx, toolName, toolDeclaration, jsonArgs)
 		if err != nil {
@@ -88,6 +93,11 @@ func (c *Callbacks) RunAfterTool(
 		return result, runErr
 	}
 
+	// Ensure callback message exists in context.
+	if CallbackMessage(ctx) == nil {
+		ctx = context.WithValue(ctx, contextKey{}, callback.NewMessage())
+	}
+
 	for _, cb := range c.AfterTool {
 		customResult, err := cb(ctx, toolName, toolDeclaration, jsonArgs, result, runErr)
 		if err != nil {
@@ -98,4 +108,16 @@ func (c *Callbacks) RunAfterTool(
 		}
 	}
 	return nil, nil
+}
+
+// contextKey is the type for tool callback context key.
+type contextKey struct{}
+
+// CallbackMessage returns the callback message from context.
+// Returns nil if not found.
+func CallbackMessage(ctx context.Context) callback.Message {
+	if msg, ok := ctx.Value(contextKey{}).(callback.Message); ok {
+		return msg
+	}
+	return nil
 }
