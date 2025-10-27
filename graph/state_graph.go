@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,6 +92,16 @@ func WithNodeType(nodeType NodeType) Option {
 func WithToolSets(toolSets []tool.ToolSet) Option {
 	return func(node *Node) {
 		node.toolSets = toolSets
+	}
+}
+
+// WithEnableParallelTools enables parallel tool execution for a Tools node.
+// When enabled, if the last assistant message contains multiple tool calls,
+// they will be executed concurrently and their responses will be merged in
+// the original order. By default, tools run serially for compatibility.
+func WithEnableParallelTools(enable bool) Option {
+	return func(node *Node) {
+		node.enableParallelTools = enable
 	}
 }
 
@@ -982,6 +993,9 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			tools[t.Declaration().Name] = t
 		}
 	}
+	// Capture whether to execute tools in parallel.
+	parallel := node.enableParallelTools
+
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "execute_tools_node")
 		defer span.End()
@@ -997,12 +1011,13 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
-			ToolCalls:    toolCalls,
-			Tools:        tools,
-			InvocationID: invocationID,
-			EventChan:    eventChan,
-			Span:         span,
-			State:        state,
+			ToolCalls:      toolCalls,
+			Tools:          tools,
+			InvocationID:   invocationID,
+			EventChan:      eventChan,
+			Span:           span,
+			State:          state,
+			EnableParallel: parallel,
 		})
 		if err != nil {
 			return nil, err
@@ -1490,30 +1505,99 @@ type toolCallsConfig struct {
 	EventChan    chan<- *event.Event
 	Span         oteltrace.Span
 	State        State
+	// EnableParallel controls whether multiple tool calls are executed concurrently.
+	// When false or when there is only one tool call, execution is serial.
+	EnableParallel bool
 }
 
 // processToolCalls executes all tool calls and returns the resulting messages.
 func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
 	toolCallbacks, _ := extractToolCallbacks(config.State)
-	newMessages := make([]model.Message, 0, len(config.ToolCalls))
-
-	for _, toolCall := range config.ToolCalls {
-		toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
-			ToolCall:      toolCall,
-			Tools:         config.Tools,
-			InvocationID:  config.InvocationID,
-			EventChan:     config.EventChan,
-			Span:          config.Span,
-			ToolCallbacks: toolCallbacks,
-			State:         config.State,
-		})
-		if err != nil {
-			return nil, err
+	// Serial path or single tool call.
+	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
+		newMessages := make([]model.Message, 0, len(config.ToolCalls))
+		for _, toolCall := range config.ToolCalls {
+			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
+				ToolCall:      toolCall,
+				Tools:         config.Tools,
+				InvocationID:  config.InvocationID,
+				EventChan:     config.EventChan,
+				Span:          config.Span,
+				ToolCallbacks: toolCallbacks,
+				State:         config.State,
+			})
+			if err != nil {
+				return nil, err
+			}
+			newMessages = append(newMessages, toolMessage)
 		}
-		newMessages = append(newMessages, toolMessage)
+		return newMessages, nil
 	}
 
-	return newMessages, nil
+	// Parallel path: execute each tool call in its own goroutine while
+	// preserving the original order in the resulting messages slice.
+	type result struct {
+		idx int
+		msg model.Message
+		err error
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan result, len(config.ToolCalls))
+	var wg sync.WaitGroup
+	wg.Add(len(config.ToolCalls))
+
+	for i, tc := range config.ToolCalls {
+		i, tc := i, tc
+		go func() {
+			defer wg.Done()
+			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
+				ToolCall:      tc,
+				Tools:         config.Tools,
+				InvocationID:  config.InvocationID,
+				EventChan:     config.EventChan,
+				Span:          config.Span,
+				ToolCallbacks: toolCallbacks,
+				State:         config.State,
+			})
+			// On error, cancel siblings but still report result so collector can exit cleanly.
+			if err != nil {
+				cancel()
+				results <- result{idx: i, err: err}
+				return
+			}
+			results <- result{idx: i, msg: msg}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Aggregate while preserving order.
+	out := make([]model.Message, len(config.ToolCalls))
+	var firstErr error
+	received := 0
+	for r := range results {
+		received++
+		if r.err != nil && firstErr == nil {
+			firstErr = r.err
+		}
+		// Only set when message exists; zero value is fine otherwise.
+		if r.err == nil {
+			out[r.idx] = r.msg
+		}
+		if received == len(config.ToolCalls) {
+			break
+		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
 }
 
 // singleToolCallConfig contains configuration for executing a single tool call.
