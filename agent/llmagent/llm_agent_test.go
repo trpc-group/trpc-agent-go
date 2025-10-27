@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -739,5 +740,76 @@ func (m *mockCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter 
 	return codeexecutor.CodeBlockDelimiter{
 		Start: "```",
 		End:   "```",
+	}
+}
+
+// TestLLMAgent_CallbackMessage_SharedBetweenBeforeAndAfter verifies that
+// the callback message created in BeforeAgent is the same instance in AfterAgent.
+func TestLLMAgent_CallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
+	// Track the message from Before callback.
+	var beforeMsg any
+
+	// Create agent callbacks.
+	callbacks := agent.NewCallbacks()
+
+	// Register Before callback that stores data in message.
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		msg := agent.CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in BeforeAgent")
+
+		// Store the message for comparison.
+		beforeMsg = msg
+
+		// Store test values.
+		msg.Set("test_key", "test_value")
+		msg.Set("invocation_id", inv.InvocationID)
+
+		return nil, nil
+	})
+
+	// Register After callback that retrieves data from message.
+	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+		msg := agent.CallbackMessage(ctx)
+		require.NotNil(t, msg, "callback message should not be nil in AfterAgent")
+
+		// Check if it's the same message instance.
+		assert.Same(t, beforeMsg, msg,
+			"callback message in AfterAgent should be the same instance as in BeforeAgent")
+
+		// Retrieve the value stored in Before callback.
+		val, ok := msg.Get("test_key")
+		require.True(t, ok, "should be able to get the value set in BeforeAgent")
+		require.Equal(t, "test_value", val.(string))
+
+		// Verify invocation_id matches.
+		invID, ok := msg.Get("invocation_id")
+		require.True(t, ok)
+		require.Equal(t, inv.InvocationID, invID.(string))
+
+		return nil, nil
+	})
+
+	// Create LLM agent with callbacks.
+	llmAgent := New(
+		"test-llm-agent",
+		WithModel(newDummyModel()),
+		WithAgentCallbacks(callbacks),
+	)
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-llm-agent",
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "test",
+		},
+	}
+
+	ctx := context.Background()
+	eventChan, err := llmAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	// Drain the event channel.
+	for range eventChan {
 	}
 }
