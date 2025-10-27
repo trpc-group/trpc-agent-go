@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -740,4 +741,262 @@ func (m *mockCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter 
 		Start: "```",
 		End:   "```",
 	}
+}
+
+// TestWithModels tests the WithModels option.
+func TestWithModels(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+	model3 := newDummyModel()
+
+	models := map[string]model.Model{
+		"model1": model1,
+		"model2": model2,
+		"model3": model3,
+	}
+
+	agent := New("test-agent",
+		WithModels(models),
+		WithModel(model1),
+	)
+
+	require.NotNil(t, agent)
+	require.NotNil(t, agent.models)
+	require.Equal(t, 3, len(agent.models))
+}
+
+// TestSetModelByName tests switching models by name.
+func TestSetModelByName(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	models := map[string]model.Model{
+		"fast":  model1,
+		"smart": model2,
+	}
+
+	agent := New("test-agent",
+		WithModels(models),
+		WithModel(model1),
+	)
+
+	// Initial model should be model1.
+	require.Equal(t, model1, agent.model)
+
+	// Switch to model2.
+	err := agent.SetModelByName("smart")
+	require.NoError(t, err)
+	require.Equal(t, model2, agent.model)
+
+	// Switch back to model1.
+	err = agent.SetModelByName("fast")
+	require.NoError(t, err)
+	require.Equal(t, model1, agent.model)
+
+	// Try to switch to non-existent model.
+	err = agent.SetModelByName("non-existent")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found in registered models")
+}
+
+// TestSetModelByName_NotRegistered tests error when model name not found.
+func TestSetModelByName_NotRegistered(t *testing.T) {
+	model1 := newDummyModel()
+
+	agent := New("test-agent", WithModel(model1))
+
+	// Try to switch to a model that was not registered.
+	err := agent.SetModelByName("some-model")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found in registered models")
+}
+
+// TestWithModelsOnly tests using only WithModels without WithModel.
+func TestWithModelsOnly(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	models := map[string]model.Model{
+		"model1": model1,
+		"model2": model2,
+	}
+
+	agent := New("test-agent", WithModels(models))
+
+	require.NotNil(t, agent)
+	require.NotNil(t, agent.model)
+	require.NotNil(t, agent.models)
+	require.Equal(t, 2, len(agent.models))
+}
+
+// TestWithModelAndModels_ModelNotInMap tests when WithModel is set but not
+// in WithModels map.
+func TestWithModelAndModels_ModelNotInMap(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+	model3 := newDummyModel()
+
+	models := map[string]model.Model{
+		"model2": model2,
+		"model3": model3,
+	}
+
+	agent := New("test-agent",
+		WithModels(models),
+		WithModel(model1),
+	)
+
+	require.NotNil(t, agent)
+	require.Equal(t, model1, agent.model)
+	require.Equal(t, 3, len(agent.models))
+
+	// The model1 should be added with defaultModelName.
+	defaultModel, ok := agent.models[defaultModelName]
+	require.True(t, ok)
+	require.Equal(t, model1, defaultModel)
+}
+
+// TestWithModelOnly tests using only WithModel without WithModels.
+func TestWithModelOnly(t *testing.T) {
+	model1 := newDummyModel()
+
+	agent := New("test-agent", WithModel(model1))
+
+	require.NotNil(t, agent)
+	require.Equal(t, model1, agent.model)
+	require.Equal(t, 1, len(agent.models))
+
+	// The model should be registered with defaultModelName.
+	defaultModel, ok := agent.models[defaultModelName]
+	require.True(t, ok)
+	require.Equal(t, model1, defaultModel)
+}
+
+// TestSetModelByName_Concurrent tests concurrent model switching.
+func TestSetModelByName_Concurrent(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	models := map[string]model.Model{
+		"model1": model1,
+		"model2": model2,
+	}
+
+	agent := New("test-agent",
+		WithModels(models),
+		WithModel(model1),
+	)
+
+	const numGoroutines = 10
+	const numIterations = 100
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < numIterations; j++ {
+				if j%2 == 0 {
+					err := agent.SetModelByName("model1")
+					require.NoError(t, err)
+				} else {
+					err := agent.SetModelByName("model2")
+					require.NoError(t, err)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// After all concurrent operations, the model should be one of the two.
+	require.True(t, agent.model == model1 || agent.model == model2)
+}
+
+// TestInitializeModels_EmptyOptions tests initializeModels with no models.
+func TestInitializeModels_EmptyOptions(t *testing.T) {
+	opts := &Options{}
+	initialModel, models := initializeModels(opts)
+
+	require.Nil(t, initialModel)
+	require.NotNil(t, models)
+	require.Equal(t, 0, len(models))
+}
+
+// TestInitializeModels_OnlyWithModel tests initializeModels with only
+// WithModel.
+func TestInitializeModels_OnlyWithModel(t *testing.T) {
+	model1 := newDummyModel()
+	opts := &Options{Model: model1}
+
+	initialModel, models := initializeModels(opts)
+
+	require.Equal(t, model1, initialModel)
+	require.Equal(t, 1, len(models))
+	require.Equal(t, model1, models[defaultModelName])
+}
+
+// TestInitializeModels_OnlyWithModels tests initializeModels with only
+// WithModels.
+func TestInitializeModels_OnlyWithModels(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	opts := &Options{
+		Models: map[string]model.Model{
+			"model1": model1,
+			"model2": model2,
+		},
+	}
+
+	initialModel, models := initializeModels(opts)
+
+	require.NotNil(t, initialModel)
+	require.True(t, initialModel == model1 || initialModel == model2)
+	require.Equal(t, 2, len(models))
+}
+
+// TestInitializeModels_BothWithModelAndModels tests initializeModels with
+// both WithModel and WithModels.
+func TestInitializeModels_BothWithModelAndModels(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+	model3 := newDummyModel()
+
+	opts := &Options{
+		Model: model1,
+		Models: map[string]model.Model{
+			"model2": model2,
+			"model3": model3,
+		},
+	}
+
+	initialModel, models := initializeModels(opts)
+
+	require.Equal(t, model1, initialModel)
+	require.Equal(t, 3, len(models))
+	require.Equal(t, model1, models[defaultModelName])
+}
+
+// TestInitializeModels_WithModelInModelsMap tests when WithModel is already
+// in the WithModels map.
+func TestInitializeModels_WithModelInModelsMap(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	opts := &Options{
+		Model: model1,
+		Models: map[string]model.Model{
+			"model1": model1,
+			"model2": model2,
+		},
+	}
+
+	initialModel, models := initializeModels(opts)
+
+	require.Equal(t, model1, initialModel)
+	require.Equal(t, 2, len(models))
+	_, hasDefault := models[defaultModelName]
+	require.False(t, hasDefault)
 }

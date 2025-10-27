@@ -748,9 +748,11 @@ For a complete interactive example, see [examples/model/retry](https://github.co
 
 ### 4. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime, accomplished simply with the `SetModel` method.
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: directly setting a model instance via `SetModel`, or pre-registering multiple models with `WithModels` and switching by name using `SetModelByName`.
 
-#### Basic Usage
+#### Approach 1: Direct Model Instance
+
+Set the model directly by passing a model instance to `SetModel`:
 
 ```go
 import (
@@ -767,7 +769,7 @@ agent := llmagent.New("my-agent",
 agent.SetModel(openai.New("gpt-4o"))
 ```
 
-#### Use Cases
+**Use Cases**:
 
 ```go
 // Select model based on task complexity.
@@ -778,11 +780,100 @@ if isComplexTask {
 }
 ```
 
+#### Approach 2: Switch by Name (Recommended)
+
+Pre-register multiple models with `WithModels`, then switch by name using `SetModelByName`:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// Create multiple model instances.
+gpt4 := openai.New("gpt-4o")
+gpt4mini := openai.New("gpt-4o-mini")
+deepseek := openai.New("deepseek-chat")
+
+// Register all models when creating the Agent.
+agent := llmagent.New("my-agent",
+    llmagent.WithModels(map[string]model.Model{
+        "smart": gpt4,
+        "fast":  gpt4mini,
+        "cheap": deepseek,
+    }),
+    llmagent.WithModel(gpt4mini), // Specify initial model.
+    llmagent.WithInstruction("You are an intelligent assistant."),
+)
+
+// Switch models by name at runtime.
+err := agent.SetModelByName("smart")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Switch to another model.
+err = agent.SetModelByName("cheap")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+**Use Cases**:
+
+```go
+// Select model based on user tier.
+modelName := "fast" // Default to fast model.
+if user.IsPremium() {
+    modelName = "smart" // Premium users get advanced model.
+}
+if err := agent.SetModelByName(modelName); err != nil {
+    log.Printf("Failed to switch model: %v", err)
+}
+
+// Select model based on time of day (cost optimization).
+hour := time.Now().Hour()
+if hour >= 22 || hour < 8 {
+    // Use cheap model at night.
+    agent.SetModelByName("cheap")
+} else {
+    // Use fast model during the day.
+    agent.SetModelByName("fast")
+}
+```
+
+#### Configuration Details
+
+**WithModels Option**:
+
+- Accepts a `map[string]model.Model` where key is the model name and value is the model instance
+- If both `WithModel` and `WithModels` are set, `WithModel` specifies the initial model
+- If only `WithModels` is set, the first model in the map will be used as the initial model (note: map iteration order is not guaranteed, so it's recommended to explicitly specify the initial model)
+- Reserved name: `__default__` is used internally by the framework and should not be used
+
+**SetModelByName Method**:
+
+- Parameter: model name (string)
+- Returns: error if the model name is not found
+- The model must be pre-registered via `WithModels`
+
+#### Comparison of Approaches
+
+| Feature          | SetModel                     | SetModelByName                            |
+| ---------------- | ---------------------------- | ----------------------------------------- |
+| Usage            | Pass model instance          | Pass model name                           |
+| Pre-registration | Not required                 | Required via WithModels                   |
+| Error Handling   | None                         | Returns error                             |
+| Use Case         | Simple switching             | Complex scenarios, multi-model management |
+| Code Maintenance | Need to hold model instances | Only need to remember names               |
+
 #### Important Notes
 
-- **Immediate Effect**: After calling `SetModel`, the next request immediately uses the new model
+- **Immediate Effect**: After calling `SetModel` or `SetModelByName`, the next request immediately uses the new model
 - **Session Persistence**: Switching models does not clear session history
 - **Independent Configuration**: Each model retains its own configuration (temperature, max tokens, etc.)
+- **Concurrency Safe**: Both switching approaches are concurrency-safe
 
 #### Usage Example
 

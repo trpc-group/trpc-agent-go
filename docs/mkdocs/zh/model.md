@@ -645,7 +645,7 @@ Batch API 的执行流程：
 ```go
 import (
     "time"
-    
+
     openaiopt "github.com/openai/openai-go/option"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -749,9 +749,11 @@ llm := openai.New("gpt-4o-mini",
 
 ### 4. 模型切换（Model Switching）
 
-模型切换允许在运行时动态更换 Agent 使用的 LLM 模型，通过 `SetModel` 方法即可完成切换。
+模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。框架提供两种方式：通过 `SetModel` 方法直接设置模型实例，或通过 `WithModels` 预注册多个模型后使用 `SetModelByName` 按名称切换。
 
-#### 基本用法
+#### 方式一：直接设置模型实例
+
+通过 `SetModel` 方法直接传入模型实例：
 
 ```go
 import (
@@ -759,31 +761,120 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-// 创建 Agent
+// 创建 Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModel(openai.New("gpt-4o-mini")),
 )
 
-// 切换到其他模型
+// 切换到其他模型.
 agent.SetModel(openai.New("gpt-4o"))
 ```
 
-#### 使用场景
+**使用场景**：
 
 ```go
-// 根据任务复杂度选择模型
+// 根据任务复杂度选择模型.
 if isComplexTask {
-    agent.SetModel(openai.New("gpt-4o"))  // 使用强大模型
+    agent.SetModel(openai.New("gpt-4o"))  // 使用强大模型.
 } else {
-    agent.SetModel(openai.New("gpt-4o-mini"))  // 使用快速模型
+    agent.SetModel(openai.New("gpt-4o-mini"))  // 使用快速模型.
 }
 ```
 
+#### 方式二：按名称切换模型（推荐）
+
+通过 `WithModels` 预注册多个模型，然后使用 `SetModelByName` 按名称切换：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// 创建多个模型实例.
+gpt4 := openai.New("gpt-4o")
+gpt4mini := openai.New("gpt-4o-mini")
+deepseek := openai.New("deepseek-chat")
+
+// 创建 Agent 时注册所有模型.
+agent := llmagent.New("my-agent",
+    llmagent.WithModels(map[string]model.Model{
+        "smart": gpt4,
+        "fast":  gpt4mini,
+        "cheap": deepseek,
+    }),
+    llmagent.WithModel(gpt4mini), // 指定初始模型.
+    llmagent.WithInstruction("你是一个智能助手。"),
+)
+
+// 运行时按名称切换模型.
+err := agent.SetModelByName("smart")
+if err != nil {
+    log.Fatal(err)
+}
+
+// 切换到其他模型.
+err = agent.SetModelByName("cheap")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+**使用场景**：
+
+```go
+// 根据用户等级选择模型.
+modelName := "fast" // 默认使用快速模型.
+if user.IsPremium() {
+    modelName = "smart" // 付费用户使用高级模型.
+}
+if err := agent.SetModelByName(modelName); err != nil {
+    log.Printf("切换模型失败: %v", err)
+}
+
+// 根据时间段选择模型（成本优化）.
+hour := time.Now().Hour()
+if hour >= 22 || hour < 8 {
+    // 夜间使用便宜模型.
+    agent.SetModelByName("cheap")
+} else {
+    // 白天使用快速模型.
+    agent.SetModelByName("fast")
+}
+```
+
+#### 配置说明
+
+**WithModels 选项**：
+
+- 接受一个 `map[string]model.Model`，key 为模型名称，value 为模型实例
+- 如果同时设置了 `WithModel` 和 `WithModels`，`WithModel` 指定初始模型
+- 如果只设置了 `WithModels`，将使用 map 中的第一个模型作为初始模型（注意：map 遍历顺序不确定，建议明确指定初始模型）
+- 保留名称：`__default__` 是框架内部使用的保留名称，建议不要使用
+
+**SetModelByName 方法**：
+
+- 参数：模型名称（字符串）
+- 返回：如果模型名称不存在，返回错误
+- 模型必须是通过 `WithModels` 预先注册的
+
+#### 两种方式对比
+
+| 特性     | SetModel         | SetModelByName       |
+| -------- | ---------------- | -------------------- |
+| 使用方式 | 传入模型实例     | 传入模型名称         |
+| 预注册   | 不需要           | 需要通过 WithModels  |
+| 错误处理 | 无               | 返回 error           |
+| 适用场景 | 简单切换         | 复杂场景，多模型管理 |
+| 代码维护 | 需要持有模型实例 | 只需要记住名称       |
+
 #### 重要说明
 
-- **即时生效**：调用 `SetModel` 后，下一次请求立即使用新模型
+- **即时生效**：调用 `SetModel` 或 `SetModelByName` 后，下一次请求立即使用新模型
 - **会话保持**：切换模型不会清除会话历史
 - **配置独立**：每个模型保留自己的配置（温度、最大 token 等）
+- **并发安全**：两种切换方式都是并发安全的
 
 #### 使用示例
 

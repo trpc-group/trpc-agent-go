@@ -1,6 +1,6 @@
 # Model Switching (Runner-less) Example
 
-This example demonstrates dynamic model switching using LLMAgent without the Runner. It focuses on a minimal, practical flow: users manage a small pool of model instances and switch the active model interactively via a command.
+This example demonstrates dynamic model switching using LLMAgent without the Runner. It showcases the recommended approach: pre-registering multiple models with `WithModels` and switching between them by name using `SetModelByName`.
 
 ## Prerequisites
 
@@ -11,20 +11,22 @@ This example demonstrates dynamic model switching using LLMAgent without the Run
 
 The example shows how to:
 
-1. Create an `LLMAgent` with an initial model.
-2. Maintain a local map of pre-constructed `model.Model` instances.
-3. Switch the active model at runtime using `LLMAgent.SetModel(model.Model)`.
+1. Pre-register multiple models using `WithModels` when creating the agent.
+2. Specify an initial model with `WithModel`.
+3. Switch the active model at runtime by name using `SetModelByName(modelName)`.
 4. Send user messages and print assistant responses.
 
-It mirrors the structure used by the Runner example (setup, chat loop, processing), but keeps only the logic necessary for model switching.
+This approach simplifies model management by eliminating the need to maintain model instances externally—you only need to remember model names.
 
 ## Key Features
 
-1. **Minimal Setup**: No Runner, no tools, only model switching logic.
-2. **Interactive Switching**: Use `/switch <model>` to change the active model.
-3. **Session Management**: Simple session ID for telemetry is handled internally.
-4. **Streaming-Friendly**: Accumulates content from streaming or non-streaming responses.
-5. **Extensible**: Easy to add or remove models in the local pool.
+1. **Pre-registered Models**: Models are registered once with `WithModels` at agent creation.
+2. **Name-based Switching**: Switch models by name using `SetModelByName(modelName)`.
+3. **Error Handling**: `SetModelByName` returns an error if the model name is not found.
+4. **Minimal Setup**: No Runner, no tools, only model switching logic.
+5. **Interactive Switching**: Use `/switch <model>` to change the active model.
+6. **Session Management**: Simple session ID for telemetry is handled internally.
+7. **Streaming-Friendly**: Accumulates content from streaming or non-streaming responses.
 
 ## Environment Variables
 
@@ -108,19 +110,25 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-// Prepare models (user-managed).
+// Prepare models map.
 models := map[string]model.Model{
-    "gpt-4o-mini": openai.New("gpt-4o-mini"),
-    "gpt-4o":      openai.New("gpt-4o"),
+    "gpt-4o-mini":   openai.New("gpt-4o-mini"),
+    "gpt-4o":        openai.New("gpt-4o"),
     "gpt-3.5-turbo": openai.New("gpt-3.5-turbo"),
 }
 
-// Create agent with default model.
+// Create agent with pre-registered models.
+// Use WithModels to register all models, and WithModel to set the initial model.
 agt := llmagent.New("switching-agent",
-    llmagent.WithModel(models["gpt-4o-mini"]))
+    llmagent.WithModels(models),
+    llmagent.WithModel(models["gpt-4o-mini"]),
+)
 
-// Switch active model on demand.
-agt.SetModel(models["gpt-4o"]) // e.g., after parsing "/switch gpt-4o"
+// Switch active model by name.
+err := agt.SetModelByName("gpt-4o") // e.g., after parsing "/switch gpt-4o"
+if err != nil {
+    // Handle error: model not found.
+}
 
 // Send a message.
 ctx := context.Background()
@@ -129,6 +137,8 @@ ctx := context.Background()
 
 ## Important Notes
 
+- **Pre-registration Required**: Models must be registered with `WithModels` before they can be switched by name.
+- **Error Handling**: `SetModelByName` returns an error if the model name is not found.
 - **No Runner**: This example intentionally does not use the Runner.
 - **No Tools**: The flow focuses purely on model switching and message handling.
 - **Model Names**: Switching is based on exact model names (case-sensitive).
@@ -141,7 +151,8 @@ ctx := context.Background()
 
 ## Benefits
 
-1. **Simplicity**: Minimal code focused on switching models.
-2. **Flexibility**: Easily switch between models based on needs.
-3. **Control**: You own how many and which models to preload.
-4. **Separation of Concerns**: Agent handles LLM logic; example handles I/O and switching.
+1. **Simplicity**: Minimal code focused on switching models by name.
+2. **Flexibility**: Easily switch between models based on needs without managing instances.
+3. **Type Safety**: Error handling ensures you only switch to registered models.
+4. **Maintainability**: No need to maintain model instances externally—just remember names.
+5. **Separation of Concerns**: Agent handles LLM logic; example handles I/O and switching.

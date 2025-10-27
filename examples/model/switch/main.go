@@ -31,7 +31,6 @@ import (
 type chatApp struct {
 	defaultModel string
 	agent        *llmagent.LLMAgent
-	models       map[string]model.Model
 	sessionID    string
 }
 
@@ -58,23 +57,25 @@ func (a *chatApp) setup(_ context.Context) error {
 	fmt.Printf("Default model: %s\n", a.defaultModel)
 	fmt.Printf("Commands: /switch X, /new, /exit\n\n")
 
-	// Prepare model map.
-	a.models = map[string]model.Model{}
-	preload := []string{a.defaultModel, "gpt-4o", "gpt-3.5-turbo"}
-	for _, name := range preload {
-		if name == "" {
-			continue
-		}
-		if _, ok := a.models[name]; ok {
-			continue
-		}
-		a.models[name] = openai.New(name)
+	// Prepare model map with pre-registered models.
+	models := map[string]model.Model{
+		"gpt-4o-mini":   openai.New("gpt-4o-mini"),
+		"gpt-4o":        openai.New("gpt-4o"),
+		"gpt-3.5-turbo": openai.New("gpt-3.5-turbo"),
 	}
 
-	// Create an agent with the default model.
+	// Get the default model instance.
+	defaultModelInstance, ok := models[a.defaultModel]
+	if !ok {
+		return fmt.Errorf("default model %q not found in registered models", a.defaultModel)
+	}
+
+	// Create an agent with pre-registered models.
+	// Use WithModels to register all models, and WithModel to set the initial model.
 	a.agent = llmagent.New(
 		"switching-agent",
-		llmagent.WithModel(a.models[a.defaultModel]),
+		llmagent.WithModels(models),
+		llmagent.WithModel(defaultModelInstance),
 	)
 
 	// Initialize session id.
@@ -181,24 +182,18 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 	return nil
 }
 
-// handleSwitch switches active model by name using SetModel.
+// handleSwitch switches active model by name using SetModelByName.
 func (a *chatApp) handleSwitch(name string) error {
-	m, ok := a.models[name]
-	if !ok {
-		fmt.Printf("Available models: ")
-		first := true
-		for k := range a.models {
-			if !first {
-				fmt.Printf(", ")
-			}
-			fmt.Printf("%s", k)
-			first = false
-		}
-		fmt.Printf("\n")
-		return fmt.Errorf("model '%s' not found", name)
+	// Switch model by name using the new SetModelByName method.
+	if err := a.agent.SetModelByName(name); err != nil {
+		// List available models on error.
+		fmt.Printf("Available models: gpt-4o-mini, gpt-4o, gpt-3.5-turbo\n")
+		return fmt.Errorf("failed to switch model: %w", err)
 	}
-	// Set the model dynamically.
-	a.agent.SetModel(m)
+
+	// Or you can use SetModel to switch model by model instance, like this:
+	//		model := openai.New("gpt-4o")
+	//		a.agent.SetModel(model)
 	fmt.Printf("✅ Switched model to: %s\n", name)
 	return nil
 }
