@@ -124,7 +124,7 @@ var errTest = errors.New("cb error")
 // the callback message created in BeforeAgent is the same instance in AfterAgent.
 func TestGraphAgent_CallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
 	// Track the message from Before callback.
-	var beforeMsg interface{}
+	var beforeMsg any
 
 	// Create agent callbacks.
 	callbacks := agent.NewCallbacks()

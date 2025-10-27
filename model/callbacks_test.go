@@ -278,7 +278,7 @@ func TestCallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
 	}
 
 	// Track the message from Before callback.
-	var beforeMsg interface{}
+	var beforeMsg any
 
 	// Register Before callback that stores data in message.
 	callbacks.RegisterBeforeModel(func(ctx context.Context, r *Request) (*Response, error) {

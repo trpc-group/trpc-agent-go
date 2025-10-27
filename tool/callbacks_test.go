@@ -553,7 +553,7 @@ func TestCallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
 	args := []byte(`{"arg1": "value1"}`)
 
 	// Track the message from Before callback.
-	var beforeMsg interface{}
+	var beforeMsg any
 
 	// Register Before callback that stores data in message.
 	callbacks.RegisterBeforeTool(func(

@@ -519,7 +519,7 @@ func TestChainAgent_BeforeCallbackError(t *testing.T) {
 // the callback message created in BeforeAgent is the same instance in AfterAgent.
 func TestChainAgent_CallbackMessage_SharedBetweenBeforeAndAfter(t *testing.T) {
 	// Track the message from Before callback.
-	var beforeMsg interface{}
+	var beforeMsg any
 
 	// Create agent callbacks.
 	callbacks := agent.NewCallbacks()
