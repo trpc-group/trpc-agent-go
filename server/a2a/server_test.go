@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -1387,13 +1388,25 @@ func TestNew(t *testing.T) {
 			errMsg:  "agent is required",
 		},
 		{
-			name: "missing host with empty host",
+			name: "missing host without agent card",
 			opts: []Option{
 				WithAgent(&mockAgent{name: "test-agent", description: "test description"}, true),
 				WithHost(""),
 			},
 			wantErr: true,
-			errMsg:  "host is required",
+			errMsg:  "host is required when agent card is not provided",
+		},
+		{
+			name: "with agent card but no host - should succeed",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent", description: "test description"}, true),
+				WithAgentCard(a2a.AgentCard{
+					Name:        "custom-agent",
+					Description: "custom description",
+					URL:         "http://custom.example.com",
+				}),
+			},
+			wantErr: false,
 		},
 		{
 			name:    "no options",
@@ -1434,7 +1447,7 @@ func TestBuildAgentCard(t *testing.T) {
 		expected a2a.AgentCard
 	}{
 		{
-			name: "agent with no tools",
+			name: "agent with no tools - host only",
 			options: &options{
 				agent: &mockAgent{
 					name:        "test-agent",
@@ -1455,6 +1468,99 @@ func TestBuildAgentCard(t *testing.T) {
 					{
 						Name:        "test-agent",
 						Description: stringPtr("test description"),
+						InputModes:  []string{"text"},
+						OutputModes: []string{"text"},
+						Tags:        []string{"default"},
+					},
+				},
+				DefaultInputModes:  []string{"text"},
+				DefaultOutputModes: []string{"text"},
+			},
+		},
+		{
+			name: "agent with http URL",
+			options: &options{
+				agent: &mockAgent{
+					name:        "test-agent",
+					description: "test description",
+					tools:       []tool.Tool{},
+				},
+				host:            "http://example.com:8080",
+				enableStreaming: true,
+			},
+			expected: a2a.AgentCard{
+				Name:        "test-agent",
+				Description: "test description",
+				URL:         "http://example.com:8080",
+				Capabilities: a2a.AgentCapabilities{
+					Streaming: boolPtr(true),
+				},
+				Skills: []a2a.AgentSkill{
+					{
+						Name:        "test-agent",
+						Description: stringPtr("test description"),
+						InputModes:  []string{"text"},
+						OutputModes: []string{"text"},
+						Tags:        []string{"default"},
+					},
+				},
+				DefaultInputModes:  []string{"text"},
+				DefaultOutputModes: []string{"text"},
+			},
+		},
+		{
+			name: "agent with https URL",
+			options: &options{
+				agent: &mockAgent{
+					name:        "test-agent",
+					description: "test description",
+					tools:       []tool.Tool{},
+				},
+				host:            "https://secure.example.com",
+				enableStreaming: true,
+			},
+			expected: a2a.AgentCard{
+				Name:        "test-agent",
+				Description: "test description",
+				URL:         "https://secure.example.com",
+				Capabilities: a2a.AgentCapabilities{
+					Streaming: boolPtr(true),
+				},
+				Skills: []a2a.AgentSkill{
+					{
+						Name:        "test-agent",
+						Description: stringPtr("test description"),
+						InputModes:  []string{"text"},
+						OutputModes: []string{"text"},
+						Tags:        []string{"default"},
+					},
+				},
+				DefaultInputModes:  []string{"text"},
+				DefaultOutputModes: []string{"text"},
+			},
+		},
+		{
+			name: "agent with custom URL",
+			options: &options{
+				agent: &mockAgent{
+					name:        "custom-agent",
+					description: "agent with custom scheme",
+					tools:       []tool.Tool{},
+				},
+				host:            "custom://service.namespace",
+				enableStreaming: true,
+			},
+			expected: a2a.AgentCard{
+				Name:        "custom-agent",
+				Description: "agent with custom scheme",
+				URL:         "custom://service.namespace",
+				Capabilities: a2a.AgentCapabilities{
+					Streaming: boolPtr(true),
+				},
+				Skills: []a2a.AgentSkill{
+					{
+						Name:        "custom-agent",
+						Description: stringPtr("agent with custom scheme"),
 						InputModes:  []string{"text"},
 						OutputModes: []string{"text"},
 						Tags:        []string{"default"},
@@ -1834,4 +1940,155 @@ func compareStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestNormalizeURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "already has http scheme",
+			input:    "http://example.com",
+			expected: "http://example.com",
+		},
+		{
+			name:     "already has https scheme",
+			input:    "https://example.com",
+			expected: "https://example.com",
+		},
+		{
+			name:     "custom scheme",
+			input:    "custom://service.namespace",
+			expected: "custom://service.namespace",
+		},
+		{
+			name:     "custom scheme",
+			input:    "grpc://example.com:9090",
+			expected: "grpc://example.com:9090",
+		},
+		{
+			name:     "host only - simple domain",
+			input:    "example.com",
+			expected: "http://example.com",
+		},
+		{
+			name:     "host only - with port",
+			input:    "localhost:8080",
+			expected: "http://localhost:8080",
+		},
+		{
+			name:     "host only - IP address",
+			input:    "192.168.1.1",
+			expected: "http://192.168.1.1",
+		},
+		{
+			name:     "host only - IP with port",
+			input:    "127.0.0.1:9999",
+			expected: "http://127.0.0.1:9999",
+		},
+		{
+			name:     "complete URL with path",
+			input:    "http://example.com/api/v1",
+			expected: "http://example.com/api/v1",
+		},
+		{
+			name:     "https URL with path and query",
+			input:    "https://example.com/api?key=value",
+			expected: "https://example.com/api?key=value",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ia2a.NormalizeURL(tt.input)
+			if result != tt.expected {
+				t.Errorf("NormalizeURL(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExtractBasePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "http with path",
+			input:    "http://example.com/api/v1",
+			expected: "/api/v1",
+		},
+		{
+			name:     "https with path",
+			input:    "https://example.com/api/v1/agents",
+			expected: "/api/v1/agents",
+		},
+		{
+			name:     "http without path",
+			input:    "http://example.com",
+			expected: "",
+		},
+		{
+			name:     "https without path",
+			input:    "https://example.com:8080",
+			expected: "",
+		},
+		{
+			name:     "http with root path",
+			input:    "http://example.com/",
+			expected: "/",
+		},
+		{
+			name:     "custom scheme with path - should return path",
+			input:    "grpc://example.com:9090/service",
+			expected: "/service",
+		},
+		{
+			name:     "custom scheme without path - should return empty",
+			input:    "custom://service.namespace",
+			expected: "",
+		},
+		{
+			name:     "http with path and query",
+			input:    "http://example.com/api?key=value",
+			expected: "/api",
+		},
+		{
+			name:     "https with path and fragment",
+			input:    "https://example.com/docs#section",
+			expected: "/docs",
+		},
+		{
+			name:     "invalid URL - no scheme",
+			input:    "://invalid",
+			expected: "",
+		},
+		{
+			name:     "grpc with complex path",
+			input:    "grpc://service:9090/api/v1/rpc",
+			expected: "/api/v1/rpc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractBasePath(tt.input)
+			if result != tt.expected {
+				t.Errorf("extractBasePath(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
 }

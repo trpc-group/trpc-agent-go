@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -25,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -187,6 +189,15 @@ func WithAddNameToInstruction(addNameToInstruction bool) Option {
 func WithEnableParallelTools(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableParallelTools = enable
+	}
+}
+
+// WithDefaultTransferMessage configures the default message used when the model
+// calls a sub-agent without providing a message. If msg is an empty string,
+// the default message injection is disabled; if non-empty, it is enabled and msg is used.
+func WithDefaultTransferMessage(msg string) Option {
+	return func(opts *Options) {
+		opts.DefaultTransferMessage = &msg
 	}
 }
 
@@ -380,6 +391,14 @@ type Options struct {
 	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
 	// when the transfer is complete. Defaults to true.
 	EndInvocationAfterTransfer bool
+
+	// DefaultTransferMessage holds the message to inject when the model directly
+	// calls a sub-agent without providing a message. Configured via WithDefaultTransferMessage.
+	// Behavior:
+	//   - Not configured: use built-in default message.
+	//   - Configured with empty string: use built-in default message.
+	//   - Configured with non-empty: use the provided message.
+	DefaultTransferMessage *string
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -416,8 +435,44 @@ func New(name string, opts ...Option) *LLMAgent {
 		opt(&options)
 	}
 
-	// Prepare request processors in the correct order.
-	requestProcessors := buildRequestProcessors(name, &options)
+	// Validate output_schema configuration before registering tools.
+	if options.OutputSchema != nil {
+		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
+		}
+		if options.Knowledge != nil {
+			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
+		}
+		if len(options.SubAgents) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
+		}
+	}
+
+	// Register tools from both tools and toolsets, including knowledge search tool if provided.
+	tools := registerTools(&options)
+
+	// Construct the agent first so request processors can access dynamic getters.
+	a := &LLMAgent{
+		name:                 name,
+		model:                options.Model,
+		description:          options.Description,
+		instruction:          options.Instruction,
+		systemPrompt:         options.GlobalInstruction,
+		genConfig:            options.GenerationConfig,
+		codeExecutor:         options.codeExecutor,
+		tools:                tools,
+		planner:              options.Planner,
+		subAgents:            options.SubAgents,
+		agentCallbacks:       options.AgentCallbacks,
+		outputKey:            options.OutputKey,
+		outputSchema:         options.OutputSchema,
+		inputSchema:          options.InputSchema,
+		structuredOutput:     options.StructuredOutput,
+		structuredOutputType: options.StructuredOutputType,
+	}
+
+	// Prepare request processors in the correct order, wiring dynamic getters.
+	requestProcessors := buildRequestProcessorsWithAgent(a, &options)
 
 	// Prepare response processors.
 	var responseProcessors []flow.ResponseProcessor
@@ -437,6 +492,12 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
+	// Configure default transfer message for direct sub-agent calls.
+	// Default behavior (when not configured): enabled with built-in default message.
+	if options.DefaultTransferMessage != nil {
+		// Explicitly configured via WithDefaultTransferMessage.
+		processor.SetDefaultTransferMessage(*options.DefaultTransferMessage)
+	}
 	responseProcessors = append(responseProcessors, toolcallProcessor)
 
 	// Add transfer response processor if sub-agents are configured.
@@ -451,50 +512,16 @@ func New(name string, opts ...Option) *LLMAgent {
 		ModelCallbacks:    options.ModelCallbacks,
 	}
 
-	llmFlow := llmflow.New(
+	a.flow = llmflow.New(
 		requestProcessors, responseProcessors,
 		flowOpts,
 	)
 
-	// Validate output_schema configuration before registering tools.
-	if options.OutputSchema != nil {
-		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
-			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
-		}
-		if options.Knowledge != nil {
-			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
-		}
-		if len(options.SubAgents) > 0 {
-			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
-		}
-	}
-
-	// Register tools from both tools and toolsets, including knowledge search tool if provided.
-	tools := registerTools(&options)
-
-	return &LLMAgent{
-		name:                 name,
-		model:                options.Model,
-		description:          options.Description,
-		instruction:          options.Instruction,
-		systemPrompt:         options.GlobalInstruction,
-		genConfig:            options.GenerationConfig,
-		flow:                 llmFlow,
-		codeExecutor:         options.codeExecutor,
-		tools:                tools,
-		planner:              options.Planner,
-		subAgents:            options.SubAgents,
-		agentCallbacks:       options.AgentCallbacks,
-		outputKey:            options.OutputKey,
-		outputSchema:         options.OutputSchema,
-		inputSchema:          options.InputSchema,
-		structuredOutput:     options.StructuredOutput,
-		structuredOutputType: options.StructuredOutputType,
-	}
+	return a
 }
 
 // buildRequestProcessors constructs the request processors in the required order.
-func buildRequestProcessors(name string, options *Options) []flow.RequestProcessor {
+func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.RequestProcessor {
 	var requestProcessors []flow.RequestProcessor
 
 	// 1. Basic processor - handles generation config.
@@ -522,18 +549,23 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 				processor.WithStructuredOutputSchema(options.StructuredOutput.JSONSchema.Schema),
 			)
 		}
+		// Always wire dynamic getters so instructions can be updated at runtime.
+		instructionOpts = append(instructionOpts,
+			processor.WithInstructionGetter(func() string { return a.getInstruction() }),
+			processor.WithSystemPromptGetter(func() string { return a.getSystemPrompt() }),
+		)
 		instructionProcessor := processor.NewInstructionRequestProcessor(
-			options.Instruction,
-			options.GlobalInstruction,
+			"", // static value unused when getters are present
+			"", // static value unused when getters are present
 			instructionOpts...,
 		)
 		requestProcessors = append(requestProcessors, instructionProcessor)
 	}
 
 	// 4. Identity processor - sets agent identity.
-	if name != "" || options.Description != "" {
+	if a.name != "" || options.Description != "" {
 		identityProcessor := processor.NewIdentityRequestProcessor(
-			name,
+			a.name,
 			options.Description,
 			processor.WithAddNameToInstruction(options.AddNameToInstruction),
 		)
@@ -551,7 +583,24 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	}
 
 	// 6. Content processor - handles messages from invocation.
+	// Align with GraphAgent: honor runtime include_contents if provided.
+	includeMode := processor.IncludeContentsFiltered
+	if inv, ok := agent.InvocationFromContext(context.Background()); ok && inv != nil {
+		if inv.RunOptions.RuntimeState != nil {
+			if mode, ok2 := inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok2 && mode != "" {
+				switch strings.ToLower(mode) {
+				case processor.IncludeContentsNone:
+					includeMode = processor.IncludeContentsNone
+				case processor.IncludeContentsFiltered:
+					includeMode = processor.IncludeContentsFiltered
+				case processor.IncludeContentsAll:
+					includeMode = processor.IncludeContentsAll
+				}
+			}
+		}
+	}
 	contentProcessor := processor.NewContentRequestProcessor(
+		processor.WithIncludeContents(includeMode),
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
@@ -559,6 +608,19 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	requestProcessors = append(requestProcessors, contentProcessor)
 
 	return requestProcessors
+}
+
+// buildRequestProcessors preserves the original helper signature for tests and
+// legacy callers. It constructs a temporary agent instance and forwards to
+// buildRequestProcessorsWithAgent. Dynamic updates are not supported when using
+// this legacy function; use New() which wires the real agent for runtime getters.
+func buildRequestProcessors(name string, options *Options) []flow.RequestProcessor { // nolint:deadcode
+	dummy := &LLMAgent{
+		name:         name,
+		instruction:  options.Instruction,
+		systemPrompt: options.GlobalInstruction,
+	}
+	return buildRequestProcessorsWithAgent(dummy, options)
 }
 
 func registerTools(options *Options) []tool.Tool {
@@ -789,4 +851,34 @@ func (a *LLMAgent) SetModel(m model.Model) {
 	a.mu.Lock()
 	a.model = m
 	a.mu.Unlock()
+}
+
+// SetInstruction updates the agent's instruction at runtime in a concurrency-safe way.
+// Subsequent requests will use the new instruction without recreating the agent.
+func (a *LLMAgent) SetInstruction(instruction string) {
+	a.mu.Lock()
+	a.instruction = instruction
+	a.mu.Unlock()
+}
+
+// SetGlobalInstruction updates the agent's global system prompt at runtime.
+// This affects the system-level prompt prepended to requests.
+func (a *LLMAgent) SetGlobalInstruction(systemPrompt string) {
+	a.mu.Lock()
+	a.systemPrompt = systemPrompt
+	a.mu.Unlock()
+}
+
+// getInstruction returns the current instruction with read lock.
+func (a *LLMAgent) getInstruction() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.instruction
+}
+
+// getSystemPrompt returns the current system prompt with read lock.
+func (a *LLMAgent) getSystemPrompt() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.systemPrompt
 }
