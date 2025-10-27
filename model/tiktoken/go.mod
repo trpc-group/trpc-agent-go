@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/model/tiktoken
 
-go 1.24.9
+go 1.23
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
