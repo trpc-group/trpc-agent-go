@@ -808,6 +808,183 @@ func TestContentRequestProcessor_WithMaxHistoryRuns_Option(t *testing.T) {
 	assert.Equal(t, 5, p.MaxHistoryRuns)
 }
 
+func TestContentRequestProcessor_EffectiveInclude_RuntimeModes(t *testing.T) {
+	// Cover runtime overrides: filtered and all (as well as none).
+	p := NewContentRequestProcessor()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{},
+		}),
+	)
+
+	inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents] =
+		IncludeContentsNone
+	assert.Equal(t, IncludeContentsNone, p.effectiveInclude(inv))
+
+	inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents] =
+		IncludeContentsFiltered
+	assert.Equal(t, IncludeContentsFiltered, p.effectiveInclude(inv))
+
+	inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents] =
+		IncludeContentsAll
+	assert.Equal(t, IncludeContentsAll, p.effectiveInclude(inv))
+}
+
+func TestContentRequestProcessor_ProcessRequest_NilInputs(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	// Nil request: should return without panic.
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, nil, nil)
+
+	// Nil invocation: should return without panic or changes.
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), nil, req, nil)
+	assert.Empty(t, req.Messages)
+}
+
+func TestGetScratchpadMessages_NilAndEmptyCases(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	// Nil invocation.
+	var invNil *agent.Invocation
+	assert.Nil(t, p.getScratchpadMessages(invNil))
+
+	// Nil session.
+	inv := agent.NewInvocation()
+	assert.Nil(t, p.getScratchpadMessages(inv))
+
+	// Empty events.
+	inv = agent.NewInvocation(
+		agent.WithInvocationID("i"),
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	assert.Nil(t, p.getScratchpadMessages(inv))
+
+	// Last event is not a tool result -> nil.
+	sess := &session.Session{}
+	nonTool := event.New("i", "assistant")
+	nonTool.Response = &model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant,
+				Content: "hi"}},
+		},
+	}
+	sess.Events = append(sess.Events, *nonTool)
+	inv = agent.NewInvocation(
+		agent.WithInvocationID("i"),
+		agent.WithInvocationSession(sess),
+	)
+	assert.Nil(t, p.getScratchpadMessages(inv))
+
+	// Only a single tool result event present -> exercise start < 0 path.
+	sess2 := &session.Session{}
+	onlyResult := event.New("i2", "assistant")
+	onlyResult.InvocationID = "i2"
+	onlyResult.Response = &model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleTool,
+				ToolID: "c1", Content: "r"}},
+		},
+	}
+	sess2.Events = append(sess2.Events, *onlyResult)
+	inv2 := agent.NewInvocation(
+		agent.WithInvocationID("i2"),
+		agent.WithInvocationSession(sess2),
+	)
+	msgs := p.getScratchpadMessages(inv2)
+	// We expect one message (the tool result) in scratchpad.
+	assert.Len(t, msgs, 1)
+	assert.Equal(t, model.RoleTool, msgs[0].Role)
+}
+
+func TestRearrangeAsyncFuncRespHist_NoResponses(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	// Tool call that has no corresponding responses.
+	call := event.Event{
+		Author: "assistant",
+		Response: &model.Response{Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{ID: "x"}}}},
+		}},
+	}
+	out := p.rearrangeAsyncFuncRespHist([]event.Event{call})
+	// Should keep the call, no responses appended.
+	assert.Len(t, out, 1)
+	assert.True(t, out[0].IsToolCallResponse())
+}
+
+func TestMergeFunctionResponseEvents_Empty(t *testing.T) {
+	p := NewContentRequestProcessor()
+	// Empty slice returns zero value event.
+	got := p.mergeFunctionResponseEvents(nil)
+	assert.Equal(t, event.Event{}, got)
+}
+
+func TestConvertForeignEvent_EmptyChoiceNoParts(t *testing.T) {
+	// When choice has no content, no tool calls, no tool result, and the
+	// prefix is disabled, the response stays unchanged but Author becomes
+	// user. This covers the path where contentParts remains empty.
+	p := NewContentRequestProcessor(WithAddContextPrefix(false))
+	ev := &event.Event{
+		Author: "other-agent",
+		Response: &model.Response{Choices: []model.Choice{
+			{Message: model.Message{}},
+		}},
+	}
+	out := p.convertForeignEvent(ev)
+	assert.Equal(t, "user", out.Author)
+	assert.Len(t, out.Response.Choices, 1)
+	assert.Equal(t, "", out.Response.Choices[0].Message.Content)
+}
+
+func TestConvertForeignEvent_NoChoices_ReturnsOriginal(t *testing.T) {
+	p := NewContentRequestProcessor()
+	ev := &event.Event{
+		Author:   "agent-x",
+		Response: &model.Response{Choices: nil},
+	}
+	out := p.convertForeignEvent(ev)
+	// No choices -> early return of the original event.
+	assert.Equal(t, "agent-x", out.Author)
+	assert.Nil(t, out.Response.Choices)
+}
+
+func TestProcessRequest_AddsInvocationMessageWhenNoHistory(t *testing.T) {
+	// When a session exists but there are no valid history messages and no
+	// summary, ProcessRequest should add the invocation message.
+	p := NewContentRequestProcessor()
+	sess := &session.Session{}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	req := &model.Request{}
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	// Expect the invocation message present.
+	assert.NotEmpty(t, req.Messages)
+	found := false
+	for _, m := range req.Messages {
+		if m.Role == model.RoleUser && m.Content == "hello" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found)
+
+	// Also expect a preprocessing event to be emitted.
+	select {
+	case e := <-ch:
+		assert.Equal(t, inv.InvocationID, e.InvocationID)
+		assert.Equal(t, model.ObjectTypePreprocessingPlanning, e.Object)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected preprocessing event emitted")
+	}
+}
 func TestContentRequestProcessor_getFilterHistoryMessages(t *testing.T) {
 	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 
