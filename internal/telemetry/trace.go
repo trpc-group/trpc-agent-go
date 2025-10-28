@@ -122,7 +122,7 @@ var (
 	KeyGenAIRequestTemperature      = "gen_ai.request.temperature"
 	KeyGenAIRequestTopP             = "gen_ai.request.top_p"
 	KeyGenAISystemInstructions      = "gen_ai.system_instructions"
-	KeyGenAITokenType               = "gen_ai.token.type"
+	KeyGenAITokenType               = "gen_ai.token.type" // #nosec G101 - this is a metric key name, not a credential.
 
 	KeyGenAIToolName          = "gen_ai.tool.name"
 	KeyGenAIToolDescription   = "gen_ai.tool.description"

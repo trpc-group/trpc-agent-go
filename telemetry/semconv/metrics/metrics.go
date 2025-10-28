@@ -12,7 +12,7 @@ package metrics
 
 const (
 	// KeyGenAITokenType represents the type of token.
-	KeyGenAITokenType = "gen_ai.token.type"
+	KeyGenAITokenType = "gen_ai.token.type" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyTRPCAgentGoInputTokenType represents the type of input token.
 	KeyTRPCAgentGoInputTokenType = "input" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyTRPCAgentGoOutputTokenType represents the type of output token.
