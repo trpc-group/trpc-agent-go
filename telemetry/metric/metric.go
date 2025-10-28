@@ -28,7 +28,7 @@ import (
 )
 
 // InitMeterProvider initializes the meter provider and default meters.
-func InitMeterProvider(mp *sdkmetric.MeterProvider) error {
+func InitMeterProvider(mp metric.MeterProvider) error {
 	itelemetry.MeterProvider = mp
 
 	itelemetry.ChatMeter = mp.Meter(metrics.MeterNameChat)
@@ -85,6 +85,11 @@ func InitMeterProvider(mp *sdkmetric.MeterProvider) error {
 		return fmt.Errorf("failed to create execute tool metric GenAIClientOperationDuration: %w", err)
 	}
 	return nil
+}
+
+// GetMeterProvider returns the meter provider.
+func GetMeterProvider() metric.MeterProvider {
+	return itelemetry.MeterProvider
 }
 
 // NewMeterProvider creates a new meter provider with optional configuration.
