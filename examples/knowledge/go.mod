@@ -9,6 +9,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../../knowledge/vectorstore/tcvector
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
 )
 
 require (
@@ -87,5 +88,6 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4 // indirect
 )
