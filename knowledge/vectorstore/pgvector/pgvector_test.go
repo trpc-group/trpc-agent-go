@@ -10,12 +10,255 @@
 package pgvector
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
+
+// TestNew tests the New function for creating a VectorStore
+func TestNew(t *testing.T) {
+	t.Run("new_with_invalid_instance_name", func(t *testing.T) {
+		_, err := New(WithPostgresInstance("non-existent-instance"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "instance")
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("new_with_direct_connection_params", func(t *testing.T) {
+		// Save old builder
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		// Set up a mock builder that returns an error on connection
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			return nil, errors.New("connection failed")
+		})
+
+		_, err := New(
+			WithHost("localhost"),
+			WithPort(5432),
+			WithUser("test"),
+			WithPassword("test"),
+			WithDatabase("test"),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "connection failed")
+	})
+
+	t.Run("new_with_init_db_extension_error", func(t *testing.T) {
+		// Save old builder
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		// Create a mock client that will fail on ExecContext (during initDB)
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("CREATE EXTENSION").
+			WillReturnError(errors.New("extension creation failed"))
+
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			return tc.client, nil
+		})
+
+		_, err := New(
+			WithHost("localhost"),
+			WithPort(5432),
+			WithUser("test"),
+			WithPassword("test"),
+			WithDatabase("test"),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "extension creation failed")
+	})
+
+	t.Run("new_with_init_db_table_error", func(t *testing.T) {
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("CREATE EXTENSION").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").
+			WillReturnError(errors.New("table creation failed"))
+
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			return tc.client, nil
+		})
+
+		_, err := New(
+			WithHost("localhost"),
+			WithPort(5432),
+			WithUser("test"),
+			WithPassword("test"),
+			WithDatabase("test"),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "table creation failed")
+	})
+
+	t.Run("new_with_init_db_vector_index_error", func(t *testing.T) {
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("CREATE EXTENSION").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").
+			WillReturnError(errors.New("vector index creation failed"))
+
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			return tc.client, nil
+		})
+
+		_, err := New(
+			WithHost("localhost"),
+			WithPort(5432),
+			WithUser("test"),
+			WithPassword("test"),
+			WithDatabase("test"),
+			WithEnableTSVector(false),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "vector index creation failed")
+	})
+
+	t.Run("new_with_init_db_text_index_error", func(t *testing.T) {
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("CREATE EXTENSION").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_content_fts_idx").
+			WillReturnError(errors.New("text index creation failed"))
+
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			return tc.client, nil
+		})
+
+		_, err := New(
+			WithHost("localhost"),
+			WithPort(5432),
+			WithUser("test"),
+			WithPassword("test"),
+			WithDatabase("test"),
+			WithEnableTSVector(true),
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "text index creation failed")
+	})
+
+	t.Run("new_success_without_tsvector", func(t *testing.T) {
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("CREATE EXTENSION").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			return tc.client, nil
+		})
+
+		vs, err := New(
+			WithHost("localhost"),
+			WithPort(5432),
+			WithUser("test"),
+			WithPassword("test"),
+			WithDatabase("test"),
+			WithEnableTSVector(false),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, vs)
+		assert.False(t, vs.option.enableTSVector)
+	})
+
+	t.Run("new_success_with_tsvector", func(t *testing.T) {
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		tc.mock.ExpectExec("CREATE EXTENSION").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_content_fts_idx").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			return tc.client, nil
+		})
+
+		vs, err := New(
+			WithHost("localhost"),
+			WithPort(5432),
+			WithUser("test"),
+			WithPassword("test"),
+			WithDatabase("test"),
+			WithEnableTSVector(true),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, vs)
+		assert.True(t, vs.option.enableTSVector)
+	})
+}
+
+// TestVectorStore_Close tests the Close method
+func TestVectorStore_Close(t *testing.T) {
+	t.Run("close_with_nil_client", func(t *testing.T) {
+		vs := &VectorStore{
+			client: nil,
+		}
+		err := vs.Close()
+		require.NoError(t, err)
+	})
+
+	t.Run("close_success", func(t *testing.T) {
+		tc := newTestClient(t)
+		vs := &VectorStore{
+			client: tc.client,
+		}
+
+		// Expect the close call
+		tc.mock.ExpectClose()
+
+		// Close the vector store
+		err := vs.Close()
+		require.NoError(t, err)
+
+		// Verify expectations were met
+		tc.AssertExpectations(t)
+	})
+}
 
 func TestConvertToFloat32Vector(t *testing.T) {
 	tests := []struct {
@@ -111,22 +354,28 @@ func TestMapToJSON(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    map[string]any
-		expected string
+		validate func(*testing.T, string)
 	}{
 		{
-			name:     "nil_map",
-			input:    nil,
-			expected: "{}",
+			name:  "nil_map",
+			input: nil,
+			validate: func(t *testing.T, result string) {
+				assert.Equal(t, "{}", result)
+			},
 		},
 		{
-			name:     "empty_map",
-			input:    map[string]any{},
-			expected: "{}",
+			name:  "empty_map",
+			input: map[string]any{},
+			validate: func(t *testing.T, result string) {
+				assert.Equal(t, "{}", result)
+			},
 		},
 		{
-			name:     "simple_map",
-			input:    map[string]any{"key": "value"},
-			expected: `{"key":"value"}`,
+			name:  "simple_map",
+			input: map[string]any{"key": "value"},
+			validate: func(t *testing.T, result string) {
+				assert.Equal(t, `{"key":"value"}`, result)
+			},
 		},
 		{
 			name: "multiple_keys",
@@ -134,8 +383,17 @@ func TestMapToJSON(t *testing.T) {
 				"name": "test",
 				"age":  25,
 			},
-			// JSON order is not guaranteed, so we'll verify differently
-			expected: "",
+			validate: func(t *testing.T, result string) {
+				// Verify by unmarshalling and checking values
+				m, err := jsonToMap(result)
+				require.NoError(t, err)
+				assert.NotEmpty(t, m)
+
+				// Alternative: just verify valid JSON structure
+				assert.Contains(t, result, "name")
+				assert.Contains(t, result, "test")
+				assert.Contains(t, result, "age")
+			},
 		},
 		{
 			name: "nested_map",
@@ -145,21 +403,46 @@ func TestMapToJSON(t *testing.T) {
 					"age":  30,
 				},
 			},
-			expected: "",
+			validate: func(t *testing.T, result string) {
+				// Verify it's valid JSON and contains expected values
+				m, err := jsonToMap(result)
+				require.NoError(t, err)
+				assert.NotEmpty(t, m)
+
+				assert.Contains(t, result, "user")
+				assert.Contains(t, result, "name")
+				assert.Contains(t, result, "John")
+			},
+		},
+		{
+			name: "map_with_boolean",
+			input: map[string]any{
+				"active": true,
+				"admin":  false,
+			},
+			validate: func(t *testing.T, result string) {
+				assert.Contains(t, result, "active")
+				assert.Contains(t, result, "true")
+				assert.Contains(t, result, "admin")
+				assert.Contains(t, result, "false")
+			},
+		},
+		{
+			name: "map_with_null",
+			input: map[string]any{
+				"value": nil,
+			},
+			validate: func(t *testing.T, result string) {
+				assert.Contains(t, result, "value")
+				assert.Contains(t, result, "null")
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := mapToJSON(tt.input)
-			if tt.expected != "" {
-				assert.Equal(t, tt.expected, result)
-			} else {
-				// For cases with multiple/nested keys, just verify it's valid JSON
-				assert.NotEmpty(t, result)
-				assert.Contains(t, result, "{")
-				assert.Contains(t, result, "}")
-			}
+			tt.validate(t, result)
 		})
 	}
 }
@@ -515,6 +798,95 @@ func TestOptions(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestBuildQueryFilter tests the buildQueryFilter method
+func TestBuildQueryFilter(t *testing.T) {
+	vs := &VectorStore{
+		filterConverter: &pgVectorConverter{},
+	}
+
+	t.Run("nil_filter", func(t *testing.T) {
+		mockBuilder := &mockQueryFilterBuilder{}
+		err := vs.buildQueryFilter(mockBuilder, nil)
+		require.NoError(t, err)
+		assert.False(t, mockBuilder.idFilterCalled)
+		assert.False(t, mockBuilder.metadataFilterCalled)
+		assert.False(t, mockBuilder.filterConditionCalled)
+	})
+
+	t.Run("with_ids_only", func(t *testing.T) {
+		mockBuilder := &mockQueryFilterBuilder{}
+		filter := &vectorstore.SearchFilter{
+			IDs: []string{"id1", "id2"},
+		}
+		err := vs.buildQueryFilter(mockBuilder, filter)
+		require.NoError(t, err)
+		assert.True(t, mockBuilder.idFilterCalled)
+		assert.Equal(t, []string{"id1", "id2"}, mockBuilder.ids)
+		assert.False(t, mockBuilder.metadataFilterCalled)
+		assert.False(t, mockBuilder.filterConditionCalled)
+	})
+
+	t.Run("with_metadata_only", func(t *testing.T) {
+		mockBuilder := &mockQueryFilterBuilder{}
+		filter := &vectorstore.SearchFilter{
+			Metadata: map[string]any{"key": "value"},
+		}
+		err := vs.buildQueryFilter(mockBuilder, filter)
+		require.NoError(t, err)
+		assert.False(t, mockBuilder.idFilterCalled)
+		assert.True(t, mockBuilder.metadataFilterCalled)
+		assert.Equal(t, map[string]any{"key": "value"}, mockBuilder.metadata)
+		assert.False(t, mockBuilder.filterConditionCalled)
+	})
+
+	t.Run("with_ids_and_metadata", func(t *testing.T) {
+		mockBuilder := &mockQueryFilterBuilder{}
+		filter := &vectorstore.SearchFilter{
+			IDs:      []string{"id1"},
+			Metadata: map[string]any{"key": "value"},
+		}
+		err := vs.buildQueryFilter(mockBuilder, filter)
+		require.NoError(t, err)
+		assert.True(t, mockBuilder.idFilterCalled)
+		assert.True(t, mockBuilder.metadataFilterCalled)
+	})
+
+	t.Run("empty_filter", func(t *testing.T) {
+		mockBuilder := &mockQueryFilterBuilder{}
+		filter := &vectorstore.SearchFilter{}
+		err := vs.buildQueryFilter(mockBuilder, filter)
+		require.NoError(t, err)
+		assert.False(t, mockBuilder.idFilterCalled)
+		assert.False(t, mockBuilder.metadataFilterCalled)
+		assert.False(t, mockBuilder.filterConditionCalled)
+	})
+}
+
+// mockQueryFilterBuilder is a mock implementation of queryFilterBuilder
+type mockQueryFilterBuilder struct {
+	idFilterCalled        bool
+	metadataFilterCalled  bool
+	filterConditionCalled bool
+	ids                   []string
+	metadata              map[string]any
+	filterCondition       *condConvertResult
+}
+
+func (m *mockQueryFilterBuilder) addIDFilter(ids []string) {
+	m.idFilterCalled = true
+	m.ids = ids
+}
+
+func (m *mockQueryFilterBuilder) addMetadataFilter(metadata map[string]any) {
+	m.metadataFilterCalled = true
+	m.metadata = metadata
+}
+
+func (m *mockQueryFilterBuilder) addFilterCondition(condition *condConvertResult) {
+	m.filterConditionCalled = true
+	m.filterCondition = condition
 }
 
 // TestWithHybridSearchWeights tests hybrid search weight normalization

@@ -223,3 +223,41 @@ func mockExistsRow(exists bool) *sqlmock.Rows {
 	}
 	return sqlmock.NewRows([]string{"exists"}).AddRow(val)
 }
+
+// newTestVectorStoreWithTSVector creates a VectorStore with TSVector enabled for testing
+func newTestVectorStoreWithTSVector(t *testing.T, opts ...Option) (*VectorStore, *testClient) {
+	tc := newTestClient(t)
+
+	option := defaultOptions
+	option.enableTSVector = true
+
+	for _, opt := range opts {
+		opt(&option)
+	}
+
+	// Mock CREATE EXTENSION, table creation, and both indexes
+	tc.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	tc.ExpectExec("CREATE TABLE IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	tc.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Expect text search index creation
+	tc.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_content_fts_idx").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	vs := &VectorStore{
+		client:          tc.client,
+		option:          option,
+		filterConverter: &pgVectorConverter{},
+	}
+
+	// Initialize DB (will use our mocked expectations)
+	err := vs.initDB(context.Background())
+	require.NoError(t, err)
+
+	return vs, tc
+}

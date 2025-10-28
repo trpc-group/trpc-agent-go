@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 // TestVectorStore_Add tests the Add method with various scenarios
@@ -571,4 +572,77 @@ func TestVectorStore_EdgeCases(t *testing.T) {
 			tc.AssertExpectations(t)
 		})
 	}
+}
+
+// TestVectorStore_GetMetadata tests metadata retrieval
+func TestVectorStore_GetMetadata(t *testing.T) {
+	t.Run("get_metadata_with_limit_and_offset", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		rows := mockDocumentRow("doc_1", "Test Doc", "Test content",
+			[]float64{1.0, 0.5, 0.2}, map[string]any{"category": "test"})
+		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT .+ OFFSET").
+			WillReturnRows(rows)
+
+		result, err := vs.GetMetadata(context.Background(),
+			vectorstore.WithGetMetadataLimit(10),
+			vectorstore.WithGetMetadataOffset(0))
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Contains(t, result, "doc_1")
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("get_all_metadata", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		// Return a single result which is less than metadataBatchSize
+		// This should not trigger a second query
+		rows1 := mockDocumentRow("doc_1", "Test Doc 1", "Content 1",
+			[]float64{1.0, 0.5, 0.2}, map[string]any{"category": "test"})
+		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT .+ OFFSET").
+			WillReturnRows(rows1)
+
+		result, err := vs.GetMetadata(context.Background())
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("get_metadata_with_ids_filter", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		rows := mockDocumentRow("doc_1", "Test Doc", "Content",
+			[]float64{1.0, 0.5, 0.2}, map[string]any{"key": "value"})
+		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT .+ OFFSET").
+			WillReturnRows(rows)
+
+		result, err := vs.GetMetadata(context.Background(),
+			vectorstore.WithGetMetadataIDs([]string{"doc_1"}),
+			vectorstore.WithGetMetadataLimit(10),
+			vectorstore.WithGetMetadataOffset(0))
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("get_metadata_with_metadata_filter", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t)
+		defer tc.Close()
+
+		rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT .+ OFFSET").
+			WillReturnRows(rows)
+
+		result, err := vs.GetMetadata(context.Background(),
+			vectorstore.WithGetMetadataFilter(map[string]any{"category": "AI"}),
+			vectorstore.WithGetMetadataLimit(5),
+			vectorstore.WithGetMetadataOffset(0))
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		tc.AssertExpectations(t)
+	})
 }

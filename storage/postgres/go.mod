@@ -2,9 +2,8 @@ module trpc.group/trpc-go/trpc-agent-go/storage/postgres
 
 go 1.21
 
-toolchain go1.24.4
-
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/jackc/pgx/v5 v5.7.1
 	github.com/stretchr/testify v1.10.0
 )
