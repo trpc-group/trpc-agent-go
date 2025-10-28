@@ -27,15 +27,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// chatApp manages the conversation and model switching.
-type chatApp struct {
-	defaultModel        string
-	agent               *llmagent.LLMAgent
-	sessionID           string
-	nextModelName       string // Model name for next request (empty = use agent's current model).
-	usePerRequestSwitch bool   // Whether to use per-request switching for next message.
-}
-
 func main() {
 	// Flags.
 	defaultModel := flag.String("model", "deepseek-chat", "Default model name")
@@ -53,6 +44,15 @@ func main() {
 	if err := app.startChat(ctx); err != nil {
 		fmt.Printf("❌ Chat failed: %v\n", err)
 	}
+}
+
+// chatApp manages the conversation and model switching.
+type chatApp struct {
+	defaultModel        string
+	agent               *llmagent.LLMAgent
+	sessionID           string
+	nextModelName       string // Model name for next request (empty = use agent's current model).
+	usePerRequestSwitch bool   // Whether to use per-request switching for next message.
 }
 
 // setup initializes models and the agent.
