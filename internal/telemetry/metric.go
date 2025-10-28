@@ -98,15 +98,19 @@ func RecordChatTimeToFirstTokenDuration(ctx context.Context, modelName string, s
 }
 
 // RecordChatRequestDuration records the total duration of a chat request from start to completion.
-func RecordChatRequestDuration(ctx context.Context, modelName string, sess *session.Session, duration time.Duration) {
+func RecordChatRequestDuration(ctx context.Context, modelName string, sess *session.Session, duration time.Duration, errorType string) {
 	appName, userID, sessionID := sessionInfo(sess)
-	ChatMetricGenAIClientOperationDuration.Record(ctx, duration.Seconds(),
-		metric.WithAttributes(attribute.String(KeyGenAIOperationName, OperationChat),
-			attribute.String(KeyGenAISystem, modelName),
-			attribute.String(KeyTRPCAgentGoAppName, appName),
-			attribute.String(KeyTRPCAgentGoUserID, userID),
-			attribute.String(KeyGenAIConversationID, sessionID),
-		))
+	attrs := []attribute.KeyValue{
+		attribute.String(KeyGenAIOperationName, OperationChat),
+		attribute.String(KeyGenAISystem, modelName),
+		attribute.String(KeyTRPCAgentGoAppName, appName),
+		attribute.String(KeyTRPCAgentGoUserID, userID),
+		attribute.String(KeyGenAIConversationID, sessionID),
+	}
+	if errorType != "" {
+		attrs = append(attrs, attribute.String(KeyErrorType, errorType))
+	}
+	ChatMetricGenAIClientOperationDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
 }
 
 func sessionInfo(sess *session.Session) (appName, userID, sessionID string) {

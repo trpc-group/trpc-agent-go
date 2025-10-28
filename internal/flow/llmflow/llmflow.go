@@ -204,15 +204,26 @@ func (f *Flow) processStreamingResponses(
 	totalCompletionTokens := 0
 	totalPromptTokens := 0
 	defer func() {
+		var (
+			modelName string
+			errorType string
+		)
+		if invocation.Model != nil {
+			modelName = invocation.Model.Info().Name
+		}
 		requestDuration := time.Since(start)
-		itelemetry.RecordChatRequestDuration(ctx, invocation.Model.Info().Name, invocation.Session, requestDuration)
-		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, invocation.Model.Info().Name, invocation.Session, firstTokenTimeDuration)
-		itelemetry.RecordChatInputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(totalPromptTokens))
-		itelemetry.RecordChatOutputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(totalCompletionTokens))
+
+		if lastEvent != nil && lastEvent.Error != nil {
+			errorType = lastEvent.Error.Type
+		}
+		itelemetry.RecordChatRequestDuration(ctx, modelName, invocation.Session, requestDuration, errorType)
+		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, modelName, invocation.Session, firstTokenTimeDuration)
+		itelemetry.RecordChatInputTokenUsage(ctx, modelName, invocation.Session, int64(totalPromptTokens))
+		itelemetry.RecordChatOutputTokenUsage(ctx, modelName, invocation.Session, int64(totalCompletionTokens))
 		if tokens, duration := totalCompletionTokens-firstCompleteToken, requestDuration-firstTokenTimeDuration; tokens > 0 && duration > 0 {
-			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, invocation.Model.Info().Name, invocation.Session, duration/time.Duration(tokens))
+			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, modelName, invocation.Session, duration/time.Duration(tokens))
 		} else if tokens == 0 && totalCompletionTokens > 0 {
-			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, invocation.Model.Info().Name, invocation.Session, requestDuration/time.Duration(totalCompletionTokens))
+			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, modelName, invocation.Session, requestDuration/time.Duration(totalCompletionTokens))
 		}
 	}()
 
