@@ -232,8 +232,12 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		sess = invocation.Session
 	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolEvent)
-	itelemetry.IncExecuteToolRequestCnt(ctx, invocation.Model.Info().Name, toolCall.Function.Name, sess)
-	itelemetry.RecordExecuteToolOperationDuration(ctx, invocation.Model.Info().Name, toolCall.Function.Name, sess, time.Since(startTime))
+	var modelName string
+	if invocation != nil && invocation.Model != nil {
+		modelName = invocation.Model.Info().Name
+	}
+	itelemetry.IncExecuteToolRequestCnt(ctx, modelName, toolCall.Function.Name, sess)
+	itelemetry.RecordExecuteToolOperationDuration(ctx, modelName, toolCall.Function.Name, sess, time.Since(startTime))
 	return toolEvent, nil
 }
 

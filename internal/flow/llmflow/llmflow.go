@@ -170,13 +170,13 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 	var span oteltrace.Span
-	if invocation.Model == nil {
-		_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(""))
-	} else {
-		_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(invocation.Model.Info().Name))
+	var modelName string
+	if invocation.Model != nil {
+		modelName = invocation.Model.Info().Name
 	}
+	_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
-	itelemetry.IncChatRequestCnt(ctx, invocation.Model.Info().Name, invocation.Session)
+	itelemetry.IncChatRequestCnt(ctx, modelName, invocation.Session)
 	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {

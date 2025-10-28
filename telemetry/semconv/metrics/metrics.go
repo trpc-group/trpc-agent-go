@@ -19,6 +19,7 @@ const (
 	KeyTRPCAgentGoOutputTokenType = "output" // #nosec G101 - this is a metric key name, not a credential.
 
 	/////////////// client ////////////////////////
+
 	// MetricGenAIClientTokenUsage represents the usage of client token.
 	MetricGenAIClientTokenUsage = "gen_ai.client.token.usage" // #nosec G101 - this is a metric key name, not a credential.
 	// MetricTRPCAgentGoClientInputTokenUsage represents the usage of input token.
