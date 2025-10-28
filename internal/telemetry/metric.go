@@ -38,20 +38,25 @@ var (
 )
 
 // IncChatRequestCnt increments the chat request counter by 1 with the provided model name and session attributes.
-func IncChatRequestCnt(ctx context.Context, modelName string, sess *session.Session) {
+func IncChatRequestCnt(ctx context.Context, modelName string, sess *session.Session, agentName string, errorType string) {
 	appName, userID, sessionID := sessionInfo(sess)
-	ChatMetricTRPCAgentGoClientRequestCnt.Add(ctx, 1,
-		metric.WithAttributes(attribute.String(KeyGenAIOperationName, OperationChat),
-			attribute.String(KeyGenAISystem, modelName),
-			attribute.String(KeyTRPCAgentGoAppName, appName),
-			attribute.String(KeyTRPCAgentGoUserID, userID),
-			attribute.String(KeyGenAIConversationID, sessionID),
-		))
+	attrs := []attribute.KeyValue{
+		attribute.String(KeyGenAIOperationName, OperationChat),
+		attribute.String(KeyGenAISystem, modelName),
+		attribute.String(KeyTRPCAgentGoAppName, appName),
+		attribute.String(KeyTRPCAgentGoUserID, userID),
+		attribute.String(KeyGenAIConversationID, sessionID),
+		attribute.String(KeyGenAIAgentName, agentName),
+	}
+	if errorType != "" {
+		attrs = append(attrs, attribute.String(KeyErrorType, errorType))
+	}
+	ChatMetricTRPCAgentGoClientRequestCnt.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
 // RecordChatTimePerOutputTokenDuration records the average time per output token for a chat operation.
 // The duration represents the time spent per token during the decode phase of LLM inference.
-func RecordChatTimePerOutputTokenDuration(ctx context.Context, modelName string, sess *session.Session, duration time.Duration) {
+func RecordChatTimePerOutputTokenDuration(ctx context.Context, modelName string, sess *session.Session, duration time.Duration, agentName string) {
 	appName, userID, sessionID := sessionInfo(sess)
 	ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(ctx, duration.Seconds(),
 		metric.WithAttributes(attribute.String(KeyGenAIOperationName, OperationChat),
@@ -59,20 +64,21 @@ func RecordChatTimePerOutputTokenDuration(ctx context.Context, modelName string,
 			attribute.String(KeyTRPCAgentGoAppName, appName),
 			attribute.String(KeyTRPCAgentGoUserID, userID),
 			attribute.String(KeyGenAIConversationID, sessionID),
+			attribute.String(KeyGenAIAgentName, agentName),
 		))
 }
 
 // RecordChatInputTokenUsage records the number of input (prompt) tokens used in a chat operation.
-func RecordChatInputTokenUsage(ctx context.Context, modelName string, sess *session.Session, usage int64) {
-	recordChatTokenUsage(ctx, modelName, sess, usage, metrics.KeyTRPCAgentGoInputTokenType)
+func RecordChatInputTokenUsage(ctx context.Context, modelName string, sess *session.Session, usage int64, agentName string) {
+	recordChatTokenUsage(ctx, modelName, sess, usage, metrics.KeyTRPCAgentGoInputTokenType, agentName)
 }
 
 // RecordChatOutputTokenUsage records the number of output (completion) tokens generated in a chat operation.
-func RecordChatOutputTokenUsage(ctx context.Context, modelName string, sess *session.Session, usage int64) {
-	recordChatTokenUsage(ctx, modelName, sess, usage, metrics.KeyTRPCAgentGoOutputTokenType)
+func RecordChatOutputTokenUsage(ctx context.Context, modelName string, sess *session.Session, usage int64, agentName string) {
+	recordChatTokenUsage(ctx, modelName, sess, usage, metrics.KeyTRPCAgentGoOutputTokenType, agentName)
 }
 
-func recordChatTokenUsage(ctx context.Context, modelName string, sess *session.Session, usage int64, tokenType string) {
+func recordChatTokenUsage(ctx context.Context, modelName string, sess *session.Session, usage int64, tokenType string, agentName string) {
 	appName, userID, sessionID := sessionInfo(sess)
 	ChatMetricGenAIClientTokenUsage.Record(ctx, usage,
 		metric.WithAttributes(attribute.String(KeyGenAIOperationName, OperationChat),
@@ -81,12 +87,13 @@ func recordChatTokenUsage(ctx context.Context, modelName string, sess *session.S
 			attribute.String(KeyTRPCAgentGoUserID, userID),
 			attribute.String(KeyGenAIConversationID, sessionID),
 			attribute.String(KeyGenAITokenType, tokenType),
+			attribute.String(KeyGenAIAgentName, agentName),
 		))
 }
 
 // RecordChatTimeToFirstTokenDuration records the time taken from request start until the first token is received.
 // This metric is important for measuring the prefill/prompt processing latency of LLM inference.
-func RecordChatTimeToFirstTokenDuration(ctx context.Context, modelName string, sess *session.Session, duration time.Duration) {
+func RecordChatTimeToFirstTokenDuration(ctx context.Context, modelName string, sess *session.Session, duration time.Duration, agentName string) {
 	appName, userID, sessionID := sessionInfo(sess)
 	ChatMetricTRPCAgentGoClientTimeToFirstToken.Record(ctx, duration.Seconds(),
 		metric.WithAttributes(attribute.String(KeyGenAIOperationName, OperationChat),
@@ -94,11 +101,12 @@ func RecordChatTimeToFirstTokenDuration(ctx context.Context, modelName string, s
 			attribute.String(KeyTRPCAgentGoAppName, appName),
 			attribute.String(KeyTRPCAgentGoUserID, userID),
 			attribute.String(KeyGenAIConversationID, sessionID),
+			attribute.String(KeyGenAIAgentName, agentName),
 		))
 }
 
 // RecordChatRequestDuration records the total duration of a chat request from start to completion.
-func RecordChatRequestDuration(ctx context.Context, modelName string, sess *session.Session, duration time.Duration, errorType string) {
+func RecordChatRequestDuration(ctx context.Context, modelName string, sess *session.Session, duration time.Duration, errorType string, agentName string) {
 	appName, userID, sessionID := sessionInfo(sess)
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAIOperationName, OperationChat),
@@ -106,6 +114,7 @@ func RecordChatRequestDuration(ctx context.Context, modelName string, sess *sess
 		attribute.String(KeyTRPCAgentGoAppName, appName),
 		attribute.String(KeyTRPCAgentGoUserID, userID),
 		attribute.String(KeyGenAIConversationID, sessionID),
+		attribute.String(KeyGenAIAgentName, agentName),
 	}
 	if errorType != "" {
 		attrs = append(attrs, attribute.String(KeyErrorType, errorType))

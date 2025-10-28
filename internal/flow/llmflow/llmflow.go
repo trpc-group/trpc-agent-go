@@ -176,13 +176,17 @@ func (f *Flow) runOneStep(
 	}
 	_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
-	itelemetry.IncChatRequestCnt(ctx, modelName, invocation.Session)
+
 	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
+	var errType string
+	if err != nil {
+		errType = err.Error()
+	}
+	itelemetry.IncChatRequestCnt(ctx, modelName, invocation.Session, invocation.AgentName, errType)
 	if err != nil {
 		return nil, err
 	}
-
 	// 3. Process streaming responses.
 	return f.processStreamingResponses(ctx, invocation, llmRequest, responseChan, eventChan, span)
 }
@@ -216,14 +220,14 @@ func (f *Flow) processStreamingResponses(
 		if lastEvent != nil && lastEvent.Error != nil {
 			errorType = lastEvent.Error.Type
 		}
-		itelemetry.RecordChatRequestDuration(ctx, modelName, invocation.Session, requestDuration, errorType)
-		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, modelName, invocation.Session, firstTokenTimeDuration)
-		itelemetry.RecordChatInputTokenUsage(ctx, modelName, invocation.Session, int64(totalPromptTokens))
-		itelemetry.RecordChatOutputTokenUsage(ctx, modelName, invocation.Session, int64(totalCompletionTokens))
+		itelemetry.RecordChatRequestDuration(ctx, modelName, invocation.Session, requestDuration, errorType, invocation.AgentName)
+		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, modelName, invocation.Session, firstTokenTimeDuration, invocation.AgentName)
+		itelemetry.RecordChatInputTokenUsage(ctx, modelName, invocation.Session, int64(totalPromptTokens), invocation.AgentName)
+		itelemetry.RecordChatOutputTokenUsage(ctx, modelName, invocation.Session, int64(totalCompletionTokens), invocation.AgentName)
 		if tokens, duration := totalCompletionTokens-firstCompleteToken, requestDuration-firstTokenTimeDuration; tokens > 0 && duration > 0 {
-			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, modelName, invocation.Session, duration/time.Duration(tokens))
+			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, modelName, invocation.Session, duration/time.Duration(tokens), invocation.AgentName)
 		} else if tokens == 0 && totalCompletionTokens > 0 {
-			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, modelName, invocation.Session, requestDuration/time.Duration(totalCompletionTokens))
+			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, modelName, invocation.Session, requestDuration/time.Duration(totalCompletionTokens), invocation.AgentName)
 		}
 	}()
 
