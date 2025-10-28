@@ -281,6 +281,16 @@ func WithMaxHistoryRuns(maxRuns int) Option {
 	}
 }
 
+// WithPreserveSameBranch controls whether messages from the same invocation
+// branch lineage (ancestor/descendant) should preserve their original roles
+// instead of being rewritten into user context when used as history.
+// Default is true.
+func WithPreserveSameBranch(preserve bool) Option {
+	return func(opts *Options) {
+		opts.PreserveSameBranch = preserve
+	}
+}
+
 // WithKnowledgeFilter sets the knowledge filter for the knowledge base.
 func WithKnowledgeFilter(filter map[string]any) Option {
 	return func(opts *Options) {
@@ -383,6 +393,13 @@ type Options struct {
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
 
+	// PreserveSameBranch controls whether the content request processor
+	// should preserve original roles (assistant/tool) for events that
+	// belong to the same invocation branch lineage (ancestor/descendant).
+	// When true, messages emitted within the same branch tree will not be
+	// rewritten into user context, keeping their original roles intact.
+	// Default is true (correct-by-default for multi-agent flows).
+	PreserveSameBranch bool
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
@@ -428,6 +445,9 @@ func New(name string, opts ...Option) *LLMAgent {
 	var options Options = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
 		EndInvocationAfterTransfer: true,
+		// Default to preserving same-branch lineage so assistant/tool roles
+		// from parent/child branches are retained for downstream agents.
+		PreserveSameBranch: true,
 	}
 
 	// Apply function options.
@@ -604,6 +624,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
+		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 

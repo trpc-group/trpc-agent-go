@@ -108,6 +108,48 @@ func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {
 	require.Equal(t, 0, crp.MaxHistoryRuns)
 }
 
+// Test that buildRequestProcessors wires PreserveSameBranch into
+// ContentRequestProcessor correctly.
+func TestBuildRequestProcessors_PreserveSameBranchWiring(t *testing.T) {
+	// true case - ensure option is propagated to content processor.
+	optsTrue := &Options{}
+	WithPreserveSameBranch(true)(optsTrue)
+	procs := buildRequestProcessors("tester", optsTrue)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.PreserveSameBranch)
+
+	// false case - ensure disabled option is propagated.
+	optsFalse := &Options{}
+	WithPreserveSameBranch(false)(optsFalse)
+	procs = buildRequestProcessors("tester", optsFalse)
+	crp = nil
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.False(t, crp.PreserveSameBranch)
+}
+
+// Test that WithPreserveSameBranch option sets the corresponding
+// field in Options correctly.
+func TestWithPreserveSameBranch_Option(t *testing.T) {
+	opts := &Options{}
+	WithPreserveSameBranch(true)(opts)
+	require.True(t, opts.PreserveSameBranch)
+
+	opts = &Options{}
+	WithPreserveSameBranch(false)(opts)
+	require.False(t, opts.PreserveSameBranch)
+}
+
 // Test that WithAddSessionSummary option sets the AddSessionSummary field correctly.
 func TestWithAddSessionSummary_Option(t *testing.T) {
 	opts := &Options{}

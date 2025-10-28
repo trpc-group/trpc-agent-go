@@ -101,6 +101,11 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 	processor := &ContentRequestProcessor{
 		IncludeContents:  IncludeContentsFiltered, // Default only to include filtered contents.
 		AddContextPrefix: true,                    // Default to add context prefix.
+		// Default to preserving roles for same-branch lineage so that
+		// downstream subagents keep assistant/tool roles from their parent
+		// agent's history. This produces interleaved user/assistant/tool,
+		// which is the expected default behavior for end users.
+		PreserveSameBranch: true,
 	}
 
 	// Apply options.
@@ -244,7 +249,12 @@ func (p *ContentRequestProcessor) isOtherAgentReply(
 		return false
 	}
 	if p.PreserveSameBranch && currentBranch != "" && evt.Branch != "" {
-		if evt.Branch == currentBranch || strings.HasPrefix(evt.Branch, currentBranch+agent.BranchDelimiter) {
+		// Treat events within the same branch lineage as non-foreign to
+		// preserve original roles. This includes both descendants and
+		// ancestors of the current branch.
+		if evt.Branch == currentBranch ||
+			strings.HasPrefix(evt.Branch, currentBranch+agent.BranchDelimiter) ||
+			strings.HasPrefix(currentBranch, evt.Branch+agent.BranchDelimiter) {
 			return false
 		}
 	}

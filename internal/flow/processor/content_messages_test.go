@@ -129,23 +129,116 @@ func TestProcessRequest_PreserveSameBranchKeepsRoles(t *testing.T) {
 		newSessionEventWithBranch("graph-node", "graph-agent", "graph-agent/graph-node", assistantMsg),
 	)
 
-	// Default behavior rewrites same-branch assistant events as user context.
+	// Default behavior now preserves same-branch assistant/tool roles.
 	defaultReq := &model.Request{}
 	defaultProc := NewContentRequestProcessor()
-	defaultProc.ProcessRequest(context.Background(), makeInvocation(sess), defaultReq, nil)
+	defaultProc.ProcessRequest(
+		context.Background(), makeInvocation(sess), defaultReq, nil,
+	)
 	require.Equal(t, 2, len(defaultReq.Messages))
 	require.Equal(t, model.RoleUser, defaultReq.Messages[0].Role)
-	require.Equal(t, model.RoleUser, defaultReq.Messages[1].Role)
-	require.Contains(t, defaultReq.Messages[1].Content, "For context")
+	require.Equal(t, model.RoleAssistant, defaultReq.Messages[1].Role)
+	require.Equal(t, assistantMsg.Content, defaultReq.Messages[1].Content)
 
-	// Enabling preserve option keeps assistant/tool roles intact for same-branch events.
+	// Explicitly enabling preserve matches the default behavior.
 	preserveReq := &model.Request{}
-	preserveProc := NewContentRequestProcessor(WithPreserveSameBranch(true))
-	preserveProc.ProcessRequest(context.Background(), makeInvocation(sess), preserveReq, nil)
+	preserveProc := NewContentRequestProcessor(
+		WithPreserveSameBranch(true),
+	)
+	preserveProc.ProcessRequest(
+		context.Background(), makeInvocation(sess), preserveReq, nil,
+	)
 	require.Equal(t, 2, len(preserveReq.Messages))
 	require.Equal(t, model.RoleUser, preserveReq.Messages[0].Role)
 	require.Equal(t, model.RoleAssistant, preserveReq.Messages[1].Role)
 	require.Equal(t, assistantMsg.Content, preserveReq.Messages[1].Content)
+
+	// Disabling preserve rewrites same-branch events as user context.
+	optOutReq := &model.Request{}
+	optOutProc := NewContentRequestProcessor(
+		WithPreserveSameBranch(false),
+	)
+	optOutProc.ProcessRequest(
+		context.Background(), makeInvocation(sess), optOutReq, nil,
+	)
+	require.Equal(t, 2, len(optOutReq.Messages))
+	require.Equal(t, model.RoleUser, optOutReq.Messages[0].Role)
+	require.Equal(t, model.RoleUser, optOutReq.Messages[1].Role)
+	require.Contains(t, optOutReq.Messages[1].Content, "For context")
+}
+
+// When the historical event branch is an ancestor or descendant of the current
+// branch, PreserveSameBranch (default: true) should keep assistant roles.
+func TestProcessRequest_PreserveSameBranch_AncestorDescendant(t *testing.T) {
+	makeInvocation := func(sess *session.Session) *agent.Invocation {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationMessage(
+				model.NewUserMessage("latest request"),
+			),
+			agent.WithInvocationEventFilterKey("graph-agent"),
+		)
+		inv.AgentName = "graph-agent"
+		inv.Branch = "graph-agent/child"
+		return inv
+	}
+
+	// ancestor: graph-agent
+	// descendant: graph-agent/child/grandchild
+	msgAncestor := model.NewAssistantMessage("from ancestor")
+	msgDesc := model.NewAssistantMessage("from descendant")
+
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEventWithBranch(
+			"graph-root", "graph-agent", "graph-agent", msgAncestor,
+		),
+		newSessionEventWithBranch(
+			"graph-leaf", "graph-agent",
+			"graph-agent/child/grandchild", msgDesc,
+		),
+	)
+
+	req := &model.Request{}
+	p := NewContentRequestProcessor() // preserve=true by default
+	p.ProcessRequest(context.Background(), makeInvocation(sess), req, nil)
+
+	require.Equal(t, 2, len(req.Messages))
+	require.Equal(t, model.RoleAssistant, req.Messages[0].Role)
+	require.Equal(t, msgAncestor.Content, req.Messages[0].Content)
+	require.Equal(t, model.RoleAssistant, req.Messages[1].Role)
+	require.Equal(t, msgDesc.Content, req.Messages[1].Content)
+}
+
+// When the historical event is on a different branch lineage, it should be
+// converted to user context even when preserve is true (default).
+func TestProcessRequest_CrossBranch_RewritesToUser(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationMessage(model.NewUserMessage("ask")),
+		agent.WithInvocationEventFilterKey("graph-agent"),
+	)
+	inv.AgentName = "graph-agent"
+	inv.Branch = "graph-agent"
+
+	// Cross-branch event (not same lineage). Use the same filter key so it is
+	// included by IncludeContentsFiltered.
+	msg := model.NewAssistantMessage("foreign content")
+	evt := newSessionEventWithBranch(
+		"other-agent", "graph-agent", "other-root", msg,
+	)
+
+	sess := &session.Session{}
+	sess.Events = append(sess.Events, evt)
+	inv.Session = sess
+
+	req := &model.Request{}
+	p := NewContentRequestProcessor() // preserve=true by default
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Equal(t, 1, len(req.Messages))
+	require.Equal(t, model.RoleUser, req.Messages[0].Role)
+	require.Contains(t, req.Messages[0].Content, "For context")
 }
 
 func newSessionEvent(author string, msg model.Message) event.Event {
