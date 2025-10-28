@@ -422,3 +422,118 @@ Memory Service 用于记录用户的偏好信息，支持个性化体验。
 1. [Runner](runner.md) - 学习推荐的使用方式
 2. [Session](session.md) - 了解会话管理
 3. [Multi-Agent](multiagent.md) - 学习多 Agent 系统
+
+## 运行时动态更新 Instruction
+
+你可以在 Agent 已经创建并被 Runner 使用的情况下，动态更新其行为文案：
+
+- Instruction：用于约束 Agent 行为的说明文本（追加到系统消息中）。
+- Global Instruction（系统提示词）：系统级前言（作为系统消息的前缀）。
+
+两者都可以在已有的 `LLMAgent` 实例上动态设置，新值会作用于后续的模型请求。
+
+示例
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+// 1）服务启动时只构建一次模型与 Agent
+mdl := openai.New("gpt-4o-mini", openai.Options{})
+llm := llmagent.New(
+    "support-bot",
+    llmagent.WithModel(mdl),
+    llmagent.WithInstruction("Be helpful and concise."),
+)
+run := runner.NewRunner("my-app", llm)
+
+// 2）运行中根据用户在后台修改的提示词，动态更新
+llm.SetInstruction("Translate all user inputs to French.")
+llm.SetGlobalInstruction("System: Safety first. No PII leakage.")
+
+// 3）之后的对话轮次将使用最新的提示词
+msg := model.NewUserMessage("Where is the nearest museum?")
+ch, err := run.Run(context.Background(), "u1", "s1", msg)
+_ = ch; _ = err
+```
+
+注意
+
+- 线程安全：上述设置方法是并发安全的，可在服务处理请求时调用。
+- 同一轮次内的效果：若一次调用过程中会触发多次模型请求（例如工具调用后再次提问），更新可能会对同一轮后续的请求生效。若需要“每次调用内保持稳定”，可在调用开始时确定或冻结提示词。
+- 个性化上下文：若需按用户/会话动态注入内容，优先使用指令中的占位符加会话状态注入（见上文“占位符变量”一节）。
+
+### 另一种方式：用占位符驱动动态 System Prompt
+
+如果不想在运行时调用 setter，也可以把 Instruction 写成模板，然后用会话状态（Session/App/User/Temp）来“喂”值。指令处理器会在每次请求时注入占位符。
+
+模式
+
+- 持久化“按用户”：写到 `user:*`，在模板里用 `{user:key}` 引用
+- 持久化“按应用”：写到 `app:*`，在模板里用 `{app:key}` 引用
+- 每轮一次（临时）：写入会话的 `temp:*` 命名空间，模板用 `{temp:key}`（不会持久化）
+
+示例：按用户动态提示词
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+svc := inmemory.NewSessionService()
+app, user, sid := "my-app", "u1", "s1"
+
+// 1）在指令模板里引用用户态 key
+llm := llmagent.New(
+  "dyn-agent",
+  llmagent.WithInstruction("{user:system_prompt}"),
+)
+run := runner.NewRunner(app, llm, runner.WithSessionService(svc))
+
+// 2）当用户在后台改设置时，更新用户态状态
+_ = svc.UpdateUserState(context.Background(), session.UserKey{AppName: app, UserID: user}, session.StateMap{
+  "system_prompt": []byte("You are a helpful assistant. Always answer in English."),
+})
+
+// 3）后续运行会通过占位符读取最新值
+_, _ = run.Run(context.Background(), user, sid, model.NewUserMessage("Hi!"))
+```
+
+示例：通过前置回调注入本轮临时值（temp）
+
+```go
+callbacks := &agent.AgentCallbacks{
+  BeforeAgent: []agent.BeforeAgentCallback{
+    func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+      if inv != nil && inv.Session != nil {
+        if inv.Session.State == nil { inv.Session.State = make(map[string][]byte) }
+        // 为“本轮”临时指定指令
+        inv.Session.State["temp:sys"] = []byte("Translate to French.")
+      }
+      return nil, nil
+    },
+  },
+}
+
+llm := llmagent.New(
+  "temp-agent",
+  llmagent.WithInstruction("{temp:sys}"),
+  llmagent.WithAgentCallbacks(callbacks),
+)
+```
+
+注意事项
+
+- 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要临时值时，直接往 `invocation.Session.State` 写（例如通过回调）。
+- 占位符是在“请求时”解析；只要你换了存储的值，下一次模型请求就会用新值，无需重建 Agent。

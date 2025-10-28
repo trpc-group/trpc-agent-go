@@ -12,328 +12,286 @@ package elasticsearch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"path"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	istorage "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
-// TestVectorStore_MockedTransport covers ensureIndex + CRUD without real ES using httptest.Server.
-func TestVectorStore_MockedTransport(t *testing.T) {
-	// In-memory state to mimic ES index + docs
-	indexCreated := false
-	docs := make(map[string]map[string]any)
+// mockClient is a mock implementation of istorage.Client for testing.
+type mockClient struct {
+	mu sync.RWMutex
 
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		w.Header().Set("Content-Type", "application/json")
+	// In-memory storage
+	indexExists bool
+	docs        map[string]map[string]any
 
-		p := r.URL.Path
-		_, last := path.Split(p)
+	// Configurable responses
+	searchHits  []map[string]any
+	countResult int
 
-		// HEAD /{index}
-		if r.Method == http.MethodHead && !strings.Contains(p, "_doc") {
-			if indexCreated {
-				w.WriteHeader(http.StatusOK)
-			} else {
-				w.WriteHeader(http.StatusNotFound)
-			}
-			return
-		}
-		// PUT /{index}
-		if r.Method == http.MethodPut && !strings.Contains(p, "_doc") && !strings.Contains(p, "_update") {
-			indexCreated = true
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
-			return
-		}
-		// POST/PUT /{index}/_doc/{id}
-		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.Contains(p, "/_doc/") && !strings.Contains(p, "_update") {
-			id := last
-			var m map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&m)
-			docs[id] = m
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
-			return
-		}
-		// GET /{index}/_doc/{id}
-		if r.Method == http.MethodGet && strings.Contains(p, "/_doc/") {
-			id := last
-			if d, ok := docs[id]; ok {
-				resp := map[string]any{"found": true, "_source": d}
-				json.NewEncoder(w).Encode(resp)
-				return
-			}
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(`{"found":false}`))
-			return
-		}
-		// POST /{index}/_update/{id}
-		if r.Method == http.MethodPost && strings.Contains(p, "_update/") {
-			id := last
-			var upd struct {
-				Doc map[string]any `json:"doc"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&upd)
-			if d, ok := docs[id]; ok {
-				for k, v := range upd.Doc {
-					d[k] = v
-				}
-				docs[id] = d
-			}
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
-			return
-		}
-		// DELETE /{index}/_doc/{id}
-		if r.Method == http.MethodDelete && strings.Contains(p, "/_doc/") {
-			id := last
-			delete(docs, id)
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`))
-			return
-		}
+	// Error simulation
+	pingError          error
+	createIndexError   error
+	indexDocError      error
+	getDocError        error
+	updateDocError     error
+	deleteDocError     error
+	searchError        error
+	countError         error
+	deleteByQueryError error
+	refreshError       error
 
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-
-	// Instantiate VectorStore pointing to httptest.Server
-	vs, err := New(
-		WithAddresses([]string{hs.URL}),
-		WithVectorDimension(3),
-		WithIndexName("test_index"),
-	)
-	require.NoError(t, err, "Failed to create vector store")
-	require.NotNil(t, vs, "Vector store should not be nil")
-	assert.Equal(t, "test_index", vs.option.indexName, "Expected index name 'test_index', got '%s'", vs.option.indexName)
-
-	ctx := context.Background()
-
-	// Add
-	doc := &document.Document{
-		ID:        "doc1",
-		Name:      "Name",
-		Content:   "Content",
-		Metadata:  map[string]any{"type": "test"},
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	embedding := []float64{0.1, 0.2, 0.3}
-	require.NoError(t, vs.Add(ctx, doc, embedding), "Failed to add document")
-
-	// Update
-	doc.Name = "Updated Name"
-	doc.UpdatedAt = time.Now()
-	require.NoError(t, vs.Update(ctx, doc, embedding), "Failed to update document")
-
-	// Delete
-	require.NoError(t, vs.Delete(ctx, "doc1"), "Failed to delete document")
+	// Call tracking
+	indexDocCalls      int
+	getDocCalls        int
+	updateDocCalls     int
+	deleteDocCalls     int
+	searchCalls        int
+	countCalls         int
+	deleteByQueryCalls int
+	refreshCalls       int
 }
 
-func TestParseSearchResultsVariants(t *testing.T) {
-	vs := &VectorStore{option: defaultOptions}
-	vs.option.scoreThreshold = 0.5
+var _ istorage.Client = (*mockClient)(nil)
 
-	// Case 1: empty hits
-	res, err := vs.parseSearchResults([]byte(`{"hits":{"hits":[]}}`))
-	require.NoError(t, err)
-	assert.Len(t, res.Results, 0)
+func newMockClient() *mockClient {
+	return &mockClient{
+		docs:       make(map[string]map[string]any),
+		searchHits: []map[string]any{},
+	}
+}
 
-	// Case 2: one below threshold, one above
-	payload := map[string]any{
+func (m *mockClient) Ping(ctx context.Context) error {
+	return m.pingError
+}
+
+func (m *mockClient) CreateIndex(ctx context.Context, indexName string, body []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.createIndexError != nil {
+		return m.createIndexError
+	}
+	m.indexExists = true
+	return nil
+}
+
+func (m *mockClient) DeleteIndex(ctx context.Context, indexName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.indexExists = false
+	return nil
+}
+
+func (m *mockClient) IndexExists(ctx context.Context, indexName string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.indexExists, nil
+}
+
+func (m *mockClient) IndexDoc(ctx context.Context, indexName, id string, body []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.indexDocCalls++
+
+	if m.indexDocError != nil {
+		return m.indexDocError
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return err
+	}
+	m.docs[id] = doc
+	return nil
+}
+
+func (m *mockClient) GetDoc(ctx context.Context, indexName, id string) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	m.getDocCalls++
+
+	if m.getDocError != nil {
+		return nil, m.getDocError
+	}
+
+	if doc, ok := m.docs[id]; ok {
+		result := map[string]any{
+			"found":   true,
+			"_source": doc,
+			"_id":     id,
+		}
+		return json.Marshal(result)
+	}
+
+	return json.Marshal(map[string]any{"found": false})
+}
+
+func (m *mockClient) UpdateDoc(ctx context.Context, indexName, id string, body []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.updateDocCalls++
+
+	if m.updateDocError != nil {
+		return m.updateDocError
+	}
+
+	var updateReq struct {
+		Doc json.RawMessage `json:"doc"`
+	}
+	if err := json.Unmarshal(body, &updateReq); err != nil {
+		return err
+	}
+
+	if doc, ok := m.docs[id]; ok {
+		var updates map[string]any
+		if err := json.Unmarshal(updateReq.Doc, &updates); err != nil {
+			return err
+		}
+		for k, v := range updates {
+			doc[k] = v
+		}
+		m.docs[id] = doc
+		return nil
+	}
+
+	return errors.New("document not found")
+}
+
+func (m *mockClient) DeleteDoc(ctx context.Context, indexName, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.deleteDocCalls++
+
+	if m.deleteDocError != nil {
+		return m.deleteDocError
+	}
+
+	delete(m.docs, id)
+	return nil
+}
+
+func (m *mockClient) Search(ctx context.Context, indexName string, body []byte) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	m.searchCalls++
+
+	if m.searchError != nil {
+		return nil, m.searchError
+	}
+
+	result := map[string]any{
 		"hits": map[string]any{
-			"hits": []map[string]any{
-				{"_score": 0.4, "_source": map[string]any{"id": "a", "name": "A", "content": "x"}},
-				{"_score": 0.7, "_source": map[string]any{"id": "b", "name": "B", "content": "y"}},
-			},
+			"hits": m.searchHits,
 		},
 	}
-	b, _ := json.Marshal(payload)
-	res, err = vs.parseSearchResults(b)
-	require.NoError(t, err)
-	assert.Len(t, res.Results, 1)
-	assert.Equal(t, "B", res.Results[0].Document.Name)
+	return json.Marshal(result)
 }
 
-func TestValidationErrors(t *testing.T) {
-	// Server that only handles HEAD/PUT for index and returns 200 for others
+func (m *mockClient) Count(ctx context.Context, indexName string, body []byte) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	m.countCalls++
+
+	if m.countError != nil {
+		return 0, m.countError
+	}
+
+	return m.countResult, nil
+}
+
+func (m *mockClient) DeleteByQuery(ctx context.Context, indexName string, body []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.deleteByQueryCalls++
+
+	if m.deleteByQueryError != nil {
+		return m.deleteByQueryError
+	}
+
+	// Simple implementation: clear all docs (for DeleteAll test)
+	m.docs = make(map[string]map[string]any)
+	return nil
+}
+
+func (m *mockClient) Refresh(ctx context.Context, indexName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.refreshCalls++
+
+	return m.refreshError
+}
+
+// Helper methods
+func (m *mockClient) SetSearchError(err error)        { m.searchError = err }
+func (m *mockClient) SetIndexDocError(err error)      { m.indexDocError = err }
+func (m *mockClient) SetGetDocError(err error)        { m.getDocError = err }
+func (m *mockClient) SetUpdateDocError(err error)     { m.updateDocError = err }
+func (m *mockClient) SetDeleteDocError(err error)     { m.deleteDocError = err }
+func (m *mockClient) SetCountError(err error)         { m.countError = err }
+func (m *mockClient) SetDeleteByQueryError(err error) { m.deleteByQueryError = err }
+
+func (m *mockClient) GetDocCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.docs)
+}
+
+func (m *mockClient) SetSearchHits(hits []map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.searchHits = hits
+}
+
+func (m *mockClient) SetCountResult(count int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.countResult = count
+}
+
+// Helper function to create VectorStore with mock client
+func newTestVectorStore(t *testing.T, mc *mockClient, opts ...Option) *VectorStore {
+	t.Helper()
+
+	option := defaultOptions
+	// Override defaults for testing
+	option.vectorDimension = 3
+	option.indexName = "test_index"
+
+	for _, opt := range opts {
+		opt(&option)
+	}
+
+	vs := &VectorStore{
+		client:          mc,
+		option:          option,
+		filterConverter: &esConverter{},
+	}
+
+	return vs
+}
+
+func TestSearchFilterMode(t *testing.T) {
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Elastic-Product", "Elasticsearch")
 		if r.Method == http.MethodHead {
 			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.Method == http.MethodPut {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	doc := &document.Document{ID: "x", Name: "n", Content: "c", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-
-	// Add invalids
-	assert.Error(t, vs.Add(ctx, nil, []float64{0.1, 0.2, 0.3})) // nil doc
-	assert.Error(t, vs.Add(ctx, doc, []float64{}))              // empty embedding
-	assert.Error(t, vs.Add(ctx, doc, []float64{0.1}))           // wrong dim
-
-	// Update invalids
-	assert.Error(t, vs.Update(ctx, nil, []float64{0.1, 0.2, 0.3})) // nil doc
-	assert.Error(t, vs.Update(ctx, doc, []float64{}))              // empty embedding
-	assert.Error(t, vs.Update(ctx, doc, []float64{0.1}))           // wrong dim
-
-	// Get invalid id
-	_, _, err = vs.Get(ctx, "")
-	assert.Error(t, err)
-
-	// Search nil query
-	_, err = vs.Search(ctx, nil)
-	assert.Error(t, err)
-
-	// Search empty vector
-	_, err = vs.Search(ctx, &vectorstore.SearchQuery{Vector: []float64{}, SearchMode: vectorstore.SearchModeVector})
-	assert.Error(t, err)
-
-	// Search wrong vector dimension
-	_, err = vs.Search(ctx, &vectorstore.SearchQuery{Vector: []float64{0.1, 0.2}, SearchMode: vectorstore.SearchModeVector})
-	assert.Error(t, err)
-}
-
-func TestServerErrorPaths(t *testing.T) {
-	// Mock server returns 500 on specific endpoints
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if strings.Contains(r.URL.Path, "_search") {
-			// Return a valid 200 for HEAD/PUT index; but here we need a failure on search body
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("err"))
-			return
-		}
-		if strings.Contains(r.URL.Path, "_doc/") && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
-			// Indexing error for Add
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		if strings.Contains(r.URL.Path, "_update/") && r.Method == http.MethodPost {
-			// Update error
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		if strings.Contains(r.URL.Path, "_doc/") && r.Method == http.MethodDelete {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodPut && !strings.Contains(r.URL.Path, "_doc") {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-	ctx := context.Background()
-
-	// Search should error
-	_, err = vs.Search(ctx, &vectorstore.SearchQuery{Vector: []float64{0.1, 0.2, 0.3}, SearchMode: vectorstore.SearchModeVector})
-	assert.Error(t, err)
-
-	// Add should error
-	err = vs.Add(ctx, &document.Document{ID: "id", Name: "n", Content: "c", CreatedAt: time.Now(), UpdatedAt: time.Now()}, []float64{0.1, 0.2, 0.3})
-	assert.Error(t, err)
-
-	// Update should error
-	err = vs.Update(ctx, &document.Document{ID: "id", Name: "n", Content: "c", CreatedAt: time.Now(), UpdatedAt: time.Now()}, []float64{0.1, 0.2, 0.3})
-	assert.Error(t, err)
-
-	// Delete should error
-	err = vs.Delete(ctx, "nope")
-	assert.Error(t, err)
-}
-
-func TestEnsureIndexExistsSkipsCreate(t *testing.T) {
-	var putCalls int32
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		// HEAD exists
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		// Count any PUT index calls (should be zero)
-		if r.Method == http.MethodPut && !strings.Contains(r.URL.Path, "_doc") {
-			atomic.AddInt32(&putCalls, 1)
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3), WithIndexName("idx"))
-	require.NoError(t, err)
-	require.NotNil(t, vs)
-	assert.Equal(t, int32(0), atomic.LoadInt32(&putCalls), "Index should not be created when already exists")
-}
-
-func TestGetNotFound(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodPut && !strings.Contains(r.URL.Path, "_doc") {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "_doc/") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-	_, _, err = vs.Get(context.Background(), "missing")
-	assert.Error(t, err)
-}
-
-func TestSearchSuccess(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.Method == http.MethodPut && !strings.Contains(r.URL.Path, "_doc") {
-			w.WriteHeader(http.StatusOK)
 			return
 		}
 		if strings.Contains(r.URL.Path, "_search") {
@@ -354,303 +312,13 @@ func TestSearchSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	res, err := vs.Search(context.Background(), &vectorstore.SearchQuery{
-		Vector:     []float64{0.1, 0.2, 0.3},
-		SearchMode: vectorstore.SearchModeVector,
+		Filter: &vectorstore.SearchFilter{
+			IDs: []string{"d1"},
+		},
+		SearchMode: vectorstore.SearchModeFilter,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, 1, len(res.Results))
 	assert.Equal(t, "N", res.Results[0].Document.Name)
-}
-
-// {"id":"i","title":"title-a","content":"content-a","page":1,"author":"author-a","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","embedding":[0.1,0.2,0.3]}}
-func TestSearchSuccess_withDocBuilder(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.Method == http.MethodPut && !strings.Contains(r.URL.Path, "_doc") {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if strings.Contains(r.URL.Path, "_search") {
-			payload := map[string]any{
-				"hits": map[string]any{
-					"hits": []map[string]any{
-						{"_score": 0.9, "_source": map[string]any{"id": "d1", "title": "title-a", "content": "content-a", "page": 1, "author": "author-a", "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z"}},
-						{"_score": 0.9, "_source": map[string]any{"id": "d2", "title": "title-b", "content": "content-b", "page": 2, "author": "author-b", "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z"}},
-					},
-				},
-			}
-			json.NewEncoder(w).Encode(payload)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-	docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
-		var source struct {
-			ID        string    `json:"id"`
-			Title     string    `json:"title"`
-			Content   string    `json:"content"`
-			Page      int       `json:"page"`
-			Author    string    `json:"author"`
-			CreatedAt time.Time `json:"created_at"`
-			UpdatedAt time.Time `json:"updated_at"`
-			Embedding []float64 `json:"embedding"`
-		}
-		if err := json.Unmarshal(hitSource, &source); err != nil {
-			return nil, nil, err
-		}
-		// Create document.
-		doc := &document.Document{
-			ID:        source.ID,
-			Name:      source.Title,
-			Content:   source.Content,
-			CreatedAt: source.CreatedAt,
-			UpdatedAt: source.UpdatedAt,
-			Metadata: map[string]any{
-				"page":   source.Page,
-				"author": source.Author,
-			},
-		}
-		return doc, source.Embedding, nil
-	}
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3), WithScoreThreshold(0.5), WithDocBuilder(docBuilder))
-	require.NoError(t, err)
-
-	res, err := vs.Search(context.Background(), &vectorstore.SearchQuery{
-		Vector:     []float64{0.1, 0.2, 0.3},
-		SearchMode: vectorstore.SearchModeVector,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Equal(t, 2, len(res.Results))
-	assert.Equal(t, "title-a", res.Results[0].Document.Name)
-	assert.Equal(t, 2, len(res.Results[0].Document.Metadata))
-	assert.Equal(t, 2, res.Results[1].Document.Metadata["page"])
-}
-
-func TestDeleteTwice(t *testing.T) {
-	var deletedOnce bool
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodPut && !strings.Contains(r.URL.Path, "_doc") {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "_doc/") {
-			if deletedOnce {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-			deletedOnce = true
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		// Index doc to allow deletion
-		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_doc/") {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-	ctx := context.Background()
-
-	// Add then delete twice
-	require.NoError(t, vs.Add(ctx, &document.Document{ID: "d", Name: "n", Content: "c", CreatedAt: time.Now(), UpdatedAt: time.Now()}, []float64{0.1, 0.2, 0.3}))
-	require.NoError(t, vs.Delete(ctx, "d"))
-	err = vs.Delete(ctx, "d")
-	assert.Error(t, err)
-}
-
-func TestGetFoundFalse200(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "_doc/") {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"found":false}`))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-	_, _, err = vs.Get(context.Background(), "id")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "document not found")
-}
-
-func TestGetInvalidResponseJSON(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "_doc/") {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("{")) // invalid JSON
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-	_, _, err = vs.Get(context.Background(), "id")
-	assert.Error(t, err)
-}
-
-func TestGetInvalidSource(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "_doc/") {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"found":true, "_source":"oops"}`))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-	_, _, err = vs.Get(context.Background(), "id")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid document source")
-}
-
-func TestGetMissingEmbedding(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "_doc/") {
-			w.WriteHeader(http.StatusOK)
-			// embedding absent
-			w.Write([]byte(`{"found":true, "_source": {"id":"i","name":"n","content":"c","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}}`))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-	_, _, err = vs.Get(context.Background(), "id")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "embedding vector not found")
-}
-
-func TestGetSuccess(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "_doc/") {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"found":true, "_source": {"id":"i","name":"n","content":"c","metadata":{"a":1},"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","embedding":[0.1,0.2,0.3]}}`))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3))
-	require.NoError(t, err)
-	d, emb, err := vs.Get(context.Background(), "id")
-	require.NoError(t, err)
-	require.NotNil(t, d)
-	assert.Equal(t, "i", d.ID)
-	assert.Equal(t, "n", d.Name)
-	assert.Equal(t, "c", d.Content)
-	assert.Equal(t, 3, len(emb))
-	assert.Equal(t, float64(1), d.Metadata["a"])
-	assert.Equal(t, "2024-01-01T00:00:00Z", d.CreatedAt.Format(time.RFC3339))
-	assert.Equal(t, "2024-01-01T00:00:00Z", d.UpdatedAt.Format(time.RFC3339))
-}
-
-func TestGetSuccess_withDocBuilder(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		if r.Method == http.MethodHead {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "_doc/") {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"found":true, "_source": {"id":"i","title":"title-a","content":"content-a","page":1,"author":"author-a","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","embedding":[0.1,0.2,0.3]}}`))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
-	}))
-	defer hs.Close()
-	docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
-		var source struct {
-			ID        string    `json:"id"`
-			Title     string    `json:"title"`
-			Content   string    `json:"content"`
-			Page      int       `json:"page"`
-			Author    string    `json:"author"`
-			CreatedAt time.Time `json:"created_at"`
-			UpdatedAt time.Time `json:"updated_at"`
-			Embedding []float64 `json:"embedding"`
-		}
-		if err := json.Unmarshal(hitSource, &source); err != nil {
-			return nil, nil, err
-		}
-		// Create document.
-		doc := &document.Document{
-			ID:        source.ID,
-			Name:      source.Title,
-			Content:   source.Content,
-			CreatedAt: source.CreatedAt,
-			UpdatedAt: source.UpdatedAt,
-			Metadata: map[string]any{
-				"page":   source.Page,
-				"author": source.Author,
-			},
-		}
-		return doc, source.Embedding, nil
-	}
-	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3), WithDocBuilder(docBuilder))
-	require.NoError(t, err)
-	d, emb, err := vs.Get(context.Background(), "id")
-	require.NoError(t, err)
-	require.NotNil(t, d)
-	assert.Equal(t, "i", d.ID)
-	assert.Equal(t, "title-a", d.Name)
-	assert.Equal(t, "content-a", d.Content)
-	assert.Equal(t, 3, len(emb))
-	assert.Equal(t, 2, len(d.Metadata))
-	assert.Equal(t, 1, d.Metadata["page"])
 }

@@ -155,6 +155,36 @@ func WithRequestID(requestID string) RunOption {
 	}
 }
 
+// WithModel sets the model for this specific run.
+// This allows temporarily switching the model for a single request without
+// affecting other requests or the agent's default model configuration.
+//
+// Example:
+//
+//	runner.Run(ctx, userID, sessionID, message,
+//	    agent.WithModel(customModel),
+//	)
+func WithModel(m model.Model) RunOption {
+	return func(opts *RunOptions) {
+		opts.Model = m
+	}
+}
+
+// WithModelName sets the model name for this specific run.
+// The agent will look up the model by name from its registered models.
+// This is useful when the agent has multiple models registered via WithModels.
+//
+// Example:
+//
+//	runner.Run(ctx, userID, sessionID, message,
+//	    agent.WithModelName("gpt-4"),
+//	)
+func WithModelName(name string) RunOption {
+	return func(opts *RunOptions) {
+		opts.ModelName = name
+	}
+}
+
 // WithA2ARequestOptions sets the A2A request options for the RunOptions.
 // These options will be passed to A2A agent's SendMessage and StreamMessage calls.
 // This allows passing dynamic HTTP headers or other request-specific options for each run.
@@ -246,6 +276,16 @@ type RunOptions struct {
 	// CustomAgentConfigs stores configurations for custom agents.
 	// Key: agent type, Value: agent-specific config.
 	CustomAgentConfigs map[string]any
+
+	// Model is the model to use for this specific run.
+	// If set, it temporarily overrides the agent's default model for this request only.
+	// This allows per-request model switching without affecting other concurrent requests.
+	Model model.Model
+
+	// ModelName is the name of the model to use for this specific run.
+	// The agent will look up the model by name from its registered models.
+	// If both Model and ModelName are set, Model takes precedence.
+	ModelName string
 }
 
 // NewInvocation create a new invocation

@@ -115,6 +115,11 @@ type Node struct {
 	// just for tool node.
 	toolCallbacks *tool.Callbacks
 
+	// enableParallelTools toggles parallel execution for Tools nodes.
+	// When true, multiple tool calls in a single assistant response are executed concurrently.
+	// Default is false (serial execution) for compatibility and safety.
+	enableParallelTools bool
+
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
 	llmGenerationConfig *model.GenerationConfig
@@ -124,6 +129,13 @@ type Node struct {
 	agentOutputMapper     SubgraphOutputMapper
 	agentIsolatedMessages bool
 	agentEventScope       string
+	// agentInputFromLastResponse indicates whether the agent node should
+	// construct the child invocation's user input from the parent's
+	// StateKeyLastResponse. When true, the framework will map
+	// last_response -> user_input for this agent node before invoking the
+	// sub-agent. This provides a concise way to implement "pass only the
+	// result" pipelines between agent nodes without extra glue nodes.
+	agentInputFromLastResponse bool
 }
 
 // Edge represents an edge in the graph.

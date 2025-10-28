@@ -16,13 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
-
-// --- Summary (CreateSessionSummary / GetSessionSummaryText) tests ---
 
 type fakeSummarizer struct {
 	allow bool
@@ -802,4 +801,368 @@ func TestRedisService_ProcessSummaryJob_Panic(t *testing.T) {
 	require.NotPanics(t, func() {
 		s.processSummaryJob(job)
 	})
+}
+
+func TestProcessSummaryJob(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, service *Service) *summaryJob
+		expectError bool
+	}{
+		{
+			name: "successful summary processing",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Add an event to make delta non-empty
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				err = service.AppendEvent(context.Background(), sess, e)
+				require.NoError(t, err)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summary job with branch filter",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid2"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Add an event
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				err = service.AppendEvent(context.Background(), sess, e)
+				require.NoError(t, err)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "branch1",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns false",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Enable summarizer that returns false
+				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns error",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid4"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Enable summarizer that returns error
+				service.opts.summarizer = &fakeErrorSummarizer{}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false, // Should not panic or error, just log
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+
+			service, err := NewService(WithRedisClientURL(redisURL))
+			require.NoError(t, err)
+			defer service.Close()
+
+			job := tt.setup(t, service)
+
+			// This should not panic
+			require.NotPanics(t, func() {
+				service.processSummaryJob(job)
+			})
+		})
+	}
+}
+
+type fakeErrorSummarizer struct{}
+
+func (f *fakeErrorSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	return "", fmt.Errorf("summarizer error")
+}
+func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestTryEnqueueJob(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, service *Service) (context.Context, *summaryJob, bool)
+		expectSend bool
+	}{
+		{
+			name: "successful enqueue",
+			setup: func(t *testing.T, service *Service) (context.Context, *summaryJob, bool) {
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+				job := &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+				}
+				return context.Background(), job, true
+			},
+			expectSend: true,
+		},
+		{
+			name: "queue full fallback",
+			setup: func(t *testing.T, service *Service) (context.Context, *summaryJob, bool) {
+				// Fill up the queue by creating a job that blocks
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
+				job := &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+				}
+
+				// Fill the channel to capacity
+			loop:
+				for i := 0; i < service.opts.summaryQueueSize; i++ {
+					select {
+					case service.summaryJobChans[0] <- job:
+						// Successfully sent
+					default:
+						// Channel is full
+						break loop
+					}
+				}
+
+				return context.Background(), job, false
+			},
+			expectSend: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+
+			service, err := NewService(
+				WithRedisClientURL(redisURL),
+				WithAsyncSummaryNum(1),
+				WithSummaryQueueSize(1),
+			)
+			require.NoError(t, err)
+			defer service.Close()
+
+			ctx, job, expected := tt.setup(t, service)
+			result := service.tryEnqueueJob(ctx, job)
+
+			assert.Equal(t, expected, result)
+		})
+	}
+}
+
+func TestStartAsyncSummaryWorker_Initialization(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(3),
+		WithSummaryQueueSize(100),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Verify channels are properly initialized
+	assert.Len(t, service.summaryJobChans, 3)
+	for i, ch := range service.summaryJobChans {
+		assert.NotNil(t, ch, "Channel %d should not be nil", i)
+		assert.Equal(t, 100, cap(ch), "Channel %d should have capacity 100", i)
+	}
+}
+
+func TestCreateSessionSummary_WithSessionTTL(t *testing.T) {
+	tests := []struct {
+		name         string
+		sessionTTL   time.Duration
+		shouldSetTTL bool
+	}{
+		{
+			name:         "with session TTL",
+			sessionTTL:   30 * time.Second,
+			shouldSetTTL: true,
+		},
+		{
+			name:         "without session TTL",
+			sessionTTL:   0,
+			shouldSetTTL: false,
+		},
+		{
+			name:         "with negative session TTL",
+			sessionTTL:   -1 * time.Second,
+			shouldSetTTL: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+
+			s, err := NewService(
+				WithRedisClientURL(redisURL),
+				WithSessionTTL(tt.sessionTTL),
+			)
+			require.NoError(t, err)
+			defer s.Close()
+
+			// Create a session and append one valid event to make delta non-empty.
+			key := session.Key{AppName: "app", UserID: "u", SessionID: "sid"}
+			sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+			require.NoError(t, err)
+
+			e := event.New("inv", "author")
+			e.Timestamp = time.Now()
+			e.Response = &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleUser, Content: "hello"},
+			}}}
+			require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+			// Enable summarizer to produce a summary and trigger TTL logic.
+			s.opts.summarizer = &fakeSummarizer{allow: true, out: "sum-text"}
+			require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", false))
+
+			// Verify TTL is set on the summary hash if sessionTTL > 0.
+			client := buildRedisClient(t, redisURL)
+			sumKey := getSessionSummaryKey(key)
+			ttl := client.TTL(context.Background(), sumKey)
+
+			if tt.shouldSetTTL {
+				require.NoError(t, ttl.Err())
+				assert.True(t, ttl.Val() > 0, "TTL should be set when sessionTTL > 0")
+			} else {
+				// When sessionTTL is 0 or negative, TTL should not be set
+				// (miniredis returns -1 for no TTL)
+				require.NoError(t, ttl.Err())
+				assert.True(t, ttl.Val() <= 0, "TTL should not be set when sessionTTL <= 0")
+			}
+		})
+	}
+}
+
+func TestProcessSummaryJob_WithSessionTTL(t *testing.T) {
+	tests := []struct {
+		name         string
+		sessionTTL   time.Duration
+		shouldSetTTL bool
+	}{
+		{
+			name:         "with session TTL",
+			sessionTTL:   30 * time.Second,
+			shouldSetTTL: true,
+		},
+		{
+			name:         "without session TTL",
+			sessionTTL:   0,
+			shouldSetTTL: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+
+			s, err := NewService(
+				WithRedisClientURL(redisURL),
+				WithSessionTTL(tt.sessionTTL),
+			)
+			require.NoError(t, err)
+			defer s.Close()
+
+			// Create a session and append one valid event.
+			key := session.Key{AppName: "app", UserID: "u", SessionID: "sid"}
+			sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+			require.NoError(t, err)
+
+			e := event.New("inv", "author")
+			e.Timestamp = time.Now()
+			e.Response = &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleUser, Content: "hello"},
+			}}}
+			require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+			// Enable summarizer.
+			s.opts.summarizer = &fakeSummarizer{allow: true, out: "async-summary"}
+
+			// Create summary job and process it.
+			job := &summaryJob{
+				sessionKey: key,
+				filterKey:  "",
+				force:      false,
+				session:    sess,
+			}
+
+			// This should not panic and should set TTL if sessionTTL > 0.
+			require.NotPanics(t, func() {
+				s.processSummaryJob(job)
+			})
+
+			// Verify TTL is set on the summary hash if sessionTTL > 0.
+			client := buildRedisClient(t, redisURL)
+			sumKey := getSessionSummaryKey(key)
+			ttl := client.TTL(context.Background(), sumKey)
+
+			if tt.shouldSetTTL {
+				require.NoError(t, ttl.Err())
+				assert.True(t, ttl.Val() > 0, "TTL should be set when sessionTTL > 0")
+			} else {
+				// When sessionTTL is 0, TTL should not be set
+				require.NoError(t, ttl.Err())
+				assert.True(t, ttl.Val() <= 0, "TTL should not be set when sessionTTL <= 0")
+			}
+		})
+	}
 }

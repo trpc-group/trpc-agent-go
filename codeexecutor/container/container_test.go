@@ -10,16 +10,29 @@
 package container
 
 import (
+	"archive/tar"
+	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/docker/docker/api"
 	tcontainer "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -53,6 +66,1414 @@ func dockerHost() (string, error) {
 	return host, nil
 }
 
+func newFakeDockerClient(t *testing.T, handler http.HandlerFunc) (*client.Client, func()) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(handler))
+
+	parsed, err := url.Parse(server.URL)
+	if !assert.NoError(t, err) {
+		server.Close()
+		return nil, func() {}
+	}
+
+	cli, err := client.NewClientWithOpts(
+		client.WithHost(fmt.Sprintf("tcp://%s", parsed.Host)),
+		client.WithVersion(api.DefaultVersion),
+	)
+	if !assert.NoError(t, err) {
+		server.Close()
+		return nil, func() {}
+	}
+
+	cleanup := func() {
+		if cli != nil {
+			assert.NoError(t, cli.Close())
+		}
+		server.Close()
+	}
+
+	return cli, cleanup
+}
+
+func writeHijackStream(t *testing.T, conn net.Conn, buf *bufio.ReadWriter, stdout, stderr string) {
+	t.Helper()
+
+	_, err := buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n")
+	assert.NoError(t, err)
+
+	if stdout != "" {
+		writeDockerFrame(t, buf, 1, stdout)
+	}
+	if stderr != "" {
+		writeDockerFrame(t, buf, 2, stderr)
+	}
+	assert.NoError(t, buf.Flush())
+
+	if closer, ok := conn.(interface{ CloseWrite() error }); ok {
+		assert.NoError(t, closer.CloseWrite())
+	}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_ = conn.Close()
+	}()
+}
+
+func writeDockerFrame(t *testing.T, w io.Writer, streamType byte, data string) {
+	t.Helper()
+
+	header := make([]byte, 8)
+	header[0] = streamType
+	binary.BigEndian.PutUint32(header[4:], uint32(len(data)))
+
+	_, err := w.Write(header)
+	assert.NoError(t, err)
+
+	if data != "" {
+		_, err = w.Write([]byte(data))
+		assert.NoError(t, err)
+	}
+}
+
+func TestCodeExecutor_ExecuteCodeWithoutContainer(t *testing.T) {
+	exec := &CodeExecutor{}
+	_, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{})
+	assert.Error(t, err)
+}
+
+func TestCreateBuildContext(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "sample.txt")
+	assert.NoError(t, os.WriteFile(targetFile, []byte("payload"), 0o644))
+
+	reader, err := createBuildContext(tempDir)
+	assert.NoError(t, err)
+	defer reader.Close()
+
+	tarReader := tar.NewReader(reader)
+	found := false
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		assert.NoError(t, err)
+
+		if header.Name == "sample.txt" {
+			data, err := io.ReadAll(tarReader)
+			assert.NoError(t, err)
+			assert.Equal(t, "payload", string(data))
+			found = true
+			break
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestGenerateContainerName(t *testing.T) {
+	name := generateContainerName()
+	assert.True(t, strings.HasPrefix(name, defaultContainerNamePrefix))
+	assert.Greater(t, len(name), len(defaultContainerNamePrefix))
+}
+
+func TestNew_WithMissingImageAndDockerfile(t *testing.T) {
+	_, err := New(WithContainerConfig(tcontainer.Config{}))
+	assert.Error(t, err)
+}
+
+func TestNew_WithDockerFilePathSetsAbsolute(t *testing.T) {
+	tempDir := t.TempDir()
+
+	_, err := New(
+		WithDockerFilePath(tempDir),
+		WithHost("invalid-host"),
+	)
+	assert.Error(t, err)
+}
+
+func TestNew_DefaultHostInitError(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
+
+	_, err := New(
+		WithDockerFilePath(tempDir),
+	)
+	assert.Error(t, err)
+}
+
+func TestNew_FilepathAbsError(t *testing.T) {
+	original, err := os.Getwd()
+	assert.NoError(t, err)
+
+	tempDir := t.TempDir()
+	assert.NoError(t, os.Chdir(tempDir))
+	assert.NoError(t, os.RemoveAll(tempDir))
+
+	t.Cleanup(func() {
+		assert.NoError(t, os.Chdir(original))
+	})
+
+	_, err = New(WithDockerFilePath("Dockerfile"))
+	assert.Error(t, err)
+}
+
+func TestNew_Success(t *testing.T) {
+	const execID = "exec-new"
+	var inspectCalls int
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == "/_ping":
+			w.Header().Set("API-Version", api.DefaultVersion)
+			_, _ = w.Write([]byte("OK"))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/cid/json"):
+			inspectCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if inspectCalls == 1 {
+				_, _ = w.Write([]byte(`{"State":{"Running":true,"Status":"running","ExitCode":0}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ID":"cid","Name":"/test","Image":"python:3.9-slim","State":{"Running":true,"Status":"running","ExitCode":0}}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"Id":"%s"}`, execID)))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			hj, ok := w.(http.Hijacker)
+			assert.True(t, ok)
+			conn, buffer, err := hj.Hijack()
+			assert.NoError(t, err)
+			writeHijackStream(t, conn, buffer, "", "")
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/stop"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(handler))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	host := fmt.Sprintf("tcp://%s", parsed.Host)
+
+	exec, err := New(
+		WithHost(host),
+		WithContainerConfig(tcontainer.Config{
+			Image: "python:3.9-slim",
+			Cmd:   []string{"tail", "-f", "/dev/null"},
+		}),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, exec)
+	assert.NotNil(t, exec.container)
+	assert.Equal(t, "python:3.9-slim", exec.container.Image)
+	assert.Equal(t, "running", exec.container.State)
+	assert.NoError(t, exec.Close())
+}
+
+func TestWithHostConfigOption(t *testing.T) {
+	optionCfg := tcontainer.HostConfig{AutoRemove: false, NetworkMode: "bridge"}
+	exec := &CodeExecutor{}
+
+	WithHostConfig(optionCfg)(exec)
+	assert.Equal(t, optionCfg.AutoRemove, exec.hostConfig.AutoRemove)
+	assert.Equal(t, optionCfg.NetworkMode, exec.hostConfig.NetworkMode)
+}
+
+func TestWithContainerNameOption(t *testing.T) {
+	exec := &CodeExecutor{}
+	WithContainerName("custom")(exec)
+	assert.Equal(t, "custom", exec.containerName)
+}
+
+func TestEnsureImageExists_ImagePresent(t *testing.T) {
+	targetImage := "example/image:latest"
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`[{"RepoTags":["%s"]}]`, targetImage)))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: targetImage,
+		},
+	}
+
+	assert.NoError(t, exec.ensureImageExists(context.Background()))
+}
+
+func TestEnsureImageExists_PullImage(t *testing.T) {
+	targetImage := "example/image:latest"
+	var pulled atomic.Bool
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/images/create"):
+			pulled.Store(true)
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write([]byte(`{"status":"pulling"}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: targetImage,
+		},
+	}
+
+	assert.NoError(t, exec.ensureImageExists(context.Background()))
+	assert.True(t, pulled.Load(), "expected image to be pulled")
+}
+
+func TestEnsureImageExists_PullError(t *testing.T) {
+	targetImage := "example/image:latest"
+	var pullAttempt bool
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/images/create"):
+			pullAttempt = true
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`error`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: targetImage,
+		},
+	}
+
+	err := exec.ensureImageExists(context.Background())
+	assert.Error(t, err)
+	assert.True(t, pullAttempt)
+}
+
+func TestEnsureImageExists_ListError(t *testing.T) {
+	var listCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			listCalled = true
+			http.Error(w, "list fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "example/image:latest",
+		},
+	}
+
+	err := exec.ensureImageExists(context.Background())
+	assert.Error(t, err)
+	assert.True(t, listCalled)
+}
+
+func TestEnsureImageExists_ReadPullError(t *testing.T) {
+	var pullCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/images/create"):
+			pullCalled = true
+			w.Header().Set("Content-Length", "10")
+			_, _ = w.Write([]byte("12345"))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "example/image:latest",
+		},
+	}
+
+	err := exec.ensureImageExists(context.Background())
+	assert.Error(t, err)
+	assert.True(t, pullCalled)
+}
+
+func TestExecuteCode_UnsupportedLanguage(t *testing.T) {
+	exec := &CodeExecutor{
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Code: "puts 'hi'", Language: "ruby"},
+		},
+	}
+
+	result, err := exec.ExecuteCode(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Contains(t, result.Output, "unsupported language: ruby")
+}
+
+func TestExecuteCode_BashExecCreateError(t *testing.T) {
+	var execCreateCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			execCreateCalled = true
+			http.Error(w, "boom", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Code: "echo hi", Language: "bash"},
+		},
+	}
+
+	_, err := exec.ExecuteCode(context.Background(), input)
+	assert.Error(t, err)
+	assert.True(t, execCreateCalled)
+}
+
+func TestExecuteCode_AttachError(t *testing.T) {
+	const execID = "exec-1"
+	var execStartCalled bool
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"Id":"%s"}`, execID)))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			execStartCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Code: "print('test')", Language: "python"},
+		},
+	}
+
+	_, err := exec.ExecuteCode(context.Background(), input)
+	assert.Error(t, err)
+	assert.True(t, execStartCalled)
+}
+
+func TestExecuteCode_Success(t *testing.T) {
+	type execData struct {
+		stdout string
+		stderr string
+	}
+
+	outputs := []execData{
+		{stdout: "python output\n"},
+		{stdout: "bash output\n", stderr: "bash warn\n"},
+	}
+
+	var (
+		mu         sync.Mutex
+		callIndex  int
+		outputByID = make(map[string]execData)
+	)
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			mu.Lock()
+			defer mu.Unlock()
+			if callIndex >= len(outputs) {
+				assert.Failf(t, "unexpected exec create call", "%d", callIndex)
+				return
+			}
+			execID := fmt.Sprintf("exec-%d", callIndex)
+			outputByID[execID] = outputs[callIndex]
+			callIndex++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"Id":"%s"}`, execID)))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"):
+			mu.Lock()
+			defer mu.Unlock()
+			for execID, data := range outputByID {
+				if strings.Contains(r.URL.Path, "/exec/"+execID+"/start") {
+					hj, ok := w.(http.Hijacker)
+					assert.True(t, ok)
+					conn, buffer, err := hj.Hijack()
+					assert.NoError(t, err)
+					writeHijackStream(t, conn, buffer, data.stdout, data.stderr)
+					delete(outputByID, execID)
+					return
+				}
+			}
+			assert.Failf(t, "unexpected exec start path", "%s", r.URL.Path)
+			return
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Code: "print('python')", Language: "python"},
+			{Code: "echo 'bash'", Language: "bash"},
+		},
+	}
+
+	result, err := exec.ExecuteCode(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Contains(t, result.Output, "python output\n")
+	assert.Contains(t, result.Output, "bash output\n")
+	assert.Contains(t, result.Output, "bash warn\n")
+}
+
+func TestVerifyPythonInstallation_CreateError(t *testing.T) {
+	var execCreateCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			execCreateCalled = true
+			http.Error(w, "failed", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	err := exec.verifyPythonInstallation(context.Background())
+	assert.Error(t, err)
+	assert.True(t, execCreateCalled)
+}
+
+func TestVerifyPythonInstallation_AttachError(t *testing.T) {
+	const execID = "exec-verify"
+	var execStartCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"Id":"%s"}`, execID)))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			execStartCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	err := exec.verifyPythonInstallation(context.Background())
+	assert.Error(t, err)
+	assert.True(t, execStartCalled)
+}
+
+func TestVerifyPythonInstallation_NotInstalled(t *testing.T) {
+	const execID = "exec-verify"
+	var inspectCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"Id":"%s"}`, execID)))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			hj, ok := w.(http.Hijacker)
+			assert.True(t, ok)
+			conn, buffer, err := hj.Hijack()
+			assert.NoError(t, err)
+			writeHijackStream(t, conn, buffer, "", "")
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
+			inspectCalled = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":1}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	err := exec.verifyPythonInstallation(context.Background())
+	assert.Error(t, err)
+	assert.True(t, inspectCalled)
+}
+
+func TestVerifyPythonInstallation_Success(t *testing.T) {
+	const execID = "exec-verify"
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"Id":"%s"}`, execID)))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			hj, ok := w.(http.Hijacker)
+			assert.True(t, ok)
+			conn, buffer, err := hj.Hijack()
+			assert.NoError(t, err)
+			writeHijackStream(t, conn, buffer, "", "")
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	err := exec.verifyPythonInstallation(context.Background())
+	assert.NoError(t, err)
+}
+
+func TestVerifyPythonInstallation_InspectError(t *testing.T) {
+	const execID = "exec-verify"
+	var inspectCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"Id":"%s"}`, execID)))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			hj, ok := w.(http.Hijacker)
+			assert.True(t, ok)
+			conn, buffer, err := hj.Hijack()
+			assert.NoError(t, err)
+			writeHijackStream(t, conn, buffer, "", "")
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
+			inspectCalled = true
+			http.Error(w, "inspect error", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+
+	err := exec.verifyPythonInstallation(context.Background())
+	assert.Error(t, err)
+	assert.True(t, inspectCalled)
+}
+
+func TestBuildDockerImage_Success(t *testing.T) {
+	var received bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/build"):
+			_, err := io.Copy(io.Discard, r.Body)
+			assert.NoError(t, err)
+			received = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"stream":"done"}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	tempDir := t.TempDir()
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644))
+
+	exec := &CodeExecutor{
+		client:         cli,
+		dockerFilePath: tempDir,
+		containerConfig: tcontainer.Config{
+			Image: "example/image:latest",
+		},
+	}
+
+	assert.NoError(t, exec.buildDockerImage(context.Background()))
+	assert.True(t, received)
+}
+
+func TestBuildDockerImage_Error(t *testing.T) {
+	var buildCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/build"):
+			buildCalled = true
+			http.Error(w, "fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	tempDir := t.TempDir()
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644))
+
+	exec := &CodeExecutor{
+		client:         cli,
+		dockerFilePath: tempDir,
+		containerConfig: tcontainer.Config{
+			Image: "example/image:latest",
+		},
+	}
+
+	err := exec.buildDockerImage(context.Background())
+	assert.Error(t, err)
+	assert.True(t, buildCalled)
+}
+
+func TestBuildDockerImage_ReadOutputError(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/build"):
+			w.Header().Set("Content-Length", "10")
+			_, _ = w.Write([]byte("12345"))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	tempDir := t.TempDir()
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644))
+
+	exec := &CodeExecutor{
+		client:         cli,
+		dockerFilePath: tempDir,
+		containerConfig: tcontainer.Config{
+			Image: "example/image:latest",
+		},
+	}
+
+	assert.NoError(t, exec.buildDockerImage(context.Background()))
+}
+
+func TestInitContainer_CreateError(t *testing.T) {
+	var createCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			createCalled = true
+			http.Error(w, "create fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "python:3.9-slim",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	err := exec.initContainer()
+	assert.Error(t, err)
+	assert.True(t, createCalled)
+}
+
+func TestInitContainer_StartError(t *testing.T) {
+	var startCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
+			startCalled = true
+			http.Error(w, "start fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "python:3.9-slim",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	err := exec.initContainer()
+	assert.Error(t, err)
+	assert.True(t, startCalled)
+}
+
+func TestInitContainer_WaitError(t *testing.T) {
+	var inspectCalls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/cid/json"):
+			inspectCalls++
+			if inspectCalls == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"State":{"Running":false,"Status":"exited","ExitCode":2}}`))
+				return
+			}
+			assert.Failf(t, "unexpected inspect call", "%d", inspectCalls)
+			return
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "python:3.9-slim",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	err := exec.initContainer()
+	assert.Error(t, err)
+	assert.Equal(t, 1, inspectCalls)
+}
+
+func TestInitContainer_InspectError(t *testing.T) {
+	var inspectCalls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/cid/json"):
+			inspectCalls++
+			if inspectCalls == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"State":{"Running":true,"Status":"running","ExitCode":0}}`))
+				return
+			}
+			http.Error(w, "inspect fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "python:3.9-slim",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	err := exec.initContainer()
+	assert.Error(t, err)
+	assert.Equal(t, 2, inspectCalls)
+}
+
+func TestInitContainer_NotRunning(t *testing.T) {
+	var inspectCalls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/cid/json"):
+			inspectCalls++
+			if inspectCalls == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"State":{"Running":true,"Status":"running","ExitCode":0}}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"State":{"Running":false,"Status":"created","ExitCode":0}}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "python:3.9-slim",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	err := exec.initContainer()
+	assert.Error(t, err)
+	assert.Equal(t, 2, inspectCalls)
+}
+
+func TestInitContainer_VerifyError(t *testing.T) {
+	var inspectCalls int
+	var execCreateCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/cid/json"):
+			inspectCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if inspectCalls == 1 {
+				_, _ = w.Write([]byte(`{"State":{"Running":true,"Status":"running","ExitCode":0}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ID":"cid","Name":"/test","Image":"python:3.9-slim","State":{"Running":true,"Status":"running","ExitCode":0}}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			execCreateCalled = true
+			http.Error(w, "exec fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "python:3.9-slim",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	err := exec.initContainer()
+	assert.Error(t, err)
+	assert.Equal(t, 2, inspectCalls)
+	assert.True(t, execCreateCalled)
+}
+
+func TestInitContainer_Success(t *testing.T) {
+	const execID = "exec-success"
+	var inspectCalls int
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/cid/json"):
+			inspectCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if inspectCalls == 1 {
+				_, _ = w.Write([]byte(`{"State":{"Running":true,"Status":"running","ExitCode":0}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ID":"cid","Name":"/test","Image":"python:3.9-slim","State":{"Running":true,"Status":"running","ExitCode":0}}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"Id":"%s"}`, execID)))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			hj, ok := w.(http.Hijacker)
+			assert.True(t, ok)
+			conn, buffer, err := hj.Hijack()
+			assert.NoError(t, err)
+			writeHijackStream(t, conn, buffer, "", "")
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		containerConfig: tcontainer.Config{
+			Image: "python:3.9-slim",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	assert.NoError(t, exec.initContainer())
+	assert.NotNil(t, exec.container)
+	assert.Equal(t, "cid", exec.container.ID)
+}
+
+func TestInitContainer_EnsureImageError(t *testing.T) {
+	var listCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			listCalled = true
+			http.Error(w, "list fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:         cli,
+		dockerFilePath: "",
+		containerConfig: tcontainer.Config{
+			Image: "python:3.9-slim",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	err := exec.initContainer()
+	assert.Error(t, err)
+	assert.True(t, listCalled)
+}
+
+func TestInitContainer_BuildError(t *testing.T) {
+	var buildCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/build"):
+			buildCalled = true
+			http.Error(w, "build fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:         cli,
+		dockerFilePath: t.TempDir(),
+		containerConfig: tcontainer.Config{
+			Image: "example/image:latest",
+		},
+		hostConfig:    tcontainer.HostConfig{},
+		containerName: "test",
+	}
+
+	// Ensure Dockerfile exists to avoid context error.
+	assert.NoError(t, os.WriteFile(filepath.Join(exec.dockerFilePath, "Dockerfile"), []byte("FROM scratch\n"), 0o644))
+
+	err := exec.initContainer()
+	assert.Error(t, err)
+	assert.True(t, buildCalled)
+}
+
+func TestCleanup_NoResources(t *testing.T) {
+	exec := &CodeExecutor{}
+	exec.cleanup()
+}
+
+func TestClose_NoClient(t *testing.T) {
+	exec := &CodeExecutor{}
+	assert.NoError(t, exec.Close())
+}
+
+func TestClose_WithClient(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		return
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+	}
+	assert.NoError(t, exec.Close())
+}
+
+func TestCleanup_StopRemoveError(t *testing.T) {
+	stopPath := "/containers/problem/stop"
+	removePath := "/containers/problem"
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, stopPath):
+			http.Error(w, "stop fail", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, removePath):
+			http.Error(w, "remove fail", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "problem"},
+	}
+
+	exec.cleanup()
+}
+
+func TestInitContainerWithoutClient(t *testing.T) {
+	exec := &CodeExecutor{}
+	err := exec.initContainer()
+	assert.Error(t, err)
+}
+
+func TestWaitForContainerReady_Succeeds(t *testing.T) {
+	var mu sync.Mutex
+	callCount := 0
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/test-container/json"):
+			mu.Lock()
+			callCount++
+			current := callCount
+			mu.Unlock()
+
+			running := current >= 2
+			status := "created"
+			if running {
+				status = "running"
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"State":{"Running":%t,"Status":"%s","ExitCode":0}}`, running, status)))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{client: cli}
+	ctx := context.Background()
+	assert.NoError(t, exec.waitForContainerReady(ctx, time.Second, "test-container"))
+}
+
+func TestWaitForContainerReady_Exited(t *testing.T) {
+	var inspectCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/failing/json"):
+			inspectCalled = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"State":{"Running":false,"Status":"exited","ExitCode":2}}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{client: cli}
+	ctx := context.Background()
+	err := exec.waitForContainerReady(ctx, time.Second, "failing")
+	assert.Error(t, err)
+	assert.True(t, inspectCalled)
+}
+
+func TestWaitForContainerReady_InspectError(t *testing.T) {
+	containerID := "aaaaaaaaaaaa"
+	var inspectCalled bool
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.HasSuffix(r.URL.Path, "_ping"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/"+containerID+"/json"):
+			inspectCalled = true
+			http.Error(w, "inspect error", http.StatusInternalServerError)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(handler))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+
+	cli, err := client.NewClientWithOpts(
+		client.WithHost(fmt.Sprintf("tcp://%s", parsed.Host)),
+		client.WithVersion(api.DefaultVersion),
+	)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		_ = cli.Close()
+	})
+
+	exec := &CodeExecutor{client: cli}
+	err = exec.waitForContainerReady(context.Background(), 200*time.Millisecond, containerID)
+	assert.Error(t, err)
+	assert.True(t, inspectCalled)
+}
+
+func TestWaitForContainerReady_Timeout(t *testing.T) {
+	containerID := "bbbbbbbbbbbb"
+	var calls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.HasSuffix(r.URL.Path, "_ping"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/"+containerID+"/json"):
+			calls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"State":{"Running":false,"Status":"created","ExitCode":0}}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(handler))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+
+	cli, err := client.NewClientWithOpts(
+		client.WithHost(fmt.Sprintf("tcp://%s", parsed.Host)),
+		client.WithVersion(api.DefaultVersion),
+	)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		_ = cli.Close()
+	})
+
+	exec := &CodeExecutor{client: cli}
+	err = exec.waitForContainerReady(context.Background(), 200*time.Millisecond, containerID)
+	assert.Error(t, err)
+	assert.GreaterOrEqual(t, calls, 1)
+}
+
+func TestCleanupStopsAndRemovesContainer(t *testing.T) {
+	var mu sync.Mutex
+	stopCount := 0
+	removeCount := 0
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/test-id/stop"):
+			mu.Lock()
+			stopCount++
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/test-id"):
+			mu.Lock()
+			removeCount++
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+			return
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client: cli,
+		container: &tcontainer.Summary{
+			ID: "test-id",
+		},
+	}
+
+	exec.cleanup()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, stopCount)
+	assert.Equal(t, 1, removeCount)
+}
+
 func TestContainerCodeExecutor_Basic(t *testing.T) {
 	host, err := dockerHost()
 	if err != nil {
@@ -68,7 +1489,7 @@ func TestContainerCodeExecutor_Basic(t *testing.T) {
 		}),
 		WithHost(host),
 	)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	t.Cleanup(func() {
 		executor.Close()
 	})
@@ -86,7 +1507,7 @@ func TestContainerCodeExecutor_Basic(t *testing.T) {
 
 	result, err := executor.ExecuteCode(context.Background(), input)
 	if err != nil {
-		t.Fatalf("Failed to execute code: %v", err)
+		assert.NoError(t, err)
 	}
 
 	expectedOutput := "Hello from container!\n"
@@ -225,14 +1646,14 @@ func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
 		}),
 		WithHost(host),
 	)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	t.Cleanup(func() {
 		executor.Close()
 	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			require.NoError(t, err)
+			assert.NoError(t, err)
 			ctx := context.Background()
 
 			result, err := executor.ExecuteCode(ctx, tt.input)
@@ -272,7 +1693,7 @@ func TestContainerCodeExecutor_CodeBlockDelimiter(t *testing.T) {
 		}),
 		WithHost(host),
 	)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	t.Cleanup(func() {
 		executor.Close()
 	})
@@ -311,7 +1732,7 @@ echo "Bash in container"
 		}),
 		WithHost(host),
 	)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	t.Cleanup(func() {
 		executor.Close()
 	})
