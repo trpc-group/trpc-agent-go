@@ -205,6 +205,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 ) (*event.Event, error) {
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	defer span.End()
+	startTime := time.Now()
 	choice, modifiedArgs, err := p.executeToolCall(
 		ctx, invocation, toolCall, tools, index, eventChan,
 	)
@@ -230,9 +231,9 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	if invocation != nil {
 		sess = invocation.Session
 	}
-	itelemetry.TraceToolCall(
-		span, sess, decl, modifiedArgs, toolEvent,
-	)
+	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolEvent)
+	itelemetry.IncExecuteToolRequestCnt(ctx, invocation.Model.Info().Name, toolCall.Function.Name, sess)
+	itelemetry.RecordExecuteToolOperationDuration(ctx, invocation.Model.Info().Name, toolCall.Function.Name, sess, time.Since(startTime))
 	return toolEvent, nil
 }
 
@@ -309,7 +310,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	// Trace the tool execution for observability.
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
 	defer span.End()
-
+	startTime := time.Now()
 	// Execute the tool (streamable or callable) with callbacks.
 	choice, modifiedArgs, err := p.executeToolCall(
 		ctx, invocation, tc, tools, index, eventChan,
@@ -358,6 +359,8 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		sess = invocation.Session
 	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent)
+	itelemetry.IncExecuteToolRequestCnt(ctx, invocation.Model.Info().Name, tc.Function.Name, sess)
+	itelemetry.RecordExecuteToolOperationDuration(ctx, invocation.Model.Info().Name, tc.Function.Name, sess, time.Since(startTime))
 	// Send result back to aggregator.
 	p.sendToolResult(
 		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},

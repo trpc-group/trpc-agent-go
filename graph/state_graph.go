@@ -1671,6 +1671,8 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Arguments:    modifiedArgs,
 	})
 	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event)
+	itelemetry.IncExecuteToolRequestCnt(ctx, "trpc-agent-go-graph", name, sessInfo)
+	itelemetry.RecordExecuteToolOperationDuration(ctx, "trpc-agent-go-graph", name, sessInfo, time.Since(startTime))
 	span.End()
 
 	if err != nil {
