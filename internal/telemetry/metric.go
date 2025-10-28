@@ -94,9 +94,9 @@ func sessionInfo(sess *session.Session) (appName, userID, sessionID string) {
 }
 
 var (
-	ExecuteToolMeter                              = MeterProvider.Meter(metrics.MeterNameExecuteTool)
-	ExecuteToolMetricTRPCAgentGoClientRequestCnt  = noop.Int64Counter{}
-	ExecuteToolMetricGenAIClientOperationDuration = noop.Float64Histogram{}
+	ExecuteToolMeter                                                      = MeterProvider.Meter(metrics.MeterNameExecuteTool)
+	ExecuteToolMetricTRPCAgentGoClientRequestCnt  metric.Int64Counter     = noop.Int64Counter{}
+	ExecuteToolMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
 )
 
 func IncExecuteToolRequestCnt(ctx context.Context, modelName string, toolName string, sess *session.Session) {
