@@ -50,8 +50,12 @@ import (
 func main() {
 	// Flags.
 	defaultModel := flag.String("model", "deepseek-chat", "Default model name")
+	defaultModel := flag.String("model", "deepseek-chat", "Default model name")
 	flag.Parse()
 
+	app := &chatApp{
+		defaultModel: *defaultModel,
+	}
 	app := &chatApp{
 		defaultModel: *defaultModel,
 	}
@@ -116,6 +120,8 @@ func (a *chatApp) setup(_ context.Context) error {
 		"switching-agent",
 		llmagent.WithModels(models),
 		llmagent.WithModel(defaultModelInstance),
+		llmagent.WithModels(models),
+		llmagent.WithModel(defaultModelInstance),
 	)
 
 	// Create runner.
@@ -152,6 +158,13 @@ func (a *chatApp) startChat(ctx context.Context) error {
 	fmt.Println("   /exit            - 👋 End the conversation")
 	fmt.Println()
 
+	fmt.Println("💡 Special commands:")
+	fmt.Println("   /switch <model>  - 🔄 Agent-level: change default model for all requests")
+	fmt.Println("   /model <model>   - 🎯 Per-request: use model for next request only")
+	fmt.Println("   /new             - 🆕 Start a new session")
+	fmt.Println("   /exit            - 👋 End the conversation")
+	fmt.Println()
+
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {
@@ -163,6 +176,7 @@ func (a *chatApp) startChat(ctx context.Context) error {
 		}
 
 		// Switch command: changes agent's default model (affects all subsequent requests).
+		// Switch command: changes agent's default model (affects all subsequent requests).
 		if strings.HasPrefix(strings.ToLower(userInput), "/switch") {
 			fields := strings.Fields(userInput)
 			if len(fields) < 2 {
@@ -172,6 +186,17 @@ func (a *chatApp) startChat(ctx context.Context) error {
 			if err := a.handleSwitch(fields[1]); err != nil {
 				fmt.Printf("❌ %v\n", err)
 			}
+			continue
+		}
+
+		// Model command: sets model for next request only (per-request override).
+		if strings.HasPrefix(strings.ToLower(userInput), "/model") {
+			fields := strings.Fields(userInput)
+			if len(fields) < 2 {
+				fmt.Println("Usage: /model <model-name>.")
+				continue
+			}
+			a.handleModelCommand(fields[1])
 			continue
 		}
 
@@ -267,6 +292,8 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 	var out strings.Builder
 	firstChunk := true
 
+	firstChunk := true
+
 	for ev := range eventChan {
 		if ev.Error != nil {
 			fmt.Printf("\n❌ Error: %s\n", ev.Error.Message)
@@ -275,7 +302,13 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 		if len(ev.Choices) > 0 {
 			ch := ev.Choices[0]
 			// Handle streaming delta content.
+			// Handle streaming delta content.
 			if ch.Delta.Content != "" {
+				if firstChunk {
+					fmt.Print("🤖 ")
+					firstChunk = false
+				}
+				fmt.Print(ch.Delta.Content)
 				if firstChunk {
 					fmt.Print("🤖 ")
 					firstChunk = false
@@ -283,6 +316,7 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 				fmt.Print(ch.Delta.Content)
 				out.WriteString(ch.Delta.Content)
 			}
+			// Handle non-streaming message content.
 			// Handle non-streaming message content.
 			if ch.Message.Content != "" {
 				out.WriteString(ch.Message.Content)
@@ -293,8 +327,16 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 		}
 	}
 
+
 	resp := strings.TrimSpace(out.String())
 	if resp != "" {
+		// If streaming, we already printed it; just add newline.
+		if !firstChunk {
+			fmt.Println()
+		} else {
+			// Non-streaming: print the complete response.
+			fmt.Printf("🤖 %s\n", resp)
+		}
 		// If streaming, we already printed it; just add newline.
 		if !firstChunk {
 			fmt.Println()
@@ -325,6 +367,12 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 //   - Application switches to a different model tier.
 //   - Adapting to different conversation contexts.
 func (a *chatApp) handleSwitch(name string) error {
+	// Switch model by name using SetModelByName method.
+	// This changes the agent's default model for all subsequent requests.
+	if err := a.agent.SetModelByName(name); err != nil {
+		// List available models on error.
+		fmt.Printf("Available models: deepseek-chat, deepseek-reasoner\n")
+		return fmt.Errorf("failed to switch model: %w", err)
 	// Switch model by name using SetModelByName method.
 	// This changes the agent's default model for all subsequent requests.
 	if err := a.agent.SetModelByName(name); err != nil {

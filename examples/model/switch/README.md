@@ -48,6 +48,9 @@ Note: You do not need to read these variables in your own code; the SDK does it 
 | Argument | Description          | Default Value   |
 | -------- | -------------------- | --------------- |
 | `-model` | Default model to use | `deepseek-chat` |
+| Argument | Description          | Default Value   |
+| -------- | -------------------- | --------------- |
+| `-model` | Default model to use | `deepseek-chat` |
 
 ## Running the Example
 
@@ -63,6 +66,7 @@ go run main.go
 ```bash
 cd examples/model/switch
 go run main.go -model deepseek-reasoner
+go run main.go -model deepseek-reasoner
 ```
 
 ### With environment variables
@@ -70,8 +74,10 @@ go run main.go -model deepseek-reasoner
 ```bash
 export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 
 cd examples/model/switch
+go run main.go -model deepseek-chat
 go run main.go -model deepseek-chat
 ```
 
@@ -101,6 +107,8 @@ Commands: /switch X, /model X, /new, /exit
 👤 You: What can you do?
 🤖 I can help answer questions, assist with writing, summarize content, and more.
 
+👤 You: /switch deepseek-reasoner
+✅ Agent-level switch: all requests will now use deepseek-reasoner
 👤 You: /switch deepseek-reasoner
 ✅ Agent-level switch: all requests will now use deepseek-reasoner
 
@@ -134,9 +142,12 @@ Below is the core idea used in this example.
 
 ### Agent-level Switching
 
+### Agent-level Switching
+
 ```go
 import (
     "context"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -145,13 +156,20 @@ import (
 )
 
 // Prepare models map.
+// Prepare models map.
 models := map[string]model.Model{
+    "deepseek-chat":     openai.New("deepseek-chat"),
+    "deepseek-reasoner": openai.New("deepseek-reasoner"),
     "deepseek-chat":     openai.New("deepseek-chat"),
     "deepseek-reasoner": openai.New("deepseek-reasoner"),
 }
 
 // Create agent with pre-registered models.
+// Create agent with pre-registered models.
 agt := llmagent.New("switching-agent",
+    llmagent.WithModels(models),
+    llmagent.WithModel(models["deepseek-chat"]),
+)
     llmagent.WithModels(models),
     llmagent.WithModel(models["deepseek-chat"]),
 )

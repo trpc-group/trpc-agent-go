@@ -617,6 +617,17 @@ stateGraph.AddToolsNode("tools", tools)
 stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 ```
 
+Enable parallel tool execution for the Tools node (aligns with LLMAgent’s option):
+
+```go
+// Tools node runs tool calls concurrently when multiple tool_calls are present.
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithEnableParallelTools(true), // optional; default is serial
+)
+```
+
 Tool-call pairing and second entry into LLM:
 
 - Scan `messages` backward from the tail to find the most recent `assistant(tool_calls)`; stop at `user` to ensure correct pairing.
