@@ -228,9 +228,17 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 			return nil, nil
 		}
 
+		// Get tool call ID from context for concurrent tool call support.
+		toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+		if !ok || toolCallID == "" {
+			// Fallback: use "default" if tool call ID is not available.
+			toolCallID = "default"
+		}
+
 		// Record start time and store it in invocation callback state.
+		// Use tool call ID to ensure unique keys for concurrent calls.
 		startTime := time.Now()
-		key := "tool:" + toolName + ":start_time"
+		key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
 		inv.SetState(key, startTime)
 
 		// Create trace span for tool execution.
@@ -239,6 +247,7 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 			"tool_execution",
 			trace.WithAttributes(
 				attribute.String("tool.name", toolName),
+				attribute.String("tool.call_id", toolCallID),
 				attribute.String("tool.args", func() string {
 					if jsonArgs == nil {
 						return ""
@@ -248,10 +257,11 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 			),
 		)
 		// Store span in invocation callback state.
-		spanKey := "tool:" + toolName + ":span"
+		spanKey := fmt.Sprintf("tool:%s:%s:span", toolName, toolCallID)
 		inv.SetState(spanKey, span)
 
-		fmt.Printf("⏱️  BeforeToolCallback: %s started at %s\n", toolName, startTime.Format("15:04:05.000"))
+		fmt.Printf("⏱️  BeforeToolCallback: %s (call %s) started at %s\n",
+			toolName, toolCallID, startTime.Format("15:04:05.000"))
 		if jsonArgs != nil {
 			fmt.Printf("   Args: %s\n", string(*jsonArgs))
 		} else {
@@ -271,8 +281,14 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 			return nil, nil
 		}
 
+		// Get tool call ID from context (must use same logic as BeforeToolCallback).
+		toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+		if !ok || toolCallID == "" {
+			toolCallID = "default"
+		}
+
 		// Get start time from invocation callback state.
-		key := "tool:" + toolName + ":start_time"
+		key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
 		if startTimeVal, ok := inv.GetState(key); ok {
 			startTime := startTimeVal.(time.Time)
 			duration := time.Since(startTime)
@@ -282,6 +298,7 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 			e.toolDurationHistogram.Record(ctx, durationSeconds,
 				metric.WithAttributes(
 					attribute.String("tool.name", toolName),
+					attribute.String("tool.call_id", toolCallID),
 				),
 			)
 			e.toolCounter.Add(ctx, 1,
@@ -291,7 +308,7 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 			)
 
 			// End trace span from invocation callback state.
-			spanKey := "tool:" + toolName + ":span"
+			spanKey := fmt.Sprintf("tool:%s:%s:span", toolName, toolCallID)
 			if spanVal, ok := inv.GetState(spanKey); ok {
 				span := spanVal.(trace.Span)
 				if runErr != nil {
@@ -310,7 +327,8 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 				inv.DeleteState(spanKey)
 			}
 
-			fmt.Printf("⏱️  AfterToolCallback: %s completed in %v\n", toolName, duration)
+			fmt.Printf("⏱️  AfterToolCallback: %s (call %s) completed in %v\n",
+				toolName, toolCallID, duration)
 			fmt.Printf("   Result: %v\n", result)
 			if runErr != nil {
 				fmt.Printf("   Error: %v\n", runErr)
@@ -318,7 +336,8 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 			// Clean up the start time after use.
 			inv.DeleteState(key)
 		} else {
-			fmt.Printf("⏱️  AfterToolCallback: %s completed (no timing info available)\n", toolName)
+			fmt.Printf("⏱️  AfterToolCallback: %s (call %s) completed (no timing info available)\n",
+				toolName, toolCallID)
 		}
 
 		return nil, nil // Return nil to use the original result.

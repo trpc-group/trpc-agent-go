@@ -365,16 +365,20 @@ func GetAppendEventNoticeKey(eventID string) string {
 // This is a general-purpose key-value store scoped to the invocation lifecycle.
 // It can be used by callbacks, middleware, or any invocation-scoped logic.
 //
-// Recommended key prefixes for common use cases:
-//   - "callback:agent:xxx" for agent callback state
-//   - "callback:model:xxx" for model callback state
-//   - "callback:tool:toolName:xxx" for tool callback state
-//   - "middleware:xxx" for middleware state
-//   - "custom:xxx" for custom application state
+// Recommended key naming conventions:
+//   - Agent callbacks: "agent:xxx" (e.g., "agent:start_time")
+//   - Model callbacks: "model:xxx" (e.g., "model:start_time")
+//   - Tool callbacks: "tool:<toolName>:<toolCallID>:xxx" (e.g., "tool:calculator:call_abc123:start_time")
+//   - Middleware: "middleware:xxx" (e.g., "middleware:request_id")
+//   - Custom logic: "custom:xxx" (e.g., "custom:user_context")
+//
+// Note: Tool callbacks should include tool call ID to support concurrent calls.
 //
 // Example:
 //
-//	inv.SetState("callback:agent:start_time", time.Now())
+//	inv.SetState("agent:start_time", time.Now())
+//	inv.SetState("model:start_time", time.Now())
+//	inv.SetState("tool:calculator:call_abc123:start_time", time.Now())
 //	inv.SetState("middleware:request_id", "req-123")
 //	inv.SetState("custom:user_context", userCtx)
 func (inv *Invocation) SetState(key string, value any) {
@@ -396,7 +400,10 @@ func (inv *Invocation) SetState(key string, value any) {
 //
 // Example:
 //
-//	if startTime, ok := inv.GetState("callback:agent:start_time"); ok {
+//	if startTime, ok := inv.GetState("agent:start_time"); ok {
+//	    duration := time.Since(startTime.(time.Time))
+//	}
+//	if startTime, ok := inv.GetState("tool:calculator:call_abc123:start_time"); ok {
 //	    duration := time.Since(startTime.(time.Time))
 //	}
 func (inv *Invocation) GetState(key string) (any, bool) {
@@ -417,7 +424,8 @@ func (inv *Invocation) GetState(key string) (any, bool) {
 //
 // Example:
 //
-//	inv.DeleteState("callback:agent:start_time")
+//	inv.DeleteState("agent:start_time")
+//	inv.DeleteState("tool:calculator:call_abc123:start_time")
 func (inv *Invocation) DeleteState(key string) {
 	if inv == nil {
 		return

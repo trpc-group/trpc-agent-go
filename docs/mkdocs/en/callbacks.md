@@ -221,7 +221,8 @@ To avoid key conflicts between different use cases, use prefixes:
 
 - Agent callbacks: `"agent:xxx"` (e.g., `"agent:start_time"`)
 - Model callbacks: `"model:xxx"` (e.g., `"model:start_time"`)
-- Tool callbacks: `"tool:toolName:xxx"` (e.g., `"tool:calculator:start_time"`)
+- Tool callbacks: `"tool:<toolName>:<toolCallID>:xxx"` (e.g., `"tool:calculator:call_abc123:start_time"`)
+  - Note: Tool callbacks should include tool call ID to support concurrent calls
 - Middleware: `"middleware:xxx"` (e.g., `"middleware:request_id"`)
 - Custom logic: `"custom:xxx"` (e.g., `"custom:user_context"`)
 
@@ -279,7 +280,14 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 // BeforeToolCallback: Record tool start time.
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    key := "tool:" + toolName + ":start_time"
+    // Get tool call ID for concurrent call support.
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+      toolCallID = "default" // Fallback for compatibility.
+    }
+
+    // Use tool call ID to build unique key.
+    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
     inv.SetState(key, time.Now())
   }
   return nil, nil
@@ -288,17 +296,32 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 // AfterToolCallback: Calculate tool execution duration.
 toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    key := "tool:" + toolName + ":start_time"
+    // Get tool call ID for concurrent call support.
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+      toolCallID = "default" // Fallback for compatibility.
+    }
+
+    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
     if startTimeVal, ok := inv.GetState(key); ok {
       startTime := startTimeVal.(time.Time)
       duration := time.Since(startTime)
-      fmt.Printf("Tool %s took: %v\n", toolName, duration)
+      fmt.Printf("Tool %s (call %s) took: %v\n", toolName, toolCallID, duration)
       inv.DeleteState(key) // Clean up state.
     }
   }
   return nil, nil
 })
 ```
+
+**Key Points**:
+
+1. **Get tool call ID**: Use `tool.ToolCallIDFromContext(ctx)` to retrieve the unique ID for each tool call from context
+2. **Key format**: `"tool:<toolName>:<toolCallID>:<key>"` ensures state isolation for concurrent calls
+3. **Fallback handling**: If tool call ID is not available (older versions or special scenarios), use `"default"` as fallback
+4. **Consistency**: Before and After callbacks must use the same logic to retrieve tool call ID
+
+This ensures that when the LLM calls `calculator` multiple times concurrently (e.g., `calculator(1,2)` and `calculator(3,4)`), each call has its own independent timing data.
 
 ### Complete Example
 

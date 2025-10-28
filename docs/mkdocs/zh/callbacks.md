@@ -272,7 +272,8 @@ func (inv *Invocation) DeleteState(key string)
 
 - Agent 回调：`"agent:xxx"`（如 `"agent:start_time"`）
 - Model 回调：`"model:xxx"`（如 `"model:start_time"`）
-- Tool 回调：`"tool:toolName:xxx"`（如 `"tool:calculator:start_time"`）
+- Tool 回调：`"tool:<toolName>:<toolCallID>:xxx"`（如 `"tool:calculator:call_abc123:start_time"`）
+  - 注意：Tool 回调需要包含 tool call ID 以支持并发调用
 - 中间件：`"middleware:xxx"`（如 `"middleware:request_id"`）
 - 自定义逻辑：`"custom:xxx"`（如 `"custom:user_context"`）
 
@@ -324,13 +325,22 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 })
 ```
 
-### 示例：Tool 回调计时（支持多工具隔离）
+### 示例：Tool 回调计时（支持并发工具调用）
+
+当 LLM 在一次响应中返回多个工具调用（包括同一工具的多次调用）时，框架会并发执行这些工具。为了正确追踪每个工具调用的状态，需要使用 **tool call ID** 来区分：
 
 ```go
 // BeforeToolCallback：记录工具开始时间.
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    key := "tool:" + toolName + ":start_time"
+    // 获取 tool call ID 以支持并发调用.
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+      toolCallID = "default" // 降级方案.
+    }
+
+    // 使用 tool call ID 构建唯一键.
+    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
     inv.SetState(key, time.Now())
   }
   return nil, nil
@@ -339,17 +349,32 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 // AfterToolCallback：计算工具执行时长.
 toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    key := "tool:" + toolName + ":start_time"
+    // 使用相同的逻辑获取 tool call ID.
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+      toolCallID = "default"
+    }
+
+    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
     if startTimeVal, ok := inv.GetState(key); ok {
       startTime := startTimeVal.(time.Time)
       duration := time.Since(startTime)
-      fmt.Printf("Tool %s took: %v\n", toolName, duration)
+      fmt.Printf("Tool %s (call %s) took: %v\n", toolName, toolCallID, duration)
       inv.DeleteState(key) // 清理状态.
     }
   }
   return nil, nil
 })
 ```
+
+**关键点**：
+
+1. **获取 tool call ID**：使用 `tool.ToolCallIDFromContext(ctx)` 从 context 中获取唯一的工具调用 ID
+2. **键名格式**：`"tool:<toolName>:<toolCallID>:<key>"` 确保并发调用的状态隔离
+3. **降级处理**：如果获取不到 tool call ID（旧版本或特殊场景），使用 `"default"` 作为降级
+4. **一致性**：Before 和 After 回调必须使用相同的逻辑获取 tool call ID
+
+这样可以确保当 LLM 同时调用 `calculator` 多次（如 `calculator(1,2)` 和 `calculator(3,4)`）时，每个调用都有独立的计时数据。
 
 ### 完整示例
 

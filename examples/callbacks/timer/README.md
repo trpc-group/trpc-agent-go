@@ -109,9 +109,33 @@ This example demonstrates the use of **Invocation State** for storing timing inf
 
 - Agent callbacks: `"agent:xxx"` (e.g., `"agent:start_time"`)
 - Model callbacks: `"model:xxx"` (e.g., `"model:start_time"`)
-- Tool callbacks: `"tool:toolName:xxx"` (e.g., `"tool:calculator:start_time"`)
+- Tool callbacks: `"tool:<toolName>:<toolCallID>:xxx"` (e.g., `"tool:calculator:call_abc123:start_time"`)
 
 For Model and Tool callbacks, retrieve the invocation from context using `agent.InvocationFromContext(ctx)`.
+
+**Handling Concurrent Tool Calls:**
+
+When LLMs return multiple tool calls in a single response (including multiple calls to the same tool), the framework executes them concurrently. To correctly track timing and spans for each tool call:
+
+1. **Get tool call ID from context**: Use `tool.ToolCallIDFromContext(ctx)` to retrieve the unique ID for each tool call
+2. **Use tool call ID in state keys**: Include the tool call ID in your state keys to ensure uniqueness
+3. **Fallback handling**: If tool call ID is not available, use `"default"` as a fallback
+
+Example:
+
+```go
+// Get tool call ID for concurrent tool call support
+toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+if !ok || toolCallID == "" {
+    toolCallID = "default"  // Fallback for compatibility
+}
+
+// Use tool call ID in state keys
+key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+inv.SetState(key, startTime)
+```
+
+This ensures that when the LLM calls `calculator` multiple times concurrently (e.g., `calculator(1,2)` and `calculator(3,4)`), each call has its own independent timing and span data.
 
 ### Callback Registration
 
