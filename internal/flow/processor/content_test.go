@@ -843,61 +843,6 @@ func TestContentRequestProcessor_ProcessRequest_NilInputs(t *testing.T) {
 	assert.Empty(t, req.Messages)
 }
 
-func TestGetScratchpadMessages_NilAndEmptyCases(t *testing.T) {
-	p := NewContentRequestProcessor()
-
-	// Nil invocation.
-	var invNil *agent.Invocation
-	assert.Nil(t, p.getScratchpadMessages(invNil))
-
-	// Nil session.
-	inv := agent.NewInvocation()
-	assert.Nil(t, p.getScratchpadMessages(inv))
-
-	// Empty events.
-	inv = agent.NewInvocation(
-		agent.WithInvocationID("i"),
-		agent.WithInvocationSession(&session.Session{}),
-	)
-	assert.Nil(t, p.getScratchpadMessages(inv))
-
-	// Last event is not a tool result -> nil.
-	sess := &session.Session{}
-	nonTool := event.New("i", "assistant")
-	nonTool.Response = &model.Response{
-		Choices: []model.Choice{
-			{Message: model.Message{Role: model.RoleAssistant,
-				Content: "hi"}},
-		},
-	}
-	sess.Events = append(sess.Events, *nonTool)
-	inv = agent.NewInvocation(
-		agent.WithInvocationID("i"),
-		agent.WithInvocationSession(sess),
-	)
-	assert.Nil(t, p.getScratchpadMessages(inv))
-
-	// Only a single tool result event present -> exercise start < 0 path.
-	sess2 := &session.Session{}
-	onlyResult := event.New("i2", "assistant")
-	onlyResult.InvocationID = "i2"
-	onlyResult.Response = &model.Response{
-		Choices: []model.Choice{
-			{Message: model.Message{Role: model.RoleTool,
-				ToolID: "c1", Content: "r"}},
-		},
-	}
-	sess2.Events = append(sess2.Events, *onlyResult)
-	inv2 := agent.NewInvocation(
-		agent.WithInvocationID("i2"),
-		agent.WithInvocationSession(sess2),
-	)
-	msgs := p.getScratchpadMessages(inv2)
-	// We expect one message (the tool result) in scratchpad.
-	assert.Len(t, msgs, 1)
-	assert.Equal(t, model.RoleTool, msgs[0].Role)
-}
-
 func TestRearrangeAsyncFuncRespHist_NoResponses(t *testing.T) {
 	p := NewContentRequestProcessor()
 
@@ -1303,6 +1248,20 @@ func TestIncludeNone_PreservesScratchpad(
 		},
 	}
 
+	// Current invocation user message event (as Runner would append).
+	userEvt := event.New(curInvID, "user")
+	userEvt.InvocationID = curInvID
+	userEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: userContent,
+				},
+			},
+		},
+	}
+
 	// Current invocation tool call
 	curCallEvt := event.New(curInvID, "assistant")
 	curCallEvt.InvocationID = curInvID
@@ -1341,7 +1300,7 @@ func TestIncludeNone_PreservesScratchpad(
 
 	sess.Events = []event.Event{
 		*oldCallEvt, *oldResultEvt,
-		*curCallEvt, *curResultEvt,
+		*userEvt, *curCallEvt, *curResultEvt,
 	}
 
 	// Invocation with include_contents=none at runtime.
@@ -1362,8 +1321,8 @@ func TestIncludeNone_PreservesScratchpad(
 	req := &model.Request{}
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
-	// Expect: user + scratchpad (tool call + tool result from current
-	// invocation). No history (old invocation) included.
+	// Expect: user + current invocation (tool call + tool result) included.
+	// No history (old invocation) included.
 	var (
 		foundUser     bool
 		foundCall     bool
@@ -1418,7 +1377,7 @@ func TestIncludeNone_PreservesScratchpad(
 		)
 	}
 
-	// Ensure only 3 messages: user + 2 scratchpad messages
+	// Ensure only 3 messages: user + 2 current-invocation messages
 	var cntScratch int
 	for _, m := range req.Messages {
 		if len(m.ToolCalls) > 0 || m.ToolID != "" {
@@ -1427,7 +1386,7 @@ func TestIncludeNone_PreservesScratchpad(
 	}
 	if cntScratch != 2 {
 		t.Fatalf(
-			"expected exactly 2 scratchpad messages, got %d", cntScratch,
+			"expected exactly 2 current-invocation tool messages, got %d", cntScratch,
 		)
 	}
 }
@@ -1435,7 +1394,7 @@ func TestIncludeNone_PreservesScratchpad(
 // Test include_contents=none keeps only the latest pair in scratchpad.
 // When multiple tool pairs exist in the current invocation, only the
 // newest pair should remain.
-func TestIncludeNone_PreservesLatestPairOnly(
+func TestIncludeNone_IncludesAllCurrentInvocationEvents(
 	t *testing.T,
 ) {
 	const (
@@ -1483,6 +1442,13 @@ func TestIncludeNone_PreservesLatestPairOnly(
 		},
 	}
 
+	// User event then later pairs.
+	userEvt := event.New(invID, "user")
+	userEvt.InvocationID = invID
+	userEvt.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: userInput},
+	}}}
+
 	// Later pair B
 	callB := event.New(invID, "assistant")
 	callB.InvocationID = invID
@@ -1517,7 +1483,7 @@ func TestIncludeNone_PreservesLatestPairOnly(
 		},
 	}
 
-	sess.Events = []event.Event{*callA, *resA, *callB, *resB}
+	sess.Events = []event.Event{*userEvt, *callA, *resA, *callB, *resB}
 
 	inv := agent.NewInvocation(
 		agent.WithInvocationID(invID),
@@ -1536,8 +1502,8 @@ func TestIncludeNone_PreservesLatestPairOnly(
 	req := &model.Request{}
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
-	// Expect only the latest pair B in the scratchpad.
-	var foundCallB, foundResB bool
+	// Expect both pairs A and B are present (all current-invocation events).
+	var foundCallA, foundResA, foundCallB, foundResB bool
 	for _, m := range req.Messages {
 		if len(m.ToolCalls) > 0 {
 			for _, tc := range m.ToolCalls {
@@ -1545,7 +1511,7 @@ func TestIncludeNone_PreservesLatestPairOnly(
 					foundCallB = true
 				}
 				if tc.ID == callIDA {
-					t.Fatalf("unexpected earlier call A in scratchpad")
+					foundCallA = true
 				}
 			}
 		}
@@ -1554,15 +1520,14 @@ func TestIncludeNone_PreservesLatestPairOnly(
 				foundResB = true
 			}
 			if m.ToolID == callIDA {
-				t.Fatalf("unexpected earlier result A in scratchpad")
+				foundResA = true
 			}
 		}
 	}
-	if !(foundCallB && foundResB) {
+	if !(foundCallA && foundResA && foundCallB && foundResB) {
 		t.Fatalf(
-			"expected latest pair B only in scratchpad, got callB=%v "+
-				"resB=%v",
-			foundCallB, foundResB,
+			"expected all current-invocation events present: callA=%v resA=%v callB=%v resB=%v",
+			foundCallA, foundResA, foundCallB, foundResB,
 		)
 	}
 }
