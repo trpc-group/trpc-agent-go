@@ -48,7 +48,7 @@ type ClientInterface interface {
 
 type clientBuilder func(builderOpts ...ClientBuilderOpt) (ClientInterface, error)
 
-var globalBuilder clientBuilder = DefaultClientBuilder
+var globalBuilder clientBuilder = defaultClientBuilder
 
 // SetClientBuilder sets the mysql client builder.
 func SetClientBuilder(builder clientBuilder) {
@@ -60,8 +60,8 @@ func GetClientBuilder() clientBuilder {
 	return globalBuilder
 }
 
-// DefaultClientBuilder is the default mysql client builder.
-func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
+// defaultClientBuilder is the default mysql client builder.
+func defaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
 	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)
