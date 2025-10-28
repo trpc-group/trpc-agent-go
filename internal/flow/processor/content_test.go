@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -1068,5 +1069,323 @@ func TestContentRequestProcessor_Integration_MaxHistoryRunsAndAddSessionSummary(
 
 			assert.Equal(t, tt.expectedCount, messageCount, tt.description)
 		})
+	}
+}
+
+// Test include_contents=none retains scratchpad.
+// Keeps latest tool call + merged tool result so the model can
+// continue the tool chain without repeating calls.
+func TestIncludeNone_PreservesScratchpad(
+	t *testing.T,
+) {
+	const (
+		curInvID       = "inv_cur"
+		oldInvID       = "inv_old"
+		currentCallID  = "call_current"
+		oldCallID      = "call_old"
+		userContent    = "user"
+		toolResultText = "result_current"
+	)
+
+	// Build a session with both old and current invocation events.
+	sess := &session.Session{}
+
+	// Old invocation tool call (ignored for include=none and scratchpad)
+	oldCallEvt := event.New(curInvID, "assistant")
+	oldCallEvt.InvocationID = oldInvID
+	oldCallEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: oldCallID,
+							Function: model.FunctionDefinitionParam{
+								Name: "calc",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Old invocation tool result (should be ignored)
+	oldResultEvt := event.New(curInvID, "assistant")
+	oldResultEvt.InvocationID = oldInvID
+	oldResultEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  oldCallID,
+					Content: "result_old",
+				},
+			},
+		},
+	}
+
+	// Current invocation tool call
+	curCallEvt := event.New(curInvID, "assistant")
+	curCallEvt.InvocationID = curInvID
+	curCallEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: currentCallID,
+							Function: model.FunctionDefinitionParam{
+								Name: "calc",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Current invocation tool result
+	curResultEvt := event.New(curInvID, "assistant")
+	curResultEvt.InvocationID = curInvID
+	curResultEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  currentCallID,
+					Content: toolResultText,
+				},
+			},
+		},
+	}
+
+	sess.Events = []event.Event{
+		*oldCallEvt, *oldResultEvt,
+		*curCallEvt, *curResultEvt,
+	}
+
+	// Invocation with include_contents=none at runtime.
+	inv := agent.NewInvocation(
+		agent.WithInvocationID(curInvID),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(
+			model.NewUserMessage(userContent),
+		),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				graph.CfgKeyIncludeContents: IncludeContentsNone,
+			},
+		}),
+	)
+
+	p := NewContentRequestProcessor()
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	// Expect: user + scratchpad (tool call + tool result from current
+	// invocation). No history (old invocation) included.
+	var (
+		foundUser     bool
+		foundCall     bool
+		foundToolResp bool
+		callIdx       = -1
+		resultIdx     = -1
+	)
+	for i, m := range req.Messages {
+		if m.Role == model.RoleUser && m.Content == userContent {
+			foundUser = true
+		}
+		if len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if tc.ID == currentCallID {
+					foundCall = true
+					callIdx = i
+				}
+				if tc.ID == oldCallID {
+					t.Fatalf("unexpected old tool call included")
+				}
+			}
+		}
+		if m.ToolID != "" {
+			if m.ToolID == currentCallID {
+				foundToolResp = true
+				resultIdx = i
+				if m.Content != toolResultText {
+					t.Fatalf(
+						"unexpected tool result content: %q", m.Content,
+					)
+				}
+			}
+			if m.ToolID == oldCallID {
+				t.Fatalf("unexpected old tool result included")
+			}
+		}
+	}
+	if !foundUser {
+		t.Fatalf("expected user message present")
+	}
+	if !(foundCall && foundToolResp) {
+		t.Fatalf(
+			"expected scratchpad (call+result) present, got call=%v "+
+				"result=%v",
+			foundCall, foundToolResp,
+		)
+	}
+	if !(callIdx >= 0 && resultIdx >= 0 && callIdx < resultIdx) {
+		t.Fatalf(
+			"expected call before result, got callIdx=%d resultIdx=%d",
+			callIdx, resultIdx,
+		)
+	}
+
+	// Ensure only 3 messages: user + 2 scratchpad messages
+	var cntScratch int
+	for _, m := range req.Messages {
+		if len(m.ToolCalls) > 0 || m.ToolID != "" {
+			cntScratch++
+		}
+	}
+	if cntScratch != 2 {
+		t.Fatalf(
+			"expected exactly 2 scratchpad messages, got %d", cntScratch,
+		)
+	}
+}
+
+// Test include_contents=none keeps only the latest pair in scratchpad.
+// When multiple tool pairs exist in the current invocation, only the
+// newest pair should remain.
+func TestIncludeNone_PreservesLatestPairOnly(
+	t *testing.T,
+) {
+	const (
+		invID     = "inv"
+		callIDA   = "call_A"
+		callIDB   = "call_B"
+		resultA   = "res_A"
+		resultB   = "res_B"
+		userInput = "u"
+	)
+
+	sess := &session.Session{}
+
+	// Earlier pair A
+	callA := event.New(invID, "assistant")
+	callA.InvocationID = invID
+	callA.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: callIDA,
+							Function: model.FunctionDefinitionParam{
+								Name: "t",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resA := event.New(invID, "assistant")
+	resA.InvocationID = invID
+	resA.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  callIDA,
+					Content: resultA,
+				},
+			},
+		},
+	}
+
+	// Later pair B
+	callB := event.New(invID, "assistant")
+	callB.InvocationID = invID
+	callB.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: callIDB,
+							Function: model.FunctionDefinitionParam{
+								Name: "t",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resB := event.New(invID, "assistant")
+	resB.InvocationID = invID
+	resB.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  callIDB,
+					Content: resultB,
+				},
+			},
+		},
+	}
+
+	sess.Events = []event.Event{*callA, *resA, *callB, *resB}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID(invID),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(
+			model.NewUserMessage(userInput),
+		),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				graph.CfgKeyIncludeContents: IncludeContentsNone,
+			},
+		}),
+	)
+
+	p := NewContentRequestProcessor()
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	// Expect only the latest pair B in the scratchpad.
+	var foundCallB, foundResB bool
+	for _, m := range req.Messages {
+		if len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if tc.ID == callIDB {
+					foundCallB = true
+				}
+				if tc.ID == callIDA {
+					t.Fatalf("unexpected earlier call A in scratchpad")
+				}
+			}
+		}
+		if m.ToolID != "" {
+			if m.ToolID == callIDB {
+				foundResB = true
+			}
+			if m.ToolID == callIDA {
+				t.Fatalf("unexpected earlier result A in scratchpad")
+			}
+		}
+	}
+	if !(foundCallB && foundResB) {
+		t.Fatalf(
+			"expected latest pair B only in scratchpad, got callB=%v "+
+				"resB=%v",
+			foundCallB, foundResB,
+		)
 	}
 }
