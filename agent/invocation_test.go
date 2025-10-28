@@ -457,3 +457,44 @@ func TestCustomAgentConfigs_Integration(t *testing.T) {
 	clonedInv := inv.Clone()
 	require.Equal(t, "test-config", clonedInv.GetCustomAgentConfig("custom-llm"))
 }
+
+func TestWithModel(t *testing.T) {
+	mockModel := &mockModel{name: "test-model"}
+	opts := &RunOptions{}
+	WithModel(mockModel)(opts)
+
+	require.NotNil(t, opts.Model)
+	require.Equal(t, "test-model", opts.Model.Info().Name)
+}
+
+func TestWithModelName(t *testing.T) {
+	opts := &RunOptions{}
+	WithModelName("gpt-4")(opts)
+
+	require.Equal(t, "gpt-4", opts.ModelName)
+}
+
+func TestWithModel_Integration(t *testing.T) {
+	mockModel := &mockModel{name: "custom-model"}
+
+	// Test WithModel sets the model in RunOptions.
+	inv := NewInvocation(
+		WithInvocationRunOptions(RunOptions{
+			Model: mockModel,
+		}),
+	)
+
+	require.NotNil(t, inv.RunOptions.Model)
+	require.Equal(t, "custom-model", inv.RunOptions.Model.Info().Name)
+}
+
+func TestWithModelName_Integration(t *testing.T) {
+	// Test WithModelName sets the model name in RunOptions.
+	inv := NewInvocation(
+		WithInvocationRunOptions(RunOptions{
+			ModelName: "gpt-4-turbo",
+		}),
+	)
+
+	require.Equal(t, "gpt-4-turbo", inv.RunOptions.ModelName)
+}

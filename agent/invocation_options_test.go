@@ -203,6 +203,14 @@ func (m *mockModel) Info() model.Info {
 
 func (m *mockModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
 	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "mock response",
+			},
+		}},
+	}
 	close(ch)
 	return ch, nil
 }

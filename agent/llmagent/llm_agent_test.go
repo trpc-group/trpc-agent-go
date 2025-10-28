@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,27 @@ import (
 
 func newDummyModel() model.Model {
 	return openai.New("dummy-model")
+}
+
+// mockModelWithResponse is a mock model that returns a predefined response.
+type mockModelWithResponse struct {
+	response *model.Response
+}
+
+func (m *mockModelWithResponse) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	if m.response != nil {
+		ch <- m.response
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockModelWithResponse) Info() model.Info {
+	return model.Info{Name: "mock-model"}
 }
 
 func TestLLMAgent_SubAgents(t *testing.T) {
@@ -782,4 +804,469 @@ func (m *mockCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter 
 		Start: "```",
 		End:   "```",
 	}
+}
+
+// TestWithModels tests the WithModels option.
+func TestWithModels(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+	model3 := newDummyModel()
+
+	models := map[string]model.Model{
+		"model1": model1,
+		"model2": model2,
+		"model3": model3,
+	}
+
+	agent := New("test-agent",
+		WithModels(models),
+		WithModel(model1),
+	)
+
+	require.NotNil(t, agent)
+	require.NotNil(t, agent.models)
+	require.Equal(t, 3, len(agent.models))
+}
+
+// TestSetModelByName tests switching models by name.
+func TestSetModelByName(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	models := map[string]model.Model{
+		"fast":  model1,
+		"smart": model2,
+	}
+
+	agent := New("test-agent",
+		WithModels(models),
+		WithModel(model1),
+	)
+
+	// Initial model should be model1.
+	require.Equal(t, model1, agent.model)
+
+	// Switch to model2.
+	err := agent.SetModelByName("smart")
+	require.NoError(t, err)
+	require.Equal(t, model2, agent.model)
+
+	// Switch back to model1.
+	err = agent.SetModelByName("fast")
+	require.NoError(t, err)
+	require.Equal(t, model1, agent.model)
+
+	// Try to switch to non-existent model.
+	err = agent.SetModelByName("non-existent")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found in registered models")
+}
+
+// TestSetModelByName_NotRegistered tests error when model name not found.
+func TestSetModelByName_NotRegistered(t *testing.T) {
+	model1 := newDummyModel()
+
+	agent := New("test-agent", WithModel(model1))
+
+	// Try to switch to a model that was not registered.
+	err := agent.SetModelByName("some-model")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found in registered models")
+}
+
+// TestWithModelsOnly tests using only WithModels without WithModel.
+func TestWithModelsOnly(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	models := map[string]model.Model{
+		"model1": model1,
+		"model2": model2,
+	}
+
+	agent := New("test-agent", WithModels(models))
+
+	require.NotNil(t, agent)
+	require.NotNil(t, agent.model)
+	require.NotNil(t, agent.models)
+	require.Equal(t, 2, len(agent.models))
+}
+
+// TestWithModelAndModels_ModelNotInMap tests when WithModel is set but not
+// in WithModels map.
+func TestWithModelAndModels_ModelNotInMap(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+	model3 := newDummyModel()
+
+	models := map[string]model.Model{
+		"model2": model2,
+		"model3": model3,
+	}
+
+	agent := New("test-agent",
+		WithModels(models),
+		WithModel(model1),
+	)
+
+	require.NotNil(t, agent)
+	require.Equal(t, model1, agent.model)
+	require.Equal(t, 3, len(agent.models))
+
+	// The model1 should be added with defaultModelName.
+	defaultModel, ok := agent.models[defaultModelName]
+	require.True(t, ok)
+	require.Equal(t, model1, defaultModel)
+}
+
+// TestWithModelOnly tests using only WithModel without WithModels.
+func TestWithModelOnly(t *testing.T) {
+	model1 := newDummyModel()
+
+	agent := New("test-agent", WithModel(model1))
+
+	require.NotNil(t, agent)
+	require.Equal(t, model1, agent.model)
+	require.Equal(t, 1, len(agent.models))
+
+	// The model should be registered with defaultModelName.
+	defaultModel, ok := agent.models[defaultModelName]
+	require.True(t, ok)
+	require.Equal(t, model1, defaultModel)
+}
+
+// TestSetModelByName_Concurrent tests concurrent model switching.
+func TestSetModelByName_Concurrent(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	models := map[string]model.Model{
+		"model1": model1,
+		"model2": model2,
+	}
+
+	agent := New("test-agent",
+		WithModels(models),
+		WithModel(model1),
+	)
+
+	const numGoroutines = 10
+	const numIterations = 100
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < numIterations; j++ {
+				if j%2 == 0 {
+					err := agent.SetModelByName("model1")
+					require.NoError(t, err)
+				} else {
+					err := agent.SetModelByName("model2")
+					require.NoError(t, err)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// After all concurrent operations, the model should be one of the two.
+	require.True(t, agent.model == model1 || agent.model == model2)
+}
+
+// TestInitializeModels_EmptyOptions tests initializeModels with no models.
+func TestInitializeModels_EmptyOptions(t *testing.T) {
+	opts := &Options{}
+	initialModel, models := initializeModels(opts)
+
+	require.Nil(t, initialModel)
+	require.NotNil(t, models)
+	require.Equal(t, 0, len(models))
+}
+
+// TestInitializeModels_OnlyWithModel tests initializeModels with only
+// WithModel.
+func TestInitializeModels_OnlyWithModel(t *testing.T) {
+	model1 := newDummyModel()
+	opts := &Options{Model: model1}
+
+	initialModel, models := initializeModels(opts)
+
+	require.Equal(t, model1, initialModel)
+	require.Equal(t, 1, len(models))
+	require.Equal(t, model1, models[defaultModelName])
+}
+
+// TestInitializeModels_OnlyWithModels tests initializeModels with only
+// WithModels.
+func TestInitializeModels_OnlyWithModels(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	opts := &Options{
+		Models: map[string]model.Model{
+			"model1": model1,
+			"model2": model2,
+		},
+	}
+
+	initialModel, models := initializeModels(opts)
+
+	require.NotNil(t, initialModel)
+	require.True(t, initialModel == model1 || initialModel == model2)
+	require.Equal(t, 2, len(models))
+}
+
+// TestInitializeModels_BothWithModelAndModels tests initializeModels with
+// both WithModel and WithModels.
+func TestInitializeModels_BothWithModelAndModels(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+	model3 := newDummyModel()
+
+	opts := &Options{
+		Model: model1,
+		Models: map[string]model.Model{
+			"model2": model2,
+			"model3": model3,
+		},
+	}
+
+	initialModel, models := initializeModels(opts)
+
+	require.Equal(t, model1, initialModel)
+	require.Equal(t, 3, len(models))
+	require.Equal(t, model1, models[defaultModelName])
+}
+
+// TestInitializeModels_WithModelInModelsMap tests when WithModel is already
+// in the WithModels map.
+func TestInitializeModels_WithModelInModelsMap(t *testing.T) {
+	model1 := newDummyModel()
+	model2 := newDummyModel()
+
+	opts := &Options{
+		Model: model1,
+		Models: map[string]model.Model{
+			"model1": model1,
+			"model2": model2,
+		},
+	}
+
+	initialModel, models := initializeModels(opts)
+
+	require.Equal(t, model1, initialModel)
+	require.Equal(t, 2, len(models))
+	_, hasDefault := models[defaultModelName]
+	require.False(t, hasDefault)
+}
+
+// TestLLMAgent_RunWithModel tests per-request model switching using WithModel.
+func TestLLMAgent_RunWithModel(t *testing.T) {
+	// Create two mock models with different responses.
+	defaultModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from default model",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 100},
+		},
+	}
+
+	customModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from custom model",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 200},
+		},
+	}
+
+	// Create agent with default model.
+	llmAgent := New(
+		"test-agent",
+		WithModel(defaultModel),
+	)
+
+	// Test 1: Verify setupInvocation uses default model when no RunOptions.Model is set.
+	inv1 := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message 1"),
+		RunOptions:   agent.RunOptions{},
+	}
+
+	llmAgent.setupInvocation(inv1)
+	require.Equal(t, defaultModel, inv1.Model)
+
+	// Test 2: Verify setupInvocation uses custom model when RunOptions.Model is set.
+	inv2 := &agent.Invocation{
+		InvocationID: "test-2",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message 2"),
+		RunOptions: agent.RunOptions{
+			Model: customModel,
+		},
+	}
+
+	llmAgent.setupInvocation(inv2)
+	require.Equal(t, customModel, inv2.Model)
+
+	// Verify that the agent's default model is unchanged.
+	require.Equal(t, defaultModel, llmAgent.model)
+}
+
+// TestLLMAgent_RunWithModelName tests per-request model switching using WithModelName.
+func TestLLMAgent_RunWithModelName(t *testing.T) {
+	// Create multiple mock models.
+	gpt4Model := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from GPT-4",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 150},
+		},
+	}
+
+	gpt35Model := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from GPT-3.5",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 80},
+		},
+	}
+
+	// Create agent with multiple models registered.
+	llmAgent := New(
+		"test-agent",
+		WithModels(map[string]model.Model{
+			"gpt-4":   gpt4Model,
+			"gpt-3.5": gpt35Model,
+		}),
+	)
+
+	// Test 1: Verify setupInvocation uses gpt-4 model when ModelName is "gpt-4".
+	inv1 := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message 1"),
+		RunOptions: agent.RunOptions{
+			ModelName: "gpt-4",
+		},
+	}
+
+	llmAgent.setupInvocation(inv1)
+	require.Equal(t, gpt4Model, inv1.Model)
+
+	// Test 2: Verify setupInvocation uses gpt-3.5 model when ModelName is "gpt-3.5".
+	inv2 := &agent.Invocation{
+		InvocationID: "test-2",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message 2"),
+		RunOptions: agent.RunOptions{
+			ModelName: "gpt-3.5",
+		},
+	}
+
+	llmAgent.setupInvocation(inv2)
+	require.Equal(t, gpt35Model, inv2.Model)
+}
+
+// TestLLMAgent_RunWithModelName_NotFound tests fallback when model name is not found.
+func TestLLMAgent_RunWithModelName_NotFound(t *testing.T) {
+	defaultModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from default model",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 100},
+		},
+	}
+
+	// Create agent with a default model.
+	llmAgent := New(
+		"test-agent",
+		WithModel(defaultModel),
+	)
+
+	// Verify setupInvocation falls back to default model when model name is not found.
+	inv := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message"),
+		RunOptions: agent.RunOptions{
+			ModelName: "non-existent-model",
+		},
+	}
+
+	llmAgent.setupInvocation(inv)
+	require.Equal(t, defaultModel, inv.Model)
+}
+
+// TestLLMAgent_RunWithModel_Priority tests that WithModel takes priority over WithModelName.
+func TestLLMAgent_RunWithModel_Priority(t *testing.T) {
+	modelFromWithModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from WithModel",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 300},
+		},
+	}
+
+	namedModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Response from named model",
+				},
+			}},
+			Usage: &model.Usage{TotalTokens: 250},
+		},
+	}
+
+	// Create agent with named models.
+	llmAgent := New(
+		"test-agent",
+		WithModels(map[string]model.Model{
+			"named-model": namedModel,
+		}),
+	)
+
+	// Verify setupInvocation prioritizes Model over ModelName.
+	inv := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message"),
+		RunOptions: agent.RunOptions{
+			Model:     modelFromWithModel,
+			ModelName: "named-model",
+		},
+	}
+
+	llmAgent.setupInvocation(inv)
+	require.Equal(t, modelFromWithModel, inv.Model)
 }
