@@ -53,7 +53,7 @@ func (e *toolTimerExample) createBeforeAgentCallback() agent.BeforeAgentCallback
 	return func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
 		// Record start time and store it in invocation callback state.
 		startTime := time.Now()
-		invocation.SetCallbackState("agent:start_time", startTime)
+		invocation.SetState("agent:start_time", startTime)
 
 		// Create trace span for agent execution.
 		_, span := atrace.Tracer.Start(
@@ -66,7 +66,7 @@ func (e *toolTimerExample) createBeforeAgentCallback() agent.BeforeAgentCallback
 			),
 		)
 		// Store span in invocation callback state.
-		invocation.SetCallbackState("agent:span", span)
+		invocation.SetState("agent:span", span)
 
 		fmt.Printf("⏱️  BeforeAgentCallback: %s started at %s\n", invocation.AgentName, startTime.Format("15:04:05.000"))
 		fmt.Printf("   InvocationID: %s\n", invocation.InvocationID)
@@ -80,7 +80,7 @@ func (e *toolTimerExample) createBeforeAgentCallback() agent.BeforeAgentCallback
 func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 	return func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
 		// Get start time from invocation callback state.
-		if startTimeVal, ok := invocation.GetCallbackState("agent:start_time"); ok {
+		if startTimeVal, ok := invocation.GetState("agent:start_time"); ok {
 			startTime := startTimeVal.(time.Time)
 			duration := time.Since(startTime)
 			durationSeconds := duration.Seconds()
@@ -99,7 +99,7 @@ func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 			)
 
 			// End trace span from invocation callback state.
-			if spanVal, ok := invocation.GetCallbackState("agent:span"); ok {
+			if spanVal, ok := invocation.GetState("agent:span"); ok {
 				span := spanVal.(trace.Span)
 				if runErr != nil {
 					span.RecordError(runErr)
@@ -114,7 +114,7 @@ func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 				)
 				span.End()
 				// Clean up the span after use.
-				invocation.DeleteCallbackState("agent:span")
+				invocation.DeleteState("agent:span")
 			}
 
 			fmt.Printf("⏱️  AfterAgentCallback: %s completed in %v\n", invocation.AgentName, duration)
@@ -122,7 +122,7 @@ func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 				fmt.Printf("   Error: %v\n", runErr)
 			}
 			// Clean up the start time after use.
-			invocation.DeleteCallbackState("agent:start_time")
+			invocation.DeleteState("agent:start_time")
 		} else {
 			fmt.Printf("⏱️  AfterAgentCallback: %s completed (no timing info available)\n", invocation.AgentName)
 		}
@@ -143,7 +143,7 @@ func (e *toolTimerExample) createBeforeModelCallback() model.BeforeModelCallback
 
 		// Record start time and store it in invocation callback state.
 		startTime := time.Now()
-		inv.SetCallbackState("model:start_time", startTime)
+		inv.SetState("model:start_time", startTime)
 
 		// Create trace span for model inference.
 		_, span := atrace.Tracer.Start(
@@ -154,7 +154,7 @@ func (e *toolTimerExample) createBeforeModelCallback() model.BeforeModelCallback
 			),
 		)
 		// Store span in invocation callback state.
-		inv.SetCallbackState("model:span", span)
+		inv.SetState("model:span", span)
 
 		fmt.Printf("⏱️  BeforeModelCallback: model started at %s\n", startTime.Format("15:04:05.000"))
 		fmt.Printf("   Messages: %d\n", len(req.Messages))
@@ -173,7 +173,7 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 		}
 
 		// Get start time from invocation callback state.
-		if startTimeVal, ok := inv.GetCallbackState("model:start_time"); ok {
+		if startTimeVal, ok := inv.GetState("model:start_time"); ok {
 			startTime := startTimeVal.(time.Time)
 			duration := time.Since(startTime)
 			durationSeconds := duration.Seconds()
@@ -187,7 +187,7 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 			e.modelCounter.Add(ctx, 1)
 
 			// End trace span from invocation callback state.
-			if spanVal, ok := inv.GetCallbackState("model:span"); ok {
+			if spanVal, ok := inv.GetState("model:span"); ok {
 				span := spanVal.(trace.Span)
 				if modelErr != nil {
 					span.RecordError(modelErr)
@@ -202,7 +202,7 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 				)
 				span.End()
 				// Clean up the span after use.
-				inv.DeleteCallbackState("model:span")
+				inv.DeleteState("model:span")
 			}
 
 			fmt.Printf("⏱️  AfterModelCallback: model completed in %v\n", duration)
@@ -210,7 +210,7 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 				fmt.Printf("   Error: %v\n", modelErr)
 			}
 			// Clean up the start time after use.
-			inv.DeleteCallbackState("model:start_time")
+			inv.DeleteState("model:start_time")
 		} else {
 			fmt.Printf("⏱️  AfterModelCallback: model completed (no timing info available)\n")
 		}
@@ -231,7 +231,7 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 		// Record start time and store it in invocation callback state.
 		startTime := time.Now()
 		key := "tool:" + toolName + ":start_time"
-		inv.SetCallbackState(key, startTime)
+		inv.SetState(key, startTime)
 
 		// Create trace span for tool execution.
 		_, span := atrace.Tracer.Start(
@@ -249,7 +249,7 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 		)
 		// Store span in invocation callback state.
 		spanKey := "tool:" + toolName + ":span"
-		inv.SetCallbackState(spanKey, span)
+		inv.SetState(spanKey, span)
 
 		fmt.Printf("⏱️  BeforeToolCallback: %s started at %s\n", toolName, startTime.Format("15:04:05.000"))
 		if jsonArgs != nil {
@@ -273,7 +273,7 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 
 		// Get start time from invocation callback state.
 		key := "tool:" + toolName + ":start_time"
-		if startTimeVal, ok := inv.GetCallbackState(key); ok {
+		if startTimeVal, ok := inv.GetState(key); ok {
 			startTime := startTimeVal.(time.Time)
 			duration := time.Since(startTime)
 			durationSeconds := duration.Seconds()
@@ -292,7 +292,7 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 
 			// End trace span from invocation callback state.
 			spanKey := "tool:" + toolName + ":span"
-			if spanVal, ok := inv.GetCallbackState(spanKey); ok {
+			if spanVal, ok := inv.GetState(spanKey); ok {
 				span := spanVal.(trace.Span)
 				if runErr != nil {
 					span.RecordError(runErr)
@@ -307,7 +307,7 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 				)
 				span.End()
 				// Clean up the span after use.
-				inv.DeleteCallbackState(spanKey)
+				inv.DeleteState(spanKey)
 			}
 
 			fmt.Printf("⏱️  AfterToolCallback: %s completed in %v\n", toolName, duration)
@@ -316,7 +316,7 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 				fmt.Printf("   Error: %v\n", runErr)
 			}
 			// Clean up the start time after use.
-			inv.DeleteCallbackState(key)
+			inv.DeleteState(key)
 		} else {
 			fmt.Printf("⏱️  AfterToolCallback: %s completed (no timing info available)\n", toolName)
 		}

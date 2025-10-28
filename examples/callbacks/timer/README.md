@@ -96,7 +96,7 @@ Each trace includes attributes like:
 
 ### Timer Storage Strategy
 
-This example demonstrates the use of **Invocation Callback State** for storing timing information. Instead of using instance variables, we leverage the `Invocation.SetCallbackState()`, `Invocation.GetCallbackState()`, and `Invocation.DeleteCallbackState()` methods to share data between Before and After callbacks.
+This example demonstrates the use of **Invocation State** for storing timing information. Instead of using instance variables, we leverage the `Invocation.SetState()`, `Invocation.GetState()`, and `Invocation.DeleteState()` methods to share data between Before and After callbacks.
 
 **Key Benefits:**
 

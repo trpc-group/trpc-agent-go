@@ -241,21 +241,21 @@ if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 
 ---
 
-## Callback State：在回调间共享状态
+## Invocation State：在回调间共享状态
 
-`Invocation` 提供了 `CallbackState` 机制，用于在 Before 和 After 回调之间共享数据，特别适用于计时、追踪等场景。
+`Invocation` 提供了通用的 `State` 机制，用于存储 invocation 级别的状态数据。它不仅可以在 Before 和 After 回调之间共享数据，也可以用于中间件、自定义逻辑等场景。
 
 ### 核心方法
 
 ```go
 // 设置状态值.
-func (inv *Invocation) SetCallbackState(key string, value any)
+func (inv *Invocation) SetState(key string, value any)
 
 // 获取状态值，返回值和是否存在.
-func (inv *Invocation) GetCallbackState(key string) (any, bool)
+func (inv *Invocation) GetState(key string) (any, bool)
 
 // 删除状态值.
-func (inv *Invocation) DeleteCallbackState(key string)
+func (inv *Invocation) DeleteState(key string)
 ```
 
 ### 特点
@@ -264,31 +264,34 @@ func (inv *Invocation) DeleteCallbackState(key string)
 - **线程安全**：内置 RWMutex 保护，支持并发访问
 - **懒初始化**：首次使用时才分配内存，节省资源
 - **清晰生命周期**：使用完毕后可显式删除，避免内存泄漏
+- **通用性强**：不限于 callbacks，可用于任何 invocation 级别的状态存储
 
 ### 命名约定
 
-为避免不同类型回调之间的键冲突，建议使用前缀：
+为避免不同使用场景之间的键冲突，建议使用前缀：
 
 - Agent 回调：`"agent:xxx"`（如 `"agent:start_time"`）
 - Model 回调：`"model:xxx"`（如 `"model:start_time"`）
 - Tool 回调：`"tool:toolName:xxx"`（如 `"tool:calculator:start_time"`）
+- 中间件：`"middleware:xxx"`（如 `"middleware:request_id"`）
+- 自定义逻辑：`"custom:xxx"`（如 `"custom:user_context"`）
 
 ### 示例：Agent 回调计时
 
 ```go
 // BeforeAgentCallback：记录开始时间.
 agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-  inv.SetCallbackState("agent:start_time", time.Now())
+  inv.SetState("agent:start_time", time.Now())
   return nil, nil
 })
 
 // AfterAgentCallback：计算执行时长.
 agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-  if startTimeVal, ok := inv.GetCallbackState("agent:start_time"); ok {
+  if startTimeVal, ok := inv.GetState("agent:start_time"); ok {
     startTime := startTimeVal.(time.Time)
     duration := time.Since(startTime)
     fmt.Printf("Agent execution took: %v\n", duration)
-    inv.DeleteCallbackState("agent:start_time") // 清理状态.
+    inv.DeleteState("agent:start_time") // 清理状态.
   }
   return nil, nil
 })
@@ -302,7 +305,7 @@ Model 和 Tool 回调需要先从 context 中获取 Invocation：
 // BeforeModelCallback：记录开始时间.
 modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    inv.SetCallbackState("model:start_time", time.Now())
+    inv.SetState("model:start_time", time.Now())
   }
   return nil, nil
 })
@@ -310,11 +313,11 @@ modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request)
 // AfterModelCallback：计算执行时长.
 modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    if startTimeVal, ok := inv.GetCallbackState("model:start_time"); ok {
+    if startTimeVal, ok := inv.GetState("model:start_time"); ok {
       startTime := startTimeVal.(time.Time)
       duration := time.Since(startTime)
       fmt.Printf("Model inference took: %v\n", duration)
-      inv.DeleteCallbackState("model:start_time") // 清理状态.
+      inv.DeleteState("model:start_time") // 清理状态.
     }
   }
   return nil, nil
@@ -328,7 +331,7 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
     key := "tool:" + toolName + ":start_time"
-    inv.SetCallbackState(key, time.Now())
+    inv.SetState(key, time.Now())
   }
   return nil, nil
 })
@@ -337,11 +340,11 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
     key := "tool:" + toolName + ":start_time"
-    if startTimeVal, ok := inv.GetCallbackState(key); ok {
+    if startTimeVal, ok := inv.GetState(key); ok {
       startTime := startTimeVal.(time.Time)
       duration := time.Since(startTime)
       fmt.Printf("Tool %s took: %v\n", toolName, duration)
-      inv.DeleteCallbackState(key) // 清理状态.
+      inv.DeleteState(key) // 清理状态.
     }
   }
   return nil, nil

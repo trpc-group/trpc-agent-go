@@ -92,9 +92,10 @@ type Invocation struct {
 	// parent is the parent invocation, if any
 	parent *Invocation
 
-	// callbackState stores callback state data (lazy initialized).
-	callbackState   map[string]any
-	callbackStateMu sync.RWMutex
+	// state stores invocation-scoped state data (lazy initialized).
+	// Can be used by callbacks, middleware, or any invocation-scoped logic.
+	state   map[string]any
+	stateMu sync.RWMutex
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -359,68 +360,73 @@ func GetAppendEventNoticeKey(eventID string) string {
 	return AppendEventNoticeKeyPrefix + eventID
 }
 
-// SetCallbackState sets a value in the callback state.
+// SetState sets a value in the invocation state.
 //
-// The key should use a prefix to avoid conflicts between different callback types:
-//   - "agent:xxx" for agent callback state
-//   - "model:xxx" for model callback state
-//   - "tool:toolName:xxx" for tool callback state
+// This is a general-purpose key-value store scoped to the invocation lifecycle.
+// It can be used by callbacks, middleware, or any invocation-scoped logic.
+//
+// Recommended key prefixes for common use cases:
+//   - "callback:agent:xxx" for agent callback state
+//   - "callback:model:xxx" for model callback state
+//   - "callback:tool:toolName:xxx" for tool callback state
+//   - "middleware:xxx" for middleware state
+//   - "custom:xxx" for custom application state
 //
 // Example:
 //
-//	inv.SetCallbackState("agent:start_time", time.Now())
-//	inv.SetCallbackState("model:request_id", "req-123")
-//	inv.SetCallbackState("tool:calculator:start_time", time.Now())
-func (inv *Invocation) SetCallbackState(key string, value any) {
+//	inv.SetState("callback:agent:start_time", time.Now())
+//	inv.SetState("middleware:request_id", "req-123")
+//	inv.SetState("custom:user_context", userCtx)
+func (inv *Invocation) SetState(key string, value any) {
 	if inv == nil {
 		return
 	}
-	inv.callbackStateMu.Lock()
-	defer inv.callbackStateMu.Unlock()
+	inv.stateMu.Lock()
+	defer inv.stateMu.Unlock()
 
-	if inv.callbackState == nil {
-		inv.callbackState = make(map[string]any)
+	if inv.state == nil {
+		inv.state = make(map[string]any)
 	}
-	inv.callbackState[key] = value
+	inv.state[key] = value
 }
 
-// GetCallbackState retrieves a value from the callback state.
+// GetState retrieves a value from the invocation state.
 //
 // Returns the value and true if the key exists, or nil and false otherwise.
 //
 // Example:
 //
-//	if startTime, ok := inv.GetCallbackState("agent:start_time"); ok {
+//	if startTime, ok := inv.GetState("callback:agent:start_time"); ok {
 //	    duration := time.Since(startTime.(time.Time))
 //	}
-func (inv *Invocation) GetCallbackState(key string) (any, bool) {
+func (inv *Invocation) GetState(key string) (any, bool) {
 	if inv == nil {
 		return nil, false
 	}
-	inv.callbackStateMu.RLock()
-	defer inv.callbackStateMu.RUnlock()
+	inv.stateMu.RLock()
+	defer inv.stateMu.RUnlock()
 
-	if inv.callbackState == nil {
+	if inv.state == nil {
 		return nil, false
 	}
-	value, ok := inv.callbackState[key]
+	value, ok := inv.state[key]
 	return value, ok
 }
 
-// DeleteCallbackState removes a value from the callback state.
+// DeleteState removes a value from the invocation state.
 //
 // Example:
 //
-//	inv.DeleteCallbackState("agent:start_time")
-func (inv *Invocation) DeleteCallbackState(key string) {
+//	inv.DeleteState("callback:agent:start_time")
+func (inv *Invocation) DeleteState(key string) {
 	if inv == nil {
 		return
 	}
-	inv.callbackStateMu.Lock()
-	defer inv.callbackStateMu.Unlock()
+	inv.stateMu.Lock()
+	defer inv.stateMu.Unlock()
 
-	if inv.callbackState != nil {
-		delete(inv.callbackState, key)
+	if inv.state != nil {
+		delete(inv.state, key)
 	}
 }
 

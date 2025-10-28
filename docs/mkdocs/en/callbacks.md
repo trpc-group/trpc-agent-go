@@ -190,23 +190,21 @@ the presence of an invocation.
 
 ---
 
-## Callback State: Sharing Data Between Callbacks
+## Invocation State: Sharing Data Between Callbacks
 
-`Invocation` provides a `CallbackState` mechanism for sharing data between
-Before and After callbacks, particularly useful for timing, tracing, and other
-scenarios requiring state persistence across callback pairs.
+`Invocation` provides a general-purpose `State` mechanism for storing invocation-scoped data. It can be used not only for sharing data between Before and After callbacks, but also for middleware, custom logic, and any invocation-level state management.
 
 ### Core Methods
 
 ```go
 // Set a state value.
-func (inv *Invocation) SetCallbackState(key string, value any)
+func (inv *Invocation) SetState(key string, value any)
 
 // Get a state value, returns value and existence flag.
-func (inv *Invocation) GetCallbackState(key string) (any, bool)
+func (inv *Invocation) GetState(key string) (any, bool)
 
 // Delete a state value.
-func (inv *Invocation) DeleteCallbackState(key string)
+func (inv *Invocation) DeleteState(key string)
 ```
 
 ### Features
@@ -215,31 +213,34 @@ func (inv *Invocation) DeleteCallbackState(key string)
 - **Thread-safe**: Built-in RWMutex protection for concurrent access
 - **Lazy initialization**: Memory allocated only on first use
 - **Clean lifecycle**: Explicit deletion prevents memory leaks
+- **General-purpose**: Not limited to callbacks, can be used for any invocation-level state
 
 ### Naming Convention
 
-To avoid key conflicts between different callback types, use prefixes:
+To avoid key conflicts between different use cases, use prefixes:
 
 - Agent callbacks: `"agent:xxx"` (e.g., `"agent:start_time"`)
 - Model callbacks: `"model:xxx"` (e.g., `"model:start_time"`)
 - Tool callbacks: `"tool:toolName:xxx"` (e.g., `"tool:calculator:start_time"`)
+- Middleware: `"middleware:xxx"` (e.g., `"middleware:request_id"`)
+- Custom logic: `"custom:xxx"` (e.g., `"custom:user_context"`)
 
 ### Example: Agent Callback Timing
 
 ```go
 // BeforeAgentCallback: Record start time.
 agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-  inv.SetCallbackState("agent:start_time", time.Now())
+  inv.SetState("agent:start_time", time.Now())
   return nil, nil
 })
 
 // AfterAgentCallback: Calculate execution duration.
 agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-  if startTimeVal, ok := inv.GetCallbackState("agent:start_time"); ok {
+  if startTimeVal, ok := inv.GetState("agent:start_time"); ok {
     startTime := startTimeVal.(time.Time)
     duration := time.Since(startTime)
     fmt.Printf("Agent execution took: %v\n", duration)
-    inv.DeleteCallbackState("agent:start_time") // Clean up state.
+    inv.DeleteState("agent:start_time") // Clean up state.
   }
   return nil, nil
 })
@@ -253,7 +254,7 @@ Model and Tool callbacks need to retrieve the Invocation from context first:
 // BeforeModelCallback: Record start time.
 modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    inv.SetCallbackState("model:start_time", time.Now())
+    inv.SetState("model:start_time", time.Now())
   }
   return nil, nil
 })
@@ -261,11 +262,11 @@ modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request)
 // AfterModelCallback: Calculate execution duration.
 modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    if startTimeVal, ok := inv.GetCallbackState("model:start_time"); ok {
+    if startTimeVal, ok := inv.GetState("model:start_time"); ok {
       startTime := startTimeVal.(time.Time)
       duration := time.Since(startTime)
       fmt.Printf("Model inference took: %v\n", duration)
-      inv.DeleteCallbackState("model:start_time") // Clean up state.
+      inv.DeleteState("model:start_time") // Clean up state.
     }
   }
   return nil, nil
@@ -279,7 +280,7 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
     key := "tool:" + toolName + ":start_time"
-    inv.SetCallbackState(key, time.Now())
+    inv.SetState(key, time.Now())
   }
   return nil, nil
 })
@@ -288,11 +289,11 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
     key := "tool:" + toolName + ":start_time"
-    if startTimeVal, ok := inv.GetCallbackState(key); ok {
+    if startTimeVal, ok := inv.GetState(key); ok {
       startTime := startTimeVal.(time.Time)
       duration := time.Since(startTime)
       fmt.Printf("Tool %s took: %v\n", toolName, duration)
-      inv.DeleteCallbackState(key) // Clean up state.
+      inv.DeleteState(key) // Clean up state.
     }
   }
   return nil, nil
