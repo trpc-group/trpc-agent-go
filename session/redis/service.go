@@ -761,7 +761,12 @@ func processEventCmd(cmd *redis.StringSliceCmd) ([]event.Event, error) {
 	for _, eventBytes := range eventsBytes {
 		event := &event.Event{}
 		if err := json.Unmarshal([]byte(eventBytes), &event); err != nil {
-			return nil, fmt.Errorf("unmarshal event failed: %w", err)
+			// Skip malformed or legacy-format events to avoid breaking the whole session fetch.
+			// Log and continue so that readable events can still be returned.
+			// Common root causes include: historical []byte fields encoded as plain string
+			// which triggers base64 decoding errors during JSON unmarshal.
+			log.Warnf("skip malformed event in redis history: %v", err)
+			continue
 		}
 		events = append(events, *event)
 	}

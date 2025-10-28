@@ -2552,3 +2552,26 @@ func TestService_DeleteSession_WithEvents(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, deletedSess)
 }
+
+// TestProcessEventCmd_SkipMalformed ensures malformed JSON items are skipped
+// rather than failing the entire list parsing.
+func TestProcessEventCmd_SkipMalformed(t *testing.T) {
+	// Prepare one valid event and one malformed JSON string.
+	valid := &event.Event{ID: "ok", Timestamp: time.Now()}
+	validBytes, err := json.Marshal(valid)
+	require.NoError(t, err)
+
+	malformed := "{not-json}"
+
+	// Build a StringSliceCmd like ZREVRANGE would return.
+	cmd := redis.NewStringSliceCmd(context.Background(), "zrange", "k")
+	cmd.SetVal([]string{malformed, string(validBytes)})
+
+	// Call the helper under test.
+	events, err := processEventCmd(cmd)
+	require.NoError(t, err)
+
+	// Only the valid one should be returned.
+	require.Len(t, events, 1)
+	require.Equal(t, "ok", events[0].ID)
+}
