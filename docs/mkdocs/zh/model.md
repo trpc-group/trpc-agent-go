@@ -980,3 +980,109 @@ m := openai.New("my-custom-model",
 #### 使用示例
 
 完整的交互式示例请参考 [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor)。
+
+### 6. 自定义 HTTP Header
+
+在网关、专有平台或代理环境中，请求模型 API 往往需要额外的
+HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块
+提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、
+文件上传、批处理等全链路。
+
+推荐顺序：
+
+- 通过 OpenAI RequestOption 设置全局 Header（简单、直观）
+- 通过自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
+
+上述两种方式同样影响流式请求，因为底层使用的是同一个客户端，
+`New` 与 `NewStreaming` 共用
+（参见 [model/openai/openai.go:524](model/openai/openai.go:524)、
+[model/openai/openai.go:964](model/openai/openai.go:964)）。
+
+1) 使用 OpenAI RequestOption 设置全局 Header
+
+通过 `WithOpenAIOptions` 配合 `openaiopt.WithHeader` 或
+`openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的“每个请求”
+注入 Header（参见
+[model/openai/openai.go:344](model/openai/openai.go:344)、
+[model/openai/openai.go:358](model/openai/openai.go:358)）。
+
+```go
+import (
+    "net/http"
+    "strings"
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+llm := openai.New("deepseek-chat",
+    // 若你的平台要求额外头部
+    openai.WithOpenAIOptions(
+        openaiopt.WithHeader("X-Custom-Header", "custom-value"),
+        openaiopt.WithHeader("X-Request-ID", "req-123"),
+        // 也可设置 User-Agent 或厂商特定头
+        openaiopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
+    ),
+)
+```
+
+若需要按条件设置（例如仅对某些路径或依赖调用上下文值），可使用中间件：
+
+```go
+llm := openai.New("deepseek-chat",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMiddleware(
+            func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+                // 例：按上下文值设置“每次请求”的头部
+                if v := r.Context().Value("x-request-id"); v != nil {
+                    if s, ok := v.(string); ok && s != "" {
+                        r.Header.Set("X-Request-ID", s)
+                    }
+                }
+                // 或仅对对话补全接口生效
+                if strings.Contains(r.URL.Path, "/chat/completions") {
+                    r.Header.Set("X-Feature-Flag", "on")
+                }
+                return next(r)
+            },
+        ),
+    ),
+)
+```
+
+鉴权差异注意事项：
+
+- OpenAI 风格：保留 `openai.WithAPIKey("sk-...")`，底层会设置
+  `Authorization: Bearer ...`。
+- Azure/部分 OpenAI 兼容：若要求 `api-key` 头部，则不要调用
+  `WithAPIKey`，改为使用
+  `openaiopt.WithHeader("api-key", "<key>")`。
+
+2) 使用自定义 http.RoundTripper（进阶）
+
+在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等
+能力的场景（参见
+[model/openai/openai.go:172](model/openai/openai.go:172)）。
+
+```go
+type headerRoundTripper struct{ base http.RoundTripper }
+
+func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+    // 添加或覆盖头部
+    req.Header.Set("X-Custom-Header", "custom-value")
+    req.Header.Set("X-Trace-ID", "trace-xyz")
+    return rt.base.RoundTrip(req)
+}
+
+llm := openai.New("deepseek-chat",
+    openai.WithHTTPClientOptions(
+        openai.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
+    ),
+)
+```
+
+关于“每次请求”的头部：
+
+- Agent/Runner 会把 `ctx` 透传至模型调用；中间件可从
+  `req.Context()` 读取值，从而为“本次调用”注入头部。
+- 对“对话补全”而言，目前未暴露单次调用级别的 BaseURL 覆盖；如需切
+  换，请新建一个使用不同 BaseURL 的模型，或在中间件中修改 `r.URL`。
