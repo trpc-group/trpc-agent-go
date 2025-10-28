@@ -96,7 +96,22 @@ Each trace includes attributes like:
 
 ### Timer Storage Strategy
 
-Since callback interfaces don't support returning modified context, we use instance variables to store timing information (see `toolTimerExample` in `main.go`).
+This example demonstrates the use of **Invocation Callback State** for storing timing information. Instead of using instance variables, we leverage the `Invocation.SetCallbackState()`, `Invocation.GetCallbackState()`, and `Invocation.DeleteCallbackState()` methods to share data between Before and After callbacks.
+
+**Key Benefits:**
+
+- **Invocation-scoped**: State is automatically scoped to a single invocation
+- **Thread-safe**: Built-in concurrency protection with RWMutex
+- **Clean lifecycle**: State is cleaned up after use, no memory leaks
+- **No external storage**: No need for instance variables or maps
+
+**State Key Convention:**
+
+- Agent callbacks: `"agent:xxx"` (e.g., `"agent:start_time"`)
+- Model callbacks: `"model:xxx"` (e.g., `"model:start_time"`)
+- Tool callbacks: `"tool:toolName:xxx"` (e.g., `"tool:calculator:start_time"`)
+
+For Model and Tool callbacks, retrieve the invocation from context using `agent.InvocationFromContext(ctx)`.
 
 ### Callback Registration
 

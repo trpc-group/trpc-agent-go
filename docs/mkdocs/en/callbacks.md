@@ -190,6 +190,122 @@ the presence of an invocation.
 
 ---
 
+## Callback State: Sharing Data Between Callbacks
+
+`Invocation` provides a `CallbackState` mechanism for sharing data between
+Before and After callbacks, particularly useful for timing, tracing, and other
+scenarios requiring state persistence across callback pairs.
+
+### Core Methods
+
+```go
+// Set a state value.
+func (inv *Invocation) SetCallbackState(key string, value any)
+
+// Get a state value, returns value and existence flag.
+func (inv *Invocation) GetCallbackState(key string) (any, bool)
+
+// Delete a state value.
+func (inv *Invocation) DeleteCallbackState(key string)
+```
+
+### Features
+
+- **Invocation-scoped**: State is automatically scoped to a single invocation
+- **Thread-safe**: Built-in RWMutex protection for concurrent access
+- **Lazy initialization**: Memory allocated only on first use
+- **Clean lifecycle**: Explicit deletion prevents memory leaks
+
+### Naming Convention
+
+To avoid key conflicts between different callback types, use prefixes:
+
+- Agent callbacks: `"agent:xxx"` (e.g., `"agent:start_time"`)
+- Model callbacks: `"model:xxx"` (e.g., `"model:start_time"`)
+- Tool callbacks: `"tool:toolName:xxx"` (e.g., `"tool:calculator:start_time"`)
+
+### Example: Agent Callback Timing
+
+```go
+// BeforeAgentCallback: Record start time.
+agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+  inv.SetCallbackState("agent:start_time", time.Now())
+  return nil, nil
+})
+
+// AfterAgentCallback: Calculate execution duration.
+agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+  if startTimeVal, ok := inv.GetCallbackState("agent:start_time"); ok {
+    startTime := startTimeVal.(time.Time)
+    duration := time.Since(startTime)
+    fmt.Printf("Agent execution took: %v\n", duration)
+    inv.DeleteCallbackState("agent:start_time") // Clean up state.
+  }
+  return nil, nil
+})
+```
+
+### Example: Model Callback Timing
+
+Model and Tool callbacks need to retrieve the Invocation from context first:
+
+```go
+// BeforeModelCallback: Record start time.
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    inv.SetCallbackState("model:start_time", time.Now())
+  }
+  return nil, nil
+})
+
+// AfterModelCallback: Calculate execution duration.
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    if startTimeVal, ok := inv.GetCallbackState("model:start_time"); ok {
+      startTime := startTimeVal.(time.Time)
+      duration := time.Since(startTime)
+      fmt.Printf("Model inference took: %v\n", duration)
+      inv.DeleteCallbackState("model:start_time") // Clean up state.
+    }
+  }
+  return nil, nil
+})
+```
+
+### Example: Tool Callback Timing (Multi-tool Isolation)
+
+```go
+// BeforeToolCallback: Record tool start time.
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    key := "tool:" + toolName + ":start_time"
+    inv.SetCallbackState(key, time.Now())
+  }
+  return nil, nil
+})
+
+// AfterToolCallback: Calculate tool execution duration.
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    key := "tool:" + toolName + ":start_time"
+    if startTimeVal, ok := inv.GetCallbackState(key); ok {
+      startTime := startTimeVal.(time.Time)
+      duration := time.Since(startTime)
+      fmt.Printf("Tool %s took: %v\n", toolName, duration)
+      inv.DeleteCallbackState(key) // Clean up state.
+    }
+  }
+  return nil, nil
+})
+```
+
+### Complete Example
+
+For a complete timing example with OpenTelemetry integration, see:
+[examples/callbacks/timer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
+
+---
+
 ## Global Callbacks and Chain Registration
 
 You can define reusable global callbacks using chain registration.

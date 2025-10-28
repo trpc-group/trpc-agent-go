@@ -91,6 +91,10 @@ type Invocation struct {
 
 	// parent is the parent invocation, if any
 	parent *Invocation
+
+	// callbackState stores callback state data (lazy initialized).
+	callbackState   map[string]any
+	callbackStateMu sync.RWMutex
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -353,6 +357,71 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 // GetAppendEventNoticeKey get append event notice key.
 func GetAppendEventNoticeKey(eventID string) string {
 	return AppendEventNoticeKeyPrefix + eventID
+}
+
+// SetCallbackState sets a value in the callback state.
+//
+// The key should use a prefix to avoid conflicts between different callback types:
+//   - "agent:xxx" for agent callback state
+//   - "model:xxx" for model callback state
+//   - "tool:toolName:xxx" for tool callback state
+//
+// Example:
+//
+//	inv.SetCallbackState("agent:start_time", time.Now())
+//	inv.SetCallbackState("model:request_id", "req-123")
+//	inv.SetCallbackState("tool:calculator:start_time", time.Now())
+func (inv *Invocation) SetCallbackState(key string, value any) {
+	if inv == nil {
+		return
+	}
+	inv.callbackStateMu.Lock()
+	defer inv.callbackStateMu.Unlock()
+
+	if inv.callbackState == nil {
+		inv.callbackState = make(map[string]any)
+	}
+	inv.callbackState[key] = value
+}
+
+// GetCallbackState retrieves a value from the callback state.
+//
+// Returns the value and true if the key exists, or nil and false otherwise.
+//
+// Example:
+//
+//	if startTime, ok := inv.GetCallbackState("agent:start_time"); ok {
+//	    duration := time.Since(startTime.(time.Time))
+//	}
+func (inv *Invocation) GetCallbackState(key string) (any, bool) {
+	if inv == nil {
+		return nil, false
+	}
+	inv.callbackStateMu.RLock()
+	defer inv.callbackStateMu.RUnlock()
+
+	if inv.callbackState == nil {
+		return nil, false
+	}
+	value, ok := inv.callbackState[key]
+	return value, ok
+}
+
+// DeleteCallbackState removes a value from the callback state.
+//
+// Example:
+//
+//	inv.DeleteCallbackState("agent:start_time")
+func (inv *Invocation) DeleteCallbackState(key string) {
+	if inv == nil {
+		return
+	}
+	inv.callbackStateMu.Lock()
+	defer inv.callbackStateMu.Unlock()
+
+	if inv.callbackState != nil {
+		delete(inv.callbackState, key)
+	}
 }
 
 // AddNoticeChannelAndWait add notice channel and wait it complete
