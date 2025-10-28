@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/pgvector/pgvector-go"
@@ -110,8 +111,11 @@ func New(opts ...Option) (*VectorStore, error) {
 		}
 	} else {
 		// Build connection string from individual parameters
+		// URL encode username and password to handle special characters
+		encodedUser := url.QueryEscape(option.user)
+		encodedPassword := url.QueryEscape(option.password)
 		connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-			option.user, option.password, option.host, option.port, option.database, option.sslMode)
+			encodedUser, encodedPassword, option.host, option.port, option.database, option.sslMode)
 
 		builderOpts := []postgres.ClientBuilderOpt{
 			postgres.WithClientConnString(connStr),
