@@ -43,6 +43,12 @@ import (
 
 var defaultChannelBufferSize = 256
 
+const (
+	// defaultModelName is the model name used when only WithModel is set
+	// without WithModels.
+	defaultModelName = "__default__"
+)
+
 // Option is a function that configures an LLMAgent.
 type Option func(*Options)
 
@@ -50,6 +56,17 @@ type Option func(*Options)
 func WithModel(model model.Model) Option {
 	return func(opts *Options) {
 		opts.Model = model
+	}
+}
+
+// WithModels registers a map of models that can be switched by name.
+// The map key is the model name, and the value is the model.Model instance.
+// If both WithModel and WithModels are set, WithModel specifies the initial
+// model. If only WithModels is set, the first model in the map will be used
+// as the initial model (note: map iteration order is not guaranteed).
+func WithModels(models map[string]model.Model) Option {
+	return func(opts *Options) {
+		opts.Models = models
 	}
 }
 
@@ -325,6 +342,8 @@ type Options struct {
 	Name string
 	// Model is the model to use for generating responses.
 	Model model.Model
+	// Models is a map of models that can be switched by name at runtime.
+	Models map[string]model.Model
 	// Description is a description of the agent.
 	Description string
 	// Instruction is the instruction for the agent.
@@ -423,6 +442,7 @@ type LLMAgent struct {
 	name                 string
 	mu                   sync.RWMutex
 	model                model.Model
+	models               map[string]model.Model // Registered models for switching
 	description          string
 	instruction          string
 	systemPrompt         string
@@ -471,10 +491,14 @@ func New(name string, opts ...Option) *LLMAgent {
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
 	tools := registerTools(&options)
 
+	// Initialize models map and determine the initial model.
+	initialModel, models := initializeModels(&options)
+
 	// Construct the agent first so request processors can access dynamic getters.
 	a := &LLMAgent{
 		name:                 name,
-		model:                options.Model,
+		model:                initialModel,
+		models:               models,
 		description:          options.Description,
 		instruction:          options.Instruction,
 		systemPrompt:         options.GlobalInstruction,
@@ -644,6 +668,52 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	return buildRequestProcessorsWithAgent(dummy, options)
 }
 
+// initializeModels initializes the models map and determines the initial
+// model based on WithModel and WithModels options.
+func initializeModels(options *Options) (model.Model, map[string]model.Model) {
+	models := make(map[string]model.Model)
+
+	// Case 1: No models configured at all.
+	if options.Model == nil && len(options.Models) == 0 {
+		return nil, models
+	}
+
+	// Case 2: Only WithModel is set, no WithModels.
+	if len(options.Models) == 0 {
+		models[defaultModelName] = options.Model
+		return options.Model, models
+	}
+
+	// Case 3: WithModels is set (with or without WithModel).
+	models = options.Models
+
+	// If WithModel is also set, use it as the initial model.
+	if options.Model != nil {
+		// Check if the model is already in the models map.
+		found := false
+		for _, m := range models {
+			if m == options.Model {
+				found = true
+				break
+			}
+		}
+		// If not found, add it with the default name.
+		if !found {
+			models[defaultModelName] = options.Model
+		}
+		return options.Model, models
+	}
+
+	// WithModels is set but WithModel is not, use the first model from map.
+	// Note: map iteration order is not guaranteed.
+	for _, m := range models {
+		return m, models
+	}
+
+	// Should not reach here, but return nil for safety.
+	return nil, models
+}
+
 func registerTools(options *Options) []tool.Tool {
 	// Start with direct tools.
 	allTools := make([]tool.Tool, 0, len(options.Tools))
@@ -652,7 +722,7 @@ func registerTools(options *Options) []tool.Tool {
 	// Add tools from each toolset with automatic namespacing.
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
-		// Create named toolset wrapper to avoid name conflicts
+		// Create named toolset wrapper to avoid name conflicts.
 		namedToolSet := itool.NewNamedToolSet(toolSet)
 		setTools := namedToolSet.Tools(ctx)
 		for _, t := range setTools {
@@ -744,9 +814,25 @@ func (e *haveCustomResponseError) Error() string {
 
 // setupInvocation sets up the invocation
 func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
-	// set model.
+	// Set model: prioritize RunOptions.Model, then RunOptions.ModelName, then agent's default model.
 	a.mu.RLock()
-	invocation.Model = a.model
+	// Check if a per-request model is specified.
+	if invocation.RunOptions.Model != nil {
+		// Use the model directly from RunOptions.
+		invocation.Model = invocation.RunOptions.Model
+	} else if invocation.RunOptions.ModelName != "" {
+		// Look up model by name from registered models.
+		if m, ok := a.models[invocation.RunOptions.ModelName]; ok {
+			invocation.Model = m
+		} else {
+			// If model name not found, fall back to agent's default model.
+			// Log a warning but don't fail the request.
+			invocation.Model = a.model
+		}
+	} else {
+		// Use agent's default model.
+		invocation.Model = a.model
+	}
 	a.mu.RUnlock()
 
 	// Set agent and agent name
@@ -872,6 +958,22 @@ func (a *LLMAgent) SetModel(m model.Model) {
 	a.mu.Lock()
 	a.model = m
 	a.mu.Unlock()
+}
+
+// SetModelByName switches the model by name in a concurrency-safe way.
+// The model must be registered via WithModels option when creating the agent.
+// Returns an error if the specified model name is not found.
+func (a *LLMAgent) SetModelByName(modelName string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	m, ok := a.models[modelName]
+	if !ok {
+		return fmt.Errorf("model %q not found in registered models", modelName)
+	}
+
+	a.model = m
+	return nil
 }
 
 // SetInstruction updates the agent's instruction at runtime in a concurrency-safe way.
