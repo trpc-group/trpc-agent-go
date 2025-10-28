@@ -979,3 +979,111 @@ m := openai.New("my-custom-model",
 #### Usage Example
 
 For a complete interactive example, see [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor).
+
+### 6. Custom HTTP Headers
+
+In some enterprise or proxy scenarios, the model provider requires
+additional HTTP headers (for example, organization ID, tenant routing,
+or custom authentication). The Model module supports setting headers in
+two reliable ways that apply to all model requests, including
+non-streaming, streaming, file upload, and batch APIs.
+
+Recommended order:
+
+- Global header via OpenAI RequestOption (simple, built-in)
+- Custom `http.RoundTripper` (advanced, cross-cutting)
+
+Both methods affect streaming too because the same client is used for
+`New` and `NewStreaming` calls
+([model/openai/openai.go:524](model/openai/openai.go:524),
+[model/openai/openai.go:964](model/openai/openai.go:964)).
+
+1) Global headers using OpenAI RequestOption
+
+Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
+`openaiopt.WithMiddleware` to inject headers for every request created
+by the underlying OpenAI client
+([model/openai/openai.go:344](model/openai/openai.go:344),
+[model/openai/openai.go:358](model/openai/openai.go:358)).
+
+```go
+import (
+    "net/http"
+    "strings"
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+llm := openai.New("deepseek-chat",
+    // If your provider needs extra headers
+    openai.WithOpenAIOptions(
+        openaiopt.WithHeader("X-Custom-Header", "custom-value"),
+        openaiopt.WithHeader("X-Request-ID", "req-123"),
+        // You can also set User-Agent or vendor-specific headers
+        openaiopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
+    ),
+)
+```
+
+For complex logic, middleware lets you modify headers conditionally
+(for example, by URL path or context values):
+
+```go
+llm := openai.New("deepseek-chat",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMiddleware(
+            func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+                // Example: per-request header via context value
+                if v := r.Context().Value("x-request-id"); v != nil {
+                    if s, ok := v.(string); ok && s != "" {
+                        r.Header.Set("X-Request-ID", s)
+                    }
+                }
+                // Or only for chat completion endpoint
+                if strings.Contains(r.URL.Path, "/chat/completions") {
+                    r.Header.Set("X-Feature-Flag", "on")
+                }
+                return next(r)
+            },
+        ),
+    ),
+)
+```
+
+Notes for authentication variants:
+
+- OpenAI style: keep `openai.WithAPIKey("sk-...")` which sets
+  `Authorization: Bearer ...` under the hood.
+- Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
+  `openaiopt.WithHeader("api-key", "<key>")` instead.
+
+2) Custom http.RoundTripper (advanced)
+
+Inject headers across all requests at the HTTP layer by wrapping the
+transport. This is useful when you also need custom proxy, TLS, or
+metrics logic
+([model/openai/openai.go:172](model/openai/openai.go:172)).
+
+```go
+type headerRoundTripper struct{ base http.RoundTripper }
+
+func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+    // Add or override headers
+    req.Header.Set("X-Custom-Header", "custom-value")
+    req.Header.Set("X-Trace-ID", "trace-xyz")
+    return rt.base.RoundTrip(req)
+}
+
+llm := openai.New("deepseek-chat",
+    openai.WithHTTPClientOptions(
+        openai.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
+    ),
+)
+```
+
+Per-request headers
+
+- Agent/Runner passes `ctx` through to the model call; middleware can
+  read values from `req.Context()` to inject per-invocation headers.
+- Chat completion per-request base URL override is not exposed; create a
+  second model with a different base URL or alter `r.URL` in middleware.
