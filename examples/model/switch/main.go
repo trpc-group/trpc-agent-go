@@ -50,12 +50,8 @@ import (
 func main() {
 	// Flags.
 	defaultModel := flag.String("model", "deepseek-chat", "Default model name")
-	defaultModel := flag.String("model", "deepseek-chat", "Default model name")
 	flag.Parse()
 
-	app := &chatApp{
-		defaultModel: *defaultModel,
-	}
 	app := &chatApp{
 		defaultModel: *defaultModel,
 	}
@@ -79,9 +75,10 @@ type chatApp struct {
 	defaultModel        string
 	agent               *llmagent.LLMAgent
 	runner              runner.Runner
-	sessionID           string // Current session ID.
-	nextModelName       string // Model name for next request (empty = use agent's current model).
-	usePerRequestSwitch bool   // Whether to use per-request switching for next message.
+	models              map[string]model.Model // Registered models for validation.
+	sessionID           string                 // Current session ID.
+	nextModelName       string                 // Model name for next request (empty = use agent's current model).
+	usePerRequestSwitch bool                   // Whether to use per-request switching for next message.
 }
 
 // setup initializes models, agent, and runner.
@@ -120,9 +117,10 @@ func (a *chatApp) setup(_ context.Context) error {
 		"switching-agent",
 		llmagent.WithModels(models),
 		llmagent.WithModel(defaultModelInstance),
-		llmagent.WithModels(models),
-		llmagent.WithModel(defaultModelInstance),
 	)
+
+	// Store models map for validation in handleModelCommand.
+	a.models = models
 
 	// Create runner.
 	a.runner = runner.NewRunner("model-switch", a.agent)
@@ -158,13 +156,6 @@ func (a *chatApp) startChat(ctx context.Context) error {
 	fmt.Println("   /exit            - 👋 End the conversation")
 	fmt.Println()
 
-	fmt.Println("💡 Special commands:")
-	fmt.Println("   /switch <model>  - 🔄 Agent-level: change default model for all requests")
-	fmt.Println("   /model <model>   - 🎯 Per-request: use model for next request only")
-	fmt.Println("   /new             - 🆕 Start a new session")
-	fmt.Println("   /exit            - 👋 End the conversation")
-	fmt.Println()
-
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {
@@ -175,7 +166,6 @@ func (a *chatApp) startChat(ctx context.Context) error {
 			continue
 		}
 
-		// Switch command: changes agent's default model (affects all subsequent requests).
 		// Switch command: changes agent's default model (affects all subsequent requests).
 		if strings.HasPrefix(strings.ToLower(userInput), "/switch") {
 			fields := strings.Fields(userInput)
@@ -189,25 +179,17 @@ func (a *chatApp) startChat(ctx context.Context) error {
 			continue
 		}
 
-		// Model command: sets model for next request only (per-request override).
+		// Model command: sets model for next request only (per-request
+		// override).
 		if strings.HasPrefix(strings.ToLower(userInput), "/model") {
 			fields := strings.Fields(userInput)
 			if len(fields) < 2 {
 				fmt.Println("Usage: /model <model-name>.")
 				continue
 			}
-			a.handleModelCommand(fields[1])
-			continue
-		}
-
-		// Model command: sets model for next request only (per-request override).
-		if strings.HasPrefix(strings.ToLower(userInput), "/model") {
-			fields := strings.Fields(userInput)
-			if len(fields) < 2 {
-				fmt.Println("Usage: /model <model-name>.")
-				continue
+			if err := a.handleModelCommand(fields[1]); err != nil {
+				fmt.Printf("❌ %v\n", err)
 			}
-			a.handleModelCommand(fields[1])
 			continue
 		}
 
@@ -256,17 +238,14 @@ func (a *chatApp) processMessage(ctx context.Context, text string) error {
 	// This demonstrates Method 2: per-request switching.
 	if a.usePerRequestSwitch && a.nextModelName != "" {
 		fmt.Printf("🔧 Per-request override: using model %s for this request only\n", a.nextModelName)
-		// Option 1: Switch by model name (recommended if model is
-		// pre-registered).
+		// Option 1: Switch by model name (recommended if model is pre-registered).
 		runOpts = append(runOpts, agent.WithModelName(a.nextModelName))
 
-		// Option 2: Switch by model instance (use when you need custom
-		// config).
+		// Option 2: Switch by model instance (use when you need custom config).
 		// modelInstance := openai.New(a.nextModelName)
 		// runOpts = append(runOpts, agent.WithModel(modelInstance))
 
-		// Reset for next request to ensure this only affects current
-		// request.
+		// Reset for next request to ensure this only affects current request.
 		a.nextModelName = ""
 		a.usePerRequestSwitch = false
 	}
@@ -292,8 +271,6 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 	var out strings.Builder
 	firstChunk := true
 
-	firstChunk := true
-
 	for ev := range eventChan {
 		if ev.Error != nil {
 			fmt.Printf("\n❌ Error: %s\n", ev.Error.Message)
@@ -302,13 +279,7 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 		if len(ev.Choices) > 0 {
 			ch := ev.Choices[0]
 			// Handle streaming delta content.
-			// Handle streaming delta content.
 			if ch.Delta.Content != "" {
-				if firstChunk {
-					fmt.Print("🤖 ")
-					firstChunk = false
-				}
-				fmt.Print(ch.Delta.Content)
 				if firstChunk {
 					fmt.Print("🤖 ")
 					firstChunk = false
@@ -316,7 +287,6 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 				fmt.Print(ch.Delta.Content)
 				out.WriteString(ch.Delta.Content)
 			}
-			// Handle non-streaming message content.
 			// Handle non-streaming message content.
 			if ch.Message.Content != "" {
 				out.WriteString(ch.Message.Content)
@@ -327,16 +297,8 @@ func (a *chatApp) processResponse(eventChan <-chan *event.Event) error {
 		}
 	}
 
-
 	resp := strings.TrimSpace(out.String())
 	if resp != "" {
-		// If streaming, we already printed it; just add newline.
-		if !firstChunk {
-			fmt.Println()
-		} else {
-			// Non-streaming: print the complete response.
-			fmt.Printf("🤖 %s\n", resp)
-		}
 		// If streaming, we already printed it; just add newline.
 		if !firstChunk {
 			fmt.Println()
@@ -373,12 +335,6 @@ func (a *chatApp) handleSwitch(name string) error {
 		// List available models on error.
 		fmt.Printf("Available models: deepseek-chat, deepseek-reasoner\n")
 		return fmt.Errorf("failed to switch model: %w", err)
-	// Switch model by name using SetModelByName method.
-	// This changes the agent's default model for all subsequent requests.
-	if err := a.agent.SetModelByName(name); err != nil {
-		// List available models on error.
-		fmt.Printf("Available models: deepseek-chat, deepseek-reasoner\n")
-		return fmt.Errorf("failed to switch model: %w", err)
 	}
 
 	// Alternative: use SetModel to switch by model instance.
@@ -399,6 +355,7 @@ func (a *chatApp) handleSwitch(name string) error {
 //   - Automatically reverts after the request completes.
 //
 // Implementation:
+//   - Validate the model name exists in registered models.
 //   - Store the model name/instance temporarily.
 //   - Pass it via agent.WithModelName() or agent.WithModel() in RunOptions.
 //   - Clear the temporary state after use.
@@ -408,12 +365,21 @@ func (a *chatApp) handleSwitch(name string) error {
 //   - Using a specialized model for specific query types.
 //   - A/B testing without affecting other users.
 //   - Fallback to a different model for retry scenarios.
-func (a *chatApp) handleModelCommand(name string) {
+func (a *chatApp) handleModelCommand(name string) error {
+	// Validate that the model exists in the agent's registered models.
+	// This prevents runtime errors when the request is executed.
+	if _, ok := a.models[name]; !ok {
+		// List available models on error.
+		fmt.Printf("Available models: deepseek-chat, deepseek-reasoner\n")
+		return fmt.Errorf("model %q not found in registered models", name)
+	}
+
 	// This uses per-request model switching via agent.WithModelName().
 	// The agent's default model remains unchanged.
 	a.nextModelName = name
 	a.usePerRequestSwitch = true
 	fmt.Printf("✅ Per-request mode: next request will use %s (agent default unchanged)\n", name)
+	return nil
 }
 
 // startNewSession creates a new session ID and clears history.
