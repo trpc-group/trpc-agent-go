@@ -221,5 +221,6 @@ To add timing and telemetry to your own agent system:
 ## Related Examples
 
 - [Multi-turn Chat with Callbacks](../main.go) - Comprehensive callback examples
+- [Authentication and Authorization](../auth/) - User context and permission checks with Invocation State
 - [Telemetry Example](../../telemetry/) - Basic OpenTelemetry integration
 - [Runner Examples](../../runner/) - Basic agent and tool usage

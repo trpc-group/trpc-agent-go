@@ -328,6 +328,9 @@ This ensures that when the LLM calls `calculator` multiple times concurrently (e
 For a complete timing example with OpenTelemetry integration, see:
 [examples/callbacks/timer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
 
+For an authentication and authorization example using Invocation State for permission checks and audit logging, see:
+[examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
+
 ---
 
 ## Global Callbacks and Chain Registration

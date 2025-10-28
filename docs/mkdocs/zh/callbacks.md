@@ -381,6 +381,9 @@ toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *to
 完整的计时示例（包含 OpenTelemetry 集成）请参考：
 [examples/callbacks/timer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
 
+用户认证与授权示例（使用 Invocation State 进行权限检查和审计日志）请参考：
+[examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
+
 ---
 
 ## 全局回调与链式注册
