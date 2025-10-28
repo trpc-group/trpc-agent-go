@@ -211,7 +211,7 @@ func (f *Flow) processStreamingResponses(
 		itelemetry.RecordChatOutputTokenUsage(ctx, invocation.Model.Info().Name, invocation.Session, int64(totalCompletionTokens))
 		if tokens, duration := totalCompletionTokens-firstCompleteToken, requestDuration-firstTokenTimeDuration; tokens > 0 && duration > 0 {
 			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, invocation.Model.Info().Name, invocation.Session, duration/time.Duration(tokens))
-		} else if tokens == 0 {
+		} else if tokens == 0 && totalCompletionTokens > 0 {
 			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, invocation.Model.Info().Name, invocation.Session, requestDuration/time.Duration(totalCompletionTokens))
 		}
 	}()
