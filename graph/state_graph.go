@@ -654,10 +654,15 @@ func NewLLMNodeFunc(
 				sessInfo.UserID = s.UserID
 			}
 		}
-		itelemetry.IncChatRequestCnt(ctx, llmModel.Info().Name, sessInfo)
+
 		_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
+		var errType string
+		if err != nil {
+			errType = err.Error()
+		}
+		itelemetry.IncChatRequestCnt(ctx, llmModel.Info().Name, sessInfo, "", errType)
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("failed to run model: %w", err)
