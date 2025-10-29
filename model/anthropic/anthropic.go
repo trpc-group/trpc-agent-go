@@ -484,21 +484,23 @@ func convertMessages(messages []model.Message) (
 		}
 	}
 	uniqueConversation := conversation[:0]
-	isToolResult := func(toolResult *anthropic.ToolResultBlockParam) bool {
-		return toolResult != nil && !param.IsOmitted(toolResult)
+	isToolResult := func(message anthropic.MessageParam) bool {
+		return len(message.Content) > 0 &&
+			message.Content[0].OfToolResult != nil &&
+			!param.IsOmitted(message.Content[0].OfToolResult)
 	}
 	for l, r := 0, -1; l < len(conversation); l = r + 1 {
 		if len(conversation[l].Content) == 0 {
 			r++
 			continue
 		}
-		if !isToolResult(conversation[l].Content[0].OfToolResult) {
+		if !isToolResult(conversation[l]) {
 			uniqueConversation = append(uniqueConversation, conversation[l])
 			r++
 			continue
 		}
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(conversation[l].Content))
-		for r+1 < len(conversation) && isToolResult(conversation[r+1].Content[0].OfToolResult) {
+		for r+1 < len(conversation) && isToolResult(conversation[r+1]) {
 			toolResult := conversation[r+1].Content[0].OfToolResult
 			blocks = append(blocks, anthropic.NewToolResultBlock(toolResult.ToolUseID, toolResult.Content[0].OfText.Text, toolResult.IsError.Value))
 			r++
