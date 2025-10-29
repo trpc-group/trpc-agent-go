@@ -697,3 +697,19 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
+
+func TestWrapSQLDB(t *testing.T) {
+	// Create a mock database.
+	mockDB, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer mockDB.Close()
+
+	// Test WrapSQLDB function.
+	client := WrapSQLDB(mockDB)
+	assert.NotNil(t, client)
+
+	// Verify it returns a sqlDBClient.
+	sqlClient, ok := client.(*sqlDBClient)
+	assert.True(t, ok)
+	assert.Equal(t, mockDB, sqlClient.db)
+}
