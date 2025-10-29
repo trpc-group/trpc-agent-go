@@ -3091,3 +3091,37 @@ func TestConvertSystemMessageContent_WithParts(t *testing.T) {
 		assert.NotNil(t, content.OfString, "expected string content")
 	})
 }
+
+// TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit tests the safety margin and ratio limit logic.
+func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("deepseek-chat", // Known model with 131072 context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger aggressive tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 1200; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 40))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring with safety margin and ratio limit, messages should be significantly reduced.
+	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored, got %d (original: %d)", len(captured.Messages), len(messages))
+	// With 50% ratio limit and safety margins, we expect roughly 40-50% of the original messages.
+	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.55), "expected messages to be reduced to at most 55%% due to ratio limit, got %d (original: %d)", len(captured.Messages), len(messages))
+}

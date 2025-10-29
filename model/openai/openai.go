@@ -45,10 +45,12 @@ const (
 	// defaultBatchEndpoint is the default batch endpoint.
 	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
 	// Default budget constants for token tailoring.
-	defaultProtocolOverheadTokens = 128  // Protocol overhead tokens for request/response formatting.
-	defaultReserveOutputTokens    = 1024 // Reserved tokens for output generation.
+	defaultProtocolOverheadTokens = 4096 // Protocol overhead tokens for request/response formatting.
+	defaultReserveOutputTokens    = 4096 // Reserved tokens for output generation (~3% of typical context window).
 	defaultInputTokensFloor       = 1024 // Minimum input tokens to ensure reasonable processing.
 	defaultOutputTokensFloor      = 256  // Minimum output tokens to ensure meaningful response.
+	defaultSafetyMarginRatio      = 0.20 // Safety margin ratio (20%) to account for token counting inaccuracies.
+	defaultMaxInputTokensRatio    = 0.50 // Maximum input tokens ratio (50%) of context window for stability.
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -554,6 +556,27 @@ func (m *Model) GenerateContent(
 }
 
 // applyTokenTailoring performs best-effort token tailoring if configured.
+//
+// Formula:
+//
+//	safetyMargin = contextWindow × safetyMarginRatio (20%)
+//	calculatedMax = contextWindow - reserveOutputTokens - protocolOverheadTokens - safetyMargin
+//	ratioLimit = contextWindow × maxInputTokensRatio (50%)
+//	maxInputTokens = max(min(calculatedMax, ratioLimit), inputTokensFloor)
+//
+// Example for deepseek-chat (contextWindow = 131072):
+//
+//	safetyMargin = 131072 × 0.20 = 26214 tokens
+//	calculatedMax = 131072 - 4096 - 4096 - 26214 = 96666 tokens
+//	ratioLimit = 131072 × 0.50 = 65536 tokens
+//	maxInputTokens = max(min(96666, 65536), 1024) = 65536 tokens (~50% of context window)
+//
+// This ensures:
+//   - 50% of context window for input messages
+//   - ~3% (4096 tokens) reserved for output generation
+//   - 20% safety margin for token counting inaccuracies
+//   - Protocol overhead (4096 tokens) for request/response formatting
+//   - Remaining ~27% buffer for stability and API overhead
 func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
 	// Early return if token tailoring is disabled or no messages to process.
 	if !m.enableTokenTailoring || len(request.Messages) == 0 {
@@ -563,10 +586,14 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Determine max input tokens using priority: user config > auto calculation > default.
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
-		// Auto-calculate based on model context window.
+		// Auto-calculate based on model context window with safety margin and ratio limit.
 		contextWindow := imodel.ResolveContextWindow(m.name)
-		maxInputTokens = max(contextWindow-defaultReserveOutputTokens-defaultProtocolOverheadTokens, defaultInputTokensFloor)
-		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d", m.name, contextWindow, maxInputTokens)
+		safetyMargin := int(float64(contextWindow) * defaultSafetyMarginRatio)
+		calculatedMax := contextWindow - defaultReserveOutputTokens - defaultProtocolOverheadTokens - safetyMargin
+		ratioLimit := int(float64(contextWindow) * defaultMaxInputTokensRatio)
+		maxInputTokens = max(min(calculatedMax, ratioLimit), defaultInputTokensFloor)
+		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, safetyMargin=%d, calculatedMax=%d, ratioLimit=%d, maxInputTokens=%d",
+			m.name, contextWindow, safetyMargin, calculatedMax, ratioLimit, maxInputTokens)
 	}
 
 	// Determine token counter using priority: user config > default.
@@ -612,9 +639,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Set max output tokens to remaining tokens, with a minimum threshold.
-	maxOutputTokens := max(remainingTokens, defaultOutputTokensFloor)
+	// Set max output tokens only if user hasn't specified it.
+	// This respects user's explicit configuration while providing a safe default.
 	if request.GenerationConfig.MaxTokens == nil {
+		maxOutputTokens := max(remainingTokens, defaultOutputTokensFloor)
 		request.GenerationConfig.MaxTokens = &maxOutputTokens
 	}
 }

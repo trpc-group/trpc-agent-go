@@ -163,7 +163,8 @@ var ModelContextWindows = map[string]int{
 	"qwq-32b-preview":            8192,
 
 	// DeepSeek
-	"deepseek-chat": 128000,
+	"deepseek-chat":     131072,
+	"deepseek-reasoner": 131072,
 
 	// Amazon
 	"nova-pro-v1":        300000,

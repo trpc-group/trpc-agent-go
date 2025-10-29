@@ -201,6 +201,11 @@ func (s *MiddleOutStrategy) findOptimalMiddleOutBalance(prefixSum []int, preserv
 	totalMessages := len(prefixSum) - 1 - preservedHead - preservedTail
 	availableTokens := maxTokens - (prefixSum[preservedHead] + (prefixSum[len(prefixSum)-1] - prefixSum[len(prefixSum)-1-preservedTail]))
 
+	// If no tokens available for additional messages, return only preserved segments.
+	if availableTokens <= 0 || totalMessages <= 0 {
+		return preservedHead, len(prefixSum) - 1 - preservedTail
+	}
+
 	// Try to fit as many messages as possible, starting from the middle.
 	headCount := preservedHead
 	tailCount := len(prefixSum) - 1 - preservedTail
@@ -293,11 +298,12 @@ func (s *HeadOutStrategy) binarySearchMaxTailCount(prefixSum []int, preservedHea
 	for left+1 < right {
 		mid := (left + right) / 2
 
-		// Calculate tokens for preserved head + tail.
+		// Calculate tokens for preserved head + tail messages + preserved tail.
 		headTokens := prefixSum[preservedHead]
-		tailTokens := prefixSum[len(prefixSum)-1] - prefixSum[mid]
+		tailTokens := prefixSum[len(prefixSum)-1-preservedTail] - prefixSum[mid]
+		preservedTailTokens := prefixSum[len(prefixSum)-1] - prefixSum[len(prefixSum)-1-preservedTail]
 
-		if headTokens+tailTokens <= maxTokens {
+		if headTokens+tailTokens+preservedTailTokens <= maxTokens {
 			right = mid
 		} else {
 			left = mid
@@ -393,11 +399,12 @@ func (s *TailOutStrategy) binarySearchMaxHeadCount(prefixSum []int, preservedHea
 	for left+1 < right {
 		mid := (left + right) / 2
 
-		// Calculate tokens for head + preserved tail.
+		// Calculate tokens for preserved head + head messages + preserved tail.
+		preservedHeadTokens := prefixSum[preservedHead]
 		headTokens := prefixSum[mid] - prefixSum[preservedHead]
-		tailTokens := prefixSum[len(prefixSum)-1] - prefixSum[len(prefixSum)-1-preservedTail]
+		preservedTailTokens := prefixSum[len(prefixSum)-1] - prefixSum[len(prefixSum)-1-preservedTail]
 
-		if headTokens+tailTokens <= maxTokens {
+		if preservedHeadTokens+headTokens+preservedTailTokens <= maxTokens {
 			left = mid
 		} else {
 			right = mid

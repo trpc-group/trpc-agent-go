@@ -50,10 +50,9 @@ func main() {
 	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel)
 	opts = append(opts, openai.WithTokenCounter(counter))
 
-	if *flagStrategy != "middle" {
-		strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
-		opts = append(opts, openai.WithTailoringStrategy(strategy))
-	}
+	// Always create strategy with the user-provided counter to ensure consistency.
+	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
+	opts = append(opts, openai.WithTailoringStrategy(strategy))
 
 	modelInstance := openai.New(*flagModel, opts...)
 
