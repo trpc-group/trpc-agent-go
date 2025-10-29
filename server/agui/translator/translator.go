@@ -34,9 +34,10 @@ func New(threadID, runID string) Translator {
 
 // translator is the default implementation of the Translator.
 type translator struct {
-	threadID      string
-	runID         string
-	lastMessageID string
+	threadID         string
+	runID            string
+	lastMessageID    string
+	receivingMessage bool
 }
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
@@ -70,7 +71,10 @@ func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, err
 		}
 		events = append(events, toolResultEvents...)
 	}
-	if rsp.IsFinalResponse() {
+	if event.IsRunnerCompletion() {
+		if t.receivingMessage {
+			events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+		}
 		events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
 	}
 	return events, nil
@@ -87,6 +91,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 		t.lastMessageID = rsp.ID
 		switch rsp.Object {
 		case model.ObjectTypeChatCompletionChunk:
+			t.receivingMessage = true
 			role := rsp.Choices[0].Delta.Role.String()
 			events = append(events, aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)))
 		case model.ObjectTypeChatCompletion:
@@ -114,6 +119,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 	// For streaming response, don't need to emit final completion event.
 	// It means the response is ended.
 	case model.ObjectTypeChatCompletion:
+		t.receivingMessage = false
 		events = append(events, aguievents.NewTextMessageEndEvent(rsp.ID))
 	default:
 		return nil, errors.New("invalid response object")
