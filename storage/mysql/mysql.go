@@ -65,6 +65,19 @@ type sqlDBClient struct {
 	db *sql.DB
 }
 
+// WrapSQLDB wraps a *sql.DB connection into a Client.
+//
+// WARNING: This function is for INTERNAL USE ONLY!
+// Do NOT call this function directly from external packages.
+// This is an internal implementation detail that may change without notice.
+// Use the public API provided by the parent storage/mysql package instead.
+//
+// This function is only exported to allow access from other internal packages
+// within the same module (memory/mysql, etc.).
+func WrapSQLDB(db *sql.DB) Client {
+	return &sqlDBClient{db: db}
+}
+
 // Exec implements Client.Exec.
 func (c *sqlDBClient) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return c.db.ExecContext(ctx, query, args...)
