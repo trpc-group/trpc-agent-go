@@ -864,8 +864,10 @@ func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
 	)
 
 	// Create many messages to trigger tailoring.
+	// With gpt-4o-mini (contextWindow=200000), maxInputTokens=130000 (65% ratio).
+	// Need ~500 messages * 300 tokens each = ~150000 tokens to exceed limit.
 	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 500; i++ {
 		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 100))))
 	}
 
@@ -3122,6 +3124,7 @@ func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// After tailoring with safety margin and ratio limit, messages should be significantly reduced.
 	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored, got %d (original: %d)", len(captured.Messages), len(messages))
-	// With 50% ratio limit and safety margins, we expect roughly 40-50% of the original messages.
-	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.55), "expected messages to be reduced to at most 55%% due to ratio limit, got %d (original: %d)", len(captured.Messages), len(messages))
+	// With 65% ratio limit (safetyMargin=10%, protocolOverhead=512, reserveOutput=2048),
+	// we expect roughly 55-65% of the original messages depending on token distribution.
+	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.70), "expected messages to be reduced to at most 70%% due to ratio limit, got %d (original: %d)", len(captured.Messages), len(messages))
 }
