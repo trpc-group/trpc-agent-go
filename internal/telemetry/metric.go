@@ -21,17 +21,13 @@ var (
 
 	// ChatMetricTRPCAgentGoClientRequestCnt records the number of chat requests made.
 	ChatMetricTRPCAgentGoClientRequestCnt metric.Int64Counter = noop.Int64Counter{}
-
 	// ChatMetricGenAIClientTokenUsage records the distribution of token usage (both input and output tokens).
 	ChatMetricGenAIClientTokenUsage metric.Int64Histogram = noop.Int64Histogram{}
-
 	// ChatMetricGenAIClientOperationDuration records the distribution of total chat operation durations in seconds.
 	ChatMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
-
 	// ChatMetricTRPCAgentGoClientTimeToFirstToken records the distribution of time to first token latency in seconds.
 	// This measures the time from request start until the first token is received.
 	ChatMetricTRPCAgentGoClientTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
-
 	// ChatMetricTRPCAgentGoClientTimePerOutputToken records the distribution of average time per output token in seconds.
 	// This metric measures the decode phase performance by calculating (total_duration - time_to_first_token) / (output_tokens - first_token_count).
 	ChatMetricTRPCAgentGoClientTimePerOutputToken metric.Float64Histogram = noop.Float64Histogram{}
@@ -135,33 +131,50 @@ var (
 
 	// ExecuteToolMetricTRPCAgentGoClientRequestCnt records the number of tool execution requests made.
 	ExecuteToolMetricTRPCAgentGoClientRequestCnt metric.Int64Counter = noop.Int64Counter{}
-
 	// ExecuteToolMetricGenAIClientOperationDuration records the distribution of tool execution durations in seconds.
 	ExecuteToolMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
 )
 
-// IncExecuteToolRequestCnt increments the tool execution request counter by 1 with the provided model name, tool name, and session attributes.
-func IncExecuteToolRequestCnt(ctx context.Context, modelName string, toolName string, sess *session.Session) {
-	appName, userID, sessionID := sessionInfo(sess)
-	ExecuteToolMetricTRPCAgentGoClientRequestCnt.Add(ctx, 1,
-		metric.WithAttributes(attribute.String(KeyGenAIOperationName, OperationExecuteTool),
-			attribute.String(KeyGenAISystem, modelName),
-			attribute.String(KeyGenAIToolName, toolName),
-			attribute.String(KeyTRPCAgentGoAppName, appName),
-			attribute.String(KeyTRPCAgentGoUserID, userID),
-			attribute.String(KeyGenAIConversationID, sessionID),
-		))
+// ExecuteToolAttributes is the attributes for tool execution metrics.
+type ExecuteToolAttributes struct {
+	RequestModelName string
+	ToolName         string
+	AppName          string
+	AgentName        string
+	UserID           string
+	SessionID        string
+	Error            error
+	ErrorType        string
 }
 
-// RecordExecuteToolOperationDuration records the duration of a tool execution operation.
-func RecordExecuteToolOperationDuration(ctx context.Context, modelName string, toolName string, sess *session.Session, duration time.Duration) {
-	appName, userID, sessionID := sessionInfo(sess)
-	ExecuteToolMetricGenAIClientOperationDuration.Record(ctx, duration.Seconds(),
-		metric.WithAttributes(attribute.String(KeyGenAIOperationName, OperationExecuteTool),
-			attribute.String(KeyGenAISystem, modelName),
-			attribute.String(KeyGenAIToolName, toolName),
-			attribute.String(KeyTRPCAgentGoAppName, appName),
-			attribute.String(KeyTRPCAgentGoUserID, userID),
-			attribute.String(KeyGenAIConversationID, sessionID),
-		))
+func (a ExecuteToolAttributes) toAttributes() []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
+		attribute.String(KeyGenAISystem, a.RequestModelName),
+		attribute.String(KeyGenAIToolName, a.ToolName),
+	}
+	if a.AppName != "" {
+		attrs = append(attrs, attribute.String(KeyTRPCAgentGoAppName, a.AppName))
+	}
+	if a.UserID != "" {
+		attrs = append(attrs, attribute.String(KeyTRPCAgentGoUserID, a.UserID))
+	}
+	if a.SessionID != "" {
+		attrs = append(attrs, attribute.String(KeyGenAIConversationID, a.SessionID))
+	}
+	if a.AgentName != "" {
+		attrs = append(attrs, attribute.String(KeyGenAIAgentName, a.AgentName))
+	}
+	if a.ErrorType != "" {
+		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
+	} else if a.Error != nil {
+		attrs = append(attrs, attribute.String(KeyErrorType, a.Error.Error()))
+	}
+	return attrs
+}
+
+func ReportExecuteToolMetrics(ctx context.Context, attrs ExecuteToolAttributes, duration time.Duration) {
+	as := attrs.toAttributes()
+	ExecuteToolMetricTRPCAgentGoClientRequestCnt.Add(ctx, 1, metric.WithAttributes(as...))
+	ExecuteToolMetricGenAIClientOperationDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(as...))
 }

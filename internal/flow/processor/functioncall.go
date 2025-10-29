@@ -227,7 +227,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 
-	var sess *session.Session
+	sess := &session.Session{}
 	if invocation != nil {
 		sess = invocation.Session
 	}
@@ -236,8 +236,15 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	if invocation != nil && invocation.Model != nil {
 		modelName = invocation.Model.Info().Name
 	}
-	itelemetry.IncExecuteToolRequestCnt(ctx, modelName, toolCall.Function.Name, sess)
-	itelemetry.RecordExecuteToolOperationDuration(ctx, modelName, toolCall.Function.Name, sess, time.Since(startTime))
+
+	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
+		RequestModelName: modelName,
+		ToolName:         toolCall.Function.Name,
+		AppName:          sess.AppName,
+		UserID:           sess.UserID,
+		SessionID:        sess.ID,
+		Error:            err,
+	}, time.Since(startTime))
 	return toolEvent, nil
 }
 
@@ -358,13 +365,19 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	// Include declaration for telemetry even when tool is missing.
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
 
-	var sess *session.Session
+	sess := &session.Session{}
 	if invocation != nil {
 		sess = invocation.Session
 	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent)
-	itelemetry.IncExecuteToolRequestCnt(ctx, invocation.Model.Info().Name, tc.Function.Name, sess)
-	itelemetry.RecordExecuteToolOperationDuration(ctx, invocation.Model.Info().Name, tc.Function.Name, sess, time.Since(startTime))
+	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
+		RequestModelName: invocation.Model.Info().Name,
+		ToolName:         tc.Function.Name,
+		AppName:          sess.AppName,
+		UserID:           sess.UserID,
+		SessionID:        sess.ID,
+		Error:            err,
+	}, time.Since(startTime))
 	// Send result back to aggregator.
 	p.sendToolResult(
 		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},
