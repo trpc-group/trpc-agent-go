@@ -30,6 +30,26 @@ func TestNew(t *testing.T) {
 		assert.Contains(t, err.Error(), "not found")
 	})
 
+	t.Run("new_with_instance_name_builder_error", func(t *testing.T) {
+		// Save old builder
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		// Register a test instance
+		postgres.RegisterPostgresInstance("test-instance",
+			postgres.WithClientConnString("postgres://test:test@localhost:5432/test"))
+
+		// Set up a mock builder that returns an error
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			return nil, errors.New("builder error from instance")
+		})
+
+		_, err := New(WithPostgresInstance("test-instance"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "create postgres client from instance name failed")
+		assert.Contains(t, err.Error(), "builder error from instance")
+	})
+
 	t.Run("new_with_direct_connection_params", func(t *testing.T) {
 		// Save old builder
 		oldBuilder := postgres.GetClientBuilder()
@@ -229,6 +249,54 @@ func TestNew(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, vs)
 		assert.True(t, vs.option.enableTSVector)
+	})
+
+	t.Run("new_with_extra_options", func(t *testing.T) {
+		oldBuilder := postgres.GetClientBuilder()
+		defer func() { postgres.SetClientBuilder(oldBuilder) }()
+
+		tc := newTestClient(t)
+		defer tc.Close()
+
+		var receivedOpts *postgres.ClientBuilderOpts
+
+		// Set up a builder that captures the options
+		postgres.SetClientBuilder(func(ctx context.Context, opts ...postgres.ClientBuilderOpt) (postgres.Client, error) {
+			builderOpts := &postgres.ClientBuilderOpts{}
+			for _, opt := range opts {
+				opt(builderOpts)
+			}
+			receivedOpts = builderOpts
+			return tc.client, nil
+		})
+
+		tc.mock.ExpectExec("CREATE EXTENSION").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		tc.mock.ExpectExec("CREATE INDEX IF NOT EXISTS (.+)_embedding_idx").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		extraOpt1 := "option1"
+		extraOpt2 := 42
+
+		vs, err := New(
+			WithHost("localhost"),
+			WithPort(5432),
+			WithUser("test"),
+			WithPassword("test"),
+			WithDatabase("test"),
+			WithEnableTSVector(false),
+			WithExtraOptions(extraOpt1, extraOpt2),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, vs)
+
+		// Verify that extra options were passed to the builder
+		require.NotNil(t, receivedOpts)
+		require.Len(t, receivedOpts.ExtraOptions, 2)
+		assert.Equal(t, extraOpt1, receivedOpts.ExtraOptions[0])
+		assert.Equal(t, extraOpt2, receivedOpts.ExtraOptions[1])
 	})
 }
 
@@ -797,6 +865,22 @@ func TestOptions(t *testing.T) {
 				assert.Equal(t, tt.expected, opts.maxResults)
 			})
 		}
+	})
+
+	t.Run("extra_options", func(t *testing.T) {
+		opts := defaultOptions
+		extraOpt1 := "option1"
+		extraOpt2 := 42
+		WithExtraOptions(extraOpt1, extraOpt2)(&opts)
+		require.Len(t, opts.extraOptions, 2)
+		assert.Equal(t, extraOpt1, opts.extraOptions[0])
+		assert.Equal(t, extraOpt2, opts.extraOptions[1])
+	})
+
+	t.Run("postgres_instance_option", func(t *testing.T) {
+		opts := defaultOptions
+		WithPostgresInstance("test-instance")(&opts)
+		assert.Equal(t, "test-instance", opts.instanceName)
 	})
 }
 

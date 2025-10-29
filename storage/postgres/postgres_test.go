@@ -545,3 +545,97 @@ func TestRealSQLClient_Query_HandlerError(t *testing.T) {
 func TestDefaultClientBuilder_WithConfigFunc(t *testing.T) {
 	t.Skip("Skipping test that requires a real PostgreSQL connection")
 }
+
+// TestRealSQLClient_Query_RowsError tests rows.Err() error path
+func TestRealSQLClient_Query_RowsError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	client := &sqlClient{db: db}
+
+	rows := sqlmock.NewRows([]string{"id", "name"}).
+		AddRow(1, "test1").
+		AddRow(2, "test2").
+		RowError(1, errors.New("rows iteration error"))
+
+	mock.ExpectQuery("SELECT").WillReturnRows(rows)
+
+	err = client.Query(context.Background(), func(rows *sql.Rows) error {
+		for rows.Next() {
+			var id int
+			var name string
+			if err := rows.Scan(&id, &name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, "SELECT * FROM test")
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rows iteration")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestRealSQLClient_Transaction_Panic tests panic handling in transaction
+func TestRealSQLClient_Transaction_Panic(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	client := &sqlClient{db: db}
+
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	defer func() {
+		if r := recover(); r != nil {
+			require.Equal(t, "panic in transaction", r)
+		} else {
+			t.Fatal("expected panic but didn't get one")
+		}
+	}()
+
+	_ = client.Transaction(context.Background(), func(tx *sql.Tx) error {
+		panic("panic in transaction")
+	})
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDefaultClientBuilder_PingError tests PingContext error path
+func TestDefaultClientBuilder_PingError(t *testing.T) {
+	// Use an invalid host/port combination that will fail on ping
+	// The connection string is valid format-wise, but points to a non-existent server
+	const badConnString = "postgres://user:pass@255.255.255.255:1/testdb?connect_timeout=1"
+
+	// Note: This test may take a few seconds due to connection timeout
+	// Use a reasonable timeout to prevent the test from hanging
+	_, err := DefaultClientBuilder(context.Background(), WithClientConnString(badConnString))
+	require.Error(t, err)
+	// The error should be about ping or connection failure
+	require.Contains(t, err.Error(), "postgres")
+}
+
+// TestDefaultClientBuilder_WithConfigFuncApplied tests that ConfigFunc is actually called
+func TestDefaultClientBuilder_WithConfigFuncApplied(t *testing.T) {
+	// We can test that ConfigFunc is applied by using a real connection
+	// However, since we can't rely on a real database, we'll skip this
+	// The ConfigFunc application is already tested in TestWithConfigFunc
+	t.Skip("ConfigFunc application requires a real database connection")
+}
+
+// TestDefaultClientBuilder_ConfigFuncNil tests the case where ConfigFunc is nil
+func TestDefaultClientBuilder_ConfigFuncNil(t *testing.T) {
+	// This test verifies that when ConfigFunc is nil, the code doesn't panic
+	// We use an invalid connection string that will fail on ping,
+	// but should pass the ConfigFunc nil check
+	const badConnString = "postgres://user:pass@255.255.255.255:1/testdb?connect_timeout=1"
+
+	// No ConfigFunc is provided, so it should be nil
+	_, err := DefaultClientBuilder(context.Background(), WithClientConnString(badConnString))
+	require.Error(t, err)
+	// The error should be about ping, not about ConfigFunc
+	require.Contains(t, err.Error(), "postgres")
+}

@@ -281,3 +281,11 @@ func WithPostgresInstance(instanceName string) Option {
 		o.instanceName = instanceName
 	}
 }
+
+// WithExtraOptions sets extra options for storage/postgres.
+// This is mainly used for customized postgres client builders.
+func WithExtraOptions(extraOptions ...any) Option {
+	return func(o *options) {
+		o.extraOptions = append(o.extraOptions, extraOptions...)
+	}
+}
