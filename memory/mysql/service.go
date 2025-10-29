@@ -43,7 +43,7 @@ var tableNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 //	Index: (app_name, user_id).
 type Service struct {
 	opts      ServiceOpts
-	db        storage.ClientInterface
+	db        storage.Client
 	tableName string
 
 	cachedTools map[string]tool.Tool
@@ -73,7 +73,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	builder := storage.GetClientBuilder()
 	var (
-		db  storage.ClientInterface
+		db  storage.Client
 		err error
 	)
 
@@ -132,7 +132,7 @@ func (s *Service) initTable(ctx context.Context) error {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`, s.tableName)
 
-	_, err := s.db.ExecContext(ctx, query)
+	_, err := s.db.Exec(ctx, query)
 	return err
 }
 
@@ -148,7 +148,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		// #nosec G201
 		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = ? AND user_id = ?", s.tableName)
 		var count int
-		if err := s.db.QueryRowContext(ctx, countQuery, userKey.AppName, userKey.UserID).Scan(&count); err != nil {
+		if err := s.db.QueryRow(ctx, []any{&count}, countQuery, userKey.AppName, userKey.UserID); err != nil {
 			return fmt.Errorf("mysql memory service check memory count failed: %w", err)
 		}
 		if count >= s.opts.memoryLimit {
@@ -183,7 +183,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		"INSERT INTO `%s` (app_name, user_id, memory_id, memory_data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
 		s.tableName,
 	)
-	_, err = s.db.ExecContext(ctx, insertQuery, userKey.AppName, userKey.UserID, entry.ID, memoryData, now, now)
+	_, err = s.db.Exec(ctx, insertQuery, userKey.AppName, userKey.UserID, entry.ID, memoryData, now, now)
 	if err != nil {
 		return fmt.Errorf("store memory entry failed: %w", err)
 	}
@@ -205,7 +205,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		s.tableName,
 	)
 	var memoryData []byte
-	err := s.db.QueryRowContext(ctx, selectQuery, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID).Scan(&memoryData)
+	err := s.db.QueryRow(ctx, []any{&memoryData}, selectQuery, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
@@ -235,7 +235,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		"UPDATE %s SET memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ?",
 		s.tableName,
 	)
-	_, err = s.db.ExecContext(ctx, updateQuery, updated, now, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
+	_, err = s.db.Exec(ctx, updateQuery, updated, now, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
 	}
@@ -255,7 +255,7 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 		"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
 		s.tableName,
 	)
-	_, err := s.db.ExecContext(ctx, deleteQuery, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
+	_, err := s.db.Exec(ctx, deleteQuery, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
 	if err != nil {
 		return fmt.Errorf("delete memory entry failed: %w", err)
 	}
@@ -275,7 +275,7 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 		"DELETE FROM %s WHERE app_name = ? AND user_id = ?",
 		s.tableName,
 	)
-	_, err := s.db.ExecContext(ctx, deleteQuery, userKey.AppName, userKey.UserID)
+	_, err := s.db.Exec(ctx, deleteQuery, userKey.AppName, userKey.UserID)
 	if err != nil {
 		return fmt.Errorf("clear memories failed: %w", err)
 	}
@@ -299,28 +299,23 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, userKey.AppName, userKey.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("list memories failed: %w", err)
-	}
-	defer rows.Close()
-
 	entries := make([]*memory.Entry, 0)
-	for rows.Next() {
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		var memoryData []byte
 		if err := rows.Scan(&memoryData); err != nil {
-			return nil, fmt.Errorf("scan memory data failed: %w", err)
+			return fmt.Errorf("scan memory data failed: %w", err)
 		}
 
 		e := &memory.Entry{}
 		if err := json.Unmarshal(memoryData, e); err != nil {
-			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
+			return fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
 		entries = append(entries, e)
-	}
+		return nil
+	}, query, userKey.AppName, userKey.UserID)
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate rows failed: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("list memories failed: %w", err)
 	}
 
 	return entries, nil
@@ -340,31 +335,26 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		s.tableName,
 	)
 
-	rows, err := s.db.QueryContext(ctx, selectQuery, userKey.AppName, userKey.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("search memories failed: %w", err)
-	}
-	defer rows.Close()
-
 	results := make([]*memory.Entry, 0)
-	for rows.Next() {
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		var memoryData []byte
 		if err := rows.Scan(&memoryData); err != nil {
-			return nil, fmt.Errorf("scan memory data failed: %w", err)
+			return fmt.Errorf("scan memory data failed: %w", err)
 		}
 
 		e := &memory.Entry{}
 		if err := json.Unmarshal(memoryData, e); err != nil {
-			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
+			return fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
 
 		if imemory.MatchMemoryEntry(e, query) {
 			results = append(results, e)
 		}
-	}
+		return nil
+	}, selectQuery, userKey.AppName, userKey.UserID)
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate rows failed: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
 	// Stable sort by updated time desc.

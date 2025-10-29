@@ -161,7 +161,7 @@ func TestSetAndGetClientBuilder(t *testing.T) {
 	defer SetClientBuilder(originalBuilder)
 
 	// Create a custom builder.
-	customBuilder := func(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
+	customBuilder := func(builderOpts ...ClientBuilderOpt) (Client, error) {
 		return nil, sql.ErrConnDone
 	}
 
@@ -195,7 +195,7 @@ func TestDefaultClientBuilder_SuccessPath(t *testing.T) {
 	mock.ExpectPing()
 
 	// Create a custom builder that simulates DefaultClientBuilder's success path.
-	successBuilder := func(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
+	successBuilder := func(builderOpts ...ClientBuilderOpt) (Client, error) {
 		// Apply options (same as DefaultClientBuilder).
 		o := &ClientBuilderOpts{}
 		for _, opt := range builderOpts {
@@ -232,7 +232,7 @@ func TestDefaultClientBuilder_SuccessPath(t *testing.T) {
 		}
 
 		// Return success (this is the path we want to test).
-		return db, nil
+		return &SQLDBClient{DB: db}, nil
 	}
 
 	// Set the custom builder.
@@ -286,13 +286,13 @@ func TestDefaultClientBuilder_ConnectionPoolApplication(t *testing.T) {
 }
 
 func TestDefaultClientBuilder_EmptyDSN(t *testing.T) {
-	_, err := defaultClientBuilder()
+	_, err := DefaultClientBuilder()
 	require.Error(t, err)
 	assert.EqualError(t, err, "mysql: dsn is empty")
 }
 
 func TestDefaultClientBuilder_InvalidDSN(t *testing.T) {
-	_, err := defaultClientBuilder(WithClientBuilderDSN("invalid-dsn-format"))
+	_, err := DefaultClientBuilder(WithClientBuilderDSN("invalid-dsn-format"))
 	require.Error(t, err)
 	// Error occurs at open stage for invalid DSN format.
 	assert.Contains(t, err.Error(), "mysql: open connection")
@@ -300,7 +300,7 @@ func TestDefaultClientBuilder_InvalidDSN(t *testing.T) {
 
 func TestDefaultClientBuilder_PingFailure(t *testing.T) {
 	// This test will fail at ping stage (no real MySQL server).
-	_, err := defaultClientBuilder(
+	_, err := DefaultClientBuilder(
 		WithClientBuilderDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
 	)
 	require.Error(t, err)
@@ -310,7 +310,7 @@ func TestDefaultClientBuilder_PingFailure(t *testing.T) {
 func TestDefaultClientBuilder_WithAllOptions(t *testing.T) {
 	// Test that all options are processed correctly.
 	// This will fail to connect but tests option processing.
-	_, err := defaultClientBuilder(
+	_, err := DefaultClientBuilder(
 		WithClientBuilderDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
 		WithMaxOpenConns(50),
 		WithMaxIdleConns(5),
@@ -339,7 +339,7 @@ func TestDefaultClientBuilder_Integration(t *testing.T) {
 		defer SetClientBuilder(originalBuilder)
 
 		// Set a custom builder that returns our mock.
-		SetClientBuilder(func(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
+		SetClientBuilder(func(builderOpts ...ClientBuilderOpt) (Client, error) {
 			o := &ClientBuilderOpts{}
 			for _, opt := range builderOpts {
 				opt(o)
@@ -368,7 +368,7 @@ func TestDefaultClientBuilder_Integration(t *testing.T) {
 				return nil, err
 			}
 
-			return db, nil
+			return &SQLDBClient{DB: db}, nil
 		})
 
 		// Test the builder.
@@ -386,42 +386,41 @@ func TestDefaultClientBuilder_Integration(t *testing.T) {
 	})
 }
 
-// TestClientInterfaceCompliance tests that ClientInterface is properly implemented
-func TestClientInterfaceCompliance(t *testing.T) {
-	t.Run("dbWrapper implements ClientInterface", func(t *testing.T) {
+// TestClientCompliance tests that Client interface is properly implemented
+func TestClientCompliance(t *testing.T) {
+	t.Run("sqlDBClient implements Client", func(t *testing.T) {
 		mockDB, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		defer mockDB.Close()
 
 		// Test that our wrapper implements the interface
-		var client ClientInterface = mockDB
+		var client Client = &SQLDBClient{DB: mockDB}
 
-		// Test ExecContext
+		// Test Exec
 		mock.ExpectExec("INSERT INTO test").WillReturnResult(sqlmock.NewResult(1, 1))
-		result, err := client.ExecContext(context.Background(), "INSERT INTO test VALUES (1)")
+		result, err := client.Exec(context.Background(), "INSERT INTO test VALUES (1)")
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
-		// Test QueryContext
+		// Test Query (callback pattern)
 		rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "test")
 		mock.ExpectQuery("SELECT id, name FROM test").WillReturnRows(rows)
-		queryResult, err := client.QueryContext(context.Background(), "SELECT id, name FROM test")
+		var id int
+		var name string
+		err = client.Query(context.Background(), func(rows *sql.Rows) error {
+			return rows.Scan(&id, &name)
+		}, "SELECT id, name FROM test")
 		require.NoError(t, err)
-		defer queryResult.Close()
+		assert.Equal(t, 1, id)
+		assert.Equal(t, "test", name)
 
-		// Test QueryRowContext
+		// Test QueryRow
 		countRows := sqlmock.NewRows([]string{"count"}).AddRow(1)
 		mock.ExpectQuery("SELECT COUNT").WillReturnRows(countRows)
-		row := client.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM test")
 		var count int
-		err = row.Scan(&count)
+		err = client.QueryRow(context.Background(), []any{&count}, "SELECT COUNT(*) FROM test")
 		require.NoError(t, err)
 		assert.Equal(t, 1, count)
-
-		// Test Ping
-		mock.ExpectPing()
-		err = client.Ping()
-		require.NoError(t, err)
 
 		// Test Close (sqlmock doesn't track Close calls, so we just call it)
 		client.Close()
@@ -430,12 +429,12 @@ func TestClientInterfaceCompliance(t *testing.T) {
 	})
 }
 
-// TestDefaultClientBuilderInterface tests that DefaultClientBuilder returns ClientInterface
+// TestDefaultClientBuilderInterface tests that DefaultClientBuilder returns Client interface
 func TestDefaultClientBuilderInterface(t *testing.T) {
-	t.Run("returns ClientInterface", func(t *testing.T) {
+	t.Run("returns Client", func(t *testing.T) {
 		// This test will fail because we don't have a real MySQL server
 		// But it validates that the function signature is correct
-		_, err := defaultClientBuilder(WithClientBuilderDSN("invalid-dsn"))
+		_, err := DefaultClientBuilder(WithClientBuilderDSN("invalid-dsn"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "mysql: open connection")
 	})
@@ -443,7 +442,7 @@ func TestDefaultClientBuilderInterface(t *testing.T) {
 	t.Run("with valid options", func(t *testing.T) {
 		// Test that all options are processed correctly
 		// This will fail at connection time but validates option processing
-		_, err := defaultClientBuilder(
+		_, err := DefaultClientBuilder(
 			WithClientBuilderDSN("user:password@tcp(localhost:3306)/testdb"),
 			WithMaxOpenConns(10),
 			WithMaxIdleConns(5),
@@ -453,5 +452,248 @@ func TestDefaultClientBuilderInterface(t *testing.T) {
 		// Should fail at connection or ping stage
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "mysql")
+	})
+}
+
+// TestSQLDBClient_Query tests the Query method with callback pattern
+func TestSQLDBClient_Query(t *testing.T) {
+	t.Run("successful query with multiple rows", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		rows := sqlmock.NewRows([]string{"id", "name"}).
+			AddRow(1, "Alice").
+			AddRow(2, "Bob").
+			AddRow(3, "Charlie")
+
+		mock.ExpectQuery("SELECT id, name FROM users").WillReturnRows(rows)
+
+		var results []struct {
+			ID   int
+			Name string
+		}
+
+		err = client.Query(context.Background(), func(rows *sql.Rows) error {
+			var id int
+			var name string
+			if err := rows.Scan(&id, &name); err != nil {
+				return err
+			}
+			results = append(results, struct {
+				ID   int
+				Name string
+			}{ID: id, Name: name})
+			return nil
+		}, "SELECT id, name FROM users")
+
+		require.NoError(t, err)
+		assert.Len(t, results, 3)
+		assert.Equal(t, 1, results[0].ID)
+		assert.Equal(t, "Alice", results[0].Name)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query with ErrBreak", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		rows := sqlmock.NewRows([]string{"id", "name"}).
+			AddRow(1, "Alice").
+			AddRow(2, "Bob").
+			AddRow(3, "Charlie")
+
+		mock.ExpectQuery("SELECT id, name FROM users").WillReturnRows(rows)
+
+		var results []struct {
+			ID   int
+			Name string
+		}
+
+		err = client.Query(context.Background(), func(rows *sql.Rows) error {
+			var id int
+			var name string
+			if err := rows.Scan(&id, &name); err != nil {
+				return err
+			}
+			results = append(results, struct {
+				ID   int
+				Name string
+			}{ID: id, Name: name})
+			// Stop after first row
+			if id == 1 {
+				return ErrBreak
+			}
+			return nil
+		}, "SELECT id, name FROM users")
+
+		require.NoError(t, err)
+		assert.Len(t, results, 1)
+		assert.Equal(t, 1, results[0].ID)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query with callback error", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		rows := sqlmock.NewRows([]string{"id", "name"}).
+			AddRow(1, "Alice").
+			AddRow(2, "Bob")
+
+		mock.ExpectQuery("SELECT id, name FROM users").WillReturnRows(rows)
+
+		expectedErr := errors.New("callback error")
+		err = client.Query(context.Background(), func(rows *sql.Rows) error {
+			return expectedErr
+		}, "SELECT id, name FROM users")
+
+		require.Error(t, err)
+		assert.Equal(t, expectedErr, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query error", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		mock.ExpectQuery("SELECT id, name FROM users").
+			WillReturnError(errors.New("query error"))
+
+		err = client.Query(context.Background(), func(rows *sql.Rows) error {
+			return nil
+		}, "SELECT id, name FROM users")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "query error")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+// TestSQLDBClient_Transaction tests the Transaction method
+func TestSQLDBClient_Transaction(t *testing.T) {
+	t.Run("successful transaction", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("UPDATE accounts").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+
+		err = client.Transaction(context.Background(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(context.Background(), "INSERT INTO users (name) VALUES (?)", "Alice")
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(context.Background(), "UPDATE accounts SET balance = balance - 100 WHERE id = 1")
+			return err
+		})
+
+		require.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("transaction with rollback on error", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("UPDATE accounts").WillReturnError(errors.New("update error"))
+		mock.ExpectRollback()
+
+		expectedErr := errors.New("update error")
+		err = client.Transaction(context.Background(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(context.Background(), "INSERT INTO users (name) VALUES (?)", "Alice")
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(context.Background(), "UPDATE accounts SET balance = balance - 100 WHERE id = 1")
+			return err
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), expectedErr.Error())
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("transaction with custom options", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit()
+
+		err = client.Transaction(context.Background(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(context.Background(), "INSERT INTO users (name) VALUES (?)", "Alice")
+			return err
+		}, func(opts *sql.TxOptions) {
+			opts.Isolation = sql.LevelReadCommitted
+			opts.ReadOnly = false
+		})
+
+		require.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("begin transaction error", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		mock.ExpectBegin().WillReturnError(errors.New("begin error"))
+
+		err = client.Transaction(context.Background(), func(tx *sql.Tx) error {
+			return nil
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "begin error")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("commit error", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &SQLDBClient{DB: mockDB}
+
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit().WillReturnError(errors.New("commit error"))
+
+		err = client.Transaction(context.Background(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(context.Background(), "INSERT INTO users (name) VALUES (?)", "Alice")
+			return err
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "commit error")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }

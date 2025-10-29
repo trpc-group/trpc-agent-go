@@ -7,7 +7,7 @@
 //
 //
 
-// Package mysql provides the mysql instance info management.
+// Package mysql provides the mysql instance info management and client interface.
 package mysql
 
 import (
@@ -26,29 +26,107 @@ func init() {
 
 var mysqlRegistry map[string][]ClientBuilderOpt
 
-// ClientInterface defines the interface for database operations.
+// Client defines the interface for database operations using callback pattern.
 // This interface abstracts the common database operations needed by the
 // memory service, making it easier to inject mock implementations for testing.
-type ClientInterface interface {
-	// ExecContext executes a query without returning any rows.
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+type Client interface {
+	// Exec executes a query without returning any rows.
+	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
 
-	// QueryContext executes a query that returns rows.
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	// Query executes a query that returns rows, calling the next function for each row.
+	Query(ctx context.Context, next NextFunc, query string, args ...any) error
 
-	// QueryRowContext executes a query that is expected to return at most one row.
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	// QueryRow executes a query that is expected to return at most one row and scans into dest.
+	QueryRow(ctx context.Context, dest []any, query string, args ...any) error
 
-	// Ping verifies a connection to the database is still alive.
-	Ping() error
+	// Transaction executes a function within a transaction.
+	Transaction(ctx context.Context, fn TxFunc, opts ...TxOption) error
 
 	// Close closes the database connection.
 	Close() error
 }
 
-type clientBuilder func(builderOpts ...ClientBuilderOpt) (ClientInterface, error)
+// NextFunc is called for each row in a query result.
+// Return ErrBreak to stop iteration early, or any other error to abort with error.
+type NextFunc func(*sql.Rows) error
 
-var globalBuilder clientBuilder = defaultClientBuilder
+// TxFunc is a user transaction function.
+// Return nil to commit, or any error to rollback.
+type TxFunc func(*sql.Tx) error
+
+// TxOption configures transaction options.
+type TxOption func(*sql.TxOptions)
+
+// ErrBreak can be returned from NextFunc to stop iteration early without error.
+var ErrBreak = errors.New("mysql scan rows break")
+
+// SQLDBClient wraps *sql.DB to implement the Client interface using callback pattern.
+type SQLDBClient struct {
+	DB *sql.DB
+}
+
+// Exec implements Client.Exec.
+func (c *SQLDBClient) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return c.DB.ExecContext(ctx, query, args...)
+}
+
+// Query implements Client.Query using callback pattern.
+func (c *SQLDBClient) Query(ctx context.Context, next NextFunc, query string, args ...any) error {
+	rows, err := c.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	// Iterate all rows, calling the callback function.
+	for rows.Next() {
+		if err := next(rows); err != nil {
+			if err == ErrBreak {
+				break
+			}
+			return err
+		}
+	}
+
+	return rows.Err()
+}
+
+// QueryRow implements Client.QueryRow.
+func (c *SQLDBClient) QueryRow(ctx context.Context, dest []any, query string, args ...any) error {
+	row := c.DB.QueryRowContext(ctx, query, args...)
+	return row.Scan(dest...)
+}
+
+// Transaction implements Client.Transaction using callback pattern.
+func (c *SQLDBClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOption) error {
+	txOpts := &sql.TxOptions{}
+	for _, opt := range opts {
+		opt(txOpts)
+	}
+
+	tx, err := c.DB.BeginTx(ctx, txOpts)
+	if err != nil {
+		return err
+	}
+
+	// Execute user transaction function.
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// Close implements Client.Close.
+func (c *SQLDBClient) Close() error {
+	return c.DB.Close()
+}
+
+// clientBuilder is the function type for building Client instances.
+type clientBuilder func(builderOpts ...ClientBuilderOpt) (Client, error)
+
+var globalBuilder clientBuilder = DefaultClientBuilder
 
 // SetClientBuilder sets the mysql client builder.
 func SetClientBuilder(builder clientBuilder) {
@@ -60,8 +138,8 @@ func GetClientBuilder() clientBuilder {
 	return globalBuilder
 }
 
-// defaultClientBuilder is the default mysql client builder.
-func defaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
+// DefaultClientBuilder is the default mysql client builder.
+func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
 	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)
@@ -96,7 +174,7 @@ func defaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, err
 		return nil, fmt.Errorf("mysql: ping failed: %w", err)
 	}
 
-	return db, nil
+	return &SQLDBClient{DB: db}, nil
 }
 
 // ClientBuilderOpt is the option for the mysql client.

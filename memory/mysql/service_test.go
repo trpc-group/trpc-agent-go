@@ -28,7 +28,7 @@ import (
 )
 
 // mockClientBuilder creates a mock MySQL client for testing.
-func mockClientBuilder(builderOpts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
+func mockClientBuilder(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
 	// For unit tests, we can use an in-memory SQLite database or mock
 	// Here we just return an error to demonstrate the pattern
 	return nil, sql.ErrConnDone
@@ -50,7 +50,7 @@ func setupMockService(t *testing.T, db *sql.DB) *Service {
 			enabledTools: make(map[string]bool),
 			tableName:    "memories",
 		},
-		db:          db,
+		db:          &storage.SQLDBClient{DB: db},
 		tableName:   "memories",
 		cachedTools: make(map[string]tool.Tool),
 	}
@@ -131,8 +131,8 @@ func TestNewService_WithAutoCreateTable(t *testing.T) {
 	defer mockDB.Close()
 
 	originalBuilder := storage.GetClientBuilder()
-	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.ClientInterface, error) {
-		return mockDB, nil
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &storage.SQLDBClient{DB: mockDB}, nil
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
@@ -854,7 +854,7 @@ func TestReadMemories_ScanError(t *testing.T) {
 
 	_, err := s.ReadMemories(ctx, userKey, 10)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "iterate rows failed")
+	assert.Contains(t, err.Error(), "scan error")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -966,7 +966,7 @@ func TestSearchMemories_ScanError(t *testing.T) {
 
 	_, err := s.SearchMemories(ctx, userKey, "query")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "iterate rows failed")
+	assert.Contains(t, err.Error(), "scan error")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -1003,7 +1003,7 @@ func TestService_Tools(t *testing.T) {
 			toolCreators: make(map[string]memory.ToolCreator),
 			enabledTools: make(map[string]bool),
 		},
-		db:          db,
+		db:          &storage.SQLDBClient{DB: db},
 		tableName:   "memories",
 		cachedTools: make(map[string]tool.Tool),
 	}
@@ -1042,7 +1042,7 @@ func TestService_Close(t *testing.T) {
 
 	t.Run("with mock db", func(t *testing.T) {
 		db, mock := setupMockDB(t)
-		s := &Service{db: db}
+		s := &Service{db: &storage.SQLDBClient{DB: db}}
 
 		mock.ExpectClose()
 		err := s.Close()
@@ -1081,6 +1081,156 @@ func TestInitTable_Error(t *testing.T) {
 
 	err := s.initTable(ctx)
 	require.Error(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSearchMemories_SortingWithEqualUpdatedAt tests sorting when multiple memories have the same updated_at
+func TestSearchMemories_SortingWithEqualUpdatedAt(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	now := time.Now()
+	earlier := now.Add(-1 * time.Hour)
+
+	// Create entries with same updated_at but different created_at
+	entry1 := &memory.Entry{
+		ID:      "mem1",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "memory 1 with query",
+			Topics:      []string{"topic1"},
+			LastUpdated: &now,
+		},
+		CreatedAt: earlier,
+		UpdatedAt: now,
+	}
+	entry2 := &memory.Entry{
+		ID:      "mem2",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "memory 2 with query",
+			Topics:      []string{"topic2"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	entry1JSON, _ := json.Marshal(entry1)
+	entry2JSON, _ := json.Marshal(entry2)
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(entry1JSON).
+			AddRow(entry2JSON))
+
+	entries, err := s.SearchMemories(ctx, userKey, "query")
+	require.NoError(t, err)
+	assert.Len(t, entries, 2)
+	// Should be sorted by created_at desc when updated_at is equal
+	assert.Equal(t, "mem2", entries[0].ID)
+	assert.Equal(t, "mem1", entries[1].ID)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSearchMemories_SortingWithDifferentUpdatedAt tests sorting when memories have different updated_at
+func TestSearchMemories_SortingWithDifferentUpdatedAt(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	now := time.Now()
+	earlier := now.Add(-1 * time.Hour)
+
+	// Create entries with different updated_at
+	entry1 := &memory.Entry{
+		ID:      "mem1",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "memory 1 with query",
+			Topics:      []string{"topic1"},
+			LastUpdated: &earlier,
+		},
+		CreatedAt: now,
+		UpdatedAt: earlier,
+	}
+	entry2 := &memory.Entry{
+		ID:      "mem2",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "memory 2 with query",
+			Topics:      []string{"topic2"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	entry1JSON, _ := json.Marshal(entry1)
+	entry2JSON, _ := json.Marshal(entry2)
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(entry1JSON).
+			AddRow(entry2JSON))
+
+	entries, err := s.SearchMemories(ctx, userKey, "query")
+	require.NoError(t, err)
+	assert.Len(t, entries, 2)
+	// Should be sorted by updated_at desc
+	assert.Equal(t, "mem2", entries[0].ID)
+	assert.Equal(t, "mem1", entries[1].ID)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSearchMemories_NoMatches tests search with no matching memories
+func TestSearchMemories_NoMatches(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	now := time.Now()
+	entry := &memory.Entry{
+		ID:      "mem1",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "memory without match",
+			Topics:      []string{"topic1"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	entryJSON, _ := json.Marshal(entry)
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryJSON))
+
+	entries, err := s.SearchMemories(ctx, userKey, "nonexistent")
+	require.NoError(t, err)
+	assert.Len(t, entries, 0)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
