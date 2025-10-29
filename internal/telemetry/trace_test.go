@@ -136,7 +136,7 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	}
 	req := &model.Request{}
 	resp := &model.Response{}
-	TraceChat(span, inv, req, resp, "event1")
+	TraceChat(span, inv, req, resp, "event1", 0)
 	require.True(t, span.called, "expected SetAttributes in TraceChat")
 }
 
@@ -181,7 +181,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	inv2 := &agent.Invocation{InvocationID: "i1", Session: &session.Session{ID: "s1"}}
 	req := &model.Request{GenerationConfig: model.GenerationConfig{Stop: []string{"END"}}, Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}
 	s5 := newRecordingSpan()
-	TraceChat(s5, inv2, req, &model.Response{ID: "rid"}, "e1")
+	TraceChat(s5, inv2, req, &model.Response{ID: "rid"}, "e1", 0)
 	if !hasAttr(s5.attrs, KeyInvocationID, "i1") {
 		t.Fatalf("missing invocation id")
 	}
@@ -214,7 +214,7 @@ func TestTrace_AdditionalBranches(t *testing.T) {
 	// TraceChat with nil req and nil rsp
 	inv := &agent.Invocation{InvocationID: "invx"}
 	s4 := newRecordingSpan()
-	TraceChat(s4, inv, nil, nil, "evt")
+	TraceChat(s4, inv, nil, nil, "evt", 0)
 }
 
 func TestTraceChat_WithChoicesAndError(t *testing.T) {
@@ -223,7 +223,7 @@ func TestTraceChat_WithChoicesAndError(t *testing.T) {
 	stop := "stop"
 	rsp := &model.Response{ID: "rid3", Model: "m3", Usage: &model.Usage{PromptTokens: 2, CompletionTokens: 3}, Choices: []model.Choice{{FinishReason: &stop}}, Error: &model.ResponseError{Message: "bad", Type: "api_error"}}
 	s := newRecordingSpan()
-	TraceChat(s, inv, req, rsp, "e3")
+	TraceChat(s, inv, req, rsp, "e3", 0)
 	if s.status != codes.Error {
 		t.Fatalf("expected error status on chat")
 	}

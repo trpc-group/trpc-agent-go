@@ -23,6 +23,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -179,11 +180,19 @@ func (f *Flow) runOneStep(
 
 	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
-	var errType string
-	if err != nil {
-		errType = err.Error()
+
+	sess := &session.Session{}
+	if invocation.Session != nil {
+		sess = invocation.Session
 	}
-	itelemetry.IncChatRequestCnt(ctx, modelName, invocation.Session, invocation.AgentName, errType)
+	itelemetry.IncChatRequestCnt(ctx, itelemetry.ChatAttributes{
+		RequestModelName: modelName,
+		AgentName:        invocation.AgentName,
+		SessionID:        sess.ID,
+		UserID:           sess.UserID,
+		AppName:          sess.AppName,
+		Error:            err,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -208,26 +217,31 @@ func (f *Flow) processStreamingResponses(
 	totalCompletionTokens := 0
 	totalPromptTokens := 0
 	defer func() {
-		var (
-			modelName string
-			errorType string
-		)
+		attrs := itelemetry.ChatAttributes{
+			AgentName: invocation.AgentName,
+		}
 		if invocation.Model != nil {
-			modelName = invocation.Model.Info().Name
+			attrs.RequestModelName = invocation.Model.Info().Name
+		}
+		if invocation.Session != nil {
+			attrs.SessionID = invocation.Session.ID
+			attrs.UserID = invocation.Session.UserID
+			attrs.AppName = invocation.Session.AppName
 		}
 		requestDuration := time.Since(start)
 
 		if lastEvent != nil && lastEvent.Error != nil {
-			errorType = lastEvent.Error.Type
+			attrs.ErrorType = lastEvent.Error.Type
 		}
-		itelemetry.RecordChatRequestDuration(ctx, modelName, invocation.Session, requestDuration, errorType, invocation.AgentName)
-		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, modelName, invocation.Session, firstTokenTimeDuration, invocation.AgentName)
-		itelemetry.RecordChatInputTokenUsage(ctx, modelName, invocation.Session, int64(totalPromptTokens), invocation.AgentName)
-		itelemetry.RecordChatOutputTokenUsage(ctx, modelName, invocation.Session, int64(totalCompletionTokens), invocation.AgentName)
+
+		itelemetry.RecordChatRequestDuration(ctx, attrs, requestDuration)
+		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, attrs, firstTokenTimeDuration)
+		itelemetry.RecordChatInputTokenUsage(ctx, attrs, int64(totalPromptTokens))
+		itelemetry.RecordChatOutputTokenUsage(ctx, attrs, int64(totalCompletionTokens))
 		if tokens, duration := totalCompletionTokens-firstCompleteToken, requestDuration-firstTokenTimeDuration; tokens > 0 && duration > 0 {
-			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, modelName, invocation.Session, duration/time.Duration(tokens), invocation.AgentName)
+			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, attrs, duration/time.Duration(tokens))
 		} else if tokens == 0 && totalCompletionTokens > 0 {
-			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, modelName, invocation.Session, requestDuration/time.Duration(totalCompletionTokens), invocation.AgentName)
+			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, attrs, requestDuration/time.Duration(totalCompletionTokens))
 		}
 	}()
 
@@ -267,7 +281,7 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID)
+		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, firstTokenTimeDuration)
 
 	}
 

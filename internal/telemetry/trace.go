@@ -14,6 +14,7 @@ package telemetry
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -95,8 +96,9 @@ var (
 	KeyRunnerInput     = "trpc.go.agent.runner.input"
 	KeyRunnerOutput    = "trpc.go.agent.runner.output"
 
-	KeyTRPCAgentGoAppName = "trpc_go_agent.app.name"
-	KeyTRPCAgentGoUserID  = "trpc_go_agent.user.id"
+	KeyTRPCAgentGoAppName                = "trpc_go_agent.app.name"
+	KeyTRPCAgentGoUserID                 = "trpc_go_agent.user.id"
+	KeyTRPCAgentGoClientTimeToFirstToken = "trpc_agent_go.client.time_to_first_token" // #nosec G101 - this is a metric key name, not a credential.
 
 	// GenAI operation attributes
 	KeyGenAIOperationName = "gen_ai.operation.name"
@@ -315,11 +317,14 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 }
 
 // TraceChat traces the invocation of an LLM call.
-func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
+func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string, timeToFirstToken time.Duration) {
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationChat),
 		attribute.String(KeyEventID, eventID),
+	}
+	if timeToFirstToken > 0 {
+		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
 	}
 
 	// Add session ID if session exists

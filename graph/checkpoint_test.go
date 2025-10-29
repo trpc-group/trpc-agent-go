@@ -913,6 +913,8 @@ func TestExecuteModelWithEvents_NoResponseError(t *testing.T) {
 		EventChan:      make(chan *event.Event, 1),
 		InvocationID:   "inv",
 		SessionID:      "sid",
+		AppName:        "app",
+		UserID:         "user",
 		Span:           span,
 		NodeID:         "n",
 	})
@@ -937,7 +939,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 	// Event emission path
 	evch := make(chan *event.Event, 1)
 	rsp := &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
-	err := processModelResponse(context.Background(), modelResponseConfig{
+	_, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       rsp,
 		ModelCallbacks: nil,
 		EventChan:      evch,
@@ -953,7 +955,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 
 	// Model API error path
 	errRsp := &model.Response{Error: &model.ResponseError{Message: "boom"}}
-	err = processModelResponse(context.Background(), modelResponseConfig{
+	_, err = processModelResponse(context.Background(), modelResponseConfig{
 		Response:     errRsp,
 		EventChan:    make(chan *event.Event, 1),
 		InvocationID: "inv",
@@ -968,7 +970,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// unbuffered channel; since ctx already canceled, select should choose ctx.Done
-	err = processModelResponse(ctx, modelResponseConfig{
+	_, err = processModelResponse(ctx, modelResponseConfig{
 		Response:     rsp,
 		EventChan:    make(chan *event.Event),
 		InvocationID: "inv",
@@ -985,7 +987,7 @@ func TestProcessModelResponse_DoneSkipsEvent(t *testing.T) {
 	_, span := tracer.Start(context.Background(), "s")
 	evch := make(chan *event.Event, 1)
 	rsp := &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
-	err := processModelResponse(context.Background(), modelResponseConfig{
+	_, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:     rsp,
 		EventChan:    evch,
 		InvocationID: "inv",
@@ -1010,7 +1012,7 @@ func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {
 		return &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("after")}}}, nil
 	})
 	evch := make(chan *event.Event, 1)
-	err := processModelResponse(context.Background(), modelResponseConfig{
+	_, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
 		ModelCallbacks: cbs,
 		EventChan:      evch,
@@ -1045,6 +1047,8 @@ func TestExecuteModelWithEvents_ToolCallsMerged(t *testing.T) {
 		EventChan:      make(chan *event.Event, 2),
 		InvocationID:   "inv",
 		SessionID:      "sid",
+		AppName:        "app",
+		UserID:         "user",
 		Span:           span,
 		NodeID:         "node",
 	})
@@ -1112,15 +1116,19 @@ func TestEnsureSystemHead_And_ExtractExecutionContext(t *testing.T) {
 	require.Equal(t, model.RoleSystem, out2[0].Role)
 	// extractExecutionContext: only execctx
 	exec := &ExecutionContext{InvocationID: "inv", EventChan: make(chan *event.Event, 1)}
-	inv, sess, ch := extractExecutionContext(State{StateKeyExecContext: exec})
+	inv, sess, appName, userID, ch := extractExecutionContext(State{StateKeyExecContext: exec})
 	require.Equal(t, "inv", inv)
 	require.Equal(t, "", sess)
+	require.Equal(t, "", appName)
+	require.Equal(t, "", userID)
 	require.NotNil(t, ch)
 	// extractExecutionContext: only session
-	s := &session.Session{ID: "sid"}
-	inv2, sess2, ch2 := extractExecutionContext(State{StateKeySession: s})
+	s := &session.Session{ID: "sid", AppName: "app", UserID: "user"}
+	inv2, sess2, appName2, userID2, ch2 := extractExecutionContext(State{StateKeySession: s})
 	require.Equal(t, "", inv2)
 	require.Equal(t, "sid", sess2)
+	require.Equal(t, "app", appName2)
+	require.Equal(t, "user", userID2)
 	require.Nil(t, ch2)
 }
 
@@ -1204,7 +1212,7 @@ func TestProcessModelResponse_AfterModelError(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
 		return nil, assert.AnError
 	})
-	err := processModelResponse(context.Background(), modelResponseConfig{
+	_, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
 		ModelCallbacks: cbs,
 		EventChan:      make(chan *event.Event, 1),
