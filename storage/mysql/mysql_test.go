@@ -232,7 +232,7 @@ func TestDefaultClientBuilder_SuccessPath(t *testing.T) {
 		}
 
 		// Return success (this is the path we want to test).
-		return &SQLDBClient{DB: db}, nil
+		return &sqlDBClient{db: db}, nil
 	}
 
 	// Set the custom builder.
@@ -368,7 +368,7 @@ func TestDefaultClientBuilder_Integration(t *testing.T) {
 				return nil, err
 			}
 
-			return &SQLDBClient{DB: db}, nil
+			return &sqlDBClient{db: db}, nil
 		})
 
 		// Test the builder.
@@ -394,7 +394,7 @@ func TestClientCompliance(t *testing.T) {
 		defer mockDB.Close()
 
 		// Test that our wrapper implements the interface
-		var client Client = &SQLDBClient{DB: mockDB}
+		var client Client = &sqlDBClient{db: mockDB}
 
 		// Test Exec
 		mock.ExpectExec("INSERT INTO test").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -462,7 +462,7 @@ func TestSQLDBClient_Query(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		rows := sqlmock.NewRows([]string{"id", "name"}).
 			AddRow(1, "Alice").
@@ -501,7 +501,7 @@ func TestSQLDBClient_Query(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		rows := sqlmock.NewRows([]string{"id", "name"}).
 			AddRow(1, "Alice").
@@ -543,7 +543,7 @@ func TestSQLDBClient_Query(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		rows := sqlmock.NewRows([]string{"id", "name"}).
 			AddRow(1, "Alice").
@@ -566,7 +566,7 @@ func TestSQLDBClient_Query(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		mock.ExpectQuery("SELECT id, name FROM users").
 			WillReturnError(errors.New("query error"))
@@ -588,7 +588,7 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -613,7 +613,7 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -640,7 +640,7 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -663,7 +663,7 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		mock.ExpectBegin().WillReturnError(errors.New("begin error"))
 
@@ -681,7 +681,7 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 		require.NoError(t, err)
 		defer mockDB.Close()
 
-		client := &SQLDBClient{DB: mockDB}
+		client := &sqlDBClient{db: mockDB}
 
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
