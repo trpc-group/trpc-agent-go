@@ -45,12 +45,12 @@ const (
 	// defaultBatchEndpoint is the default batch endpoint.
 	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
 	// Default budget constants for token tailoring.
-	defaultProtocolOverheadTokens = 4096 // Protocol overhead tokens for request/response formatting.
-	defaultReserveOutputTokens    = 4096 // Reserved tokens for output generation (~3% of typical context window).
+	defaultProtocolOverheadTokens = 512  // Protocol overhead tokens for request/response formatting.
+	defaultReserveOutputTokens    = 2048 // Reserved tokens for output generation (~1-2% of typical context window).
 	defaultInputTokensFloor       = 1024 // Minimum input tokens to ensure reasonable processing.
 	defaultOutputTokensFloor      = 256  // Minimum output tokens to ensure meaningful response.
-	defaultSafetyMarginRatio      = 0.20 // Safety margin ratio (20%) to account for token counting inaccuracies.
-	defaultMaxInputTokensRatio    = 0.50 // Maximum input tokens ratio (50%) of context window for stability.
+	defaultSafetyMarginRatio      = 0.10 // Safety margin ratio (10%) to account for token counting inaccuracies.
+	defaultMaxInputTokensRatio    = 0.65 // Maximum input tokens ratio (65%) of context window for stability.
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -559,24 +559,24 @@ func (m *Model) GenerateContent(
 //
 // Formula:
 //
-//	safetyMargin = contextWindow × safetyMarginRatio (20%)
+//	safetyMargin = contextWindow × safetyMarginRatio (10%)
 //	calculatedMax = contextWindow - reserveOutputTokens - protocolOverheadTokens - safetyMargin
-//	ratioLimit = contextWindow × maxInputTokensRatio (50%)
+//	ratioLimit = contextWindow × maxInputTokensRatio (65%)
 //	maxInputTokens = max(min(calculatedMax, ratioLimit), inputTokensFloor)
 //
 // Example for deepseek-chat (contextWindow = 131072):
 //
-//	safetyMargin = 131072 × 0.20 = 26214 tokens
-//	calculatedMax = 131072 - 4096 - 4096 - 26214 = 96666 tokens
-//	ratioLimit = 131072 × 0.50 = 65536 tokens
-//	maxInputTokens = max(min(96666, 65536), 1024) = 65536 tokens (~50% of context window)
+//	safetyMargin = 131072 × 0.10 = 13107 tokens
+//	calculatedMax = 131072 - 2048 - 512 - 13107 = 115405 tokens
+//	ratioLimit = 131072 × 0.65 = 85196 tokens
+//	maxInputTokens = max(min(115405, 85196), 1024) = 85196 tokens (~65% of context window)
 //
 // This ensures:
-//   - 50% of context window for input messages
-//   - ~3% (4096 tokens) reserved for output generation
-//   - 20% safety margin for token counting inaccuracies
-//   - Protocol overhead (4096 tokens) for request/response formatting
-//   - Remaining ~27% buffer for stability and API overhead
+//   - 65% of context window for input messages
+//   - ~1.5% (2048 tokens) reserved for output generation
+//   - 10% safety margin for token counting inaccuracies
+//   - Protocol overhead (512 tokens) for request/response formatting
+//   - Remaining ~23.5% buffer for stability and API overhead
 func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
 	// Early return if token tailoring is disabled or no messages to process.
 	if !m.enableTokenTailoring || len(request.Messages) == 0 {
