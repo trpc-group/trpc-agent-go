@@ -268,8 +268,15 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 	}
 }
 
+// TokenUsage is token usage information.
+type TokenUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+}
+
 // TraceAfterInvokeAgent traces the after invocation of an agent.
-func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event) {
+func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *TokenUsage) {
 	if rspEvent == nil {
 		return
 	}
@@ -295,7 +302,7 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event) {
 
 	}
 	span.SetAttributes(attribute.String(KeyGenAIResponseModel, rsp.Model))
-	if rsp.Usage != nil {
+	if tokenUsage != nil {
 		span.SetAttributes(attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens))
 		span.SetAttributes(attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens))
 	}

@@ -748,9 +748,10 @@ func (a *LLMAgent) wrapEventChannel(
 
 	go func() {
 		var fullRespEvent *event.Event
+		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
 			if fullRespEvent != nil {
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent)
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage)
 			}
 			span.End()
 			close(wrappedChan)
@@ -758,8 +759,16 @@ func (a *LLMAgent) wrapEventChannel(
 
 		// Forward all events from the original channel
 		for evt := range originalChan {
-			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
-				fullRespEvent = evt
+			if evt != nil && evt.Response != nil {
+				if evt.Response.Usage != nil {
+					tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+					tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+					tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+				}
+				if !evt.Response.IsPartial {
+					fullRespEvent = evt
+				}
+
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
