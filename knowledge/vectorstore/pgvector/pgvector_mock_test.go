@@ -49,11 +49,11 @@ type testPostgresClient struct {
 	db *sql.DB
 }
 
-func (c *testPostgresClient) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (c *testPostgresClient) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return c.db.ExecContext(ctx, query, args...)
 }
 
-func (c *testPostgresClient) Query(ctx context.Context, handler postgres.HandlerFunc, query string, args ...interface{}) error {
+func (c *testPostgresClient) Query(ctx context.Context, handler postgres.HandlerFunc, query string, args ...any) error {
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)

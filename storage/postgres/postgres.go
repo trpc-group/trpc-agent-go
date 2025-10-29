@@ -128,12 +128,12 @@ func GetPostgresInstance(name string) ([]ClientBuilderOpt, bool) {
 type Client interface {
 	// ExecContext executes a query that doesn't return rows.
 	// For example: INSERT, UPDATE, DELETE.
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 
 	// Query executes a query that returns rows and passes them to the handler.
 	// The rows are automatically closed after the handler returns.
 	// This ensures proper resource cleanup and prevents resource leaks.
-	Query(ctx context.Context, handler HandlerFunc, query string, args ...interface{}) error
+	Query(ctx context.Context, fn HandlerFunc, query string, args ...any) error
 
 	// Transaction executes a function within a transaction.
 	// The transaction is automatically committed if the function returns nil,
@@ -158,13 +158,13 @@ type sqlClient struct {
 }
 
 // ExecContext executes a query that doesn't return rows.
-func (c *sqlClient) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (c *sqlClient) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return c.db.ExecContext(ctx, query, args...)
 }
 
 // Query executes a query that returns rows and passes them to the handler.
 // It automatically closes the rows after the handler completes or panics.
-func (c *sqlClient) Query(ctx context.Context, handler HandlerFunc, query string, args ...interface{}) error {
+func (c *sqlClient) Query(ctx context.Context, handler HandlerFunc, query string, args ...any) error {
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)

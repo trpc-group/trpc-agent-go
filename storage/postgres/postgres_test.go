@@ -207,10 +207,10 @@ func TestSQLClient_ExecContext(t *testing.T) {
 
 	execCalled := false
 	mockClient := &mockClient{
-		execFn: func(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+		execFn: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
 			execCalled = true
 			require.Equal(t, "INSERT INTO test VALUES ($1)", query)
-			require.Equal(t, []interface{}{"value"}, args)
+			require.Equal(t, []any{"value"}, args)
 			return &mockResult{rowsAffected: 1}, nil
 		},
 	}
@@ -239,10 +239,10 @@ func TestSQLClient_Query(t *testing.T) {
 
 	queryCalled := false
 	mockClient := &mockClient{
-		queryFn: func(ctx context.Context, handler HandlerFunc, query string, args ...interface{}) error {
+		queryFn: func(ctx context.Context, handler HandlerFunc, query string, args ...any) error {
 			queryCalled = true
 			require.Equal(t, "SELECT * FROM test WHERE id = $1", query)
-			require.Equal(t, []interface{}{1}, args)
+			require.Equal(t, []any{1}, args)
 			// Simulate calling the handler with nil rows (we can't create real rows without DB)
 			return nil
 		},
@@ -296,20 +296,20 @@ func TestSQLClient_Transaction(t *testing.T) {
 // Mock implementations for testing
 
 type mockClient struct {
-	execFn  func(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
-	queryFn func(ctx context.Context, handler HandlerFunc, query string, args ...interface{}) error
+	execFn  func(ctx context.Context, query string, args ...any) (sql.Result, error)
+	queryFn func(ctx context.Context, handler HandlerFunc, query string, args ...any) error
 	txFn    func(ctx context.Context, fn TxFunc) error
 	closeFn func() error
 }
 
-func (m *mockClient) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (m *mockClient) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if m.execFn != nil {
 		return m.execFn(ctx, query, args...)
 	}
 	return nil, nil
 }
 
-func (m *mockClient) Query(ctx context.Context, handler HandlerFunc, query string, args ...interface{}) error {
+func (m *mockClient) Query(ctx context.Context, handler HandlerFunc, query string, args ...any) error {
 	if m.queryFn != nil {
 		return m.queryFn(ctx, handler, query, args...)
 	}
