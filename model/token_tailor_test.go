@@ -270,6 +270,7 @@ func TestMiddleOutStrategy_TailorMessages(t *testing.T) {
 
 func TestMiddleOutStrategy_PreserveSystemAndLastTurn(t *testing.T) {
 	// Create messages: system, user1, user2, user3, user4, user5
+	// Total tokens: 7 + 2 + 2 + 2 + 2 + 2 = 17 tokens
 	msgs := []Message{
 		NewSystemMessage("You are a helpful assistant."),
 		NewUserMessage("Question 1"),
@@ -282,27 +283,29 @@ func TestMiddleOutStrategy_PreserveSystemAndLastTurn(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	s := NewMiddleOutStrategy(counter) // Always preserves system and last turn
 
-	tailored, err := s.TailorMessages(context.Background(), msgs, 50)
+	// Set maxTokens to 12 to trigger tailoring (total is 17 tokens).
+	tailored, err := s.TailorMessages(context.Background(), msgs, 12)
 	require.NoError(t, err)
 
-	// Should preserve system message at the beginning
+	// Should preserve system message at the beginning.
 	if len(tailored) > 0 {
 		assert.Equal(t, RoleSystem, tailored[0].Role)
 		assert.Equal(t, "You are a helpful assistant.", tailored[0].Content)
 	}
 
-	// Should preserve last turn (last 1-2 messages)
+	// Should preserve last turn (last 1-2 messages).
 	if len(tailored) >= 2 {
 		lastMsg := tailored[len(tailored)-1]
 		assert.Equal(t, "Question 5", lastMsg.Content)
 	}
 
-	// Should remove messages from the middle
+	// Should remove messages from the middle.
 	assert.Less(t, len(tailored), len(msgs))
 }
 
 func TestMiddleOutStrategy_MiddleOutLogic(t *testing.T) {
 	// Create messages: system, user1, user2, user3, user4, user5, user6
+	// Total tokens: 7 + 2 + 2 + 2 + 2 + 2 + 2 = 19 tokens
 	msgs := []Message{
 		NewSystemMessage("You are a helpful assistant."),
 		NewUserMessage("Question 1"),
@@ -316,28 +319,29 @@ func TestMiddleOutStrategy_MiddleOutLogic(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	s := NewMiddleOutStrategy(counter)
 
-	tailored, err := s.TailorMessages(context.Background(), msgs, 30)
+	// Set maxTokens to 15 to trigger tailoring (total is 19 tokens).
+	tailored, err := s.TailorMessages(context.Background(), msgs, 15)
 	require.NoError(t, err)
 
-	// Should preserve system message at the beginning
+	// Should preserve system message at the beginning.
 	assert.Equal(t, RoleSystem, tailored[0].Role)
 	assert.Equal(t, "You are a helpful assistant.", tailored[0].Content)
 
-	// Should preserve last turn (last 2 messages)
+	// Should preserve last turn (last 2 messages).
 	assert.Equal(t, "Question 5", tailored[len(tailored)-2].Content)
 	assert.Equal(t, "Question 6", tailored[len(tailored)-1].Content)
 
-	// Should have removed some middle messages
+	// Should have removed some middle messages.
 	assert.Less(t, len(tailored), len(msgs))
 
-	// Verify token count is within limit
+	// Verify token count is within limit.
 	totalTokens := 0
 	for _, msg := range tailored {
 		tokens, err := counter.CountTokens(context.Background(), msg)
 		require.NoError(t, err)
 		totalTokens += tokens
 	}
-	assert.LessOrEqual(t, totalTokens, 30)
+	assert.LessOrEqual(t, totalTokens, 15)
 }
 
 func TestHeadOutStrategy_PreserveOptions(t *testing.T) {

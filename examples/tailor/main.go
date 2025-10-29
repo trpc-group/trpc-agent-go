@@ -13,6 +13,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -38,6 +39,7 @@ var (
 // counter/strategy usage without runner/session dependencies.
 func main() {
 	flag.Parse()
+	log.SetLevel(log.LevelDebug)
 
 	// Build model with dual-mode token tailoring support.
 	var opts []openai.Option
@@ -70,6 +72,7 @@ func main() {
 	fmt.Println("==================================================")
 	fmt.Println("💡 Commands:")
 	fmt.Println("  /bulk N     - append N synthetic user messages")
+	fmt.Println("  /load FILE  - load messages from JSON file (e.g., /load input.json)")
 	fmt.Println("  /history    - show current message count")
 	fmt.Println("  /show       - display current messages (head + tail)")
 	fmt.Println("  /exit       - quit")
@@ -93,7 +96,7 @@ func main() {
 			}
 			continue
 		}
-		processTurn(context.Background(), modelInstance, &messages, line)
+		processTurn(context.Background(), modelInstance, counter, &messages, line)
 	}
 }
 
@@ -134,6 +137,27 @@ func handleCommand(messages *[]model.Message, line string) bool {
 		fmt.Printf("📋 Current messages (total: %d):\n", len(*messages))
 		fmt.Print(summarizeMessagesHeadTail(*messages, 10, 10))
 		return true
+	case strings.HasPrefix(line, "/load"):
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			fmt.Println("❌ Usage: /load <filename>")
+			return true
+		}
+		filename := parts[1]
+		loaded, err := loadMessagesFromJSON(filename)
+		if err != nil {
+			fmt.Printf("❌ Failed to load %s: %v\n", filename, err)
+			return true
+		}
+		// Replace messages with loaded ones (keep system message if first is not system).
+		if len(loaded) > 0 && loaded[0].Role == model.RoleSystem {
+			*messages = loaded
+		} else {
+			// Prepend system message if not present.
+			*messages = append([]model.Message{model.NewSystemMessage("You are a helpful assistant.")}, loaded...)
+		}
+		fmt.Printf("✅ Loaded %d messages from %s. Total=%d\n", len(loaded), filename, len(*messages))
+		return true
 	case strings.HasPrefix(line, "/bulk"):
 		parts := strings.Fields(line)
 		n := 10
@@ -152,18 +176,29 @@ func handleCommand(messages *[]model.Message, line string) bool {
 	}
 }
 
-func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message, userLine string) {
+func processTurn(ctx context.Context, m *openai.Model, counter model.TokenCounter, messages *[]model.Message, userLine string) {
 	*messages = append(*messages, model.NewUserMessage(userLine))
 	before := len(*messages)
 
 	// Calculate token count before tailoring.
-	counter := model.NewSimpleTokenCounter()
 	tokensBefore, _ := counter.CountTokensRange(ctx, *messages, 0, len(*messages))
 
 	req := &model.Request{
 		Messages:         cloneMessages(*messages),
 		GenerationConfig: model.GenerationConfig{Stream: *flagStreaming},
 	}
+
+	// Clean up empty assistant messages (no content and no tool_calls).
+	// This prevents API errors when assistant messages lack both fields.
+	cleanedMessages := []model.Message{}
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleAssistant && msg.Content == "" && len(msg.ToolCalls) == 0 {
+			// Skip empty assistant messages.
+			continue
+		}
+		cleanedMessages = append(cleanedMessages, msg)
+	}
+	req.Messages = cleanedMessages
 
 	ch, err := m.GenerateContent(ctx, req)
 	if err != nil {
@@ -348,4 +383,59 @@ func truncate(s string, max int) string {
 		return s[:max]
 	}
 	return s[:max-3] + "..."
+}
+
+// loadMessagesFromJSON loads messages from a JSON file in the format of input.json.
+func loadMessagesFromJSON(filename string) ([]model.Message, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	var jsonData struct {
+		Messages []struct {
+			Role      string        `json:"role"`
+			Content   string        `json:"content"`
+			ToolCalls []interface{} `json:"tool_calls"`
+			ToolID    string        `json:"tool_id"`
+			ToolName  string        `json:"tool_name"`
+		} `json:"messages"`
+	}
+
+	if err := json.Unmarshal(data, &jsonData); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+
+	var messages []model.Message
+	for _, msg := range jsonData.Messages {
+		role := model.Role(msg.Role)
+		switch role {
+		case model.RoleSystem:
+			messages = append(messages, model.NewSystemMessage(msg.Content))
+		case model.RoleUser:
+			messages = append(messages, model.NewUserMessage(msg.Content))
+		case model.RoleAssistant:
+			// For assistant messages, preserve tool_calls if present.
+			m := model.NewAssistantMessage(msg.Content)
+			// If there are tool_calls but no content, keep the message.
+			// The API will handle it correctly.
+			if len(msg.ToolCalls) > 0 && msg.Content == "" {
+				// Preserve the message with tool_calls.
+				m.Content = ""
+			}
+			messages = append(messages, m)
+		case model.RoleTool:
+			messages = append(messages, model.Message{
+				Role:     role,
+				Content:  msg.Content,
+				ToolID:   msg.ToolID,
+				ToolName: msg.ToolName,
+			})
+		default:
+			// Skip unknown roles.
+			continue
+		}
+	}
+
+	return messages, nil
 }

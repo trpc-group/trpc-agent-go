@@ -132,6 +132,17 @@ func (s *MiddleOutStrategy) TailorMessages(ctx context.Context, messages []Messa
 	// Build prefix sum for efficient range queries.
 	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
 
+	// Check if all messages fit within the budget.
+	totalTokens := prefixSum[len(messages)]
+	if totalTokens <= maxTokens {
+		// All messages fit, but still remove leading tool message if present.
+		result := messages
+		if len(result) > 0 && result[0].Role == RoleTool {
+			result = result[1:]
+		}
+		return result, nil
+	}
+
 	// Calculate preserved segments (always preserve system message and last turn).
 	preservedHead := calculatePreservedHeadCount(messages)
 	preservedTail := calculatePreservedTailCount(messages)
@@ -258,6 +269,17 @@ func (s *HeadOutStrategy) TailorMessages(ctx context.Context, messages []Message
 	// Build prefix sum for efficient range queries.
 	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
 
+	// Check if all messages fit within the budget.
+	totalTokens := prefixSum[len(messages)]
+	if totalTokens <= maxTokens {
+		// All messages fit, but still remove leading tool message if present.
+		result := messages
+		if len(result) > 0 && result[0].Role == RoleTool {
+			result = result[1:]
+		}
+		return result, nil
+	}
+
 	// Calculate preserved segments (preserve system message and last turn).
 	preservedHead := calculatePreservedHeadCount(messages)
 	preservedTail := calculatePreservedTailCount(messages)
@@ -358,6 +380,17 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 
 	// Build prefix sum for efficient range queries.
 	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
+
+	// Check if all messages fit within the budget.
+	totalTokens := prefixSum[len(messages)]
+	if totalTokens <= maxTokens {
+		// All messages fit, but still remove leading tool message if present.
+		result := messages
+		if len(result) > 0 && result[0].Role == RoleTool {
+			result = result[1:]
+		}
+		return result, nil
+	}
 
 	// Calculate preserved segments (preserve system message and last turn).
 	preservedHead := calculatePreservedHeadCount(messages)
