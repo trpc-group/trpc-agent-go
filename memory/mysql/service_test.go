@@ -50,7 +50,7 @@ func setupMockService(t *testing.T, db *sql.DB) *Service {
 			enabledTools: make(map[string]bool),
 			tableName:    "memories",
 		},
-		db:          &storage.SQLDBClient{DB: db},
+		db:          storage.WrapSQLDB(db),
 		tableName:   "memories",
 		cachedTools: make(map[string]tool.Tool),
 	}
@@ -132,7 +132,7 @@ func TestNewService_WithAutoCreateTable(t *testing.T) {
 
 	originalBuilder := storage.GetClientBuilder()
 	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
-		return &storage.SQLDBClient{DB: mockDB}, nil
+		return storage.WrapSQLDB(mockDB), nil
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
@@ -1003,7 +1003,7 @@ func TestService_Tools(t *testing.T) {
 			toolCreators: make(map[string]memory.ToolCreator),
 			enabledTools: make(map[string]bool),
 		},
-		db:          &storage.SQLDBClient{DB: db},
+		db:          storage.WrapSQLDB(db),
 		tableName:   "memories",
 		cachedTools: make(map[string]tool.Tool),
 	}
@@ -1042,7 +1042,7 @@ func TestService_Close(t *testing.T) {
 
 	t.Run("with mock db", func(t *testing.T) {
 		db, mock := setupMockDB(t)
-		s := &Service{db: &storage.SQLDBClient{DB: db}}
+		s := &Service{db: storage.WrapSQLDB(db)}
 
 		mock.ExpectClose()
 		err := s.Close()
