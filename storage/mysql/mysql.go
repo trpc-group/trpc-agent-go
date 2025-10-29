@@ -60,19 +60,19 @@ type TxOption func(*sql.TxOptions)
 // ErrBreak can be returned from NextFunc to stop iteration early without error.
 var ErrBreak = errors.New("mysql scan rows break")
 
-// SQLDBClient wraps *sql.DB to implement the Client interface using callback pattern.
-type SQLDBClient struct {
-	DB *sql.DB
+// sqlDBClient wraps *sql.DB to implement the Client interface using callback pattern.
+type sqlDBClient struct {
+	db *sql.DB
 }
 
 // Exec implements Client.Exec.
-func (c *SQLDBClient) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return c.DB.ExecContext(ctx, query, args...)
+func (c *sqlDBClient) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return c.db.ExecContext(ctx, query, args...)
 }
 
 // Query implements Client.Query using callback pattern.
-func (c *SQLDBClient) Query(ctx context.Context, next NextFunc, query string, args ...any) error {
-	rows, err := c.DB.QueryContext(ctx, query, args...)
+func (c *sqlDBClient) Query(ctx context.Context, next NextFunc, query string, args ...any) error {
+	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -92,19 +92,19 @@ func (c *SQLDBClient) Query(ctx context.Context, next NextFunc, query string, ar
 }
 
 // QueryRow implements Client.QueryRow.
-func (c *SQLDBClient) QueryRow(ctx context.Context, dest []any, query string, args ...any) error {
-	row := c.DB.QueryRowContext(ctx, query, args...)
+func (c *sqlDBClient) QueryRow(ctx context.Context, dest []any, query string, args ...any) error {
+	row := c.db.QueryRowContext(ctx, query, args...)
 	return row.Scan(dest...)
 }
 
 // Transaction implements Client.Transaction using callback pattern.
-func (c *SQLDBClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOption) error {
+func (c *sqlDBClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOption) error {
 	txOpts := &sql.TxOptions{}
 	for _, opt := range opts {
 		opt(txOpts)
 	}
 
-	tx, err := c.DB.BeginTx(ctx, txOpts)
+	tx, err := c.db.BeginTx(ctx, txOpts)
 	if err != nil {
 		return err
 	}
@@ -119,8 +119,14 @@ func (c *SQLDBClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOpti
 }
 
 // Close implements Client.Close.
-func (c *SQLDBClient) Close() error {
-	return c.DB.Close()
+func (c *sqlDBClient) Close() error {
+	return c.db.Close()
+}
+
+// NewClient creates a new Client from an existing *sql.DB connection.
+// This is useful for testing or when you already have a *sql.DB instance.
+func NewClient(db *sql.DB) Client {
+	return &sqlDBClient{db: db}
 }
 
 // clientBuilder is the function type for building Client instances.
@@ -174,7 +180,7 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
 		return nil, fmt.Errorf("mysql: ping failed: %w", err)
 	}
 
-	return &SQLDBClient{DB: db}, nil
+	return &sqlDBClient{db: db}, nil
 }
 
 // ClientBuilderOpt is the option for the mysql client.
