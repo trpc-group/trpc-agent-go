@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
@@ -662,4 +663,493 @@ func TestVectorStore_GetMetadata(t *testing.T) {
 		require.NotNil(t, result)
 		tc.AssertExpectations(t)
 	})
+}
+
+// TestVectorStore_Update_RowsAffectedError tests Update when RowsAffected returns error
+func TestVectorStore_Update_RowsAffectedError(t *testing.T) {
+	vs, tc := newTestVectorStore(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	doc := &document.Document{
+		ID:      "test_001",
+		Name:    "Updated Name",
+		Content: "Updated content",
+	}
+	vector := []float64{1.0, 0.5, 0.2}
+
+	// Mock document exists check
+	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
+		WithArgs("test_001").
+		WillReturnRows(mockExistsRow(true))
+
+	// Mock update that succeeds but RowsAffected fails
+	tc.mock.ExpectExec("UPDATE documents").
+		WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected error")))
+
+	err := vs.Update(context.Background(), doc, vector)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get rows affected")
+}
+
+// TestVectorStore_Delete_RowsAffectedError tests Delete when RowsAffected returns error
+func TestVectorStore_Delete_RowsAffectedError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	// Mock delete that succeeds but RowsAffected fails
+	tc.mock.ExpectExec("DELETE FROM documents WHERE id").
+		WithArgs("test_001").
+		WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected error")))
+
+	err := vs.Delete(context.Background(), "test_001")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get rows affected")
+}
+
+// TestVectorStore_SearchByKeyword_EmptyQuery tests searchByKeyword with empty query
+func TestVectorStore_SearchByKeyword_EmptyQuery(t *testing.T) {
+	vs, tc := newTestVectorStoreWithTSVector(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	query := &vectorstore.SearchQuery{
+		SearchMode: vectorstore.SearchModeKeyword,
+		Query:      "",
+		Limit:      10,
+	}
+
+	result, err := vs.searchByKeyword(context.Background(), query)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "keyword is required")
+}
+
+// TestVectorStore_SearchByKeyword_FilterError tests searchByKeyword with filter error
+func TestVectorStore_SearchByKeyword_FilterError(t *testing.T) {
+	vs, tc := newTestVectorStoreWithTSVector(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	// Use a mock converter that returns error
+	vs.filterConverter = &mockFilterConverter{shouldError: true}
+
+	query := &vectorstore.SearchQuery{
+		SearchMode: vectorstore.SearchModeKeyword,
+		Query:      "test",
+		Filter: &vectorstore.SearchFilter{
+			FilterCondition: &searchfilter.UniversalFilterCondition{
+				Field:    "invalid",
+				Operator: "INVALID",
+				Value:    "test",
+			},
+		},
+		Limit: 10,
+	}
+
+	result, err := vs.searchByKeyword(context.Background(), query)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "converter error")
+}
+
+// TestVectorStore_SearchByVector_FilterError tests searchByVector with filter error
+func TestVectorStore_SearchByVector_FilterError(t *testing.T) {
+	vs, tc := newTestVectorStore(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	// Use a mock converter that returns error
+	vs.filterConverter = &mockFilterConverter{shouldError: true}
+
+	query := &vectorstore.SearchQuery{
+		SearchMode: vectorstore.SearchModeVector,
+		Vector:     []float64{1.0, 0.5, 0.2},
+		Filter: &vectorstore.SearchFilter{
+			FilterCondition: &searchfilter.UniversalFilterCondition{
+				Field:    "invalid",
+				Operator: "INVALID",
+				Value:    "test",
+			},
+		},
+		Limit: 10,
+	}
+
+	result, err := vs.searchByVector(context.Background(), query)
+	require.Error(t, err)
+	assert.Nil(t, result)
+}
+
+// TestVectorStore_SearchByHybrid_FilterError tests searchByHybrid with filter error
+func TestVectorStore_SearchByHybrid_FilterError(t *testing.T) {
+	vs, tc := newTestVectorStoreWithTSVector(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	// Use a mock converter that returns error
+	vs.filterConverter = &mockFilterConverter{shouldError: true}
+
+	query := &vectorstore.SearchQuery{
+		SearchMode: vectorstore.SearchModeHybrid,
+		Vector:     []float64{1.0, 0.5, 0.2},
+		Query:      "test",
+		Filter: &vectorstore.SearchFilter{
+			FilterCondition: &searchfilter.UniversalFilterCondition{
+				Field:    "invalid",
+				Operator: "INVALID",
+				Value:    "test",
+			},
+		},
+		Limit: 10,
+	}
+
+	result, err := vs.searchByHybrid(context.Background(), query)
+	require.Error(t, err)
+	assert.Nil(t, result)
+}
+
+// TestVectorStore_SearchByFilter_FilterError tests searchByFilter with filter error
+func TestVectorStore_SearchByFilter_FilterError(t *testing.T) {
+	vs, tc := newTestVectorStore(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	// Use a mock converter that returns error
+	vs.filterConverter = &mockFilterConverter{shouldError: true}
+
+	query := &vectorstore.SearchQuery{
+		SearchMode: vectorstore.SearchModeFilter,
+		Filter: &vectorstore.SearchFilter{
+			FilterCondition: &searchfilter.UniversalFilterCondition{
+				Field:    "invalid",
+				Operator: "INVALID",
+				Value:    "test",
+			},
+		},
+		Limit: 10,
+	}
+
+	result, err := vs.searchByFilter(context.Background(), query)
+	require.Error(t, err)
+	assert.Nil(t, result)
+}
+
+// TestVectorStore_ExecuteSearch_ParseError tests executeSearch with document parse error
+func TestVectorStore_ExecuteSearch_ParseError(t *testing.T) {
+	vs, tc := newTestVectorStore(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	// Mock query that returns invalid data causing parse error
+	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"}).
+			AddRow("test_001", "Test", "Content", "invalid_json", "{}", 1000000, 2000000, 0.9))
+
+	query := "SELECT * FROM documents"
+	result, err := vs.executeSearch(context.Background(), query, []any{}, vectorstore.SearchModeVector)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "parse document")
+}
+
+// TestVectorStore_DeleteAll tests deleteAll method
+func TestVectorStore_DeleteAll(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	tc.mock.ExpectExec("TRUNCATE TABLE documents").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err := vs.deleteAll(context.Background())
+	require.NoError(t, err)
+	tc.AssertExpectations(t)
+}
+
+// TestVectorStore_DeleteByFilter_Success tests deleteByFilter with successful deletion
+func TestVectorStore_DeleteByFilter_Success(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	config := &vectorstore.DeleteConfig{
+		DocumentIDs: []string{"test_001", "test_002"},
+	}
+
+	tc.mock.ExpectExec("DELETE FROM documents").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	err := vs.deleteByFilter(context.Background(), config)
+	require.NoError(t, err)
+	tc.AssertExpectations(t)
+}
+
+// TestVectorStore_DeleteByFilter_ExecError tests deleteByFilter with exec error
+func TestVectorStore_DeleteByFilter_ExecError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	config := &vectorstore.DeleteConfig{
+		DocumentIDs: []string{"test_001"},
+	}
+
+	tc.mock.ExpectExec("DELETE FROM documents").
+		WillReturnError(errors.New("exec error"))
+
+	err := vs.deleteByFilter(context.Background(), config)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete by filter")
+	assert.Contains(t, err.Error(), "exec error")
+}
+
+// TestVectorStore_DeleteByFilter_RowsAffectedError tests deleteByFilter when RowsAffected fails
+func TestVectorStore_DeleteByFilter_RowsAffectedError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	config := &vectorstore.DeleteConfig{
+		DocumentIDs: []string{"test_001"},
+	}
+
+	tc.mock.ExpectExec("DELETE FROM documents").
+		WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected error")))
+
+	err := vs.deleteByFilter(context.Background(), config)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get rows affected")
+}
+
+// TestVectorStore_Count_FilterError tests Count with filter error
+func TestVectorStore_Count_FilterError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	// Use a mock converter that returns error
+	vs.filterConverter = &mockFilterConverter{shouldError: true}
+
+	count, err := vs.Count(context.Background(), vectorstore.WithCountFilter(map[string]any{"invalid": "filter"}))
+	require.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.Contains(t, err.Error(), "count documents")
+}
+
+// TestVectorStore_Count_ScanError tests Count with scan error
+func TestVectorStore_Count_ScanError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	// Mock query that returns invalid data type for count
+	tc.mock.ExpectQuery("SELECT COUNT").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("invalid_number"))
+
+	count, err := vs.Count(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.Contains(t, err.Error(), "count documents")
+}
+
+// TestVectorStore_GetMetadata_FilterError tests GetMetadata with filter error
+func TestVectorStore_GetMetadata_FilterError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	// Use a mock converter that returns error
+	vs.filterConverter = &mockFilterConverter{shouldError: true}
+
+	result, err := vs.GetMetadata(context.Background(),
+		vectorstore.WithGetMetadataFilter(map[string]any{"invalid": "filter"}))
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "get metadata")
+}
+
+// TestVectorStore_GetAllMetadata_BatchError tests getAllMetadata with batch error
+func TestVectorStore_GetAllMetadata_BatchError(t *testing.T) {
+	vs, tc := newTestVectorStore(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	// Create enough rows to trigger a second batch (metadataBatchSize = 5000)
+	// We'll mock the first batch with exactly 5000 rows to trigger continuation
+	rows := sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"})
+	for i := 0; i < 5000; i++ {
+		rows.AddRow(fmt.Sprintf("test_%d", i), "Test", "Content", "[1.0,0.5,0.2]", `{"key":"value"}`, 1000000, 2000000, 0.0)
+	}
+	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
+		WillReturnRows(rows)
+
+	// Second batch returns error
+	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
+		WillReturnError(errors.New("batch query error"))
+
+	config := &vectorstore.GetMetadataConfig{
+		Limit:  -1,
+		Offset: -1,
+	}
+
+	result, err := vs.getAllMetadata(context.Background(), config)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "batch query error")
+}
+
+// TestVectorStore_QueryMetadataBatch_FilterError tests queryMetadataBatch with filter error
+func TestVectorStore_QueryMetadataBatch_FilterError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	// Use a mock converter that returns error
+	vs.filterConverter = &mockFilterConverter{shouldError: true}
+
+	result, err := vs.queryMetadataBatch(context.Background(), 10, 0, nil, map[string]any{"invalid": "filter"})
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "get metadata")
+}
+
+// TestVectorStore_QueryMetadataBatch_BuildError tests queryMetadataBatch with build document error
+func TestVectorStore_QueryMetadataBatch_BuildError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	// Mock query that returns invalid embedding data causing parse error
+	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "content", "embedding", "metadata", "created_at", "updated_at", "score"}).
+			AddRow("test_001", "Test", "Content", "invalid_vector", "{}", 1000000, 2000000, 0.0))
+
+	result, err := vs.queryMetadataBatch(context.Background(), 10, 0, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "build document")
+}
+
+// TestVectorStore_QueryMetadataBatch_QueryError tests queryMetadataBatch with query error
+func TestVectorStore_QueryMetadataBatch_QueryError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	tc.mock.ExpectQuery("SELECT (.+) FROM documents").
+		WillReturnError(errors.New("query error"))
+
+	result, err := vs.queryMetadataBatch(context.Background(), 10, 0, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "get metadata batch")
+}
+
+// TestVectorStore_DocumentExists_NoRows tests documentExists when no rows returned
+func TestVectorStore_DocumentExists_NoRows(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
+		WithArgs("test_001").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}))
+
+	exists, err := vs.documentExists(context.Background(), "test_001")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+// TestVectorStore_DocumentExists_QueryError tests documentExists with query error
+func TestVectorStore_DocumentExists_QueryError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
+		WithArgs("test_001").
+		WillReturnError(errors.New("database error"))
+
+	exists, err := vs.documentExists(context.Background(), "test_001")
+	require.Error(t, err)
+	assert.False(t, exists)
+	assert.Contains(t, err.Error(), "database error")
+}
+
+// TestMapToJSON_MarshalError tests mapToJSON with unmarshalable data
+func TestMapToJSON_MarshalError(t *testing.T) {
+	// Create a map with a value that cannot be marshaled to JSON
+	m := map[string]any{
+		"invalid": make(chan int), // channels cannot be marshaled
+	}
+
+	result := mapToJSON(m)
+	// Should return "{}" on marshal error
+	assert.Equal(t, "{}", result)
+}
+
+// TestVectorStore_Update_ExecError tests Update with exec error (line 298)
+func TestVectorStore_Update_ExecError(t *testing.T) {
+	vs, tc := newTestVectorStore(t, WithIndexDimension(3))
+	defer tc.Close()
+
+	doc := &document.Document{
+		ID:      "test_001",
+		Name:    "Updated Test",
+		Content: "Updated Content",
+	}
+
+	tc.mock.ExpectExec("UPDATE documents").
+		WillReturnError(errors.New("exec error"))
+
+	err := vs.Update(context.Background(), doc, []float64{1.0, 0.5, 0.2})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exec error")
+}
+
+// TestVectorStore_DeleteAll_Error tests deleteAll with error (line 526)
+func TestVectorStore_DeleteAll_Error(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	tc.mock.ExpectExec("TRUNCATE TABLE documents").
+		WillReturnError(errors.New("truncate error"))
+
+	err := vs.deleteAll(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "truncate error")
+}
+
+// TestVectorStore_Count_QueryError tests Count with query error (line 568)
+func TestVectorStore_Count_QueryError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	tc.mock.ExpectQuery("SELECT COUNT").
+		WillReturnError(errors.New("query error"))
+
+	count, err := vs.Count(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.Contains(t, err.Error(), "query error")
+}
+
+// TestVectorStore_GetMetadata_OptionsError tests GetMetadata with options error (line 599)
+func TestVectorStore_GetMetadata_OptionsError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	// Use limit=0 which causes validation error in ApplyGetMetadataOptions
+	result, err := vs.GetMetadata(context.Background(), vectorstore.WithGetMetadataLimit(0))
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "limit should be greater than 0")
+}
+
+// TestVectorStore_DocumentExists_ScanError tests documentExists with scan error (line 705)
+func TestVectorStore_DocumentExists_ScanError(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
+		WithArgs("test_001").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow("invalid"))
+
+	exists, err := vs.documentExists(context.Background(), "test_001")
+	require.Error(t, err)
+	assert.False(t, exists)
+}
+
+// TestVectorStore_DocumentExists_ErrNoRows tests documentExists with ErrNoRows (line 713)
+func TestVectorStore_DocumentExists_ErrNoRows(t *testing.T) {
+	vs, tc := newTestVectorStore(t)
+	defer tc.Close()
+
+	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
+		WithArgs("test_001").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}))
+
+	exists, err := vs.documentExists(context.Background(), "test_001")
+	require.NoError(t, err)
+	assert.False(t, exists)
 }
