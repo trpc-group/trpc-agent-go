@@ -488,9 +488,13 @@ func convertMessages(messages []model.Message) (
 		return toolResult != nil && !param.IsOmitted(toolResult)
 	}
 	for l, r := 0, -1; l < len(conversation); l = r + 1 {
+		if len(conversation[l].Content) == 0 {
+			r++
+			continue
+		}
 		if !isToolResult(conversation[l].Content[0].OfToolResult) {
 			uniqueConversation = append(uniqueConversation, conversation[l])
-			r = l
+			r++
 			continue
 		}
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(conversation[l].Content))
