@@ -123,12 +123,6 @@ func (c *sqlDBClient) Close() error {
 	return c.db.Close()
 }
 
-// NewClient creates a new Client from an existing *sql.DB connection.
-// This is useful for testing or when you already have a *sql.DB instance.
-func NewClient(db *sql.DB) Client {
-	return &sqlDBClient{db: db}
-}
-
 // clientBuilder is the function type for building Client instances.
 type clientBuilder func(builderOpts ...ClientBuilderOpt) (Client, error)
 
