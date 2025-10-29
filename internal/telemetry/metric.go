@@ -32,6 +32,7 @@ var (
 	ChatMetricTRPCAgentGoClientTimePerOutputToken metric.Float64Histogram = noop.Float64Histogram{}
 )
 
+// ChatAttributes is the attributes for chat metrics.
 type ChatAttributes struct {
 	RequestModelName string
 	AgentName        string
@@ -148,6 +149,7 @@ func (a ExecuteToolAttributes) toAttributes() []attribute.KeyValue {
 	return attrs
 }
 
+// ReportExecuteToolMetrics reports the tool execution metrics.
 func ReportExecuteToolMetrics(ctx context.Context, attrs ExecuteToolAttributes, duration time.Duration) {
 	as := attrs.toAttributes()
 	ExecuteToolMetricTRPCAgentGoClientRequestCnt.Add(ctx, 1, metric.WithAttributes(as...))

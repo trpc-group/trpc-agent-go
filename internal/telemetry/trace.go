@@ -305,8 +305,8 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 	}
 	span.SetAttributes(attribute.String(KeyGenAIResponseModel, rsp.Model))
 	if tokenUsage != nil {
-		span.SetAttributes(attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens))
-		span.SetAttributes(attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens))
+		span.SetAttributes(attribute.Int(KeyGenAIUsageInputTokens, tokenUsage.PromptTokens))
+		span.SetAttributes(attribute.Int(KeyGenAIUsageOutputTokens, tokenUsage.CompletionTokens))
 	}
 	span.SetAttributes(attribute.String(KeyGenAIResponseID, rsp.ID))
 
