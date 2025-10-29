@@ -146,6 +146,58 @@ func TestVectorStore_Search(t *testing.T) {
 	}
 }
 
+// TestVectorStore_SearchWithMinScore tests MinScore filtering
+func TestVectorStore_SearchWithMinScore(t *testing.T) {
+	t.Run("vector_search_with_min_score", func(t *testing.T) {
+		vs, tc := newTestVectorStore(t, WithIndexDimension(3))
+		defer tc.Close()
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{1.0, 0.5, 0.2},
+			Limit:      5,
+			MinScore:   0.8, // MinScore > 0 should add score filter
+			SearchMode: vectorstore.SearchModeVector,
+		}
+
+		// Mock result with high score
+		rows := mockSearchResultRow("doc_1", "High Score Doc", "Highly relevant content",
+			[]float64{1.0, 0.5, 0.2}, map[string]any{"quality": "high"}, 0.95)
+		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT").
+			WillReturnRows(rows)
+
+		result, err := vs.Search(context.Background(), query)
+		require.NoError(t, err)
+		require.Len(t, result.Results, 1)
+		assert.Equal(t, "doc_1", result.Results[0].Document.ID)
+		assert.GreaterOrEqual(t, result.Results[0].Score, 0.8)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("hybrid_search_with_min_score", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t, WithIndexDimension(3))
+		defer tc.Close()
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{1.0, 0.5, 0.2},
+			Query:      "test",
+			Limit:      5,
+			MinScore:   0.75, // MinScore > 0 should add score filter
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		rows := mockSearchResultRow("doc_1", "Relevant Doc", "Test content",
+			[]float64{1.0, 0.5, 0.2}, map[string]any{}, 0.85)
+		tc.mock.ExpectQuery("SELECT .+ FROM documents .+ LIMIT").
+			WillReturnRows(rows)
+
+		result, err := vs.Search(context.Background(), query)
+		require.NoError(t, err)
+		require.Len(t, result.Results, 1)
+		assert.GreaterOrEqual(t, result.Results[0].Score, 0.75)
+		tc.AssertExpectations(t)
+	})
+}
+
 // TestVectorStore_SearchEmptyResults tests handling of queries that return no results
 func TestVectorStore_SearchEmptyResults(t *testing.T) {
 	tests := []struct {
@@ -311,6 +363,25 @@ func TestVectorStore_SearchByHybrid(t *testing.T) {
 		result, err := vs.Search(context.Background(), query)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "vector is required")
+		require.Nil(t, result)
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("hybrid_search_dimension_mismatch", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t, WithIndexDimension(3))
+		defer tc.Close()
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{1.0, 0.5}, // Wrong dimension: 2 instead of 3
+			Query:      "test",
+			SearchMode: vectorstore.SearchModeHybrid,
+			Limit:      5,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "dimension mismatch")
+		assert.Contains(t, err.Error(), "expected 3, got 2")
 		require.Nil(t, result)
 		tc.AssertExpectations(t)
 	})

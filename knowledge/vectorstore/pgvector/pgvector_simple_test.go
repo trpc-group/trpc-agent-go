@@ -11,6 +11,7 @@ package pgvector
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -285,6 +286,22 @@ func TestVectorStore_Update(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "not found",
+		},
+		{
+			name: "document_check_query_error",
+			doc: &document.Document{
+				ID:      "query_error_test",
+				Content: "Test",
+			},
+			vector: []float64{1.0, 0.5, 0.2},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				// Return a query error that's not sql.ErrNoRows
+				mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
+					WithArgs("query_error_test").
+					WillReturnError(sql.ErrNoRows)
+			},
+			wantErr: true,
+			errMsg:  "check document existence",
 		},
 		{
 			name: "dimension_mismatch",

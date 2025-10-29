@@ -17,6 +17,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
@@ -946,6 +947,57 @@ func TestBuildQueryFilter(t *testing.T) {
 		assert.False(t, mockBuilder.metadataFilterCalled)
 		assert.False(t, mockBuilder.filterConditionCalled)
 	})
+
+	t.Run("with_filter_condition_success", func(t *testing.T) {
+		mockBuilder := &mockQueryFilterBuilder{}
+		filter := &vectorstore.SearchFilter{
+			FilterCondition: &searchfilter.UniversalFilterCondition{
+				Field:    "status",
+				Operator: searchfilter.OperatorEqual,
+				Value:    "active",
+			},
+		}
+		err := vs.buildQueryFilter(mockBuilder, filter)
+		require.NoError(t, err)
+		assert.True(t, mockBuilder.filterConditionCalled)
+		assert.NotNil(t, mockBuilder.filterCondition)
+		assert.Contains(t, mockBuilder.filterCondition.cond, "status")
+	})
+
+	t.Run("with_filter_condition_nil", func(t *testing.T) {
+		mockBuilder := &mockQueryFilterBuilder{}
+		filter := &vectorstore.SearchFilter{
+			IDs:             []string{"id1"},
+			FilterCondition: nil, // Explicitly nil
+		}
+		err := vs.buildQueryFilter(mockBuilder, filter)
+		require.NoError(t, err)
+		assert.True(t, mockBuilder.idFilterCalled)
+		assert.False(t, mockBuilder.filterConditionCalled)
+	})
+
+	t.Run("with_filter_condition_error", func(t *testing.T) {
+		// Create a mock converter that returns an error
+		mockConverter := &mockFilterConverter{
+			shouldError: true,
+		}
+		vsWithMockConverter := &VectorStore{
+			filterConverter: mockConverter,
+		}
+
+		mockBuilder := &mockQueryFilterBuilder{}
+		filter := &vectorstore.SearchFilter{
+			FilterCondition: &searchfilter.UniversalFilterCondition{
+				Field:    "invalid",
+				Operator: "INVALID_OP",
+				Value:    "test",
+			},
+		}
+		err := vsWithMockConverter.buildQueryFilter(mockBuilder, filter)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "converter error")
+		assert.False(t, mockBuilder.filterConditionCalled) // Should not be called if conversion fails
+	})
 }
 
 // mockQueryFilterBuilder is a mock implementation of queryFilterBuilder
@@ -971,6 +1023,21 @@ func (m *mockQueryFilterBuilder) addMetadataFilter(metadata map[string]any) {
 func (m *mockQueryFilterBuilder) addFilterCondition(condition *condConvertResult) {
 	m.filterConditionCalled = true
 	m.filterCondition = condition
+}
+
+// mockFilterConverter is a mock implementation of filter converter
+type mockFilterConverter struct {
+	shouldError bool
+}
+
+func (m *mockFilterConverter) Convert(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
+	if m.shouldError {
+		return nil, errors.New("converter error")
+	}
+	return &condConvertResult{
+		cond: "status = $1",
+		args: []any{"active"},
+	}, nil
 }
 
 // TestWithHybridSearchWeights tests hybrid search weight normalization
