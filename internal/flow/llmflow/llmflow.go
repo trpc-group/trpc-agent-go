@@ -208,8 +208,7 @@ func (f *Flow) processStreamingResponses(
 	responseChan <-chan *model.Response,
 	eventChan chan<- *event.Event,
 	span oteltrace.Span,
-) (*event.Event, error) {
-	var lastEvent *event.Event
+) (lastEvent *event.Event, err error) {
 	start := time.Now()
 	isFirstToken := true
 	firstTokenTimeDuration := time.Duration(0)
@@ -219,6 +218,7 @@ func (f *Flow) processStreamingResponses(
 	defer func() {
 		attrs := itelemetry.ChatAttributes{
 			AgentName: invocation.AgentName,
+			Error:     err,
 		}
 		if invocation.Model != nil {
 			attrs.RequestModelName = invocation.Model.Info().Name
@@ -271,7 +271,7 @@ func (f *Flow) processStreamingResponses(
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
 		// 5. Check context cancellation.
-		if err := agent.CheckContextCancelled(ctx); err != nil {
+		if err = agent.CheckContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 
