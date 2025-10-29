@@ -749,7 +749,7 @@ llm := openai.New("gpt-4o-mini",
 
 ### 4. 模型切换（Model Switching）
 
-模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。框架提供三种方式：Agent 级别切换（影响所有后续请求）和请求级别切换（仅影响单次请求）。
+模型切换允许在运行时动态更换 Agent 使用的 LLM 模型。框架提供两种方式：Agent 级别切换（影响所有后续请求）和请求级别切换（仅影响单次请求）。
 
 #### Agent 级别切换
 
@@ -765,23 +765,23 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-// 创建 Agent.
+// 创建 Agent
 agent := llmagent.New("my-agent",
     llmagent.WithModel(openai.New("gpt-4o-mini")),
 )
 
-// 切换到其他模型.
+// 切换到其他模型
 agent.SetModel(openai.New("gpt-4o"))
 ```
 
 **使用场景**：
 
 ```go
-// 根据任务复杂度选择模型.
+// 根据任务复杂度选择模型
 if isComplexTask {
-    agent.SetModel(openai.New("gpt-4o"))  // 使用强大模型.
+    agent.SetModel(openai.New("gpt-4o"))  // 使用强大模型
 } else {
-    agent.SetModel(openai.New("gpt-4o-mini"))  // 使用快速模型.
+    agent.SetModel(openai.New("gpt-4o-mini"))  // 使用快速模型
 }
 ```
 
@@ -796,29 +796,29 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-// 创建多个模型实例.
+// 创建多个模型实例
 gpt4 := openai.New("gpt-4o")
 gpt4mini := openai.New("gpt-4o-mini")
 deepseek := openai.New("deepseek-chat")
 
-// 创建 Agent 时注册所有模型.
+// 创建 Agent 时注册所有模型
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
         "smart": gpt4,
         "fast":  gpt4mini,
         "cheap": deepseek,
     }),
-    llmagent.WithModel(gpt4mini), // 指定初始模型.
+    llmagent.WithModel(gpt4mini), // 指定初始模型
     llmagent.WithInstruction("你是一个智能助手。"),
 )
 
-// 运行时按名称切换模型.
+// 运行时按名称切换模型
 err := agent.SetModelByName("smart")
 if err != nil {
     log.Fatal(err)
 }
 
-// 切换到其他模型.
+// 切换到其他模型
 err = agent.SetModelByName("cheap")
 if err != nil {
     log.Fatal(err)
@@ -828,22 +828,22 @@ if err != nil {
 **使用场景**：
 
 ```go
-// 根据用户等级选择模型.
-modelName := "fast" // 默认使用快速模型.
+// 根据用户等级选择模型
+modelName := "fast" // 默认使用快速模型
 if user.IsPremium() {
-    modelName = "smart" // 付费用户使用高级模型.
+    modelName = "smart" // 付费用户使用高级模型
 }
 if err := agent.SetModelByName(modelName); err != nil {
     log.Printf("切换模型失败: %v", err)
 }
 
-// 根据时间段选择模型（成本优化）.
+// 根据时间段选择模型（成本优化）
 hour := time.Now().Hour()
 if hour >= 22 || hour < 8 {
-    // 夜间使用便宜模型.
+    // 夜间使用便宜模型
     agent.SetModelByName("cheap")
 } else {
-    // 白天使用快速模型.
+    // 白天使用快速模型
     agent.SetModelByName("fast")
 }
 ```
@@ -862,7 +862,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-// 为这次请求使用特定模型.
+// 为这次请求使用特定模型
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithModel(openai.New("gpt-4o")),
 )
@@ -873,39 +873,39 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 通过 `agent.WithModelName` 为单次请求指定预注册的模型名称：
 
 ```go
-// 创建 Agent 时预注册多个模型.
+// 创建 Agent 时预注册多个模型
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
         "smart": openai.New("gpt-4o"),
         "fast":  openai.New("gpt-4o-mini"),
         "cheap": openai.New("deepseek-chat"),
     }),
-    llmagent.WithModel(openai.New("gpt-4o-mini")), // 默认模型.
+    llmagent.WithModel(openai.New("gpt-4o-mini")), // 默认模型
 )
 
 runner := runner.NewRunner("app", agent)
 
-// 为这次请求临时使用 "smart" 模型.
+// 为这次请求临时使用 "smart" 模型
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithModelName("smart"),
 )
 
-// 下一次请求仍然使用默认模型 "gpt-4o-mini".
+// 下一次请求仍然使用默认模型 "gpt-4o-mini"
 eventChan2, err := runner.Run(ctx, userID, sessionID, message2)
 ```
 
 **使用场景**：
 
 ```go
-// 根据消息复杂度动态选择模型.
+// 根据消息复杂度动态选择模型
 var opts []agent.RunOption
 if isComplexQuery(message) {
-    opts = append(opts, agent.WithModelName("smart")) // 复杂查询使用强大模型.
+    opts = append(opts, agent.WithModelName("smart")) // 复杂查询使用强大模型
 }
 
 eventChan, err := runner.Run(ctx, userID, sessionID, message, opts...)
 
-// 为推理任务使用专门的推理模型.
+// 为推理任务使用专门的推理模型
 eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
     agent.WithModelName("deepseek-reasoner"),
 )
@@ -1183,7 +1183,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 （参见 [model/openai/openai.go:524](model/openai/openai.go:524)、
 [model/openai/openai.go:964](model/openai/openai.go:964)）。
 
-1) 使用 OpenAI RequestOption 设置全局 Header
+1. 使用 OpenAI RequestOption 设置全局 Header
 
 通过 `WithOpenAIOptions` 配合 `openaiopt.WithHeader` 或
 `openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的“每个请求”
@@ -1242,7 +1242,7 @@ llm := openai.New("deepseek-chat",
   `WithAPIKey`，改为使用
   `openaiopt.WithHeader("api-key", "<key>")`。
 
-2) 使用自定义 http.RoundTripper（进阶）
+2. 使用自定义 http.RoundTripper（进阶）
 
 在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等
 能力的场景（参见

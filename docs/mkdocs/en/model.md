@@ -748,7 +748,7 @@ For a complete interactive example, see [examples/model/retry](https://github.co
 
 ### 4. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides three approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
 
 #### Agent-level Switching
 
@@ -1183,7 +1183,7 @@ Both methods affect streaming too because the same client is used for
 ([model/openai/openai.go:524](model/openai/openai.go:524),
 [model/openai/openai.go:964](model/openai/openai.go:964)).
 
-1) Global headers using OpenAI RequestOption
+1. Global headers using OpenAI RequestOption
 
 Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
 `openaiopt.WithMiddleware` to inject headers for every request created
@@ -1242,7 +1242,7 @@ Notes for authentication variants:
 - Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
   `openaiopt.WithHeader("api-key", "<key>")` instead.
 
-2) Custom http.RoundTripper (advanced)
+2. Custom http.RoundTripper (advanced)
 
 Inject headers across all requests at the HTTP layer by wrapping the
 transport. This is useful when you also need custom proxy, TLS, or
