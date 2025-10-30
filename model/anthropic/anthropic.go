@@ -473,7 +473,7 @@ func buildStreamingPartialResponse(acc anthropic.Message,
 	return response, nil
 }
 
-// buildStreamingFinalResponse builds a streamingfinal response from the accumulator.
+// buildStreamingFinalResponse builds a final streaming response from the accumulator.
 func buildStreamingFinalResponse(acc anthropic.Message) *model.Response {
 	var (
 		accumulatedToolCalls []model.ToolCall
