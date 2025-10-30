@@ -43,7 +43,7 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	if itelemetry.ChatMetricGenAIClientTokenUsage, err = itelemetry.ChatMeter.Int64Histogram(
 		metrics.MetricGenAIClientTokenUsage,
 		metric.WithDescription("Token usage for client"),
-		metric.WithUnit("1"),
+		metric.WithUnit("{token}"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIClientTokenUsage: %w", err)
 	}
@@ -67,6 +67,13 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimePerOutputToken: %w", err)
+	}
+	if itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime, err = itelemetry.ChatMeter.Float64Histogram(
+		metrics.MetricTRPCAgentGoClientOutputTokenPerTime,
+		metric.WithDescription("Output token per time for client"),
+		metric.WithUnit("{token}"),
+	); err != nil {
+		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientOutputTokenPerTime: %w", err)
 	}
 
 	itelemetry.ExecuteToolMeter = mp.Meter(metrics.MeterNameExecuteTool)

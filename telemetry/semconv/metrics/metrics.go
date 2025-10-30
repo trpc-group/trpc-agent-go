@@ -33,6 +33,8 @@ const (
 	MetricTRPCAgentGoClientTimeToFirstToken = "trpc_agent_go.client.time_to_first_token" // #nosec G101 - this is a metric key name, not a credential.
 	// MetricTRPCAgentGoClientTimePerOutputToken represents the time per output token for client.
 	MetricTRPCAgentGoClientTimePerOutputToken = "trpc_agent_go.client.time_per_output_token" // #nosec G101 - this is a metric key name, not a credential.
+	// MetricTRPCAgentGoClientOutputTokenPerTime represents the output token per time for client.
+	MetricTRPCAgentGoClientOutputTokenPerTime = "trpc_agent_go.client.output_token_per_time" // #nosec G101 - this is a metric key name, not a credential.
 
 	// MetricTRPCAgentGoClientRequestCnt represents the request count for client.
 	MetricTRPCAgentGoClientRequestCnt = "trpc_agent_go.client.request_cnt"

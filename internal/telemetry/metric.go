@@ -30,6 +30,9 @@ var (
 	// ChatMetricTRPCAgentGoClientTimePerOutputToken records the distribution of average time per output token in seconds.
 	// This metric measures the decode phase performance by calculating (total_duration - time_to_first_token) / (output_tokens - first_token_count).
 	ChatMetricTRPCAgentGoClientTimePerOutputToken metric.Float64Histogram = noop.Float64Histogram{}
+	// ChatMetricTRPCAgentGoClientOutputTokenPerTime records the distribution of output token per time for client.
+	// 1 / ChatMetricTRPCAgentGoClientTimePerOutputToken.
+	ChatMetricTRPCAgentGoClientOutputTokenPerTime metric.Float64Histogram = noop.Float64Histogram{}
 )
 
 // ChatAttributes is the attributes for chat metrics.
@@ -76,6 +79,13 @@ func IncChatRequestCnt(ctx context.Context, attrs ChatAttributes) {
 // The duration represents the time spent per token during the decode phase of LLM inference.
 func RecordChatTimePerOutputTokenDuration(ctx context.Context, attrs ChatAttributes, duration time.Duration) {
 	ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(ctx, duration.Seconds(),
+		metric.WithAttributes(attrs.toAttributes()...))
+}
+
+// RecordChatOutputTokenPerTime records the output token per time for a chat operation.
+// 1 / ChatMetricTRPCAgentGoClientTimePerOutputToken.
+func RecordChatOutputTokenPerTime(ctx context.Context, attrs ChatAttributes, tokenPerTime float64) {
+	ChatMetricTRPCAgentGoClientOutputTokenPerTime.Record(ctx, tokenPerTime,
 		metric.WithAttributes(attrs.toAttributes()...))
 }
 

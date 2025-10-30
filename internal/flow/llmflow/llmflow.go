@@ -240,8 +240,10 @@ func (f *Flow) processStreamingResponses(
 		itelemetry.RecordChatOutputTokenUsage(ctx, attrs, int64(totalCompletionTokens))
 		if tokens, duration := totalCompletionTokens-firstCompleteToken, requestDuration-firstTokenTimeDuration; tokens > 0 && duration > 0 {
 			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, attrs, duration/time.Duration(tokens))
-		} else if tokens == 0 && totalCompletionTokens > 0 {
+			itelemetry.RecordChatOutputTokenPerTime(ctx, attrs, float64(tokens)/duration.Seconds())
+		} else if tokens == 0 && totalCompletionTokens > 0 && requestDuration > 0 {
 			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, attrs, requestDuration/time.Duration(totalCompletionTokens))
+			itelemetry.RecordChatOutputTokenPerTime(ctx, attrs, float64(totalCompletionTokens)/requestDuration.Seconds())
 		}
 	}()
 
