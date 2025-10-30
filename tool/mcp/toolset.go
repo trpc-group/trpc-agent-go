@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"golang.org/x/sync/singleflight"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -90,14 +91,8 @@ func (ts *ToolSet) Tools(ctx context.Context) []tool.Tool {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	// Since we control the creation of mcpTool instances and they all implement CallableTool,
-	// we can safely do the type conversion. Using a more explicit approach for better readability.
-	result := make([]tool.Tool, 0, len(ts.tools))
-	for _, t := range ts.tools {
-		// All tools created by newMCPTool implement CallableTool, so this should always succeed
-		result = append(result, t.(tool.Tool))
-	}
-	return result
+	// All tools created by newMCPTool implement both CallableTool and Tool interfaces
+	return ts.tools
 }
 
 // Close implements the ToolSet interface.
@@ -380,6 +375,12 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments map[string]any) ([]mcp.Content, error) {
 	var result []mcp.Content
 
+	// Extract MCP request options from invocation context
+	var mcpOptsRaw []any
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv.RunOptions.MCPRequestOptions != nil {
+		mcpOptsRaw = inv.RunOptions.MCPRequestOptions
+	}
+
 	// Execute with session reconnection support
 	operationErr := m.executeWithSessionReconnect(ctx, func() error {
 		m.mu.RLock()
@@ -397,7 +398,16 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		callReq.Params.Name = name
 		callReq.Params.Arguments = arguments
 
-		callResp, callErr := m.client.CallTool(toolCtx, callReq)
+		// Convert []any to []mcp.RequestOption
+		mcpOpts := make([]mcp.RequestOption, 0, len(mcpOptsRaw))
+		for _, opt := range mcpOptsRaw {
+			if mcpOpt, ok := opt.(mcp.RequestOption); ok {
+				mcpOpts = append(mcpOpts, mcpOpt)
+			}
+		}
+
+		// Call tool with request options
+		callResp, callErr := m.client.CallTool(toolCtx, callReq, mcpOpts...)
 		if callErr != nil {
 			// Enhanced error with parameter information.
 			enhancedErr := fmt.Errorf("failed to call tool %s: %w", name, callErr)

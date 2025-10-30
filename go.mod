@@ -84,3 +84,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace trpc.group/trpc-go/trpc-mcp-go => github.com/bytethm/trpc-mcp-go v0.0.0-20251030035431-23288a8e5a6d
