@@ -270,6 +270,7 @@ func TestMiddleOutStrategy_TailorMessages(t *testing.T) {
 
 func TestMiddleOutStrategy_PreserveSystemAndLastTurn(t *testing.T) {
 	// Create messages: system, user1, user2, user3, user4, user5
+	// Total tokens: 7 + 2 + 2 + 2 + 2 + 2 = 17 tokens
 	msgs := []Message{
 		NewSystemMessage("You are a helpful assistant."),
 		NewUserMessage("Question 1"),
@@ -282,27 +283,29 @@ func TestMiddleOutStrategy_PreserveSystemAndLastTurn(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	s := NewMiddleOutStrategy(counter) // Always preserves system and last turn
 
-	tailored, err := s.TailorMessages(context.Background(), msgs, 50)
+	// Set maxTokens to 12 to trigger tailoring (total is 17 tokens).
+	tailored, err := s.TailorMessages(context.Background(), msgs, 12)
 	require.NoError(t, err)
 
-	// Should preserve system message at the beginning
+	// Should preserve system message at the beginning.
 	if len(tailored) > 0 {
 		assert.Equal(t, RoleSystem, tailored[0].Role)
 		assert.Equal(t, "You are a helpful assistant.", tailored[0].Content)
 	}
 
-	// Should preserve last turn (last 1-2 messages)
+	// Should preserve last turn (last 1-2 messages).
 	if len(tailored) >= 2 {
 		lastMsg := tailored[len(tailored)-1]
 		assert.Equal(t, "Question 5", lastMsg.Content)
 	}
 
-	// Should remove messages from the middle
+	// Should remove messages from the middle.
 	assert.Less(t, len(tailored), len(msgs))
 }
 
 func TestMiddleOutStrategy_MiddleOutLogic(t *testing.T) {
 	// Create messages: system, user1, user2, user3, user4, user5, user6
+	// Total tokens: 7 + 2 + 2 + 2 + 2 + 2 + 2 = 19 tokens
 	msgs := []Message{
 		NewSystemMessage("You are a helpful assistant."),
 		NewUserMessage("Question 1"),
@@ -316,28 +319,29 @@ func TestMiddleOutStrategy_MiddleOutLogic(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	s := NewMiddleOutStrategy(counter)
 
-	tailored, err := s.TailorMessages(context.Background(), msgs, 30)
+	// Set maxTokens to 15 to trigger tailoring (total is 19 tokens).
+	tailored, err := s.TailorMessages(context.Background(), msgs, 15)
 	require.NoError(t, err)
 
-	// Should preserve system message at the beginning
+	// Should preserve system message at the beginning.
 	assert.Equal(t, RoleSystem, tailored[0].Role)
 	assert.Equal(t, "You are a helpful assistant.", tailored[0].Content)
 
-	// Should preserve last turn (last 2 messages)
+	// Should preserve last turn (last 2 messages).
 	assert.Equal(t, "Question 5", tailored[len(tailored)-2].Content)
 	assert.Equal(t, "Question 6", tailored[len(tailored)-1].Content)
 
-	// Should have removed some middle messages
+	// Should have removed some middle messages.
 	assert.Less(t, len(tailored), len(msgs))
 
-	// Verify token count is within limit
+	// Verify token count is within limit.
 	totalTokens := 0
 	for _, msg := range tailored {
 		tokens, err := counter.CountTokens(context.Background(), msg)
 		require.NoError(t, err)
 		totalTokens += tokens
 	}
-	assert.LessOrEqual(t, totalTokens, 30)
+	assert.LessOrEqual(t, totalTokens, 15)
 }
 
 func TestHeadOutStrategy_PreserveOptions(t *testing.T) {
@@ -1362,4 +1366,294 @@ func TestSimpleTokenCounter_CountTokensRange_InvalidRange(t *testing.T) {
 			require.Contains(t, err.Error(), "invalid range")
 		})
 	}
+}
+
+// TestHeadOutStrategy_BinarySearchAccuracy tests that binary search correctly accounts for preserved tail tokens.
+func TestHeadOutStrategy_BinarySearchAccuracy(t *testing.T) {
+	// Create messages with varying token sizes.
+	msgs := []Message{
+		NewSystemMessage("System prompt"),                    // ~3 tokens
+		NewUserMessage(repeat("a", 100)),                    // ~25 tokens
+		NewUserMessage(repeat("b", 100)),                    // ~25 tokens
+		NewUserMessage(repeat("c", 100)),                    // ~25 tokens
+		NewUserMessage(repeat("d", 100)),                    // ~25 tokens
+		NewUserMessage("Last user message"),                 // ~4 tokens
+		NewAssistantMessage("Last assistant response"),      // ~4 tokens
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewHeadOutStrategy(counter)
+
+	// Set a strict token limit that forces trimming.
+	maxTokens := 50
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, maxTokens)
+	require.NoError(t, err)
+
+	// Should preserve system message.
+	require.Greater(t, len(tailored), 0)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+
+	// Should preserve last turn (last 2 messages).
+	assert.Equal(t, "Last user message", tailored[len(tailored)-2].Content)
+	assert.Equal(t, "Last assistant response", tailored[len(tailored)-1].Content)
+
+	// Verify token count is within limit.
+	totalTokens := 0
+	for _, msg := range tailored {
+		tokens, err := counter.CountTokens(context.Background(), msg)
+		require.NoError(t, err)
+		totalTokens += tokens
+	}
+	assert.LessOrEqual(t, totalTokens, maxTokens)
+}
+
+// TestTailOutStrategy_BinarySearchAccuracy tests that binary search correctly accounts for preserved head tokens.
+func TestTailOutStrategy_BinarySearchAccuracy(t *testing.T) {
+	// Create messages with varying token sizes.
+	msgs := []Message{
+		NewSystemMessage("System prompt"),                    // ~3 tokens
+		NewUserMessage(repeat("a", 100)),                    // ~25 tokens
+		NewUserMessage(repeat("b", 100)),                    // ~25 tokens
+		NewUserMessage(repeat("c", 100)),                    // ~25 tokens
+		NewUserMessage(repeat("d", 100)),                    // ~25 tokens
+		NewUserMessage("Last user message"),                 // ~4 tokens
+		NewAssistantMessage("Last assistant response"),      // ~4 tokens
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewTailOutStrategy(counter)
+
+	// Set a strict token limit that forces trimming.
+	maxTokens := 50
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, maxTokens)
+	require.NoError(t, err)
+
+	// Should preserve system message.
+	require.Greater(t, len(tailored), 0)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+
+	// Should preserve last turn (last 2 messages).
+	assert.Equal(t, "Last user message", tailored[len(tailored)-2].Content)
+	assert.Equal(t, "Last assistant response", tailored[len(tailored)-1].Content)
+
+	// Verify token count is within limit.
+	totalTokens := 0
+	for _, msg := range tailored {
+		tokens, err := counter.CountTokens(context.Background(), msg)
+		require.NoError(t, err)
+		totalTokens += tokens
+	}
+	assert.LessOrEqual(t, totalTokens, maxTokens)
+}
+
+// TestHeadOutStrategy_VeryTightBudget tests HeadOut with extremely tight token budget.
+func TestHeadOutStrategy_VeryTightBudget(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage("System"),
+		NewUserMessage(repeat("x", 500)),
+		NewUserMessage(repeat("y", 500)),
+		NewUserMessage("Query"),
+		NewAssistantMessage("Response"),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewHeadOutStrategy(counter)
+
+	// Very tight budget: only 20 tokens.
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 20)
+	require.NoError(t, err)
+
+	// Should still preserve system and last turn.
+	if len(tailored) > 0 {
+		assert.Equal(t, RoleSystem, tailored[0].Role)
+	}
+	if len(tailored) >= 2 {
+		assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
+		assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+	}
+
+	// Verify token count is within limit.
+	totalTokens := 0
+	for _, msg := range tailored {
+		tokens, err := counter.CountTokens(context.Background(), msg)
+		require.NoError(t, err)
+		totalTokens += tokens
+	}
+	assert.LessOrEqual(t, totalTokens, 20)
+}
+
+// TestTailOutStrategy_VeryTightBudget tests TailOut with extremely tight token budget.
+func TestTailOutStrategy_VeryTightBudget(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage("System"),
+		NewUserMessage(repeat("x", 500)),
+		NewUserMessage(repeat("y", 500)),
+		NewUserMessage("Query"),
+		NewAssistantMessage("Response"),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewTailOutStrategy(counter)
+
+	// Very tight budget: only 20 tokens.
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 20)
+	require.NoError(t, err)
+
+	// Should still preserve system and last turn.
+	if len(tailored) > 0 {
+		assert.Equal(t, RoleSystem, tailored[0].Role)
+	}
+	if len(tailored) >= 2 {
+		assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
+		assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+	}
+
+	// Verify token count is within limit.
+	totalTokens := 0
+	for _, msg := range tailored {
+		tokens, err := counter.CountTokens(context.Background(), msg)
+		require.NoError(t, err)
+		totalTokens += tokens
+	}
+	assert.LessOrEqual(t, totalTokens, 20)
+}
+
+// TestHeadOutStrategy_PreservedSegmentsExceedBudget tests when preserved segments exceed budget.
+func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage(repeat("system ", 100)),
+		NewUserMessage("User 1"),
+		NewUserMessage("User 2"),
+		NewUserMessage("Query"),
+		NewAssistantMessage(repeat("response ", 100)),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewHeadOutStrategy(counter)
+
+	// Budget is less than preserved segments.
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
+	require.NoError(t, err)
+
+	// Should return only preserved segments (system + last turn).
+	require.Greater(t, len(tailored), 0)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, RoleAssistant, tailored[len(tailored)-1].Role)
+}
+
+// TestTailOutStrategy_PreservedSegmentsExceedBudget tests when preserved segments exceed budget.
+func TestTailOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage(repeat("system ", 100)),
+		NewUserMessage("User 1"),
+		NewUserMessage("User 2"),
+		NewUserMessage("Query"),
+		NewAssistantMessage(repeat("response ", 100)),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewTailOutStrategy(counter)
+
+	// Budget is less than preserved segments.
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 10)
+	require.NoError(t, err)
+
+	// Should return only preserved segments (system + last turn).
+	require.Greater(t, len(tailored), 0)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, RoleAssistant, tailored[len(tailored)-1].Role)
+}
+
+// TestHeadOutStrategy_BalancedMessages tests HeadOut with balanced message distribution.
+func TestHeadOutStrategy_BalancedMessages(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage("System"),
+		NewUserMessage("Head 1"),
+		NewUserMessage("Head 2"),
+		NewUserMessage("Head 3"),
+		NewUserMessage("Middle 1"),
+		NewUserMessage("Middle 2"),
+		NewUserMessage("Tail 1"),
+		NewUserMessage("Tail 2"),
+		NewUserMessage("Query"),
+		NewAssistantMessage("Response"),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewHeadOutStrategy(counter)
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 100)
+	require.NoError(t, err)
+
+	// Should preserve system and last turn.
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
+	assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+
+	// Should keep tail messages (HeadOut removes from head).
+	hasTailMessages := false
+	for _, msg := range tailored {
+		if msg.Content == "Tail 1" || msg.Content == "Tail 2" {
+			hasTailMessages = true
+		}
+	}
+	// HeadOut should prefer tail messages over head messages.
+	assert.True(t, hasTailMessages, "HeadOut should keep tail messages")
+
+	// Verify token count is within limit.
+	totalTokens := 0
+	for _, msg := range tailored {
+		tokens, err := counter.CountTokens(context.Background(), msg)
+		require.NoError(t, err)
+		totalTokens += tokens
+	}
+	assert.LessOrEqual(t, totalTokens, 100)
+}
+
+// TestTailOutStrategy_BalancedMessages tests TailOut with balanced message distribution.
+func TestTailOutStrategy_BalancedMessages(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage("System"),
+		NewUserMessage("Head 1"),
+		NewUserMessage("Head 2"),
+		NewUserMessage("Head 3"),
+		NewUserMessage("Middle 1"),
+		NewUserMessage("Middle 2"),
+		NewUserMessage("Tail 1"),
+		NewUserMessage("Tail 2"),
+		NewUserMessage("Query"),
+		NewAssistantMessage("Response"),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewTailOutStrategy(counter)
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 100)
+	require.NoError(t, err)
+
+	// Should preserve system and last turn.
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
+	assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+
+	// Should keep head messages (TailOut removes from tail).
+	hasHeadMessages := false
+	for _, msg := range tailored {
+		if msg.Content == "Head 1" || msg.Content == "Head 2" || msg.Content == "Head 3" {
+			hasHeadMessages = true
+		}
+	}
+	// TailOut should prefer head messages over tail messages.
+	assert.True(t, hasHeadMessages, "TailOut should keep head messages")
+
+	// Verify token count is within limit.
+	totalTokens := 0
+	for _, msg := range tailored {
+		tokens, err := counter.CountTokens(context.Background(), msg)
+		require.NoError(t, err)
+		totalTokens += tokens
+	}
+	assert.LessOrEqual(t, totalTokens, 100)
 }
