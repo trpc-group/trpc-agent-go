@@ -36,8 +36,10 @@ import (
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -123,6 +125,22 @@ func WithTools(tools []tool.Tool) Option {
 func WithToolSets(toolSets []tool.ToolSet) Option {
 	return func(opts *Options) {
 		opts.ToolSets = toolSets
+	}
+}
+
+// WithSkills enables model-agnostic Agent Skills support using the
+// provided repository. The processor will inject a small overview
+// and on-demand content according to session state.
+func WithSkills(repo skill.Repository) Option {
+	return func(opts *Options) {
+		opts.SkillsRepository = repo
+	}
+}
+
+// WithSkillsOverview toggles overview injection (names + descriptions).
+func WithSkillsOverview(show bool) Option {
+	return func(opts *Options) {
+		opts.SkillsOverview = show
 	}
 }
 
@@ -435,6 +453,11 @@ type Options struct {
 	//   - Configured with empty string: use built-in default message.
 	//   - Configured with non-empty: use the provided message.
 	DefaultTransferMessage *string
+
+	// SkillsRepository enables Agent Skills if non-nil.
+	SkillsRepository skill.Repository
+	// SkillsOverview controls whether to inject overview.
+	SkillsOverview bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -643,6 +666,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			}
 		}
 	}
+	// 6a. Skills processor (overview + loaded content/docs).
+	if options.SkillsRepository != nil {
+		sp := processor.NewSkillsRequestProcessor(
+			options.SkillsRepository, options.SkillsOverview,
+		)
+		requestProcessors = append(requestProcessors, sp)
+	}
+
 	contentProcessor := processor.NewContentRequestProcessor(
 		processor.WithIncludeContents(includeMode),
 		processor.WithAddContextPrefix(options.AddContextPrefix),
@@ -742,6 +773,12 @@ func registerTools(options *Options) []tool.Tool {
 				options.Knowledge, knowledgetool.WithFilter(options.KnowledgeFilter),
 			))
 		}
+	}
+
+	// Add skill_load tool when skills are enabled.
+	if options.SkillsRepository != nil {
+		allTools = append(allTools,
+			toolskill.NewLoadTool(options.SkillsRepository))
 	}
 
 	return allTools
