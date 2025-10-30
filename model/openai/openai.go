@@ -979,16 +979,16 @@ func (m *Model) handleStreamingResponse(
 
 	for stream.Next() {
 		chunk := stream.Current()
+
 		// Skip empty chunks.
-		if m.skipEmptyChunk(chunk) {
+		if m.shouldSkipEmptyChunk(chunk) {
 			continue
 		}
 
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
-		// Always accumulate for correctness (tool call deltas are assembled later),
-		// but we may suppress emitting a partial event for noise reduction.
+		// Always accumulate for correctness (tool call deltas are assembled later).
 		acc.AddChunk(chunk)
 
 		// Suppress chunks that carry no meaningful visible delta (including
@@ -1058,8 +1058,8 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 		return false
 	}
 
-	// think model reasoning content
-	if _, ok := delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
+	// Check for reasoning content - if present, don't suppress.
+	if m.hasReasoningContent(delta) {
 		return false
 	}
 
@@ -1074,37 +1074,52 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	return true
 }
 
-// skipEmptyChunk returns true when the chunk contains no meaningful delta.
+// shouldSkipEmptyChunk returns true when the chunk contains no meaningful delta.
 // This is a defensive check against malformed responses from certain providers
 // that may return chunks with valid JSON fields but empty actual content.
 //
 // The order of checks matters:
-// 1. Check content first - if valid, don't skip (even if empty string)
-// 2. Check refusal - if valid, don't skip
-// 3. Check toolcalls - if valid but array is empty, skip (defensive against panic)
-// 4. Otherwise, don't skip (let it be processed normally)
-func (m *Model) skipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
+// 1. Check reasoning content first - if present, don't skip
+// 2. Check content - if valid, don't skip (even if empty string)
+// 3. Check refusal - if valid, don't skip
+// 4. Check toolcalls - if valid but array is empty, skip (defensive against panic)
+// 5. Otherwise, skip
+func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 	// No choices available, don't skip (let it be processed normally).
 	if len(chunk.Choices) == 0 {
 		return false
 	}
-	delta := chunk.Choices[0].Delta
+
 	// Check for meaningful delta content in priority order.
-	switch {
-	case delta.JSON.Content.Valid():
-		// Content field is present, chunk is not empty.
+	delta := chunk.Choices[0].Delta
+
+	// Check reasoning content first - if present, chunk is not empty.
+	if m.hasReasoningContent(delta) {
 		return false
-	case delta.JSON.Refusal.Valid():
-		// Refusal field is present, chunk is not empty.
+	}
+
+	// Content or Refusal field is present, chunk is not empty.
+	if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
 		return false
-	case delta.JSON.ToolCalls.Valid():
+	}
+
+	if delta.JSON.ToolCalls.Valid() {
 		// ToolCalls field is valid, but check if the array is empty.
 		// Empty toolcalls array would cause panic when accessing the first element.
 		return len(delta.ToolCalls) <= 0
-	default:
-		// No valid fields, but it can be processed normally.
+	}
+
+	// No meaningful content, skip the chunk.
+	return true
+}
+
+// hasReasoningContent checks if the delta contains reasoning content.
+func (m *Model) hasReasoningContent(delta openai.ChatCompletionChunkChoiceDelta) bool {
+	if delta.JSON.ExtraFields == nil {
 		return false
 	}
+	_, ok := delta.JSON.ExtraFields[model.ReasoningContentKey]
+	return ok
 }
 
 // createPartialResponse creates a partial response from a chunk.
@@ -1131,9 +1146,21 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 			response.Choices = make([]model.Choice, 1)
 		}
 
-		reasoningContent, err := strconv.Unquote(chunk.Choices[0].Delta.JSON.ExtraFields[model.ReasoningContentKey].Raw())
-		if err != nil {
-			reasoningContent = ""
+		var reasoningContent string
+		if chunk.Choices[0].Delta.JSON.ExtraFields != nil {
+			if reasoningField, ok := chunk.Choices[0].Delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
+				var err error
+				reasoningContent, err = strconv.Unquote(reasoningField.Raw())
+				if err != nil {
+					// If Unquote fails, try to use the raw value directly.
+					rawValue := reasoningField.Raw()
+					if len(rawValue) >= 2 && rawValue[0] == '"' && rawValue[len(rawValue)-1] == '"' {
+						reasoningContent = rawValue[1 : len(rawValue)-1]
+					} else {
+						reasoningContent = rawValue
+					}
+				}
+			}
 		}
 
 		response.Choices[0].Delta = model.Message{
@@ -1303,9 +1330,6 @@ func (m *Model) handleNonStreamingResponse(
 ) {
 	chatCompletion, err := m.client.Chat.Completions.New(
 		ctx, chatRequest, opts...)
-	if m.chatResponseCallback != nil {
-		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
-	}
 	if err != nil {
 		errorResponse := &model.Response{
 			Error: &model.ResponseError{
@@ -1321,6 +1345,11 @@ func (m *Model) handleNonStreamingResponse(
 		case <-ctx.Done():
 		}
 		return
+	}
+
+	// Call response callback on successful completion.
+	if m.chatResponseCallback != nil {
+		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
 	}
 
 	response := &model.Response{
