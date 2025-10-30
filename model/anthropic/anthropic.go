@@ -326,7 +326,7 @@ func (m *Model) handleNonStreamingResponse(
 		m.chatResponseCallback(ctx, &chatRequest, message)
 	}
 	if err != nil {
-		m.sendErrorResponse(ctx, responseChan, err)
+		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
 		return
 	}
 	// Build final response payload.
@@ -382,7 +382,7 @@ func (m *Model) handleStreamingResponse(
 		chunk := stream.Current()
 		// Accumulate into accumulator.
 		if err := acc.Accumulate(chunk); err != nil {
-			m.sendErrorResponse(ctx, responseChan, err)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
 			return
 		}
 		if m.chatChunkCallback != nil {
@@ -391,7 +391,7 @@ func (m *Model) handleStreamingResponse(
 		// Build partial response.
 		response, err := buildStreamingPartialResponse(acc, chunk)
 		if err != nil {
-			m.sendErrorResponse(ctx, responseChan, err)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
 			return
 		}
 		if response == nil {
@@ -406,19 +406,7 @@ func (m *Model) handleStreamingResponse(
 	}
 	// Propagate stream error.
 	if err := stream.Err(); err != nil {
-		errorResponse := &model.Response{
-			Error: &model.ResponseError{
-				Message: stream.Err().Error(),
-				Type:    model.ErrorTypeStreamError,
-			},
-			Timestamp: time.Now(),
-			Done:      true,
-		}
-
-		select {
-		case responseChan <- errorResponse:
-		case <-ctx.Done():
-		}
+		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
 		return
 	}
 	// Emit final response built from the accumulator.
@@ -542,11 +530,11 @@ func buildStreamingFinalResponse(acc anthropic.Message) *model.Response {
 }
 
 // sendErrorResponse sends an error response through the channel.
-func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *model.Response, err error) {
+func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *model.Response, errType string, err error) {
 	errorResponse := &model.Response{
 		Error: &model.ResponseError{
 			Message: err.Error(),
-			Type:    model.ErrorTypeAPIError,
+			Type:    errType,
 		},
 		Timestamp: time.Now(),
 		Done:      true,
