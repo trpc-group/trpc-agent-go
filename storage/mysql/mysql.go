@@ -139,7 +139,7 @@ func (c *sqlDBClient) Close() error {
 // clientBuilder is the function type for building Client instances.
 type clientBuilder func(builderOpts ...ClientBuilderOpt) (Client, error)
 
-var globalBuilder clientBuilder = DefaultClientBuilder
+var globalBuilder clientBuilder = defaultClientBuilder
 
 // SetClientBuilder sets the mysql client builder.
 func SetClientBuilder(builder clientBuilder) {
@@ -151,8 +151,8 @@ func GetClientBuilder() clientBuilder {
 	return globalBuilder
 }
 
-// DefaultClientBuilder is the default mysql client builder.
-func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
+// defaultClientBuilder is the default mysql client builder.
+func defaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
 	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)

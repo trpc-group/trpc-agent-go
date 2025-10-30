@@ -286,13 +286,13 @@ func TestDefaultClientBuilder_ConnectionPoolApplication(t *testing.T) {
 }
 
 func TestDefaultClientBuilder_EmptyDSN(t *testing.T) {
-	_, err := DefaultClientBuilder()
+	_, err := defaultClientBuilder()
 	require.Error(t, err)
 	assert.EqualError(t, err, "mysql: dsn is empty")
 }
 
 func TestDefaultClientBuilder_InvalidDSN(t *testing.T) {
-	_, err := DefaultClientBuilder(WithClientBuilderDSN("invalid-dsn-format"))
+	_, err := defaultClientBuilder(WithClientBuilderDSN("invalid-dsn-format"))
 	require.Error(t, err)
 	// Error occurs at open stage for invalid DSN format.
 	assert.Contains(t, err.Error(), "mysql: open connection")
@@ -300,7 +300,7 @@ func TestDefaultClientBuilder_InvalidDSN(t *testing.T) {
 
 func TestDefaultClientBuilder_PingFailure(t *testing.T) {
 	// This test will fail at ping stage (no real MySQL server).
-	_, err := DefaultClientBuilder(
+	_, err := defaultClientBuilder(
 		WithClientBuilderDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
 	)
 	require.Error(t, err)
@@ -310,7 +310,7 @@ func TestDefaultClientBuilder_PingFailure(t *testing.T) {
 func TestDefaultClientBuilder_WithAllOptions(t *testing.T) {
 	// Test that all options are processed correctly.
 	// This will fail to connect but tests option processing.
-	_, err := DefaultClientBuilder(
+	_, err := defaultClientBuilder(
 		WithClientBuilderDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
 		WithMaxOpenConns(50),
 		WithMaxIdleConns(5),
@@ -434,7 +434,7 @@ func TestDefaultClientBuilderInterface(t *testing.T) {
 	t.Run("returns Client", func(t *testing.T) {
 		// This test will fail because we don't have a real MySQL server
 		// But it validates that the function signature is correct
-		_, err := DefaultClientBuilder(WithClientBuilderDSN("invalid-dsn"))
+		_, err := defaultClientBuilder(WithClientBuilderDSN("invalid-dsn"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "mysql: open connection")
 	})
@@ -442,7 +442,7 @@ func TestDefaultClientBuilderInterface(t *testing.T) {
 	t.Run("with valid options", func(t *testing.T) {
 		// Test that all options are processed correctly
 		// This will fail at connection time but validates option processing
-		_, err := DefaultClientBuilder(
+		_, err := defaultClientBuilder(
 			WithClientBuilderDSN("user:password@tcp(localhost:3306)/testdb"),
 			WithMaxOpenConns(10),
 			WithMaxIdleConns(5),
