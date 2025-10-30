@@ -27,7 +27,7 @@ var postgresRegistry map[string][]ClientBuilderOpt
 
 type clientBuilder func(ctx context.Context, builderOpts ...ClientBuilderOpt) (Client, error)
 
-var globalBuilder clientBuilder = DefaultClientBuilder
+var globalBuilder clientBuilder = defaultClientBuilder
 
 // SetClientBuilder sets the postgres client builder.
 func SetClientBuilder(builder clientBuilder) {
@@ -39,9 +39,9 @@ func GetClientBuilder() clientBuilder {
 	return globalBuilder
 }
 
-// DefaultClientBuilder is the default postgres client builder.
+// defaultClientBuilder is the default postgres client builder.
 // It creates a database/sql connection using pgx driver.
-func DefaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) (Client, error) {
+func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) (Client, error) {
 	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)
@@ -55,11 +55,6 @@ func DefaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 	db, err := sql.Open("pgx", o.ConnString)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: open connection: %w", err)
-	}
-
-	// Configure connection pool if ConfigFunc is provided
-	if o.ConfigFunc != nil {
-		o.ConfigFunc(db)
 	}
 
 	// Verify connection
@@ -80,9 +75,6 @@ type ClientBuilderOpts struct {
 	// Format: "postgres://username:password@host:port/database?options"
 	ConnString string
 
-	// ConfigFunc allows customizing the database/sql.DB config.
-	ConfigFunc func(*sql.DB)
-
 	// ExtraOptions is the extra options for the postgres client.
 	// This is mainly used for customized postgres client builders.
 	ExtraOptions []any
@@ -92,13 +84,6 @@ type ClientBuilderOpts struct {
 func WithClientConnString(connString string) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
 		opts.ConnString = connString
-	}
-}
-
-// WithConfigFunc sets a function to customize database/sql.DB config.
-func WithConfigFunc(fn func(*sql.DB)) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) {
-		opts.ConfigFunc = fn
 	}
 }
 
