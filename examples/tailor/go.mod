@@ -8,13 +8,13 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.3.0
+	github.com/openai/openai-go v1.12.0
+	trpc.group/trpc-go/trpc-agent-go v0.4.0
 	trpc.group/trpc-go/trpc-agent-go/model/tiktoken v0.0.0
 )
 
 require (
 	github.com/dlclark/regexp2 v1.11.5 // indirect
-	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
