@@ -5,8 +5,9 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
-// Package anthropic provides Anthropic model implementations.
+// Package anthropic provides Anthropic-compatible model implementations.
 package anthropic
 
 import (
@@ -14,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -21,7 +23,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
-
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -31,36 +32,123 @@ const (
 	functionToolType         = "function"
 )
 
-// Option configures the Anthropic model adapter.
+// HTTPClient is the interface for the HTTP client.
+type HTTPClient interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+// HTTPClientNewFunc is the function type for creating a new HTTP client.
+type HTTPClientNewFunc func(opts ...HTTPClientOption) HTTPClient
+
+// DefaultNewHTTPClient is the default HTTP client for Anthropic.
+var DefaultNewHTTPClient HTTPClientNewFunc = func(opts ...HTTPClientOption) HTTPClient {
+	options := &HTTPClientOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	return &http.Client{
+		Transport: options.Transport,
+	}
+}
+
+// HTTPClientOption is the option for the HTTP client.
+type HTTPClientOption func(*HTTPClientOptions)
+
+// WithHTTPClientName is the option for the HTTP client name.
+func WithHTTPClientName(name string) HTTPClientOption {
+	return func(options *HTTPClientOptions) {
+		options.Name = name
+	}
+}
+
+// WithHTTPClientTransport is the option for the HTTP client transport.
+func WithHTTPClientTransport(transport http.RoundTripper) HTTPClientOption {
+	return func(options *HTTPClientOptions) {
+		options.Transport = transport
+	}
+}
+
+// HTTPClientOptions is the options for the HTTP client.
+type HTTPClientOptions struct {
+	Name      string
+	Transport http.RoundTripper
+}
+
+// Model implements the model.Model interface for Anthropic API.
+type Model struct {
+	client                     anthropic.Client
+	name                       string
+	baseURL                    string
+	apiKey                     string
+	channelBufferSize          int
+	anthropicRequestOptions    []option.RequestOption
+	chatRequestCallback        ChatRequestCallbackFunc
+	chatResponseCallback       ChatResponseCallbackFunc
+	chatChunkCallback          ChatChunkCallbackFunc
+	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+}
+
+// ChatRequestCallbackFunc is the function type for the chat request callback.
+type ChatRequestCallbackFunc func(
+	ctx context.Context,
+	chatRequest *anthropic.MessageNewParams,
+)
+
+// ChatResponseCallbackFunc is the function type for the chat response callback.
+type ChatResponseCallbackFunc func(
+	ctx context.Context,
+	chatRequest *anthropic.MessageNewParams,
+	chatResponse *anthropic.Message,
+)
+
+// ChatChunkCallbackFunc is the function type for the chat chunk callback.
+type ChatChunkCallbackFunc func(
+	ctx context.Context,
+	chatRequest *anthropic.MessageNewParams,
+	chatChunk *anthropic.MessageStreamEventUnion,
+)
+
+// ChatStreamCompleteCallbackFunc is the function type for the chat stream completion callback.
+// This callback is invoked when streaming is completely finished (success or error).
+type ChatStreamCompleteCallbackFunc func(
+	ctx context.Context,
+	chatRequest *anthropic.MessageNewParams,
+	accumulator *anthropic.Message, // nil if streamErr is not nil
+	streamErr error, // nil if streaming completed successfully
+)
+
+// options contains configuration options for creating an Anthropic model.
+type options struct {
+	apiKey                     string                         // API key for the Anthropic client.
+	baseURL                    string                         // Base URL for the Anthropic client.
+	channelBufferSize          int                            // Buffer size for response channels (default: 256)
+	HTTPClientOptions          []HTTPClientOption             // Options for the HTTP client.
+	anthropicClientOptions     []option.RequestOption         // Options for building Anthropic client.
+	anthropicRequestOptions    []option.RequestOption         // Options for building Anthropic request.
+	chatRequestCallback        ChatRequestCallbackFunc        // Callback for the chat request.
+	chatResponseCallback       ChatResponseCallbackFunc       // Callback for the chat response.
+	chatChunkCallback          ChatChunkCallbackFunc          // Callback for the chat chunk.
+	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc // Callback for the chat stream completion.
+}
+
+// Option is a function that configures an Anthropic model.
 type Option func(*options)
 
-type options struct {
-	channelBufferSize int
-	clientOptions     []option.RequestOption
-	requestOptions    []option.RequestOption
-}
-
-// WithAPIKey sets the API key for Anthropic.
+// WithAPIKey sets the API key for the Anthropic client.
 func WithAPIKey(key string) Option {
 	return func(o *options) {
-		if key == "" {
-			return
-		}
-		o.clientOptions = append(o.clientOptions, option.WithAPIKey(key))
+		o.apiKey = key
 	}
 }
 
-// WithBaseURL sets the base URL for Anthropic API requests.
+// WithBaseURL sets the base URL for the Anthropic client.
 func WithBaseURL(url string) Option {
 	return func(o *options) {
-		if url == "" {
-			return
-		}
-		o.clientOptions = append(o.clientOptions, option.WithBaseURL(url))
+		o.baseURL = url
 	}
 }
 
-// WithChannelBufferSize overrides the response channel buffer size.
+// WithChannelBufferSize sets the channel buffer size for the Anthropic client, 256 by default.
 func WithChannelBufferSize(size int) Option {
 	return func(o *options) {
 		if size <= 0 {
@@ -70,26 +158,56 @@ func WithChannelBufferSize(size int) Option {
 	}
 }
 
-// WithClientOptions forwards custom request options to the Anthropic client.
-func WithClientOptions(opts ...option.RequestOption) Option {
+// WithAnthropicClientOptions appends custom request options for the Anthropic client.
+func WithAnthropicClientOptions(opts ...option.RequestOption) Option {
 	return func(o *options) {
-		o.clientOptions = append(o.clientOptions, opts...)
+		o.anthropicClientOptions = append(o.anthropicClientOptions, opts...)
 	}
 }
 
-// WithRequestOptions adds per-request options for Anthropic calls.
-func WithRequestOptions(opts ...option.RequestOption) Option {
+// WithAnthropicRequestOptions appends per-request options for the Anthropic client.
+func WithAnthropicRequestOptions(opts ...option.RequestOption) Option {
 	return func(o *options) {
-		o.requestOptions = append(o.requestOptions, opts...)
+		o.anthropicRequestOptions = append(o.anthropicRequestOptions, opts...)
 	}
 }
 
-// Model implements model.Model using anthropic-sdk-go.
-type Model struct {
-	name              string
-	client            anthropic.Client
-	channelBufferSize int
-	requestOptions    []option.RequestOption
+// WithChatRequestCallback sets the function to be called before sending a chat request.
+func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
+	return func(opts *options) {
+		opts.chatRequestCallback = fn
+	}
+}
+
+// WithChatResponseCallback sets the function to be called after receiving a chat response.
+// Used for non-streaming responses.
+func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
+	return func(opts *options) {
+		opts.chatResponseCallback = fn
+	}
+}
+
+// WithChatChunkCallback sets the function to be called after receiving a chat chunk.
+// Used for streaming responses.
+func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
+	return func(opts *options) {
+		opts.chatChunkCallback = fn
+	}
+}
+
+// WithChatStreamCompleteCallback sets the function to be called when streaming is completed.
+// Called for both successful and failed streaming completions.
+func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
+	return func(opts *options) {
+		opts.chatStreamCompleteCallback = fn
+	}
+}
+
+// WithHTTPClientOptions sets the HTTP client options for the Anthropic client.
+func WithHTTPClientOptions(httpOpts ...HTTPClientOption) Option {
+	return func(opts *options) {
+		opts.HTTPClientOptions = httpOpts
+	}
 }
 
 // New creates a new Anthropic model adapter.
@@ -100,25 +218,38 @@ func New(name string, opts ...Option) *Model {
 	for _, opt := range opts {
 		opt(o)
 	}
-
-	client := anthropic.NewClient(o.clientOptions...)
-
+	var clientOpts []option.RequestOption
+	if o.apiKey != "" {
+		clientOpts = append(clientOpts, option.WithAPIKey(o.apiKey))
+	}
+	if o.baseURL != "" {
+		clientOpts = append(clientOpts, option.WithBaseURL(o.baseURL))
+	}
+	clientOpts = append(clientOpts, option.WithHTTPClient(DefaultNewHTTPClient(o.HTTPClientOptions...)))
+	clientOpts = append(clientOpts, o.anthropicClientOptions...)
+	client := anthropic.NewClient(clientOpts...)
 	return &Model{
-		name:              name,
-		client:            client,
-		channelBufferSize: o.channelBufferSize,
-		requestOptions:    o.requestOptions,
+		client:                     client,
+		name:                       name,
+		baseURL:                    o.baseURL,
+		apiKey:                     o.apiKey,
+		channelBufferSize:          o.channelBufferSize,
+		anthropicRequestOptions:    o.anthropicRequestOptions,
+		chatRequestCallback:        o.chatRequestCallback,
+		chatResponseCallback:       o.chatResponseCallback,
+		chatChunkCallback:          o.chatChunkCallback,
+		chatStreamCompleteCallback: o.chatStreamCompleteCallback,
 	}
 }
 
-// Info implements the model.Model interface.
+// Info returns the model information.
 func (m *Model) Info() model.Info {
 	return model.Info{
 		Name: m.name,
 	}
 }
 
-// GenerateContent implements the model.Model interface.
+// GenerateContent generates content from the model.
 func (m *Model) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
@@ -126,74 +257,79 @@ func (m *Model) GenerateContent(
 	if request == nil {
 		return nil, errors.New("request cannot be nil")
 	}
+	chatRequest, err := m.buildChatRequest(request)
+	if err != nil {
+		return nil, fmt.Errorf("build chat request: %w", err)
+	}
+	// Send chat request and handle response.
+	responseChan := make(chan *model.Response, m.channelBufferSize)
+	go func() {
+		defer close(responseChan)
+		if m.chatRequestCallback != nil {
+			m.chatRequestCallback(ctx, chatRequest)
+		}
+		if request.Stream {
+			m.handleStreamingResponse(ctx, *chatRequest, responseChan)
+			return
+		}
+		m.handleNonStreamingResponse(ctx, *chatRequest, responseChan)
+	}()
+	return responseChan, nil
+}
 
+// buildChatRequest builds the chat request for the Anthropic API.
+func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewParams, error) {
+	// Convert messages to Anthropic format.
 	messages, systemPrompts, err := convertMessages(request.Messages)
 	if err != nil {
 		return nil, err
 	}
 	if len(messages) == 0 {
-		return nil, fmt.Errorf("request must include at least one supported message")
+		return nil, fmt.Errorf("request must include at least one message")
 	}
-
-	params := anthropic.MessageNewParams{
+	// Build chat request.
+	chatRequest := &anthropic.MessageNewParams{
 		Model:    anthropic.Model(m.name),
 		Messages: messages,
 		Tools:    convertTools(request.Tools),
 	}
-
 	if len(systemPrompts) > 0 {
-		params.System = systemPrompts
+		chatRequest.System = systemPrompts
 	}
 	if request.MaxTokens != nil {
-		params.MaxTokens = int64(*request.MaxTokens)
+		chatRequest.MaxTokens = int64(*request.MaxTokens)
 	}
 	if request.Temperature != nil {
-		params.Temperature = anthropic.Float(*request.Temperature)
+		chatRequest.Temperature = anthropic.Float(*request.Temperature)
 	}
 	if request.TopP != nil {
-		params.TopP = anthropic.Float(*request.TopP)
+		chatRequest.TopP = anthropic.Float(*request.TopP)
 	}
 	if len(request.Stop) > 0 {
-		params.StopSequences = append(params.StopSequences, request.Stop...)
+		chatRequest.StopSequences = append(chatRequest.StopSequences, request.Stop...)
 	}
-
-	responseChan := make(chan *model.Response, m.channelBufferSize)
-
-	go func() {
-		defer close(responseChan)
-		if request.Stream {
-			m.handleStreamingResponse(ctx, params, responseChan)
-			return
-		}
-		m.handleNonStreamingResponse(ctx, params, responseChan)
-	}()
-
-	return responseChan, nil
+	if request.ThinkingEnabled != nil && *request.ThinkingEnabled && request.ThinkingTokens != nil {
+		chatRequest.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(*request.ThinkingTokens))
+	}
+	return chatRequest, nil
 }
 
+// handleNonStreamingResponse sends a non-streaming request to the Anthropic API and emits exactly one final response.
 func (m *Model) handleNonStreamingResponse(
 	ctx context.Context,
-	body anthropic.MessageNewParams,
+	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
 ) {
-	message, err := m.client.Messages.New(ctx, body, m.requestOptions...)
+	// Issue non-streaming request.
+	message, err := m.client.Messages.New(ctx, chatRequest, m.anthropicRequestOptions...)
+	if m.chatResponseCallback != nil {
+		m.chatResponseCallback(ctx, &chatRequest, message)
+	}
 	if err != nil {
-		errorResponse := &model.Response{
-			Error: &model.ResponseError{
-				Message: err.Error(),
-				Type:    model.ErrorTypeAPIError,
-			},
-			Timestamp: time.Now(),
-			Done:      true,
-		}
-
-		select {
-		case responseChan <- errorResponse:
-		case <-ctx.Done():
-		}
+		m.sendErrorResponse(ctx, responseChan, err)
 		return
 	}
-
+	// Build final response payload.
 	now := time.Now()
 	response := &model.Response{
 		ID:        message.ID,
@@ -203,21 +339,19 @@ func (m *Model) handleNonStreamingResponse(
 		Timestamp: now,
 		Done:      true,
 	}
-
-	assistantMessage := convertMessage(message.Content)
+	// Convert assistant content blocks.
+	assistantMessage := convertContentBlock(message.Content)
 	response.Choices = []model.Choice{
 		{
 			Index:   0,
 			Message: assistantMessage,
 		},
 	}
-
-	// Handle finish reason - FinishReason is a plain string.
+	// Set finish reason.
 	if finishReason := strings.TrimSpace(string(message.StopReason)); finishReason != "" {
 		response.Choices[0].FinishReason = &finishReason
 	}
-
-	// Convert usage information.
+	// Set usage.
 	if message.Usage.InputTokens > 0 || message.Usage.OutputTokens > 0 {
 		response.Usage = &model.Usage{
 			PromptTokens:     int(message.Usage.InputTokens),
@@ -225,79 +359,53 @@ func (m *Model) handleNonStreamingResponse(
 			TotalTokens:      int(message.Usage.InputTokens + message.Usage.OutputTokens),
 		}
 	}
-
+	// Emit final response.
 	select {
 	case responseChan <- response:
 	case <-ctx.Done():
 	}
 }
 
+// handleStreamingResponse sends a streaming request to the Anthropic API and emits partial deltas
+// followed by a final response.
 func (m *Model) handleStreamingResponse(
 	ctx context.Context,
-	params anthropic.MessageNewParams,
+	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
 ) {
-	stream := m.client.Messages.NewStreaming(ctx, params, m.requestOptions...)
+	// Issue streaming request.
+	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
 	defer stream.Close()
-
+	// Accumulator to build final response.
 	acc := anthropic.Message{}
-
 	for stream.Next() {
 		chunk := stream.Current()
-
+		// Accumulate into accumulator.
 		if err := acc.Accumulate(chunk); err != nil {
 			m.sendErrorResponse(ctx, responseChan, err)
 			return
 		}
-
-		if shouldSuppressChunk(chunk) {
-			continue
+		if m.chatChunkCallback != nil {
+			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
-
-		now := time.Now()
-		response := &model.Response{
-			ID:        acc.ID,
-			Object:    model.ObjectTypeChatCompletionChunk,
-			Created:   now.Unix(),
-			Model:     string(acc.Model),
-			Timestamp: now,
-			Done:      false,
-			IsPartial: true,
-			Choices: []model.Choice{
-				{
-					Delta: model.Message{
-						Role: model.RoleAssistant,
-					},
-				},
-			},
-		}
-		switch event := chunk.AsAny().(type) {
-		case anthropic.ContentBlockDeltaEvent:
-			switch delta := event.Delta.AsAny().(type) {
-			case anthropic.TextDelta:
-				response.Choices[0].Delta.Content = delta.Text
-			case anthropic.ThinkingDelta:
-				response.Choices[0].Delta.ReasoningContent = delta.Thinking
-			default:
-				m.sendErrorResponse(ctx, responseChan, fmt.Errorf("unexpected delta type: %T", delta))
-				return
-			}
-		case anthropic.MessageDeltaEvent:
-			finishReason := string(event.Delta.StopReason)
-			response.Choices[0].FinishReason = &finishReason
-		default:
-			m.sendErrorResponse(ctx, responseChan, fmt.Errorf("unexpected chunk type: %T", chunk))
+		// Build partial response.
+		response, err := buildStreamingPartialResponse(acc, chunk)
+		if err != nil {
+			m.sendErrorResponse(ctx, responseChan, err)
 			return
 		}
+		if response == nil {
+			continue
+		}
+		// Emit partial response.
 		select {
 		case responseChan <- response:
 		case <-ctx.Done():
 			return
 		}
 	}
-
+	// Propagate stream error.
 	if err := stream.Err(); err != nil {
-		// Send error response.
 		errorResponse := &model.Response{
 			Error: &model.ResponseError{
 				Message: stream.Err().Error(),
@@ -313,13 +421,79 @@ func (m *Model) handleStreamingResponse(
 		}
 		return
 	}
+	// Emit final response built from the accumulator.
+	finalResponse := buildStreamingFinalResponse(acc)
+	select {
+	case responseChan <- finalResponse:
+	case <-ctx.Done():
+	}
+	// Call the stream complete callback after final response is sent.
+	if m.chatStreamCompleteCallback != nil {
+		var callbackAcc *anthropic.Message
+		if stream.Err() == nil {
+			callbackAcc = &acc
+		}
+		m.chatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, stream.Err())
+	}
+}
 
-	// Check accumulated tool calls (batch processing after streaming is complete).
-	var accumulatedToolCalls []model.ToolCall
-	accumulatedContent := ""
-	accumulatedReasoningContent := ""
+// buildStreamingPartialResponse builds a partial streaming response for a chunk.
+// Returns nil if the chunk should be skipped.
+func buildStreamingPartialResponse(acc anthropic.Message,
+	chunk anthropic.MessageStreamEventUnion) (*model.Response, error) {
+	now := time.Now()
+	response := &model.Response{
+		ID:        acc.ID,
+		Object:    model.ObjectTypeChatCompletionChunk,
+		Created:   now.Unix(),
+		Model:     string(acc.Model),
+		Timestamp: now,
+		Done:      false,
+		IsPartial: true,
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{Role: model.RoleAssistant},
+			},
+		},
+	}
+	// Branch by event type.
+	switch event := chunk.AsAny().(type) {
+	case anthropic.ContentBlockDeltaEvent:
+		switch delta := event.Delta.AsAny().(type) {
+		case anthropic.TextDelta:
+			if delta.Text == "" {
+				return nil, nil
+			}
+			response.Choices[0].Delta.Content = delta.Text
+		case anthropic.ThinkingDelta:
+			if delta.Thinking == "" {
+				return nil, nil
+			}
+			response.Choices[0].Delta.ReasoningContent = delta.Thinking
+		default:
+			return nil, nil
+		}
+	case anthropic.MessageDeltaEvent:
+		if event.Delta.StopReason == "" {
+			return nil, nil
+		}
+		finishReason := string(event.Delta.StopReason)
+		response.Choices[0].FinishReason = &finishReason
+	default:
+		return nil, nil
+	}
+	return response, nil
+}
 
-	index := 0
+// buildStreamingFinalResponse builds a streamingfinal response from the accumulator.
+func buildStreamingFinalResponse(acc anthropic.Message) *model.Response {
+	var (
+		accumulatedToolCalls []model.ToolCall
+		accumulatedContent   string
+		accumulatedReasoning string
+		index                int
+	)
+	// Aggregate all blocks into final assistant message.
 	for _, content := range acc.Content {
 		switch block := content.AsAny().(type) {
 		case anthropic.ToolUseBlock:
@@ -335,12 +509,12 @@ func (m *Model) handleStreamingResponse(
 		case anthropic.TextBlock:
 			accumulatedContent += block.Text
 		case anthropic.ThinkingBlock:
-			accumulatedReasoningContent += block.Thinking
+			accumulatedReasoning += block.Thinking
 		}
 	}
-
+	// Build final response.
 	now := time.Now()
-	finalResponse := &model.Response{
+	return &model.Response{
 		Object:  model.ObjectTypeChatCompletion,
 		ID:      acc.ID,
 		Created: now.Unix(),
@@ -351,7 +525,7 @@ func (m *Model) handleStreamingResponse(
 				Message: model.Message{
 					Role:             model.RoleAssistant,
 					Content:          accumulatedContent,
-					ReasoningContent: accumulatedReasoningContent,
+					ReasoningContent: accumulatedReasoning,
 					ToolCalls:        accumulatedToolCalls,
 				},
 			},
@@ -365,13 +539,9 @@ func (m *Model) handleStreamingResponse(
 		Done:      true,
 		IsPartial: false,
 	}
-
-	select {
-	case responseChan <- finalResponse:
-	case <-ctx.Done():
-	}
 }
 
+// sendErrorResponse sends an error response through the channel.
 func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *model.Response, err error) {
 	errorResponse := &model.Response{
 		Error: &model.ResponseError{
@@ -387,31 +557,8 @@ func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *mode
 	}
 }
 
-func shouldSuppressChunk(chunk anthropic.MessageStreamEventUnion) bool {
-	switch event := chunk.AsAny().(type) {
-	case anthropic.MessageDeltaEvent:
-		return event.Delta.StopReason == ""
-	case anthropic.MessageStartEvent, anthropic.MessageStopEvent:
-		return true
-	case anthropic.ContentBlockStartEvent, anthropic.ContentBlockStopEvent:
-		return true
-	case anthropic.ContentBlockDeltaEvent:
-		switch delta := event.Delta.AsAny().(type) {
-		case anthropic.TextDelta:
-			return delta.Text == ""
-		case anthropic.ThinkingDelta:
-			return delta.Thinking == ""
-		case anthropic.InputJSONDelta:
-			return true
-		default:
-			return true
-		}
-	default:
-		return true
-	}
-}
-
-func convertMessage(contents []anthropic.ContentBlockUnion) model.Message {
+// convertContentBlock builds a single assistant message from Anthropic content blocks.
+func convertContentBlock(contents []anthropic.ContentBlockUnion) model.Message {
 	var (
 		textBuilder      strings.Builder
 		reasoningBuilder strings.Builder
@@ -443,6 +590,7 @@ func convertMessage(contents []anthropic.ContentBlockUnion) model.Message {
 	}
 }
 
+// convertTools maps our tool declarations to Anthropic tool parameters.
 func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 	var result []anthropic.ToolUnionParam
 	for _, tool := range tools {
@@ -462,11 +610,10 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 	return result
 }
 
-func convertMessages(messages []model.Message) (
-	[]anthropic.MessageParam,
-	[]anthropic.TextBlockParam,
-	error,
-) {
+// convertMessages builds Anthropic message parameters and system prompts from trpc-agent-go messages.
+// Merges consecutive tool results into a single user message and drops empty-content messages.
+func convertMessages(messages []model.Message) ([]anthropic.MessageParam, []anthropic.TextBlockParam, error) {
+	// Convert messages by role and collect system prompts.
 	conversation := make([]anthropic.MessageParam, 0, len(messages))
 	systemPrompts := make([]anthropic.TextBlockParam, 0)
 	for _, message := range messages {
@@ -483,33 +630,42 @@ func convertMessages(messages []model.Message) (
 			conversation = append(conversation, convertUserMessage(message))
 		}
 	}
-	uniqueConversation := conversation[:0]
+	// Merge consecutive tool result messages into a single user message to support parallel tool invocation.
+	mergedConversation := conversation[:0]
 	isToolResult := func(message anthropic.MessageParam) bool {
 		return len(message.Content) > 0 &&
 			message.Content[0].OfToolResult != nil &&
 			!param.IsOmitted(message.Content[0].OfToolResult)
 	}
 	for l, r := 0, -1; l < len(conversation); l = r + 1 {
+		// Skip empty content messages.
 		if len(conversation[l].Content) == 0 {
 			r++
 			continue
 		}
+		// Forward non tool result messages.
 		if !isToolResult(conversation[l]) {
-			uniqueConversation = append(uniqueConversation, conversation[l])
+			mergedConversation = append(mergedConversation, conversation[l])
 			r++
 			continue
 		}
+		// Gather contiguous tool results and wrap into a single user message to support parallel tool invocation.
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(conversation[l].Content))
 		for r+1 < len(conversation) && isToolResult(conversation[r+1]) {
 			toolResult := conversation[r+1].Content[0].OfToolResult
-			blocks = append(blocks, anthropic.NewToolResultBlock(toolResult.ToolUseID, toolResult.Content[0].OfText.Text, toolResult.IsError.Value))
+			blocks = append(blocks, anthropic.NewToolResultBlock(
+				toolResult.ToolUseID,
+				toolResult.Content[0].OfText.Text,
+				toolResult.IsError.Value,
+			))
 			r++
 		}
-		uniqueConversation = append(uniqueConversation, anthropic.NewUserMessage(blocks...))
+		mergedConversation = append(mergedConversation, anthropic.NewUserMessage(blocks...))
 	}
-	return uniqueConversation, systemPrompts, nil
+	return mergedConversation, systemPrompts, nil
 }
 
+// convertUserMessage converts a user message by keeping only supported text parts.
 func convertUserMessage(message model.Message) anthropic.MessageParam {
 	blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(message.ContentParts))
 	if message.Content != "" {
@@ -523,7 +679,9 @@ func convertUserMessage(message model.Message) anthropic.MessageParam {
 	return anthropic.NewUserMessage(blocks...)
 }
 
+// convertAssistantMessageContent converts an assistant message including tool calls into Anthropic format.
 func convertAssistantMessageContent(message model.Message) anthropic.MessageParam {
+	// Append text blocks.
 	blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(message.ContentParts)+len(message.ToolCalls))
 	if message.Content != "" {
 		blocks = append(blocks, anthropic.NewTextBlock(message.Content))
@@ -533,13 +691,19 @@ func convertAssistantMessageContent(message model.Message) anthropic.MessagePara
 			blocks = append(blocks, anthropic.NewTextBlock(*part.Text))
 		}
 	}
+	// Append tool use blocks.
 	for _, toolCall := range message.ToolCalls {
-		toolUse := anthropic.NewToolUseBlock(toolCall.ID, decodeToolArguments(toolCall.Function.Arguments), toolCall.Function.Name)
+		toolUse := anthropic.NewToolUseBlock(
+			toolCall.ID,
+			decodeToolArguments(toolCall.Function.Arguments),
+			toolCall.Function.Name,
+		)
 		blocks = append(blocks, toolUse)
 	}
 	return anthropic.NewAssistantMessage(blocks...)
 }
 
+// decodeToolArguments parses JSON bytes into any, returning an empty object on failure.
 func decodeToolArguments(args []byte) any {
 	if len(args) == 0 {
 		return map[string]any{}
@@ -551,6 +715,7 @@ func decodeToolArguments(args []byte) any {
 	return decoded
 }
 
+// convertToolResult wraps a tool result into a user message with a ToolResult block.
 func convertToolResult(message model.Message) anthropic.MessageParam {
 	return anthropic.NewUserMessage(anthropic.NewToolResultBlock(message.ToolID, message.Content, false))
 }
