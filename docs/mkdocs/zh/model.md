@@ -239,6 +239,27 @@ type ResponseError struct {
 
 OpenAI Model 用于对接 OpenAI 及其兼容平台，支持流式输出、多模态与高级参数配置，并提供丰富的回调机制、批量处理与重试能力，同时可灵活设置自定义 HTTP Header.
 
+### 配置方式
+
+#### 环境变量方式
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com" # 可选配置，默认为此 BASE URL
+```
+
+#### 代码方式
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai"
+
+m := openai.New(
+    "gpt-4o",
+    openai.WithAPIKey("your-api-key"),
+    openai.WithBaseURL("https://api.openai.com"), // 可选配置，默认为此 BASE URL
+)
+```
+
 ### 直接使用 Model
 
 ```go
@@ -778,8 +799,6 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 
 ```go
 import (
-    "net/http"
-    "strings"
     openaiopt "github.com/openai/openai-go/option"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -859,133 +878,163 @@ llm := openai.New("deepseek-chat",
 
 ## Anthropic Model
 
-Anthropic Model 用于对接 Claude 族模型及其兼容平台，支持流式输出、思考模式与工具调用，并提供丰富的回调机制，同时可灵活设置自定义 HTTP Header.
+Anthropic Model 用于对接 Claude 模型及其兼容平台，支持流式输出、思考模式与工具调用，并提供丰富的回调机制，同时可灵活设置自定义 HTTP Header.
 
 ### 配置方式
 
-```bash
-# 基础使用：通过环境变量配置，直接运行
-export ANTHROPIC_API_KEY="sk-..."
-export ANTHROPIC_BASE_URL="https://api.anthropic.com"
+#### 环境变量方式
 
-cd examples/runner
-go run main.go -model claude-3-5-sonnet-latest
+```bash
+export ANTHROPIC_API_KEY="your-api-key"
+export ANTHROPIC_BASE_URL="https://api.anthropic.com" # 可选配置，默认为此 BASE URL
 ```
 
-代码方式：
+#### 代码方式
 
 ```go
-import (
-    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
-)
+import "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 
 m := anthropic.New(
-    "claude-3-5-sonnet-latest",
-    anthropic.WithAPIKey("sk-..."),
-    anthropic.WithBaseURL("https://api.anthropic.com"),
+    "claude-sonnet-4-0",
+    anthropic.WithAPIKey("your-api-key"),
+    anthropic.WithBaseURL("https://api.anthropic.com"), // 可选配置，默认为此 BASE URL
 )
 ```
 
-### 直接使用Model
+### 直接使用 Model
 
 ```go
 import (
-    "context"
-    "fmt"
     "trpc.group/trpc-go/trpc-agent-go/model"
-    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 )
 
 func main() {
-    llm := anthropic.New("claude-3-5-sonnet-latest")
-
-    req := &model.Request{
-        Messages: []model.Message{
-            model.NewSystemMessage("你是一个有用的助手。"),
-            model.NewUserMessage("介绍一下Go的并发模型。"),
-        },
-    }
-
-    ch, err := llm.GenerateContent(context.Background(), req)
-    if err != nil { panic(err) }
-    for resp := range ch {
-        if resp.Error != nil { fmt.Println("API错误:", resp.Error.Message); break }
-        if len(resp.Choices) > 0 {
-            fmt.Println(resp.Choices[0].Message.Content)
-        }
-        if resp.Done { break }
-    }
+	// 创建模型实例
+	llm := anthropic.New("claude-sonnet-4-0")
+	// 构建请求
+	temperature := 0.7
+	maxTokens := 1000
+	request := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("你是一个专业的AI助手。"),
+			model.NewUserMessage("介绍一下Go语言的并发特性。"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+			Stream:      false,
+		},
+	}
+	// 调用模型
+	ctx := context.Background()
+	responseChan, err := llm.GenerateContent(ctx, request)
+	if err != nil {
+		fmt.Printf("系统错误: %v\n", err)
+		return
+	}
+	// 处理响应
+	for response := range responseChan {
+		if response.Error != nil {
+			fmt.Printf("API错误: %s\n", response.Error.Message)
+			return
+		}
+		if len(response.Choices) > 0 {
+			fmt.Printf("回复: %s\n", response.Choices[0].Message.Content)
+		}
+		if response.Done {
+			break
+		}
+	}
 }
 ```
 
 ### 流式输出
 
 ```go
-req := &model.Request{
-    Messages: []model.Message{
-        model.NewSystemMessage("你是一个创意写作者。"),
-        model.NewUserMessage("写一个关于机器人学习绘画的短故事。"),
-    },
-    GenerationConfig: model.GenerationConfig{Stream: true},
-}
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
 
-ch, _ := llm.GenerateContent(ctx, req)
-for resp := range ch {
-    if resp.Error != nil { break }
-    if len(resp.Choices) > 0 && resp.Choices[0].Delta.Content != "" {
-        fmt.Print(resp.Choices[0].Delta.Content)
-    }
-    if resp.Done { break }
+func main() {
+	// 创建模型实例
+	llm := anthropic.New("claude-sonnet-4-0")
+	// 流式请求配置
+	temperature := 0.7
+	maxTokens := 1000
+	request := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("你是一个创意故事讲述者。"),
+			model.NewUserMessage("写一个关于机器人学习绘画的短故事。"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+			Stream:      true,
+		},
+	}
+	// 调用模型
+	ctx := context.Background()
+	// 处理流式响应
+	responseChan, err := llm.GenerateContent(ctx, request)
+	if err != nil {
+		fmt.Printf("系统错误: %v\n", err)
+		return
+	}
+	for response := range responseChan {
+		if response.Error != nil {
+			fmt.Printf("错误: %s", response.Error.Message)
+			return
+		}
+		if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
+			fmt.Print(response.Choices[0].Delta.Content)
+		}
+		if response.Done {
+			break
+		}
+	}
 }
 ```
 
-### 配置项与高级参数
-
-- 认证与网络
-  - `anthropic.WithAPIKey(string)` 设置 API Key。
-  - `anthropic.WithBaseURL(string)` 设置自定义网关地址。
-  - `anthropic.WithHTTPClientOptions(opts ...HTTPClientOption)` 注入自定义 HTTP 客户端选项，如 `WithHTTPClientName` 与 `WithHTTPClientTransport`。
-- SDK 选项
-  - `anthropic.WithAnthropicClientOptions(opts ...option.RequestOption)` 配置客户端级选项。
-  - `anthropic.WithAnthropicRequestOptions(opts ...option.RequestOption)` 配置每次请求选项。
-- 回调
-  - `anthropic.WithChatRequestCallback` 发送前回调。
-  - `anthropic.WithChatResponseCallback` 非流式响应回调。
-  - `anthropic.WithChatChunkCallback` 流式分片回调。
-  - `anthropic.WithChatStreamCompleteCallback` 流式完成回调。
-- 其他
-  - `anthropic.WithChannelBufferSize(int)` 配置通道缓冲大小。
-
-思考模式与推理参数：
+### 高级参数配置
 
 ```go
+// 使用高级生成参数
+temperature := 0.3
+maxTokens := 2000
+topP := 0.9
 thinking := true
-tokens := 2048
+thinkingTokens := 2048
 
-req := &model.Request{
+request := &model.Request{
     Messages: []model.Message{
-        model.NewUserMessage("逐步解释快速排序的关键步骤。"),
+        model.NewSystemMessage("你是一个专业的技术文档撰写者。"),
+        model.NewUserMessage("解释微服务架构的优缺点。"),
     },
     GenerationConfig: model.GenerationConfig{
+        Temperature:     &temperature,
+        MaxTokens:       &maxTokens,
+        TopP:            &topP,
         ThinkingEnabled: &thinking,
-        ThinkingTokens:  &tokens,
+        ThinkingTokens:  &thinkingTokens,
         Stream:          true,
     },
 }
 ```
 
-### 回调函数
+#### 高级功能
+
+##### 1. 回调函数
 
 ```go
 import (
-    "context"
-    "log"
     anthropicsdk "github.com/anthropics/anthropic-sdk-go"
-    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 )
 
 model := anthropic.New(
-    "claude-3-5-sonnet-latest",
+    "claude-sonnet-4-0",
     anthropic.WithChatRequestCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams) {
         // Log request before sending.
         log.Printf("sending request: model=%s, messages=%d.", req.Model, len(req.Messages))
@@ -1009,14 +1058,16 @@ model := anthropic.New(
 )
 ```
 
-### 自定义 HTTP Header
+##### 2. 自定义 HTTP Header
 
-在网关、专有平台或代理环境中，请求模型 API 往往需要额外的 HTTP Header，例如组织标识、路由开关或自定义鉴权。Anthropic 适配器提供两种方式为所有请求添加 Header，两种方式同样影响流式请求，因为底层使用同一个客户端。
+在网关、专有平台或代理环境中，请求模型 API 往往需要额外的HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、文件上传、批处理等全链路。
 
 推荐顺序：
 
-- 使用 Anthropic RequestOption 设置全局 Header。
-- 使用自定义 `http.RoundTripper` 注入。
+- 使用 Anthropic RequestOption 设置全局 Header（简单、直观）
+- 使用自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
+
+上述两种方式同样影响流式请求，因为底层使用的是同一个客户端，
 
 1. 使用 Anthropic RequestOption 设置全局 Header
 
@@ -1024,32 +1075,43 @@ model := anthropic.New(
 
 ```go
 import (
-    "net/http"
-    "strings"
     anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
-    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 )
 
-// 方式一: 直接设置固定头部
-llm := anthropic.New(
-    "claude-3-5-sonnet-latest",
+llm := anthropic.New("claude-sonnet-4-0",
+    // 若你的平台要求额外头部
     anthropic.WithAnthropicClientOptions(
         anthropicopt.WithHeader("X-Custom-Header", "custom-value"),
         anthropicopt.WithHeader("X-Request-ID", "req-123"),
+        // 也可设置 User-Agent 或厂商特定头
         anthropicopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
     ),
 )
+```
 
-// 方式二: 使用中间件按条件设置头部
-llm2 := anthropic.New(
-    "claude-3-5-sonnet-latest",
+若需要按条件设置（例如仅对某些路径或依赖调用上下文值），可使用中间件：
+
+```go
+import (
+    anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+llm := anthropic.New("claude-sonnet-4-0",
     anthropic.WithAnthropicClientOptions(
         anthropicopt.WithMiddleware(
             func(r *http.Request, next anthropicopt.MiddlewareNext) (*http.Response, error) {
+                // 例：按上下文值设置“每次请求”的头部
                 if v := r.Context().Value("x-request-id"); v != nil {
-                    if s, ok := v.(string); ok && s != "" { r.Header.Set("X-Request-ID", s) }
+                    if s, ok := v.(string); ok && s != "" {
+                        r.Header.Set("X-Request-ID", s)
+                    }
                 }
-                if strings.Contains(r.URL.Path, "/v1/messages") { r.Header.Set("X-Feature-Flag", "on") }
+                // 或仅对对话补全接口生效
+                if strings.Contains(r.URL.Path, "v1/messages") {
+                    r.Header.Set("X-Feature-Flag", "on")
+                }
                 return next(r)
             },
         ),
@@ -1059,28 +1121,34 @@ llm2 := anthropic.New(
 
 2. 使用自定义 http.RoundTripper
 
+在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等能力的场景。
+
 ```go
+import (
+    anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
 type headerRoundTripper struct{ base http.RoundTripper }
 
 func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-    req.Header.Set("X-Request-ID", "req-123")
-    req.Header.Set("User-Agent", "trpc-agent-go/anthropic")
+    // 添加或覆盖头部
+    req.Header.Set("X-Custom-Header", "custom-value")
+    req.Header.Set("X-Trace-ID", "trace-xyz")
     return rt.base.RoundTrip(req)
 }
 
-llm := anthropic.New(
-    "claude-3-5-sonnet-latest",
+llm := anthropic.New("claude-sonnet-4-0",
     anthropic.WithHTTPClientOptions(
-        anthropic.WithHTTPClientName("my-client"),
         anthropic.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
     ),
 )
 ```
 
-关于每次请求的头部：
+关于“每次请求”的头部：
 
-- Agent 与 Runner 会把 `ctx` 透传至模型调用，中间件可从 `req.Context()` 读取值，为本次调用注入头部。
-- 如需覆盖或新增厂商特定头部，例如 `x-api-key` 或版本头，可通过 `anthropicopt.WithHeader` 设置。
+- Agent/Runner 会把 `ctx` 透传至模型调用；中间件可从 `req.Context()` 读取值，从而为“本次调用”注入头部。
+- 对“对话补全”而言，目前未暴露单次调用级别的 BaseURL 覆盖；如需切换，请新建一个使用不同 BaseURL 的模型，或在中间件中修改 `r.URL`。
 
 ## 高级功能
 
