@@ -23,7 +23,6 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -180,19 +179,6 @@ func (f *Flow) runOneStep(
 
 	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
-
-	sess := &session.Session{}
-	if invocation.Session != nil {
-		sess = invocation.Session
-	}
-	itelemetry.IncChatRequestCnt(ctx, itelemetry.ChatAttributes{
-		RequestModelName: modelName,
-		AgentName:        invocation.AgentName,
-		SessionID:        sess.ID,
-		UserID:           sess.UserID,
-		AppName:          sess.AppName,
-		Error:            err,
-	})
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +220,7 @@ func (f *Flow) processStreamingResponses(
 			attrs.ErrorType = lastEvent.Error.Type
 		}
 
+		itelemetry.IncChatRequestCnt(ctx, attrs)
 		itelemetry.RecordChatRequestDuration(ctx, attrs, requestDuration)
 		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, attrs, firstTokenTimeDuration)
 		itelemetry.RecordChatInputTokenUsage(ctx, attrs, int64(totalPromptTokens))

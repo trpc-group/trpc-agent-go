@@ -1426,15 +1426,6 @@ type modelExecutionConfig struct {
 // executeModelWithEvents executes the model with event processing.
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
 	responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
-	attrs := itelemetry.ChatAttributes{
-		RequestModelName: config.LLMModel.Info().Name,
-		AgentName:        fmt.Sprintf("trpc-agent-go-graph-node-id: %s", config.NodeID),
-		AppName:          config.AppName,
-		UserID:           config.UserID,
-		SessionID:        config.SessionID,
-		Error:            err,
-	}
-	itelemetry.IncChatRequestCnt(ctx, attrs)
 	if err != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 		return nil, fmt.Errorf("failed to run model: %w", err)
@@ -1477,6 +1468,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 			attrs.ErrorType = lastEvent.Error.Type
 		}
 
+		itelemetry.IncChatRequestCnt(ctx, attrs)
 		itelemetry.RecordChatRequestDuration(ctx, attrs, requestDuration)
 		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, attrs, firstTokenTimeDuration)
 		itelemetry.RecordChatInputTokenUsage(ctx, attrs, int64(totalPromptTokens))
