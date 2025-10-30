@@ -143,7 +143,7 @@ var (
 )
 
 // TraceToolCall traces the invocation of a tool call.
-func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Declaration, args []byte, rspEvent *event.Event) {
+func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Declaration, args []byte, rspEvent *event.Event, err error) {
 	span.SetAttributes(
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
@@ -163,10 +163,12 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 	// args is json-encoded.
 	span.SetAttributes(attribute.String(KeyGenAIToolCallArguments, string(args)))
 	if rspEvent != nil && rspEvent.Response != nil {
-
 		if e := rspEvent.Response.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)
 			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+		} else if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
 		}
 
 		if callIDs := rspEvent.Response.GetToolCallIDs(); len(callIDs) > 0 {
