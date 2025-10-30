@@ -589,7 +589,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		// Auto-calculate based on model context window with safety margin and ratio limit.
 		contextWindow := imodel.ResolveContextWindow(m.name)
 		safetyMargin := int(float64(contextWindow) * defaultSafetyMarginRatio)
-		calculatedMax := contextWindow - defaultReserveOutputTokens - defaultProtocolOverheadTokens - safetyMargin
+		calculatedMax := max(contextWindow-defaultReserveOutputTokens-defaultProtocolOverheadTokens-safetyMargin, 0)
 		ratioLimit := int(float64(contextWindow) * defaultMaxInputTokensRatio)
 		maxInputTokens = max(min(calculatedMax, ratioLimit), defaultInputTokensFloor)
 		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, safetyMargin=%d, calculatedMax=%d, ratioLimit=%d, maxInputTokens=%d",
