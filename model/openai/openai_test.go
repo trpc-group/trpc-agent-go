@@ -3229,3 +3229,313 @@ func TestReasoningContentChunkHandling(t *testing.T) {
 		assert.Equal(t, "test content", response.Choices[0].Delta.Content)
 	})
 }
+
+// TestEmptyChunkHandling tests the handling of empty chunks in streaming responses.
+func TestEmptyChunkHandling(t *testing.T) {
+	m := New("test-model")
+
+	t.Run("shouldSkipEmptyChunk with no choices", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{},
+		}
+		// Should not skip chunks with no choices.
+		assert.False(t, m.shouldSkipEmptyChunk(chunk))
+	})
+
+	t.Run("shouldSkipEmptyChunk with empty delta", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{},
+				},
+			},
+		}
+		// Should skip chunks with completely empty delta.
+		assert.True(t, m.shouldSkipEmptyChunk(chunk))
+	})
+
+	t.Run("shouldSuppressChunk with empty delta", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{},
+				},
+			},
+		}
+		// Should suppress chunks with empty delta and no finish reason.
+		assert.True(t, m.shouldSuppressChunk(chunk))
+	})
+
+	t.Run("shouldSuppressChunk with finish reason", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					FinishReason: "stop",
+				},
+			},
+		}
+		// Should not suppress chunks with finish reason.
+		assert.False(t, m.shouldSuppressChunk(chunk))
+	})
+
+	t.Run("hasReasoningContent returns false for empty delta", func(t *testing.T) {
+		delta := openai.ChatCompletionChunkChoiceDelta{}
+		assert.False(t, m.hasReasoningContent(delta))
+	})
+}
+
+// TestToolCallIndexMapping tests the tool call index mapping functionality.
+func TestToolCallIndexMapping(t *testing.T) {
+	m := New("test-model")
+
+	t.Run("updateToolCallIndexMapping with valid tool call", func(t *testing.T) {
+		idToIndexMap := make(map[string]int)
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 1,
+								ID:    "call-123",
+								Type:  "function",
+							},
+						},
+					},
+				},
+			},
+		}
+		m.updateToolCallIndexMapping(chunk, idToIndexMap)
+		assert.Equal(t, 1, idToIndexMap["call-123"])
+	})
+
+	t.Run("updateToolCallIndexMapping with empty tool calls", func(t *testing.T) {
+		idToIndexMap := make(map[string]int)
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{},
+					},
+				},
+			},
+		}
+		m.updateToolCallIndexMapping(chunk, idToIndexMap)
+		assert.Empty(t, idToIndexMap)
+	})
+
+	t.Run("updateToolCallIndexMapping with no choices", func(t *testing.T) {
+		idToIndexMap := make(map[string]int)
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{},
+		}
+		m.updateToolCallIndexMapping(chunk, idToIndexMap)
+		assert.Empty(t, idToIndexMap)
+	})
+}
+
+// TestStreamingCallbackIntegration tests the integration of streaming callbacks.
+func TestStreamingCallbackIntegration(t *testing.T) {
+	t.Run("streaming with chat stream complete callback", func(t *testing.T) {
+		var callbackCalled bool
+		var capturedRequest *openai.ChatCompletionNewParams
+
+		callback := func(ctx context.Context, req *openai.ChatCompletionNewParams, acc *openai.ChatCompletionAccumulator, err error) {
+			callbackCalled = true
+			capturedRequest = req
+			_ = acc // unused in this test
+			_ = err // unused in this test
+		}
+
+		// Create mock server
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			// Send a simple streaming response
+			chunks := []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+				`data: [DONE]`,
+			}
+
+			for _, chunk := range chunks {
+				fmt.Fprintf(w, "%s\n\n", chunk)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		}))
+		defer server.Close()
+
+		m := New("gpt-3.5-turbo", 
+			WithBaseURL(server.URL), 
+			WithAPIKey("test-key"),
+			WithChatStreamCompleteCallback(callback),
+		)
+
+		ctx := context.Background()
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("Hello"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: true,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+
+		// Consume all responses
+		for response := range responseChan {
+			if response.Done {
+				break
+			}
+		}
+
+		// Give some time for the callback to be called
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify callback was called
+		assert.True(t, callbackCalled, "expected chat stream complete callback to be called")
+		assert.NotNil(t, capturedRequest, "expected request to be captured in callback")
+	})
+
+	t.Run("streaming with reasoning content handling", func(t *testing.T) {
+		// Create mock server with reasoning content
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			// Send chunks with reasoning content
+			chunks := []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"\"Let me think about this...\""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":"I think","reasoning_content":"\"I need to consider the context\""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" the answer is","reasoning_content":"\"Based on my analysis\""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" 42."},"finish_reason":"stop"}]}`,
+				`data: [DONE]`,
+			}
+
+			for _, chunk := range chunks {
+				fmt.Fprintf(w, "%s\n\n", chunk)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		}))
+		defer server.Close()
+
+		m := New("gpt-3.5-turbo", 
+			WithBaseURL(server.URL), 
+			WithAPIKey("test-key"),
+		)
+
+		ctx := context.Background()
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("What is the meaning of life?"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: true,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+
+		var responses []*model.Response
+		for response := range responseChan {
+			responses = append(responses, response)
+			if response.Done {
+				break
+			}
+		}
+
+		// Verify that we received responses with reasoning content
+		assert.NotEmpty(t, responses, "expected to receive responses")
+		
+		// Check that at least one response has reasoning content
+		var hasReasoning bool
+		for _, resp := range responses {
+			if resp != nil && len(resp.Choices) > 0 && resp.Choices[0].Delta.ReasoningContent != "" {
+				hasReasoning = true
+				break
+			}
+		}
+		assert.True(t, hasReasoning, "expected at least one response to contain reasoning content")
+	})
+
+	t.Run("streaming with malformed reasoning content", func(t *testing.T) {
+		// Create mock server with malformed reasoning content to test error handling.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			// Send chunks with various malformed reasoning content formats.
+			chunks := []string{
+				// Reasoning content without quotes (raw value).
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"raw_reasoning_without_quotes"},"finish_reason":null}]}`,
+				// Reasoning content with quotes that should be stripped.
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":"test","reasoning_content":"\"quoted_reasoning\""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" content"},"finish_reason":"stop"}]}`,
+				`data: [DONE]`,
+			}
+
+			for _, chunk := range chunks {
+				fmt.Fprintf(w, "%s\n\n", chunk)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		}))
+		defer server.Close()
+
+		m := New("gpt-3.5-turbo",
+			WithBaseURL(server.URL),
+			WithAPIKey("test-key"),
+		)
+
+		ctx := context.Background()
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("Test malformed reasoning"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: true,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+
+		var responses []*model.Response
+		for response := range responseChan {
+			responses = append(responses, response)
+			if response.Done {
+				break
+			}
+		}
+
+		// Verify that we received responses and they were processed without panic.
+		assert.NotEmpty(t, responses, "expected to receive responses")
+
+		// Check that reasoning content was extracted even from malformed formats.
+		var hasReasoning bool
+		for _, resp := range responses {
+			if resp != nil && len(resp.Choices) > 0 && resp.Choices[0].Delta.ReasoningContent != "" {
+				hasReasoning = true
+				// Verify the reasoning content was properly extracted.
+				t.Logf("Extracted reasoning content: %q", resp.Choices[0].Delta.ReasoningContent)
+			}
+		}
+		assert.True(t, hasReasoning, "expected at least one response to contain reasoning content")
+	})
+}
