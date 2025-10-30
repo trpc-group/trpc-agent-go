@@ -227,7 +227,7 @@ func TestTranslateToolCallResponseIncludesAllEvents(t *testing.T) {
 	assert.Equal(t, "tool-call", args.ToolCallID)
 }
 
-func TestTranslateFinalResponse(t *testing.T) {
+func TestTranslateFullResponse(t *testing.T) {
 	translator, ok := New("thread", "run").(*translator)
 	assert.True(t, ok)
 	rsp := &model.Response{
@@ -241,7 +241,7 @@ func TestTranslateFinalResponse(t *testing.T) {
 
 	events, err := translator.Translate(&agentevent.Event{Response: rsp})
 	assert.NoError(t, err)
-	assert.Len(t, events, 4)
+	assert.Len(t, events, 3)
 
 	start, ok := events[0].(*aguievents.TextMessageStartEvent)
 	assert.True(t, ok)
@@ -255,8 +255,41 @@ func TestTranslateFinalResponse(t *testing.T) {
 	end, ok := events[2].(*aguievents.TextMessageEndEvent)
 	assert.True(t, ok)
 	assert.Equal(t, "final", end.MessageID)
+}
 
-	finished, ok := events[3].(*aguievents.RunFinishedEvent)
+func TestTranslateRunCompletionResponse(t *testing.T) {
+	translator, ok := New("thread", "run").(*translator)
+	assert.True(t, ok)
+	chunkRsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "partial"},
+		}},
+		IsPartial: true,
+	}
+
+	events, err := translator.Translate(&agentevent.Event{Response: chunkRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-1", start.MessageID)
+
+	runCompletionRsp := &model.Response{
+		ID:     "msg-run-completion",
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	}
+
+	events, err = translator.Translate(&agentevent.Event{Response: runCompletionRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+
+	assert.IsType(t, (*aguievents.TextMessageEndEvent)(nil), events[0])
+
+	finished, ok := events[1].(*aguievents.RunFinishedEvent)
 	assert.True(t, ok)
 	assert.Equal(t, "thread", finished.ThreadID())
 	assert.Equal(t, "run", finished.RunID())
@@ -348,11 +381,20 @@ func TestTranslateSequentialEvents(t *testing.T) {
 	}
 	events, err = translator.Translate(&agentevent.Event{Response: finalRsp})
 	assert.NoError(t, err)
-	assert.Len(t, events, 4)
+	assert.Len(t, events, 3)
 	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), events[0])
 	assert.IsType(t, (*aguievents.TextMessageContentEvent)(nil), events[1])
 	assert.IsType(t, (*aguievents.TextMessageEndEvent)(nil), events[2])
-	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), events[3])
+
+	runCompletionRsp := &model.Response{
+		ID:     "msg-run-completion",
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	}
+	events, err = translator.Translate(&agentevent.Event{Response: runCompletionRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), events[0])
 }
 
 func TestFormatToolCallArguments(t *testing.T) {

@@ -864,8 +864,10 @@ func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
 	)
 
 	// Create many messages to trigger tailoring.
+	// With gpt-4o-mini (contextWindow=200000), maxInputTokens=130000 (65% ratio).
+	// Need ~500 messages * 300 tokens each = ~150000 tokens to exceed limit.
 	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 500; i++ {
 		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 100))))
 	}
 
@@ -3090,4 +3092,39 @@ func TestConvertSystemMessageContent_WithParts(t *testing.T) {
 		content := m.convertSystemMessageContent(message)
 		assert.NotNil(t, content.OfString, "expected string content")
 	})
+}
+
+// TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit tests the safety margin and ratio limit logic.
+func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("deepseek-chat", // Known model with 131072 context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger aggressive tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 1200; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 40))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring with safety margin and ratio limit, messages should be significantly reduced.
+	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored, got %d (original: %d)", len(captured.Messages), len(messages))
+	// With 65% ratio limit (safetyMargin=10%, protocolOverhead=512, reserveOutput=2048),
+	// we expect roughly 55-65% of the original messages depending on token distribution.
+	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.70), "expected messages to be reduced to at most 70%% due to ratio limit, got %d (original: %d)", len(captured.Messages), len(messages))
 }

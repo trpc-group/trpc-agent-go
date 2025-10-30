@@ -62,6 +62,8 @@ type options struct {
 	indexDimension int    // PostgreSQL index dimension
 	sslMode        string // PostgreSQL SSL mode
 	enableTSVector bool   // Enable text search vector
+	instanceName   string // Registered postgres instance name from storage/postgres
+	extraOptions   []any  // Extra options for storage/postgres
 
 	// Hybrid search scoring weights
 	vectorWeight float64 // Weight for vector similarity (0.0-1.0)
@@ -268,5 +270,22 @@ func WithUpdatedAtField(field string) Option {
 func WithDocBuilder(builder DocBuilderFunc) Option {
 	return func(o *options) {
 		o.docBuilder = builder
+	}
+}
+
+// WithPostgresInstance uses a postgres instance from storage/postgres.
+// Note: Direct connection settings (WithHost, WithPort, etc.) have higher priority than WithPostgresInstance.
+// If both are specified, direct connection settings will be used.
+func WithPostgresInstance(instanceName string) Option {
+	return func(o *options) {
+		o.instanceName = instanceName
+	}
+}
+
+// WithExtraOptions sets extra options for storage/postgres.
+// This is mainly used for customized postgres client builders.
+func WithExtraOptions(extraOptions ...any) Option {
+	return func(o *options) {
+		o.extraOptions = append(o.extraOptions, extraOptions...)
 	}
 }
