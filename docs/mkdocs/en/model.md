@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Model module is the large language model abstraction layer of the tRPC-Agent-Go framework, providing a unified LLM interface design that currently supports OpenAI-compatible API calls. Through standardized interface design, developers can flexibly switch between different model providers, achieving seamless model integration and invocation. This module has been verified to be compatible with most OpenAI-like interfaces both inside and outside the company.
+The Model module is the large language model abstraction layer of the tRPC-Agent-Go framework, providing a unified LLM interface design that currently supports OpenAI-compatible and Anthropic-compatible API calls. Through standardized interface design, developers can flexibly switch between different model providers, achieving seamless model integration and invocation. This module has been verified to be compatible with most OpenAI-like interfaces both inside and outside the company.
 
 The Model module has the following core features:
 
@@ -235,6 +235,10 @@ type ResponseError struct {
 }
 ```
 
+## OpenAI Model
+
+The OpenAI Model is used to interface with OpenAI and its compatible platforms. It supports streaming output, multimodal and advanced parameter configuration, and provides rich callback mechanisms, batch processing and retry capabilities. It also allows for flexible setting of custom HTTP headers.
+
 ### Direct Model Usage
 
 ```go
@@ -386,9 +390,9 @@ request := &model.Request{
 }
 ```
 
-## Advanced Features
+### Advanced Features
 
-### 1. Callback Functions
+#### 1. Callback Functions
 
 ```go
 // Set pre-request callback function.
@@ -431,11 +435,11 @@ model := openai.New("deepseek-chat",
 )
 ```
 
-### 2. Batch Processing (Batch API)
+#### 2. Batch Processing (Batch API)
 
 Batch API is an asynchronous batch processing technique for efficiently handling large volumes of requests. This feature is particularly suitable for scenarios requiring large-scale data processing, significantly reducing costs and improving processing efficiency.
 
-#### Core Features
+##### Core Features
 
 - **Asynchronous Processing**: Batch requests are processed asynchronously without waiting for immediate responses
 - **Cost Optimization**: Typically more cost-effective than individual requests
@@ -443,7 +447,7 @@ Batch API is an asynchronous batch processing technique for efficiently handling
 - **Complete Management**: Provides full operations including create, retrieve, cancel, and list
 - **Result Parsing**: Automatically downloads and parses batch processing results
 
-#### Quick Start
+##### Quick Start
 
 **Creating a Batch Job**:
 
@@ -494,7 +498,7 @@ if err != nil {
 fmt.Printf("Batch job created: %s\n", batch.ID)
 ```
 
-#### Batch Operations
+##### Batch Operations
 
 **Retrieving Batch Status**:
 
@@ -567,7 +571,7 @@ for _, batch := range page.Data {
 }
 ```
 
-#### Configuration Options
+##### Configuration Options
 
 **Global Configuration**:
 
@@ -595,7 +599,7 @@ batch, err := llm.CreateBatch(ctx, requests,
 )
 ```
 
-#### How It Works
+##### How It Works
 
 Batch API execution flow:
 
@@ -616,29 +620,29 @@ Key design:
 - **Asynchronous Processing**: Batch jobs execute asynchronously in the background without blocking main flow
 - **Completion Window**: Configurable completion time window for batch processing (e.g., 24h)
 
-#### Use Cases
+##### Use Cases
 
 - **Large-scale Data Processing**: Processing thousands or tens of thousands of requests
 - **Offline Analysis**: Non-real-time data analysis and processing tasks
 - **Cost Optimization**: Batch processing is typically more economical than individual requests
 - **Scheduled Tasks**: Regularly executed batch processing jobs
 
-#### Usage Example
+##### Usage Example
 
 For a complete interactive example, see [examples/model/batch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/batch).
 
-### 3. Retry Mechanism
+#### 3. Retry Mechanism
 
 The retry mechanism is an automatic error recovery technique that automatically retries failed requests. This feature is provided by the underlying OpenAI SDK, with the framework passing retry parameters to the SDK through configuration options.
 
-#### Core Features
+##### Core Features
 
 - **Automatic Retry**: SDK automatically handles retryable errors
 - **Smart Backoff**: Follows API's `Retry-After` headers or uses exponential backoff
 - **Configurable**: Supports custom maximum retry count and timeout duration
 - **Zero Maintenance**: No custom retry logic needed, handled by mature SDK
 
-#### Quick Start
+##### Quick Start
 
 **Basic Configuration**:
 
@@ -658,7 +662,7 @@ llm := openai.New("gpt-4o-mini",
 )
 ```
 
-#### Retryable Errors
+##### Retryable Errors
 
 The OpenAI SDK automatically retries the following errors:
 
@@ -670,7 +674,7 @@ The OpenAI SDK automatically retries the following errors:
 
 **Note**: SDK default maximum retry count is 2.
 
-#### Retry Strategies
+##### Retry Strategies
 
 **Standard Retry**:
 
@@ -708,7 +712,7 @@ llm := openai.New("gpt-4o-mini",
 )
 ```
 
-#### How It Works
+##### How It Works
 
 Retry mechanism execution flow:
 
@@ -728,25 +732,136 @@ Key design:
 - **Smart Backoff**: Prioritizes using `Retry-After` header returned by API
 - **Transparent Handling**: Transparent to application layer, no additional code needed
 
-#### Use Cases
+##### Use Cases
 
 - **Production Environment**: Improve service reliability and fault tolerance
 - **Rate Limiting**: Automatically handle 429 errors
 - **Network Instability**: Handle temporary network failures
 - **Server Errors**: Handle temporary server-side issues
 
-#### Important Notes
+##### Important Notes
 
 - **No Framework Retry**: Framework itself does not implement retry logic
 - **Client-level Retry**: All retry is handled by OpenAI client
 - **Configuration Pass-through**: Use `WithOpenAIOptions` to configure retry behavior
 - **Automatic Handling**: Rate limiting (429) is automatically handled without additional code
 
-#### Usage Example
+##### Usage Example
 
 For a complete interactive example, see [examples/model/retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/retry).
 
-### 4. Model Switching
+
+#### 4. Custom HTTP Headers
+
+In some enterprise or proxy scenarios, the model provider requires
+additional HTTP headers (for example, organization ID, tenant routing,
+or custom authentication). The Model module supports setting headers in
+two reliable ways that apply to all model requests, including
+non-streaming, streaming, file upload, and batch APIs.
+
+Recommended order:
+
+- Global header via OpenAI RequestOption (simple, built-in)
+- Custom `http.RoundTripper` (advanced, cross-cutting)
+
+Both methods affect streaming too because the same client is used for
+`New` and `NewStreaming` calls
+([model/openai/openai.go:524](model/openai/openai.go:524),
+[model/openai/openai.go:964](model/openai/openai.go:964)).
+
+1. Global headers using OpenAI RequestOption
+
+Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
+`openaiopt.WithMiddleware` to inject headers for every request created
+by the underlying OpenAI client
+([model/openai/openai.go:344](model/openai/openai.go:344),
+[model/openai/openai.go:358](model/openai/openai.go:358)).
+
+```go
+import (
+    "net/http"
+    "strings"
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+llm := openai.New("deepseek-chat",
+    // If your provider needs extra headers
+    openai.WithOpenAIOptions(
+        openaiopt.WithHeader("X-Custom-Header", "custom-value"),
+        openaiopt.WithHeader("X-Request-ID", "req-123"),
+        // You can also set User-Agent or vendor-specific headers
+        openaiopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
+    ),
+)
+```
+
+For complex logic, middleware lets you modify headers conditionally
+(for example, by URL path or context values):
+
+```go
+llm := openai.New("deepseek-chat",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMiddleware(
+            func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+                // Example: per-request header via context value
+                if v := r.Context().Value("x-request-id"); v != nil {
+                    if s, ok := v.(string); ok && s != "" {
+                        r.Header.Set("X-Request-ID", s)
+                    }
+                }
+                // Or only for chat completion endpoint
+                if strings.Contains(r.URL.Path, "/chat/completions") {
+                    r.Header.Set("X-Feature-Flag", "on")
+                }
+                return next(r)
+            },
+        ),
+    ),
+)
+```
+
+Notes for authentication variants:
+
+- OpenAI style: keep `openai.WithAPIKey("sk-...")` which sets
+  `Authorization: Bearer ...` under the hood.
+- Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
+  `openaiopt.WithHeader("api-key", "<key>")` instead.
+
+2. Custom http.RoundTripper (advanced)
+
+Inject headers across all requests at the HTTP layer by wrapping the
+transport. This is useful when you also need custom proxy, TLS, or
+metrics logic
+([model/openai/openai.go:172](model/openai/openai.go:172)).
+
+```go
+type headerRoundTripper struct{ base http.RoundTripper }
+
+func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+    // Add or override headers
+    req.Header.Set("X-Custom-Header", "custom-value")
+    req.Header.Set("X-Trace-ID", "trace-xyz")
+    return rt.base.RoundTrip(req)
+}
+
+llm := openai.New("deepseek-chat",
+    openai.WithHTTPClientOptions(
+        openai.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
+    ),
+)
+```
+
+Per-request headers
+
+- Agent/Runner passes `ctx` through to the model call; middleware can
+  read values from `req.Context()` to inject per-invocation headers.
+- Chat completion per-request base URL override is not exposed; create a
+  second model with a different base URL or alter `r.URL` in middleware.
+
+## Advanced features
+
+### 1. Model Switching
 
 Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
 
@@ -973,7 +1088,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
 
 For a complete interactive example, see [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch), which demonstrates both agent-level and per-request switching approaches.
 
-### 5. Token Tailoring
+### 2. Token Tailoring
 
 Token Tailoring is an intelligent message management technique that automatically trims messages when they exceed the model's context window limit, ensuring requests can be successfully sent to the LLM API. This feature is particularly useful for long conversation scenarios, maintaining key context while keeping the message list within the model's token constraints.
 
@@ -1164,111 +1279,3 @@ m := openai.New("my-custom-model",
 #### Usage Example
 
 For a complete interactive example, see [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor).
-
-### 6. Custom HTTP Headers
-
-In some enterprise or proxy scenarios, the model provider requires
-additional HTTP headers (for example, organization ID, tenant routing,
-or custom authentication). The Model module supports setting headers in
-two reliable ways that apply to all model requests, including
-non-streaming, streaming, file upload, and batch APIs.
-
-Recommended order:
-
-- Global header via OpenAI RequestOption (simple, built-in)
-- Custom `http.RoundTripper` (advanced, cross-cutting)
-
-Both methods affect streaming too because the same client is used for
-`New` and `NewStreaming` calls
-([model/openai/openai.go:524](model/openai/openai.go:524),
-[model/openai/openai.go:964](model/openai/openai.go:964)).
-
-1. Global headers using OpenAI RequestOption
-
-Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
-`openaiopt.WithMiddleware` to inject headers for every request created
-by the underlying OpenAI client
-([model/openai/openai.go:344](model/openai/openai.go:344),
-[model/openai/openai.go:358](model/openai/openai.go:358)).
-
-```go
-import (
-    "net/http"
-    "strings"
-    openaiopt "github.com/openai/openai-go/option"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-)
-
-llm := openai.New("deepseek-chat",
-    // If your provider needs extra headers
-    openai.WithOpenAIOptions(
-        openaiopt.WithHeader("X-Custom-Header", "custom-value"),
-        openaiopt.WithHeader("X-Request-ID", "req-123"),
-        // You can also set User-Agent or vendor-specific headers
-        openaiopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
-    ),
-)
-```
-
-For complex logic, middleware lets you modify headers conditionally
-(for example, by URL path or context values):
-
-```go
-llm := openai.New("deepseek-chat",
-    openai.WithOpenAIOptions(
-        openaiopt.WithMiddleware(
-            func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
-                // Example: per-request header via context value
-                if v := r.Context().Value("x-request-id"); v != nil {
-                    if s, ok := v.(string); ok && s != "" {
-                        r.Header.Set("X-Request-ID", s)
-                    }
-                }
-                // Or only for chat completion endpoint
-                if strings.Contains(r.URL.Path, "/chat/completions") {
-                    r.Header.Set("X-Feature-Flag", "on")
-                }
-                return next(r)
-            },
-        ),
-    ),
-)
-```
-
-Notes for authentication variants:
-
-- OpenAI style: keep `openai.WithAPIKey("sk-...")` which sets
-  `Authorization: Bearer ...` under the hood.
-- Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
-  `openaiopt.WithHeader("api-key", "<key>")` instead.
-
-2. Custom http.RoundTripper (advanced)
-
-Inject headers across all requests at the HTTP layer by wrapping the
-transport. This is useful when you also need custom proxy, TLS, or
-metrics logic
-([model/openai/openai.go:172](model/openai/openai.go:172)).
-
-```go
-type headerRoundTripper struct{ base http.RoundTripper }
-
-func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-    // Add or override headers
-    req.Header.Set("X-Custom-Header", "custom-value")
-    req.Header.Set("X-Trace-ID", "trace-xyz")
-    return rt.base.RoundTrip(req)
-}
-
-llm := openai.New("deepseek-chat",
-    openai.WithHTTPClientOptions(
-        openai.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
-    ),
-)
-```
-
-Per-request headers
-
-- Agent/Runner passes `ctx` through to the model call; middleware can
-  read values from `req.Context()` to inject per-invocation headers.
-- Chat completion per-request base URL override is not exposed; create a
-  second model with a different base URL or alter `r.URL` in middleware.
