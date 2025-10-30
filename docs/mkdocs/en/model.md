@@ -786,17 +786,13 @@ Recommended order:
 - Custom `http.RoundTripper` (advanced, cross-cutting)
 
 Both methods affect streaming too because the same client is used for
-`New` and `NewStreaming` calls
-([model/openai/openai.go:524](model/openai/openai.go:524),
-[model/openai/openai.go:964](model/openai/openai.go:964)).
+`New` and `NewStreaming` calls.
 
-1. Global headers using OpenAI RequestOption
+##### 1. Global headers using OpenAI RequestOption
 
 Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
 `openaiopt.WithMiddleware` to inject headers for every request created
-by the underlying OpenAI client
-([model/openai/openai.go:344](model/openai/openai.go:344),
-[model/openai/openai.go:358](model/openai/openai.go:358)).
+by the underlying OpenAI client.
 
 ```go
 import (
@@ -847,12 +843,11 @@ Notes for authentication variants:
 - Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
   `openaiopt.WithHeader("api-key", "<key>")` instead.
 
-2. Custom http.RoundTripper (advanced)
+##### 2. Custom http.RoundTripper (advanced)
 
 Inject headers across all requests at the HTTP layer by wrapping the
 transport. This is useful when you also need custom proxy, TLS, or
-metrics logic
-([model/openai/openai.go:172](model/openai/openai.go:172)).
+metrics logic.
 
 ```go
 type headerRoundTripper struct{ base http.RoundTripper }
@@ -1025,9 +1020,9 @@ request := &model.Request{
 }
 ```
 
-#### Advanced features
+### Advanced features
 
-##### 1. Callback Functions
+#### 1. Callback Functions
 
 ```go
 import (
@@ -1060,7 +1055,7 @@ model := anthropic.New(
 )
 ```
 
-##### 2. Custom HTTP Headers
+#### 2. Custom HTTP Headers
 
 In environments like gateways, proprietary platforms, or proxy setups, model API requests often require additional HTTP headers (e.g., organization/tenant identifiers, grayscale routing, custom authentication, etc.). The Model module provides two reliable ways to add headers for “all model requests,” including standard requests, streaming, file uploads, batch processing, etc.
 
@@ -1071,7 +1066,7 @@ Recommended order:
 
 Both methods affect streaming requests, as they use the same underlying client.
 
-1. **Using Anthropic RequestOption to Set Global Headers**
+##### 1. Using Anthropic RequestOption to Set Global Headers
 
 By using `WithAnthropicClientOptions` combined with `anthropicopt.WithHeader` or `anthropicopt.WithMiddleware`, you can inject headers into every request made by the underlying Anthropic client.
 
@@ -1121,7 +1116,7 @@ llm := anthropic.New("claude-sonnet-4-0",
 )
 ```
 
-2. **Using Custom `http.RoundTripper`**
+##### 2. Using Custom `http.RoundTripper`
 
 For injecting headers at the HTTP transport layer, ideal for scenarios requiring proxying, TLS, custom monitoring, and other capabilities.
 

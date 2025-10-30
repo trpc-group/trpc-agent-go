@@ -784,18 +784,13 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 - 通过 OpenAI RequestOption 设置全局 Header（简单、直观）
 - 通过自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
 
-上述两种方式同样影响流式请求，因为底层使用的是同一个客户端，
-`New` 与 `NewStreaming` 共用
-（参见 [model/openai/openai.go:524](model/openai/openai.go:524)、
-[model/openai/openai.go:964](model/openai/openai.go:964)）。
+上述两种方式同样影响流式请求，因为底层使用的是同一个客户端。
 
-1. 使用 OpenAI RequestOption 设置全局 Header
+##### 1. 使用 OpenAI RequestOption 设置全局 Header
 
 通过 `WithOpenAIOptions` 配合 `openaiopt.WithHeader` 或
 `openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的“每个请求”
-注入 Header（参见
-[model/openai/openai.go:344](model/openai/openai.go:344)、
-[model/openai/openai.go:358](model/openai/openai.go:358)）。
+注入 Header。
 
 ```go
 import (
@@ -846,11 +841,10 @@ llm := openai.New("deepseek-chat",
   `WithAPIKey`，改为使用
   `openaiopt.WithHeader("api-key", "<key>")`。
 
-2. 使用自定义 http.RoundTripper（进阶）
+##### 2. 使用自定义 http.RoundTripper（进阶）
 
 在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等
-能力的场景（参见
-[model/openai/openai.go:172](model/openai/openai.go:172)）。
+能力的场景。
 
 ```go
 type headerRoundTripper struct{ base http.RoundTripper }
@@ -1023,9 +1017,9 @@ request := &model.Request{
 }
 ```
 
-#### 高级功能
+### 高级功能
 
-##### 1. 回调函数
+#### 1. 回调函数
 
 ```go
 import (
@@ -1058,18 +1052,18 @@ model := anthropic.New(
 )
 ```
 
-##### 2. 自定义 HTTP Header
+#### 2. 自定义 HTTP Header
 
 在网关、专有平台或代理环境中，请求模型 API 往往需要额外的HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、文件上传、批处理等全链路。
 
 推荐顺序：
 
-- 使用 Anthropic RequestOption 设置全局 Header（简单、直观）
-- 使用自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
+- 通过 Anthropic RequestOption 设置全局 Header（简单、直观）
+- 通过自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
 
 上述两种方式同样影响流式请求，因为底层使用的是同一个客户端，
 
-1. 使用 Anthropic RequestOption 设置全局 Header
+##### 1. 使用 Anthropic RequestOption 设置全局 Header
 
 通过 `WithAnthropicClientOptions` 配合 `anthropicopt.WithHeader` 或 `anthropicopt.WithMiddleware`，可为底层 Anthropic 客户端发起的每个请求注入 Header。
 
@@ -1119,7 +1113,7 @@ llm := anthropic.New("claude-sonnet-4-0",
 )
 ```
 
-2. 使用自定义 http.RoundTripper
+##### 2. 使用自定义 http.RoundTripper
 
 在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等能力的场景。
 
