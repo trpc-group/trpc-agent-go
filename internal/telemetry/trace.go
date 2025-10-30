@@ -136,6 +136,7 @@ var (
 
 	// https://github.com/open-telemetry/semantic-conventions/blob/main/docs/general/recording-errors.md#recording-errors-on-spans
 	KeyErrorType          = "error.type"
+	KeyErrorMessage       = "error.message"
 	ValueDefaultErrorType = "_OTHER"
 
 	// System value
@@ -165,10 +166,10 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 	if rspEvent != nil && rspEvent.Response != nil {
 		if e := rspEvent.Response.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+			span.SetAttributes(attribute.String(KeyErrorType, e.Type), attribute.String(KeyErrorMessage, e.Message))
 		} else if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
+			span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType), attribute.String(KeyErrorMessage, err.Error()))
 		}
 
 		if callIDs := rspEvent.Response.GetToolCallIDs(); len(callIDs) > 0 {
@@ -209,7 +210,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 		}
 		if e := rspEvent.Response.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+			span.SetAttributes(attribute.String(KeyErrorType, e.Type), attribute.String(KeyErrorMessage, e.Message))
 		}
 		span.SetAttributes(attribute.String(KeyEventID, rspEvent.ID))
 
@@ -314,7 +315,7 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 
 	if e := rsp.Error; e != nil {
 		span.SetStatus(codes.Error, e.Message)
-		span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+		span.SetAttributes(attribute.String(KeyErrorType, e.Type), attribute.String(KeyErrorMessage, e.Message))
 	}
 }
 
@@ -329,94 +330,144 @@ func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rs
 		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
 	}
 
-	// Add session ID if session exists
-	if invoke != nil {
-		attrs = append(attrs, attribute.String(KeyInvocationID, invoke.InvocationID))
-		if invoke.Session != nil {
-			attrs = append(attrs,
-				attribute.String(KeyGenAIConversationID, invoke.Session.ID),
-				attribute.String(KeyRunnerUserID, invoke.Session.UserID),
-			)
-		}
-		if invoke.Model != nil {
-			attrs = append(attrs, attribute.String(KeyGenAIRequestModel, invoke.Model.Info().Name))
-		}
-	}
+	// Add invocation attributes
+	attrs = append(attrs, buildInvocationAttributes(invoke)...)
 
+	// Add request attributes
+	attrs = append(attrs, buildRequestAttributes(req)...)
+
+	// Add response attributes
+	attrs = append(attrs, buildResponseAttributes(rsp)...)
+
+	// Set all attributes at once
 	span.SetAttributes(attrs...)
 
-	if req != nil {
-		genConfig := req.GenerationConfig
-		span.SetAttributes(
-			attribute.StringSlice(KeyGenAIRequestStopSequences, genConfig.Stop),
-		)
-		if fp := genConfig.FrequencyPenalty; fp != nil {
-			span.SetAttributes(attribute.Float64(KeyGenAIRequestFrequencyPenalty, *fp))
-		}
-		if mt := genConfig.MaxTokens; mt != nil {
-			span.SetAttributes(attribute.Int(KeyGenAIRequestMaxTokens, *mt))
-		}
-		if pp := genConfig.PresencePenalty; pp != nil {
-			span.SetAttributes(attribute.Float64(KeyGenAIRequestPresencePenalty, *pp))
-		}
-		if tp := genConfig.Temperature; tp != nil {
-			span.SetAttributes(attribute.Float64(KeyGenAIRequestTemperature, *tp))
-		}
-		if tp := genConfig.TopP; tp != nil {
-			span.SetAttributes(attribute.Float64(KeyGenAIRequestTopP, *tp))
-		}
-		if bts, err := json.Marshal(req); err == nil {
-			span.SetAttributes(
-				attribute.String(KeyLLMRequest, string(bts)),
-			)
-		} else {
-			span.SetAttributes(attribute.String(KeyLLMRequest, "<not json serializable>"))
-		}
-		span.SetAttributes(attribute.Int(KeyGenAIRequestChoiceCount, 1))
-		if bts, err := json.Marshal(req.Messages); err == nil {
-			span.SetAttributes(
-				attribute.String(KeyGenAIInputMessages, string(bts)),
-			)
-		} else {
-			span.SetAttributes(attribute.String(KeyGenAIInputMessages, "<not json serializable>"))
-		}
-		span.SetAttributes(attribute.String(KeyGenAIResponseModel, rsp.Model))
-		if rsp.Usage != nil {
-			span.SetAttributes(attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens))
-			span.SetAttributes(attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens))
-		}
-		span.SetAttributes(attribute.String(KeyGenAIResponseID, rsp.ID))
+	// Handle response error status
+	if rsp != nil && rsp.Error != nil {
+		span.SetStatus(codes.Error, rsp.Error.Message)
+	}
+}
+
+// buildInvocationAttributes extracts attributes from the invocation.
+func buildInvocationAttributes(invoke *agent.Invocation) []attribute.KeyValue {
+	if invoke == nil {
+		return nil
 	}
 
-	if rsp != nil {
-		if e := rsp.Error; e != nil {
-			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
-		}
-		if len(rsp.Choices) > 0 {
-			if bts, err := json.Marshal(rsp.Choices); err == nil {
-				span.SetAttributes(
-					attribute.String(KeyGenAIOutputMessages, string(bts)),
-				)
-			}
-			var finishReasons []string
-			for _, choice := range rsp.Choices {
-				if choice.FinishReason != nil {
-					finishReasons = append(finishReasons, *choice.FinishReason)
-				} else {
-					finishReasons = append(finishReasons, "")
-				}
-			}
-			span.SetAttributes(attribute.StringSlice(KeyGenAIResponseFinishReasons, finishReasons))
-		}
-		if bts, err := json.Marshal(rsp); err == nil {
-			span.SetAttributes(
-				attribute.String(KeyLLMResponse, string(bts)),
-			)
-		} else {
-			span.SetAttributes(attribute.String(KeyLLMResponse, "<not json serializable>"))
-		}
+	attrs := []attribute.KeyValue{
+		attribute.String(KeyInvocationID, invoke.InvocationID),
 	}
+
+	if invoke.Session != nil {
+		attrs = append(attrs,
+			attribute.String(KeyGenAIConversationID, invoke.Session.ID),
+			attribute.String(KeyRunnerUserID, invoke.Session.UserID),
+		)
+	}
+
+	if invoke.Model != nil {
+		attrs = append(attrs, attribute.String(KeyGenAIRequestModel, invoke.Model.Info().Name))
+	}
+
+	return attrs
+}
+
+// buildRequestAttributes builds request-related attributes.
+func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
+	if req == nil {
+		return nil
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.StringSlice(KeyGenAIRequestStopSequences, req.GenerationConfig.Stop),
+		attribute.Int(KeyGenAIRequestChoiceCount, 1),
+	}
+
+	// Add generation config attributes
+	genConfig := req.GenerationConfig
+	if fp := genConfig.FrequencyPenalty; fp != nil {
+		attrs = append(attrs, attribute.Float64(KeyGenAIRequestFrequencyPenalty, *fp))
+	}
+	if mt := genConfig.MaxTokens; mt != nil {
+		attrs = append(attrs, attribute.Int(KeyGenAIRequestMaxTokens, *mt))
+	}
+	if pp := genConfig.PresencePenalty; pp != nil {
+		attrs = append(attrs, attribute.Float64(KeyGenAIRequestPresencePenalty, *pp))
+	}
+	if tp := genConfig.Temperature; tp != nil {
+		attrs = append(attrs, attribute.Float64(KeyGenAIRequestTemperature, *tp))
+	}
+	if tp := genConfig.TopP; tp != nil {
+		attrs = append(attrs, attribute.Float64(KeyGenAIRequestTopP, *tp))
+	}
+
+	// Add request body
+	if bts, err := json.Marshal(req); err == nil {
+		attrs = append(attrs, attribute.String(KeyLLMRequest, string(bts)))
+	} else {
+		attrs = append(attrs, attribute.String(KeyLLMRequest, "<not json serializable>"))
+	}
+
+	// Add messages
+	if bts, err := json.Marshal(req.Messages); err == nil {
+		attrs = append(attrs, attribute.String(KeyGenAIInputMessages, string(bts)))
+	} else {
+		attrs = append(attrs, attribute.String(KeyGenAIInputMessages, "<not json serializable>"))
+	}
+
+	return attrs
+}
+
+// buildResponseAttributes builds response-related attributes.
+func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
+	if rsp == nil {
+		return nil
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.String(KeyGenAIResponseModel, rsp.Model),
+		attribute.String(KeyGenAIResponseID, rsp.ID),
+	}
+
+	// Add error type if present
+	if e := rsp.Error; e != nil {
+		attrs = append(attrs, attribute.String(KeyErrorType, e.Type), attribute.String(KeyErrorMessage, e.Message))
+	}
+
+	// Add usage attributes
+	if rsp.Usage != nil {
+		attrs = append(attrs,
+			attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens),
+			attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens),
+		)
+	}
+
+	// Add choices attributes
+	if len(rsp.Choices) > 0 {
+		if bts, err := json.Marshal(rsp.Choices); err == nil {
+			attrs = append(attrs, attribute.String(KeyGenAIOutputMessages, string(bts)))
+		}
+
+		// Extract finish reasons
+		finishReasons := make([]string, 0, len(rsp.Choices))
+		for _, choice := range rsp.Choices {
+			if choice.FinishReason != nil {
+				finishReasons = append(finishReasons, *choice.FinishReason)
+			} else {
+				finishReasons = append(finishReasons, "")
+			}
+		}
+		attrs = append(attrs, attribute.StringSlice(KeyGenAIResponseFinishReasons, finishReasons))
+	}
+
+	// Add response body
+	if bts, err := json.Marshal(rsp); err == nil {
+		attrs = append(attrs, attribute.String(KeyLLMResponse, string(bts)))
+	} else {
+		attrs = append(attrs, attribute.String(KeyLLMResponse, "<not json serializable>"))
+	}
+
+	return attrs
 }
 
 // TraceEmbedding traces the invocation of an embedding call.
@@ -427,7 +478,7 @@ func TraceEmbedding(span trace.Span, requestEncodingFormat, requestModel string,
 		attribute.StringSlice(KeyGenAIRequestEncodingFormats, []string{requestEncodingFormat}),
 	)
 	if err != nil {
-		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType), attribute.String(KeyErrorMessage, err.Error()))
 		span.SetStatus(codes.Error, err.Error())
 	}
 	if inputToken != nil {

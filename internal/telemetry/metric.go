@@ -65,7 +65,7 @@ func (a ChatAttributes) toAttributes() []attribute.KeyValue {
 	if a.ErrorType != "" {
 		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
 	} else if a.Error != nil {
-		attrs = append(attrs, attribute.String(KeyErrorType, a.Error.Error()))
+		attrs = append(attrs, attribute.String(KeyErrorType, ValueDefaultErrorType), attribute.String(KeyErrorMessage, a.Error.Error()))
 	}
 	return attrs
 }
@@ -154,7 +154,7 @@ func (a ExecuteToolAttributes) toAttributes() []attribute.KeyValue {
 	if a.ErrorType != "" {
 		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
 	} else if a.Error != nil {
-		attrs = append(attrs, attribute.String(KeyErrorType, a.Error.Error()))
+		attrs = append(attrs, attribute.String(KeyErrorType, ValueDefaultErrorType), attribute.String(KeyErrorMessage, a.Error.Error()))
 	}
 	return attrs
 }
