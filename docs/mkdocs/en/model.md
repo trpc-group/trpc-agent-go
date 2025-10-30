@@ -859,6 +859,254 @@ Per-request headers
 - Chat completion per-request base URL override is not exposed; create a
   second model with a different base URL or alter `r.URL` in middleware.
 
+## Anthropic Model
+
+The Anthropic Model integrates the Claude family of models. It supports streaming output, thinking mode, and tool use, while aligning with the framework’s unified `Model` interface. Key differences from the OpenAI Model include different callback signatures and lack of batch processing support.
+
+### Usage and Platform Integration
+
+```bash
+# Environment variables.
+export ANTHROPIC_API_KEY="sk-..."
+# Optional custom gateway.
+export ANTHROPIC_BASE_URL="https://api.anthropic.com"
+
+cd examples/runner
+go run main.go -model claude-3-5-sonnet-latest
+```
+
+Code method:
+
+```go
+import (
+    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+m := anthropic.New(
+    "claude-3-5-sonnet-latest",
+    anthropic.WithAPIKey("sk-..."),
+    anthropic.WithBaseURL("https://api.anthropic.com"), // Optional.
+)
+```
+
+### Direct Usage
+
+```go
+import (
+    "context"
+    "fmt"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+func main() {
+    llm := anthropic.New("claude-3-5-sonnet-latest")
+
+    req := &model.Request{
+        Messages: []model.Message{
+            model.NewSystemMessage("You are a helpful assistant."),
+            model.NewUserMessage("Explain Go's concurrency model."),
+        },
+    }
+
+    ch, err := llm.GenerateContent(context.Background(), req)
+    if err != nil { panic(err) }
+    for resp := range ch {
+        if resp.Error != nil { fmt.Println("API error:", resp.Error.Message); break }
+        if len(resp.Choices) > 0 {
+            fmt.Println(resp.Choices[0].Message.Content)
+        }
+        if resp.Done { break }
+    }
+}
+```
+
+### Streaming Output
+
+```go
+req := &model.Request{
+    Messages: []model.Message{
+        model.NewSystemMessage("You are a creative writer."),
+        model.NewUserMessage("Write a short story about a robot learning to paint."),
+    },
+    GenerationConfig: model.GenerationConfig{Stream: true},
+}
+
+ch, _ := llm.GenerateContent(ctx, req)
+for resp := range ch {
+    if resp.Error != nil { break }
+    if len(resp.Choices) > 0 && resp.Choices[0].Delta.Content != "" {
+        fmt.Print(resp.Choices[0].Delta.Content)
+    }
+    if resp.Done { break }
+}
+```
+
+### Configuration and Advanced Parameters
+
+- Authentication and networking.
+  - `anthropic.WithAPIKey(string)` Set API key.
+  - `anthropic.WithBaseURL(string)` Set custom gateway URL.
+  - `anthropic.WithHTTPClientOptions(opts ...HTTPClientOption)` Inject custom HTTP client options, such as `WithHTTPClientName` and `WithHTTPClientTransport`.
+- SDK options.
+  - `anthropic.WithAnthropicClientOptions(opts ...option.RequestOption)` Client-level SDK options.
+  - `anthropic.WithAnthropicRequestOptions(opts ...option.RequestOption)` Per-request SDK options.
+- Callbacks.
+  - `anthropic.WithChatRequestCallback` Before sending request.
+  - `anthropic.WithChatResponseCallback` Non-streaming response callback.
+  - `anthropic.WithChatChunkCallback` Streaming chunk callback.
+  - `anthropic.WithChatStreamCompleteCallback` Stream completion callback.
+- Others.
+  - `anthropic.WithChannelBufferSize(int)` Response channel buffer size.
+
+Thinking mode example:
+
+```go
+thinking := true
+tokens := 2048
+
+req := &model.Request{
+    Messages: []model.Message{
+        model.NewUserMessage("Explain quicksort step by step."),
+    },
+    GenerationConfig: model.GenerationConfig{
+        ThinkingEnabled: &thinking,
+        ThinkingTokens:  &tokens,
+        Stream:          true,
+    },
+}
+```
+
+### Runner Integration
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+llm := anthropic.New("claude-3-5-sonnet-latest")
+agent := llmagent.New(
+    "chat-assistant",
+    llmagent.WithModel(llm),
+)
+
+r := runner.NewRunner("app", agent)
+events, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("Hello"))
+if err != nil { panic(err) }
+for e := range events { _ = e }
+```
+
+### Callbacks
+
+```go
+import (
+    "context"
+    "log"
+    anthropicsdk "github.com/anthropics/anthropic-sdk-go"
+    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+model := anthropic.New(
+    "claude-3-5-sonnet-latest",
+    anthropic.WithChatRequestCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams) {
+        // Log request before sending.
+        log.Printf("sending request: model=%s, messages=%d.", req.Model, len(req.Messages))
+    }),
+    anthropic.WithChatResponseCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams, resp *anthropicsdk.Message) {
+        // Log non-streaming response details.
+        log.Printf("received response: id=%s, input_tokens=%d, output_tokens=%d.", resp.ID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+    }),
+    anthropic.WithChatChunkCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams, chunk *anthropicsdk.MessageStreamEventUnion) {
+        // Log streaming event type.
+        log.Printf("stream event: %T.", chunk.AsAny())
+    }),
+    anthropic.WithChatStreamCompleteCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams, acc *anthropicsdk.Message, streamErr error) {
+        // Log stream completion or error.
+        if streamErr != nil {
+            log.Printf("stream failed: %v.", streamErr)
+            return
+        }
+        log.Printf("stream completed: finish_reason=%s, input_tokens=%d, output_tokens=%d.", acc.StopReason, acc.Usage.InputTokens, acc.Usage.OutputTokens)
+    }),
+)
+```
+
+### Custom HTTP Headers
+
+In gateway, enterprise, or proxy environments, requests often require additional HTTP headers such as organization IDs, routing flags, or custom authentication. The Anthropic Model provides two ways to add headers for all requests. Both methods also affect streaming, since the same underlying client is used.
+
+Recommended order:
+
+- Use Anthropic RequestOption to set global headers.
+- Use a custom `http.RoundTripper` to inject headers.
+
+1. Using Anthropic RequestOption to set global headers
+
+Use `WithAnthropicClientOptions` with `anthropicopt.WithHeader` or `anthropicopt.WithMiddleware` to inject headers into every request made by the underlying Anthropic client.
+
+```go
+import (
+    "net/http"
+    "strings"
+    anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+    anthropic "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+// Option A: Set fixed headers.
+llm := anthropic.New(
+    "claude-3-5-sonnet-latest",
+    anthropic.WithAnthropicClientOptions(
+        anthropicopt.WithHeader("X-Custom-Header", "custom-value"),
+        anthropicopt.WithHeader("X-Request-ID", "req-123"),
+        anthropicopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
+    ),
+)
+
+// Option B: Use middleware to set headers conditionally.
+llm2 := anthropic.New(
+    "claude-3-5-sonnet-latest",
+    anthropic.WithAnthropicClientOptions(
+        anthropicopt.WithMiddleware(
+            func(r *http.Request, next anthropicopt.MiddlewareNext) (*http.Response, error) {
+                if v := r.Context().Value("x-request-id"); v != nil {
+                    if s, ok := v.(string); ok && s != "" { r.Header.Set("X-Request-ID", s) }
+                }
+                if strings.Contains(r.URL.Path, "/v1/messages") { r.Header.Set("X-Feature-Flag", "on") }
+                return next(r)
+            },
+        ),
+    ),
+)
+```
+
+2. Using a custom http.RoundTripper
+
+```go
+type headerRoundTripper struct{ base http.RoundTripper }
+
+func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+    req.Header.Set("X-Request-ID", "req-123")
+    req.Header.Set("User-Agent", "trpc-agent-go/anthropic")
+    return rt.base.RoundTrip(req)
+}
+
+llm := anthropic.New(
+    "claude-3-5-sonnet-latest",
+    anthropic.WithHTTPClientOptions(
+        anthropic.WithHTTPClientName("my-client"),
+        anthropic.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
+    ),
+)
+```
+
+About per-request headers:
+
+- Agent and Runner pass `ctx` through to model calls. Middleware can read values from `req.Context()` to inject headers for the current call.
+- If you need to override or add vendor-specific headers, such as `x-api-key` or version headers, set them using `anthropicopt.WithHeader`.
+
 ## Advanced features
 
 ### 1. Model Switching
