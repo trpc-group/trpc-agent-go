@@ -643,7 +643,7 @@ func convertMessages(messages []model.Message) ([]anthropic.MessageParam, []anth
 			r++
 			continue
 		}
-		// Forward non tool result messages.
+		// Forward non-tool result messages.
 		if !isToolResult(conversation[l]) {
 			mergedConversation = append(mergedConversation, conversation[l])
 			r++
