@@ -91,6 +91,11 @@ type Invocation struct {
 
 	// parent is the parent invocation, if any
 	parent *Invocation
+
+	// state stores invocation-scoped state data (lazy initialized).
+	// Can be used by callbacks, middleware, or any invocation-scoped logic.
+	state   map[string]any
+	stateMu sync.RWMutex
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -393,6 +398,84 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 // GetAppendEventNoticeKey get append event notice key.
 func GetAppendEventNoticeKey(eventID string) string {
 	return AppendEventNoticeKeyPrefix + eventID
+}
+
+// SetState sets a value in the invocation state.
+//
+// This is a general-purpose key-value store scoped to the invocation lifecycle.
+// It can be used by callbacks, middleware, or any invocation-scoped logic.
+//
+// Recommended key naming conventions:
+//   - Agent callbacks: "agent:xxx" (e.g., "agent:start_time")
+//   - Model callbacks: "model:xxx" (e.g., "model:start_time")
+//   - Tool callbacks: "tool:<toolName>:<toolCallID>:xxx" (e.g., "tool:calculator:call_abc123:start_time")
+//   - Middleware: "middleware:xxx" (e.g., "middleware:request_id")
+//   - Custom logic: "custom:xxx" (e.g., "custom:user_context")
+//
+// Note: Tool callbacks should include tool call ID to support concurrent calls.
+//
+// Example:
+//
+//	inv.SetState("agent:start_time", time.Now())
+//	inv.SetState("model:start_time", time.Now())
+//	inv.SetState("tool:calculator:call_abc123:start_time", time.Now())
+//	inv.SetState("middleware:request_id", "req-123")
+//	inv.SetState("custom:user_context", userCtx)
+func (inv *Invocation) SetState(key string, value any) {
+	if inv == nil {
+		return
+	}
+	inv.stateMu.Lock()
+	defer inv.stateMu.Unlock()
+
+	if inv.state == nil {
+		inv.state = make(map[string]any)
+	}
+	inv.state[key] = value
+}
+
+// GetState retrieves a value from the invocation state.
+//
+// Returns the value and true if the key exists, or nil and false otherwise.
+//
+// Example:
+//
+//	if startTime, ok := inv.GetState("agent:start_time"); ok {
+//	    duration := time.Since(startTime.(time.Time))
+//	}
+//	if startTime, ok := inv.GetState("tool:calculator:call_abc123:start_time"); ok {
+//	    duration := time.Since(startTime.(time.Time))
+//	}
+func (inv *Invocation) GetState(key string) (any, bool) {
+	if inv == nil {
+		return nil, false
+	}
+	inv.stateMu.RLock()
+	defer inv.stateMu.RUnlock()
+
+	if inv.state == nil {
+		return nil, false
+	}
+	value, ok := inv.state[key]
+	return value, ok
+}
+
+// DeleteState removes a value from the invocation state.
+//
+// Example:
+//
+//	inv.DeleteState("agent:start_time")
+//	inv.DeleteState("tool:calculator:call_abc123:start_time")
+func (inv *Invocation) DeleteState(key string) {
+	if inv == nil {
+		return
+	}
+	inv.stateMu.Lock()
+	defer inv.stateMu.Unlock()
+
+	if inv.state != nil {
+		delete(inv.state, key)
+	}
 }
 
 // AddNoticeChannelAndWait add notice channel and wait it complete
