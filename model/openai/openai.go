@@ -988,17 +988,10 @@ func (m *Model) handleStreamingResponse(
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
-		// Always accumulate for correctness (tool call deltas are assembled later).
-		acc.AddChunk(chunk)
-
-		// Suppress chunks that carry no meaningful visible delta (including
-		// tool_call deltas, which we'll surface only in the final response).
-		if m.shouldSuppressChunk(chunk) {
-			continue
-		}
-
-		if m.chatChunkCallback != nil {
-			m.chatChunkCallback(ctx, &chatRequest, &chunk)
+		// Always accumulate for correctness (tool call deltas are assembled later),
+		// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
+		if len(chunk.Choices) > 0 && !m.hasReasoningContent(chunk.Choices[0].Delta) {
+			acc.AddChunk(chunk)
 		}
 
 		// Aggregate reasoning delta (if any) for final response fallback.
@@ -1008,6 +1001,19 @@ func (m *Model) handleStreamingResponse(
 					reasoningBuf.WriteString(s)
 				}
 			}
+		}
+
+		// Suppress chunks that carry no meaningful visible delta (including
+		// tool_call deltas, which we'll surface only in the final response).
+		// Note: reasoning content chunks are not suppressed even if they have no other content.
+		if m.shouldSuppressChunk(chunk) {
+			if len(chunk.Choices) == 0 || !m.hasReasoningContent(chunk.Choices[0].Delta) {
+				continue
+			}
+		}
+
+		if m.chatChunkCallback != nil {
+			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
 
 		response := m.createPartialResponse(chunk)
@@ -1090,26 +1096,25 @@ func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 		return false
 	}
 
-	// Check for meaningful delta content in priority order.
+	// Extract delta for inspection.
 	delta := chunk.Choices[0].Delta
 
-	// Check reasoning content first - if present, chunk is not empty.
+	// Reasoning content is meaningful even if other fields are empty.
 	if m.hasReasoningContent(delta) {
 		return false
 	}
 
-	// Content or Refusal field is present, chunk is not empty.
+	// Content or refusal indicates meaningful output.
 	if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
 		return false
 	}
 
+	// Tool calls are only meaningful when the array is non-empty.
 	if delta.JSON.ToolCalls.Valid() {
-		// ToolCalls field is valid, but check if the array is empty.
-		// Empty toolcalls array would cause panic when accessing the first element.
-		return len(delta.ToolCalls) <= 0
+		return len(delta.ToolCalls) == 0
 	}
 
-	// No meaningful content, skip the chunk.
+	// Otherwise there is no meaningful delta, skip the chunk.
 	return true
 }
 
@@ -1196,6 +1201,33 @@ func (m *Model) sendFinalResponse(
 		if len(acc.Choices) > 0 && len(acc.Choices[0].Message.ToolCalls) > 0 {
 			hasToolCall = true
 			accumulatedToolCalls = m.processAccumulatedToolCalls(acc, idToIndexMap)
+		}
+
+		// If accumulator is empty but we have aggregated reasoning, create a response with it.
+		if len(acc.Choices) == 0 && aggregatedReasoning != "" {
+			finalResponse := &model.Response{
+				Object:    model.ObjectTypeChatCompletion,
+				ID:        acc.ID,
+				Created:   acc.Created,
+				Model:     acc.Model,
+				Timestamp: time.Now(),
+				Done:      true,
+				IsPartial: false,
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:             model.RoleAssistant,
+							ReasoningContent: aggregatedReasoning,
+						},
+					},
+				},
+			}
+			select {
+			case responseChan <- finalResponse:
+			case <-ctx.Done():
+			}
+			return
 		}
 
 		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls, aggregatedReasoning)

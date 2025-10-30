@@ -3116,7 +3116,7 @@ func TestShouldSkipEmptyChunk(t *testing.T) {
 	// Note: Testing with actual content requires proper JSON field setup
 	// which is complex due to OpenAI SDK internal structures.
 	// Integration tests with real API responses would be more appropriate
-	// for testing the full skipEmptyChunk logic.
+	// for testing the full shouldSkipEmptyChunk logic.
 }
 
 // TestShouldSuppressChunk tests the shouldSuppressChunk method.
@@ -3170,7 +3170,6 @@ func TestCreatePartialResponse(t *testing.T) {
 	assert.Equal(t, "Hello", response.Choices[0].Delta.Content)
 }
 
-
 // Integration test for reasoning content processing
 func TestReasoningContentIntegration(t *testing.T) {
 	// This test would require actual API responses with reasoning content
@@ -3183,5 +3182,50 @@ func TestReasoningContentIntegration(t *testing.T) {
 		m.shouldSkipEmptyChunk(emptyChunk)
 		m.shouldSuppressChunk(emptyChunk)
 		m.createPartialResponse(emptyChunk)
+	})
+}
+
+// TestReasoningContentChunkHandling tests that chunks with reasoning content
+// are properly handled without causing panics in the accumulator.
+func TestReasoningContentChunkHandling(t *testing.T) {
+	m := &Model{}
+
+	t.Run("hasReasoningContent returns false for empty delta", func(t *testing.T) {
+		delta := openai.ChatCompletionChunkChoiceDelta{}
+		assert.False(t, m.hasReasoningContent(delta))
+	})
+
+	t.Run("shouldSkipEmptyChunk handles chunks without choices", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{},
+		}
+		// Should not skip chunks with no choices (let them be processed normally)
+		assert.False(t, m.shouldSkipEmptyChunk(chunk))
+	})
+
+	t.Run("shouldSuppressChunk suppresses empty chunks", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{},
+		}
+		// Should suppress chunks with no choices
+		assert.True(t, m.shouldSuppressChunk(chunk))
+	})
+
+	t.Run("createPartialResponse handles chunks with content", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:    "chunk-1",
+			Model: "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "test content",
+					},
+				},
+			},
+		}
+		response := m.createPartialResponse(chunk)
+		assert.NotNil(t, response)
+		assert.Equal(t, "chunk-1", response.ID)
+		assert.Equal(t, "test content", response.Choices[0].Delta.Content)
 	})
 }
