@@ -330,7 +330,7 @@ func formatToolResult(content string) string {
 
 // Calculator tool related structures
 type calculatorRequest struct {
-	Expression string `json:"expression" jsonschema:"description=Mathematical expression to calculate. Supports basic operations (+, -, *, /), scientific functions (sin, cos, tan, sqrt, log, ln, abs, pow), and constants (pi, e). Examples: '2+3*4', 'sqrt(16)', 'sin(30*pi/180)', 'log10(100)',required"`
+	Expression string `json:"expression" jsonschema:"description=Mathematical expression to calculate. Supports basic operations (+ - * /). scientific functions (sin/cos/tan/sqrt/log/ln/abs/pow) and constants (pi/e). Examples: '2+3*4'; 'sqrt(16)'; 'sin(30*pi/180)'; 'log10(100)',required"`
 }
 
 type calculatorResponse struct {
@@ -715,7 +715,7 @@ type fileRequest struct {
 type fileResponse struct {
 	Path      string `json:"path" jsonschema:"description=The file or directory path that was accessed"`
 	Operation string `json:"operation" jsonschema:"description=The file operation that was performed"`
-	Result    string `json:"result" jsonschema:"description=The result of the file operation (file content, directory listing, etc.)"`
+	Result    string `json:"result" jsonschema:"description=The result of the file operation (file content; directory listing; etc.)"`
 	Success   bool   `json:"success" jsonschema:"description=Whether the file operation was successful"`
 	Message   string `json:"message" jsonschema:"description=Human-readable message about the operation result"`
 }
