@@ -109,14 +109,16 @@ import (
 
 func main() {
     // Start metrics collection.
-    metricClean, err := ametric.Start(
-        context.Background(),
-        ametric.WithEndpoint("localhost:4317"), // Metric export address.
-    )
-    if err != nil {
-        log.Fatalf("Failed to start metric telemetry: %v", err)
-    }
-    defer metricClean()
+    mp, err := ametric.NewMeterProvider(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4318"),
+		ametric.WithProtocol("http"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create meter provider: %v", err)
+	}
+	defer mp.Shutdown(context.Background())
+	ametric.InitMeterProvider(mp)
 
     // Start tracing.
     traceClean, err := atrace.Start(
@@ -155,12 +157,32 @@ import (
     
     ametric "trpc.group/trpc-go/trpc-agent-go/telemetry/metric"
     atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+    "trpc.group/trpc-go/trpc-agent-go/log"
+    
     "go.opentelemetry.io/otel/attribute"
     "go.opentelemetry.io/otel/metric"
     "go.opentelemetry.io/otel/trace"
 )
 
-func processAgentRequest(ctx context.Context) error {
+func main() {
+	mp, err := ametric.NewMeterProvider(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4318"),
+		ametric.WithProtocol("http"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create meter provider: %v", err)
+	}
+	defer mp.Shutdown(context.Background())
+	ametric.InitMeterProvider(mp)
+	meter := mp.Meter("trpc_agent_go.app")
+
+	if err := processAgentRequest(context.Background(), meter); err != nil {
+		log.Errorf("processAgentRequest failed: %v", err)
+	}
+}
+
+func processAgentRequest(ctx context.Context, meter metric.Meter) error {
     // Create tracing span.
     ctx, span := atrace.Tracer.Start(
         ctx,
@@ -173,7 +195,7 @@ func processAgentRequest(ctx context.Context) error {
     defer span.End()
     
     // Create metrics counter.
-    requestCounter, err := ametric.Meter.Int64Counter(
+    requestCounter, err := meter.Int64Counter(
         "agent.requests.total",
         metric.WithDescription("Total number of agent requests"),
     )

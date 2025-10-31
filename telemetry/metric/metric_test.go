@@ -100,7 +100,10 @@ func TestStartAndClean(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			clean, err := Start(ctx, tt.opts...)
+			mp, err := NewMeterProvider(ctx, tt.opts...)
+			if err != nil {
+				t.Fatalf("NewMeterProvider returned error: %v", err)
+			}
 
 			if tt.expectError {
 				if err == nil {
@@ -109,16 +112,8 @@ func TestStartAndClean(t *testing.T) {
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("Start returned unexpected error: %v", err)
-			}
-			if clean == nil {
-				t.Fatal("expected non-nil cleanup function")
-			}
-
-			if err := clean(); err != nil {
-				// Ignore cleanup errors in tests as no real collector is running
-				t.Logf("cleanup error (expected in tests): %v", err)
+			if err := mp.Shutdown(ctx); err != nil {
+				t.Logf("Shutdown returned error: %v", err)
 			}
 		})
 	}

@@ -110,7 +110,7 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 		},
 	}
 
-	choice, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	choice, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, choice)
 
@@ -151,7 +151,7 @@ func TestExecuteToolCall(t *testing.T) {
 		},
 	}
 
-	choice, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	choice, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	res, _ := json.Marshal("Tokyo'weather is good")
 	require.NoError(t, err)
 	require.NotNil(t, choice)
@@ -600,11 +600,10 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 		},
 	}
 
-	choice, _, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
-	require.NoError(t, err)
-	require.NotNil(t, choice)
-	assert.Equal(t, ErrorToolNotFound, choice.Message.Content)
-	assert.Equal(t, "call-404", choice.Message.ToolID)
+	choice, _, shouldIgnoreError, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
+	require.True(t, shouldIgnoreError)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Nil(t, choice)
 }
 
 func TestFindCompatibleTool(t *testing.T) {

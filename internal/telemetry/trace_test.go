@@ -115,7 +115,7 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	rspEvt := event.New("inv1", "author")
 
 	// 1. TraceToolCall should execute without panic and call SetAttributes.
-	TraceToolCall(span, nil, decl, args, rspEvt)
+	TraceToolCall(span, nil, decl, args, rspEvt, nil)
 	require.True(t, span.called, "expected SetAttributes to be called in TraceToolCall")
 
 	// Reset flag for next test.
@@ -136,7 +136,7 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	}
 	req := &model.Request{}
 	resp := &model.Response{}
-	TraceChat(span, inv, req, resp, "event1")
+	TraceChat(span, inv, req, resp, "event1", 0)
 	require.True(t, span.called, "expected SetAttributes in TraceChat")
 }
 
@@ -156,7 +156,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	rsp := &model.Response{ID: "rid", Model: "m-1", Usage: &model.Usage{PromptTokens: 1, CompletionTokens: 2}, Choices: []model.Choice{{FinishReason: &stop}, {}}, Error: &model.ResponseError{Message: "oops", Type: "api_error"}}
 	evt := event.New("eid", "alpha", event.WithResponse(rsp))
 	s2 := newRecordingSpan()
-	TraceAfterInvokeAgent(s2, evt)
+	TraceAfterInvokeAgent(s2, evt, nil)
 	if s2.status != codes.Error {
 		t.Fatalf("expected error status")
 	}
@@ -167,7 +167,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	rsp2 := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "c1"}}}}}}
 	evt2 := event.New("eid2", "a", event.WithResponse(rsp2))
 	s3 := newRecordingSpan()
-	TraceToolCall(s3, nil, decl, args, evt2)
+	TraceToolCall(s3, nil, decl, args, evt2, nil)
 	if !hasAttr(s3.attrs, KeyGenAIToolCallID, "c1") {
 		t.Fatalf("missing call id")
 	}
@@ -181,7 +181,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	inv2 := &agent.Invocation{InvocationID: "i1", Session: &session.Session{ID: "s1"}}
 	req := &model.Request{GenerationConfig: model.GenerationConfig{Stop: []string{"END"}}, Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}
 	s5 := newRecordingSpan()
-	TraceChat(s5, inv2, req, &model.Response{ID: "rid"}, "e1")
+	TraceChat(s5, inv2, req, &model.Response{ID: "rid"}, "e1", 0)
 	if !hasAttr(s5.attrs, KeyInvocationID, "i1") {
 		t.Fatalf("missing invocation id")
 	}
@@ -203,9 +203,9 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 func TestTrace_AdditionalBranches(t *testing.T) {
 	// TraceToolCall with nil rspEvent and rspEvent without Response
 	s := newRecordingSpan()
-	TraceToolCall(s, nil, &tool.Declaration{Name: "t"}, nil, nil)
+	TraceToolCall(s, nil, &tool.Declaration{Name: "t"}, nil, nil, nil)
 	s2 := newRecordingSpan()
-	TraceToolCall(s2, nil, &tool.Declaration{Name: "t"}, nil, event.New("id", "a"))
+	TraceToolCall(s2, nil, &tool.Declaration{Name: "t"}, nil, event.New("id", "a"), nil)
 
 	// TraceMergedToolCalls with nil response
 	s3 := newRecordingSpan()
@@ -214,7 +214,7 @@ func TestTrace_AdditionalBranches(t *testing.T) {
 	// TraceChat with nil req and nil rsp
 	inv := &agent.Invocation{InvocationID: "invx"}
 	s4 := newRecordingSpan()
-	TraceChat(s4, inv, nil, nil, "evt")
+	TraceChat(s4, inv, nil, nil, "evt", 0)
 }
 
 func TestTraceChat_WithChoicesAndError(t *testing.T) {
@@ -223,7 +223,7 @@ func TestTraceChat_WithChoicesAndError(t *testing.T) {
 	stop := "stop"
 	rsp := &model.Response{ID: "rid3", Model: "m3", Usage: &model.Usage{PromptTokens: 2, CompletionTokens: 3}, Choices: []model.Choice{{FinishReason: &stop}}, Error: &model.ResponseError{Message: "bad", Type: "api_error"}}
 	s := newRecordingSpan()
-	TraceChat(s, inv, req, rsp, "e3")
+	TraceChat(s, inv, req, rsp, "e3", 0)
 	if s.status != codes.Error {
 		t.Fatalf("expected error status on chat")
 	}
