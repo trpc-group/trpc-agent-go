@@ -190,6 +190,59 @@ func WithModelName(name string) RunOption {
 	}
 }
 
+// WithAllowedTools sets the allowed tools for this specific run.
+// This filters the tools available to the agent for this request only.
+// If empty, all tools registered with the agent will be available (default behavior).
+//
+// This is useful for:
+//   - Permission control: restrict tool access based on user roles
+//   - Cost optimization: reduce token usage by limiting tool descriptions
+//   - Feature isolation: limit capabilities for specific use cases
+//
+// Example:
+//
+//	runner.Run(ctx, userID, sessionID, message,
+//	    agent.WithAllowedTools([]string{"calculator", "time_tool"}),
+//	)
+//
+// Note: This is a "soft" constraint. Tools should still implement their own
+// authorization logic for security.
+func WithAllowedTools(toolNames []string) RunOption {
+	return func(opts *RunOptions) {
+		opts.AllowedTools = toolNames
+	}
+}
+
+// WithAllowedAgentTools sets the allowed tools for specific agents in this run.
+// This is useful for controlling tool access for sub-agents.
+// Key: agent name, Value: allowed tool names for that agent.
+//
+// Example:
+//
+//	runner.Run(ctx, userID, sessionID, message,
+//	    agent.WithAllowedAgentTools(map[string][]string{
+//	        "agent1": {"tool_a", "tool_b"},  // agent1 can only use a and b
+//	        "agent2": {"tool_c"},             // agent2 can only use c
+//	    }),
+//	)
+//
+// If an agent is not in this map, it will fall back to AllowedTools or use all
+// registered tools if neither is specified.
+func WithAllowedAgentTools(agentTools map[string][]string) RunOption {
+	return func(opts *RunOptions) {
+		if agentTools == nil {
+			opts.AllowedAgentTools = nil
+			return
+		}
+		// Create a shallow copy to prevent external modifications
+		copied := make(map[string][]string, len(agentTools))
+		for k, v := range agentTools {
+			copied[k] = v
+		}
+		opts.AllowedAgentTools = copied
+	}
+}
+
 // WithA2ARequestOptions sets the A2A request options for the RunOptions.
 // These options will be passed to A2A agent's SendMessage and StreamMessage calls.
 // This allows passing dynamic HTTP headers or other request-specific options for each run.
@@ -291,6 +344,27 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+
+	// AllowedTools specifies which tools are allowed for this run.
+	// If set, only tools whose names are in this list will be available to the model.
+	// If nil or empty, all registered tools will be available (default behavior).
+	//
+	// This filtering happens at the request preparation stage, before sending to the model.
+	// The model will only see the tool descriptions for allowed tools.
+	//
+	// Priority: AllowedAgentTools (for specific agent) > AllowedTools > Agent's registered tools
+	AllowedTools []string
+
+	// AllowedAgentTools specifies allowed tools for specific agents (including sub-agents).
+	// Key: agent name, Value: allowed tool names for that agent.
+	//
+	// If an agent is in this map, only the specified tools will be available to it.
+	// If an agent is not in this map, it will fall back to AllowedTools.
+	// If neither is set, the agent will use all its registered tools.
+	//
+	// This is particularly useful for multi-agent systems where different agents
+	// need different tool access permissions.
+	AllowedAgentTools map[string][]string
 }
 
 // NewInvocation create a new invocation
