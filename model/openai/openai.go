@@ -27,6 +27,7 @@ import (
 
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -1155,6 +1156,23 @@ func (m *Model) hasReasoningContent(delta openai.ChatCompletionChunkChoiceDelta)
 	return ok
 }
 
+// extractReasoningContent extracts reasoning content from ExtraFields.
+// The extraFields parameter should be a map with values that have a Raw() method.
+func extractReasoningContent(extraFields map[string]respjson.Field) string {
+	if extraFields == nil {
+		return ""
+	}
+	reasoningField, ok := extraFields[model.ReasoningContentKey]
+	if !ok {
+		return ""
+	}
+	reasoningStr, err := strconv.Unquote(reasoningField.Raw())
+	if err == nil {
+		return reasoningStr
+	}
+	return ""
+}
+
 // createPartialResponse creates a partial response from a chunk.
 func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.Response {
 	response := &model.Response{
@@ -1179,22 +1197,7 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 			response.Choices = make([]model.Choice, 1)
 		}
 
-		var reasoningContent string
-		if chunk.Choices[0].Delta.JSON.ExtraFields != nil {
-			if reasoningField, ok := chunk.Choices[0].Delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
-				var err error
-				reasoningContent, err = strconv.Unquote(reasoningField.Raw())
-				if err != nil {
-					// If Unquote fails, try to use the raw value directly.
-					rawValue := reasoningField.Raw()
-					if len(rawValue) >= 2 && rawValue[0] == '"' && rawValue[len(rawValue)-1] == '"' {
-						reasoningContent = rawValue[1 : len(rawValue)-1]
-					} else {
-						reasoningContent = rawValue
-					}
-				}
-			}
-		}
+		reasoningContent := extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields)
 
 		response.Choices[0].Delta = model.Message{
 			Role:             model.RoleAssistant,
@@ -1350,14 +1353,7 @@ func (m *Model) createFinalResponse(
 
 	for i, choice := range acc.Choices {
 		// Extract reasoning content from the accumulated message if available.
-		var reasoningContent string
-		if choice.Message.JSON.ExtraFields != nil {
-			if reasoningField, ok := choice.Message.JSON.ExtraFields[model.ReasoningContentKey]; ok {
-				if reasoningStr, err := strconv.Unquote(reasoningField.Raw()); err == nil {
-					reasoningContent = reasoningStr
-				}
-			}
-		}
+		reasoningContent := extractReasoningContent(choice.Message.JSON.ExtraFields)
 		// Fallback to aggregated streaming deltas if accumulator didn't retain reasoning.
 		if reasoningContent == "" && i == 0 && aggregatedReasoning != "" {
 			reasoningContent = aggregatedReasoning
@@ -1426,14 +1422,7 @@ func (m *Model) handleNonStreamingResponse(
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
 			// Extract reasoning content from the message if available.
-			var reasoningContent string
-			if choice.Message.JSON.ExtraFields != nil {
-				if reasoningField, ok := choice.Message.JSON.ExtraFields[model.ReasoningContentKey]; ok {
-					if reasoningStr, err := strconv.Unquote(reasoningField.Raw()); err == nil {
-						reasoningContent = reasoningStr
-					}
-				}
-			}
+			reasoningContent := extractReasoningContent(choice.Message.JSON.ExtraFields)
 
 			response.Choices[i] = model.Choice{
 				Index: int(choice.Index),

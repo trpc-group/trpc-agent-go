@@ -3183,28 +3183,122 @@ func TestShouldSuppressChunk(t *testing.T) {
 func TestCreatePartialResponse(t *testing.T) {
 	m := &Model{}
 
-	chunk := openai.ChatCompletionChunk{
-		ID:      "test-id",
-		Object:  "chat.completion.chunk",
-		Created: 1234567890,
-		Model:   "test-model",
-		Choices: []openai.ChatCompletionChunkChoice{
-			{
-				Delta: openai.ChatCompletionChunkChoiceDelta{
-					Content: "Hello",
+	t.Run("basic chunk with content", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "Hello",
+					},
 				},
 			},
-		},
-	}
+		}
 
-	response := m.createPartialResponse(chunk)
+		response := m.createPartialResponse(chunk)
 
-	assert.Equal(t, "test-id", response.ID)
-	assert.Equal(t, "test-model", response.Model)
-	assert.True(t, response.IsPartial)
-	assert.False(t, response.Done)
-	assert.Len(t, response.Choices, 1)
-	assert.Equal(t, "Hello", response.Choices[0].Delta.Content)
+		assert.Equal(t, "test-id", response.ID)
+		assert.Equal(t, "test-model", response.Model)
+		assert.True(t, response.IsPartial)
+		assert.False(t, response.Done)
+		assert.Len(t, response.Choices, 1)
+		assert.Equal(t, "Hello", response.Choices[0].Delta.Content)
+	})
+
+	t.Run("chunk with empty object", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "",
+			Created: 1234567890,
+			Model:   "test-model",
+		}
+
+		response := m.createPartialResponse(chunk)
+		assert.Equal(t, model.ObjectTypeChatCompletionChunk, response.Object)
+	})
+
+	t.Run("chunk with no choices", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{},
+		}
+
+		response := m.createPartialResponse(chunk)
+		assert.NotNil(t, response)
+		assert.Empty(t, response.Choices)
+	})
+
+	t.Run("chunk with finish reason", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "",
+					},
+					FinishReason: "stop",
+				},
+			},
+		}
+
+		response := m.createPartialResponse(chunk)
+		assert.NotNil(t, response)
+		assert.Len(t, response.Choices, 1)
+		assert.NotNil(t, response.Choices[0].FinishReason)
+		assert.Equal(t, "stop", *response.Choices[0].FinishReason)
+	})
+
+	t.Run("chunk with empty delta", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{},
+				},
+			},
+		}
+
+		response := m.createPartialResponse(chunk)
+		assert.NotNil(t, response)
+		assert.Len(t, response.Choices, 1)
+		assert.Empty(t, response.Choices[0].Delta.Content)
+		assert.Empty(t, response.Choices[0].Delta.ReasoningContent)
+	})
+
+	t.Run("chunk with multiple content parts", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "test-id",
+			Object:  "chat.completion.chunk",
+			Created: 1234567890,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "Part 1",
+					},
+				},
+			},
+		}
+
+		response1 := m.createPartialResponse(chunk)
+		assert.Equal(t, "Part 1", response1.Choices[0].Delta.Content)
+
+		chunk.Choices[0].Delta.Content = " Part 2"
+		response2 := m.createPartialResponse(chunk)
+		assert.Equal(t, " Part 2", response2.Choices[0].Delta.Content)
+	})
 }
 
 // Integration test for reasoning content processing
