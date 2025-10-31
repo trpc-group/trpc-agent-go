@@ -234,7 +234,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 
 	var (
-		sess      *session.Session
+		sess      = &session.Session{}
 		modelName string
 		agentName string
 	)
@@ -387,7 +387,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
 
 	var (
-		sess      *session.Session
+		sess      = &session.Session{}
 		modelName string
 		agentName string
 	)
