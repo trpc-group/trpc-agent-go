@@ -46,7 +46,7 @@ func TestSetGetClientBuilder(t *testing.T) {
 // Test the default builder validates empty connection string.
 func TestDefaultClientBuilder_EmptyConnString(t *testing.T) {
 	const expected = "postgres: connection string is empty"
-	_, err := DefaultClientBuilder(context.Background())
+	_, err := defaultClientBuilder(context.Background())
 	require.Error(t, err)
 	require.Equal(t, expected, err.Error())
 }
@@ -54,7 +54,7 @@ func TestDefaultClientBuilder_EmptyConnString(t *testing.T) {
 // Test invalid connection string parsing error path.
 func TestDefaultClientBuilder_InvalidConnString(t *testing.T) {
 	const badConnString = "invalid connection string"
-	_, err := DefaultClientBuilder(context.Background(), WithClientConnString(badConnString))
+	_, err := defaultClientBuilder(context.Background(), WithClientConnString(badConnString))
 	require.Error(t, err)
 	// The error should contain information about connection failure or opening
 	require.Contains(t, err.Error(), "postgres")
@@ -160,17 +160,6 @@ func TestRegisterPostgresInstance_AppendsOptions(t *testing.T) {
 		opt(cfg)
 	}
 	require.Equal(t, []any{"x", "y"}, cfg.ExtraOptions)
-}
-
-// Test WithConfigFunc applies configuration to the database.
-func TestWithConfigFunc(t *testing.T) {
-	configFunc := func(db *sql.DB) {
-		db.SetMaxOpenConns(10)
-	}
-
-	opts := &ClientBuilderOpts{}
-	WithConfigFunc(configFunc)(opts)
-	require.NotNil(t, opts.ConfigFunc)
 }
 
 // TestSQLClient tests the sqlClient implementation using a mock approach.
@@ -542,10 +531,6 @@ func TestRealSQLClient_Query_HandlerError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDefaultClientBuilder_WithConfigFunc(t *testing.T) {
-	t.Skip("Skipping test that requires a real PostgreSQL connection")
-}
-
 // TestRealSQLClient_Query_RowsError tests rows.Err() error path
 func TestRealSQLClient_Query_RowsError(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -612,30 +597,8 @@ func TestDefaultClientBuilder_PingError(t *testing.T) {
 
 	// Note: This test may take a few seconds due to connection timeout
 	// Use a reasonable timeout to prevent the test from hanging
-	_, err := DefaultClientBuilder(context.Background(), WithClientConnString(badConnString))
+	_, err := defaultClientBuilder(context.Background(), WithClientConnString(badConnString))
 	require.Error(t, err)
 	// The error should be about ping or connection failure
-	require.Contains(t, err.Error(), "postgres")
-}
-
-// TestDefaultClientBuilder_WithConfigFuncApplied tests that ConfigFunc is actually called
-func TestDefaultClientBuilder_WithConfigFuncApplied(t *testing.T) {
-	// We can test that ConfigFunc is applied by using a real connection
-	// However, since we can't rely on a real database, we'll skip this
-	// The ConfigFunc application is already tested in TestWithConfigFunc
-	t.Skip("ConfigFunc application requires a real database connection")
-}
-
-// TestDefaultClientBuilder_ConfigFuncNil tests the case where ConfigFunc is nil
-func TestDefaultClientBuilder_ConfigFuncNil(t *testing.T) {
-	// This test verifies that when ConfigFunc is nil, the code doesn't panic
-	// We use an invalid connection string that will fail on ping,
-	// but should pass the ConfigFunc nil check
-	const badConnString = "postgres://user:pass@255.255.255.255:1/testdb?connect_timeout=1"
-
-	// No ConfigFunc is provided, so it should be nil
-	_, err := DefaultClientBuilder(context.Background(), WithClientConnString(badConnString))
-	require.Error(t, err)
-	// The error should be about ping, not about ConfigFunc
 	require.Contains(t, err.Error(), "postgres")
 }

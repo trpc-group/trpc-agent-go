@@ -13,7 +13,7 @@ require (
 	github.com/pgvector/pgvector-go v0.2.3
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0-20251030021201-13c22db836ca
 )
 
 require (
