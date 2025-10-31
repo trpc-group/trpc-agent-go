@@ -1448,10 +1448,12 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	totalPromptTokens := 0
 	defer func() {
 		attrs := itelemetry.ChatAttributes{
-			AgentName: invocation.AgentName,
-			Error:     err,
+			Error: err,
 		}
 		if invocation != nil {
+			if invocation.AgentName != "" {
+				attrs.AgentName = invocation.AgentName
+			}
 			if invocation.Model != nil {
 				attrs.RequestModelName = invocation.Model.Info().Name
 			}
@@ -1738,6 +1740,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: "trpc-agent-go-graph",
 		ToolName:         name,
+		AgentName:        fmt.Sprintf("trpc-agent-go-graph-node-id: %s", nodeID),
 		AppName:          sessInfo.AppName,
 		UserID:           sessInfo.UserID,
 		SessionID:        sessInfo.ID,
