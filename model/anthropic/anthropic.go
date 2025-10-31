@@ -322,12 +322,12 @@ func (m *Model) handleNonStreamingResponse(
 ) {
 	// Issue non-streaming request.
 	message, err := m.client.Messages.New(ctx, chatRequest, m.anthropicRequestOptions...)
-	if m.chatResponseCallback != nil {
-		m.chatResponseCallback(ctx, &chatRequest, message)
-	}
 	if err != nil {
 		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
 		return
+	}
+	if m.chatResponseCallback != nil {
+		m.chatResponseCallback(ctx, &chatRequest, message)
 	}
 	// Build final response payload.
 	now := time.Now()

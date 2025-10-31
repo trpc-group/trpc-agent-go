@@ -1303,9 +1303,6 @@ func (m *Model) handleNonStreamingResponse(
 ) {
 	chatCompletion, err := m.client.Chat.Completions.New(
 		ctx, chatRequest, opts...)
-	if m.chatResponseCallback != nil {
-		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
-	}
 	if err != nil {
 		errorResponse := &model.Response{
 			Error: &model.ResponseError{
@@ -1321,6 +1318,9 @@ func (m *Model) handleNonStreamingResponse(
 		case <-ctx.Done():
 		}
 		return
+	}
+	if m.chatResponseCallback != nil {
+		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
 	}
 
 	response := &model.Response{

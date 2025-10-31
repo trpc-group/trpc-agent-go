@@ -771,7 +771,6 @@ Key design:
 
 For a complete interactive example, see [examples/model/retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/retry).
 
-
 #### 4. Custom HTTP Headers
 
 In some enterprise or proxy scenarios, the model provider requires
