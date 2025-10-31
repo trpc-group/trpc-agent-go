@@ -240,7 +240,7 @@ func formatToolResult(content string) string {
 
 // Calculator tool related structures
 type calculatorRequest struct {
-	Expression string `json:"expression" jsonschema:"description=Mathematical expression to calculate, e.g., '2+3*4', 'sqrt(16)', 'sin(30*pi/180)'"`
+	Expression string `json:"expression" jsonschema:"description=Mathematical expression to calculate. e.g. '2+3*4'; 'sqrt(16)'; 'sin(30*pi/180)'"`
 }
 
 type calculatorResponse struct {
@@ -488,7 +488,7 @@ func evaluateMultiplicationDivisionOnly(expr string) (float64, error) {
 
 // Time tool related structures
 type timeRequest struct {
-	Operation string `json:"operation" jsonschema:"description=Time operation type: 'current' (current time), 'date' (current date), 'weekday' (day of week), 'timestamp' (Unix timestamp)"`
+	Operation string `json:"operation" jsonschema:"description=Time operation type, enum=current,enum=date,enum=weekday,enum=timestamp"`
 }
 
 type timeResponse struct {
@@ -535,7 +535,7 @@ func getTimeInfo(_ context.Context, req timeRequest) (timeResponse, error) {
 // Text tool related structures
 type textRequest struct {
 	Text      string `json:"text" jsonschema:"description=Text content to process"`
-	Operation string `json:"operation" jsonschema:"description=Text operation type: 'uppercase' (to uppercase), 'lowercase' (to lowercase), 'length' (calculate length), 'reverse' (reverse), 'words' (count words)"`
+	Operation string `json:"operation" jsonschema:"description=Text operation type, enum=uppercase,enum=lowercase,enum=length,enum=reverse,enum=words"`
 }
 
 type textResponse struct {
@@ -597,7 +597,7 @@ func processText(_ context.Context, req textRequest) (textResponse, error) {
 // File tool related structures
 type fileRequest struct {
 	Path      string `json:"path" jsonschema:"description=File or directory path"`
-	Operation string `json:"operation" jsonschema:"description=File operation type: 'read' (read file), 'write' (write file), 'list' (list directory), 'exists' (check file existence)"`
+	Operation string `json:"operation" jsonschema:"description=File operation type, enum=read,enum=write,enum=list,enum=exists"`
 	Content   string `json:"content,omitempty" jsonschema:"description=Content to write when writing files (only for write operation)"`
 }
 

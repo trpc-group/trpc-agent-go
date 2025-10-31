@@ -371,7 +371,7 @@ type searchResult struct {
 }
 
 type calcArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide, power"`
+	Operation string  `json:"operation" description:"The operation to perform,enum=add,enum=subtract,enum=multiply,enum=divide,enum=power"`
 	A         float64 `json:"a" description:"First number"`
 	B         float64 `json:"b" description:"Second number"`
 }

@@ -176,7 +176,7 @@ Contains all tool definitions and implementations with proper JSON schema:
 ```go
 // Tool arguments with JSON schema
 type calculatorArgs struct {
-    Operation string  `json:"operation" jsonschema:"description=The operation: add, subtract, multiply, divide,enum=add,enum=subtract,enum=multiply,enum=divide"`
+    Operation string  `json:"operation" jsonschema:"description=The operation to perform,enum=add,enum=subtract,enum=multiply,enum=divide"`
     A         float64 `json:"a" jsonschema:"description=First number"`
     B         float64 `json:"b" jsonschema:"description=Second number"`
 }

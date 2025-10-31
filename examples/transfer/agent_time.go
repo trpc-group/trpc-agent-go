@@ -136,8 +136,8 @@ func (c *transferChat) calculateTimeDiff(_ context.Context, args timeDiffArgs) (
 
 // Data structures for time difference tool.
 type timeDiffArgs struct {
-	StartTime string `json:"startTime" jsonschema:"description=Start time. Supported formats: RFC3339 (2023-01-01T00:00:00Z), DateTime (2023-01-01 00:00:00), or 2006-01-02T15:04:05,required"`
-	EndTime   string `json:"endTime" jsonschema:"description=End time. Supported formats: RFC3339 (2023-01-02T12:30:45Z), DateTime (2023-01-02 12:30:45), or 2006-01-02T15:04:05,required"`
+	StartTime string `json:"startTime" jsonschema:"description=Start time. Supported formats: RFC3339 (2023-01-01T00:00:00Z). DateTime (2023-01-01 00:00:00). or 2006-01-02T15:04:05,required"`
+	EndTime   string `json:"endTime" jsonschema:"description=End time. Supported formats: RFC3339 (2023-01-02T12:30:45Z). DateTime (2023-01-02 12:30:45). or 2006-01-02T15:04:05,required"`
 }
 
 type timeDiffResult struct {

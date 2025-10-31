@@ -40,7 +40,7 @@ type calculatorResult struct {
 
 // timeArgs holds the input for the time tool.
 type timeArgs struct {
-	Timezone string `json:"timezone" jsonschema:"description=Timezone (UTC, EST, PST, CST) or leave empty for local,required"`
+	Timezone string `json:"timezone" jsonschema:"description=Timezone or leave empty for local,required"`
 }
 
 // timeResult holds the output for the time tool.
