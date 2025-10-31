@@ -15,6 +15,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"testing"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
@@ -578,4 +579,56 @@ func (m *mockSparseEncoder) EncodeQueries(queries []string) ([][]encoder.SparseV
 		result[i] = sparseVec
 	}
 	return result, nil
+}
+
+// TestVectorStore_GetFilterFieldName tests the getFilterFieldName method.
+func TestVectorStore_GetFilterFieldName(t *testing.T) {
+	tests := []struct {
+		name         string
+		filterFields []string
+		inputField   string
+		expected     string
+	}{
+		{
+			name:         "field_in_filterFields",
+			filterFields: []string{"category", "content_type", "topic"},
+			inputField:   "content_type",
+			expected:     "content_type",
+		},
+		{
+			name:         "field_not_in_filterFields",
+			filterFields: []string{"category", "topic"},
+			inputField:   "content_type",
+			expected:     "metadata.content_type",
+		},
+		{
+			name:         "empty_filterFields",
+			filterFields: []string{},
+			inputField:   "category",
+			expected:     "metadata.category",
+		},
+		{
+			name:         "field_in_default_filterFields",
+			filterFields: []string{"uri", "source_name"},
+			inputField:   "uri",
+			expected:     "uri",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			vs := newVectorStoreWithMockClient(mockClient,
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithIndexDimension(3),
+				WithFilterIndexFields(tt.filterFields),
+			)
+
+			result := vs.getFilterFieldName(tt.inputField)
+			if result != tt.expected {
+				t.Errorf("getFilterFieldName() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
 }

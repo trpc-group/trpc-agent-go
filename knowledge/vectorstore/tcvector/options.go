@@ -203,6 +203,28 @@ func WithTCVectorInstance(name string) Option {
 }
 
 // WithFilterIndexFields sets the filter fields for the vector database.
+// This is an optional performance optimization that creates dedicated indexes for frequently queried metadata fields.
+//
+// How it works:
+//   - Fields specified here will have dedicated indexes created (e.g., "category" -> indexed as "category")
+//   - Other metadata fields will use the JSON index path (e.g., "custom_field" -> indexed as "metadata.custom_field")
+//   - Both approaches work correctly; dedicated indexes offer better query performance
+//
+// When to use:
+//   - You have specific metadata fields that are queried frequently
+//   - You want to optimize query performance for those fields
+//   - You're willing to use extra storage for dedicated indexes
+//
+// When NOT to use:
+//   - You have many metadata fields but query them infrequently
+//   - You want to minimize storage usage
+//   - The default JSON index performance is sufficient for your use case
+//
+// Example:
+//
+//	// Create dedicated indexes for category, content_type, and topic
+//	vectortcvector.WithFilterIndexFields([]string{"category", "content_type", "topic"})
+//
 // It will build index for the filter fields.
 func WithFilterIndexFields(fields []string) Option {
 	return func(o *options) {
