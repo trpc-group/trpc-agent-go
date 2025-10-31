@@ -82,7 +82,7 @@ func (c *agentToolChat) getCurrentTime(ctx context.Context, args timeArgs) (time
 
 // calculatorArgs defines the input arguments for the calculator tool.
 type calculatorArgs struct {
-	Operation string  `json:"operation" jsonschema:"description=The operation: add, subtract, multiply, divide,enum=add,enum=subtract,enum=multiply,enum=divide"`
+	Operation string  `json:"operation" jsonschema:"description=The operation to perform,enum=add,enum=subtract,enum=multiply,enum=divide"`
 	A         float64 `json:"a" jsonschema:"description=First number"`
 	B         float64 `json:"b" jsonschema:"description=Second number"`
 }
@@ -98,7 +98,7 @@ type calculatorResult struct {
 
 // timeArgs defines the input arguments for the time tool.
 type timeArgs struct {
-	Timezone string `json:"timezone" jsonschema:"description=Timezone (UTC, EST, PST, CST) or leave empty for local"`
+	Timezone string `json:"timezone" jsonschema:"description=Timezone or leave empty for local"`
 }
 
 // timeResult defines the output result for the time tool.

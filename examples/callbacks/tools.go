@@ -95,7 +95,7 @@ type calculatorResult struct {
 
 // timeArgs represents arguments for the time tool.
 type timeArgs struct {
-	Timezone string `json:"timezone" jsonschema:"description=Timezone (UTC, EST, PST, CST) or leave empty for local,required"`
+	Timezone string `json:"timezone" jsonschema:"description=Timezone or leave empty for local,required"`
 }
 
 // timeResult represents the current time information.
