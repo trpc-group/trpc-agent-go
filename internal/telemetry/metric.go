@@ -37,8 +37,10 @@ var (
 
 // ChatAttributes is the attributes for chat metrics.
 type ChatAttributes struct {
-	RequestModelName string
-	AgentName        string
+	RequestModelName  string
+	ResponseModelName string
+	Stream            bool
+	AgentName         string
 
 	AppName   string
 	UserID    string
@@ -52,6 +54,11 @@ func (a ChatAttributes) toAttributes() []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAIOperationName, OperationChat),
 		attribute.String(KeyGenAISystem, a.RequestModelName),
+		attribute.String(KeyGenAIRequestModel, a.RequestModelName),
+		attribute.Bool(metrics.KeyTRPCAgentGoStream, a.Stream),
+	}
+	if a.ResponseModelName != "" {
+		attrs = append(attrs, attribute.String(KeyGenAIResponseModel, a.ResponseModelName))
 	}
 	if a.AppName != "" {
 		attrs = append(attrs, attribute.String(KeyTRPCAgentGoAppName, a.AppName))
@@ -70,6 +77,7 @@ func (a ChatAttributes) toAttributes() []attribute.KeyValue {
 	if a.AgentName != "" {
 		attrs = append(attrs, attribute.String(KeyGenAIAgentName, a.AgentName))
 	}
+
 	return attrs
 }
 

@@ -214,10 +214,18 @@ func (f *Flow) processStreamingResponses(
 			attrs.UserID = invocation.Session.UserID
 			attrs.AppName = invocation.Session.AppName
 		}
+		if llmRequest != nil {
+			attrs.Stream = llmRequest.GenerationConfig.Stream
+		}
 		requestDuration := time.Since(start)
 
-		if lastEvent != nil && lastEvent.Error != nil {
-			attrs.ErrorType = lastEvent.Error.Type
+		if lastEvent != nil {
+			if lastEvent.Response != nil {
+				attrs.ResponseModelName = lastEvent.Response.Model
+			}
+			if lastEvent.Error != nil {
+				attrs.ErrorType = lastEvent.Error.Type
+			}
 		}
 
 		itelemetry.IncChatRequestCnt(ctx, attrs)

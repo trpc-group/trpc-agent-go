@@ -233,22 +233,32 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 
-	sess := &session.Session{}
-	if invocation != nil && invocation.Session != nil {
-		sess = invocation.Session
-	}
-	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolEvent, err)
-	var modelName string
-	if invocation != nil && invocation.Model != nil {
-		modelName = invocation.Model.Info().Name
+	var (
+		sess      *session.Session
+		modelName string
+		agentName string
+	)
+
+	if invocation != nil {
+		if invocation.Session != nil {
+			sess = invocation.Session
+		}
+		if invocation.Model != nil {
+			modelName = invocation.Model.Info().Name
+		}
+		if invocation.AgentName != "" {
+			agentName = invocation.AgentName
+		}
 	}
 
+	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolEvent, err)
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: modelName,
 		ToolName:         toolCall.Function.Name,
 		AppName:          sess.AppName,
 		UserID:           sess.UserID,
 		SessionID:        sess.ID,
+		AgentName:        agentName,
 		Error:            err,
 	}, time.Since(startTime))
 	return toolEvent, nil
@@ -376,13 +386,21 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	// Include declaration for telemetry even when tool is missing.
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
 
-	sess := &session.Session{}
-	if invocation != nil && invocation.Session != nil {
-		sess = invocation.Session
-	}
-	var modelName string
-	if invocation != nil && invocation.Model != nil {
-		modelName = invocation.Model.Info().Name
+	var (
+		sess      *session.Session
+		modelName string
+		agentName string
+	)
+	if invocation != nil {
+		if invocation.Session != nil {
+			sess = invocation.Session
+		}
+		if invocation.Model != nil {
+			modelName = invocation.Model.Info().Name
+		}
+		if invocation.AgentName != "" {
+			agentName = invocation.AgentName
+		}
 	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
@@ -391,6 +409,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		AppName:          sess.AppName,
 		UserID:           sess.UserID,
 		SessionID:        sess.ID,
+		AgentName:        agentName,
 		Error:            err,
 	}, time.Since(startTime))
 	// Send result back to aggregator.

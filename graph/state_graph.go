@@ -1450,6 +1450,9 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		attrs := itelemetry.ChatAttributes{
 			Error: err,
 		}
+		if config.Request != nil {
+			attrs.Stream = config.Request.GenerationConfig.Stream
+		}
 		if invocation != nil {
 			if invocation.AgentName != "" {
 				attrs.AgentName = invocation.AgentName
@@ -1466,8 +1469,13 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 
 		requestDuration := time.Since(start)
 
-		if lastEvent != nil && lastEvent.Error != nil {
-			attrs.ErrorType = lastEvent.Error.Type
+		if lastEvent != nil {
+			if lastEvent.Response != nil {
+				attrs.ResponseModelName = lastEvent.Response.Model
+			}
+			if lastEvent.Error != nil {
+				attrs.ErrorType = lastEvent.Error.Type
+			}
 		}
 
 		itelemetry.IncChatRequestCnt(ctx, attrs)
