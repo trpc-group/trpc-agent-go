@@ -25,6 +25,7 @@ import (
 	openai "github.com/openai/openai-go"
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/respjson"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
@@ -3129,15 +3130,47 @@ func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
 func TestHasReasoningContent(t *testing.T) {
 	m := &Model{}
 
-	// Test with nil ExtraFields
+	// Test with nil ExtraFields.
 	delta1 := openai.ChatCompletionChunkChoiceDelta{}
 	// Since we can't easily construct the JSON field in tests,
-	// we'll test the method doesn't panic with empty delta
+	// we'll test the method doesn't panic with empty delta.
 	assert.False(t, m.hasReasoningContent(delta1))
 
 	// Note: Testing with actual reasoning content would require
 	// integration tests with real API responses, as the JSON field
-	// structure is internal to the OpenAI SDK
+	// structure is internal to the OpenAI SDK.
+}
+
+// TestExtractReasoningContent tests the extractReasoningContent function.
+func TestExtractReasoningContent(t *testing.T) {
+	t.Run("returns empty string when extraFields is nil", func(t *testing.T) {
+		result := extractReasoningContent(nil)
+		assert.Equal(t, "", result)
+	})
+
+	t.Run("returns empty string when reasoning_content key is missing", func(t *testing.T) {
+		extraFields := make(map[string]respjson.Field)
+		result := extractReasoningContent(extraFields)
+		assert.Equal(t, "", result)
+	})
+
+	t.Run("returns empty string when field value cannot be unquoted", func(t *testing.T) {
+		// Create a field with invalid JSON that cannot be unquoted.
+		invalidField := respjson.Field{}
+		// We can't easily set the internal Raw value, but we can test
+		// the behavior by ensuring the function handles errors gracefully.
+		// This test documents the expected behavior even if we can't
+		// fully exercise it without SDK internals.
+		extraFields := map[string]respjson.Field{
+			model.ReasoningContentKey: invalidField,
+		}
+		result := extractReasoningContent(extraFields)
+		assert.Equal(t, "", result)
+	})
+
+	// Note: Testing with valid reasoning content would require
+	// integration tests with real API responses, as the respjson.Field
+	// structure is internal to the OpenAI SDK and difficult to mock.
 }
 
 // TestShouldSkipEmptyChunk tests the shouldSkipEmptyChunk method.

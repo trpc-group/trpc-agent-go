@@ -1025,10 +1025,8 @@ func (m *Model) handleStreamingResponse(
 
 		// Aggregate reasoning delta (if any) for final response fallback.
 		if len(chunk.Choices) > 0 {
-			if raw, ok := chunk.Choices[0].Delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
-				if s, err := strconv.Unquote(raw.Raw()); err == nil && s != "" {
-					reasoningBuf.WriteString(s)
-				}
+			if reasoningContent := extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields); reasoningContent != "" {
+				reasoningBuf.WriteString(reasoningContent)
 			}
 		}
 
@@ -1149,11 +1147,7 @@ func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 
 // hasReasoningContent checks if the delta contains reasoning content.
 func (m *Model) hasReasoningContent(delta openai.ChatCompletionChunkChoiceDelta) bool {
-	if delta.JSON.ExtraFields == nil {
-		return false
-	}
-	_, ok := delta.JSON.ExtraFields[model.ReasoningContentKey]
-	return ok
+	return extractReasoningContent(delta.JSON.ExtraFields) != ""
 }
 
 // extractReasoningContent extracts reasoning content from ExtraFields.
