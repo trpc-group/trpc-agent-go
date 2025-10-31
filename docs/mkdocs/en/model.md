@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Model module is the large language model abstraction layer of the tRPC-Agent-Go framework, providing a unified LLM interface design that currently supports OpenAI-compatible API calls. Through standardized interface design, developers can flexibly switch between different model providers, achieving seamless model integration and invocation. This module has been verified to be compatible with most OpenAI-like interfaces both inside and outside the company.
+The Model module is the large language model abstraction layer of the tRPC-Agent-Go framework, providing a unified LLM interface design that currently supports OpenAI-compatible and Anthropic-compatible API calls. Through standardized interface design, developers can flexibly switch between different model providers, achieving seamless model integration and invocation. This module has been verified to be compatible with most OpenAI-like interfaces both inside and outside the company.
 
 The Model module has the following core features:
 
@@ -235,6 +235,31 @@ type ResponseError struct {
 }
 ```
 
+## OpenAI Model
+
+The OpenAI Model is used to interface with OpenAI and its compatible platforms. It supports streaming output, multimodal and advanced parameter configuration, and provides rich callback mechanisms, batch processing and retry capabilities. It also allows for flexible setting of custom HTTP headers.
+
+### Configuration Method
+
+#### Environment Variable Method
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com" # Optional configuration, default is this BASE URL
+```
+
+#### Code Method
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai"
+
+m := openai.New(
+    "gpt-4o",
+    openai.WithAPIKey("your-api-key"),
+    openai.WithBaseURL("https://api.openai.com"), // Optional configuration, default is this BASE URL
+)
+```
+
 ### Direct Model Usage
 
 ```go
@@ -386,9 +411,9 @@ request := &model.Request{
 }
 ```
 
-## Advanced Features
+### Advanced Features
 
-### 1. Callback Functions
+#### 1. Callback Functions
 
 ```go
 // Set pre-request callback function.
@@ -431,11 +456,11 @@ model := openai.New("deepseek-chat",
 )
 ```
 
-### 2. Batch Processing (Batch API)
+#### 2. Batch Processing (Batch API)
 
 Batch API is an asynchronous batch processing technique for efficiently handling large volumes of requests. This feature is particularly suitable for scenarios requiring large-scale data processing, significantly reducing costs and improving processing efficiency.
 
-#### Core Features
+##### Core Features
 
 - **Asynchronous Processing**: Batch requests are processed asynchronously without waiting for immediate responses
 - **Cost Optimization**: Typically more cost-effective than individual requests
@@ -443,7 +468,7 @@ Batch API is an asynchronous batch processing technique for efficiently handling
 - **Complete Management**: Provides full operations including create, retrieve, cancel, and list
 - **Result Parsing**: Automatically downloads and parses batch processing results
 
-#### Quick Start
+##### Quick Start
 
 **Creating a Batch Job**:
 
@@ -494,7 +519,7 @@ if err != nil {
 fmt.Printf("Batch job created: %s\n", batch.ID)
 ```
 
-#### Batch Operations
+##### Batch Operations
 
 **Retrieving Batch Status**:
 
@@ -567,7 +592,7 @@ for _, batch := range page.Data {
 }
 ```
 
-#### Configuration Options
+##### Configuration Options
 
 **Global Configuration**:
 
@@ -595,7 +620,7 @@ batch, err := llm.CreateBatch(ctx, requests,
 )
 ```
 
-#### How It Works
+##### How It Works
 
 Batch API execution flow:
 
@@ -616,29 +641,29 @@ Key design:
 - **Asynchronous Processing**: Batch jobs execute asynchronously in the background without blocking main flow
 - **Completion Window**: Configurable completion time window for batch processing (e.g., 24h)
 
-#### Use Cases
+##### Use Cases
 
 - **Large-scale Data Processing**: Processing thousands or tens of thousands of requests
 - **Offline Analysis**: Non-real-time data analysis and processing tasks
 - **Cost Optimization**: Batch processing is typically more economical than individual requests
 - **Scheduled Tasks**: Regularly executed batch processing jobs
 
-#### Usage Example
+##### Usage Example
 
 For a complete interactive example, see [examples/model/batch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/batch).
 
-### 3. Retry Mechanism
+#### 3. Retry Mechanism
 
 The retry mechanism is an automatic error recovery technique that automatically retries failed requests. This feature is provided by the underlying OpenAI SDK, with the framework passing retry parameters to the SDK through configuration options.
 
-#### Core Features
+##### Core Features
 
 - **Automatic Retry**: SDK automatically handles retryable errors
 - **Smart Backoff**: Follows API's `Retry-After` headers or uses exponential backoff
 - **Configurable**: Supports custom maximum retry count and timeout duration
 - **Zero Maintenance**: No custom retry logic needed, handled by mature SDK
 
-#### Quick Start
+##### Quick Start
 
 **Basic Configuration**:
 
@@ -658,7 +683,7 @@ llm := openai.New("gpt-4o-mini",
 )
 ```
 
-#### Retryable Errors
+##### Retryable Errors
 
 The OpenAI SDK automatically retries the following errors:
 
@@ -670,7 +695,7 @@ The OpenAI SDK automatically retries the following errors:
 
 **Note**: SDK default maximum retry count is 2.
 
-#### Retry Strategies
+##### Retry Strategies
 
 **Standard Retry**:
 
@@ -708,7 +733,7 @@ llm := openai.New("gpt-4o-mini",
 )
 ```
 
-#### How It Works
+##### How It Works
 
 Retry mechanism execution flow:
 
@@ -728,25 +753,402 @@ Key design:
 - **Smart Backoff**: Prioritizes using `Retry-After` header returned by API
 - **Transparent Handling**: Transparent to application layer, no additional code needed
 
-#### Use Cases
+##### Use Cases
 
 - **Production Environment**: Improve service reliability and fault tolerance
 - **Rate Limiting**: Automatically handle 429 errors
 - **Network Instability**: Handle temporary network failures
 - **Server Errors**: Handle temporary server-side issues
 
-#### Important Notes
+##### Important Notes
 
 - **No Framework Retry**: Framework itself does not implement retry logic
 - **Client-level Retry**: All retry is handled by OpenAI client
 - **Configuration Pass-through**: Use `WithOpenAIOptions` to configure retry behavior
 - **Automatic Handling**: Rate limiting (429) is automatically handled without additional code
 
-#### Usage Example
+##### Usage Example
 
 For a complete interactive example, see [examples/model/retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/retry).
 
-### 4. Model Switching
+#### 4. Custom HTTP Headers
+
+In some enterprise or proxy scenarios, the model provider requires
+additional HTTP headers (for example, organization ID, tenant routing,
+or custom authentication). The Model module supports setting headers in
+two reliable ways that apply to all model requests, including
+non-streaming, streaming, file upload, and batch APIs.
+
+Recommended order:
+
+- Global header via OpenAI RequestOption (simple, built-in)
+- Custom `http.RoundTripper` (advanced, cross-cutting)
+
+Both methods affect streaming too because the same client is used for
+`New` and `NewStreaming` calls.
+
+##### 1. Global headers using OpenAI RequestOption
+
+Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
+`openaiopt.WithMiddleware` to inject headers for every request created
+by the underlying OpenAI client.
+
+```go
+import (
+    openaiopt "github.com/openai/openai-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+llm := openai.New("deepseek-chat",
+    // If your provider needs extra headers
+    openai.WithOpenAIOptions(
+        openaiopt.WithHeader("X-Custom-Header", "custom-value"),
+        openaiopt.WithHeader("X-Request-ID", "req-123"),
+        // You can also set User-Agent or vendor-specific headers
+        openaiopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
+    ),
+)
+```
+
+For complex logic, middleware lets you modify headers conditionally
+(for example, by URL path or context values):
+
+```go
+llm := openai.New("deepseek-chat",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMiddleware(
+            func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+                // Example: per-request header via context value
+                if v := r.Context().Value("x-request-id"); v != nil {
+                    if s, ok := v.(string); ok && s != "" {
+                        r.Header.Set("X-Request-ID", s)
+                    }
+                }
+                // Or only for chat completion endpoint
+                if strings.Contains(r.URL.Path, "/chat/completions") {
+                    r.Header.Set("X-Feature-Flag", "on")
+                }
+                return next(r)
+            },
+        ),
+    ),
+)
+```
+
+Notes for authentication variants:
+
+- OpenAI style: keep `openai.WithAPIKey("sk-...")` which sets
+  `Authorization: Bearer ...` under the hood.
+- Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
+  `openaiopt.WithHeader("api-key", "<key>")` instead.
+
+##### 2. Custom http.RoundTripper (advanced)
+
+Inject headers across all requests at the HTTP layer by wrapping the
+transport. This is useful when you also need custom proxy, TLS, or
+metrics logic.
+
+```go
+type headerRoundTripper struct{ base http.RoundTripper }
+
+func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+    // Add or override headers
+    req.Header.Set("X-Custom-Header", "custom-value")
+    req.Header.Set("X-Trace-ID", "trace-xyz")
+    return rt.base.RoundTrip(req)
+}
+
+llm := openai.New("deepseek-chat",
+    openai.WithHTTPClientOptions(
+        openai.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
+    ),
+)
+```
+
+Per-request headers
+
+- Agent/Runner passes `ctx` through to the model call; middleware can
+  read values from `req.Context()` to inject per-invocation headers.
+- Chat completion per-request base URL override is not exposed; create a
+  second model with a different base URL or alter `r.URL` in middleware.
+
+## Anthropic Model
+
+Anthropic Model is used to interface with Claude models and compatible platforms, supporting streaming output, thought modes and tool calls, and providing a rich callback mechanism, while also allowing for flexible configuration of custom HTTP headers.
+
+### Configuration Method
+
+#### Environment Variable Method
+
+```bash
+export ANTHROPIC_API_KEY="your-api-key"
+export ANTHROPIC_BASE_URL="https://api.anthropic.com" # Optional configuration, default is this BASE URL
+```
+
+#### Code Method
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+
+m := anthropic.New(
+    "claude-sonnet-4-0",
+    anthropic.WithAPIKey("your-api-key"),
+    anthropic.WithBaseURL("https://api.anthropic.com"), // Optional configuration, default is this BASE URL
+)
+```
+
+### Using the Model Directly
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+func main() {
+	// Create model instance
+	llm := anthropic.New("claude-sonnet-4-0")
+	// Build request
+	temperature := 0.7
+	maxTokens := 1000
+	request := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("You are a professional AI assistant."),
+			model.NewUserMessage("Introduce the concurrency features of Go language."),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+			Stream:      false,
+		},
+	}
+	// Call the model
+	ctx := context.Background()
+	responseChan, err := llm.GenerateContent(ctx, request)
+	if err != nil {
+		fmt.Printf("System error: %v\n", err)
+		return
+	}
+	// Handle response
+	for response := range responseChan {
+		if response.Error != nil {
+			fmt.Printf("API error: %s\n", response.Error.Message)
+			return
+		}
+		if len(response.Choices) > 0 {
+			fmt.Printf("Reply: %s\n", response.Choices[0].Message.Content)
+		}
+		if response.Done {
+			break
+		}
+	}
+}
+```
+
+### Streaming Output
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+func main() {
+	// Create model instance
+	llm := anthropic.New("claude-sonnet-4-0")
+	// Streaming request configuration
+	temperature := 0.7
+	maxTokens := 1000
+	request := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("You are a creative story storyteller."),
+			model.NewUserMessage("Write a short story about a robot learning to paint."),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+			Stream:      true,
+		},
+	}
+	// Call the model
+	ctx := context.Background()
+	// Handle streaming response
+	responseChan, err := llm.GenerateContent(ctx, request)
+	if err != nil {
+		fmt.Printf("System error: %v\n", err)
+		return
+	}
+	for response := range responseChan {
+		if response.Error != nil {
+			fmt.Printf("Error: %s", response.Error.Message)
+			return
+		}
+		if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
+			fmt.Print(response.Choices[0].Delta.Content)
+		}
+		if response.Done {
+			break
+		}
+	}
+}
+```
+
+### Advanced Parameter Configuration
+
+```go
+// Using advanced generation parameters
+temperature := 0.3
+maxTokens := 2000
+topP := 0.9
+thinking := true
+thinkingTokens := 2048
+
+request := &model.Request{
+    Messages: []model.Message{
+        model.NewSystemMessage("You are a professional technical documentation writer."),
+        model.NewUserMessage("Explain the pros and cons of microservices architecture."),
+    },
+    GenerationConfig: model.GenerationConfig{
+        Temperature:     &temperature,
+        MaxTokens:       &maxTokens,
+        TopP:            &topP,
+        ThinkingEnabled: &thinking,
+        ThinkingTokens:  &thinkingTokens,
+        Stream:          true,
+    },
+}
+```
+
+### Advanced features
+
+#### 1. Callback Functions
+
+```go
+import (
+    anthropicsdk "github.com/anthropics/anthropic-sdk-go"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+model := anthropic.New(
+    "claude-sonnet-4-0",
+    anthropic.WithChatRequestCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams) {
+        // Log the request before sending.
+        log.Printf("sending request: model=%s, messages=%d.", req.Model, len(req.Messages))
+    }),
+    anthropic.WithChatResponseCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams, resp *anthropicsdk.Message) {
+        // Log details of the non-streaming response.
+        log.Printf("received response: id=%s, input_tokens=%d, output_tokens=%d.", resp.ID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+    }),
+    anthropic.WithChatChunkCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams, chunk *anthropicsdk.MessageStreamEventUnion) {
+        // Log the type of the streaming event.
+        log.Printf("stream event: %T.", chunk.AsAny())
+    }),
+    anthropic.WithChatStreamCompleteCallback(func(ctx context.Context, req *anthropicsdk.MessageNewParams, acc *anthropicsdk.Message, streamErr error) {
+        // Log stream completion or error.
+        if streamErr != nil {
+            log.Printf("stream failed: %v.", streamErr)
+            return
+        }
+        log.Printf("stream completed: finish_reason=%s, input_tokens=%d, output_tokens=%d.", acc.StopReason, acc.Usage.InputTokens, acc.Usage.OutputTokens)
+    }),
+)
+```
+
+#### 2. Custom HTTP Headers
+
+In environments like gateways, proprietary platforms, or proxy setups, model API requests often require additional HTTP headers (e.g., organization/tenant identifiers, grayscale routing, custom authentication, etc.). The Model module provides two reliable ways to add headers for “all model requests,” including standard requests, streaming, file uploads, batch processing, etc.
+
+Recommended order:
+
+* Use **Anthropic RequestOption** to set global headers (simple and intuitive)
+* Use a custom `http.RoundTripper` injection (advanced, more cross-cutting capabilities)
+
+Both methods affect streaming requests, as they use the same underlying client.
+
+##### 1. Using Anthropic RequestOption to Set Global Headers
+
+By using `WithAnthropicClientOptions` combined with `anthropicopt.WithHeader` or `anthropicopt.WithMiddleware`, you can inject headers into every request made by the underlying Anthropic client.
+
+```go
+import (
+    anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+llm := anthropic.New("claude-sonnet-4-0",
+    // If your platform requires additional headers
+    anthropic.WithAnthropicClientOptions(
+        anthropicopt.WithHeader("X-Custom-Header", "custom-value"),
+        anthropicopt.WithHeader("X-Request-ID", "req-123"),
+        // You can also set User-Agent or vendor-specific headers
+        anthropicopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
+    ),
+)
+```
+
+If you need to set headers conditionally (e.g., only for certain paths or depending on context values), you can use middleware:
+
+```go
+import (
+    anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+llm := anthropic.New("claude-sonnet-4-0",
+    anthropic.WithAnthropicClientOptions(
+        anthropicopt.WithMiddleware(
+            func(r *http.Request, next anthropicopt.MiddlewareNext) (*http.Response, error) {
+                // Example: Set "per-request" headers based on context value
+                if v := r.Context().Value("x-request-id"); v != nil {
+                    if s, ok := v.(string); ok && s != "" {
+                        r.Header.Set("X-Request-ID", s)
+                    }
+                }
+                // Or only for the "message completion" endpoint
+                if strings.Contains(r.URL.Path, "v1/messages") {
+                    r.Header.Set("X-Feature-Flag", "on")
+                }
+                return next(r)
+            },
+        ),
+    ),
+)
+```
+
+##### 2. Using Custom `http.RoundTripper`
+
+For injecting headers at the HTTP transport layer, ideal for scenarios requiring proxying, TLS, custom monitoring, and other capabilities.
+
+```go
+import (
+    anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+type headerRoundTripper struct{ base http.RoundTripper }
+
+func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+    // Add or override headers
+    req.Header.Set("X-Custom-Header", "custom-value")
+    req.Header.Set("X-Trace-ID", "trace-xyz")
+    return rt.base.RoundTrip(req)
+}
+
+llm := anthropic.New("claude-sonnet-4-0",
+    anthropic.WithHTTPClientOptions(
+        anthropic.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
+    ),
+)
+```
+
+Regarding **"per-request" headers**:
+
+* The Agent/Runner will propagate `ctx` to the model call; middleware can read the value from `req.Context()` to inject headers for “this call.”
+* For **message completion**, the current API doesn't expose per-call BaseURL overrides; if switching is needed, create a model using a different BaseURL or modify the `r.URL` in middleware.
+
+## Advanced features
+
+### 1. Model Switching
 
 Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
 
@@ -973,7 +1375,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
 
 For a complete interactive example, see [examples/model/switch](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch), which demonstrates both agent-level and per-request switching approaches.
 
-### 5. Token Tailoring
+### 2. Token Tailoring
 
 Token Tailoring is an intelligent message management technique that automatically trims messages when they exceed the model's context window limit, ensuring requests can be successfully sent to the LLM API. This feature is particularly useful for long conversation scenarios, maintaining key context while keeping the message list within the model's token constraints.
 
@@ -1164,111 +1566,3 @@ m := openai.New("my-custom-model",
 #### Usage Example
 
 For a complete interactive example, see [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor).
-
-### 6. Custom HTTP Headers
-
-In some enterprise or proxy scenarios, the model provider requires
-additional HTTP headers (for example, organization ID, tenant routing,
-or custom authentication). The Model module supports setting headers in
-two reliable ways that apply to all model requests, including
-non-streaming, streaming, file upload, and batch APIs.
-
-Recommended order:
-
-- Global header via OpenAI RequestOption (simple, built-in)
-- Custom `http.RoundTripper` (advanced, cross-cutting)
-
-Both methods affect streaming too because the same client is used for
-`New` and `NewStreaming` calls
-([model/openai/openai.go:524](model/openai/openai.go:524),
-[model/openai/openai.go:964](model/openai/openai.go:964)).
-
-1. Global headers using OpenAI RequestOption
-
-Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
-`openaiopt.WithMiddleware` to inject headers for every request created
-by the underlying OpenAI client
-([model/openai/openai.go:344](model/openai/openai.go:344),
-[model/openai/openai.go:358](model/openai/openai.go:358)).
-
-```go
-import (
-    "net/http"
-    "strings"
-    openaiopt "github.com/openai/openai-go/option"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-)
-
-llm := openai.New("deepseek-chat",
-    // If your provider needs extra headers
-    openai.WithOpenAIOptions(
-        openaiopt.WithHeader("X-Custom-Header", "custom-value"),
-        openaiopt.WithHeader("X-Request-ID", "req-123"),
-        // You can also set User-Agent or vendor-specific headers
-        openaiopt.WithHeader("User-Agent", "trpc-agent-go/1.0"),
-    ),
-)
-```
-
-For complex logic, middleware lets you modify headers conditionally
-(for example, by URL path or context values):
-
-```go
-llm := openai.New("deepseek-chat",
-    openai.WithOpenAIOptions(
-        openaiopt.WithMiddleware(
-            func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
-                // Example: per-request header via context value
-                if v := r.Context().Value("x-request-id"); v != nil {
-                    if s, ok := v.(string); ok && s != "" {
-                        r.Header.Set("X-Request-ID", s)
-                    }
-                }
-                // Or only for chat completion endpoint
-                if strings.Contains(r.URL.Path, "/chat/completions") {
-                    r.Header.Set("X-Feature-Flag", "on")
-                }
-                return next(r)
-            },
-        ),
-    ),
-)
-```
-
-Notes for authentication variants:
-
-- OpenAI style: keep `openai.WithAPIKey("sk-...")` which sets
-  `Authorization: Bearer ...` under the hood.
-- Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
-  `openaiopt.WithHeader("api-key", "<key>")` instead.
-
-2. Custom http.RoundTripper (advanced)
-
-Inject headers across all requests at the HTTP layer by wrapping the
-transport. This is useful when you also need custom proxy, TLS, or
-metrics logic
-([model/openai/openai.go:172](model/openai/openai.go:172)).
-
-```go
-type headerRoundTripper struct{ base http.RoundTripper }
-
-func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-    // Add or override headers
-    req.Header.Set("X-Custom-Header", "custom-value")
-    req.Header.Set("X-Trace-ID", "trace-xyz")
-    return rt.base.RoundTrip(req)
-}
-
-llm := openai.New("deepseek-chat",
-    openai.WithHTTPClientOptions(
-        openai.WithHTTPClientTransport(headerRoundTripper{base: http.DefaultTransport}),
-    ),
-)
-```
-
-Per-request headers
-
-- Agent/Runner passes `ctx` through to the model call; middleware can
-  read values from `req.Context()` to inject per-invocation headers.
-- Chat completion per-request base URL override is not exposed; create a
-  second model with a different base URL or alter `r.URL` in middleware.
