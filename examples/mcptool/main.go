@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -235,8 +236,18 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) error {
 	message := model.NewUserMessage(userMessage)
 
-	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
+	// Generate request ID for this run
+	requestID := fmt.Sprintf("req-%d", time.Now().UnixNano())
+
+	// Run the agent through the runner with MCP request options.
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message,
+		// Pass MCP request options for all MCP tool calls in this run
+		agent.WithMCPRequestOptions(
+			tmcp.WithRequestHeader("X-Request-ID", requestID),
+			tmcp.WithRequestHeader("X-User-ID", c.userID),
+			tmcp.WithRequestHeader("X-Session-ID", c.sessionID),
+		),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
