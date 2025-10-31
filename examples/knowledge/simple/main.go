@@ -294,9 +294,7 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
 			vectortcvector.WithPassword(tcvectorPassword),
-			vectortcvector.WithCollection("tcvector-agent-go-1"),
-			// tcvector need build index for the filter fields
-			vectortcvector.WithFilterIndexFields(source.GetAllMetadataKeys(c.sources)),
+			vectortcvector.WithCollection("tcvector-agent-go"),
 			// used for build document from tcvector query result
 			vectortcvector.WithDocBuilder(docBuilder),
 		)

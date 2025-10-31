@@ -714,42 +714,84 @@ llmAgent := llmagent.New(
 
 #### 过滤器优先级
 
-系统支持多层过滤器，按以下优先级合并（后者覆盖前者）：
+系统支持多层过滤器，分为两种类型：
 
-1. **Agent 级过滤器**：`WithKnowledgeFilter()` 设置的固定过滤器（优先级最低）
-2. **Runner 级过滤器**：运行时传递的过滤器（优先级中等）
-3. **智能过滤器**：LLM 动态生成的过滤器（优先级最高）
+##### 1. 简单元数据过滤器（Metadata Filter）
+
+简单键值对过滤器，按以下优先级合并（后者覆盖前者）：
+
+1. **Tool 级过滤器**：通过 `WithFilter()` 设置的静态过滤器（优先级高）
+2. **智能过滤器**：LLM 动态生成的过滤条件
+
 
 ```go
-// 过滤器合并逻辑（优先级：Agent < Runner < 智能过滤器）
-// 如果多个层级设置了相同的键，高优先级的值会覆盖低优先级的值
-
-// Agent 级过滤器（基础过滤器）
-agentFilter := map[string]interface{}{
+// Tool 级过滤器（创建 Tool 时设置）
+tool.WithFilter(map[string]any{
+    "source":   "official",
     "category": "documentation",
-    "source":   "internal",
-}
+})
 
-// Runner 级过滤器（运行时过滤器）
-runnerFilter := map[string]interface{}{
-    "source": "official",  // 覆盖 Agent 级的 "internal"
-    "topic":  "api",
-}
-
-// 智能过滤器（LLM 动态生成）
-intelligentFilter := map[string]interface{}{
-    "topic": "programming",  // 覆盖 Runner 级的 "api"
-    "level": "advanced",
-}
-
-// 最终合并结果
-finalFilter := {
-    "category": "documentation",  // 来自 Agent 级
-    "source":   "official",       // 来自 Runner 级（覆盖了 Agent 级）
-    "topic":    "programming",     // 来自智能过滤器（覆盖了 Runner 级）
-    "level":    "advanced",       // 来自智能过滤器
-}
+// 智能过滤器由 LLM 根据用户查询动态生成
+// 例如：用户问 "查找 API 相关文档"，LLM 可能生成 {"topic": "api"}
 ```
+
+##### 2. 复杂条件过滤器（FilterCondition）
+
+支持复杂逻辑（AND/OR/嵌套）的过滤器，按以下规则合并：
+
+1. **Tool 级条件过滤器**：通过 `WithConditionedFilter()` 设置的静态条件
+2. **智能过滤器**：LLM 动态生成的过滤条件
+
+```go
+tool.WithConditionedFilter(
+    searchfilter.Or(
+        searchfilter.Equal("topic", "programming"),
+        searchfilter.Equal("content_type", "llm"),
+    ),
+)
+
+
+// 常用辅助函数：
+// - searchfilter.Equal(field, value)        // field = value
+// - searchfilter.NotEqual(field, value)     // field != value
+// - searchfilter.GreaterThan(field, value)  // field > value
+// - searchfilter.LessThan(field, value)     // field < value
+// - searchfilter.In(field, values...)       // field IN (...)
+// - searchfilter.And(conditions...)         // AND 组合
+// - searchfilter.Or(conditions...)          // OR 组合
+
+// 嵌套示例：(status = 'published') AND (category = 'doc' OR category = 'tutorial')
+tool.WithConditionedFilter(
+    searchfilter.And(
+        searchfilter.Equal("status", "published"),
+        searchfilter.Or(
+            searchfilter.Equal("category", "documentation"),
+            searchfilter.Equal("category", "tutorial"),
+        ),
+    ),
+)
+```
+
+#### 多文档返回
+
+Knowledge Search Tool 支持返回多个相关文档，可通过 `WithMaxResults(n)` 选项限制返回的最大文档数量：
+
+```go
+// 创建搜索工具，限制最多返回 5 个文档
+searchTool := tool.NewKnowledgeSearchTool(
+    kb,
+    tool.WithMaxResults(5),
+)
+
+// 或使用智能过滤搜索工具
+agenticSearchTool := tool.NewAgenticFilterSearchTool(
+    kb,
+    sourcesMetadata,
+    tool.WithMaxResults(10),
+)
+```
+
+每个返回的文档包含文本内容、元数据和相关性分数，按分数降序排列
 
 ### 配置元数据源
 
@@ -809,19 +851,37 @@ vectorStore, err := vectorpgvector.New(
 
 #### TcVector
 
-- ✅ 支持预定义字段过滤
-- ⚠️ 需要预先建立过滤字段索引
+- ✅ 支持所有元数据过滤
+- ✅ v0.4.0+ 新建集合自动支持 JSON 索引（需 TCVector 服务支持）
+- ⚡ 可选：使用 `WithFilterIndexFields` 为高频字段构建额外索引
 
 ```go
-// 获取所有元数据键用于建立索引
-metadataKeys := source.GetAllMetadataKeys(sources)
-
+// v0.4.0+ 新建集合（TCVector 服务支持 JSON 索引）
 vectorStore, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-endpoint"),
-    vectortcvector.WithFilterIndexFields(metadataKeys), // 建立过滤字段索引
+    // ... 其他配置
+)
+// 所有元数据字段可通过 JSON 索引查询，无需预定义
+
+// 可选：为高频字段构建额外索引以优化性能
+metadataKeys := source.GetAllMetadataKeys(sources)
+vectorStore, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-endpoint"),
+    vectortcvector.WithFilterIndexFields(metadataKeys), // 可选：构建额外索引
+    // ... 其他配置
+)
+
+// v0.4.0 之前的集合或 TCVector 服务不支持 JSON 索引
+vectorStore, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-endpoint"),
+    vectortcvector.WithFilterIndexFields(metadataKeys), // 必需：预定义过滤字段
     // ... 其他配置
 )
 ```
+
+**说明：**
+- **v0.4.0+ 新建集合**：自动创建 metadata JSON 索引，所有字段可查询
+- **旧版本集合**：仅支持 `WithFilterIndexFields` 中预定义的字段
 
 #### 内存存储
 

@@ -829,19 +829,37 @@ vectorStore, err := vectorpgvector.New(
 
 #### TcVector
 
-- ✅ Supports predefined field filtering
-- ⚠️ Requires pre-establishing filter field indexes
+- ✅ Supports all metadata filtering
+- ✅ v0.4.0+ new collections automatically support JSON index (requires TCVector service support)
+- ⚡ Optional: Use `WithFilterIndexFields` to build additional indexes for frequently queried fields
 
 ```go
-// Get all metadata keys for establishing indexes
-metadataKeys := source.GetAllMetadataKeys(sources)
-
+// v0.4.0+ new collections (TCVector service supports JSON index)
 vectorStore, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-endpoint"),
-    vectortcvector.WithFilterIndexFields(metadataKeys), // Establish filter field indexes
+    // ... other configurations
+)
+// All metadata fields are queryable via JSON index, no need to predefine
+
+// Optional: Build additional indexes for high-frequency fields to optimize performance
+metadataKeys := source.GetAllMetadataKeys(sources)
+vectorStore, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-endpoint"),
+    vectortcvector.WithFilterIndexFields(metadataKeys), // Optional: build additional indexes
+    // ... other configurations
+)
+
+// Collections before v0.4.0 or TCVector service without JSON index support
+vectorStore, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-endpoint"),
+    vectortcvector.WithFilterIndexFields(metadataKeys), // Required: predefine filter fields
     // ... other configurations
 )
 ```
+
+**Notes:**
+- **v0.4.0+ new collections**: Automatically create metadata JSON index, all fields queryable
+- **Legacy collections**: Only fields in `WithFilterIndexFields` are queryable
 
 #### In-memory Storage
 

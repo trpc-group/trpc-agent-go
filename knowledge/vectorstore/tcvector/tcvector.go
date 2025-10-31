@@ -859,8 +859,7 @@ func covertToVector32(embedding []float64) []float32 {
 }
 
 // getFilterFieldName returns the appropriate field name for filtering.
-// If the field is in filterFields, use it directly (indexed field).
-// Otherwise, use metadata.field format (JSON field path).
+// Fields in filterFields use dedicated index, others use JSON index path.
 func (vs *VectorStore) getFilterFieldName(field string) string {
 	for _, filterField := range vs.option.filterFields {
 		if filterField == field {

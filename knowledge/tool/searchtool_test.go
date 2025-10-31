@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	ctool "trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -41,9 +42,9 @@ func marshalArgs(t *testing.T, query string) []byte {
 	return bts
 }
 
-func marshalArgsWithFilter(t *testing.T, query string, filters []KnowledgeFilter) []byte {
+func marshalArgsWithFilter(t *testing.T, query string, filter *ConditionedFilterRequest) []byte {
 	t.Helper()
-	bts, err := json.Marshal(&KnowledgeSearchRequestWithFilter{Query: query, Filters: filters})
+	bts, err := json.Marshal(&KnowledgeSearchRequestWithFilter{Query: query, Filter: filter})
 	require.NoError(t, err)
 	return bts
 }
@@ -74,14 +75,84 @@ func TestKnowledgeSearchTool(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
-		kb := stubKnowledge{result: &knowledge.SearchResult{Text: "foo", Score: 0.9}}
+		kb := stubKnowledge{result: &knowledge.SearchResult{
+			Documents: []*knowledge.Result{
+				{
+					Document: &document.Document{Content: "foo", Metadata: map[string]any{"source": "test"}},
+					Score:    0.9,
+				},
+			},
+		}}
 		searchTool := NewKnowledgeSearchTool(kb)
 		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, "hello"))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
-		require.Equal(t, "foo", rsp.Text)
-		require.Equal(t, 0.9, rsp.Score)
-		require.Contains(t, rsp.Message, "Found relevant content")
+		require.Len(t, rsp.Documents, 1)
+		require.Equal(t, "foo", rsp.Documents[0].Text)
+		require.Equal(t, 0.9, rsp.Documents[0].Score)
+		require.Equal(t, "test", rsp.Documents[0].Metadata["source"])
+		require.Contains(t, rsp.Message, "Found 1 relevant document")
+	})
+
+	t.Run("success with multiple documents", func(t *testing.T) {
+		kb := stubKnowledge{result: &knowledge.SearchResult{
+			Documents: []*knowledge.Result{
+				{
+					Document: &document.Document{Content: "first result", Metadata: map[string]any{"rank": 1}},
+					Score:    0.95,
+				},
+				{
+					Document: &document.Document{Content: "second result", Metadata: map[string]any{"rank": 2}},
+					Score:    0.85,
+				},
+				{
+					Document: &document.Document{Content: "third result", Metadata: map[string]any{"rank": 3}},
+					Score:    0.75,
+				},
+			},
+		}}
+		searchTool := NewKnowledgeSearchTool(kb)
+		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, "hello"))
+		require.NoError(t, err)
+		rsp := res.(*KnowledgeSearchResponse)
+		require.Len(t, rsp.Documents, 3)
+		require.Equal(t, "first result", rsp.Documents[0].Text)
+		require.Equal(t, 0.95, rsp.Documents[0].Score)
+		require.Equal(t, "second result", rsp.Documents[1].Text)
+		require.Equal(t, 0.85, rsp.Documents[1].Score)
+		require.Equal(t, "third result", rsp.Documents[2].Text)
+		require.Equal(t, 0.75, rsp.Documents[2].Score)
+		require.Contains(t, rsp.Message, "Found 3 relevant document")
+	})
+
+	t.Run("filters internal metadata", func(t *testing.T) {
+		kb := stubKnowledge{result: &knowledge.SearchResult{
+			Documents: []*knowledge.Result{
+				{
+					Document: &document.Document{
+						Content: "test content",
+						Metadata: map[string]any{
+							"public_key":              "public_value",
+							"trpc_agent_go_source":    "internal_source",
+							"trpc_agent_go_file_path": "/path/to/file",
+							"custom_field":            "custom_value",
+						},
+					},
+					Score: 0.9,
+				},
+			},
+		}}
+		searchTool := NewKnowledgeSearchTool(kb)
+		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, "hello"))
+		require.NoError(t, err)
+		rsp := res.(*KnowledgeSearchResponse)
+		require.Len(t, rsp.Documents, 1)
+		// Should include public metadata
+		require.Contains(t, rsp.Documents[0].Metadata, "public_key")
+		require.Contains(t, rsp.Documents[0].Metadata, "custom_field")
+		// Should NOT include internal metadata with trpc_agent_go_ prefix
+		require.NotContains(t, rsp.Documents[0].Metadata, "trpc_agent_go_source")
+		require.NotContains(t, rsp.Documents[0].Metadata, "trpc_agent_go_file_path")
 	})
 
 	t.Run("verify options", func(t *testing.T) {
@@ -113,8 +184,13 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		decl = ttool.Declaration()
 		require.NotEmpty(t, decl.Name)
 
+		// Verify WithMaxResults option
+		ttool = NewKnowledgeSearchTool(kb, WithMaxResults(5))
+		decl = ttool.Declaration()
+		require.NotEmpty(t, decl.Name)
+
 		// Verify all options together
-		ttool = NewKnowledgeSearchTool(kb, WithToolName(customName), WithToolDescription(customDesc), WithFilter(customFilter))
+		ttool = NewKnowledgeSearchTool(kb, WithToolName(customName), WithToolDescription(customDesc), WithFilter(customFilter), WithMaxResults(10))
 		decl = ttool.Declaration()
 		require.Equal(t, customName, decl.Name)
 		require.Equal(t, customDesc, decl.Description)
@@ -128,19 +204,19 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 		"level":    {"beginner", "intermediate", "advanced"},
 	}
 
-	t.Run("empty query", func(t *testing.T) {
+	t.Run("empty query and filter", func(t *testing.T) {
 		kb := stubKnowledge{}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "", nil))
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "at least one of query, filters, or filter must be provided")
+		require.Contains(t, err.Error(), "at least one of query or filter must be provided")
 	})
 
 	t.Run("search error", func(t *testing.T) {
 		kb := stubKnowledge{err: errors.New("search failed")}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filters := []KnowledgeFilter{{Key: "category", Value: "documentation"}}
-		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filters))
+		filter := &ConditionedFilterRequest{Field: "category", Operator: "eq", Value: "documentation"}
+		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filter))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "search failed")
 	})
@@ -148,49 +224,76 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 	t.Run("no result", func(t *testing.T) {
 		kb := stubKnowledge{}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filters := []KnowledgeFilter{{Key: "category", Value: "documentation"}}
-		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filters))
+		filter := &ConditionedFilterRequest{Field: "category", Operator: "eq", Value: "documentation"}
+		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filter))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no relevant information found")
 	})
 
 	t.Run("success with single filter", func(t *testing.T) {
-		kb := stubKnowledge{result: &knowledge.SearchResult{Text: "filtered content", Score: 0.85}}
+		kb := stubKnowledge{result: &knowledge.SearchResult{
+			Documents: []*knowledge.Result{
+				{
+					Document: &document.Document{Content: "filtered content", Metadata: map[string]any{"category": "documentation"}},
+					Score:    0.85,
+				},
+			},
+		}}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filters := []KnowledgeFilter{{Key: "category", Value: "documentation"}}
-		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filters))
+		filter := &ConditionedFilterRequest{Field: "category", Operator: "eq", Value: "documentation"}
+		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filter))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
-		require.Equal(t, "filtered content", rsp.Text)
-		require.Equal(t, 0.85, rsp.Score)
-		require.Contains(t, rsp.Message, "Found relevant content")
+		require.Len(t, rsp.Documents, 1)
+		require.Equal(t, "filtered content", rsp.Documents[0].Text)
+		require.Equal(t, 0.85, rsp.Documents[0].Score)
+		require.Contains(t, rsp.Message, "Found 1 relevant document")
 	})
 
-	t.Run("success with multiple filters", func(t *testing.T) {
-		kb := stubKnowledge{result: &knowledge.SearchResult{Text: "multi-filtered content", Score: 0.92}}
+	t.Run("success with AND filter", func(t *testing.T) {
+		kb := stubKnowledge{result: &knowledge.SearchResult{
+			Documents: []*knowledge.Result{
+				{
+					Document: &document.Document{Content: "multi-filtered content"},
+					Score:    0.92,
+				},
+			},
+		}}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filters := []KnowledgeFilter{
-			{Key: "category", Value: "documentation"},
-			{Key: "protocol", Value: "trpc-go"},
-			{Key: "level", Value: "intermediate"},
+		filter := &ConditionedFilterRequest{
+			Operator: "and",
+			Conditions: []*ConditionedFilterRequest{
+				{Field: "category", Operator: "eq", Value: "documentation"},
+				{Field: "protocol", Operator: "eq", Value: "trpc-go"},
+				{Field: "level", Operator: "eq", Value: "intermediate"},
+			},
 		}
-		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "trpc gateway", filters))
+		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "trpc gateway", filter))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
-		require.Equal(t, "multi-filtered content", rsp.Text)
-		require.Equal(t, 0.92, rsp.Score)
-		require.Contains(t, rsp.Message, "Found relevant content")
+		require.Len(t, rsp.Documents, 1)
+		require.Equal(t, "multi-filtered content", rsp.Documents[0].Text)
+		require.Equal(t, 0.92, rsp.Documents[0].Score)
+		require.Contains(t, rsp.Message, "Found 1 relevant document")
 	})
 
 	t.Run("success with no filters", func(t *testing.T) {
-		kb := stubKnowledge{result: &knowledge.SearchResult{Text: "unfiltered content", Score: 0.75}}
+		kb := stubKnowledge{result: &knowledge.SearchResult{
+			Documents: []*knowledge.Result{
+				{
+					Document: &document.Document{Content: "unfiltered content"},
+					Score:    0.75,
+				},
+			},
+		}}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "general query", nil))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
-		require.Equal(t, "unfiltered content", rsp.Text)
-		require.Equal(t, 0.75, rsp.Score)
-		require.Contains(t, rsp.Message, "Found relevant content")
+		require.Len(t, rsp.Documents, 1)
+		require.Equal(t, "unfiltered content", rsp.Documents[0].Text)
+		require.Equal(t, 0.75, rsp.Documents[0].Score)
+		require.Contains(t, rsp.Message, "Found 1 relevant document")
 	})
 
 	t.Run("verify declaration metadata", func(t *testing.T) {
@@ -214,6 +317,37 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 		decl := searchTool.Declaration()
 		require.Contains(t, decl.Description, "helpful assistant")
 		require.NotContains(t, decl.Description, "Available filters")
+	})
+
+	t.Run("filters internal metadata", func(t *testing.T) {
+		kb := stubKnowledge{result: &knowledge.SearchResult{
+			Documents: []*knowledge.Result{
+				{
+					Document: &document.Document{
+						Content: "test content",
+						Metadata: map[string]any{
+							"category":                "documentation",
+							"trpc_agent_go_source":    "internal_source",
+							"trpc_agent_go_file_name": "test.md",
+							"author":                  "test_author",
+						},
+					},
+					Score: 0.88,
+				},
+			},
+		}}
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
+		filter := &ConditionedFilterRequest{Field: "category", Operator: "eq", Value: "documentation"}
+		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filter))
+		require.NoError(t, err)
+		rsp := res.(*KnowledgeSearchResponse)
+		require.Len(t, rsp.Documents, 1)
+		// Should include public metadata
+		require.Contains(t, rsp.Documents[0].Metadata, "category")
+		require.Contains(t, rsp.Documents[0].Metadata, "author")
+		// Should NOT include internal metadata with trpc_agent_go_ prefix
+		require.NotContains(t, rsp.Documents[0].Metadata, "trpc_agent_go_source")
+		require.NotContains(t, rsp.Documents[0].Metadata, "trpc_agent_go_file_name")
 	})
 
 	t.Run("verify options", func(t *testing.T) {
@@ -256,27 +390,22 @@ func TestGetFinalFilter(t *testing.T) {
 			"runner": "runner_value",
 			"common": "runner_value", // Will be overridden by agent
 		}
-		invocationFilter := map[string]any{
-			"invocation": "invocation_value",
-			"common":     "invocation_value", // Will be overridden by runner and agent
-		}
 
-		result := getFinalFilter(agentFilter, runnerFilter, invocationFilter)
+		result := getStaticFilter(agentFilter, runnerFilter)
 
 		require.Equal(t, "agent", result["source"])
 		require.Equal(t, "runner_value", result["runner"])
-		require.Equal(t, "invocation_value", result["invocation"])
 		require.Equal(t, "agent_value", result["common"]) // Agent has highest priority (added last)
 	})
 
 	t.Run("handle nil filters", func(t *testing.T) {
-		result := getFinalFilter(nil, nil, nil)
+		result := getStaticFilter(nil, nil)
 		require.Empty(t, result)
 	})
 
 	t.Run("partial nil filters", func(t *testing.T) {
 		agentFilter := map[string]any{"agent": "value"}
-		result := getFinalFilter(agentFilter, nil, nil)
+		result := getStaticFilter(agentFilter, nil)
 		require.Equal(t, "value", result["agent"])
 		require.Len(t, result, 1)
 	})
@@ -305,15 +434,13 @@ func TestGenerateAgenticFilterPrompt(t *testing.T) {
 
 		// Check for filter usage sections
 		require.Contains(t, prompt, "Filter Usage")
-		require.Contains(t, prompt, "Simple filters")
-		require.Contains(t, prompt, "Complex filters")
+		require.Contains(t, prompt, "filter")
 
 		// Check for operator information
-		require.Contains(t, prompt, "Operators:")
+		require.Contains(t, prompt, "Supported operators")
 		require.Contains(t, prompt, "eq")
 		require.Contains(t, prompt, "or")
 		require.Contains(t, prompt, "and")
-		require.Contains(t, prompt, "Operator aliases")
 
 		// Check for examples
 		require.Contains(t, prompt, "Filter Examples")
@@ -330,8 +457,12 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 	t.Run("successful search with simple filter", func(t *testing.T) {
 		kb := stubKnowledge{
 			result: &knowledge.SearchResult{
-				Text:  "test result",
-				Score: 0.95,
+				Documents: []*knowledge.Result{
+					{
+						Document: &document.Document{Content: "test result"},
+						Score:    0.95,
+					},
+				},
 			},
 		}
 
@@ -356,15 +487,20 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 		require.NoError(t, err)
 
 		resp := result.(*KnowledgeSearchResponse)
-		require.Equal(t, "test result", resp.Text)
-		require.Equal(t, 0.95, resp.Score)
+		require.Len(t, resp.Documents, 1)
+		require.Equal(t, "test result", resp.Documents[0].Text)
+		require.Equal(t, 0.95, resp.Documents[0].Score)
 	})
 
 	t.Run("successful search with AND filter", func(t *testing.T) {
 		kb := stubKnowledge{
 			result: &knowledge.SearchResult{
-				Text:  "filtered result",
-				Score: 0.88,
+				Documents: []*knowledge.Result{
+					{
+						Document: &document.Document{Content: "filtered result"},
+						Score:    0.88,
+					},
+				},
 			},
 		}
 
@@ -399,14 +535,19 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 		require.NoError(t, err)
 
 		resp := result.(*KnowledgeSearchResponse)
-		require.Equal(t, "filtered result", resp.Text)
+		require.Len(t, resp.Documents, 1)
+		require.Equal(t, "filtered result", resp.Documents[0].Text)
 	})
 
 	t.Run("successful search with OR filter", func(t *testing.T) {
 		kb := stubKnowledge{
 			result: &knowledge.SearchResult{
-				Text:  "or result",
-				Score: 0.75,
+				Documents: []*knowledge.Result{
+					{
+						Document: &document.Document{Content: "or result"},
+						Score:    0.75,
+					},
+				},
 			},
 		}
 
@@ -440,7 +581,8 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 		require.NoError(t, err)
 
 		resp := result.(*KnowledgeSearchResponse)
-		require.Equal(t, "or result", resp.Text)
+		require.Len(t, resp.Documents, 1)
+		require.Equal(t, "or result", resp.Documents[0].Text)
 	})
 
 	t.Run("empty query error", func(t *testing.T) {
@@ -456,7 +598,7 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 
 		_, err = tool.(ctool.CallableTool).Call(context.Background(), args)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "at least one of query, filters, or filter must be provided")
+		require.Contains(t, err.Error(), "at least one of query or filter must be provided")
 	})
 
 	t.Run("search error", func(t *testing.T) {
