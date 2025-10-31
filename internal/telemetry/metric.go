@@ -7,6 +7,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -81,45 +84,159 @@ func (a ChatAttributes) toAttributes() []attribute.KeyValue {
 	return attrs
 }
 
-// IncChatRequestCnt increments the chat request counter by 1 with the provided model name and session attributes.
-func IncChatRequestCnt(ctx context.Context, attrs ChatAttributes) {
-	ChatMetricTRPCAgentGoClientRequestCnt.Add(ctx, 1, metric.WithAttributes(attrs.toAttributes()...))
+// ChatMetricsTracker tracks metrics for a single chat request lifecycle.
+type ChatMetricsTracker struct {
+	ctx                    context.Context
+	start                  time.Time
+	isFirstToken           bool
+	firstTokenTimeDuration time.Duration
+	firstCompleteToken     int
+	totalCompletionTokens  int
+	totalPromptTokens      int
+	lastEvent              *event.Event
+
+	// Configuration
+	invocation *agent.Invocation
+	llmRequest *model.Request
+	err        *error // pointer to capture final error
 }
 
-// RecordChatTimePerOutputTokenDuration records the average time per output token for a chat operation.
-// The duration represents the time spent per token during the decode phase of LLM inference.
-func RecordChatTimePerOutputTokenDuration(ctx context.Context, attrs ChatAttributes, duration time.Duration) {
-	ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(ctx, duration.Seconds(),
-		metric.WithAttributes(attrs.toAttributes()...))
+// NewChatMetricsTracker creates a new telemetry tracker.
+func NewChatMetricsTracker(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	err *error,
+) *ChatMetricsTracker {
+	return &ChatMetricsTracker{
+		ctx:          ctx,
+		start:        time.Now(),
+		isFirstToken: true,
+		invocation:   invocation,
+		llmRequest:   llmRequest,
+		err:          err,
+	}
 }
 
-// RecordChatOutputTokenPerTime records the output token per time for a chat operation.
-// 1 / ChatMetricTRPCAgentGoClientTimePerOutputToken.
-func RecordChatOutputTokenPerTime(ctx context.Context, attrs ChatAttributes, tokenPerTime float64) {
-	ChatMetricTRPCAgentGoClientOutputTokenPerTime.Record(ctx, tokenPerTime,
-		metric.WithAttributes(attrs.toAttributes()...))
+// TrackResponse updates telemetry state for a streaming response.
+// Call this for each response received from the LLM.
+func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
+	if t.isFirstToken {
+		t.firstTokenTimeDuration = time.Since(t.start)
+		t.isFirstToken = false
+		if response.Usage != nil {
+			t.firstCompleteToken = response.Usage.CompletionTokens
+		}
+	}
+	if response.Usage != nil {
+		t.totalPromptTokens += response.Usage.PromptTokens
+		t.totalCompletionTokens += response.Usage.CompletionTokens
+	}
 }
 
-// RecordChatInputTokenUsage records the number of input (prompt) tokens used in a chat operation.
-func RecordChatInputTokenUsage(ctx context.Context, attrs ChatAttributes, usage int64) {
-	ChatMetricGenAIClientTokenUsage.Record(ctx, usage, metric.WithAttributes(append(attrs.toAttributes(), attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+// SetLastEvent updates the last event seen (for extracting response model name and error).
+func (t *ChatMetricsTracker) SetLastEvent(evt *event.Event) {
+	t.lastEvent = evt
 }
 
-// RecordChatOutputTokenUsage records the number of output (completion) tokens generated in a chat operation.
-func RecordChatOutputTokenUsage(ctx context.Context, attrs ChatAttributes, usage int64) {
-	ChatMetricGenAIClientTokenUsage.Record(ctx, usage, metric.WithAttributes(append(attrs.toAttributes(), attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
+// FirstTokenTimeDuration returns the time to first token duration.
+func (t *ChatMetricsTracker) FirstTokenTimeDuration() time.Duration {
+	return t.firstTokenTimeDuration
 }
 
-// RecordChatTimeToFirstTokenDuration records the time taken from request start until the first token is received.
-// This metric is important for measuring the prefill/prompt processing latency of LLM inference.
-func RecordChatTimeToFirstTokenDuration(ctx context.Context, attrs ChatAttributes, duration time.Duration) {
-	ChatMetricTRPCAgentGoClientTimeToFirstToken.Record(ctx, duration.Seconds(),
-		metric.WithAttributes(attrs.toAttributes()...))
+// RecordMetrics returns a defer function that records all telemetry metrics.
+// Should be called with defer immediately after creating the tracker.
+func (t *ChatMetricsTracker) RecordMetrics() func() {
+	return func() {
+		attrs := t.buildAttributes()
+		requestDuration := time.Since(t.start)
+		otelAttrs := attrs.toAttributes()
+
+		// Increment chat request counter
+		ChatMetricTRPCAgentGoClientRequestCnt.Add(t.ctx, 1, metric.WithAttributes(otelAttrs...))
+
+		// Record chat request duration
+		ChatMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
+
+		// Record time to first token
+		ChatMetricTRPCAgentGoClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
+			metric.WithAttributes(otelAttrs...))
+
+		// Record input token usage
+		ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
+			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+
+		// Record output token usage
+		ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
+			metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
+
+		// Calculate and record derived metrics
+		t.recordDerivedMetrics(otelAttrs, requestDuration)
+	}
 }
 
-// RecordChatRequestDuration records the total duration of a chat request from start to completion.
-func RecordChatRequestDuration(ctx context.Context, attrs ChatAttributes, duration time.Duration) {
-	ChatMetricGenAIClientOperationDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs.toAttributes()...))
+// buildAttributes constructs ChatAttributes from tracked state.
+func (t *ChatMetricsTracker) buildAttributes() ChatAttributes {
+	attrs := ChatAttributes{}
+
+	// Extract error
+	if t.err != nil && *t.err != nil {
+		attrs.Error = *t.err
+	}
+
+	// Extract request attributes
+	if t.llmRequest != nil {
+		attrs.Stream = t.llmRequest.GenerationConfig.Stream
+	}
+
+	// Extract invocation attributes (with nil safety)
+	if t.invocation != nil {
+		if t.invocation.AgentName != "" {
+			attrs.AgentName = t.invocation.AgentName
+		}
+		if t.invocation.Model != nil {
+			attrs.RequestModelName = t.invocation.Model.Info().Name
+		}
+		if t.invocation.Session != nil {
+			attrs.SessionID = t.invocation.Session.ID
+			attrs.UserID = t.invocation.Session.UserID
+			attrs.AppName = t.invocation.Session.AppName
+		}
+	}
+
+	// Extract response attributes from last event
+	if t.lastEvent != nil {
+		if t.lastEvent.Response != nil {
+			attrs.ResponseModelName = t.lastEvent.Response.Model
+		}
+		if t.lastEvent.Error != nil {
+			attrs.ErrorType = t.lastEvent.Error.Type
+		}
+	}
+
+	return attrs
+}
+
+// recordDerivedMetrics calculates and records time-per-token and token-per-time metrics.
+func (t *ChatMetricsTracker) recordDerivedMetrics(otelAttrs []attribute.KeyValue, requestDuration time.Duration) {
+	tokens := t.totalCompletionTokens - t.firstCompleteToken
+	duration := requestDuration - t.firstTokenTimeDuration
+
+	if tokens > 0 && duration > 0 {
+		// Record time per output token
+		ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(t.ctx, (duration / time.Duration(tokens)).Seconds(),
+			metric.WithAttributes(otelAttrs...))
+		// Record output token per time
+		ChatMetricTRPCAgentGoClientOutputTokenPerTime.Record(t.ctx, float64(tokens)/duration.Seconds(),
+			metric.WithAttributes(otelAttrs...))
+	} else if tokens == 0 && t.totalCompletionTokens > 0 && requestDuration > 0 {
+		// Record time per output token
+		ChatMetricTRPCAgentGoClientTimePerOutputToken.Record(t.ctx, (requestDuration / time.Duration(t.totalCompletionTokens)).Seconds(),
+			metric.WithAttributes(otelAttrs...))
+		// Record output token per time
+		ChatMetricTRPCAgentGoClientOutputTokenPerTime.Record(t.ctx, float64(t.totalCompletionTokens)/requestDuration.Seconds(),
+			metric.WithAttributes(otelAttrs...))
+	}
 }
 
 var (

@@ -1440,73 +1440,16 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	}
 
 	var lastEvent *event.Event
-	start := time.Now()
-	isFirstToken := true
-	firstTokenTimeDuration := time.Duration(0)
-	firstCompleteToken := 0
-	totalCompletionTokens := 0
-	totalPromptTokens := 0
-	defer func() {
-		attrs := itelemetry.ChatAttributes{
-			Error: err,
-		}
-		if config.Request != nil {
-			attrs.Stream = config.Request.GenerationConfig.Stream
-		}
-		if invocation != nil {
-			if invocation.AgentName != "" {
-				attrs.AgentName = invocation.AgentName
-			}
-			if invocation.Model != nil {
-				attrs.RequestModelName = invocation.Model.Info().Name
-			}
-			if invocation.Session != nil {
-				attrs.SessionID = invocation.Session.ID
-				attrs.UserID = invocation.Session.UserID
-				attrs.AppName = invocation.Session.AppName
-			}
-		}
-
-		requestDuration := time.Since(start)
-
-		if lastEvent != nil {
-			if lastEvent.Response != nil {
-				attrs.ResponseModelName = lastEvent.Response.Model
-			}
-			if lastEvent.Error != nil {
-				attrs.ErrorType = lastEvent.Error.Type
-			}
-		}
-
-		itelemetry.IncChatRequestCnt(ctx, attrs)
-		itelemetry.RecordChatRequestDuration(ctx, attrs, requestDuration)
-		itelemetry.RecordChatTimeToFirstTokenDuration(ctx, attrs, firstTokenTimeDuration)
-		itelemetry.RecordChatInputTokenUsage(ctx, attrs, int64(totalPromptTokens))
-		itelemetry.RecordChatOutputTokenUsage(ctx, attrs, int64(totalCompletionTokens))
-		if tokens, duration := totalCompletionTokens-firstCompleteToken, requestDuration-firstTokenTimeDuration; tokens > 0 && duration > 0 {
-			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, attrs, duration/time.Duration(tokens))
-			itelemetry.RecordChatOutputTokenPerTime(ctx, attrs, float64(tokens)/duration.Seconds())
-		} else if tokens == 0 && totalCompletionTokens > 0 && requestDuration > 0 {
-			itelemetry.RecordChatTimePerOutputTokenDuration(ctx, attrs, requestDuration/time.Duration(totalCompletionTokens))
-			itelemetry.RecordChatOutputTokenPerTime(ctx, attrs, float64(totalCompletionTokens)/requestDuration.Seconds())
-		}
-	}()
+	// Create telemetry tracker and defer metrics recording
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, &err)
+	defer tracker.RecordMetrics()()
 
 	// Process response.
 	var finalResponse *model.Response
 	var toolCalls []model.ToolCall
 	for response := range responseChan {
-		if isFirstToken {
-			firstTokenTimeDuration = time.Since(start)
-			isFirstToken = false
-			if response.Usage != nil {
-				firstCompleteToken = response.Usage.CompletionTokens
-			}
-		}
-		if response.Usage != nil {
-			totalPromptTokens += response.Usage.PromptTokens
-			totalCompletionTokens += response.Usage.CompletionTokens
-		}
+		// Track response for telemetry
+		tracker.TrackResponse(response)
 		lastEvent, err = processModelResponse(ctx, modelResponseConfig{
 			Response:       response,
 			ModelCallbacks: config.ModelCallbacks,
@@ -1522,7 +1465,8 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 			return nil, err
 		}
 		if lastEvent != nil {
-			itelemetry.TraceChat(config.Span, invocation, config.Request, response, lastEvent.ID, firstTokenTimeDuration)
+			tracker.SetLastEvent(lastEvent)
+			itelemetry.TraceChat(config.Span, invocation, config.Request, response, lastEvent.ID, tracker.FirstTokenTimeDuration())
 		}
 
 		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
