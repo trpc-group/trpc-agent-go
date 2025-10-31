@@ -23,6 +23,7 @@ nav:
       - Knowledge: knowledge.md
       - Planner: planner.md
       - Event: event.md
+      - Evaluation: evaluation.md
   - Server:
     - Debug: debugserver.md
     - AG-UI: agui.md
@@ -62,6 +63,7 @@ plugins:
                 - Planner: planner.md
                 - Graph: graph.md
                 - Event: event.md
+                - Evaluation: evaluation.md
             - 服务:
               - 调试: debugserver.md
               - AG-UI: agui.md
