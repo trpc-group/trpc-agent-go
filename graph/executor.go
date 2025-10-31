@@ -2524,7 +2524,11 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventInterruptValue(interrupt.Value),
 	)
 
-	agent.EmitEvent(ctx, invocation, execCtx.EventChan, interruptEvent)
+	// Replace ctx with a fresh eventCtx derived from background to avoid cancel warning.
+	const defaultEmitTimeout = time.Second
+	eventCtx, cancel := context.WithTimeout(context.Background(), defaultEmitTimeout)
+	defer cancel()
+	agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, interruptEvent)
 
 	// Return the interrupt error to propagate it to the caller.
 	return interrupt
