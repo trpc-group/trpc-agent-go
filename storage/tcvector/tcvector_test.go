@@ -51,15 +51,15 @@ func TestSetGetClientBuilder(t *testing.T) {
 }
 
 func TestDefaultClientBuilder_ValidatesRequired(t *testing.T) {
-	_, err := DefaultClientBuilder()
+	_, err := defaultClientBuilder()
 	require.Error(t, err)
 	require.Equal(t, "HTTPURL is required", err.Error())
 
-	_, err = DefaultClientBuilder(WithClientBuilderHTTPURL("http://localhost"))
+	_, err = defaultClientBuilder(WithClientBuilderHTTPURL("http://localhost"))
 	require.Error(t, err)
 	require.Equal(t, "UserName is required", err.Error())
 
-	_, err = DefaultClientBuilder(
+	_, err = defaultClientBuilder(
 		WithClientBuilderHTTPURL("http://localhost"),
 		WithClientBuilderUserName("user"),
 	)
@@ -68,7 +68,7 @@ func TestDefaultClientBuilder_ValidatesRequired(t *testing.T) {
 }
 
 func TestDefaultClientBuilder_Success(t *testing.T) {
-	cli, err := DefaultClientBuilder(
+	cli, err := defaultClientBuilder(
 		WithClientBuilderHTTPURL("http://localhost"),
 		WithClientBuilderUserName("user"),
 		WithClientBuilderKey("key"),
@@ -93,7 +93,7 @@ func TestRegisterAndGetTcVectorInstance(t *testing.T) {
 	require.True(t, ok, "expected instance to exist")
 	require.GreaterOrEqual(t, len(opts), 3, "expected 3 options")
 
-	cli, err := DefaultClientBuilder(opts...)
+	cli, err := defaultClientBuilder(opts...)
 	require.NoError(t, err)
 	require.NotNil(t, cli)
 }
@@ -105,7 +105,7 @@ func TestDefaultClientBuilder_InvalidURL(t *testing.T) {
 		user   = "user"
 		key    = "key"
 	)
-	_, err := DefaultClientBuilder(
+	_, err := defaultClientBuilder(
 		WithClientBuilderHTTPURL(badURL),
 		WithClientBuilderUserName(user),
 		WithClientBuilderKey(key),
