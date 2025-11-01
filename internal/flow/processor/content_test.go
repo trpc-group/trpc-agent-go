@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -807,6 +808,128 @@ func TestContentRequestProcessor_WithMaxHistoryRuns_Option(t *testing.T) {
 	assert.Equal(t, 5, p.MaxHistoryRuns)
 }
 
+func TestContentRequestProcessor_EffectiveInclude_RuntimeModes(t *testing.T) {
+	// Cover runtime overrides: filtered and all (as well as none).
+	p := NewContentRequestProcessor()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{},
+		}),
+	)
+
+	inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents] =
+		IncludeContentsNone
+	assert.Equal(t, IncludeContentsNone, p.effectiveInclude(inv))
+
+	inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents] =
+		IncludeContentsFiltered
+	assert.Equal(t, IncludeContentsFiltered, p.effectiveInclude(inv))
+
+	inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents] =
+		IncludeContentsAll
+	assert.Equal(t, IncludeContentsAll, p.effectiveInclude(inv))
+}
+
+func TestContentRequestProcessor_ProcessRequest_NilInputs(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	// Nil request: should return without panic.
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, nil, nil)
+
+	// Nil invocation: should return without panic or changes.
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), nil, req, nil)
+	assert.Empty(t, req.Messages)
+}
+
+func TestRearrangeAsyncFuncRespHist_NoResponses(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	// Tool call that has no corresponding responses.
+	call := event.Event{
+		Author: "assistant",
+		Response: &model.Response{Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{ID: "x"}}}},
+		}},
+	}
+	out := p.rearrangeAsyncFuncRespHist([]event.Event{call})
+	// Should keep the call, no responses appended.
+	assert.Len(t, out, 1)
+	assert.True(t, out[0].IsToolCallResponse())
+}
+
+func TestMergeFunctionResponseEvents_Empty(t *testing.T) {
+	p := NewContentRequestProcessor()
+	// Empty slice returns zero value event.
+	got := p.mergeFunctionResponseEvents(nil)
+	assert.Equal(t, event.Event{}, got)
+}
+
+func TestConvertForeignEvent_EmptyChoiceNoParts(t *testing.T) {
+	// When choice has no content, no tool calls, no tool result, and the
+	// prefix is disabled, the response stays unchanged but Author becomes
+	// user. This covers the path where contentParts remains empty.
+	p := NewContentRequestProcessor(WithAddContextPrefix(false))
+	ev := &event.Event{
+		Author: "other-agent",
+		Response: &model.Response{Choices: []model.Choice{
+			{Message: model.Message{}},
+		}},
+	}
+	out := p.convertForeignEvent(ev)
+	assert.Equal(t, "user", out.Author)
+	assert.Len(t, out.Response.Choices, 1)
+	assert.Equal(t, "", out.Response.Choices[0].Message.Content)
+}
+
+func TestConvertForeignEvent_NoChoices_ReturnsOriginal(t *testing.T) {
+	p := NewContentRequestProcessor()
+	ev := &event.Event{
+		Author:   "agent-x",
+		Response: &model.Response{Choices: nil},
+	}
+	out := p.convertForeignEvent(ev)
+	// No choices -> early return of the original event.
+	assert.Equal(t, "agent-x", out.Author)
+	assert.Nil(t, out.Response.Choices)
+}
+
+func TestProcessRequest_AddsInvocationMessageWhenNoHistory(t *testing.T) {
+	// When a session exists but there are no valid history messages and no
+	// summary, ProcessRequest should add the invocation message.
+	p := NewContentRequestProcessor()
+	sess := &session.Session{}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	req := &model.Request{}
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	// Expect the invocation message present.
+	assert.NotEmpty(t, req.Messages)
+	found := false
+	for _, m := range req.Messages {
+		if m.Role == model.RoleUser && m.Content == "hello" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found)
+
+	// Also expect a preprocessing event to be emitted.
+	select {
+	case e := <-ch:
+		assert.Equal(t, inv.InvocationID, e.InvocationID)
+		assert.Equal(t, model.ObjectTypePreprocessingPlanning, e.Object)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected preprocessing event emitted")
+	}
+}
 func TestContentRequestProcessor_getFilterHistoryMessages(t *testing.T) {
 	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 
@@ -1068,5 +1191,343 @@ func TestContentRequestProcessor_Integration_MaxHistoryRunsAndAddSessionSummary(
 
 			assert.Equal(t, tt.expectedCount, messageCount, tt.description)
 		})
+	}
+}
+
+// Test include_contents=none retains scratchpad.
+// Keeps latest tool call + merged tool result so the model can
+// continue the tool chain without repeating calls.
+func TestIncludeNone_PreservesScratchpad(
+	t *testing.T,
+) {
+	const (
+		curInvID       = "inv_cur"
+		oldInvID       = "inv_old"
+		currentCallID  = "call_current"
+		oldCallID      = "call_old"
+		userContent    = "user"
+		toolResultText = "result_current"
+	)
+
+	// Build a session with both old and current invocation events.
+	sess := &session.Session{}
+
+	// Old invocation tool call (ignored for include=none and scratchpad)
+	oldCallEvt := event.New(curInvID, "assistant")
+	oldCallEvt.InvocationID = oldInvID
+	oldCallEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: oldCallID,
+							Function: model.FunctionDefinitionParam{
+								Name: "calc",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Old invocation tool result (should be ignored)
+	oldResultEvt := event.New(curInvID, "assistant")
+	oldResultEvt.InvocationID = oldInvID
+	oldResultEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  oldCallID,
+					Content: "result_old",
+				},
+			},
+		},
+	}
+
+	// Current invocation user message event (as Runner would append).
+	userEvt := event.New(curInvID, "user")
+	userEvt.InvocationID = curInvID
+	userEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: userContent,
+				},
+			},
+		},
+	}
+
+	// Current invocation tool call
+	curCallEvt := event.New(curInvID, "assistant")
+	curCallEvt.InvocationID = curInvID
+	curCallEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: currentCallID,
+							Function: model.FunctionDefinitionParam{
+								Name: "calc",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Current invocation tool result
+	curResultEvt := event.New(curInvID, "assistant")
+	curResultEvt.InvocationID = curInvID
+	curResultEvt.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  currentCallID,
+					Content: toolResultText,
+				},
+			},
+		},
+	}
+
+	sess.Events = []event.Event{
+		*oldCallEvt, *oldResultEvt,
+		*userEvt, *curCallEvt, *curResultEvt,
+	}
+
+	// Invocation with include_contents=none at runtime.
+	inv := agent.NewInvocation(
+		agent.WithInvocationID(curInvID),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(
+			model.NewUserMessage(userContent),
+		),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				graph.CfgKeyIncludeContents: IncludeContentsNone,
+			},
+		}),
+	)
+
+	p := NewContentRequestProcessor()
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	// Expect: user + current invocation (tool call + tool result) included.
+	// No history (old invocation) included.
+	var (
+		foundUser     bool
+		foundCall     bool
+		foundToolResp bool
+		callIdx       = -1
+		resultIdx     = -1
+	)
+	for i, m := range req.Messages {
+		if m.Role == model.RoleUser && m.Content == userContent {
+			foundUser = true
+		}
+		if len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if tc.ID == currentCallID {
+					foundCall = true
+					callIdx = i
+				}
+				if tc.ID == oldCallID {
+					t.Fatalf("unexpected old tool call included")
+				}
+			}
+		}
+		if m.ToolID != "" {
+			if m.ToolID == currentCallID {
+				foundToolResp = true
+				resultIdx = i
+				if m.Content != toolResultText {
+					t.Fatalf(
+						"unexpected tool result content: %q", m.Content,
+					)
+				}
+			}
+			if m.ToolID == oldCallID {
+				t.Fatalf("unexpected old tool result included")
+			}
+		}
+	}
+	if !foundUser {
+		t.Fatalf("expected user message present")
+	}
+	if !(foundCall && foundToolResp) {
+		t.Fatalf(
+			"expected scratchpad (call+result) present, got call=%v "+
+				"result=%v",
+			foundCall, foundToolResp,
+		)
+	}
+	if !(callIdx >= 0 && resultIdx >= 0 && callIdx < resultIdx) {
+		t.Fatalf(
+			"expected call before result, got callIdx=%d resultIdx=%d",
+			callIdx, resultIdx,
+		)
+	}
+
+	// Ensure only 3 messages: user + 2 current-invocation messages
+	var cntScratch int
+	for _, m := range req.Messages {
+		if len(m.ToolCalls) > 0 || m.ToolID != "" {
+			cntScratch++
+		}
+	}
+	if cntScratch != 2 {
+		t.Fatalf(
+			"expected exactly 2 current-invocation tool messages, got %d", cntScratch,
+		)
+	}
+}
+
+// Test include_contents=none keeps only the latest pair in scratchpad.
+// When multiple tool pairs exist in the current invocation, only the
+// newest pair should remain.
+func TestIncludeNone_IncludesAllCurrentInvocationEvents(
+	t *testing.T,
+) {
+	const (
+		invID     = "inv"
+		callIDA   = "call_A"
+		callIDB   = "call_B"
+		resultA   = "res_A"
+		resultB   = "res_B"
+		userInput = "u"
+	)
+
+	sess := &session.Session{}
+
+	// Earlier pair A
+	callA := event.New(invID, "assistant")
+	callA.InvocationID = invID
+	callA.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: callIDA,
+							Function: model.FunctionDefinitionParam{
+								Name: "t",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resA := event.New(invID, "assistant")
+	resA.InvocationID = invID
+	resA.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  callIDA,
+					Content: resultA,
+				},
+			},
+		},
+	}
+
+	// User event then later pairs.
+	userEvt := event.New(invID, "user")
+	userEvt.InvocationID = invID
+	userEvt.Response = &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: userInput},
+	}}}
+
+	// Later pair B
+	callB := event.New(invID, "assistant")
+	callB.InvocationID = invID
+	callB.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: callIDB,
+							Function: model.FunctionDefinitionParam{
+								Name: "t",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resB := event.New(invID, "assistant")
+	resB.InvocationID = invID
+	resB.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  callIDB,
+					Content: resultB,
+				},
+			},
+		},
+	}
+
+	sess.Events = []event.Event{*userEvt, *callA, *resA, *callB, *resB}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID(invID),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(
+			model.NewUserMessage(userInput),
+		),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				graph.CfgKeyIncludeContents: IncludeContentsNone,
+			},
+		}),
+	)
+
+	p := NewContentRequestProcessor()
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	// Expect both pairs A and B are present (all current-invocation events).
+	var foundCallA, foundResA, foundCallB, foundResB bool
+	for _, m := range req.Messages {
+		if len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if tc.ID == callIDB {
+					foundCallB = true
+				}
+				if tc.ID == callIDA {
+					foundCallA = true
+				}
+			}
+		}
+		if m.ToolID != "" {
+			if m.ToolID == callIDB {
+				foundResB = true
+			}
+			if m.ToolID == callIDA {
+				foundResA = true
+			}
+		}
+	}
+	if !(foundCallA && foundResA && foundCallB && foundResB) {
+		t.Fatalf(
+			"expected all current-invocation events present: callA=%v resA=%v callB=%v resB=%v",
+			foundCallA, foundResA, foundCallB, foundResB,
+		)
 	}
 }

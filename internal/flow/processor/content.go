@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -116,6 +117,26 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 	return processor
 }
 
+// effectiveInclude resolves the effective include mode for this request.
+// Priority: runtime state (invocation.RunOptions[include_contents]) > static IncludeContents.
+func (p *ContentRequestProcessor) effectiveInclude(inv *agent.Invocation) string {
+	include := p.IncludeContents
+	if inv == nil || inv.RunOptions.RuntimeState == nil {
+		return include
+	}
+	if mode, ok := inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok && mode != "" {
+		switch strings.ToLower(mode) {
+		case IncludeContentsNone:
+			include = IncludeContentsNone
+		case IncludeContentsFiltered:
+			include = IncludeContentsFiltered
+		case IncludeContentsAll:
+			include = IncludeContentsAll
+		}
+	}
+	return include
+}
+
 // ProcessRequest implements the flow.RequestProcessor interface.
 // It handles adding messages from the session events to the request.
 func (p *ContentRequestProcessor) ProcessRequest(
@@ -133,29 +154,46 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// 2) Append per-filter messages from session events when allowed.
-	needToAddInvocationMessage := true
-	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
-		var messages []model.Message
-		var summaryUpdatedAt time.Time
-		if p.AddSessionSummary {
-			// Prepend session summary as a system message if enabled and available.
-			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
-			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Prepend to the front of messages.
-				req.Messages = append([]model.Message{*msg}, req.Messages...)
-				summaryUpdatedAt = updatedAt
-			}
-		}
-		messages = p.getHistoryMessages(invocation, summaryUpdatedAt)
-		req.Messages = append(req.Messages, messages...)
-		needToAddInvocationMessage = summaryUpdatedAt.IsZero() && len(messages) == 0
-	}
+	// Resolve effective include mode for this request.
+	include := p.effectiveInclude(invocation)
 
-	if invocation.Message.Content != "" && needToAddInvocationMessage {
-		req.Messages = append(req.Messages, invocation.Message)
-		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
-			invocation.Message.Role)
+	// 2) Append per-filter messages from session events when allowed.
+	//    History considers only events not belonging to the current
+	//    invocation. Current-invocation events are always included as
+	//    necessary context regardless of include mode.
+	var historyMsgs []model.Message
+	var summaryUpdatedAt time.Time
+	if invocation.Session != nil {
+		if include != IncludeContentsNone {
+			if p.AddSessionSummary {
+				if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
+					req.Messages = append([]model.Message{*msg}, req.Messages...)
+					summaryUpdatedAt = updatedAt
+				}
+			}
+			historyMsgs = p.getHistoryMessages(invocation, summaryUpdatedAt)
+			req.Messages = append(req.Messages, historyMsgs...)
+		}
+
+		// Always include current invocation messages to continue the tool
+		// chain without relying on prior session history.
+		curInvMsgs := p.getCurrentInvocationMessages(invocation)
+		if len(curInvMsgs) > 0 {
+			req.Messages = append(req.Messages, curInvMsgs...)
+		} else if invocation.Message.Content != "" && len(historyMsgs) == 0 && summaryUpdatedAt.IsZero() {
+			// No current-invocation messages found in session and no history
+			// or summary; fall back to the direct invocation message.
+			req.Messages = append(req.Messages, invocation.Message)
+			log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
+				invocation.Message.Role)
+		}
+	} else {
+		// No session; include the direct invocation message if present.
+		if invocation.Message.Content != "" {
+			req.Messages = append(req.Messages, invocation.Message)
+			log.Debugf("Content request processor: added invocation message with role %s (no session)",
+				invocation.Message.Role)
+		}
 	}
 
 	// Send a preprocessing event.
@@ -164,6 +202,43 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingPlanning),
 	))
+}
+
+// getCurrentInvocationMessages collects all complete, valid events that
+// belong to the current invocation and converts them to model messages.
+// These messages are always included to ensure the model can continue the
+// current tool chain reliably without relying on prior session history.
+func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invocation) []model.Message {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+
+	var evts []event.Event
+	inv.Session.EventMu.RLock()
+	for _, evt := range inv.Session.Events {
+		if evt.InvocationID != inv.InvocationID || evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+			continue
+		}
+		evts = append(evts, evt)
+	}
+	inv.Session.EventMu.RUnlock()
+
+	if len(evts) == 0 {
+		return nil
+	}
+
+	// Normalize event sequence to avoid duplicate parallel tool results and
+	// to keep the latest tool result set consolidated.
+	evts = p.rearrangeLatestFuncResp(evts)
+	evts = p.rearrangeAsyncFuncRespHist(evts)
+
+	var messages []model.Message
+	for _, e := range evts {
+		for _, choice := range e.Choices {
+			messages = append(messages, choice.Message)
+		}
+	}
+	return messages
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
@@ -182,7 +257,7 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	}
 	filter := inv.GetEventFilterKey()
 	// For IncludeContentsAll, prefer the full-session summary under empty filter key.
-	if p.IncludeContents == IncludeContentsAll {
+	if p.effectiveInclude(inv) == IncludeContentsAll {
 		filter = ""
 	}
 	sum := inv.Session.Summaries[filter]
@@ -203,8 +278,13 @@ func (p *ContentRequestProcessor) getHistoryMessages(inv *agent.Invocation, sinc
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
+		// Exclude current-invocation events from "history"; they are handled
+		// separately and always included.
+		if evt.InvocationID == inv.InvocationID {
+			continue
+		}
 		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
-			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(filter)) &&
+			(p.effectiveInclude(inv) != IncludeContentsFiltered || evt.Filter(filter)) &&
 			(isZeroTime || evt.Timestamp.After(since)) {
 			events = append(events, evt)
 		}
