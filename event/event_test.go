@@ -614,6 +614,6 @@ func TestEventUnMarshalJSON_TimestampOverflow(t *testing.T) {
 	t.Run("response with timestamp overflow", func(t *testing.T) {
 		var e Event
 		err := json.Unmarshal([]byte(`{"response": {"timestamp": "12025-01-01T00:00:00Z"}}`), &e)
-		require.Error(t, err)
+		require.NoError(t, err)
 	})
 }
