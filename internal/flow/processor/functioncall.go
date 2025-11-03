@@ -569,6 +569,9 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (any, []byte, error) {
+	// Inject tool call ID into context for callbacks to use.
+	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
+
 	toolDeclaration := tl.Declaration()
 	// Run before tool callbacks if they exist.
 	if p.toolCallbacks != nil {

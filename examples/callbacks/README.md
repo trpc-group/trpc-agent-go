@@ -302,6 +302,13 @@ go run . -streaming=false
 
 ---
 
+## Related Examples
+
+- [Timer Example](./timer/) - Timing and telemetry with Invocation State and OpenTelemetry
+- [Authentication and Authorization](./auth/) - User context and permission checks with Invocation State
+
+---
+
 ## References
 
 - `main.go` (wiring of model/agent/runner and in-memory session)
