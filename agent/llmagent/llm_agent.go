@@ -161,24 +161,24 @@ func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 	}
 }
 
-// WithAgentCallbacksV2 sets the agent V2 callbacks.
-func WithAgentCallbacksV2(callbacks *agent.CallbacksV2) Option {
+// WithAgentCallbacksStructured sets the agent structured callbacks.
+func WithAgentCallbacksStructured(callbacks *agent.CallbacksStructured) Option {
 	return func(opts *Options) {
-		opts.AgentCallbacksV2 = callbacks
+		opts.AgentCallbacksStructured = callbacks
 	}
 }
 
-// WithModelCallbacksV2 sets the model V2 callbacks.
-func WithModelCallbacksV2(callbacks *model.CallbacksV2) Option {
+// WithModelCallbacksStructured sets the model structured callbacks.
+func WithModelCallbacksStructured(callbacks *model.CallbacksStructured) Option {
 	return func(opts *Options) {
-		opts.ModelCallbacksV2 = callbacks
+		opts.ModelCallbacksStructured = callbacks
 	}
 }
 
-// WithToolCallbacksV2 sets the tool V2 callbacks.
-func WithToolCallbacksV2(callbacks *tool.CallbacksV2) Option {
+// WithToolCallbacksStructured sets the tool structured callbacks.
+func WithToolCallbacksStructured(callbacks *tool.CallbacksStructured) Option {
 	return func(opts *Options) {
-		opts.ToolCallbacksV2 = callbacks
+		opts.ToolCallbacksStructured = callbacks
 	}
 }
 
@@ -387,16 +387,16 @@ type Options struct {
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
-	// AgentCallbacksV2 contains V2 callbacks for agent operations.
-	AgentCallbacksV2 *agent.CallbacksV2
+	// AgentCallbacksStructured contains structured callbacks for agent operations.
+	AgentCallbacksStructured *agent.CallbacksStructured
 	// ModelCallbacks contains callbacks for model operations.
 	ModelCallbacks *model.Callbacks
-	// ModelCallbacksV2 contains V2 callbacks for model operations.
-	ModelCallbacksV2 *model.CallbacksV2
+	// ModelCallbacksStructured contains structured callbacks for model operations.
+	ModelCallbacksStructured *model.CallbacksStructured
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks
-	// ToolCallbacksV2 contains V2 callbacks for tool operations.
-	ToolCallbacksV2 *tool.CallbacksV2
+	// ToolCallbacksStructured contains structured callbacks for tool operations.
+	ToolCallbacksStructured *tool.CallbacksStructured
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
@@ -475,17 +475,17 @@ type LLMAgent struct {
 	systemPrompt         string
 	genConfig            model.GenerationConfig
 	flow                 flow.Flow
-	tools                []tool.Tool // Tools supported by the agent
-	codeExecutor         codeexecutor.CodeExecutor
-	planner              planner.Planner
-	subAgents            []agent.Agent // Sub-agents that can be delegated to
-	agentCallbacks       *agent.Callbacks
-	agentCallbacksV2     *agent.CallbacksV2
-	outputKey            string         // Key to store output in session state
-	outputSchema         map[string]any // JSON schema for output validation
-	inputSchema          map[string]any // JSON schema for input validation
-	structuredOutput     *model.StructuredOutput
-	structuredOutputType reflect.Type
+	tools                    []tool.Tool // Tools supported by the agent
+	codeExecutor             codeexecutor.CodeExecutor
+	planner                  planner.Planner
+	subAgents                []agent.Agent // Sub-agents that can be delegated to
+	agentCallbacks           *agent.Callbacks
+	agentCallbacksStructured *agent.CallbacksStructured
+	outputKey                string         // Key to store output in session state
+	outputSchema             map[string]any // JSON schema for output validation
+	inputSchema              map[string]any // JSON schema for input validation
+	structuredOutput         *model.StructuredOutput
+	structuredOutputType     reflect.Type
 }
 
 // New creates a new LLMAgent with the given options.
@@ -531,17 +531,17 @@ func New(name string, opts ...Option) *LLMAgent {
 		instruction:          options.Instruction,
 		systemPrompt:         options.GlobalInstruction,
 		genConfig:            options.GenerationConfig,
-		codeExecutor:         options.codeExecutor,
-		tools:                tools,
-		planner:              options.Planner,
-		subAgents:            options.SubAgents,
-		agentCallbacks:       options.AgentCallbacks,
-		agentCallbacksV2:     options.AgentCallbacksV2,
-		outputKey:            options.OutputKey,
-		outputSchema:         options.OutputSchema,
-		inputSchema:          options.InputSchema,
-		structuredOutput:     options.StructuredOutput,
-		structuredOutputType: options.StructuredOutputType,
+		codeExecutor:             options.codeExecutor,
+		tools:                    tools,
+		planner:                  options.Planner,
+		subAgents:                options.SubAgents,
+		agentCallbacks:           options.AgentCallbacks,
+		agentCallbacksStructured: options.AgentCallbacksStructured,
+		outputKey:                options.OutputKey,
+		outputSchema:             options.OutputSchema,
+		inputSchema:              options.InputSchema,
+		structuredOutput:         options.StructuredOutput,
+		structuredOutputType:     options.StructuredOutputType,
 	}
 
 	// Prepare request processors in the correct order, wiring dynamic getters.
@@ -565,9 +565,9 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
-	// Set V2 tool callbacks if they exist.
-	if options.ToolCallbacksV2 != nil {
-		toolcallProcessor.SetToolCallbacksV2(options.ToolCallbacksV2)
+	// Set structured tool callbacks if they exist.
+	if options.ToolCallbacksStructured != nil {
+		toolcallProcessor.SetToolCallbacksStructured(options.ToolCallbacksStructured)
 	}
 	// Configure default transfer message for direct sub-agent calls.
 	// Default behavior (when not configured): enabled with built-in default message.
@@ -585,9 +585,9 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize: options.ChannelBufferSize,
-		ModelCallbacks:    options.ModelCallbacks,
-		ModelCallbacksV2:  options.ModelCallbacksV2,
+		ChannelBufferSize:        options.ChannelBufferSize,
+		ModelCallbacks:           options.ModelCallbacks,
+		ModelCallbacksStructured: options.ModelCallbacksStructured,
 	}
 
 	a.flow = llmflow.New(
@@ -827,11 +827,11 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 		}
 	}
 
-	// Run V2 before agent callbacks.
-	if a.agentCallbacksV2 != nil {
-		result, err := a.agentCallbacksV2.RunBeforeAgent(ctx, invocation)
+	// Run structured before agent callbacks.
+	if a.agentCallbacksStructured != nil {
+		result, err := a.agentCallbacksStructured.RunBeforeAgent(ctx, invocation)
 		if err != nil {
-			return nil, fmt.Errorf("before agent callback V2 failed: %w", err)
+			return nil, fmt.Errorf("before agent callback (structured) failed: %w", err)
 		}
 		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.
@@ -948,9 +948,9 @@ func (a *LLMAgent) wrapEventChannel(
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
 
-		// Run after agent callbacks (V2).
-		if a.agentCallbacksV2 != nil {
-			result, err := a.agentCallbacksV2.RunAfterAgent(ctx, invocation, nil)
+		// Run after agent callbacks (structured).
+		if a.agentCallbacksStructured != nil {
+			result, err := a.agentCallbacksStructured.RunAfterAgent(ctx, invocation, nil)
 			var evt *event.Event
 			if err != nil {
 				// Send error event.

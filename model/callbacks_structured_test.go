@@ -18,10 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCallbacksV2_BeforeModel(t *testing.T) {
+func TestCallbacksStructured_BeforeModel(t *testing.T) {
 	tests := []struct {
 		name          string
-		callbacks     []BeforeModelCallbackV2
+		callbacks     []BeforeModelCallbackStructured
 		wantCustomRsp bool
 		wantErr       bool
 	}{
@@ -33,7 +33,7 @@ func TestCallbacksV2_BeforeModel(t *testing.T) {
 		},
 		{
 			name: "callback returns nil",
-			callbacks: []BeforeModelCallbackV2{
+			callbacks: []BeforeModelCallbackStructured{
 				func(ctx context.Context, args *BeforeModelArgs) (
 					*BeforeModelResult, error,
 				) {
@@ -45,7 +45,7 @@ func TestCallbacksV2_BeforeModel(t *testing.T) {
 		},
 		{
 			name: "callback returns custom response",
-			callbacks: []BeforeModelCallbackV2{
+			callbacks: []BeforeModelCallbackStructured{
 				func(ctx context.Context, args *BeforeModelArgs) (
 					*BeforeModelResult, error,
 				) {
@@ -59,7 +59,7 @@ func TestCallbacksV2_BeforeModel(t *testing.T) {
 		},
 		{
 			name: "callback returns error",
-			callbacks: []BeforeModelCallbackV2{
+			callbacks: []BeforeModelCallbackStructured{
 				func(ctx context.Context, args *BeforeModelArgs) (
 					*BeforeModelResult, error,
 				) {
@@ -71,7 +71,7 @@ func TestCallbacksV2_BeforeModel(t *testing.T) {
 		},
 		{
 			name: "multiple callbacks, first returns custom response",
-			callbacks: []BeforeModelCallbackV2{
+			callbacks: []BeforeModelCallbackStructured{
 				func(ctx context.Context, args *BeforeModelArgs) (
 					*BeforeModelResult, error,
 				) {
@@ -93,7 +93,7 @@ func TestCallbacksV2_BeforeModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCallbacksV2()
+			c := NewCallbacksStructured()
 			for _, cb := range tt.callbacks {
 				c.RegisterBeforeModel(cb)
 			}
@@ -113,10 +113,10 @@ func TestCallbacksV2_BeforeModel(t *testing.T) {
 	}
 }
 
-func TestCallbacksV2_AfterModel(t *testing.T) {
+func TestCallbacksStructured_AfterModel(t *testing.T) {
 	tests := []struct {
 		name          string
-		callbacks     []AfterModelCallbackV2
+		callbacks     []AfterModelCallbackStructured
 		wantCustomRsp bool
 		wantErr       bool
 	}{
@@ -128,7 +128,7 @@ func TestCallbacksV2_AfterModel(t *testing.T) {
 		},
 		{
 			name: "callback returns nil",
-			callbacks: []AfterModelCallbackV2{
+			callbacks: []AfterModelCallbackStructured{
 				func(ctx context.Context, args *AfterModelArgs) (
 					*AfterModelResult, error,
 				) {
@@ -140,7 +140,7 @@ func TestCallbacksV2_AfterModel(t *testing.T) {
 		},
 		{
 			name: "callback returns custom response",
-			callbacks: []AfterModelCallbackV2{
+			callbacks: []AfterModelCallbackStructured{
 				func(ctx context.Context, args *AfterModelArgs) (
 					*AfterModelResult, error,
 				) {
@@ -154,7 +154,7 @@ func TestCallbacksV2_AfterModel(t *testing.T) {
 		},
 		{
 			name: "callback returns error",
-			callbacks: []AfterModelCallbackV2{
+			callbacks: []AfterModelCallbackStructured{
 				func(ctx context.Context, args *AfterModelArgs) (
 					*AfterModelResult, error,
 				) {
@@ -166,7 +166,7 @@ func TestCallbacksV2_AfterModel(t *testing.T) {
 		},
 		{
 			name: "callback can access error from args",
-			callbacks: []AfterModelCallbackV2{
+			callbacks: []AfterModelCallbackStructured{
 				func(ctx context.Context, args *AfterModelArgs) (
 					*AfterModelResult, error,
 				) {
@@ -183,7 +183,7 @@ func TestCallbacksV2_AfterModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCallbacksV2()
+			c := NewCallbacksStructured()
 			for _, cb := range tt.callbacks {
 				c.RegisterAfterModel(cb)
 			}

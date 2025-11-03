@@ -37,18 +37,18 @@ const (
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
-	ChannelBufferSize int // Buffer size for event channels (default: 256)
-	ModelCallbacks    *model.Callbacks
-	ModelCallbacksV2  *model.CallbacksV2
+	ChannelBufferSize        int // Buffer size for event channels (default: 256)
+	ModelCallbacks           *model.Callbacks
+	ModelCallbacksStructured *model.CallbacksStructured
 }
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors  []flow.RequestProcessor
-	responseProcessors []flow.ResponseProcessor
-	channelBufferSize  int
-	modelCallbacks     *model.Callbacks
-	modelCallbacksV2   *model.CallbacksV2
+	requestProcessors        []flow.RequestProcessor
+	responseProcessors       []flow.ResponseProcessor
+	channelBufferSize        int
+	modelCallbacks           *model.Callbacks
+	modelCallbacksStructured *model.CallbacksStructured
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -65,11 +65,11 @@ func New(
 	}
 
 	return &Flow{
-		requestProcessors:  requestProcessors,
-		responseProcessors: responseProcessors,
-		channelBufferSize:  channelBufferSize,
-		modelCallbacks:     opts.ModelCallbacks,
-		modelCallbacksV2:   opts.ModelCallbacksV2,
+		requestProcessors:        requestProcessors,
+		responseProcessors:       responseProcessors,
+		channelBufferSize:        channelBufferSize,
+		modelCallbacks:           opts.ModelCallbacks,
+		modelCallbacksStructured: opts.ModelCallbacksStructured,
 	}
 }
 
@@ -301,9 +301,9 @@ func (f *Flow) runAfterModelCallbacks(
 		}
 	}
 
-	// Run V2 after model callbacks if they exist.
-	if f.modelCallbacksV2 != nil {
-		result, err := f.modelCallbacksV2.RunAfterModel(ctx, req, response, nil)
+	// Run structured after model callbacks if they exist.
+	if f.modelCallbacksStructured != nil {
+		result, err := f.modelCallbacksStructured.RunAfterModel(ctx, req, response, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -363,11 +363,11 @@ func (f *Flow) callLLM(
 		}
 	}
 
-	// Run V2 before model callbacks if they exist.
-	if f.modelCallbacksV2 != nil {
-		result, err := f.modelCallbacksV2.RunBeforeModel(ctx, llmRequest)
+	// Run structured before model callbacks if they exist.
+	if f.modelCallbacksStructured != nil {
+		result, err := f.modelCallbacksStructured.RunBeforeModel(ctx, llmRequest)
 		if err != nil {
-			log.Errorf("Before model callback V2 failed for agent %s: %v", invocation.AgentName, err)
+			log.Errorf("Before model callback (structured) failed for agent %s: %v", invocation.AgentName, err)
 			return nil, err
 		}
 		if result != nil && result.CustomResponse != nil {

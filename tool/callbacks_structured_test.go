@@ -18,10 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCallbacksV2_BeforeTool(t *testing.T) {
+func TestCallbacksStructured_BeforeTool(t *testing.T) {
 	tests := []struct {
 		name              string
-		callbacks         []BeforeToolCallbackV2
+		callbacks         []BeforeToolCallbackStructured
 		wantCustomResult  bool
 		wantModifiedArgs  bool
 		wantErr           bool
@@ -34,7 +34,7 @@ func TestCallbacksV2_BeforeTool(t *testing.T) {
 		},
 		{
 			name: "callback returns nil",
-			callbacks: []BeforeToolCallbackV2{
+			callbacks: []BeforeToolCallbackStructured{
 				func(ctx context.Context, args *BeforeToolArgs) (
 					*BeforeToolResult, error,
 				) {
@@ -46,7 +46,7 @@ func TestCallbacksV2_BeforeTool(t *testing.T) {
 		},
 		{
 			name: "callback returns custom result",
-			callbacks: []BeforeToolCallbackV2{
+			callbacks: []BeforeToolCallbackStructured{
 				func(ctx context.Context, args *BeforeToolArgs) (
 					*BeforeToolResult, error,
 				) {
@@ -60,7 +60,7 @@ func TestCallbacksV2_BeforeTool(t *testing.T) {
 		},
 		{
 			name: "callback returns modified arguments",
-			callbacks: []BeforeToolCallbackV2{
+			callbacks: []BeforeToolCallbackStructured{
 				func(ctx context.Context, args *BeforeToolArgs) (
 					*BeforeToolResult, error,
 				) {
@@ -75,7 +75,7 @@ func TestCallbacksV2_BeforeTool(t *testing.T) {
 		},
 		{
 			name: "callback returns error",
-			callbacks: []BeforeToolCallbackV2{
+			callbacks: []BeforeToolCallbackStructured{
 				func(ctx context.Context, args *BeforeToolArgs) (
 					*BeforeToolResult, error,
 				) {
@@ -89,7 +89,7 @@ func TestCallbacksV2_BeforeTool(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCallbacksV2()
+			c := NewCallbacksStructured()
 			for _, cb := range tt.callbacks {
 				c.RegisterBeforeTool(cb)
 			}
@@ -117,10 +117,10 @@ func TestCallbacksV2_BeforeTool(t *testing.T) {
 	}
 }
 
-func TestCallbacksV2_AfterTool(t *testing.T) {
+func TestCallbacksStructured_AfterTool(t *testing.T) {
 	tests := []struct {
 		name             string
-		callbacks        []AfterToolCallbackV2
+		callbacks        []AfterToolCallbackStructured
 		wantCustomResult bool
 		wantErr          bool
 	}{
@@ -132,7 +132,7 @@ func TestCallbacksV2_AfterTool(t *testing.T) {
 		},
 		{
 			name: "callback returns nil",
-			callbacks: []AfterToolCallbackV2{
+			callbacks: []AfterToolCallbackStructured{
 				func(ctx context.Context, args *AfterToolArgs) (
 					*AfterToolResult, error,
 				) {
@@ -144,7 +144,7 @@ func TestCallbacksV2_AfterTool(t *testing.T) {
 		},
 		{
 			name: "callback returns custom result",
-			callbacks: []AfterToolCallbackV2{
+			callbacks: []AfterToolCallbackStructured{
 				func(ctx context.Context, args *AfterToolArgs) (
 					*AfterToolResult, error,
 				) {
@@ -158,7 +158,7 @@ func TestCallbacksV2_AfterTool(t *testing.T) {
 		},
 		{
 			name: "callback returns error",
-			callbacks: []AfterToolCallbackV2{
+			callbacks: []AfterToolCallbackStructured{
 				func(ctx context.Context, args *AfterToolArgs) (
 					*AfterToolResult, error,
 				) {
@@ -170,7 +170,7 @@ func TestCallbacksV2_AfterTool(t *testing.T) {
 		},
 		{
 			name: "callback can access tool error from args",
-			callbacks: []AfterToolCallbackV2{
+			callbacks: []AfterToolCallbackStructured{
 				func(ctx context.Context, args *AfterToolArgs) (
 					*AfterToolResult, error,
 				) {
@@ -187,7 +187,7 @@ func TestCallbacksV2_AfterTool(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCallbacksV2()
+			c := NewCallbacksStructured()
 			for _, cb := range tt.callbacks {
 				c.RegisterAfterTool(cb)
 			}

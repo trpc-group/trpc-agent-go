@@ -19,8 +19,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestLLMAgent_CallbacksV2_BeforeAgent(t *testing.T) {
-	t.Run("before agent callback V2 returns custom response", func(t *testing.T) {
+func TestLLMAgent_CallbacksStructured_BeforeAgent(t *testing.T) {
+	t.Run("before agent callback (structured) returns custom response", func(t *testing.T) {
 		customResp := &model.Response{
 			Choices: []model.Choice{
 				{
@@ -32,7 +32,7 @@ func TestLLMAgent_CallbacksV2_BeforeAgent(t *testing.T) {
 			},
 		}
 
-		callbacks := agent.NewCallbacksV2()
+		callbacks := agent.NewCallbacksStructured()
 		callbacks.RegisterBeforeAgent(
 			func(ctx context.Context, args *agent.BeforeAgentArgs) (
 				*agent.BeforeAgentResult, error,
@@ -44,7 +44,7 @@ func TestLLMAgent_CallbacksV2_BeforeAgent(t *testing.T) {
 		)
 
 		m := newDummyModel()
-		agt := New("test", WithModel(m), WithAgentCallbacksV2(callbacks))
+		agt := New("test", WithModel(m), WithAgentCallbacksStructured(callbacks))
 
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("test-inv"),
@@ -86,8 +86,8 @@ func TestLLMAgent_CallbacksV2_BeforeAgent(t *testing.T) {
 		}
 	})
 
-	t.Run("before agent callback V2 returns error", func(t *testing.T) {
-		callbacks := agent.NewCallbacksV2()
+	t.Run("before agent callback (structured) returns error", func(t *testing.T) {
+		callbacks := agent.NewCallbacksStructured()
 		callbacks.RegisterBeforeAgent(
 			func(ctx context.Context, args *agent.BeforeAgentArgs) (
 				*agent.BeforeAgentResult, error,
@@ -97,7 +97,7 @@ func TestLLMAgent_CallbacksV2_BeforeAgent(t *testing.T) {
 		)
 
 		m := newDummyModel()
-		agt := New("test", WithModel(m), WithAgentCallbacksV2(callbacks))
+		agt := New("test", WithModel(m), WithAgentCallbacksStructured(callbacks))
 
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("test-inv"),
@@ -114,8 +114,8 @@ func TestLLMAgent_CallbacksV2_BeforeAgent(t *testing.T) {
 	})
 }
 
-func TestLLMAgent_CallbacksV2_AfterAgent(t *testing.T) {
-	t.Run("after agent callback V2 returns custom response", func(t *testing.T) {
+func TestLLMAgent_CallbacksStructured_AfterAgent(t *testing.T) {
+	t.Run("after agent callback (structured) returns custom response", func(t *testing.T) {
 		customResp := &model.Response{
 			Choices: []model.Choice{
 				{
@@ -127,7 +127,7 @@ func TestLLMAgent_CallbacksV2_AfterAgent(t *testing.T) {
 			},
 		}
 
-		callbacks := agent.NewCallbacksV2()
+		callbacks := agent.NewCallbacksStructured()
 		callbacks.RegisterAfterAgent(
 			func(ctx context.Context, args *agent.AfterAgentArgs) (
 				*agent.AfterAgentResult, error,
@@ -139,7 +139,7 @@ func TestLLMAgent_CallbacksV2_AfterAgent(t *testing.T) {
 		)
 
 		m := newDummyModel()
-		agt := New("test", WithModel(m), WithAgentCallbacksV2(callbacks))
+		agt := New("test", WithModel(m), WithAgentCallbacksStructured(callbacks))
 
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("test-inv"),
@@ -179,8 +179,8 @@ func TestLLMAgent_CallbacksV2_AfterAgent(t *testing.T) {
 		}
 	})
 
-	t.Run("after agent callback V2 returns error", func(t *testing.T) {
-		callbacks := agent.NewCallbacksV2()
+	t.Run("after agent callback (structured) returns error", func(t *testing.T) {
+		callbacks := agent.NewCallbacksStructured()
 		callbacks.RegisterAfterAgent(
 			func(ctx context.Context, args *agent.AfterAgentArgs) (
 				*agent.AfterAgentResult, error,
@@ -190,7 +190,7 @@ func TestLLMAgent_CallbacksV2_AfterAgent(t *testing.T) {
 		)
 
 		m := newDummyModel()
-		agt := New("test", WithModel(m), WithAgentCallbacksV2(callbacks))
+		agt := New("test", WithModel(m), WithAgentCallbacksStructured(callbacks))
 
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("test-inv"),
@@ -220,7 +220,7 @@ func TestLLMAgent_CallbacksV2_AfterAgent(t *testing.T) {
 	})
 }
 
-func TestLLMAgent_CallbacksV2_CoexistWithV1(t *testing.T) {
+func TestLLMAgent_CallbacksStructured_CoexistWithV1(t *testing.T) {
 	t.Run("V1 and V2 callbacks coexist", func(t *testing.T) {
 		v1Called := false
 		v2Called := false
@@ -235,7 +235,7 @@ func TestLLMAgent_CallbacksV2_CoexistWithV1(t *testing.T) {
 			},
 		)
 
-		callbacksV2 := agent.NewCallbacksV2()
+		callbacksV2 := agent.NewCallbacksStructured()
 		callbacksV2.RegisterBeforeAgent(
 			func(ctx context.Context, args *agent.BeforeAgentArgs) (
 				*agent.BeforeAgentResult, error,
@@ -249,7 +249,7 @@ func TestLLMAgent_CallbacksV2_CoexistWithV1(t *testing.T) {
 		agt := New("test",
 			WithModel(m),
 			WithAgentCallbacks(callbacksV1),
-			WithAgentCallbacksV2(callbacksV2),
+			WithAgentCallbacksStructured(callbacksV2),
 		)
 
 		inv := agent.NewInvocation(
@@ -301,7 +301,7 @@ func TestLLMAgent_CallbacksV2_CoexistWithV1(t *testing.T) {
 			},
 		)
 
-		callbacksV2 := agent.NewCallbacksV2()
+		callbacksV2 := agent.NewCallbacksStructured()
 		callbacksV2.RegisterBeforeAgent(
 			func(ctx context.Context, args *agent.BeforeAgentArgs) (
 				*agent.BeforeAgentResult, error,
@@ -315,7 +315,7 @@ func TestLLMAgent_CallbacksV2_CoexistWithV1(t *testing.T) {
 		agt := New("test",
 			WithModel(m),
 			WithAgentCallbacks(callbacksV1),
-			WithAgentCallbacksV2(callbacksV2),
+			WithAgentCallbacksStructured(callbacksV2),
 		)
 
 		inv := agent.NewInvocation(

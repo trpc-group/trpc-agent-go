@@ -31,14 +31,14 @@ type BeforeToolResult struct {
 	ModifiedArguments []byte
 }
 
-// BeforeToolCallbackV2 is the before tool callback (V2 version).
+// BeforeToolCallbackStructured is the before tool callback (structured version).
 // Parameters:
 // - ctx: context.Context (use agent.InvocationFromContext to get invocation)
 // - args: callback arguments
 // Returns (result, error).
 // - result: if not nil and CustomResult is set, tool execution will be skipped.
 // - error: if not nil, tool execution will be stopped with this error.
-type BeforeToolCallbackV2 func(
+type BeforeToolCallbackStructured func(
 	ctx context.Context,
 	args *BeforeToolArgs,
 ) (*BeforeToolResult, error)
@@ -63,43 +63,43 @@ type AfterToolResult struct {
 	CustomResult any
 }
 
-// AfterToolCallbackV2 is the after tool callback (V2 version).
+// AfterToolCallbackStructured is the after tool callback (structured version).
 // Parameters:
 // - ctx: context.Context (use agent.InvocationFromContext to get invocation)
 // - args: callback arguments
 // Returns (result, error).
 // - result: if not nil and CustomResult is set, this result will be used.
 // - error: if not nil, this error will be returned.
-type AfterToolCallbackV2 func(
+type AfterToolCallbackStructured func(
 	ctx context.Context,
 	args *AfterToolArgs,
 ) (*AfterToolResult, error)
 
-// CallbacksV2 holds V2 callbacks for tool operations.
-type CallbacksV2 struct {
+// CallbacksStructured holds structured callbacks for tool operations.
+type CallbacksStructured struct {
 	// BeforeTool is a list of callbacks called before the tool is executed.
-	BeforeTool []BeforeToolCallbackV2
+	BeforeTool []BeforeToolCallbackStructured
 	// AfterTool is a list of callbacks called after the tool is executed.
-	AfterTool []AfterToolCallbackV2
+	AfterTool []AfterToolCallbackStructured
 }
 
-// NewCallbacksV2 creates a new CallbacksV2 instance for tool.
-func NewCallbacksV2() *CallbacksV2 {
-	return &CallbacksV2{}
+// NewCallbacksStructured creates a new CallbacksStructured instance for tool.
+func NewCallbacksStructured() *CallbacksStructured {
+	return &CallbacksStructured{}
 }
 
 // RegisterBeforeTool registers a before tool callback.
-func (c *CallbacksV2) RegisterBeforeTool(
-	cb BeforeToolCallbackV2,
-) *CallbacksV2 {
+func (c *CallbacksStructured) RegisterBeforeTool(
+	cb BeforeToolCallbackStructured,
+) *CallbacksStructured {
 	c.BeforeTool = append(c.BeforeTool, cb)
 	return c
 }
 
 // RegisterAfterTool registers an after tool callback.
-func (c *CallbacksV2) RegisterAfterTool(
-	cb AfterToolCallbackV2,
-) *CallbacksV2 {
+func (c *CallbacksStructured) RegisterAfterTool(
+	cb AfterToolCallbackStructured,
+) *CallbacksStructured {
 	c.AfterTool = append(c.AfterTool, cb)
 	return c
 }
@@ -108,7 +108,7 @@ func (c *CallbacksV2) RegisterAfterTool(
 // Returns (result, error).
 // If any callback returns a result with CustomResult or ModifiedArguments,
 // stop and return.
-func (c *CallbacksV2) RunBeforeTool(
+func (c *CallbacksStructured) RunBeforeTool(
 	ctx context.Context,
 	toolName string,
 	toolDeclaration *Declaration,
@@ -135,7 +135,7 @@ func (c *CallbacksV2) RunBeforeTool(
 // RunAfterTool runs all after tool callbacks in order.
 // Returns (result, error).
 // If any callback returns a result with CustomResult, stop and return.
-func (c *CallbacksV2) RunAfterTool(
+func (c *CallbacksStructured) RunAfterTool(
 	ctx context.Context,
 	toolName string,
 	toolDeclaration *Declaration,

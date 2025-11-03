@@ -82,9 +82,9 @@ type subAgentCall struct {
 
 // FunctionCallResponseProcessor handles agent transfer operations after LLM responses.
 type FunctionCallResponseProcessor struct {
-	enableParallelTools bool
-	toolCallbacks       *tool.Callbacks
-	toolCallbacksV2     *tool.CallbacksV2
+	enableParallelTools      bool
+	toolCallbacks            *tool.Callbacks
+	toolCallbacksStructured  *tool.CallbacksStructured
 }
 
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
@@ -95,9 +95,9 @@ func NewFunctionCallResponseProcessor(enableParallelTools bool, toolCallbacks *t
 	}
 }
 
-// SetToolCallbacksV2 sets the V2 tool callbacks.
-func (p *FunctionCallResponseProcessor) SetToolCallbacksV2(callbacks *tool.CallbacksV2) {
-	p.toolCallbacksV2 = callbacks
+// SetToolCallbacksStructured sets the structured tool callbacks.
+func (p *FunctionCallResponseProcessor) SetToolCallbacksStructured(callbacks *tool.CallbacksStructured) {
+	p.toolCallbacksStructured = callbacks
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
@@ -596,16 +596,16 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		}
 	}
 
-	// Run V2 before tool callbacks if they exist.
-	if p.toolCallbacksV2 != nil {
-		result, callbackErr := p.toolCallbacksV2.RunBeforeTool(
+	// Run structured before tool callbacks if they exist.
+	if p.toolCallbacksStructured != nil {
+		result, callbackErr := p.toolCallbacksStructured.RunBeforeTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
 			toolCall.Function.Arguments,
 		)
 		if callbackErr != nil {
-			log.Errorf("Before tool callback V2 failed for %s: %v", toolCall.Function.Name, callbackErr)
+			log.Errorf("Before tool callback (structured) failed for %s: %v", toolCall.Function.Name, callbackErr)
 			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
 		if result != nil {
@@ -649,9 +649,9 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		}
 	}
 
-	// Run V2 after tool callbacks if they exist.
-	if p.toolCallbacksV2 != nil {
-		callbackResult, callbackErr := p.toolCallbacksV2.RunAfterTool(
+	// Run structured after tool callbacks if they exist.
+	if p.toolCallbacksStructured != nil {
+		callbackResult, callbackErr := p.toolCallbacksStructured.RunAfterTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
@@ -660,7 +660,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			err,
 		)
 		if callbackErr != nil {
-			log.Errorf("After tool callback V2 failed for %s: %v", toolCall.Function.Name, callbackErr)
+			log.Errorf("After tool callback (structured) failed for %s: %v", toolCall.Function.Name, callbackErr)
 			return result, modifiedArgs, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
 		if callbackResult != nil && callbackResult.CustomResult != nil {

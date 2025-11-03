@@ -20,10 +20,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestCallbacksV2_BeforeAgent(t *testing.T) {
+func TestCallbacksStructured_BeforeAgent(t *testing.T) {
 	tests := []struct {
 		name          string
-		callbacks     []BeforeAgentCallbackV2
+		callbacks     []BeforeAgentCallbackStructured
 		wantCustomRsp bool
 		wantErr       bool
 	}{
@@ -35,7 +35,7 @@ func TestCallbacksV2_BeforeAgent(t *testing.T) {
 		},
 		{
 			name: "callback returns nil",
-			callbacks: []BeforeAgentCallbackV2{
+			callbacks: []BeforeAgentCallbackStructured{
 				func(ctx context.Context, args *BeforeAgentArgs) (
 					*BeforeAgentResult, error,
 				) {
@@ -47,7 +47,7 @@ func TestCallbacksV2_BeforeAgent(t *testing.T) {
 		},
 		{
 			name: "callback returns custom response",
-			callbacks: []BeforeAgentCallbackV2{
+			callbacks: []BeforeAgentCallbackStructured{
 				func(ctx context.Context, args *BeforeAgentArgs) (
 					*BeforeAgentResult, error,
 				) {
@@ -61,7 +61,7 @@ func TestCallbacksV2_BeforeAgent(t *testing.T) {
 		},
 		{
 			name: "callback returns error",
-			callbacks: []BeforeAgentCallbackV2{
+			callbacks: []BeforeAgentCallbackStructured{
 				func(ctx context.Context, args *BeforeAgentArgs) (
 					*BeforeAgentResult, error,
 				) {
@@ -73,7 +73,7 @@ func TestCallbacksV2_BeforeAgent(t *testing.T) {
 		},
 		{
 			name: "callback can access invocation from args",
-			callbacks: []BeforeAgentCallbackV2{
+			callbacks: []BeforeAgentCallbackStructured{
 				func(ctx context.Context, args *BeforeAgentArgs) (
 					*BeforeAgentResult, error,
 				) {
@@ -90,7 +90,7 @@ func TestCallbacksV2_BeforeAgent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCallbacksV2()
+			c := NewCallbacksStructured()
 			for _, cb := range tt.callbacks {
 				c.RegisterBeforeAgent(cb)
 			}
@@ -110,10 +110,10 @@ func TestCallbacksV2_BeforeAgent(t *testing.T) {
 	}
 }
 
-func TestCallbacksV2_AfterAgent(t *testing.T) {
+func TestCallbacksStructured_AfterAgent(t *testing.T) {
 	tests := []struct {
 		name          string
-		callbacks     []AfterAgentCallbackV2
+		callbacks     []AfterAgentCallbackStructured
 		wantCustomRsp bool
 		wantErr       bool
 	}{
@@ -125,7 +125,7 @@ func TestCallbacksV2_AfterAgent(t *testing.T) {
 		},
 		{
 			name: "callback returns nil",
-			callbacks: []AfterAgentCallbackV2{
+			callbacks: []AfterAgentCallbackStructured{
 				func(ctx context.Context, args *AfterAgentArgs) (
 					*AfterAgentResult, error,
 				) {
@@ -137,7 +137,7 @@ func TestCallbacksV2_AfterAgent(t *testing.T) {
 		},
 		{
 			name: "callback returns custom response",
-			callbacks: []AfterAgentCallbackV2{
+			callbacks: []AfterAgentCallbackStructured{
 				func(ctx context.Context, args *AfterAgentArgs) (
 					*AfterAgentResult, error,
 				) {
@@ -151,7 +151,7 @@ func TestCallbacksV2_AfterAgent(t *testing.T) {
 		},
 		{
 			name: "callback returns error",
-			callbacks: []AfterAgentCallbackV2{
+			callbacks: []AfterAgentCallbackStructured{
 				func(ctx context.Context, args *AfterAgentArgs) (
 					*AfterAgentResult, error,
 				) {
@@ -163,7 +163,7 @@ func TestCallbacksV2_AfterAgent(t *testing.T) {
 		},
 		{
 			name: "callback can access error from args",
-			callbacks: []AfterAgentCallbackV2{
+			callbacks: []AfterAgentCallbackStructured{
 				func(ctx context.Context, args *AfterAgentArgs) (
 					*AfterAgentResult, error,
 				) {
@@ -180,7 +180,7 @@ func TestCallbacksV2_AfterAgent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCallbacksV2()
+			c := NewCallbacksStructured()
 			for _, cb := range tt.callbacks {
 				c.RegisterAfterAgent(cb)
 			}

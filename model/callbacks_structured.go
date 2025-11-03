@@ -25,14 +25,14 @@ type BeforeModelResult struct {
 	CustomResponse *Response
 }
 
-// BeforeModelCallbackV2 is the before model callback (V2 version).
+// BeforeModelCallbackStructured is the before model callback (structured version).
 // Parameters:
 // - ctx: context.Context (use agent.InvocationFromContext to get invocation)
 // - args: callback arguments
 // Returns (result, error).
 // - result: if not nil and CustomResponse is set, model call will be skipped.
 // - error: if not nil, model call will be stopped with this error.
-type BeforeModelCallbackV2 func(
+type BeforeModelCallbackStructured func(
 	ctx context.Context,
 	args *BeforeModelArgs,
 ) (*BeforeModelResult, error)
@@ -53,43 +53,43 @@ type AfterModelResult struct {
 	CustomResponse *Response
 }
 
-// AfterModelCallbackV2 is the after model callback (V2 version).
+// AfterModelCallbackStructured is the after model callback (structured version).
 // Parameters:
 // - ctx: context.Context (use agent.InvocationFromContext to get invocation)
 // - args: callback arguments
 // Returns (result, error).
 // - result: if not nil and CustomResponse is set, this response will be used.
 // - error: if not nil, this error will be returned.
-type AfterModelCallbackV2 func(
+type AfterModelCallbackStructured func(
 	ctx context.Context,
 	args *AfterModelArgs,
 ) (*AfterModelResult, error)
 
-// CallbacksV2 holds V2 callbacks for model operations.
-type CallbacksV2 struct {
+// CallbacksStructured holds structured callbacks for model operations.
+type CallbacksStructured struct {
 	// BeforeModel is a list of callbacks called before the model is invoked.
-	BeforeModel []BeforeModelCallbackV2
+	BeforeModel []BeforeModelCallbackStructured
 	// AfterModel is a list of callbacks called after the model is invoked.
-	AfterModel []AfterModelCallbackV2
+	AfterModel []AfterModelCallbackStructured
 }
 
-// NewCallbacksV2 creates a new CallbacksV2 instance for model.
-func NewCallbacksV2() *CallbacksV2 {
-	return &CallbacksV2{}
+// NewCallbacksStructured creates a new CallbacksStructured instance for model.
+func NewCallbacksStructured() *CallbacksStructured {
+	return &CallbacksStructured{}
 }
 
 // RegisterBeforeModel registers a before model callback.
-func (c *CallbacksV2) RegisterBeforeModel(
-	cb BeforeModelCallbackV2,
-) *CallbacksV2 {
+func (c *CallbacksStructured) RegisterBeforeModel(
+	cb BeforeModelCallbackStructured,
+) *CallbacksStructured {
 	c.BeforeModel = append(c.BeforeModel, cb)
 	return c
 }
 
 // RegisterAfterModel registers an after model callback.
-func (c *CallbacksV2) RegisterAfterModel(
-	cb AfterModelCallbackV2,
-) *CallbacksV2 {
+func (c *CallbacksStructured) RegisterAfterModel(
+	cb AfterModelCallbackStructured,
+) *CallbacksStructured {
 	c.AfterModel = append(c.AfterModel, cb)
 	return c
 }
@@ -97,7 +97,7 @@ func (c *CallbacksV2) RegisterAfterModel(
 // RunBeforeModel runs all before model callbacks in order.
 // Returns (result, error).
 // If any callback returns a result with CustomResponse, stop and return.
-func (c *CallbacksV2) RunBeforeModel(
+func (c *CallbacksStructured) RunBeforeModel(
 	ctx context.Context,
 	req *Request,
 ) (*BeforeModelResult, error) {
@@ -117,7 +117,7 @@ func (c *CallbacksV2) RunBeforeModel(
 // RunAfterModel runs all after model callbacks in order.
 // Returns (result, error).
 // If any callback returns a result with CustomResponse, stop and return.
-func (c *CallbacksV2) RunAfterModel(
+func (c *CallbacksStructured) RunAfterModel(
 	ctx context.Context,
 	req *Request,
 	rsp *Response,

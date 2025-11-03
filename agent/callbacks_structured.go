@@ -28,7 +28,7 @@ type BeforeAgentResult struct {
 	CustomResponse *model.Response
 }
 
-// BeforeAgentCallbackV2 is the before agent callback (V2 version).
+// BeforeAgentCallbackStructured is the before agent callback (structured version).
 // Parameters:
 // - ctx: context.Context (use InvocationFromContext to get invocation)
 // - args: callback arguments
@@ -36,7 +36,7 @@ type BeforeAgentResult struct {
 //   - result: if not nil and CustomResponse is set, agent execution will be
 //     skipped.
 //   - error: if not nil, agent execution will be stopped with this error.
-type BeforeAgentCallbackV2 func(
+type BeforeAgentCallbackStructured func(
 	ctx context.Context,
 	args *BeforeAgentArgs,
 ) (*BeforeAgentResult, error)
@@ -55,43 +55,43 @@ type AfterAgentResult struct {
 	CustomResponse *model.Response
 }
 
-// AfterAgentCallbackV2 is the after agent callback (V2 version).
+// AfterAgentCallbackStructured is the after agent callback (structured version).
 // Parameters:
 // - ctx: context.Context (use InvocationFromContext to get invocation)
 // - args: callback arguments
 // Returns (result, error).
 // - result: if not nil and CustomResponse is set, this response will be used.
 // - error: if not nil, this error will be returned.
-type AfterAgentCallbackV2 func(
+type AfterAgentCallbackStructured func(
 	ctx context.Context,
 	args *AfterAgentArgs,
 ) (*AfterAgentResult, error)
 
-// CallbacksV2 holds V2 callbacks for agent operations.
-type CallbacksV2 struct {
+// CallbacksStructured holds structured callbacks for agent operations.
+type CallbacksStructured struct {
 	// BeforeAgent is a list of callbacks called before the agent runs.
-	BeforeAgent []BeforeAgentCallbackV2
+	BeforeAgent []BeforeAgentCallbackStructured
 	// AfterAgent is a list of callbacks called after the agent runs.
-	AfterAgent []AfterAgentCallbackV2
+	AfterAgent []AfterAgentCallbackStructured
 }
 
-// NewCallbacksV2 creates a new CallbacksV2 instance for agent.
-func NewCallbacksV2() *CallbacksV2 {
-	return &CallbacksV2{}
+// NewCallbacksStructured creates a new CallbacksStructured instance for agent.
+func NewCallbacksStructured() *CallbacksStructured {
+	return &CallbacksStructured{}
 }
 
 // RegisterBeforeAgent registers a before agent callback.
-func (c *CallbacksV2) RegisterBeforeAgent(
-	cb BeforeAgentCallbackV2,
-) *CallbacksV2 {
+func (c *CallbacksStructured) RegisterBeforeAgent(
+	cb BeforeAgentCallbackStructured,
+) *CallbacksStructured {
 	c.BeforeAgent = append(c.BeforeAgent, cb)
 	return c
 }
 
 // RegisterAfterAgent registers an after agent callback.
-func (c *CallbacksV2) RegisterAfterAgent(
-	cb AfterAgentCallbackV2,
-) *CallbacksV2 {
+func (c *CallbacksStructured) RegisterAfterAgent(
+	cb AfterAgentCallbackStructured,
+) *CallbacksStructured {
 	c.AfterAgent = append(c.AfterAgent, cb)
 	return c
 }
@@ -99,7 +99,7 @@ func (c *CallbacksV2) RegisterAfterAgent(
 // RunBeforeAgent runs all before agent callbacks in order.
 // Returns (result, error).
 // If any callback returns a result with CustomResponse, stop and return.
-func (c *CallbacksV2) RunBeforeAgent(
+func (c *CallbacksStructured) RunBeforeAgent(
 	ctx context.Context,
 	invocation *Invocation,
 ) (*BeforeAgentResult, error) {
@@ -119,7 +119,7 @@ func (c *CallbacksV2) RunBeforeAgent(
 // RunAfterAgent runs all after agent callbacks in order.
 // Returns (result, error).
 // If any callback returns a result with CustomResponse, stop and return.
-func (c *CallbacksV2) RunAfterAgent(
+func (c *CallbacksStructured) RunAfterAgent(
 	ctx context.Context,
 	invocation *Invocation,
 	runErr error,
