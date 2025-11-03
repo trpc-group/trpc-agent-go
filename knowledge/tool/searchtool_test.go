@@ -55,8 +55,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		searchTool := NewKnowledgeSearchTool(kb)
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, ""))
 		require.Error(t, err)
-		// Empty query is now allowed (for filter-only search), but no results will be found
-		require.Contains(t, err.Error(), "no relevant information found")
+		require.Contains(t, err.Error(), "query cannot be empty")
 	})
 
 	t.Run("search error", func(t *testing.T) {
