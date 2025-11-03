@@ -84,6 +84,7 @@ type subAgentCall struct {
 type FunctionCallResponseProcessor struct {
 	enableParallelTools bool
 	toolCallbacks       *tool.Callbacks
+	toolCallbacksV2     *tool.CallbacksV2
 }
 
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
@@ -92,6 +93,11 @@ func NewFunctionCallResponseProcessor(enableParallelTools bool, toolCallbacks *t
 		enableParallelTools: enableParallelTools,
 		toolCallbacks:       toolCallbacks,
 	}
+}
+
+// SetToolCallbacksV2 sets the V2 tool callbacks.
+func (p *FunctionCallResponseProcessor) SetToolCallbacksV2(callbacks *tool.CallbacksV2) {
+	p.toolCallbacksV2 = callbacks
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
@@ -570,7 +576,9 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	eventChan chan<- *event.Event,
 ) (any, []byte, error) {
 	toolDeclaration := tl.Declaration()
-	// Run before tool callbacks if they exist.
+	modifiedArgs := toolCall.Function.Arguments
+
+	// Run V1 before tool callbacks if they exist.
 	if p.toolCallbacks != nil {
 		customResult, callbackErr := p.toolCallbacks.RunBeforeTool(
 			ctx,
@@ -588,6 +596,31 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		}
 	}
 
+	// Run V2 before tool callbacks if they exist.
+	if p.toolCallbacksV2 != nil {
+		result, callbackErr := p.toolCallbacksV2.RunBeforeTool(
+			ctx,
+			toolCall.Function.Name,
+			toolDeclaration,
+			toolCall.Function.Arguments,
+		)
+		if callbackErr != nil {
+			log.Errorf("Before tool callback V2 failed for %s: %v", toolCall.Function.Name, callbackErr)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
+		}
+		if result != nil {
+			if result.CustomResult != nil {
+				// Use custom result from callback.
+				return result.CustomResult, toolCall.Function.Arguments, nil
+			}
+			if result.ModifiedArguments != nil {
+				// Use modified arguments.
+				modifiedArgs = result.ModifiedArguments
+				toolCall.Function.Arguments = modifiedArgs
+			}
+		}
+	}
+
 	// Execute the actual tool.
 	result, err := p.executeTool(ctx, invocation, toolCall, tl, eventChan)
 	if err != nil {
@@ -595,7 +628,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			toolCall.Function.Name, string(toolCall.Function.Arguments), result, err)
 	}
 
-	// Run after tool callbacks if they exist.
+	// Run V1 after tool callbacks if they exist.
 	// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
 	if p.toolCallbacks != nil {
 		var customResult any
@@ -612,10 +645,30 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		}
 		if err != nil {
 			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, err)
-			return result, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", err)
+			return result, modifiedArgs, fmt.Errorf("tool callback error: %w", err)
 		}
 	}
-	return result, toolCall.Function.Arguments, err
+
+	// Run V2 after tool callbacks if they exist.
+	if p.toolCallbacksV2 != nil {
+		callbackResult, callbackErr := p.toolCallbacksV2.RunAfterTool(
+			ctx,
+			toolCall.Function.Name,
+			toolDeclaration,
+			toolCall.Function.Arguments,
+			result,
+			err,
+		)
+		if callbackErr != nil {
+			log.Errorf("After tool callback V2 failed for %s: %v", toolCall.Function.Name, callbackErr)
+			return result, modifiedArgs, fmt.Errorf("tool callback error: %w", callbackErr)
+		}
+		if callbackResult != nil && callbackResult.CustomResult != nil {
+			result = callbackResult.CustomResult
+		}
+	}
+
+	return result, modifiedArgs, err
 }
 
 // isStreamable returns true if the tool supports streaming and its stream

@@ -39,6 +39,7 @@ const (
 type Options struct {
 	ChannelBufferSize int // Buffer size for event channels (default: 256)
 	ModelCallbacks    *model.Callbacks
+	ModelCallbacksV2  *model.CallbacksV2
 }
 
 // Flow provides the basic flow implementation.
@@ -47,6 +48,7 @@ type Flow struct {
 	responseProcessors []flow.ResponseProcessor
 	channelBufferSize  int
 	modelCallbacks     *model.Callbacks
+	modelCallbacksV2   *model.CallbacksV2
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -67,6 +69,7 @@ func New(
 		responseProcessors: responseProcessors,
 		channelBufferSize:  channelBufferSize,
 		modelCallbacks:     opts.ModelCallbacks,
+		modelCallbacksV2:   opts.ModelCallbacksV2,
 	}
 }
 
@@ -287,10 +290,29 @@ func (f *Flow) runAfterModelCallbacks(
 	req *model.Request,
 	response *model.Response,
 ) (*model.Response, error) {
-	if f.modelCallbacks == nil {
-		return response, nil
+	// Run V1 after model callbacks if they exist.
+	if f.modelCallbacks != nil {
+		customResp, err := f.modelCallbacks.RunAfterModel(ctx, req, response, nil)
+		if err != nil {
+			return nil, err
+		}
+		if customResp != nil {
+			response = customResp
+		}
 	}
-	return f.modelCallbacks.RunAfterModel(ctx, req, response, nil)
+
+	// Run V2 after model callbacks if they exist.
+	if f.modelCallbacksV2 != nil {
+		result, err := f.modelCallbacksV2.RunAfterModel(ctx, req, response, nil)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil && result.CustomResponse != nil {
+			response = result.CustomResponse
+		}
+	}
+
+	return response, nil
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
@@ -325,7 +347,7 @@ func (f *Flow) callLLM(
 
 	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
 
-	// Run before model callbacks if they exist.
+	// Run V1 before model callbacks if they exist.
 	if f.modelCallbacks != nil {
 		customResponse, err := f.modelCallbacks.RunBeforeModel(ctx, llmRequest)
 		if err != nil {
@@ -336,6 +358,22 @@ func (f *Flow) callLLM(
 			// Create a channel that returns the custom response and then closes.
 			responseChan := make(chan *model.Response, 1)
 			responseChan <- customResponse
+			close(responseChan)
+			return responseChan, nil
+		}
+	}
+
+	// Run V2 before model callbacks if they exist.
+	if f.modelCallbacksV2 != nil {
+		result, err := f.modelCallbacksV2.RunBeforeModel(ctx, llmRequest)
+		if err != nil {
+			log.Errorf("Before model callback V2 failed for agent %s: %v", invocation.AgentName, err)
+			return nil, err
+		}
+		if result != nil && result.CustomResponse != nil {
+			// Create a channel that returns the custom response and then closes.
+			responseChan := make(chan *model.Response, 1)
+			responseChan <- result.CustomResponse
 			close(responseChan)
 			return responseChan, nil
 		}

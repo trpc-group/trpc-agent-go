@@ -161,6 +161,27 @@ func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 	}
 }
 
+// WithAgentCallbacksV2 sets the agent V2 callbacks.
+func WithAgentCallbacksV2(callbacks *agent.CallbacksV2) Option {
+	return func(opts *Options) {
+		opts.AgentCallbacksV2 = callbacks
+	}
+}
+
+// WithModelCallbacksV2 sets the model V2 callbacks.
+func WithModelCallbacksV2(callbacks *model.CallbacksV2) Option {
+	return func(opts *Options) {
+		opts.ModelCallbacksV2 = callbacks
+	}
+}
+
+// WithToolCallbacksV2 sets the tool V2 callbacks.
+func WithToolCallbacksV2(callbacks *tool.CallbacksV2) Option {
+	return func(opts *Options) {
+		opts.ToolCallbacksV2 = callbacks
+	}
+}
+
 // WithKnowledge sets the knowledge base for the agent.
 // If provided, the knowledge search tool will be automatically added to the agent's tools.
 func WithKnowledge(kb knowledge.Knowledge) Option {
@@ -366,10 +387,16 @@ type Options struct {
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
+	// AgentCallbacksV2 contains V2 callbacks for agent operations.
+	AgentCallbacksV2 *agent.CallbacksV2
 	// ModelCallbacks contains callbacks for model operations.
 	ModelCallbacks *model.Callbacks
+	// ModelCallbacksV2 contains V2 callbacks for model operations.
+	ModelCallbacksV2 *model.CallbacksV2
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks
+	// ToolCallbacksV2 contains V2 callbacks for tool operations.
+	ToolCallbacksV2 *tool.CallbacksV2
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
@@ -453,6 +480,7 @@ type LLMAgent struct {
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks       *agent.Callbacks
+	agentCallbacksV2     *agent.CallbacksV2
 	outputKey            string         // Key to store output in session state
 	outputSchema         map[string]any // JSON schema for output validation
 	inputSchema          map[string]any // JSON schema for input validation
@@ -508,6 +536,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		planner:              options.Planner,
 		subAgents:            options.SubAgents,
 		agentCallbacks:       options.AgentCallbacks,
+		agentCallbacksV2:     options.AgentCallbacksV2,
 		outputKey:            options.OutputKey,
 		outputSchema:         options.OutputSchema,
 		inputSchema:          options.InputSchema,
@@ -536,6 +565,10 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
+	// Set V2 tool callbacks if they exist.
+	if options.ToolCallbacksV2 != nil {
+		toolcallProcessor.SetToolCallbacksV2(options.ToolCallbacksV2)
+	}
 	// Configure default transfer message for direct sub-agent calls.
 	// Default behavior (when not configured): enabled with built-in default message.
 	if options.DefaultTransferMessage != nil {
@@ -554,6 +587,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	flowOpts := llmflow.Options{
 		ChannelBufferSize: options.ChannelBufferSize,
 		ModelCallbacks:    options.ModelCallbacks,
+		ModelCallbacksV2:  options.ModelCallbacksV2,
 	}
 
 	a.flow = llmflow.New(
@@ -776,6 +810,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 // executeAgentFlow executes the agent flow with before agent callbacks.
 // Returns the event channel and any error that occurred.
 func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	// Run V1 before agent callbacks.
 	if a.agentCallbacks != nil {
 		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
@@ -786,6 +821,23 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
+			close(eventChan)
+			return nil, &haveCustomResponseError{EventChan: eventChan}
+		}
+	}
+
+	// Run V2 before agent callbacks.
+	if a.agentCallbacksV2 != nil {
+		result, err := a.agentCallbacksV2.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			return nil, fmt.Errorf("before agent callback V2 failed: %w", err)
+		}
+		if result != nil && result.CustomResponse != nil {
+			// Create a channel that returns the custom response and then closes.
+			eventChan := make(chan *event.Event, 1)
+			// Create an event from the custom response.
+			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
 			return nil, &haveCustomResponseError{EventChan: eventChan}
@@ -873,7 +925,7 @@ func (a *LLMAgent) wrapEventChannel(
 			}
 		}
 
-		// After all events are processed, run after agent callbacks
+		// After all events are processed, run after agent callbacks (V1).
 		if a.agentCallbacks != nil {
 			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
 			var evt *event.Event
@@ -888,6 +940,29 @@ func (a *LLMAgent) wrapEventChannel(
 			} else if customResponse != nil {
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			}
+			if evt != nil {
+				fullRespEvent = evt
+			}
+
+			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
+		}
+
+		// Run after agent callbacks (V2).
+		if a.agentCallbacksV2 != nil {
+			result, err := a.agentCallbacksV2.RunAfterAgent(ctx, invocation, nil)
+			var evt *event.Event
+			if err != nil {
+				// Send error event.
+				evt = event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					agent.ErrorTypeAgentCallbackError,
+					err.Error(),
+				)
+			} else if result != nil && result.CustomResponse != nil {
+				// Create an event from the custom response.
+				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			}
 			if evt != nil {
 				fullRespEvent = evt
