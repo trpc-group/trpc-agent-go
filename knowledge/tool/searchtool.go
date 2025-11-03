@@ -28,6 +28,20 @@ import (
 
 const defaultMaxResults = 10
 
+// operatorAliasMap maps operator aliases to standard operators.
+var operatorAliasMap = map[string]string{
+	"=":     searchfilter.OperatorEqual,
+	"==":    searchfilter.OperatorEqual,
+	"!=":    searchfilter.OperatorNotEqual,
+	">":     searchfilter.OperatorGreaterThan,
+	">=":    searchfilter.OperatorGreaterThanOrEqual,
+	"<":     searchfilter.OperatorLessThan,
+	"<=":    searchfilter.OperatorLessThanOrEqual,
+	"&&":    searchfilter.OperatorAnd,
+	"||":    searchfilter.OperatorOr,
+	"equal": searchfilter.OperatorEqual,
+}
+
 // KnowledgeSearchRequest represents the input for the knowledge search tool.
 type KnowledgeSearchRequest struct {
 	Query string `json:"query" jsonschema:"description=The search query to find relevant information in the knowledge base"`
@@ -90,7 +104,7 @@ func WithConditionedFilter(filterCondition *searchfilter.UniversalFilterConditio
 }
 
 // WithMaxResults sets the maximum number of documents to return.
-// Default is 0, which means no limit (controlled by knowledge base settings).
+// Default is 10 if not specified.
 func WithMaxResults(maxResults int) Option {
 	return func(opts *options) {
 		opts.maxResults = maxResults
@@ -136,34 +150,12 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 			// History, UserID, SessionID could be filled from agent context in the future.
 		}
 
-		// Set search mode based on whether query is provided
-		// When query is empty, use filter-only search mode
-		if req.Query == "" {
-			searchReq.SearchMode = vectorstore.SearchModeFilter
-		}
-
 		result, err := kb.Search(ctx, searchReq)
 		if err != nil {
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
-		if result == nil || len(result.Documents) == 0 {
-			return nil, errors.New("no relevant information found")
-		}
 
-		// Convert results to DocumentResult array
-		documents := make([]*DocumentResult, 0, len(result.Documents))
-		for _, doc := range result.Documents {
-			documents = append(documents, &DocumentResult{
-				Text:     doc.Document.Content,
-				Metadata: filterMetadata(doc.Document.Metadata),
-				Score:    doc.Score,
-			})
-		}
-
-		return &KnowledgeSearchResponse{
-			Documents: documents,
-			Message:   fmt.Sprintf("Found %d relevant document(s)", len(documents)),
-		}, nil
+		return convertSearchResults(result)
 	}
 
 	toolName := opt.toolName
@@ -274,24 +266,8 @@ func NewAgenticFilterSearchTool(
 		if err != nil {
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
-		if result == nil || len(result.Documents) == 0 {
-			return nil, errors.New("no relevant information found")
-		}
 
-		// Convert results to DocumentResult array
-		documents := make([]*DocumentResult, 0, len(result.Documents))
-		for _, doc := range result.Documents {
-			documents = append(documents, &DocumentResult{
-				Text:     doc.Document.Content,
-				Metadata: filterMetadata(doc.Document.Metadata),
-				Score:    doc.Score,
-			})
-		}
-
-		return &KnowledgeSearchResponse{
-			Documents: documents,
-			Message:   fmt.Sprintf("Found %d relevant document(s)", len(documents)),
-		}, nil
+		return convertSearchResults(result)
 	}
 
 	toolName := opt.toolName
@@ -310,6 +286,27 @@ func NewAgenticFilterSearchTool(
 		function.WithName(toolName),
 		function.WithDescription(description),
 	)
+}
+
+// convertSearchResults converts knowledge.SearchResult to KnowledgeSearchResponse.
+func convertSearchResults(result *knowledge.SearchResult) (*KnowledgeSearchResponse, error) {
+	if result == nil || len(result.Documents) == 0 {
+		return nil, errors.New("no relevant information found")
+	}
+
+	documents := make([]*DocumentResult, 0, len(result.Documents))
+	for _, doc := range result.Documents {
+		documents = append(documents, &DocumentResult{
+			Text:     doc.Document.Content,
+			Metadata: filterMetadata(doc.Document.Metadata),
+			Score:    doc.Score,
+		})
+	}
+
+	return &KnowledgeSearchResponse{
+		Documents: documents,
+		Message:   fmt.Sprintf("Found %d relevant document(s)", len(documents)),
+	}, nil
 }
 
 // convertMetadataToFilterCondition converts a metadata map to UniversalFilterCondition.
@@ -340,9 +337,8 @@ func convertMetadataToFilterCondition(metadata map[string]any) *searchfilter.Uni
 	}
 }
 
-// mergeFilterConditions merges multiple filter conditions with priority order.
-// Priority: earlier conditions have higher priority (cannot be overridden by later ones).
-// All conditions are combined with AND operator.
+// mergeFilterConditions merges multiple filter conditions using AND logic.
+// All non-nil conditions are combined with AND operator.
 // Returns nil if all conditions are nil.
 func mergeFilterConditions(
 	conditions ...*searchfilter.UniversalFilterCondition,
@@ -448,112 +444,165 @@ func convertConditionedFilterToUniversal(filter *ConditionedFilterRequest) (*sea
 		return nil, nil
 	}
 
-	// Validate operator
 	if filter.Operator == "" {
 		return nil, fmt.Errorf("operator is required")
 	}
 
-	// Normalize operator to lowercase
-	normalizedOp := strings.ToLower(filter.Operator)
-
-	// Map common operator aliases to standard operators
-	operatorMap := map[string]string{
-		"=":     searchfilter.OperatorEqual,
-		"==":    searchfilter.OperatorEqual,
-		"!=":    searchfilter.OperatorNotEqual,
-		">":     searchfilter.OperatorGreaterThan,
-		">=":    searchfilter.OperatorGreaterThanOrEqual,
-		"<":     searchfilter.OperatorLessThan,
-		"<=":    searchfilter.OperatorLessThanOrEqual,
-		"&&":    searchfilter.OperatorAnd,
-		"||":    searchfilter.OperatorOr,
-		"equal": searchfilter.OperatorEqual,
-	}
-	if mappedOp, ok := operatorMap[normalizedOp]; ok {
-		normalizedOp = mappedOp
-	}
+	normalizedOp := normalizeOperator(filter.Operator)
 
 	// Handle logical operators (and/or)
-	if normalizedOp == searchfilter.OperatorAnd || normalizedOp == searchfilter.OperatorOr {
-		var subConditions []*searchfilter.UniversalFilterCondition
-
-		// Use Conditions field if provided
-		if len(filter.Conditions) > 0 {
-			for _, subFilter := range filter.Conditions {
-				subCond, err := convertConditionedFilterToUniversal(subFilter)
-				if err != nil {
-					return nil, fmt.Errorf("invalid sub-condition: %w", err)
-				}
-				subConditions = append(subConditions, subCond)
-			}
-		} else if filter.Value != nil {
-			// Try to parse Value as array of conditions
-			valueSlice, ok := filter.Value.([]any)
-			if !ok {
-				return nil, fmt.Errorf("logical operator %s requires an array of conditions", filter.Operator)
-			}
-
-			for i, v := range valueSlice {
-				// Try to convert to ConditionedFilterRequest
-				vMap, ok := v.(map[string]any)
-				if !ok {
-					return nil, fmt.Errorf("condition at index %d is not a valid object", i)
-				}
-
-				subFilter := &ConditionedFilterRequest{}
-				if field, ok := vMap["field"].(string); ok {
-					subFilter.Field = field
-				}
-				if operator, ok := vMap["operator"].(string); ok {
-					subFilter.Operator = operator
-				}
-				if value, ok := vMap["value"]; ok {
-					subFilter.Value = value
-				}
-				if conditions, ok := vMap["conditions"].([]any); ok {
-					for _, c := range conditions {
-						if cMap, ok := c.(map[string]any); ok {
-							cond := &ConditionedFilterRequest{}
-							if f, ok := cMap["field"].(string); ok {
-								cond.Field = f
-							}
-							if o, ok := cMap["operator"].(string); ok {
-								cond.Operator = o
-							}
-							if v, ok := cMap["value"]; ok {
-								cond.Value = v
-							}
-							subFilter.Conditions = append(subFilter.Conditions, cond)
-						}
-					}
-				}
-
-				subCond, err := convertConditionedFilterToUniversal(subFilter)
-				if err != nil {
-					return nil, fmt.Errorf("invalid sub-condition at index %d: %w", i, err)
-				}
-				subConditions = append(subConditions, subCond)
-			}
-		}
-
-		if len(subConditions) == 0 {
-			return nil, fmt.Errorf("logical operator %s requires at least one sub-condition", normalizedOp)
-		}
-
-		return &searchfilter.UniversalFilterCondition{
-			Operator: normalizedOp,
-			Value:    subConditions,
-		}, nil
+	if isLogicalOperator(normalizedOp) {
+		return convertLogicalFilter(filter, normalizedOp)
 	}
 
 	// Handle comparison operators
+	return convertComparisonFilter(filter, normalizedOp)
+}
+
+// normalizeOperator normalizes operator to lowercase and maps aliases to standard operators.
+func normalizeOperator(operator string) string {
+	normalizedOp := strings.ToLower(operator)
+
+	if mappedOp, ok := operatorAliasMap[normalizedOp]; ok {
+		return mappedOp
+	}
+	return normalizedOp
+}
+
+// isLogicalOperator checks if the operator is a logical operator (and/or).
+func isLogicalOperator(operator string) bool {
+	return operator == searchfilter.OperatorAnd || operator == searchfilter.OperatorOr
+}
+
+// convertLogicalFilter converts a logical filter (and/or) to UniversalFilterCondition.
+func convertLogicalFilter(filter *ConditionedFilterRequest, operator string) (*searchfilter.UniversalFilterCondition, error) {
+	var subConditions []*searchfilter.UniversalFilterCondition
+	var err error
+
+	if len(filter.Conditions) > 0 {
+		subConditions, err = convertConditionsArray(filter.Conditions)
+	} else if filter.Value != nil {
+		subConditions, err = convertValueArray(filter.Value, filter.Operator)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(subConditions) == 0 {
+		return nil, fmt.Errorf("logical operator %s requires at least one sub-condition", operator)
+	}
+
+	return &searchfilter.UniversalFilterCondition{
+		Operator: operator,
+		Value:    subConditions,
+	}, nil
+}
+
+// convertConditionsArray converts an array of ConditionedFilterRequest to UniversalFilterCondition.
+func convertConditionsArray(conditions []*ConditionedFilterRequest) ([]*searchfilter.UniversalFilterCondition, error) {
+	subConditions := make([]*searchfilter.UniversalFilterCondition, 0, len(conditions))
+
+	for _, subFilter := range conditions {
+		subCond, err := convertConditionedFilterToUniversal(subFilter)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sub-condition: %w", err)
+		}
+		subConditions = append(subConditions, subCond)
+	}
+
+	return subConditions, nil
+}
+
+// convertValueArray converts a Value array to UniversalFilterCondition array.
+func convertValueArray(value any, operator string) ([]*searchfilter.UniversalFilterCondition, error) {
+	valueSlice, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("logical operator %s requires an array of conditions", operator)
+	}
+
+	subConditions := make([]*searchfilter.UniversalFilterCondition, 0, len(valueSlice))
+
+	for i, v := range valueSlice {
+		subFilter, err := parseFilterFromMap(v, i)
+		if err != nil {
+			return nil, err
+		}
+
+		subCond, err := convertConditionedFilterToUniversal(subFilter)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sub-condition at index %d: %w", i, err)
+		}
+		subConditions = append(subConditions, subCond)
+	}
+
+	return subConditions, nil
+}
+
+// parseFilterFromMap parses a ConditionedFilterRequest from a map.
+func parseFilterFromMap(v any, index int) (*ConditionedFilterRequest, error) {
+	vMap, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("condition at index %d is not a valid object", index)
+	}
+
+	subFilter := &ConditionedFilterRequest{}
+
+	if field, ok := vMap["field"].(string); ok {
+		subFilter.Field = field
+	}
+	if operator, ok := vMap["operator"].(string); ok {
+		subFilter.Operator = operator
+	}
+	if value, ok := vMap["value"]; ok {
+		subFilter.Value = value
+	}
+	if conditions, ok := vMap["conditions"].([]any); ok {
+		subFilter.Conditions = parseNestedConditions(conditions)
+	}
+
+	return subFilter, nil
+}
+
+// parseNestedConditions parses nested conditions from an array.
+func parseNestedConditions(conditions []any) []*ConditionedFilterRequest {
+	result := make([]*ConditionedFilterRequest, 0, len(conditions))
+
+	for _, c := range conditions {
+		cMap, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		cond := &ConditionedFilterRequest{}
+		if f, ok := cMap["field"].(string); ok {
+			cond.Field = f
+		}
+		if o, ok := cMap["operator"].(string); ok {
+			cond.Operator = o
+		}
+		if v, ok := cMap["value"]; ok {
+			cond.Value = v
+		}
+		// Recursively parse nested conditions
+		if nestedConditions, ok := cMap["conditions"].([]any); ok {
+			cond.Conditions = parseNestedConditions(nestedConditions)
+		}
+		result = append(result, cond)
+	}
+
+	return result
+}
+
+// convertComparisonFilter converts a comparison filter to UniversalFilterCondition.
+func convertComparisonFilter(filter *ConditionedFilterRequest, operator string) (*searchfilter.UniversalFilterCondition, error) {
 	if filter.Field == "" {
-		return nil, fmt.Errorf("field is required for comparison operator %s", normalizedOp)
+		return nil, fmt.Errorf("field is required for comparison operator %s", operator)
 	}
 
 	return &searchfilter.UniversalFilterCondition{
 		Field:    filter.Field,
-		Operator: normalizedOp,
+		Operator: operator,
 		Value:    filter.Value,
 	}, nil
 }
