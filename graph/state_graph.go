@@ -1649,6 +1649,15 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		ctx, config.EventChan, config.InvocationID, name, id, nodeID,
 		startTime, modifiedArgs,
 	)
+
+	var interruptErr *InterruptError
+	eventErr := err
+	if err != nil {
+		if errors.As(err, &interruptErr) {
+			// Do not emit error payload for interrupt so clients treat it as pause.
+			eventErr = nil
+		}
+	}
 	// Emit tool execution complete event.
 	event := emitToolCompleteEvent(ctx, toolCompleteEventConfig{
 		EventChan:    config.EventChan,
@@ -1658,13 +1667,16 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		NodeID:       nodeID,
 		StartTime:    startTime,
 		Result:       result,
-		Error:        err,
+		Error:        eventErr,
 		Arguments:    modifiedArgs,
 	})
 	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event)
 	span.End()
 
 	if err != nil {
+		if interruptErr != nil {
+			return model.Message{}, interruptErr
+		}
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
 	}
