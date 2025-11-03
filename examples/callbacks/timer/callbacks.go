@@ -51,12 +51,9 @@ func (e *toolTimerExample) createModelCallbacks() *model.Callbacks {
 // createBeforeAgentCallback creates the before agent callback for timing.
 func (e *toolTimerExample) createBeforeAgentCallback() agent.BeforeAgentCallback {
 	return func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-		// Record start time and store it in the instance variable.
+		// Record start time and store it in invocation callback state.
 		startTime := time.Now()
-		if e.agentStartTimes == nil {
-			e.agentStartTimes = make(map[string]time.Time)
-		}
-		e.agentStartTimes[invocation.InvocationID] = startTime
+		invocation.SetState("agent:start_time", startTime)
 
 		// Create trace span for agent execution.
 		_, span := atrace.Tracer.Start(
@@ -68,11 +65,8 @@ func (e *toolTimerExample) createBeforeAgentCallback() agent.BeforeAgentCallback
 				attribute.String("user.message", invocation.Message.Content),
 			),
 		)
-		// Store span in instance variable for later use.
-		if e.agentSpans == nil {
-			e.agentSpans = make(map[string]trace.Span)
-		}
-		e.agentSpans[invocation.InvocationID] = span
+		// Store span in invocation callback state.
+		invocation.SetState("agent:span", span)
 
 		fmt.Printf("⏱️  BeforeAgentCallback: %s started at %s\n", invocation.AgentName, startTime.Format("15:04:05.000"))
 		fmt.Printf("   InvocationID: %s\n", invocation.InvocationID)
@@ -85,8 +79,9 @@ func (e *toolTimerExample) createBeforeAgentCallback() agent.BeforeAgentCallback
 // createAfterAgentCallback creates the after agent callback for timing.
 func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 	return func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-		// Get start time from the instance variable.
-		if startTime, exists := e.agentStartTimes[invocation.InvocationID]; exists {
+		// Get start time from invocation callback state.
+		if startTimeVal, ok := invocation.GetState("agent:start_time"); ok {
+			startTime := startTimeVal.(time.Time)
 			duration := time.Since(startTime)
 			durationSeconds := duration.Seconds()
 
@@ -103,8 +98,9 @@ func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 				),
 			)
 
-			// End trace span from instance variable.
-			if span, exists := e.agentSpans[invocation.InvocationID]; exists {
+			// End trace span from invocation callback state.
+			if spanVal, ok := invocation.GetState("agent:span"); ok {
+				span := spanVal.(trace.Span)
 				if runErr != nil {
 					span.RecordError(runErr)
 				}
@@ -118,7 +114,7 @@ func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 				)
 				span.End()
 				// Clean up the span after use.
-				delete(e.agentSpans, invocation.InvocationID)
+				invocation.DeleteState("agent:span")
 			}
 
 			fmt.Printf("⏱️  AfterAgentCallback: %s completed in %v\n", invocation.AgentName, duration)
@@ -126,10 +122,11 @@ func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 				fmt.Printf("   Error: %v\n", runErr)
 			}
 			// Clean up the start time after use.
-			delete(e.agentStartTimes, invocation.InvocationID)
+			invocation.DeleteState("agent:start_time")
 		} else {
 			fmt.Printf("⏱️  AfterAgentCallback: %s completed (no timing info available)\n", invocation.AgentName)
 		}
+		fmt.Println() // Add spacing after agent callback.
 
 		return nil, nil // Return nil to use the original result.
 	}
@@ -138,15 +135,15 @@ func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 // createBeforeModelCallback creates the before model callback for timing.
 func (e *toolTimerExample) createBeforeModelCallback() model.BeforeModelCallback {
 	return func(ctx context.Context, req *model.Request) (*model.Response, error) {
-		// Record start time and store it in the instance variable.
-		startTime := time.Now()
-		if e.modelStartTimes == nil {
-			e.modelStartTimes = make(map[string]time.Time)
+		// Get invocation from context.
+		inv, ok := agent.InvocationFromContext(ctx)
+		if !ok || inv == nil {
+			return nil, nil
 		}
-		// Use a unique key for model timing.
-		modelKey := fmt.Sprintf("model_%d", startTime.UnixNano())
-		e.modelStartTimes[modelKey] = startTime
-		e.currentModelKey = modelKey // Store the current model key.
+
+		// Record start time and store it in invocation callback state.
+		startTime := time.Now()
+		inv.SetState("model:start_time", startTime)
 
 		// Create trace span for model inference.
 		_, span := atrace.Tracer.Start(
@@ -154,17 +151,12 @@ func (e *toolTimerExample) createBeforeModelCallback() model.BeforeModelCallback
 			"model_inference",
 			trace.WithAttributes(
 				attribute.Int("messages.count", len(req.Messages)),
-				attribute.String("model.key", modelKey),
 			),
 		)
-		// Store span in instance variable for later use.
-		if e.modelSpans == nil {
-			e.modelSpans = make(map[string]trace.Span)
-		}
-		e.modelSpans[modelKey] = span
+		// Store span in invocation callback state.
+		inv.SetState("model:span", span)
 
 		fmt.Printf("⏱️  BeforeModelCallback: model started at %s\n", startTime.Format("15:04:05.000"))
-		fmt.Printf("   ModelKey: %s\n", modelKey)
 		fmt.Printf("   Messages: %d\n", len(req.Messages))
 
 		return nil, nil
@@ -174,25 +166,29 @@ func (e *toolTimerExample) createBeforeModelCallback() model.BeforeModelCallback
 // createAfterModelCallback creates the after model callback for timing.
 func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 	return func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
-		// Use the stored model key.
-		modelKey := e.currentModelKey
+		// Get invocation from context.
+		inv, ok := agent.InvocationFromContext(ctx)
+		if !ok || inv == nil {
+			return nil, nil
+		}
 
-		// Get start time from the instance variable.
-		if startTime, exists := e.modelStartTimes[modelKey]; exists {
+		// Get start time from invocation callback state.
+		if startTimeVal, ok := inv.GetState("model:start_time"); ok {
+			startTime := startTimeVal.(time.Time)
 			duration := time.Since(startTime)
 			durationSeconds := duration.Seconds()
 
 			// Record metrics.
 			e.modelDurationHistogram.Record(ctx, durationSeconds,
 				metric.WithAttributes(
-					attribute.String("model.key", modelKey),
 					attribute.Int("messages.count", len(req.Messages)),
 				),
 			)
 			e.modelCounter.Add(ctx, 1)
 
-			// End trace span from instance variable.
-			if span, exists := e.modelSpans[modelKey]; exists {
+			// End trace span from invocation callback state.
+			if spanVal, ok := inv.GetState("model:span"); ok {
+				span := spanVal.(trace.Span)
 				if modelErr != nil {
 					span.RecordError(modelErr)
 				}
@@ -206,7 +202,7 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 				)
 				span.End()
 				// Clean up the span after use.
-				delete(e.modelSpans, modelKey)
+				inv.DeleteState("model:span")
 			}
 
 			fmt.Printf("⏱️  AfterModelCallback: model completed in %v\n", duration)
@@ -214,8 +210,7 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 				fmt.Printf("   Error: %v\n", modelErr)
 			}
 			// Clean up the start time after use.
-			delete(e.modelStartTimes, modelKey)
-			e.currentModelKey = "" // Clear the current model key.
+			inv.DeleteState("model:start_time")
 		} else {
 			fmt.Printf("⏱️  AfterModelCallback: model completed (no timing info available)\n")
 		}
@@ -227,12 +222,24 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 // createBeforeToolCallback creates the before tool callback for timing.
 func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
-		// Record start time and store it in the instance variable.
-		startTime := time.Now()
-		if e.toolStartTimes == nil {
-			e.toolStartTimes = make(map[string]time.Time)
+		// Get invocation from context.
+		inv, ok := agent.InvocationFromContext(ctx)
+		if !ok || inv == nil {
+			return nil, nil
 		}
-		e.toolStartTimes[toolName] = startTime
+
+		// Get tool call ID from context for concurrent tool call support.
+		toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+		if !ok || toolCallID == "" {
+			// Fallback: use "default" if tool call ID is not available.
+			toolCallID = "default"
+		}
+
+		// Record start time and store it in invocation callback state.
+		// Use tool call ID to ensure unique keys for concurrent calls.
+		startTime := time.Now()
+		key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+		inv.SetState(key, startTime)
 
 		// Create trace span for tool execution.
 		_, span := atrace.Tracer.Start(
@@ -240,6 +247,7 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 			"tool_execution",
 			trace.WithAttributes(
 				attribute.String("tool.name", toolName),
+				attribute.String("tool.call_id", toolCallID),
 				attribute.String("tool.args", func() string {
 					if jsonArgs == nil {
 						return ""
@@ -248,13 +256,12 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 				}()),
 			),
 		)
-		// Store span in instance variable for later use.
-		if e.toolSpans == nil {
-			e.toolSpans = make(map[string]trace.Span)
-		}
-		e.toolSpans[toolName] = span
+		// Store span in invocation callback state.
+		spanKey := fmt.Sprintf("tool:%s:%s:span", toolName, toolCallID)
+		inv.SetState(spanKey, span)
 
-		fmt.Printf("⏱️  BeforeToolCallback: %s started at %s\n", toolName, startTime.Format("15:04:05.000"))
+		fmt.Printf("⏱️  BeforeToolCallback: %s (call %s) started at %s\n",
+			toolName, toolCallID, startTime.Format("15:04:05.000"))
 		if jsonArgs != nil {
 			fmt.Printf("   Args: %s\n", string(*jsonArgs))
 		} else {
@@ -268,8 +275,22 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 // createAfterToolCallback creates the after tool callback for timing.
 func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-		// Get start time from the instance variable.
-		if startTime, exists := e.toolStartTimes[toolName]; exists {
+		// Get invocation from context.
+		inv, ok := agent.InvocationFromContext(ctx)
+		if !ok || inv == nil {
+			return nil, nil
+		}
+
+		// Get tool call ID from context (must use same logic as BeforeToolCallback).
+		toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+		if !ok || toolCallID == "" {
+			toolCallID = "default"
+		}
+
+		// Get start time from invocation callback state.
+		key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+		if startTimeVal, ok := inv.GetState(key); ok {
+			startTime := startTimeVal.(time.Time)
 			duration := time.Since(startTime)
 			durationSeconds := duration.Seconds()
 
@@ -277,6 +298,7 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 			e.toolDurationHistogram.Record(ctx, durationSeconds,
 				metric.WithAttributes(
 					attribute.String("tool.name", toolName),
+					attribute.String("tool.call_id", toolCallID),
 				),
 			)
 			e.toolCounter.Add(ctx, 1,
@@ -285,8 +307,10 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 				),
 			)
 
-			// End trace span from instance variable.
-			if span, exists := e.toolSpans[toolName]; exists {
+			// End trace span from invocation callback state.
+			spanKey := fmt.Sprintf("tool:%s:%s:span", toolName, toolCallID)
+			if spanVal, ok := inv.GetState(spanKey); ok {
+				span := spanVal.(trace.Span)
 				if runErr != nil {
 					span.RecordError(runErr)
 				}
@@ -300,18 +324,20 @@ func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
 				)
 				span.End()
 				// Clean up the span after use.
-				delete(e.toolSpans, toolName)
+				inv.DeleteState(spanKey)
 			}
 
-			fmt.Printf("⏱️  AfterToolCallback: %s completed in %v\n", toolName, duration)
+			fmt.Printf("⏱️  AfterToolCallback: %s (call %s) completed in %v\n",
+				toolName, toolCallID, duration)
 			fmt.Printf("   Result: %v\n", result)
 			if runErr != nil {
 				fmt.Printf("   Error: %v\n", runErr)
 			}
 			// Clean up the start time after use.
-			delete(e.toolStartTimes, toolName)
+			inv.DeleteState(key)
 		} else {
-			fmt.Printf("⏱️  AfterToolCallback: %s completed (no timing info available)\n", toolName)
+			fmt.Printf("⏱️  AfterToolCallback: %s (call %s) completed (no timing info available)\n",
+				toolName, toolCallID)
 		}
 
 		return nil, nil // Return nil to use the original result.
