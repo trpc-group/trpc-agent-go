@@ -20,11 +20,11 @@ import (
 
 func TestCallbacksStructured_BeforeTool(t *testing.T) {
 	tests := []struct {
-		name              string
-		callbacks         []BeforeToolCallbackStructured
-		wantCustomResult  bool
-		wantModifiedArgs  bool
-		wantErr           bool
+		name             string
+		callbacks        []BeforeToolCallbackStructured
+		wantCustomResult bool
+		wantModifiedArgs bool
+		wantErr          bool
 	}{
 		{
 			name:             "no callbacks",

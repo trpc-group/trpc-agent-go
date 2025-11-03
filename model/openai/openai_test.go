@@ -3535,8 +3535,8 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 		}))
 		defer server.Close()
 
-		m := New("gpt-3.5-turbo", 
-			WithBaseURL(server.URL), 
+		m := New("gpt-3.5-turbo",
+			WithBaseURL(server.URL),
 			WithAPIKey("test-key"),
 			WithChatStreamCompleteCallback(callback),
 		)
@@ -3595,8 +3595,8 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 		}))
 		defer server.Close()
 
-		m := New("gpt-3.5-turbo", 
-			WithBaseURL(server.URL), 
+		m := New("gpt-3.5-turbo",
+			WithBaseURL(server.URL),
 			WithAPIKey("test-key"),
 		)
 
@@ -3623,7 +3623,7 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 
 		// Verify that we received responses with reasoning content
 		assert.NotEmpty(t, responses, "expected to receive responses")
-		
+
 		// Check that at least one response has reasoning content
 		var hasReasoning bool
 		for _, resp := range responses {

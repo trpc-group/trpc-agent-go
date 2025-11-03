@@ -82,9 +82,9 @@ type subAgentCall struct {
 
 // FunctionCallResponseProcessor handles agent transfer operations after LLM responses.
 type FunctionCallResponseProcessor struct {
-	enableParallelTools      bool
-	toolCallbacks            *tool.Callbacks
-	toolCallbacksStructured  *tool.CallbacksStructured
+	enableParallelTools     bool
+	toolCallbacks           *tool.Callbacks
+	toolCallbacksStructured *tool.CallbacksStructured
 }
 
 // NewFunctionCallResponseProcessor creates a new transfer response processor.

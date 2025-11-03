@@ -131,5 +131,3 @@ func TestWithCallbacks_Generic(t *testing.T) {
 		assert.Equal(t, structuredCallbacks, opts.ToolCallbacksStructured)
 	})
 }
-
-

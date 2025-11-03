@@ -167,7 +167,7 @@ func TestOptions(t *testing.T) {
 // TestInitMeterProvider tests the InitMeterProvider function
 func TestInitMeterProvider(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Save original meter provider
 	originalMP := itelemetry.MeterProvider
 	defer func() {
@@ -229,7 +229,7 @@ func TestInitMeterProvider(t *testing.T) {
 // TestGetMeterProvider tests the GetMeterProvider function
 func TestGetMeterProvider(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Save original meter provider
 	originalMP := itelemetry.MeterProvider
 	defer func() {
@@ -317,8 +317,8 @@ func TestNewMeterProviderWithEnvironmentVariables(t *testing.T) {
 // TestNewHTTPMeterProvider tests HTTP meter provider creation
 func TestNewHTTPMeterProvider(t *testing.T) {
 	ctx := context.Background()
-	
-	mp, err := NewMeterProvider(ctx, 
+
+	mp, err := NewMeterProvider(ctx,
 		WithProtocol("http"),
 		WithEndpoint("localhost:4318"),
 	)
@@ -334,8 +334,8 @@ func TestNewHTTPMeterProvider(t *testing.T) {
 // TestNewGRPCMeterProvider tests gRPC meter provider creation
 func TestNewGRPCMeterProvider(t *testing.T) {
 	ctx := context.Background()
-	
-	mp, err := NewMeterProvider(ctx, 
+
+	mp, err := NewMeterProvider(ctx,
 		WithProtocol("grpc"),
 		WithEndpoint("localhost:4317"),
 	)
@@ -401,7 +401,7 @@ func TestMetricsEndpointProtocols(t *testing.T) {
 // TestMultipleOptions tests applying multiple options
 func TestMultipleOptions(t *testing.T) {
 	ctx := context.Background()
-	
+
 	mp, err := NewMeterProvider(ctx,
 		WithEndpoint("test-endpoint:4317"),
 		WithProtocol("grpc"),
