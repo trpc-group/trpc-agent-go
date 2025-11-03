@@ -412,6 +412,138 @@ func TestToolEvents_And_ExecuteSingleToolCall(t *testing.T) {
 	require.Error(t, err)
 }
 
+// interruptTool is a dummy tool that always interrupts.
+type interruptTool struct{ name string }
+
+func (it *interruptTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: it.name}
+}
+
+func (it *interruptTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return nil, NewInterruptError("ask?")
+}
+
+// When a tool interrupts, executeSingleToolCall should:
+// - emit a tool complete event WITHOUT an error payload, and
+// - return the interrupt error (not wrapped).
+func TestExecuteSingleToolCall_Interrupt_NoErrorInEvent(t *testing.T) {
+	ch := make(chan *event.Event, 4)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("test-int")
+	ctx, span := tracer.Start(context.Background(), "span")
+	defer span.End()
+
+	// Configure a tool call that yields an interrupt.
+	args := []byte(`{"x":1}`)
+	cfg := singleToolCallConfig{
+		ToolCall: model.ToolCall{ID: "tid",
+			Function: model.FunctionDefinitionParam{
+				Name:      "interrupt",
+				Arguments: args,
+			}},
+		Tools: map[string]tool.Tool{
+			"interrupt": &interruptTool{name: "interrupt"},
+		},
+		InvocationID: "inv-int",
+		EventChan:    ch,
+		Span:         span,
+		State:        State{StateKeyCurrentNodeID: "nodeInt"},
+	}
+
+	_, err := executeSingleToolCall(ctx, cfg)
+	require.Error(t, err)
+	require.True(t, IsInterruptError(err))
+	if intr, ok := GetInterruptError(err); ok {
+		require.Equal(t, "ask?", intr.Value)
+	}
+
+	// Drain events; find the tool complete event and assert no error.
+	var complete *event.Event
+	drain := len(ch)
+	for i := 0; i < drain; i++ {
+		e := <-ch
+		if e == nil || e.StateDelta == nil {
+			continue
+		}
+		if b, ok := e.StateDelta[MetadataKeyTool]; ok {
+			var meta ToolExecutionMetadata
+			if json.Unmarshal(b, &meta) == nil &&
+				meta.Phase == ToolExecutionPhaseComplete {
+				complete = e
+				// Meta.Error must be empty for interrupts
+				require.Equal(t, "", meta.Error)
+				break
+			}
+		}
+	}
+	require.NotNil(t, complete, "expected tool complete event")
+	// Response.Error must be nil for interrupt tool completes.
+	if complete.Response != nil {
+		require.Nil(t, complete.Response.Error)
+	}
+}
+
+// A tool that returns a normal error should produce an error payload in the
+// tool complete event and return a wrapped error from executeSingleToolCall.
+type errorTool struct{ name string }
+
+func (et *errorTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: et.name}
+}
+
+func (et *errorTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return nil, fmt.Errorf("boom")
+}
+
+func TestExecuteSingleToolCall_Error_ErrorInEvent(t *testing.T) {
+	ch := make(chan *event.Event, 4)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("test-err")
+	ctx, span := tracer.Start(context.Background(), "span")
+	defer span.End()
+
+	args := []byte(`{"x":1}`)
+	cfg := singleToolCallConfig{
+		ToolCall: model.ToolCall{ID: "tid2",
+			Function: model.FunctionDefinitionParam{
+				Name:      "errtool",
+				Arguments: args,
+			}},
+		Tools: map[string]tool.Tool{
+			"errtool": &errorTool{name: "errtool"},
+		},
+		InvocationID: "inv-err",
+		EventChan:    ch,
+		Span:         span,
+		State:        State{StateKeyCurrentNodeID: "nodeErr"},
+	}
+
+	_, err := executeSingleToolCall(ctx, cfg)
+	require.Error(t, err)
+	// Should not be an interrupt error
+	require.False(t, IsInterruptError(err))
+
+	// Find the tool complete event and assert error surfaced.
+	var complete *event.Event
+	drain := len(ch)
+	for i := 0; i < drain; i++ {
+		e := <-ch
+		if e == nil || e.StateDelta == nil {
+			continue
+		}
+		if b, ok := e.StateDelta[MetadataKeyTool]; ok {
+			var meta ToolExecutionMetadata
+			if json.Unmarshal(b, &meta) == nil &&
+				meta.Phase == ToolExecutionPhaseComplete {
+				complete = e
+				require.NotEqual(t, "", meta.Error)
+				break
+			}
+		}
+	}
+	require.NotNil(t, complete)
+	require.NotNil(t, complete.Response)
+	require.NotNil(t, complete.Response.Error)
+}
+
 func TestExtractToolCallbacks_NotFound(t *testing.T) {
 	_, ok := extractToolCallbacks(State{})
 	require.False(t, ok)
