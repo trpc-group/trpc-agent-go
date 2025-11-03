@@ -547,3 +547,34 @@ func TestEventJSON_Roundtrip(t *testing.T) {
 	require.Equal(t, "resp-rt", dst.Response.ID)
 	require.Equal(t, model.ObjectTypeChatCompletion, dst.Response.Object)
 }
+
+// Test error path: MarshalJSON on a nil *Event should return an error due to
+// attempting to unmarshal a JSON null into the payload map.
+func TestEventMarshalJSON_NilReceiver_Error(t *testing.T) {
+	var e *Event = nil
+	_, err := json.Marshal(e)
+	require.Error(t, err)
+}
+
+// Test error path: UnmarshalJSON should return error on invalid JSON input.
+func TestEventUnmarshalJSON_InvalidJSON_Error(t *testing.T) {
+	var e Event
+	err := json.Unmarshal([]byte("{"), &e)
+	require.Error(t, err)
+}
+
+// Test error path: Nested response exists but is malformed; Unmarshal should
+// not fail, but it should skip hydrating Response (and we log a warning).
+func TestEventUnmarshalJSON_BadNestedResponse_WarnsNoError(t *testing.T) {
+	input := `{
+        "id": "evt-bad",
+        "object": "chat.completion",
+        "response": 123
+    }`
+	var e Event
+	err := json.Unmarshal([]byte(input), &e)
+	require.NoError(t, err)
+	require.Equal(t, "evt-bad", e.ID)
+	// Response stays nil because nested payload is malformed.
+	require.Nil(t, e.Response)
+}
