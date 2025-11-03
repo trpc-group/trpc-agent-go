@@ -48,7 +48,7 @@ func (m *mockToolSet) Name() string {
 	return m.name
 }
 
-func TestFilterTools_Include(t *testing.T) {
+func TestFilterTools_IncludeNames(t *testing.T) {
 	// Create mock tools
 	tools := []Tool{
 		&mockTool{name: "echo", description: "Echo tool"},
@@ -65,7 +65,7 @@ func TestFilterTools_Include(t *testing.T) {
 
 	t.Run("filter by specific names", func(t *testing.T) {
 		// Filter tools by names
-		filtered := FilterTools(original, Include("echo", "multiply"))
+		filtered := FilterTools(original, IncludeNames("echo", "multiply"))
 
 		// Get filtered tools
 		ctx := context.Background()
@@ -80,7 +80,7 @@ func TestFilterTools_Include(t *testing.T) {
 
 	t.Run("filter by empty names", func(t *testing.T) {
 		// Filter with empty names list
-		filtered := FilterTools(original, Include())
+		filtered := FilterTools(original, IncludeNames())
 
 		ctx := context.Background()
 		result := filtered.Tools(ctx)
@@ -91,7 +91,7 @@ func TestFilterTools_Include(t *testing.T) {
 
 	t.Run("filter by non-existent names", func(t *testing.T) {
 		// Filter by names that don't exist
-		filtered := FilterTools(original, Include("nonexistent", "tool"))
+		filtered := FilterTools(original, IncludeNames("nonexistent", "tool"))
 
 		ctx := context.Background()
 		result := filtered.Tools(ctx)
@@ -101,7 +101,7 @@ func TestFilterTools_Include(t *testing.T) {
 	})
 }
 
-func TestFilterTools_Exclude(t *testing.T) {
+func TestFilterTools_ExcludeNames(t *testing.T) {
 	// Create mock tools
 	tools := []Tool{
 		&mockTool{name: "echo", description: "Echo tool"},
@@ -118,7 +118,7 @@ func TestFilterTools_Exclude(t *testing.T) {
 
 	t.Run("exclude specific names", func(t *testing.T) {
 		// Exclude specific tools
-		filtered := FilterTools(original, Exclude("multiply", "divide"))
+		filtered := FilterTools(original, ExcludeNames("multiply", "divide"))
 
 		// Get filtered tools
 		ctx := context.Background()
@@ -133,7 +133,7 @@ func TestFilterTools_Exclude(t *testing.T) {
 
 	t.Run("exclude by empty names", func(t *testing.T) {
 		// Exclude with empty names list - should return all tools
-		filtered := FilterTools(original, Exclude())
+		filtered := FilterTools(original, ExcludeNames())
 
 		ctx := context.Background()
 		result := filtered.Tools(ctx)
@@ -148,7 +148,7 @@ func TestFilterTools_Exclude(t *testing.T) {
 
 	t.Run("exclude all tools", func(t *testing.T) {
 		// Exclude all tools
-		filtered := FilterTools(original, Exclude("echo", "add", "multiply", "divide"))
+		filtered := FilterTools(original, ExcludeNames("echo", "add", "multiply", "divide"))
 
 		ctx := context.Background()
 		result := filtered.Tools(ctx)
@@ -159,7 +159,7 @@ func TestFilterTools_Exclude(t *testing.T) {
 
 	t.Run("exclude non-existent names", func(t *testing.T) {
 		// Exclude names that don't exist
-		filtered := FilterTools(original, Exclude("nonexistent", "tool"))
+		filtered := FilterTools(original, ExcludeNames("nonexistent", "tool"))
 
 		ctx := context.Background()
 		result := filtered.Tools(ctx)
@@ -238,7 +238,7 @@ func TestFilteredToolSet_Interface(t *testing.T) {
 	}
 
 	t.Run("implements ToolSet interface", func(t *testing.T) {
-		filtered := FilterTools(original, Include("tool1"))
+		filtered := FilterTools(original, IncludeNames("tool1"))
 
 		// Verify it implements ToolSet interface
 		var _ ToolSet = filtered
@@ -260,7 +260,7 @@ func TestFilteredToolSet_Interface(t *testing.T) {
 			tools: tools,
 		}
 
-		filtered := FilterTools(errorToolSet, Include("tool1"))
+		filtered := FilterTools(errorToolSet, IncludeNames("tool1"))
 		err := filtered.Close()
 		assert.NoError(t, err)
 	})
@@ -283,10 +283,10 @@ func TestFilterTools_Chaining(t *testing.T) {
 
 	t.Run("chain multiple filters", func(t *testing.T) {
 		// First filter by calc_ pattern
-		firstFilter := FilterTools(original, Include("calc_add", "calc_multiply"))
+		firstFilter := FilterTools(original, IncludeNames("calc_add", "calc_multiply"))
 
 		// Then filter by specific name
-		finalFilter := FilterTools(firstFilter, Include("calc_multiply"))
+		finalFilter := FilterTools(firstFilter, IncludeNames("calc_multiply"))
 
 		ctx := context.Background()
 		result := finalFilter.Tools(ctx)

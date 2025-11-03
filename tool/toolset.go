@@ -68,8 +68,8 @@ func (f *filteredToolSet) Name() string {
 	return f.original.Name()
 }
 
-// Include creates a ToolFilter that includes only the specified tool names.
-func Include(names ...string) ToolFilter {
+// IncludeNames creates a ToolFilter that includes only the specified tool names.
+func IncludeNames(names ...string) ToolFilter {
 	allowed := make(map[string]bool)
 	for _, name := range names {
 		allowed[name] = true
@@ -79,8 +79,8 @@ func Include(names ...string) ToolFilter {
 	}
 }
 
-// Exclude creates a ToolFilter that excludes the specified tool names.
-func Exclude(names ...string) ToolFilter {
+// ExcludeNames creates a ToolFilter that excludes the specified tool names.
+func ExcludeNames(names ...string) ToolFilter {
 	excluded := make(map[string]bool)
 	for _, name := range names {
 		excluded[name] = true
