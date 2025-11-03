@@ -24,6 +24,9 @@ import (
 	"strings"
 )
 
+// skillFile is the canonical skill definition filename.
+const skillFile = "SKILL.md"
+
 // Summary contains the minimal information for a skill.
 type Summary struct {
 	Name        string
@@ -68,7 +71,6 @@ func NewFSRepository(roots ...string) (*FSRepository, error) {
 }
 
 func (r *FSRepository) scan() error {
-	const skillFile = "SKILL.md"
 	for _, root := range r.roots {
 		root = filepath.Clean(root)
 		filepath.WalkDir(root, func(p string, d fs.DirEntry,
@@ -102,7 +104,7 @@ func (r *FSRepository) scan() error {
 func (r *FSRepository) Summaries() []Summary {
 	out := make([]Summary, 0, len(r.index))
 	for name, dir := range r.index {
-		sf := filepath.Join(dir, "SKILL.md")
+		sf := filepath.Join(dir, skillFile)
 		s, err := parseSummary(sf)
 		if err != nil {
 			continue
@@ -121,7 +123,7 @@ func (r *FSRepository) Get(name string) (*Skill, error) {
 	if !ok {
 		return nil, fmt.Errorf("skill %q not found", name)
 	}
-	sf := filepath.Join(dir, "SKILL.md")
+	sf := filepath.Join(dir, skillFile)
 	sum, body, err := parseFull(sf)
 	if err != nil {
 		return nil, err
@@ -137,7 +139,7 @@ func (r *FSRepository) Get(name string) (*Skill, error) {
 				continue
 			}
 			n := e.Name()
-			if strings.EqualFold(n, "SKILL.md") {
+			if strings.EqualFold(n, skillFile) {
 				continue
 			}
 			if !isDocFile(n) {
