@@ -316,11 +316,11 @@ func (e *Event) MarshalJSON() ([]byte, error) {
 func (e *Event) UnmarshalJSON(data []byte) error {
 	// Unmarshal into alias to populate legacy flattened fields.
 	type noMethods Event
-	var aux noMethods
-	if err := json.Unmarshal(data, &aux); err != nil {
+	var noMethodEvent noMethods
+	if err := json.Unmarshal(data, &noMethodEvent); err != nil {
 		return err
 	}
-	*e = Event(aux)
+	*e = Event(noMethodEvent)
 	// If a nested response is present, hydrate it to avoid conflicts.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {

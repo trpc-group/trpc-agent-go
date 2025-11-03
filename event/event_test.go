@@ -563,6 +563,13 @@ func TestEventUnmarshalJSON_InvalidJSON_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Wrong JSON type: valid JSON but not an object should return error when decoding into struct.
+func TestEventUnmarshalJSON_WrongType_Error(t *testing.T) {
+	var e Event
+	err := json.Unmarshal([]byte(`"not-an-object"`), &e)
+	require.Error(t, err)
+}
+
 // Test error path: Nested response exists but is malformed; Unmarshal should
 // not fail, but it should skip hydrating Response (and we log a warning).
 func TestEventUnmarshalJSON_BadNestedResponse_WarnsNoError(t *testing.T) {
@@ -577,4 +584,36 @@ func TestEventUnmarshalJSON_BadNestedResponse_WarnsNoError(t *testing.T) {
 	require.Equal(t, "evt-bad", e.ID)
 	require.NotNil(t, e.Response)
 	require.Equal(t, "chat.completion", e.Response.Object)
+}
+
+func TestEventMarshalJSON_TimestampOverflow(t *testing.T) {
+	t.Run("event with timestamp overflow", func(t *testing.T) {
+		e := &Event{
+			Timestamp: time.Unix(1<<60-1, 0),
+		}
+		_, err := json.Marshal(e)
+		require.Error(t, err)
+	})
+	t.Run("response with timestamp overflow", func(t *testing.T) {
+		e := &Event{
+			Response: &model.Response{
+				Timestamp: time.Unix(1<<60-1, 0),
+			},
+		}
+		_, err := json.Marshal(e)
+		require.Error(t, err)
+	})
+}
+
+func TestEventUnMarshalJSON_TimestampOverflow(t *testing.T) {
+	t.Run("event with timestamp overflow", func(t *testing.T) {
+		var e Event
+		err := json.Unmarshal([]byte(`{"timestamp": "12025-01-01T00:00:00Z"}`), &e)
+		require.Error(t, err)
+	})
+	t.Run("response with timestamp overflow", func(t *testing.T) {
+		var e Event
+		err := json.Unmarshal([]byte(`{"response": {"timestamp": "12025-01-01T00:00:00Z"}}`), &e)
+		require.Error(t, err)
+	})
 }
