@@ -38,8 +38,8 @@ var (
 	ChatMetricTRPCAgentGoClientOutputTokenPerTime metric.Float64Histogram = noop.Float64Histogram{}
 )
 
-// ChatAttributes is the attributes for chat metrics.
-type ChatAttributes struct {
+// chatAttributes is the attributes for chat metrics.
+type chatAttributes struct {
 	RequestModelName  string
 	ResponseModelName string
 	Stream            bool
@@ -53,7 +53,7 @@ type ChatAttributes struct {
 	Error     error
 }
 
-func (a ChatAttributes) toAttributes() []attribute.KeyValue {
+func (a chatAttributes) toAttributes() []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAIOperationName, OperationChat),
 		attribute.String(KeyGenAISystem, a.RequestModelName),
@@ -175,9 +175,9 @@ func (t *ChatMetricsTracker) RecordMetrics() func() {
 	}
 }
 
-// buildAttributes constructs ChatAttributes from tracked state.
-func (t *ChatMetricsTracker) buildAttributes() ChatAttributes {
-	attrs := ChatAttributes{}
+// buildAttributes constructs chatAttributes from tracked state.
+func (t *ChatMetricsTracker) buildAttributes() chatAttributes {
+	attrs := chatAttributes{}
 
 	// Extract error
 	if t.err != nil && *t.err != nil {
