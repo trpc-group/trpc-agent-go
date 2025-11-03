@@ -646,6 +646,7 @@ func NewLLMNodeFunc(
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
+
 		_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
@@ -787,7 +788,7 @@ func (r *llmRunner) executeModel(
 		Tools:            r.tools,
 		GenerationConfig: r.generationConfig,
 	}
-	invocationID, sessionID, eventChan := extractExecutionContext(state)
+	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	var nodeID string
 	if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
@@ -808,6 +809,8 @@ func (r *llmRunner) executeModel(
 		EventChan:      eventChan,
 		InvocationID:   invocationID,
 		SessionID:      sessionID,
+		AppName:        appName,
+		UserID:         userID,
 		Span:           span,
 		NodeID:         nodeID,
 	})
@@ -869,7 +872,7 @@ func ensureSystemHead(in []model.Message, sys string) []model.Message {
 }
 
 // extractExecutionContext extracts execution context from state.
-func extractExecutionContext(state State) (invocationID string, sessionID string, eventChan chan<- *event.Event) {
+func extractExecutionContext(state State) (invocationID, sessionID, appName, userID string, eventChan chan<- *event.Event) {
 	if execCtx, exists := state[StateKeyExecContext]; exists {
 		execContext, ok := execCtx.(*ExecutionContext)
 		if ok {
@@ -880,10 +883,12 @@ func extractExecutionContext(state State) (invocationID string, sessionID string
 	if sess, ok := state[StateKeySession]; ok {
 		if s, ok := sess.(*session.Session); ok && s != nil {
 			sessionID = s.ID
+			appName = s.AppName
+			userID = s.UserID
 		}
 
 	}
-	return invocationID, sessionID, eventChan
+	return invocationID, sessionID, appName, userID, eventChan
 }
 
 // modelResponseConfig contains configuration for processing model responses.
@@ -901,23 +906,24 @@ type modelResponseConfig struct {
 }
 
 // processModelResponse processes a single model response.
-func processModelResponse(ctx context.Context, config modelResponseConfig) error {
+func processModelResponse(ctx context.Context, config modelResponseConfig) (*event.Event, error) {
 	if config.ModelCallbacks != nil {
 		customResponse, err := config.ModelCallbacks.RunAfterModel(ctx, config.Request, config.Response, nil)
 		if err != nil {
 			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return fmt.Errorf("callback after model error: %w", err)
+			return nil, fmt.Errorf("callback after model error: %w", err)
 		}
 		if customResponse != nil {
 			config.Response = customResponse
 		}
 	}
+	var llmEvent *event.Event
 	if config.EventChan != nil && !config.Response.Done {
 		author := config.LLMModel.Info().Name
 		if config.NodeID != "" {
 			author = config.NodeID
 		}
-		llmEvent := event.NewResponseEvent(config.InvocationID, author, config.Response)
+		llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
 		invocation, ok := agent.InvocationFromContext(ctx)
 		if !ok {
 			invocation = agent.NewInvocation(
@@ -927,17 +933,15 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 			)
 		}
 
-		// Trace the LLM call using the telemetry package.
-		itelemetry.TraceChat(config.Span, invocation, config.Request, config.Response, llmEvent.ID)
 		if err := agent.EmitEvent(ctx, invocation, config.EventChan, llmEvent); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if config.Response.Error != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", config.Response.Error.Message))
-		return fmt.Errorf("model API error: %s", config.Response.Error.Message)
+		return nil, fmt.Errorf("model API error: %s", config.Response.Error.Message)
 	}
-	return nil
+	return llmEvent, nil
 }
 
 func runModel(
@@ -1007,7 +1011,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 		}
 
 		// Extract execution context for event emission.
-		invocationID, _, eventChan := extractExecutionContext(state)
+		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
@@ -1068,7 +1072,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		defer span.End()
 
 		// Extract execution context for event emission.
-		invocationID, _, eventChan := extractExecutionContext(state)
+		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 
 		// Extract current node ID from state.
 		var nodeID string
@@ -1412,6 +1416,8 @@ type modelExecutionConfig struct {
 	EventChan      chan<- *event.Event
 	InvocationID   string
 	SessionID      string
+	AppName        string
+	UserID         string
 	NodeID         string // Add NodeID for parallel execution support
 	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
 	Span           oteltrace.Span
@@ -1424,11 +1430,27 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 		return nil, fmt.Errorf("failed to run model: %w", err)
 	}
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok {
+		invocation = agent.NewInvocation(
+			agent.WithInvocationID(config.InvocationID),
+			agent.WithInvocationModel(config.LLMModel),
+			agent.WithInvocationSession(&session.Session{ID: config.SessionID}),
+		)
+	}
+
+	var lastEvent *event.Event
+	// Create telemetry tracker and defer metrics recording
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, &err)
+	defer tracker.RecordMetrics()()
+
 	// Process response.
 	var finalResponse *model.Response
 	var toolCalls []model.ToolCall
 	for response := range responseChan {
-		if err := processModelResponse(ctx, modelResponseConfig{
+		// Track response for telemetry
+		tracker.TrackResponse(response)
+		lastEvent, err = processModelResponse(ctx, modelResponseConfig{
 			Response:       response,
 			ModelCallbacks: config.ModelCallbacks,
 			EventChan:      config.EventChan,
@@ -1438,8 +1460,13 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 			Request:        config.Request,
 			Span:           config.Span,
 			NodeID:         config.NodeID,
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, err
+		}
+		if lastEvent != nil {
+			tracker.SetLastEvent(lastEvent)
+			itelemetry.TraceChat(config.Span, invocation, config.Request, response, lastEvent.ID, tracker.FirstTokenTimeDuration())
 		}
 
 		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
@@ -1670,7 +1697,16 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Error:        eventErr,
 		Arguments:    modifiedArgs,
 	})
-	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event)
+	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
+	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
+		RequestModelName: "trpc-agent-go-graph",
+		ToolName:         name,
+		AgentName:        fmt.Sprintf("trpc-agent-go-graph-node-id: %s", nodeID),
+		AppName:          sessInfo.AppName,
+		UserID:           sessInfo.UserID,
+		SessionID:        sessInfo.ID,
+		Error:            err,
+	}, time.Since(startTime))
 	span.End()
 
 	if err != nil {
