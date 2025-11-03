@@ -141,44 +141,53 @@ func WithSubAgents(subAgents []agent.Agent) Option {
 }
 
 // WithAgentCallbacks sets the agent callbacks.
-func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
+// Supports both legacy (*agent.Callbacks) and structured
+// (*agent.CallbacksStructured) callbacks.
+func WithAgentCallbacks[T *agent.Callbacks | *agent.CallbacksStructured](
+	callbacks T,
+) Option {
 	return func(opts *Options) {
-		opts.AgentCallbacks = callbacks
+		switch cb := any(callbacks).(type) {
+		case *agent.Callbacks:
+			opts.AgentCallbacks = cb
+		case *agent.CallbacksStructured:
+			opts.AgentCallbacksStructured = cb
+		default:
+		}
 	}
 }
 
 // WithModelCallbacks sets the model callbacks.
-func WithModelCallbacks(callbacks *model.Callbacks) Option {
+// Supports both legacy (*model.Callbacks) and structured
+// (*model.CallbacksStructured) callbacks.
+func WithModelCallbacks[T *model.Callbacks | *model.CallbacksStructured](
+	callbacks T,
+) Option {
 	return func(opts *Options) {
-		opts.ModelCallbacks = callbacks
+		switch cb := any(callbacks).(type) {
+		case *model.Callbacks:
+			opts.ModelCallbacks = cb
+		case *model.CallbacksStructured:
+			opts.ModelCallbacksStructured = cb
+		default:
+		}
 	}
 }
 
 // WithToolCallbacks sets the tool callbacks.
-func WithToolCallbacks(callbacks *tool.Callbacks) Option {
+// Supports both legacy (*tool.Callbacks) and structured
+// (*tool.CallbacksStructured) callbacks.
+func WithToolCallbacks[T *tool.Callbacks | *tool.CallbacksStructured](
+	callbacks T,
+) Option {
 	return func(opts *Options) {
-		opts.ToolCallbacks = callbacks
-	}
-}
-
-// WithAgentCallbacksStructured sets the agent structured callbacks.
-func WithAgentCallbacksStructured(callbacks *agent.CallbacksStructured) Option {
-	return func(opts *Options) {
-		opts.AgentCallbacksStructured = callbacks
-	}
-}
-
-// WithModelCallbacksStructured sets the model structured callbacks.
-func WithModelCallbacksStructured(callbacks *model.CallbacksStructured) Option {
-	return func(opts *Options) {
-		opts.ModelCallbacksStructured = callbacks
-	}
-}
-
-// WithToolCallbacksStructured sets the tool structured callbacks.
-func WithToolCallbacksStructured(callbacks *tool.CallbacksStructured) Option {
-	return func(opts *Options) {
-		opts.ToolCallbacksStructured = callbacks
+		switch cb := any(callbacks).(type) {
+		case *tool.Callbacks:
+			opts.ToolCallbacks = cb
+		case *tool.CallbacksStructured:
+			opts.ToolCallbacksStructured = cb
+		default:
+		}
 	}
 }
 
@@ -466,15 +475,15 @@ type Options struct {
 
 // LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
-	name                 string
-	mu                   sync.RWMutex
-	model                model.Model
-	models               map[string]model.Model // Registered models for switching
-	description          string
-	instruction          string
-	systemPrompt         string
-	genConfig            model.GenerationConfig
-	flow                 flow.Flow
+	name                     string
+	mu                       sync.RWMutex
+	model                    model.Model
+	models                   map[string]model.Model // Registered models for switching
+	description              string
+	instruction              string
+	systemPrompt             string
+	genConfig                model.GenerationConfig
+	flow                     flow.Flow
 	tools                    []tool.Tool // Tools supported by the agent
 	codeExecutor             codeexecutor.CodeExecutor
 	planner                  planner.Planner
@@ -524,13 +533,13 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Construct the agent first so request processors can access dynamic getters.
 	a := &LLMAgent{
-		name:                 name,
-		model:                initialModel,
-		models:               models,
-		description:          options.Description,
-		instruction:          options.Instruction,
-		systemPrompt:         options.GlobalInstruction,
-		genConfig:            options.GenerationConfig,
+		name:                     name,
+		model:                    initialModel,
+		models:                   models,
+		description:              options.Description,
+		instruction:              options.Instruction,
+		systemPrompt:             options.GlobalInstruction,
+		genConfig:                options.GenerationConfig,
 		codeExecutor:             options.codeExecutor,
 		tools:                    tools,
 		planner:                  options.Planner,

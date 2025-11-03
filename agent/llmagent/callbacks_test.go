@@ -14,6 +14,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -44,7 +46,7 @@ func TestLLMAgent_CallbacksStructured_BeforeAgent(t *testing.T) {
 		)
 
 		m := newDummyModel()
-		agt := New("test", WithModel(m), WithAgentCallbacksStructured(callbacks))
+		agt := New("test", WithModel(m), WithAgentCallbacks(callbacks))
 
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("test-inv"),
@@ -55,9 +57,7 @@ func TestLLMAgent_CallbacksStructured_BeforeAgent(t *testing.T) {
 		)
 
 		eventChan, err := agt.Run(context.Background(), inv)
-		if err != nil {
-			t.Fatalf("Run() error = %v", err)
-		}
+		require.NoError(t, err)
 
 		// Collect events.
 		var events []*event.Event
@@ -66,24 +66,11 @@ func TestLLMAgent_CallbacksStructured_BeforeAgent(t *testing.T) {
 		}
 
 		// Should have exactly one response event with custom response.
-		if len(events) != 1 {
-			t.Fatalf("expected 1 event, got %d", len(events))
-		}
-
-		if events[0].Response == nil {
-			t.Fatal("expected response event")
-		}
-
-		if len(events[0].Response.Choices) == 0 {
-			t.Fatal("expected response with choices")
-		}
-
-		if events[0].Response.Choices[0].Message.Content !=
-			customResp.Choices[0].Message.Content {
-			t.Errorf("expected custom response content %q, got %q",
-				customResp.Choices[0].Message.Content,
-				events[0].Response.Choices[0].Message.Content)
-		}
+		require.Len(t, events, 1)
+		require.NotNil(t, events[0].Response)
+		require.NotEmpty(t, events[0].Response.Choices)
+		assert.Equal(t, customResp.Choices[0].Message.Content,
+			events[0].Response.Choices[0].Message.Content)
 	})
 
 	t.Run("before agent callback (structured) returns error", func(t *testing.T) {
@@ -97,7 +84,7 @@ func TestLLMAgent_CallbacksStructured_BeforeAgent(t *testing.T) {
 		)
 
 		m := newDummyModel()
-		agt := New("test", WithModel(m), WithAgentCallbacksStructured(callbacks))
+		agt := New("test", WithModel(m), WithAgentCallbacks(callbacks))
 
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("test-inv"),
@@ -108,9 +95,7 @@ func TestLLMAgent_CallbacksStructured_BeforeAgent(t *testing.T) {
 		)
 
 		_, err := agt.Run(context.Background(), inv)
-		if err == nil {
-			t.Fatal("expected error from callback")
-		}
+		require.Error(t, err)
 	})
 }
 
@@ -139,7 +124,7 @@ func TestLLMAgent_CallbacksStructured_AfterAgent(t *testing.T) {
 		)
 
 		m := newDummyModel()
-		agt := New("test", WithModel(m), WithAgentCallbacksStructured(callbacks))
+		agt := New("test", WithModel(m), WithAgentCallbacks(callbacks))
 
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("test-inv"),
@@ -150,9 +135,7 @@ func TestLLMAgent_CallbacksStructured_AfterAgent(t *testing.T) {
 		)
 
 		eventChan, err := agt.Run(context.Background(), inv)
-		if err != nil {
-			t.Fatalf("Run() error = %v", err)
-		}
+		require.NoError(t, err)
 
 		// Collect events.
 		var events []*event.Event
@@ -163,20 +146,11 @@ func TestLLMAgent_CallbacksStructured_AfterAgent(t *testing.T) {
 		}
 
 		// Last event should be the custom response from after callback.
-		if lastEvent == nil || lastEvent.Response == nil {
-			t.Fatal("expected response event")
-		}
-
-		if len(lastEvent.Response.Choices) == 0 {
-			t.Fatal("expected response with choices")
-		}
-
-		if lastEvent.Response.Choices[0].Message.Content !=
-			customResp.Choices[0].Message.Content {
-			t.Errorf("expected custom response content %q, got %q",
-				customResp.Choices[0].Message.Content,
-				lastEvent.Response.Choices[0].Message.Content)
-		}
+		require.NotNil(t, lastEvent)
+		require.NotNil(t, lastEvent.Response)
+		require.NotEmpty(t, lastEvent.Response.Choices)
+		assert.Equal(t, customResp.Choices[0].Message.Content,
+			lastEvent.Response.Choices[0].Message.Content)
 	})
 
 	t.Run("after agent callback (structured) returns error", func(t *testing.T) {
@@ -190,7 +164,7 @@ func TestLLMAgent_CallbacksStructured_AfterAgent(t *testing.T) {
 		)
 
 		m := newDummyModel()
-		agt := New("test", WithModel(m), WithAgentCallbacksStructured(callbacks))
+		agt := New("test", WithModel(m), WithAgentCallbacks(callbacks))
 
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("test-inv"),
@@ -214,9 +188,8 @@ func TestLLMAgent_CallbacksStructured_AfterAgent(t *testing.T) {
 		}
 
 		// Last event should be an error event.
-		if lastEvent == nil || lastEvent.Error == nil {
-			t.Fatal("expected error event from after callback")
-		}
+		require.NotNil(t, lastEvent)
+		require.NotNil(t, lastEvent.Error)
 	})
 }
 
@@ -249,7 +222,7 @@ func TestLLMAgent_CallbacksStructured_CoexistWithV1(t *testing.T) {
 		agt := New("test",
 			WithModel(m),
 			WithAgentCallbacks(callbacksV1),
-			WithAgentCallbacksStructured(callbacksV2),
+			WithAgentCallbacks(callbacksV2),
 		)
 
 		inv := agent.NewInvocation(
@@ -261,21 +234,14 @@ func TestLLMAgent_CallbacksStructured_CoexistWithV1(t *testing.T) {
 		)
 
 		eventChan, err := agt.Run(context.Background(), inv)
-		if err != nil {
-			t.Fatalf("Run() error = %v", err)
-		}
+		require.NoError(t, err)
 
 		// Drain events.
 		for range eventChan {
 		}
 
-		if !v1Called {
-			t.Error("V1 callback was not called")
-		}
-
-		if !v2Called {
-			t.Error("V2 callback was not called")
-		}
+		assert.True(t, v1Called, "V1 callback was not called")
+		assert.True(t, v2Called, "V2 callback was not called")
 	})
 
 	t.Run("V1 callback returns custom response, V2 not called", func(t *testing.T) {
@@ -315,7 +281,7 @@ func TestLLMAgent_CallbacksStructured_CoexistWithV1(t *testing.T) {
 		agt := New("test",
 			WithModel(m),
 			WithAgentCallbacks(callbacksV1),
-			WithAgentCallbacksStructured(callbacksV2),
+			WithAgentCallbacks(callbacksV2),
 		)
 
 		inv := agent.NewInvocation(
@@ -327,9 +293,7 @@ func TestLLMAgent_CallbacksStructured_CoexistWithV1(t *testing.T) {
 		)
 
 		eventChan, err := agt.Run(context.Background(), inv)
-		if err != nil {
-			t.Fatalf("Run() error = %v", err)
-		}
+		require.NoError(t, err)
 
 		// Collect events.
 		var events []*event.Event
@@ -337,21 +301,11 @@ func TestLLMAgent_CallbacksStructured_CoexistWithV1(t *testing.T) {
 			events = append(events, evt)
 		}
 
-		if len(events) != 1 {
-			t.Fatalf("expected 1 event, got %d", len(events))
-		}
-
-		if len(events[0].Response.Choices) == 0 {
-			t.Fatal("expected response with choices")
-		}
-
-		if events[0].Response.Choices[0].Message.Content !=
-			customResp.Choices[0].Message.Content {
-			t.Errorf("expected V1 custom response")
-		}
-
-		if v2Called {
-			t.Error("V2 callback should not be called when V1 returns custom response")
-		}
+		require.Len(t, events, 1)
+		require.NotEmpty(t, events[0].Response.Choices)
+		assert.Equal(t, customResp.Choices[0].Message.Content,
+			events[0].Response.Choices[0].Message.Content)
+		assert.False(t, v2Called,
+			"V2 callback should not be called when V1 returns custom response")
 	})
 }
