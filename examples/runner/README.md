@@ -28,15 +28,18 @@ This implementation showcases the essential features for building conversational
 
 ## Environment Variables
 
-| Variable          | Description                              | Default Value               |
-| ----------------- | ---------------------------------------- | --------------------------- |
-| `OPENAI_API_KEY`  | API key for the model service (required) | ``                          |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
+| Variable                | Description                                    | Default Value               |
+| ----------------------- | ---------------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`        | API key for the openai model                   | ``                          |
+| `OPENAI_BASE_URL`       | Base URL for the openai model API endpoint     | `https://api.openai.com/v1` |
+| `ANTHROPIC_AUTH_TOKEN`  | API key for the anthropic model                | ``                          |
+| `ANTHROPIC_BASE_URL`    | Base URL for the anthropic model API endpoint  | `https://api.anthropic.com` |
 
 ## Command Line Arguments
 
 | Argument           | Description                                         | Default Value    |
 | ------------------ | --------------------------------------------------- | ---------------- |
+| `-provider`        | Provider of the model to use                        | `openai`         |
 | `-model`           | Name of the model to use                            | `deepseek-chat`  |
 | `-session`         | Session service: `inmemory` or `redis`              | `inmemory`       |
 | `-redis-addr`      | Redis server address (when using redis session)     | `localhost:6379` |
@@ -58,6 +61,13 @@ go run .
 ```bash
 export OPENAI_API_KEY="your-api-key"
 go run . -model gpt-4o
+```
+
+### Custom Model Provider
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+go run . -provider anthropic
 ```
 
 ### With Redis Session
@@ -131,9 +141,11 @@ Output:
 ```
 Usage of ./runner:
   -enable-parallel
-        Enable parallel tool execution (faster performance) (default false)
+        Enable parallel tool execution (default: false, serial execution)
   -model string
         Name of the model to use (default "deepseek-chat")
+  -provider string
+        Name of the provider to use, openai or anthropic (default "openai")
   -redis-addr string
         Redis address (default "localhost:6379")
   -session string
