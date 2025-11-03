@@ -488,7 +488,9 @@ agent := llmagent.New("ai-assistant",
 )
 ```
 
-### Tool Filters
+### MCP Tool Filters
+
+MCP ToolSets support filtering tools at creation time:
 
 ```go
 // Include filter: only allow specified tools.
@@ -497,12 +499,119 @@ includeFilter := mcp.NewIncludeFilter("get_weather", "get_news", "calculator")
 // Exclude filter: exclude specified tools.
 excludeFilter := mcp.NewExcludeFilter("deprecated_tool", "slow_tool")
 
-// Combined filters.
+// Apply filter.
 combinedToolSet := mcp.NewMCPToolSet(
     connectionConfig,
     mcp.WithToolFilter(includeFilter),
 )
 ```
+
+### Per-Run Tool Filtering
+
+Per-run tool filtering enables dynamic control of tool availability for each `runner.Run` invocation without modifying Agent configuration. This is a "soft constraint" mechanism for optimizing token consumption and implementing role-based tool access control.
+
+**Key Features:**
+
+- 🎯 **Per-Run Control**: Independent configuration per invocation, no Agent modification needed
+- 💰 **Cost Optimization**: Reduce tool descriptions sent to LLM, lowering token costs
+- 🛡️ **Smart Protection**: Framework tools (`transfer_to_agent`, `knowledge_search`) automatically preserved, never filtered
+
+#### Basic Usage
+
+**1. Global Filtering (WithAllowedTools)**
+
+Uniformly restrict available tools for all Agents:
+
+```go
+// Only allow calculator and time tool
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithAllowedTools([]string{"calculator", "time_tool"}),
+)
+```
+
+**2. Agent-Specific Filtering (WithAllowedAgentTools)**
+
+Set different tool permissions for different Agents:
+
+```go
+// Configure different tools for different sub-Agents
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithAllowedAgentTools(map[string][]string{
+        "math-agent": {"calculator"},           // Math Agent can only use calculator
+        "time-agent": {"time_tool"},            // Time Agent can only use time tool
+        "text-agent": {"text_tool", "search"},  // Text Agent can use two tools
+    }),
+)
+```
+
+**3. Combined Usage**
+
+Set global default + Agent-specific overrides:
+
+```go
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    // Global: all Agents can use these tools by default
+    agent.WithAllowedTools([]string{"calculator", "time_tool", "search"}),
+    // Agent-specific: math-agent can only use calculator (more restrictive)
+    agent.WithAllowedAgentTools(map[string][]string{
+        "math-agent": {"calculator"},
+    }),
+)
+```
+
+**Priority:** `WithAllowedAgentTools` > `WithAllowedTools` > All Agent-registered tools
+
+#### Smart Filtering Mechanism
+
+The framework automatically distinguishes **user tools** from **framework tools**, filtering only user tools:
+
+| Tool Category | Includes | Filtered? |
+|--------------|----------|-----------|
+| **User Tools** | Tools registered via `WithTools`<br>Tools registered via `WithToolSets` | ✅ Subject to filtering |
+| **Framework Tools** | `transfer_to_agent` (multi-Agent coordination)<br>`knowledge_search` (knowledge base retrieval)<br>`agentic_knowledge_search` | ❌ Never filtered, auto-preserved |
+
+**Example:**
+
+```go
+// Agent registers multiple tools
+agent := llmagent.New("assistant",
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool,  // User tool
+        textTool,        // User tool
+    }),
+    llmagent.WithSubAgents([]agent.Agent{subAgent1, subAgent2}), // Auto-adds transfer_to_agent
+    llmagent.WithKnowledge(kb),                                   // Auto-adds knowledge_search
+)
+
+// Runtime filtering: only allow calculator
+runner.Run(ctx, userID, sessionID, message,
+    agent.WithAllowedTools([]string{"calculator"}),
+)
+
+// Tools actually sent to LLM:
+// ✅ calculator        - User tool, in allowed list
+// ❌ textTool          - User tool, filtered out
+// ✅ transfer_to_agent - Framework tool, auto-preserved
+// ✅ knowledge_search  - Framework tool, auto-preserved
+```
+
+#### Important Notes
+
+⚠️ **Security Notice:** Per-run tool filtering is a "soft constraint" primarily for optimization and user experience. Tools must still implement their own authorization logic:
+
+```go
+func sensitiveOperation(ctx context.Context, req Request) (Result, error) {
+    // ✅ Required: internal tool authorization
+    if !hasPermission(ctx, req.UserID, "sensitive_operation") {
+        return nil, fmt.Errorf("permission denied")
+    }
+    
+    // Execute operation
+    return performOperation(req)
+}
+```
+
+**Reason:** LLMs may know about tool existence and usage from context or memory and attempt to call them. Tool filtering reduces this possibility but cannot completely prevent it.
 
 ### Parallel Tool Execution
 
