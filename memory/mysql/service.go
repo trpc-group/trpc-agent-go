@@ -410,8 +410,9 @@ func validateTableName(tableName string) error {
 	if tableName == "" {
 		return errors.New("table name cannot be empty")
 	}
-	if len(tableName) > 64 {
-		return fmt.Errorf("table name too long: %d characters (max 64)", len(tableName))
+	const maxTableNameLength = 64
+	if len(tableName) > maxTableNameLength {
+		return fmt.Errorf("table name too long: %d characters (max %d)", len(tableName), maxTableNameLength)
 	}
 	if !tableNamePattern.MatchString(tableName) {
 		return fmt.Errorf("invalid table name: %s (must start with letter/underscore and contain only alphanumeric characters and underscores)", tableName)
