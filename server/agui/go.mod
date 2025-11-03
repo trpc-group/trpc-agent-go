@@ -2,10 +2,12 @@ module trpc.group/trpc-go/trpc-agent-go/server/agui
 
 go 1.24.4
 
+replace trpc.group/trpc-go/trpc-agent-go => ../../
+
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251023014556-5eaa5fba9ad5
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -17,6 +19,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
+	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.29.0 // indirect
@@ -35,5 +38,5 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
 )

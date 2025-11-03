@@ -388,7 +388,7 @@ func (c *multiTurnChat) getCurrentTime(_ context.Context, args timeArgs) (timeRe
 
 // calculatorArgs represents arguments for the calculator tool.
 type calculatorArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
+	Operation string  `json:"operation" description:"The operation to perform"`
 	A         float64 `json:"a" description:"First number"`
 	B         float64 `json:"b" description:"Second number"`
 }
@@ -403,7 +403,7 @@ type calculatorResult struct {
 
 // timeArgs represents arguments for the time tool.
 type timeArgs struct {
-	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
+	Timezone string `json:"timezone" description:"Timezone or leave empty for local"`
 }
 
 // timeResult represents the current time information.

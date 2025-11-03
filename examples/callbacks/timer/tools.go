@@ -50,7 +50,7 @@ func (e *toolTimerExample) calculator(ctx context.Context, args *calculatorArgs)
 
 // calculatorArgs represents arguments for the calculator tool.
 type calculatorArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
+	Operation string  `json:"operation" description:"The operation to perform"`
 	A         float64 `json:"a" description:"First number"`
 	B         float64 `json:"b" description:"Second number"`
 }

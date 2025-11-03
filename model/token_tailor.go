@@ -132,6 +132,17 @@ func (s *MiddleOutStrategy) TailorMessages(ctx context.Context, messages []Messa
 	// Build prefix sum for efficient range queries.
 	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
 
+	// Check if all messages fit within the budget.
+	totalTokens := prefixSum[len(messages)]
+	if totalTokens <= maxTokens {
+		// All messages fit, but still remove leading tool message if present.
+		result := messages
+		if len(result) > 0 && result[0].Role == RoleTool {
+			result = result[1:]
+		}
+		return result, nil
+	}
+
 	// Calculate preserved segments (always preserve system message and last turn).
 	preservedHead := calculatePreservedHeadCount(messages)
 	preservedTail := calculatePreservedTailCount(messages)
@@ -201,6 +212,11 @@ func (s *MiddleOutStrategy) findOptimalMiddleOutBalance(prefixSum []int, preserv
 	totalMessages := len(prefixSum) - 1 - preservedHead - preservedTail
 	availableTokens := maxTokens - (prefixSum[preservedHead] + (prefixSum[len(prefixSum)-1] - prefixSum[len(prefixSum)-1-preservedTail]))
 
+	// If no tokens available for additional messages, return only preserved segments.
+	if availableTokens <= 0 || totalMessages <= 0 {
+		return preservedHead, len(prefixSum) - 1 - preservedTail
+	}
+
 	// Try to fit as many messages as possible, starting from the middle.
 	headCount := preservedHead
 	tailCount := len(prefixSum) - 1 - preservedTail
@@ -253,6 +269,17 @@ func (s *HeadOutStrategy) TailorMessages(ctx context.Context, messages []Message
 	// Build prefix sum for efficient range queries.
 	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
 
+	// Check if all messages fit within the budget.
+	totalTokens := prefixSum[len(messages)]
+	if totalTokens <= maxTokens {
+		// All messages fit, but still remove leading tool message if present.
+		result := messages
+		if len(result) > 0 && result[0].Role == RoleTool {
+			result = result[1:]
+		}
+		return result, nil
+	}
+
 	// Calculate preserved segments (preserve system message and last turn).
 	preservedHead := calculatePreservedHeadCount(messages)
 	preservedTail := calculatePreservedTailCount(messages)
@@ -293,11 +320,12 @@ func (s *HeadOutStrategy) binarySearchMaxTailCount(prefixSum []int, preservedHea
 	for left+1 < right {
 		mid := (left + right) / 2
 
-		// Calculate tokens for preserved head + tail.
+		// Calculate tokens for preserved head + tail messages + preserved tail.
 		headTokens := prefixSum[preservedHead]
-		tailTokens := prefixSum[len(prefixSum)-1] - prefixSum[mid]
+		tailTokens := prefixSum[len(prefixSum)-1-preservedTail] - prefixSum[mid]
+		preservedTailTokens := prefixSum[len(prefixSum)-1] - prefixSum[len(prefixSum)-1-preservedTail]
 
-		if headTokens+tailTokens <= maxTokens {
+		if headTokens+tailTokens+preservedTailTokens <= maxTokens {
 			right = mid
 		} else {
 			left = mid
@@ -353,6 +381,17 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 	// Build prefix sum for efficient range queries.
 	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
 
+	// Check if all messages fit within the budget.
+	totalTokens := prefixSum[len(messages)]
+	if totalTokens <= maxTokens {
+		// All messages fit, but still remove leading tool message if present.
+		result := messages
+		if len(result) > 0 && result[0].Role == RoleTool {
+			result = result[1:]
+		}
+		return result, nil
+	}
+
 	// Calculate preserved segments (preserve system message and last turn).
 	preservedHead := calculatePreservedHeadCount(messages)
 	preservedTail := calculatePreservedTailCount(messages)
@@ -393,11 +432,12 @@ func (s *TailOutStrategy) binarySearchMaxHeadCount(prefixSum []int, preservedHea
 	for left+1 < right {
 		mid := (left + right) / 2
 
-		// Calculate tokens for head + preserved tail.
+		// Calculate tokens for preserved head + head messages + preserved tail.
+		preservedHeadTokens := prefixSum[preservedHead]
 		headTokens := prefixSum[mid] - prefixSum[preservedHead]
-		tailTokens := prefixSum[len(prefixSum)-1] - prefixSum[len(prefixSum)-1-preservedTail]
+		preservedTailTokens := prefixSum[len(prefixSum)-1] - prefixSum[len(prefixSum)-1-preservedTail]
 
-		if headTokens+tailTokens <= maxTokens {
+		if preservedHeadTokens+headTokens+preservedTailTokens <= maxTokens {
 			left = mid
 		} else {
 			right = mid
