@@ -62,6 +62,10 @@ func WithMemoryLimit(limit int) ServiceOpt {
 // Maximum length is 64 characters.
 func WithTableName(tableName string) ServiceOpt {
 	return func(opts *ServiceOpts) {
+		// Validate table name to prevent SQL injection.
+		if err := validateTableName(tableName); err != nil {
+			return
+		}
 		opts.tableName = tableName
 	}
 }
