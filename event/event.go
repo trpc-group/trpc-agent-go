@@ -12,6 +12,7 @@ package event
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -38,6 +39,9 @@ const (
 
 	// TagDelimiter is the delimiter for event tags.
 	TagDelimiter = ";"
+
+	// jsonKeyResponse is the nested response object key to preserve response fields.
+	jsonKeyResponse = "response"
 )
 
 // Event represents an event in conversation between agents and users.
@@ -277,6 +281,59 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	case <-time.After(timeout):
 		log.Warnf("EmitEventWithTimeout: timeout, event: %+v", *e)
 		return DefaultEmitTimeoutErr
+	}
+	return nil
+}
+
+// MarshalJSON provides the format for Event that avoids anonymous
+// embedding conflicts by always including a nested "response" object while
+// preserving legacy flattened fields for backward compatibility.
+func (e *Event) MarshalJSON() ([]byte, error) {
+	// Avoid recursion by using a no-method alias.
+	type noMethods Event
+	flat, err := json.Marshal((*noMethods)(e))
+	if err != nil {
+		return nil, err
+	}
+	// Convert to a raw payload map and inject the nested response.
+	payload := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(flat, &payload); err != nil {
+		return nil, err
+	}
+	if e != nil && e.Response != nil {
+		rspBytes, err := json.Marshal(e.Response)
+		if err != nil {
+			return nil, err
+		}
+		payload[jsonKeyResponse] = rspBytes
+	}
+	return json.Marshal(payload)
+}
+
+// UnmarshalJSON accepts both legacy flattened Event JSON and the new format
+// that includes a nested "response" object. When nested "response" is present,
+// it takes precedence for populating the Response fields.
+func (e *Event) UnmarshalJSON(data []byte) error {
+	// Unmarshal into alias to populate legacy flattened fields.
+	type noMethods Event
+	var aux noMethods
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*e = Event(aux)
+	// If a nested response is present, hydrate it to avoid conflicts.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		log.Warnf("Event raw unmarshal: %w", err)
+		return nil
+	}
+	if rspBytes, ok := raw[jsonKeyResponse]; ok && len(rspBytes) > 0 {
+		var rsp model.Response
+		if err := json.Unmarshal(rspBytes, &rsp); err != nil {
+			log.Warnf("Event response unmarshal: %w", err)
+			return nil
+		}
+		e.Response = &rsp
 	}
 	return nil
 }
