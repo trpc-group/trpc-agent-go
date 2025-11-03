@@ -250,6 +250,149 @@ the presence of an invocation.
 
 ---
 
+## Invocation State: Sharing Data Between Callbacks
+
+`Invocation` provides a general-purpose `State` mechanism for storing invocation-scoped data. It can be used not only for sharing data between Before and After callbacks, but also for middleware, custom logic, and any invocation-level state management.
+
+### Core Methods
+
+```go
+// Set a state value.
+func (inv *Invocation) SetState(key string, value any)
+
+// Get a state value, returns value and existence flag.
+func (inv *Invocation) GetState(key string) (any, bool)
+
+// Delete a state value.
+func (inv *Invocation) DeleteState(key string)
+```
+
+### Features
+
+- **Invocation-scoped**: State is automatically scoped to a single invocation
+- **Thread-safe**: Built-in RWMutex protection for concurrent access
+- **Lazy initialization**: Memory allocated only on first use
+- **Clean lifecycle**: Explicit deletion prevents memory leaks
+- **General-purpose**: Not limited to callbacks, can be used for any invocation-level state
+
+### Naming Convention
+
+To avoid key conflicts between different use cases, use prefixes:
+
+- Agent callbacks: `"agent:xxx"` (e.g., `"agent:start_time"`)
+- Model callbacks: `"model:xxx"` (e.g., `"model:start_time"`)
+- Tool callbacks: `"tool:<toolName>:<toolCallID>:xxx"` (e.g., `"tool:calculator:call_abc123:start_time"`)
+  - Note: Tool callbacks should include tool call ID to support concurrent calls
+- Middleware: `"middleware:xxx"` (e.g., `"middleware:request_id"`)
+- Custom logic: `"custom:xxx"` (e.g., `"custom:user_context"`)
+
+### Example: Agent Callback Timing
+
+```go
+// BeforeAgentCallback: Record start time.
+agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+  inv.SetState("agent:start_time", time.Now())
+  return nil, nil
+})
+
+// AfterAgentCallback: Calculate execution duration.
+agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+  if startTimeVal, ok := inv.GetState("agent:start_time"); ok {
+    startTime := startTimeVal.(time.Time)
+    duration := time.Since(startTime)
+    fmt.Printf("Agent execution took: %v\n", duration)
+    inv.DeleteState("agent:start_time") // Clean up state.
+  }
+  return nil, nil
+})
+```
+
+### Example: Model Callback Timing
+
+Model and Tool callbacks need to retrieve the Invocation from context first:
+
+```go
+// BeforeModelCallback: Record start time.
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    inv.SetState("model:start_time", time.Now())
+  }
+  return nil, nil
+})
+
+// AfterModelCallback: Calculate execution duration.
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    if startTimeVal, ok := inv.GetState("model:start_time"); ok {
+      startTime := startTimeVal.(time.Time)
+      duration := time.Since(startTime)
+      fmt.Printf("Model inference took: %v\n", duration)
+      inv.DeleteState("model:start_time") // Clean up state.
+    }
+  }
+  return nil, nil
+})
+```
+
+### Example: Tool Callback Timing (Multi-tool Isolation)
+
+```go
+// BeforeToolCallback: Record tool start time.
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    // Get tool call ID for concurrent call support.
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+      toolCallID = "default" // Fallback for compatibility.
+    }
+
+    // Use tool call ID to build unique key.
+    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+    inv.SetState(key, time.Now())
+  }
+  return nil, nil
+})
+
+// AfterToolCallback: Calculate tool execution duration.
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    // Get tool call ID for concurrent call support.
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+      toolCallID = "default" // Fallback for compatibility.
+    }
+
+    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+    if startTimeVal, ok := inv.GetState(key); ok {
+      startTime := startTimeVal.(time.Time)
+      duration := time.Since(startTime)
+      fmt.Printf("Tool %s (call %s) took: %v\n", toolName, toolCallID, duration)
+      inv.DeleteState(key) // Clean up state.
+    }
+  }
+  return nil, nil
+})
+```
+
+**Key Points**:
+
+1. **Get tool call ID**: Use `tool.ToolCallIDFromContext(ctx)` to retrieve the unique ID for each tool call from context
+2. **Key format**: `"tool:<toolName>:<toolCallID>:<key>"` ensures state isolation for concurrent calls
+3. **Fallback handling**: If tool call ID is not available (older versions or special scenarios), use `"default"` as fallback
+4. **Consistency**: Before and After callbacks must use the same logic to retrieve tool call ID
+
+This ensures that when the LLM calls `calculator` multiple times concurrently (e.g., `calculator(1,2)` and `calculator(3,4)`), each call has its own independent timing data.
+
+### Complete Example
+
+For a complete timing example with OpenTelemetry integration, see:
+[examples/callbacks/timer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
+
+For an authentication and authorization example using Invocation State for permission checks and audit logging, see:
+[examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
+
+---
+
 ## Global Callbacks and Chain Registration
 
 You can define reusable global callbacks using chain registration.

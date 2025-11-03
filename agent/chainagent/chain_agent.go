@@ -154,12 +154,12 @@ func (a *ChainAgent) executeChainRun(
 	}
 
 	// Execute sub-agents in sequence.
-	e := a.executeSubAgents(ctx, invocation, eventChan)
+	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan)
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil || a.agentCallbacksStructured != nil {
 		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
 	}
-	itelemetry.TraceAfterInvokeAgent(span, e)
+	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage)
 
 }
 
@@ -232,7 +232,8 @@ func (a *ChainAgent) executeSubAgents(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) *event.Event {
+) (*event.Event, *itelemetry.TokenUsage) {
+	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
 	for _, subAgent := range a.subAgents {
 		// Create clean invocation for sub-agent - no shared state mutation.
@@ -252,16 +253,23 @@ func (a *ChainAgent) executeSubAgents(
 				err.Error(),
 			)
 			agent.EmitEvent(ctx, invocation, eventChan, e)
-			return e
+			return e, tokenUsage
 		}
 
 		// Forward all events from the sub-agent.
 		for subEvent := range subEventChan {
-			if subEvent != nil && subEvent.Response != nil && !subEvent.Response.IsPartial {
-				fullRespEvent = subEvent
+			if subEvent != nil && subEvent.Response != nil {
+				if subEvent.Response.Usage != nil {
+					tokenUsage.PromptTokens += subEvent.Response.Usage.PromptTokens
+					tokenUsage.CompletionTokens += subEvent.Response.Usage.CompletionTokens
+					tokenUsage.TotalTokens += subEvent.Response.Usage.TotalTokens
+				}
+				if !subEvent.Response.IsPartial {
+					fullRespEvent = subEvent
+				}
 			}
 			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
-				return nil
+				return nil, tokenUsage
 			}
 		}
 
@@ -274,10 +282,10 @@ func (a *ChainAgent) executeSubAgents(
 				fmt.Sprintf("chain agent %q cancelled execution of sub-agent %q: %v", a.name, subAgent.Info().Name, err),
 			)
 			agent.EmitEvent(ctx, invocation, eventChan, e)
-			return e
+			return e, tokenUsage
 		}
 	}
-	return fullRespEvent
+	return fullRespEvent, tokenUsage
 }
 
 // handleAfterAgentCallbacks handles post-execution callbacks.

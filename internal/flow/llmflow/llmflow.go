@@ -173,11 +173,11 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 	var span oteltrace.Span
-	if invocation.Model == nil {
-		_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(""))
-	} else {
-		_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(invocation.Model.Info().Name))
+	var modelName string
+	if invocation.Model != nil {
+		modelName = invocation.Model.Info().Name
 	}
+	_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
 
 	// 2. Call LLM (get response channel).
@@ -185,7 +185,6 @@ func (f *Flow) runOneStep(
 	if err != nil {
 		return nil, err
 	}
-
 	// 3. Process streaming responses.
 	return f.processStreamingResponses(ctx, invocation, llmRequest, responseChan, eventChan, span)
 }
@@ -198,10 +197,14 @@ func (f *Flow) processStreamingResponses(
 	responseChan <-chan *model.Response,
 	eventChan chan<- *event.Event,
 	span oteltrace.Span,
-) (*event.Event, error) {
-	var lastEvent *event.Event
+) (lastEvent *event.Event, err error) {
+	// Create telemetry tracker and defer metrics recording
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, &err)
+	defer tracker.RecordMetrics()()
 
 	for response := range responseChan {
+		// Track response for telemetry
+		tracker.TrackResponse(response)
 		// Handle after model callbacks.
 		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
 		if err != nil {
@@ -215,8 +218,9 @@ func (f *Flow) processStreamingResponses(
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
+		tracker.SetLastEvent(lastEvent)
 		// 5. Check context cancellation.
-		if err := agent.CheckContextCancelled(ctx); err != nil {
+		if err = agent.CheckContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 
@@ -226,7 +230,8 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID)
+		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, tracker.FirstTokenTimeDuration())
+
 	}
 
 	return lastEvent, nil

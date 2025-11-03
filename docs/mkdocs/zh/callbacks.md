@@ -296,6 +296,151 @@ if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 
 ---
 
+## Invocation State：在回调间共享状态
+
+`Invocation` 提供了通用的 `State` 机制，用于存储 invocation 级别的状态数据。它不仅可以在 Before 和 After 回调之间共享数据，也可以用于中间件、自定义逻辑等场景。
+
+### 核心方法
+
+```go
+// 设置状态值.
+func (inv *Invocation) SetState(key string, value any)
+
+// 获取状态值，返回值和是否存在.
+func (inv *Invocation) GetState(key string) (any, bool)
+
+// 删除状态值.
+func (inv *Invocation) DeleteState(key string)
+```
+
+### 特点
+
+- **Invocation 级作用域**：状态自动限定在单次 Invocation 内
+- **线程安全**：内置 RWMutex 保护，支持并发访问
+- **懒初始化**：首次使用时才分配内存，节省资源
+- **清晰生命周期**：使用完毕后可显式删除，避免内存泄漏
+- **通用性强**：不限于 callbacks，可用于任何 invocation 级别的状态存储
+
+### 命名约定
+
+为避免不同使用场景之间的键冲突，建议使用前缀：
+
+- Agent 回调：`"agent:xxx"`（如 `"agent:start_time"`）
+- Model 回调：`"model:xxx"`（如 `"model:start_time"`）
+- Tool 回调：`"tool:<toolName>:<toolCallID>:xxx"`（如 `"tool:calculator:call_abc123:start_time"`）
+  - 注意：Tool 回调需要包含 tool call ID 以支持并发调用
+- 中间件：`"middleware:xxx"`（如 `"middleware:request_id"`）
+- 自定义逻辑：`"custom:xxx"`（如 `"custom:user_context"`）
+
+### 示例：Agent 回调计时
+
+```go
+// BeforeAgentCallback：记录开始时间.
+agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+  inv.SetState("agent:start_time", time.Now())
+  return nil, nil
+})
+
+// AfterAgentCallback：计算执行时长.
+agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+  if startTimeVal, ok := inv.GetState("agent:start_time"); ok {
+    startTime := startTimeVal.(time.Time)
+    duration := time.Since(startTime)
+    fmt.Printf("Agent execution took: %v\n", duration)
+    inv.DeleteState("agent:start_time") // 清理状态.
+  }
+  return nil, nil
+})
+```
+
+### 示例：Model 回调计时
+
+Model 和 Tool 回调需要先从 context 中获取 Invocation：
+
+```go
+// BeforeModelCallback：记录开始时间.
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    inv.SetState("model:start_time", time.Now())
+  }
+  return nil, nil
+})
+
+// AfterModelCallback：计算执行时长.
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    if startTimeVal, ok := inv.GetState("model:start_time"); ok {
+      startTime := startTimeVal.(time.Time)
+      duration := time.Since(startTime)
+      fmt.Printf("Model inference took: %v\n", duration)
+      inv.DeleteState("model:start_time") // 清理状态.
+    }
+  }
+  return nil, nil
+})
+```
+
+### 示例：Tool 回调计时（支持并发工具调用）
+
+当 LLM 在一次响应中返回多个工具调用（包括同一工具的多次调用）时，框架会并发执行这些工具。为了正确追踪每个工具调用的状态，需要使用 **tool call ID** 来区分：
+
+```go
+// BeforeToolCallback：记录工具开始时间.
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    // 获取 tool call ID 以支持并发调用.
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+      toolCallID = "default" // 降级方案.
+    }
+
+    // 使用 tool call ID 构建唯一键.
+    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+    inv.SetState(key, time.Now())
+  }
+  return nil, nil
+})
+
+// AfterToolCallback：计算工具执行时长.
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    // 使用相同的逻辑获取 tool call ID.
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+      toolCallID = "default"
+    }
+
+    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+    if startTimeVal, ok := inv.GetState(key); ok {
+      startTime := startTimeVal.(time.Time)
+      duration := time.Since(startTime)
+      fmt.Printf("Tool %s (call %s) took: %v\n", toolName, toolCallID, duration)
+      inv.DeleteState(key) // 清理状态.
+    }
+  }
+  return nil, nil
+})
+```
+
+**关键点**：
+
+1. **获取 tool call ID**：使用 `tool.ToolCallIDFromContext(ctx)` 从 context 中获取唯一的工具调用 ID
+2. **键名格式**：`"tool:<toolName>:<toolCallID>:<key>"` 确保并发调用的状态隔离
+3. **降级处理**：如果获取不到 tool call ID（旧版本或特殊场景），使用 `"default"` 作为降级
+4. **一致性**：Before 和 After 回调必须使用相同的逻辑获取 tool call ID
+
+这样可以确保当 LLM 同时调用 `calculator` 多次（如 `calculator(1,2)` 和 `calculator(3,4)`）时，每个调用都有独立的计时数据。
+
+### 完整示例
+
+完整的计时示例（包含 OpenTelemetry 集成）请参考：
+[examples/callbacks/timer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
+
+用户认证与授权示例（使用 Invocation State 进行权限检查和审计日志）请参考：
+[examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
+
+---
+
 ## 全局回调与链式注册
 
 可通过链式注册构建可复用的全局回调配置。
