@@ -545,8 +545,9 @@ func TestExecuteSingleToolCall_Error_ErrorInEvent(t *testing.T) {
 }
 
 func TestExtractToolCallbacks_NotFound(t *testing.T) {
-	_, ok := extractToolCallbacks(State{})
-	require.False(t, ok)
+	legacy, structured := extractToolCallbacks(State{})
+	require.Nil(t, legacy)
+	require.Nil(t, structured)
 }
 
 func TestAgentEvents_Emit(t *testing.T) {
@@ -622,7 +623,7 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	cbs := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return map[string]any{"short": true}, nil
 	})
-	res, _, err := runTool(ctx, call, cbs, tdecl)
+	res, _, err := runTool(ctx, call, cbs, nil, tdecl)
 	require.NoError(t, err)
 	m, _ := res.(map[string]any)
 	require.Equal(t, true, m["short"])
@@ -631,20 +632,20 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	cbs2 := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return nil, assert.AnError
 	})
-	_, _, err = runTool(ctx, call, cbs2, tdecl)
+	_, _, err = runTool(ctx, call, cbs2, nil, tdecl)
 	require.Error(t, err)
 
 	// After callback returns custom result
 	cbs3 := tool.NewCallbacks().RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
 		return map[string]any{"override": true}, nil
 	})
-	res, _, err = runTool(ctx, call, cbs3, tdecl)
+	res, _, err = runTool(ctx, call, cbs3, nil, tdecl)
 	require.NoError(t, err)
 	m2, _ := res.(map[string]any)
 	require.Equal(t, true, m2["override"])
 
 	// Not callable tool
-	_, _, err = runTool(ctx, call, nil, &notCallableTool{})
+	_, _, err = runTool(ctx, call, nil, nil, &notCallableTool{})
 	require.Error(t, err)
 }
 
@@ -1056,7 +1057,7 @@ func TestRunModel_BeforeModelCustomResponse(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
 		return &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("custom")}}}, nil
 	})
-	ch, err := runModel(context.Background(), cbs, &dummyModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
+	ch, err := runModel(context.Background(), cbs, nil, &dummyModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.NoError(t, err)
 	rsp := <-ch
 	require.NotNil(t, rsp)
@@ -1206,9 +1207,9 @@ func TestFindSubAgentByName_NoProvider(t *testing.T) {
 func TestExtractToolCallbacks_Found(t *testing.T) {
 	cbs := tool.NewCallbacks()
 	st := State{StateKeyToolCallbacks: cbs}
-	got, ok := extractToolCallbacks(st)
-	require.True(t, ok)
-	require.Equal(t, cbs, got)
+	gotLegacy, gotStructured := extractToolCallbacks(st)
+	require.Equal(t, cbs, gotLegacy)
+	require.Nil(t, gotStructured)
 }
 
 func TestMessageReducer_NilUpdateAndFallback(t *testing.T) {
@@ -1357,7 +1358,7 @@ func (e *errModel) GenerateContent(ctx context.Context, req *model.Request) (<-c
 func (e *errModel) Info() model.Info { return model.Info{Name: "err"} }
 
 func TestRunModel_GenerateContentError(t *testing.T) {
-	_, err := runModel(context.Background(), nil, &errModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
+	_, err := runModel(context.Background(), nil, nil, &errModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.Error(t, err)
 }
 

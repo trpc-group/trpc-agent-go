@@ -21,6 +21,7 @@ func isInternalStateKey(key string) bool {
 		// Graph execution internal wiring
 		StateKeyExecContext, StateKeyParentAgent,
 		StateKeyToolCallbacks, StateKeyModelCallbacks,
+		StateKeyToolCallbacksStructured, StateKeyModelCallbacksStructured,
 		StateKeyAgentCallbacks, StateKeyCurrentNodeID,
 		StateKeySession:
 		return true

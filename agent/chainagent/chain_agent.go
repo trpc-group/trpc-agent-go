@@ -27,10 +27,11 @@ const defaultChannelBufferSize = 256
 
 // ChainAgent is an agent that runs its sub-agents in sequence.
 type ChainAgent struct {
-	name              string
-	subAgents         []agent.Agent
-	channelBufferSize int
-	agentCallbacks    *agent.Callbacks
+	name                     string
+	subAgents                []agent.Agent
+	channelBufferSize        int
+	agentCallbacks           *agent.Callbacks
+	agentCallbacksStructured *agent.CallbacksStructured
 }
 
 // Option configures ChainAgent settings using the functional options pattern.
@@ -40,9 +41,10 @@ type Option func(*Options)
 // Options contains all configuration options for ChainAgent.
 // This struct is exported to allow external packages to inspect or modify options.
 type Options struct {
-	subAgents         []agent.Agent
-	channelBufferSize int
-	agentCallbacks    *agent.Callbacks
+	subAgents                []agent.Agent
+	channelBufferSize        int
+	agentCallbacks           *agent.Callbacks
+	agentCallbacksStructured *agent.CallbacksStructured
 }
 
 // WithSubAgents sets the sub-agents that will be executed in sequence.
@@ -62,8 +64,20 @@ func WithChannelBufferSize(size int) Option {
 // WithAgentCallbacks attaches lifecycle callbacks to the chain agent.
 // These callbacks allow custom logic to be executed before and after
 // the chain agent runs.
-func WithAgentCallbacks(cb *agent.Callbacks) Option {
-	return func(o *Options) { o.agentCallbacks = cb }
+// Supports both legacy (*agent.Callbacks) and structured
+// (*agent.CallbacksStructured) callbacks.
+func WithAgentCallbacks[T *agent.Callbacks | *agent.CallbacksStructured](
+	callbacks T,
+) Option {
+	return func(o *Options) {
+		switch cb := any(callbacks).(type) {
+		case *agent.Callbacks:
+			o.agentCallbacks = cb
+		case *agent.CallbacksStructured:
+			o.agentCallbacksStructured = cb
+		default:
+		}
+	}
 }
 
 // New creates a new ChainAgent with the given name and options.
@@ -86,10 +100,11 @@ func New(name string, opts ...Option) *ChainAgent {
 	}
 
 	return &ChainAgent{
-		name:              name,
-		subAgents:         cfg.subAgents,
-		channelBufferSize: cfg.channelBufferSize,
-		agentCallbacks:    cfg.agentCallbacks,
+		name:                     name,
+		subAgents:                cfg.subAgents,
+		channelBufferSize:        cfg.channelBufferSize,
+		agentCallbacks:           cfg.agentCallbacks,
+		agentCallbacksStructured: cfg.agentCallbacksStructured,
 	}
 }
 
@@ -141,7 +156,7 @@ func (a *ChainAgent) executeChainRun(
 	// Execute sub-agents in sequence.
 	e := a.executeSubAgents(ctx, invocation, eventChan)
 	// Handle after agent callbacks.
-	if a.agentCallbacks != nil {
+	if a.agentCallbacks != nil || a.agentCallbacksStructured != nil {
 		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
 	}
 	itelemetry.TraceAfterInvokeAgent(span, e)
@@ -161,31 +176,55 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) bool {
-	if a.agentCallbacks == nil {
-		return false
+	// Run legacy before agent callbacks.
+	if a.agentCallbacks != nil {
+		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			// Send error event.
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			))
+			return true
+		}
+		if customResponse != nil {
+			// Create an event from the custom response and then close.
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				customResponse,
+			))
+			return true
+		}
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
-	if err != nil {
-		// Send error event.
-		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			agent.ErrorTypeAgentCallbackError,
-			err.Error(),
-		))
-		return true // Indicates early return
+	// Run structured before agent callbacks.
+	if a.agentCallbacksStructured != nil {
+		result, err := a.agentCallbacksStructured.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			// Send error event.
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			))
+			return true
+		}
+		if result != nil && result.CustomResponse != nil {
+			// Create an event from the custom response and then close.
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				result.CustomResponse,
+			))
+			return true
+		}
 	}
-	if customResponse != nil {
-		// Create an event from the custom response and then close.
-		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		))
-		return true // Indicates early return
-	}
-	return false // Continue execution
+
+	return false
 }
 
 // executeSubAgents runs all sub-agents in sequence.
@@ -247,26 +286,52 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) *event.Event {
-
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
 	var evt *event.Event
-	if err != nil {
-		// Send error event.
-		evt = event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			agent.ErrorTypeAgentCallbackError,
-			err.Error(),
-		)
-	} else if customResponse != nil {
-		// Create an event from the custom response.
-		evt = event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		)
+
+	// Run legacy after agent callbacks.
+	if a.agentCallbacks != nil {
+		customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		if err != nil {
+			// Send error event.
+			evt = event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			)
+		} else if customResponse != nil {
+			// Create an event from the custom response.
+			evt = event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				customResponse,
+			)
+		}
+		agent.EmitEvent(ctx, invocation, eventChan, evt)
 	}
-	agent.EmitEvent(ctx, invocation, eventChan, evt)
+
+	// Run structured after agent callbacks.
+	if a.agentCallbacksStructured != nil {
+		result, err := a.agentCallbacksStructured.RunAfterAgent(ctx, invocation, nil)
+		if err != nil {
+			// Send error event.
+			evt = event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			)
+		} else if result != nil && result.CustomResponse != nil {
+			// Create an event from the custom response.
+			evt = event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				result.CustomResponse,
+			)
+		}
+		agent.EmitEvent(ctx, invocation, eventChan, evt)
+	}
+
 	return evt
 }
 

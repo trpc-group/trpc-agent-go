@@ -38,11 +38,17 @@ const (
 	// StateKeyExecContext is the key of the execution context.
 	StateKeyExecContext = "exec_context"
 	// StateKeyToolCallbacks is the key of the tool callbacks.
+	// Deprecated: Use StateKeyToolCallbacksStructured instead.
 	StateKeyToolCallbacks = "tool_callbacks"
 	// StateKeyModelCallbacks is the key of the model callbacks.
+	// Deprecated: Use StateKeyModelCallbacksStructured instead.
 	StateKeyModelCallbacks = "model_callbacks"
 	// StateKeyAgentCallbacks is the key of the agent callbacks.
 	StateKeyAgentCallbacks = "agent_callbacks"
+	// StateKeyToolCallbacksStructured is the key of the structured tool callbacks.
+	StateKeyToolCallbacksStructured = "tool_callbacks_structured"
+	// StateKeyModelCallbacksStructured is the key of the structured model callbacks.
+	StateKeyModelCallbacksStructured = "model_callbacks_structured"
 	// StateKeyCurrentNodeID is the key for storing the current node ID in the state.
 	StateKeyCurrentNodeID = "current_node_id"
 	// StateKeyParentAgent is the key for storing the parent GraphAgent that owns sub-agents.

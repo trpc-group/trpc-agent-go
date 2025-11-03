@@ -36,9 +36,19 @@ func WithDescription(description string) Option {
 }
 
 // WithAgentCallbacks sets the agent callbacks.
-func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
+// Supports both legacy (*agent.Callbacks) and structured
+// (*agent.CallbacksStructured) callbacks.
+func WithAgentCallbacks[T *agent.Callbacks | *agent.CallbacksStructured](
+	callbacks T,
+) Option {
 	return func(opts *Options) {
-		opts.AgentCallbacks = callbacks
+		switch cb := any(callbacks).(type) {
+		case *agent.Callbacks:
+			opts.AgentCallbacks = cb
+		case *agent.CallbacksStructured:
+			opts.AgentCallbacksStructured = cb
+		default:
+		}
 	}
 }
 
@@ -78,6 +88,8 @@ type Options struct {
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
+	// AgentCallbacksStructured contains structured callbacks for agent operations.
+	AgentCallbacksStructured *agent.CallbacksStructured
 	// InitialState is the initial state for graph execution.
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
@@ -88,14 +100,15 @@ type Options struct {
 
 // GraphAgent is an agent that executes a graph.
 type GraphAgent struct {
-	name              string
-	description       string
-	graph             *graph.Graph
-	executor          *graph.Executor
-	subAgents         []agent.Agent
-	agentCallbacks    *agent.Callbacks
-	initialState      graph.State
-	channelBufferSize int
+	name                     string
+	description              string
+	graph                    *graph.Graph
+	executor                 *graph.Executor
+	subAgents                []agent.Agent
+	agentCallbacks           *agent.Callbacks
+	agentCallbacksStructured *agent.CallbacksStructured
+	initialState             graph.State
+	channelBufferSize        int
 }
 
 // New creates a new GraphAgent with the given graph and options.
@@ -123,14 +136,15 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	}
 
 	return &GraphAgent{
-		name:              name,
-		description:       options.Description,
-		graph:             g,
-		executor:          executor,
-		subAgents:         options.SubAgents,
-		agentCallbacks:    options.AgentCallbacks,
-		initialState:      options.InitialState,
-		channelBufferSize: options.ChannelBufferSize,
+		name:                     name,
+		description:              options.Description,
+		graph:                    g,
+		executor:                 executor,
+		subAgents:                options.SubAgents,
+		agentCallbacks:           options.AgentCallbacks,
+		agentCallbacksStructured: options.AgentCallbacksStructured,
+		initialState:             options.InitialState,
+		channelBufferSize:        options.ChannelBufferSize,
 	}, nil
 }
 
@@ -143,6 +157,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	initialState := ga.createInitialState(ctx, invocation)
 
 	// Execute the graph.
+	// Run legacy before agent callbacks.
 	if ga.agentCallbacks != nil {
 		customResponse, err := ga.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
@@ -158,11 +173,27 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 			return eventChan, nil
 		}
 	}
+	// Run structured before agent callbacks.
+	if ga.agentCallbacksStructured != nil {
+		result, err := ga.agentCallbacksStructured.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			return nil, fmt.Errorf("before agent callback (structured) failed: %w", err)
+		}
+		if result != nil && result.CustomResponse != nil {
+			// Create a channel that returns the custom response and then closes.
+			eventChan := make(chan *event.Event, 1)
+			// Create an event from the custom response.
+			customevent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
+			agent.EmitEvent(ctx, invocation, eventChan, customevent)
+			close(eventChan)
+			return eventChan, nil
+		}
+	}
 	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
 	if err != nil {
 		return nil, err
 	}
-	if ga.agentCallbacks != nil {
+	if ga.agentCallbacks != nil || ga.agentCallbacksStructured != nil {
 		return ga.wrapEventChannel(ctx, invocation, eventChan), nil
 	}
 	return eventChan, nil
@@ -290,27 +321,57 @@ func (ga *GraphAgent) wrapEventChannel(
 				return
 			}
 		}
-		// After all events are processed, run after agent callbacks
-		customResponse, err := ga.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
-		var evt *event.Event
-		if err != nil {
-			// Send error event.
-			evt = event.NewErrorEvent(
-				invocation.InvocationID,
-				invocation.AgentName,
-				agent.ErrorTypeAgentCallbackError,
-				err.Error(),
-			)
-		} else if customResponse != nil {
-			// Create an event from the custom response.
-			evt = event.NewResponseEvent(
-				invocation.InvocationID,
-				invocation.AgentName,
-				customResponse,
-			)
-		}
+		// After all events are processed, run after agent callbacks.
+		// Run legacy after agent callbacks.
+		if ga.agentCallbacks != nil {
+			customResponse, err := ga.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			var evt *event.Event
+			if err != nil {
+				// Send error event.
+				evt = event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					agent.ErrorTypeAgentCallbackError,
+					err.Error(),
+				)
+			} else if customResponse != nil {
+				// Create an event from the custom response.
+				evt = event.NewResponseEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					customResponse,
+				)
+			}
 
-		agent.EmitEvent(ctx, invocation, wrappedChan, evt)
+			if evt != nil {
+				agent.EmitEvent(ctx, invocation, wrappedChan, evt)
+			}
+		}
+		// Run structured after agent callbacks.
+		if ga.agentCallbacksStructured != nil {
+			result, err := ga.agentCallbacksStructured.RunAfterAgent(ctx, invocation, nil)
+			var evt *event.Event
+			if err != nil {
+				// Send error event.
+				evt = event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					agent.ErrorTypeAgentCallbackError,
+					err.Error(),
+				)
+			} else if result != nil && result.CustomResponse != nil {
+				// Create an event from the custom response.
+				evt = event.NewResponseEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					result.CustomResponse,
+				)
+			}
+
+			if evt != nil {
+				agent.EmitEvent(ctx, invocation, wrappedChan, evt)
+			}
+		}
 	}()
 	return wrappedChan
 }

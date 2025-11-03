@@ -53,7 +53,8 @@ func TestCheckContextCancelled(t *testing.T) {
 		{
 			name: "context with timeout not expired",
 			setupCtx: func() context.Context {
-				ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				_ = cancel
 				return ctx
 			},
 			expectErr: false,

@@ -30,12 +30,13 @@ type EscalationFunc func(*event.Event) bool
 // When a sub-agent generates an event with escalation or max_iterations are
 // reached, the cycle agent will stop.
 type CycleAgent struct {
-	name              string
-	subAgents         []agent.Agent
-	maxIterations     *int // Optional maximum number of iterations
-	channelBufferSize int
-	agentCallbacks    *agent.Callbacks
-	escalationFunc    EscalationFunc // Injectable escalation logic
+	name                     string
+	subAgents                []agent.Agent
+	maxIterations            *int // Optional maximum number of iterations
+	channelBufferSize        int
+	agentCallbacks           *agent.Callbacks
+	agentCallbacksStructured *agent.CallbacksStructured
+	escalationFunc           EscalationFunc // Injectable escalation logic
 }
 
 // Option configures CycleAgent settings using the functional options pattern.
@@ -45,11 +46,12 @@ type Option func(*Options)
 // Options contains all configuration options for CycleAgent.
 // This struct is exported to allow external packages to inspect or modify options.
 type Options struct {
-	subAgents         []agent.Agent
-	maxIterations     *int
-	channelBufferSize int
-	agentCallbacks    *agent.Callbacks
-	escalationFunc    EscalationFunc
+	subAgents                []agent.Agent
+	maxIterations            *int
+	channelBufferSize        int
+	agentCallbacks           *agent.Callbacks
+	agentCallbacksStructured *agent.CallbacksStructured
+	escalationFunc           EscalationFunc
 }
 
 // WithSubAgents sets the sub-agents that will be executed in a loop.
@@ -76,8 +78,20 @@ func WithChannelBufferSize(size int) Option {
 // WithAgentCallbacks attaches lifecycle callbacks to the cycle agent.
 // These callbacks allow custom logic to be executed before and after
 // the cycle agent runs.
-func WithAgentCallbacks(cb *agent.Callbacks) Option {
-	return func(o *Options) { o.agentCallbacks = cb }
+// Supports both legacy (*agent.Callbacks) and structured
+// (*agent.CallbacksStructured) callbacks.
+func WithAgentCallbacks[T *agent.Callbacks | *agent.CallbacksStructured](
+	callbacks T,
+) Option {
+	return func(o *Options) {
+		switch cb := any(callbacks).(type) {
+		case *agent.Callbacks:
+			o.agentCallbacks = cb
+		case *agent.CallbacksStructured:
+			o.agentCallbacksStructured = cb
+		default:
+		}
+	}
 }
 
 // WithEscalationFunc sets a custom function to detect escalation conditions.
@@ -101,12 +115,13 @@ func New(name string, opts ...Option) *CycleAgent {
 		cfg.channelBufferSize = defaultChannelBufferSize
 	}
 	return &CycleAgent{
-		name:              name,
-		subAgents:         cfg.subAgents,
-		maxIterations:     cfg.maxIterations,
-		channelBufferSize: cfg.channelBufferSize,
-		agentCallbacks:    cfg.agentCallbacks,
-		escalationFunc:    cfg.escalationFunc,
+		name:                     name,
+		subAgents:                cfg.subAgents,
+		maxIterations:            cfg.maxIterations,
+		channelBufferSize:        cfg.channelBufferSize,
+		agentCallbacks:           cfg.agentCallbacks,
+		agentCallbacksStructured: cfg.agentCallbacksStructured,
+		escalationFunc:           cfg.escalationFunc,
 	}
 }
 
@@ -184,31 +199,55 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) bool {
-	if a.agentCallbacks == nil {
-		return false
+	// Run legacy before agent callbacks.
+	if a.agentCallbacks != nil {
+		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			// Send error event.
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			))
+			return true
+		}
+		if customResponse != nil {
+			// Create an event from the custom response and then close.
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				customResponse,
+			))
+			return true
+		}
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
-	if err != nil {
-		// Send error event.
-		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			agent.ErrorTypeAgentCallbackError,
-			err.Error(),
-		))
-		return true // Indicates early return
+	// Run structured before agent callbacks.
+	if a.agentCallbacksStructured != nil {
+		result, err := a.agentCallbacksStructured.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			// Send error event.
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			))
+			return true
+		}
+		if result != nil && result.CustomResponse != nil {
+			// Create an event from the custom response and then close.
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				result.CustomResponse,
+			))
+			return true
+		}
 	}
-	if customResponse != nil {
-		// Create an event from the custom response and then close.
-		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		))
-		return true // Indicates early return
-	}
-	return false // Continue execution
+
+	return false
 }
 
 // runSubAgent executes a single sub-agent and forwards its events.
@@ -283,30 +322,51 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
-	if a.agentCallbacks == nil {
-		return
-	}
-
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
 	var evt *event.Event
-	if err != nil {
-		// Send error event.
-		evt = event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			agent.ErrorTypeAgentCallbackError,
-			err.Error(),
-		)
-	} else if customResponse != nil {
-		// Create an event from the custom response.
-		evt = event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		)
+
+	// Run legacy after agent callbacks.
+	if a.agentCallbacks != nil {
+		customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		if err != nil {
+			// Send error event.
+			evt = event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			)
+		} else if customResponse != nil {
+			// Create an event from the custom response.
+			evt = event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				customResponse,
+			)
+		}
+		agent.EmitEvent(ctx, invocation, eventChan, evt)
 	}
 
-	agent.EmitEvent(ctx, invocation, eventChan, evt)
+	// Run structured after agent callbacks.
+	if a.agentCallbacksStructured != nil {
+		result, err := a.agentCallbacksStructured.RunAfterAgent(ctx, invocation, nil)
+		if err != nil {
+			// Send error event.
+			evt = event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			)
+		} else if result != nil && result.CustomResponse != nil {
+			// Create an event from the custom response.
+			evt = event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				result.CustomResponse,
+			)
+		}
+		agent.EmitEvent(ctx, invocation, eventChan, evt)
+	}
 }
 
 // Run implements the agent.Agent interface.

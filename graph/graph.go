@@ -110,10 +110,14 @@ type Node struct {
 	// conditional branches to resolve results with clearer, local semantics.
 	ends map[string]string
 
-	// It's effect just for LLM node
-	modelCallbacks *model.Callbacks
+	// It's effect just for LLM node.
+	// Deprecated: Use modelCallbacksStructured instead.
+	modelCallbacks           *model.Callbacks
+	modelCallbacksStructured *model.CallbacksStructured
 	// just for tool node.
-	toolCallbacks *tool.Callbacks
+	// Deprecated: Use toolCallbacksStructured instead.
+	toolCallbacks           *tool.Callbacks
+	toolCallbacksStructured *tool.CallbacksStructured
 
 	// enableParallelTools toggles parallel execution for Tools nodes.
 	// When true, multiple tool calls in a single assistant response are executed concurrently.

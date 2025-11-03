@@ -261,9 +261,15 @@ func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
 // WithToolCallbacks sets multiple callbacks for this specific node.
 // This allows setting tool callbacks directly on the node.
 // It's effect just for tool node.
-func WithToolCallbacks(callbacks *tool.Callbacks) Option {
+func WithToolCallbacks[T *tool.Callbacks | *tool.CallbacksStructured](callbacks T) Option {
 	return func(node *Node) {
-		node.toolCallbacks = callbacks
+		switch cb := any(callbacks).(type) {
+		case *tool.Callbacks:
+			node.toolCallbacks = cb
+		case *tool.CallbacksStructured:
+			node.toolCallbacksStructured = cb
+		default:
+		}
 	}
 }
 
@@ -354,9 +360,17 @@ func WithSubgraphEventScope(scope string) Option {
 }
 
 // WithModelCallbacks sets the model callbacks for LLM node.
-func WithModelCallbacks(callbacks *model.Callbacks) Option {
+// Supports both legacy (*model.Callbacks) and structured
+// (*model.CallbacksStructured) callbacks.
+func WithModelCallbacks[T *model.Callbacks | *model.CallbacksStructured](callbacks T) Option {
 	return func(node *Node) {
-		node.modelCallbacks = callbacks
+		switch cb := any(callbacks).(type) {
+		case *model.Callbacks:
+			node.modelCallbacks = cb
+		case *model.CallbacksStructured:
+			node.modelCallbacksStructured = cb
+		default:
+		}
 	}
 }
 
@@ -789,6 +803,7 @@ func (r *llmRunner) executeModel(
 	}
 	invocationID, sessionID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
+	modelCallbacksStructured, _ := state[StateKeyModelCallbacksStructured].(*model.CallbacksStructured)
 	var nodeID string
 	if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
 		if id, ok := nodeIDData.(string); ok {
@@ -802,14 +817,15 @@ func (r *llmRunner) executeModel(
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, startTime)
 	result, err := executeModelWithEvents(ctx, modelExecutionConfig{
-		ModelCallbacks: modelCallbacks,
-		LLMModel:       r.llmModel,
-		Request:        request,
-		EventChan:      eventChan,
-		InvocationID:   invocationID,
-		SessionID:      sessionID,
-		Span:           span,
-		NodeID:         nodeID,
+		ModelCallbacks:           modelCallbacks,
+		ModelCallbacksStructured: modelCallbacksStructured,
+		LLMModel:                 r.llmModel,
+		Request:                  request,
+		EventChan:                eventChan,
+		InvocationID:             invocationID,
+		SessionID:                sessionID,
+		Span:                     span,
+		NodeID:                   nodeID,
 	})
 	endTime := time.Now()
 	var modelOutput string
@@ -888,20 +904,22 @@ func extractExecutionContext(state State) (invocationID string, sessionID string
 
 // modelResponseConfig contains configuration for processing model responses.
 type modelResponseConfig struct {
-	Response       *model.Response
-	ModelCallbacks *model.Callbacks
-	EventChan      chan<- *event.Event
-	InvocationID   string
-	SessionID      string
-	LLMModel       model.Model
-	Request        *model.Request
-	Span           oteltrace.Span
+	Response                 *model.Response
+	ModelCallbacks           *model.Callbacks
+	ModelCallbacksStructured *model.CallbacksStructured
+	EventChan                chan<- *event.Event
+	InvocationID             string
+	SessionID                string
+	LLMModel                 model.Model
+	Request                  *model.Request
+	Span                     oteltrace.Span
 	// NodeID, when provided, is used as the event author.
 	NodeID string
 }
 
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) error {
+	// Run legacy after model callbacks.
 	if config.ModelCallbacks != nil {
 		customResponse, err := config.ModelCallbacks.RunAfterModel(ctx, config.Request, config.Response, nil)
 		if err != nil {
@@ -910,6 +928,17 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 		}
 		if customResponse != nil {
 			config.Response = customResponse
+		}
+	}
+	// Run structured after model callbacks.
+	if config.ModelCallbacksStructured != nil {
+		result, err := config.ModelCallbacksStructured.RunAfterModel(ctx, config.Request, config.Response, nil)
+		if err != nil {
+			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			return fmt.Errorf("callback after model (structured) error: %w", err)
+		}
+		if result != nil && result.CustomResponse != nil {
+			config.Response = result.CustomResponse
 		}
 	}
 	if config.EventChan != nil && !config.Response.Done {
@@ -943,6 +972,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 func runModel(
 	ctx context.Context,
 	modelCallbacks *model.Callbacks,
+	modelCallbacksStructured *model.CallbacksStructured,
 	llmModel model.Model,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
@@ -954,6 +984,7 @@ func runModel(
 		attribute.String("trpc.go.agent.model_name", llmModel.Info().Name),
 	)
 
+	// Run legacy before model callbacks.
 	if modelCallbacks != nil {
 		customResponse, err := modelCallbacks.RunBeforeModel(ctx, request)
 		if err != nil {
@@ -963,6 +994,20 @@ func runModel(
 		if customResponse != nil {
 			responseChan := make(chan *model.Response, 1)
 			responseChan <- customResponse
+			close(responseChan)
+			return responseChan, nil
+		}
+	}
+	// Run structured before model callbacks.
+	if modelCallbacksStructured != nil {
+		result, err := modelCallbacksStructured.RunBeforeModel(ctx, request)
+		if err != nil {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			return nil, fmt.Errorf("callback before model (structured) error: %w", err)
+		}
+		if result != nil && result.CustomResponse != nil {
+			responseChan := make(chan *model.Response, 1)
+			responseChan <- result.CustomResponse
 			close(responseChan)
 			return responseChan, nil
 		}
@@ -1285,7 +1330,8 @@ func buildAgentInvocationWithStateAndScope(
 // Parameters:
 //   - ctx: context for cancellation and tracing
 //   - toolCall: the tool call to execute, including function name and arguments
-//   - toolCallbacks: callbacks to execute before and after tool execution
+//   - toolCallbacks: legacy callbacks to execute before and after tool execution
+//   - toolCallbacksStructured: structured callbacks to execute before and after tool execution
 //   - t: the tool implementation to execute
 //
 // Returns:
@@ -1296,36 +1342,68 @@ func runTool(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	toolCallbacks *tool.Callbacks,
+	toolCallbacksStructured *tool.CallbacksStructured,
 	t tool.Tool,
 ) (any, []byte, error) {
+	modifiedArgs := toolCall.Function.Arguments
+
+	// Run legacy before tool callbacks.
 	if toolCallbacks != nil {
 		customResult, err := toolCallbacks.RunBeforeTool(
-			ctx, toolCall.Function.Name, t.Declaration(), &toolCall.Function.Arguments)
+			ctx, toolCall.Function.Name, t.Declaration(), &modifiedArgs)
 		if err != nil {
-			return nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
+			return nil, modifiedArgs, fmt.Errorf("callback before tool error: %w", err)
 		}
 		if customResult != nil {
-			return customResult, toolCall.Function.Arguments, nil
+			return customResult, modifiedArgs, nil
 		}
 	}
-	if callableTool, ok := t.(tool.CallableTool); ok {
-		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
+	// Run structured before tool callbacks.
+	if toolCallbacksStructured != nil {
+		result, err := toolCallbacksStructured.RunBeforeTool(ctx, toolCall.Function.Name, t.Declaration(), modifiedArgs)
 		if err != nil {
-			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
+			return nil, modifiedArgs, fmt.Errorf("callback before tool (structured) error: %w", err)
 		}
+		if result != nil {
+			if result.ModifiedArguments != nil {
+				modifiedArgs = result.ModifiedArguments
+			}
+			if result.CustomResult != nil {
+				return result.CustomResult, modifiedArgs, nil
+			}
+		}
+	}
+
+	if callableTool, ok := t.(tool.CallableTool); ok {
+		toolResult, err := callableTool.Call(ctx, modifiedArgs)
+		if err != nil {
+			return nil, modifiedArgs, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
+		}
+
+		// Run legacy after tool callbacks.
 		if toolCallbacks != nil {
 			customResult, err := toolCallbacks.RunAfterTool(
-				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
+				ctx, toolCall.Function.Name, t.Declaration(), modifiedArgs, toolResult, err)
 			if err != nil {
-				return nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", err)
+				return nil, modifiedArgs, fmt.Errorf("callback after tool error: %w", err)
 			}
 			if customResult != nil {
-				return customResult, toolCall.Function.Arguments, nil
+				return customResult, modifiedArgs, nil
 			}
 		}
-		return result, toolCall.Function.Arguments, nil
+		// Run structured after tool callbacks.
+		if toolCallbacksStructured != nil {
+			result, err := toolCallbacksStructured.RunAfterTool(ctx, toolCall.Function.Name, t.Declaration(), modifiedArgs, toolResult, err)
+			if err != nil {
+				return nil, modifiedArgs, fmt.Errorf("callback after tool (structured) error: %w", err)
+			}
+			if result != nil && result.CustomResult != nil {
+				return result.CustomResult, modifiedArgs, nil
+			}
+		}
+		return toolResult, modifiedArgs, nil
 	}
-	return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+	return nil, modifiedArgs, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 
 // extractModelInput extracts the model input from state and instruction.
@@ -1406,20 +1484,21 @@ func emitModelCompleteEvent(
 
 // modelExecutionConfig contains configuration for model execution with events.
 type modelExecutionConfig struct {
-	ModelCallbacks *model.Callbacks
-	LLMModel       model.Model
-	Request        *model.Request
-	EventChan      chan<- *event.Event
-	InvocationID   string
-	SessionID      string
-	NodeID         string // Add NodeID for parallel execution support
-	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
-	Span           oteltrace.Span
+	ModelCallbacks           *model.Callbacks
+	ModelCallbacksStructured *model.CallbacksStructured
+	LLMModel                 model.Model
+	Request                  *model.Request
+	EventChan                chan<- *event.Event
+	InvocationID             string
+	SessionID                string
+	NodeID                   string // Add NodeID for parallel execution support
+	NodeResultKey            string // Add NodeResultKey for configurable result key pattern
+	Span                     oteltrace.Span
 }
 
 // executeModelWithEvents executes the model with event processing.
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
-	responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
+	responseChan, err := runModel(ctx, config.ModelCallbacks, config.ModelCallbacksStructured, config.LLMModel, config.Request)
 	if err != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 		return nil, fmt.Errorf("failed to run model: %w", err)
@@ -1429,15 +1508,16 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	var toolCalls []model.ToolCall
 	for response := range responseChan {
 		if err := processModelResponse(ctx, modelResponseConfig{
-			Response:       response,
-			ModelCallbacks: config.ModelCallbacks,
-			EventChan:      config.EventChan,
-			InvocationID:   config.InvocationID,
-			SessionID:      config.SessionID,
-			LLMModel:       config.LLMModel,
-			Request:        config.Request,
-			Span:           config.Span,
-			NodeID:         config.NodeID,
+			Response:                 response,
+			ModelCallbacks:           config.ModelCallbacks,
+			ModelCallbacksStructured: config.ModelCallbacksStructured,
+			EventChan:                config.EventChan,
+			InvocationID:             config.InvocationID,
+			SessionID:                config.SessionID,
+			LLMModel:                 config.LLMModel,
+			Request:                  config.Request,
+			Span:                     config.Span,
+			NodeID:                   config.NodeID,
 		}); err != nil {
 			return nil, err
 		}
@@ -1512,19 +1592,20 @@ type toolCallsConfig struct {
 
 // processToolCalls executes all tool calls and returns the resulting messages.
 func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
-	toolCallbacks, _ := extractToolCallbacks(config.State)
+	toolCallbacks, toolCallbacksStructured := extractToolCallbacks(config.State)
 	// Serial path or single tool call.
 	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
 		for _, toolCall := range config.ToolCalls {
 			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
-				ToolCall:      toolCall,
-				Tools:         config.Tools,
-				InvocationID:  config.InvocationID,
-				EventChan:     config.EventChan,
-				Span:          config.Span,
-				ToolCallbacks: toolCallbacks,
-				State:         config.State,
+				ToolCall:                toolCall,
+				Tools:                   config.Tools,
+				InvocationID:            config.InvocationID,
+				EventChan:               config.EventChan,
+				Span:                    config.Span,
+				ToolCallbacks:           toolCallbacks,
+				ToolCallbacksStructured: toolCallbacksStructured,
+				State:                   config.State,
 			})
 			if err != nil {
 				return nil, err
@@ -1554,13 +1635,14 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		go func() {
 			defer wg.Done()
 			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
-				ToolCall:      tc,
-				Tools:         config.Tools,
-				InvocationID:  config.InvocationID,
-				EventChan:     config.EventChan,
-				Span:          config.Span,
-				ToolCallbacks: toolCallbacks,
-				State:         config.State,
+				ToolCall:                tc,
+				Tools:                   config.Tools,
+				InvocationID:            config.InvocationID,
+				EventChan:               config.EventChan,
+				Span:                    config.Span,
+				ToolCallbacks:           toolCallbacks,
+				ToolCallbacksStructured: toolCallbacksStructured,
+				State:                   config.State,
 			})
 			// On error, cancel siblings but still report result so collector can exit cleanly.
 			if err != nil {
@@ -1602,13 +1684,14 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 
 // singleToolCallConfig contains configuration for executing a single tool call.
 type singleToolCallConfig struct {
-	ToolCall      model.ToolCall
-	Tools         map[string]tool.Tool
-	InvocationID  string
-	EventChan     chan<- *event.Event
-	Span          oteltrace.Span
-	ToolCallbacks *tool.Callbacks
-	State         State
+	ToolCall                model.ToolCall
+	Tools                   map[string]tool.Tool
+	InvocationID            string
+	EventChan               chan<- *event.Event
+	Span                    oteltrace.Span
+	ToolCallbacks           *tool.Callbacks
+	ToolCallbacksStructured *tool.CallbacksStructured
+	State                   State
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -1642,7 +1725,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Execute the tool with callbacks and get modified arguments.
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
-	result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+	result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, config.ToolCallbacksStructured, t)
 
 	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
@@ -1763,13 +1846,22 @@ func emitToolCompleteEvent(ctx context.Context, config toolCompleteEventConfig) 
 }
 
 // extractToolCallbacks extracts tool callbacks from the state.
-func extractToolCallbacks(state State) (*tool.Callbacks, bool) {
+// Returns both legacy and structured callbacks.
+func extractToolCallbacks(state State) (*tool.Callbacks, *tool.CallbacksStructured) {
+	var legacyCallbacks *tool.Callbacks
+	var structuredCallbacks *tool.CallbacksStructured
+
 	if toolCallbacks, exists := state[StateKeyToolCallbacks]; exists {
 		if callbacks, ok := toolCallbacks.(*tool.Callbacks); ok {
-			return callbacks, true
+			legacyCallbacks = callbacks
 		}
 	}
-	return nil, false
+	if toolCallbacks, exists := state[StateKeyToolCallbacksStructured]; exists {
+		if callbacks, ok := toolCallbacks.(*tool.CallbacksStructured); ok {
+			structuredCallbacks = callbacks
+		}
+	}
+	return legacyCallbacks, structuredCallbacks
 }
 
 // MessagesStateSchema creates a state schema optimized for message-based workflows.

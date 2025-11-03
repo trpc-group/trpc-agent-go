@@ -162,7 +162,7 @@ func (w *externalToolWorkflow) buildGraph() (*graph.Graph, error) {
 			nodeTools,
 			w.wrapToolsNode(graph.NewToolsNodeFunc(
 				tools,
-				graph.WithToolCallbacks(tool.NewCallbacks()),
+				graph.WithToolCallbacks(tool.NewCallbacksStructured()),
 			)),
 			graph.WithNodeType(graph.NodeTypeTool),
 			graph.WithName("Manual Lookup Tool"),

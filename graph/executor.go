@@ -576,6 +576,8 @@ func isUnsafeStateKey(key string) bool {
 		StateKeyParentAgent,
 		StateKeyToolCallbacks,
 		StateKeyModelCallbacks,
+		StateKeyToolCallbacksStructured,
+		StateKeyModelCallbacksStructured,
 		StateKeyAgentCallbacks,
 		StateKeyCurrentNodeID,
 		StateKeySession:
@@ -1696,6 +1698,8 @@ func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State 
 		StateKeyNodeCallbacks,
 		StateKeyToolCallbacks,
 		StateKeyModelCallbacks,
+		StateKeyToolCallbacksStructured,
+		StateKeyModelCallbacksStructured,
 		StateKeyAgentCallbacks,
 	} {
 		if v, ok := base[cbKey]; ok && v != nil {
@@ -1923,6 +1927,8 @@ func (e *Executor) executeNodeFunction(
 	}
 	input[StateKeyToolCallbacks] = node.toolCallbacks
 	input[StateKeyModelCallbacks] = node.modelCallbacks
+	input[StateKeyToolCallbacksStructured] = node.toolCallbacksStructured
+	input[StateKeyModelCallbacksStructured] = node.modelCallbacksStructured
 
 	return node.Function(ctx, input)
 }
