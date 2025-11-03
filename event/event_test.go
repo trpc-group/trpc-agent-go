@@ -427,3 +427,123 @@ func TestWithTag(t *testing.T) {
 	e := New("inv", "author", WithTag("alpha"), WithTag("beta"))
 	require.Equal(t, "alpha"+TagDelimiter+"beta", e.Tag)
 }
+
+// Test that MarshalJSON outputs a payload that preserves the top-level event
+// fields and also includes a nested "response" object carrying Response-only
+// identifiers like response.id.
+func TestEventMarshalJSON_IncludesNestedResponse(t *testing.T) {
+	e := &Event{
+		Response: &model.Response{
+			ID:        "resp-1",
+			Object:    model.ObjectTypeChatCompletion,
+			Done:      true,
+			Choices:   []model.Choice{{Index: 0, Message: model.NewAssistantMessage("hi")}},
+			Timestamp: time.Now(),
+		},
+		ID:           "evt-1",
+		InvocationID: "inv-1",
+		Author:       "assistant",
+		Timestamp:    time.Now(),
+	}
+
+	data, err := json.Marshal(e)
+	require.NoError(t, err)
+
+	// Decode to a raw map for inspection.
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &raw))
+
+	// Top-level id should be the event ID.
+	var topID string
+	require.NoError(t, json.Unmarshal(raw["id"], &topID))
+	require.Equal(t, "evt-1", topID)
+
+	// Top-level object should remain available for legacy (flattened) readers.
+	var topObject string
+	require.NoError(t, json.Unmarshal(raw["object"], &topObject))
+	require.Equal(t, string(model.ObjectTypeChatCompletion), topObject)
+
+	// Nested response must exist and preserve response.id.
+	nested, ok := raw[jsonKeyResponse]
+	require.True(t, ok, "missing nested response field")
+
+	var rsp model.Response
+	require.NoError(t, json.Unmarshal(nested, &rsp))
+	require.Equal(t, "resp-1", rsp.ID)
+	require.Equal(t, model.ObjectTypeChatCompletion, rsp.Object)
+}
+
+// Test that UnmarshalJSON prefers nested response over flattened fields when both
+// are present in the input JSON.
+func TestEventUnmarshalJSON_PrefersNestedResponse(t *testing.T) {
+	input := `{
+        "id": "evt-2",
+        "object": "chat.completion",
+        "done": true,
+        "response": {
+            "id": "resp-2",
+            "object": "chat.completion",
+            "done": true
+        }
+    }`
+
+	var e Event
+	require.NoError(t, json.Unmarshal([]byte(input), &e))
+	require.Equal(t, "evt-2", e.ID)
+	require.NotNil(t, e.Response)
+	require.Equal(t, "resp-2", e.Response.ID)
+	require.Equal(t, model.ObjectTypeChatCompletion, e.Response.Object)
+	require.True(t, e.Response.Done)
+}
+
+// Test that legacy flattened JSON without nested response decodes successfully and
+// populates Response fields except the conflicting response.id.
+func TestEventUnmarshalJSON_LegacyFlatOnly(t *testing.T) {
+	// Simulate older payload where response fields live on the top-level due to embedding,
+	// thus there is no nested "response" and no way to carry response.id.
+	input := `{
+        "id": "evt-3",
+        "object": "chat.completion",
+        "done": true,
+        "choices": [{"index":0, "message": {"role":"assistant", "content":"ok"}}]
+    }`
+
+	var e Event
+	require.NoError(t, json.Unmarshal([]byte(input), &e))
+	require.Equal(t, "evt-3", e.ID)
+	require.NotNil(t, e.Response)
+	require.Equal(t, "", e.Response.ID) // No response.id in legacy flat payload.
+	require.Equal(t, model.ObjectTypeChatCompletion, e.Response.Object)
+	require.True(t, e.Response.Done)
+	require.Len(t, e.Response.Choices, 1)
+	require.Equal(t, 0, e.Response.Choices[0].Index)
+	require.Equal(t, model.RoleAssistant, e.Response.Choices[0].Message.Role)
+	require.Equal(t, "ok", e.Response.Choices[0].Message.Content)
+}
+
+// Test a marshal-unmarshal roundtrip preserves both event ID and response ID.
+func TestEventJSON_Roundtrip(t *testing.T) {
+	src := &Event{
+		Response: &model.Response{
+			ID:      "resp-rt",
+			Object:  model.ObjectTypeChatCompletion,
+			Done:    true,
+			Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("hi")}},
+		},
+		ID:           "evt-rt",
+		InvocationID: "inv-rt",
+		Author:       "assistant",
+		Timestamp:    time.Now(),
+	}
+
+	data, err := json.Marshal(src)
+	require.NoError(t, err)
+
+	var dst Event
+	require.NoError(t, json.Unmarshal(data, &dst))
+
+	require.NotNil(t, dst.Response)
+	require.Equal(t, "evt-rt", dst.ID)
+	require.Equal(t, "resp-rt", dst.Response.ID)
+	require.Equal(t, model.ObjectTypeChatCompletion, dst.Response.Object)
+}
