@@ -66,6 +66,11 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
+	// Validate table name to prevent SQL injection.
+	if err := validateTableName(opts.tableName); err != nil {
+		return nil, err
+	}
+
 	builder := storage.GetClientBuilder()
 	var (
 		db  storage.Client
@@ -111,8 +116,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 // initTable creates the memories table if it doesn't exist.
 func (s *Service) initTable(ctx context.Context) error {
-	// Table name is validated by validateTableName().
-	// This prevents SQL injection as only alphanumeric and underscore characters are allowed.
+	// Table name is validated in NewService.
 	// #nosec G201
 	query := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
@@ -139,7 +143,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 
 	// Enforce memory limit.
 	if s.opts.memoryLimit > 0 {
-		// Table name is validated by validateTableName().
+		// Table name is validated in NewService.
 		// #nosec G201
 		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = ? AND user_id = ?", s.tableName)
 		var count int
@@ -172,7 +176,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return fmt.Errorf("marshal memory entry failed: %w", err)
 	}
 
-	// Table name is validated by validateTableName().
+	// Table name is validated in NewService.
 	// #nosec G201
 	insertQuery := fmt.Sprintf(
 		"INSERT INTO `%s` (app_name, user_id, memory_id, memory_data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -193,7 +197,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	}
 
 	// Get existing entry.
-	// Table name is validated by validateTableName().
+	// Table name is validated in NewService.
 	// #nosec G201
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
@@ -224,7 +228,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		return fmt.Errorf("marshal updated memory entry failed: %w", err)
 	}
 
-	// Table name is validated by validateTableName().
+	// Table name is validated in NewService.
 	// #nosec G201
 	updateQuery := fmt.Sprintf(
 		"UPDATE %s SET memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ?",
@@ -244,7 +248,7 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 		return err
 	}
 
-	// Table name is validated by validateTableName().
+	// Table name is validated in NewService.
 	// #nosec G201
 	deleteQuery := fmt.Sprintf(
 		"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
@@ -264,7 +268,7 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 		return err
 	}
 
-	// Table name is validated by validateTableName().
+	// Table name is validated in NewService.
 	// #nosec G201
 	deleteQuery := fmt.Sprintf(
 		"DELETE FROM %s WHERE app_name = ? AND user_id = ?",
@@ -284,7 +288,7 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		return nil, err
 	}
 
-	// Table name is validated by validateTableName().
+	// Table name is validated in NewService.
 	// #nosec G201
 	query := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? ORDER BY updated_at DESC, created_at DESC",
@@ -323,7 +327,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	}
 
 	// Get all memories for the user.
-	// Table name is validated by validateTableName().
+	// Table name is validated in NewService.
 	// #nosec G201
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ?",

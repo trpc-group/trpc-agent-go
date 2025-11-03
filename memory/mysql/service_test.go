@@ -42,7 +42,7 @@ func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 }
 
 // setupMockService creates a service with a mock database.
-func setupMockService(t *testing.T, db *sql.DB) *Service {
+func setupMockService(_ *testing.T, db *sql.DB) *Service {
 	return &Service{
 		opts: ServiceOpts{
 			memoryLimit:  100,

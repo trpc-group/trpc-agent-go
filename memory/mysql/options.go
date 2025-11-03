@@ -60,12 +60,9 @@ func WithMemoryLimit(limit int) ServiceOpt {
 // Default is "memories".
 // Table name must start with a letter or underscore and contain only alphanumeric characters and underscores.
 // Maximum length is 64 characters.
+// Validation is performed in NewService.
 func WithTableName(tableName string) ServiceOpt {
 	return func(opts *ServiceOpts) {
-		// Validate table name to prevent SQL injection.
-		if err := validateTableName(tableName); err != nil {
-			return
-		}
 		opts.tableName = tableName
 	}
 }

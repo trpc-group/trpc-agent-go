@@ -929,12 +929,18 @@ import (
 )
 
 func main() {
-    clean, _ := ametric.Start(context.Background(),
-        ametric.WithEndpoint("localhost:4317"),
-    )
-    defer clean()
-
-    counter, _ := ametric.Meter.Int64Counter(
+    mp, err := ametric.NewMeterProvider(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4318"),
+		ametric.WithProtocol("http"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create meter provider: %v", err)
+	}
+	defer mp.Shutdown(context.Background())
+	ametric.InitMeterProvider(mp)
+	meter := mp.Meter("trpc_agent_go.app")
+        counter, _ := meter.Int64Counter(
         "requests_total",
         metric.WithDescription("total requests"),
     )
