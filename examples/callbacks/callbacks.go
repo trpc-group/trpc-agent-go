@@ -23,13 +23,13 @@ import (
 var (
 	// Global callback configurations using chain registration.
 	// This demonstrates how to create reusable callback configurations.
-	_ = model.NewCallbacks().
-		RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-			fmt.Printf("🌐 Global BeforeModel: processing %d messages\n", len(req.Messages))
+	_ = model.NewCallbacksStructured().
+		RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			fmt.Printf("🌐 Global BeforeModel: processing %d messages\n", len(args.Request.Messages))
 			return nil, nil
 		}).
-		RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
-			if modelErr != nil {
+		RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			if args.Error != nil {
 				fmt.Printf("🌐 Global AfterModel: error occurred\n")
 			} else {
 				fmt.Printf("🌐 Global AfterModel: processed successfully\n")
@@ -37,29 +37,29 @@ var (
 			return nil, nil
 		})
 
-	_ = tool.NewCallbacks().
-		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
-			fmt.Printf("🌐 Global BeforeTool: executing %s\n", toolName)
-			// Note: jsonArgs is a pointer, so modifications will be visible to the caller.
+	_ = tool.NewCallbacksStructured().
+		RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			fmt.Printf("🌐 Global BeforeTool: executing %s\n", args.ToolName)
+			// Note: Use ModifiedArguments in result to modify tool arguments.
 			// This allows callbacks to modify tool arguments before execution.
 			return nil, nil
 		}).
-		RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-			if runErr != nil {
-				fmt.Printf("🌐 Global AfterTool: %s failed\n", toolName)
+		RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+			if args.Error != nil {
+				fmt.Printf("🌐 Global AfterTool: %s failed\n", args.ToolName)
 			} else {
-				fmt.Printf("🌐 Global AfterTool: %s completed\n", toolName)
+				fmt.Printf("🌐 Global AfterTool: %s completed\n", args.ToolName)
 			}
 			return nil, nil
 		})
 
-	_ = agent.NewCallbacks().
-		RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-			fmt.Printf("🌐 Global BeforeAgent: starting %s\n", invocation.AgentName)
+	_ = agent.NewCallbacksStructured().
+		RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+			fmt.Printf("🌐 Global BeforeAgent: starting %s\n", args.Invocation.AgentName)
 			return nil, nil
 		}).
-		RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-			if runErr != nil {
+		RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+			if args.Error != nil {
 				fmt.Printf("🌐 Global AfterAgent: execution failed\n")
 			} else {
 				fmt.Printf("🌐 Global AfterAgent: execution completed\n")
@@ -69,18 +69,18 @@ var (
 )
 
 // createModelCallbacks creates and configures model callbacks.
-func (c *multiTurnChatWithCallbacks) createModelCallbacks() *model.Callbacks {
-	// Using traditional registration.
-	modelCallbacks := model.NewCallbacks()
+func (c *multiTurnChatWithCallbacks) createModelCallbacks() *model.CallbacksStructured {
+	// Using structured callbacks with chain registration.
+	modelCallbacks := model.NewCallbacksStructured()
 	modelCallbacks.RegisterBeforeModel(c.createBeforeModelCallback())
 	modelCallbacks.RegisterAfterModel(c.createAfterModelCallback())
 	return modelCallbacks
 }
 
 // createBeforeModelCallback creates the before model callback.
-func (c *multiTurnChatWithCallbacks) createBeforeModelCallback() model.BeforeModelCallback {
-	return func(ctx context.Context, req *model.Request) (*model.Response, error) {
-		userMsg := c.extractLastUserMessage(req)
+func (c *multiTurnChatWithCallbacks) createBeforeModelCallback() model.BeforeModelCallbackStructured {
+	return func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+		userMsg := c.extractLastUserMessage(args.Request)
 		fmt.Printf("\n🔵 BeforeModelCallback: model=%s, lastUserMsg=%q\n",
 			c.modelName,
 			userMsg,
@@ -94,42 +94,46 @@ func (c *multiTurnChatWithCallbacks) createBeforeModelCallback() model.BeforeMod
 
 		if c.shouldReturnCustomResponse(userMsg) {
 			fmt.Printf("🔵 BeforeModelCallback: triggered, returning custom response for 'custom model'.\n")
-			return c.createCustomResponse(), nil
+			return &model.BeforeModelResult{
+				CustomResponse: c.createCustomResponse(),
+			}, nil
 		}
 		return nil, nil
 	}
 }
 
 // createAfterModelCallback creates the after model callback.
-func (c *multiTurnChatWithCallbacks) createAfterModelCallback() model.AfterModelCallback {
-	return func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-		c.handleModelFinished(resp)
-		c.demonstrateOriginalRequestAccess(req, resp)
+func (c *multiTurnChatWithCallbacks) createAfterModelCallback() model.AfterModelCallbackStructured {
+	return func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+		c.handleModelFinished(args.Response)
+		c.demonstrateOriginalRequestAccess(args.Request, args.Response)
 
-		if c.shouldOverrideResponse(resp) {
+		if c.shouldOverrideResponse(args.Response) {
 			fmt.Printf("🟣 AfterModelCallback: triggered, overriding response for 'override me'.\n")
-			return c.createOverrideResponse(), nil
+			return &model.AfterModelResult{
+				CustomResponse: c.createOverrideResponse(),
+			}, nil
 		}
 		return nil, nil
 	}
 }
 
 // createToolCallbacks creates and configures tool callbacks.
-func (c *multiTurnChatWithCallbacks) createToolCallbacks() *tool.Callbacks {
-	// Using traditional registration.
-	toolCallbacks := tool.NewCallbacks()
+func (c *multiTurnChatWithCallbacks) createToolCallbacks() *tool.CallbacksStructured {
+	// Using structured callbacks with chain registration.
+	toolCallbacks := tool.NewCallbacksStructured()
 	toolCallbacks.RegisterBeforeTool(c.createBeforeToolCallback())
 	toolCallbacks.RegisterAfterTool(c.createAfterToolCallback())
 	return toolCallbacks
 }
 
 // createBeforeToolCallback creates the before tool callback.
-func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
-		if jsonArgs != nil {
-			fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(*jsonArgs))
+func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolCallbackStructured {
+	return func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		if args.Arguments != nil {
+			fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", args.ToolName, string(args.Arguments))
 		} else {
-			fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=<nil>\n", toolName)
+			fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=<nil>\n", args.ToolName)
 		}
 
 		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
@@ -139,65 +143,72 @@ func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolC
 		}
 
 		// Demonstrate argument modification capability.
-		// Since jsonArgs is a pointer, we can modify the arguments that will be passed to the tool.
-		if jsonArgs != nil && toolName == "calculator" {
+		// Use ModifiedArguments in result to modify the arguments.
+		if args.Arguments != nil && args.ToolName == "calculator" {
 			// Example: Add a timestamp to the arguments for logging purposes.
-			originalArgs := string(*jsonArgs)
+			originalArgs := string(args.Arguments)
 			modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-			*jsonArgs = []byte(modifiedArgs)
 			fmt.Printf("🟠 BeforeToolCallback: Modified args for calculator: %s\n", modifiedArgs)
+			return &tool.BeforeToolResult{
+				ModifiedArguments: []byte(modifiedArgs),
+			}, nil
 		}
 
-		if jsonArgs != nil && c.shouldReturnCustomToolResult(toolName, *jsonArgs) {
+		if args.Arguments != nil && c.shouldReturnCustomToolResult(args.ToolName, args.Arguments) {
 			fmt.Println("\n🟠 BeforeToolCallback: triggered, custom result returned for calculator with 42.")
-			return c.createCustomCalculatorResult(), nil
+			return &tool.BeforeToolResult{
+				CustomResult: c.createCustomCalculatorResult(),
+			}, nil
 		}
 		return nil, nil
 	}
 }
 
 // createAfterToolCallback creates the after tool callback.
-func (c *multiTurnChatWithCallbacks) createAfterToolCallback() tool.AfterToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-		fmt.Printf("\n🟤 AfterToolCallback: tool=%s, args=%s, result=%v, err=%v\n", toolName, string(jsonArgs), result, runErr)
+func (c *multiTurnChatWithCallbacks) createAfterToolCallback() tool.AfterToolCallbackStructured {
+	return func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		fmt.Printf("\n🟤 AfterToolCallback: tool=%s, args=%s, result=%v, err=%v\n",
+			args.ToolName, string(args.Arguments), args.Result, args.Error)
 
-		if c.shouldFormatTimeResult(toolName, result) {
+		if c.shouldFormatTimeResult(args.ToolName, args.Result) {
 			fmt.Println("\n🟤 AfterToolCallback: triggered, formatted result.")
-			return c.formatTimeResult(result), nil
+			return &tool.AfterToolResult{
+				CustomResult: c.formatTimeResult(args.Result),
+			}, nil
 		}
 		return nil, nil
 	}
 }
 
 // createAgentCallbacks creates and configures agent callbacks.
-func (c *multiTurnChatWithCallbacks) createAgentCallbacks() *agent.Callbacks {
-	// Using traditional registration.
-	agentCallbacks := agent.NewCallbacks()
+func (c *multiTurnChatWithCallbacks) createAgentCallbacks() *agent.CallbacksStructured {
+	// Using structured callbacks with chain registration.
+	agentCallbacks := agent.NewCallbacksStructured()
 	agentCallbacks.RegisterBeforeAgent(c.createBeforeAgentCallback())
 	agentCallbacks.RegisterAfterAgent(c.createAfterAgentCallback())
 	return agentCallbacks
 }
 
 // createBeforeAgentCallback creates the before agent callback.
-func (c *multiTurnChatWithCallbacks) createBeforeAgentCallback() agent.BeforeAgentCallback {
-	return func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+func (c *multiTurnChatWithCallbacks) createBeforeAgentCallback() agent.BeforeAgentCallbackStructured {
+	return func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
 		fmt.Printf("\n🟢 BeforeAgentCallback: agent=%s, invocationID=%s, userMsg=%q\n",
-			invocation.AgentName,
-			invocation.InvocationID,
-			invocation.Message.Content,
+			args.Invocation.AgentName,
+			args.Invocation.InvocationID,
+			args.Invocation.Message.Content,
 		)
 		return nil, nil
 	}
 }
 
 // createAfterAgentCallback creates the after agent callback.
-func (c *multiTurnChatWithCallbacks) createAfterAgentCallback() agent.AfterAgentCallback {
-	return func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-		respContent := c.extractResponseContent(invocation)
+func (c *multiTurnChatWithCallbacks) createAfterAgentCallback() agent.AfterAgentCallbackStructured {
+	return func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		respContent := c.extractResponseContent(args.Invocation)
 		fmt.Printf("\n🟡 AfterAgentCallback: agent=%s, invocationID=%s, runErr=%v, userMsg=%q\n",
-			invocation.AgentName,
-			invocation.InvocationID,
-			runErr,
+			args.Invocation.AgentName,
+			args.Invocation.InvocationID,
+			args.Error,
 			respContent,
 		)
 		return nil, nil

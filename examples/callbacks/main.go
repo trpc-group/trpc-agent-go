@@ -106,9 +106,9 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 			"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(tools),
-		llmagent.WithAgentCallbacks(agentCallbacks),
-		llmagent.WithModelCallbacks(modelCallbacks),
-		llmagent.WithToolCallbacks(toolCallbacks),
+		llmagent.WithAgentCallbacksStructured(agentCallbacks),
+		llmagent.WithModelCallbacksStructured(modelCallbacks),
+		llmagent.WithToolCallbacksStructured(toolCallbacks),
 	)
 
 	// Create runner with in-memory session service.

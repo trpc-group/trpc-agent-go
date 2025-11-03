@@ -128,9 +128,9 @@ func (e *toolTimerExample) setup(_ context.Context) error {
 		llmagent.WithInstruction("Use the calculator tool when asked to perform calculations."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(tools),
-		llmagent.WithToolCallbacks(toolCallbacks),
-		llmagent.WithAgentCallbacks(agentCallbacks),
-		llmagent.WithModelCallbacks(modelCallbacks),
+		llmagent.WithToolCallbacksStructured(toolCallbacks),
+		llmagent.WithAgentCallbacksStructured(agentCallbacks),
+		llmagent.WithModelCallbacksStructured(modelCallbacks),
 	)
 
 	// Create runner.
