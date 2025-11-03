@@ -28,23 +28,21 @@ import (
 )
 
 func main() {
-	// Start metric
-	clean, err := ametric.Start(
+	// Initialize meter provider
+	mp, err := ametric.NewMeterProvider(
 		context.Background(),
 		ametric.WithEndpoint("localhost:4318"),
 		ametric.WithProtocol("http"),
 	)
 	if err != nil {
-		log.Fatalf("Failed to start metric telemetry: %v", err)
+		log.Fatalf("Failed to create meter provider: %v", err)
 	}
-	defer func() {
-		if err := clean(); err != nil {
-			log.Printf("Failed to clean up metric telemetry: %v", err)
-		}
-	}()
+	defer mp.Shutdown(context.Background())
+	ametric.InitMeterProvider(mp)
+	meter := mp.Meter("trpc_agent_go.app")
 
 	// Strat trace
-	clean, err = atrace.Start(
+	clean, err := atrace.Start(
 		context.Background(),
 		atrace.WithEndpoint("localhost:4318"),
 		atrace.WithProtocol("http"),
@@ -76,7 +74,8 @@ func main() {
 		attribute.String("agentName", agentName),
 		attribute.String("modelName", *modelName),
 	}
-	userMessageCount, err := ametric.Meter.Int64Counter("run",
+
+	userMessageCount, err := meter.Int64Counter("run",
 		metric.WithDescription("the number of user message that the agent processed"))
 
 	ctx, span := atrace.Tracer.Start(

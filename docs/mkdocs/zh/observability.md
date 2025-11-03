@@ -111,14 +111,16 @@ import (
 
 func main() {
     // 启动指标收集
-    metricClean, err := ametric.Start(
-        context.Background(),
-        ametric.WithEndpoint("localhost:4317"), // metric 导出地址
-    )
-    if err != nil {
-        log.Fatalf("Failed to start metric telemetry: %v", err)
-    }
-    defer metricClean()
+    mp, err := ametric.NewMeterProvider(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4318"),
+		ametric.WithProtocol("http"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create meter provider: %v", err)
+	}
+	defer mp.Shutdown(context.Background())
+	ametric.InitMeterProvider(mp)
 
     // 启动链路追踪
     traceClean, err := atrace.Start(
@@ -157,12 +159,32 @@ import (
     
     ametric "trpc.group/trpc-go/trpc-agent-go/telemetry/metric"
     atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+    "trpc.group/trpc-go/trpc-agent-go/log"
+
     "go.opentelemetry.io/otel/attribute"
     "go.opentelemetry.io/otel/metric"
     "go.opentelemetry.io/otel/trace"
 )
 
-func processAgentRequest(ctx context.Context) error {
+func main() {
+	// 启动指标收集
+	mp, err := ametric.NewMeterProvider(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4318"),
+		ametric.WithProtocol("http"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create meter provider: %v", err)
+	}
+	defer mp.Shutdown(context.Background())
+	ametric.InitMeterProvider(mp)
+	meter := mp.Meter("trpc_agent_go.app")
+
+	if err := processAgentRequest(context.Background(), meter); err != nil {
+		log.Errorf("processAgentRequest failed: %v", err)
+	}
+}
+func processAgentRequest(ctx context.Context, meter metric.Meter) error {
     // 创建追踪 span
     ctx, span := atrace.Tracer.Start(
         ctx,
@@ -175,7 +197,7 @@ func processAgentRequest(ctx context.Context) error {
     defer span.End()
     
     // 创建指标计数器
-    requestCounter, err := ametric.Meter.Int64Counter(
+    requestCounter, err := meter.Int64Counter(
         "agent.requests.total",
         metric.WithDescription("Total number of agent requests"),
     )
