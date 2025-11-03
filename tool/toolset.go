@@ -23,3 +23,69 @@ type ToolSet interface {
 	// Name returns the name of the ToolSet for identification and conflict resolution.
 	Name() string
 }
+
+// ToolFilter defines a filter function for tools based on their names.
+type ToolFilter func(string) bool
+
+// FilterTools creates a new ToolSet that filters tools from the original ToolSet.
+func FilterTools(toolset ToolSet, filter ToolFilter) ToolSet {
+	return &filteredToolSet{
+		original: toolset,
+		filter:   filter,
+	}
+}
+
+// filteredToolSet wraps a ToolSet to filter its tools based on their names.
+type filteredToolSet struct {
+	original ToolSet
+	filter   ToolFilter
+}
+
+// Tools returns filtered tools from the original ToolSet.
+func (f *filteredToolSet) Tools(ctx context.Context) []Tool {
+	originalTools := f.original.Tools(ctx)
+	if f.filter == nil {
+		return originalTools
+	}
+
+	// Create new slice for filtered tools
+	var result []Tool
+	for _, tool := range originalTools {
+		if f.filter(tool.Declaration().Name) {
+			result = append(result, tool)
+		}
+	}
+	return result
+}
+
+// Close implements the ToolSet interface.
+func (f *filteredToolSet) Close() error {
+	return f.original.Close()
+}
+
+// Name implements the ToolSet interface.
+func (f *filteredToolSet) Name() string {
+	return f.original.Name()
+}
+
+// Include creates a ToolFilter that includes only the specified tool names.
+func Include(names ...string) ToolFilter {
+	allowed := make(map[string]bool)
+	for _, name := range names {
+		allowed[name] = true
+	}
+	return func(name string) bool {
+		return allowed[name]
+	}
+}
+
+// Exclude creates a ToolFilter that excludes the specified tool names.
+func Exclude(names ...string) ToolFilter {
+	excluded := make(map[string]bool)
+	for _, name := range names {
+		excluded[name] = true
+	}
+	return func(name string) bool {
+		return !excluded[name]
+	}
+}
