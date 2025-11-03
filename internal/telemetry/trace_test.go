@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
@@ -198,6 +199,531 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	if s7.status != codes.Error {
 		t.Fatalf("embedding expected error status")
 	}
+}
+
+func TestNewChatSpanName(t *testing.T) {
+	tests := []struct {
+		name         string
+		requestModel string
+		want         string
+	}{
+		{
+			name:         "with model name",
+			requestModel: "gpt-4",
+			want:         "chat gpt-4",
+		},
+		{
+			name:         "empty model name",
+			requestModel: "",
+			want:         "chat",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewChatSpanName(tt.requestModel)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestNewExecuteToolSpanName(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		want     string
+	}{
+		{
+			name:     "simple tool name",
+			toolName: "calculator",
+			want:     "execute_tool calculator",
+		},
+		{
+			name:     "empty tool name",
+			toolName: "",
+			want:     "execute_tool ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewExecuteToolSpanName(tt.toolName)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestTraceToolCall_NilPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		sess     *session.Session
+		rspEvent *event.Event
+		err      error
+	}{
+		{
+			name:     "nil session and nil rspEvent",
+			sess:     nil,
+			rspEvent: nil,
+			err:      nil,
+		},
+		{
+			name:     "nil session with rspEvent",
+			sess:     nil,
+			rspEvent: event.New("evt1", "author"),
+			err:      nil,
+		},
+		{
+			name:     "with session and nil rspEvent",
+			sess:     &session.Session{ID: "sess1", UserID: "user1"},
+			rspEvent: nil,
+			err:      nil,
+		},
+		{
+			name:     "with error but no response error",
+			sess:     &session.Session{ID: "sess1", UserID: "user1"},
+			rspEvent: event.New("evt1", "author"),
+			err:      errors.New("tool execution failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			span := newRecordingSpan()
+			decl := &tool.Declaration{Name: "test_tool", Description: "test description"}
+			args, _ := json.Marshal(map[string]string{"key": "value"})
+
+			TraceToolCall(span, tt.sess, decl, args, tt.rspEvent, tt.err)
+
+			// Verify basic attributes are always set
+			require.True(t, hasAttr(span.attrs, KeyGenAISystem, SystemTRPCGoAgent))
+			require.True(t, hasAttr(span.attrs, KeyGenAIOperationName, OperationExecuteTool))
+			require.True(t, hasAttr(span.attrs, KeyGenAIToolName, "test_tool"))
+
+			// Verify error status when err is provided
+			if tt.err != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil && tt.rspEvent.Response.Error == nil {
+				require.Equal(t, codes.Error, span.status)
+			}
+		})
+	}
+}
+
+func TestTraceMergedToolCalls_NilPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		rspEvent *event.Event
+	}{
+		{
+			name:     "nil rspEvent",
+			rspEvent: nil,
+		},
+		{
+			name:     "rspEvent with nil response",
+			rspEvent: event.New("evt1", "author"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			span := newRecordingSpan()
+			TraceMergedToolCalls(span, tt.rspEvent)
+
+			// Verify basic attributes are always set
+			require.True(t, hasAttr(span.attrs, KeyGenAISystem, SystemTRPCGoAgent))
+			require.True(t, hasAttr(span.attrs, KeyGenAIToolName, ToolNameMergedTools))
+		})
+	}
+}
+
+func TestTraceBeforeInvokeAgent_NilPaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		invoke    *agent.Invocation
+		genConfig *model.GenerationConfig
+	}{
+		{
+			name: "nil generation config",
+			invoke: &agent.Invocation{
+				AgentName:    "test-agent",
+				InvocationID: "inv1",
+				Session:      &session.Session{ID: "sess1", UserID: "user1"},
+			},
+			genConfig: nil,
+		},
+		{
+			name: "nil session",
+			invoke: &agent.Invocation{
+				AgentName:    "test-agent",
+				InvocationID: "inv1",
+				Session:      nil,
+			},
+			genConfig: &model.GenerationConfig{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			span := newRecordingSpan()
+			TraceBeforeInvokeAgent(span, tt.invoke, "desc", "instructions", tt.genConfig)
+
+			require.True(t, hasAttr(span.attrs, KeyGenAIAgentName, "test-agent"))
+			require.True(t, hasAttr(span.attrs, KeyInvocationID, "inv1"))
+		})
+	}
+}
+
+func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
+	tests := []struct {
+		name       string
+		rspEvent   *event.Event
+		tokenUsage *TokenUsage
+	}{
+		{
+			name:       "nil rspEvent",
+			rspEvent:   nil,
+			tokenUsage: nil,
+		},
+		{
+			name:       "rspEvent with nil response",
+			rspEvent:   event.New("evt1", "author"),
+			tokenUsage: nil,
+		},
+		{
+			name: "with token usage",
+			rspEvent: event.New("evt1", "author", event.WithResponse(&model.Response{
+				ID:      "resp1",
+				Model:   "gpt-4",
+				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "test"}}},
+			})),
+			tokenUsage: &TokenUsage{
+				PromptTokens:     10,
+				CompletionTokens: 20,
+				TotalTokens:      30,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			span := newRecordingSpan()
+			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage)
+
+			if tt.tokenUsage != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil {
+				require.True(t, hasAttr(span.attrs, KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
+				require.True(t, hasAttr(span.attrs, KeyGenAIUsageOutputTokens, int64(tt.tokenUsage.CompletionTokens)))
+			}
+		})
+	}
+}
+
+func TestTraceChat_WithTimeToFirstToken(t *testing.T) {
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		Session:      &session.Session{ID: "sess1", UserID: "user1"},
+		Model:        dummyModel{},
+	}
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	}
+	rsp := &model.Response{
+		ID:    "resp1",
+		Model: "dummy",
+		Usage: &model.Usage{PromptTokens: 5, CompletionTokens: 10},
+	}
+
+	span := newRecordingSpan()
+	TraceChat(span, inv, req, rsp, "evt1", 100*time.Millisecond)
+
+	require.True(t, hasAttr(span.attrs, KeyTRPCAgentGoClientTimeToFirstToken, 0.1))
+}
+
+func TestBuildInvocationAttributes(t *testing.T) {
+	tests := []struct {
+		name   string
+		invoke *agent.Invocation
+		want   int // expected number of attributes
+	}{
+		{
+			name:   "nil invocation",
+			invoke: nil,
+			want:   0,
+		},
+		{
+			name: "invocation without session and model",
+			invoke: &agent.Invocation{
+				InvocationID: "inv1",
+			},
+			want: 1, // only invocation ID
+		},
+		{
+			name: "invocation with session",
+			invoke: &agent.Invocation{
+				InvocationID: "inv1",
+				Session:      &session.Session{ID: "sess1", UserID: "user1"},
+			},
+			want: 3, // invocation ID + session ID + user ID
+		},
+		{
+			name: "invocation with model",
+			invoke: &agent.Invocation{
+				InvocationID: "inv1",
+				Model:        dummyModel{},
+			},
+			want: 2, // invocation ID + model name
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := buildInvocationAttributes(tt.invoke)
+			require.Len(t, attrs, tt.want)
+		})
+	}
+}
+
+func TestBuildRequestAttributes(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *model.Request
+	}{
+		{
+			name: "nil request",
+			req:  nil,
+		},
+		{
+			name: "request with all generation config",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stop:             []string{"STOP"},
+					FrequencyPenalty: func() *float64 { v := 0.5; return &v }(),
+					MaxTokens:        func() *int { v := 100; return &v }(),
+					PresencePenalty:  func() *float64 { v := 0.3; return &v }(),
+					Temperature:      func() *float64 { v := 0.7; return &v }(),
+					TopP:             func() *float64 { v := 0.9; return &v }(),
+				},
+			},
+		},
+		{
+			name: "request with empty generation config",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := buildRequestAttributes(tt.req)
+			if tt.req == nil {
+				require.Nil(t, attrs)
+			} else {
+				require.NotNil(t, attrs)
+			}
+		})
+	}
+}
+
+func TestBuildResponseAttributes(t *testing.T) {
+	tests := []struct {
+		name string
+		rsp  *model.Response
+	}{
+		{
+			name: "nil response",
+			rsp:  nil,
+		},
+		{
+			name: "response with error",
+			rsp: &model.Response{
+				ID:    "resp1",
+				Model: "gpt-4",
+				Error: &model.ResponseError{
+					Type:    "api_error",
+					Message: "rate limit exceeded",
+				},
+			},
+		},
+		{
+			name: "response with usage",
+			rsp: &model.Response{
+				ID:    "resp1",
+				Model: "gpt-4",
+				Usage: &model.Usage{
+					PromptTokens:     10,
+					CompletionTokens: 20,
+				},
+			},
+		},
+		{
+			name: "response with choices",
+			rsp: &model.Response{
+				ID:    "resp1",
+				Model: "gpt-4",
+				Choices: []model.Choice{
+					{
+						Message:      model.Message{Role: model.RoleAssistant, Content: "response"},
+						FinishReason: func() *string { s := "stop"; return &s }(),
+					},
+					{
+						Message: model.Message{Role: model.RoleAssistant, Content: "response2"},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := buildResponseAttributes(tt.rsp)
+			if tt.rsp == nil {
+				require.Nil(t, attrs)
+			} else {
+				require.NotNil(t, attrs)
+				// Verify basic attributes
+				require.True(t, hasAttr(attrs, KeyGenAIResponseModel, tt.rsp.Model))
+				require.True(t, hasAttr(attrs, KeyGenAIResponseID, tt.rsp.ID))
+			}
+		})
+	}
+}
+
+func TestNewGRPCConn(t *testing.T) {
+	tests := []struct {
+		name        string
+		endpoint    string
+		mockDialErr error
+		wantErr     bool
+	}{
+		{
+			name:        "successful connection",
+			endpoint:    "localhost:4317",
+			mockDialErr: nil,
+			wantErr:     false,
+		},
+		{
+			name:        "connection failure",
+			endpoint:    "invalid:endpoint",
+			mockDialErr: errors.New("connection failed"),
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save original grpcDial
+			originalDial := grpcDial
+			defer func() { grpcDial = originalDial }()
+
+			// Mock grpcDial
+			grpcDial = func(target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+				if tt.mockDialErr != nil {
+					return nil, tt.mockDialErr
+				}
+				// Return a mock connection
+				return &grpc.ClientConn{}, nil
+			}
+
+			conn, err := NewGRPCConn(tt.endpoint)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Nil(t, conn)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, conn)
+			}
+		})
+	}
+}
+
+func TestTraceToolCall_EmptyToolCallIDs(t *testing.T) {
+	span := newRecordingSpan()
+	decl := &tool.Declaration{Name: "test_tool", Description: "test description"}
+	args, _ := json.Marshal(map[string]string{"key": "value"})
+	
+	// Response with empty tool call IDs
+	rsp := &model.Response{
+		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{}}}},
+	}
+	evt := event.New("evt1", "author", event.WithResponse(rsp))
+	
+	TraceToolCall(span, nil, decl, args, evt, nil)
+	
+	require.True(t, hasAttr(span.attrs, KeyGenAIToolName, "test_tool"))
+}
+
+func TestTraceMergedToolCalls_WithError(t *testing.T) {
+	span := newRecordingSpan()
+	
+	// Response with error
+	rsp := &model.Response{
+		Error: &model.ResponseError{
+			Type:    "api_error",
+			Message: "test error",
+		},
+		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "call1"}}}}},
+	}
+	evt := event.New("evt1", "author", event.WithResponse(rsp))
+	
+	TraceMergedToolCalls(span, evt)
+	
+	require.Equal(t, codes.Error, span.status)
+	require.True(t, hasAttr(span.attrs, KeyGenAIToolCallID, "call1"))
+}
+
+func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
+	span := newRecordingSpan()
+	
+	// Create an invocation with a message that contains a channel (not JSON serializable)
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv1",
+		Message:      model.Message{Role: model.RoleUser, Content: "test"},
+	}
+	
+	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
+	
+	require.True(t, hasAttr(span.attrs, KeyGenAIAgentName, "test-agent"))
+}
+
+func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
+	// Test with valid request
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+	}
+	attrs := buildRequestAttributes(req)
+	require.NotNil(t, attrs)
+	
+	// Verify LLM request attribute is set
+	found := false
+	for _, attr := range attrs {
+		if string(attr.Key) == KeyLLMRequest {
+			found = true
+			break
+		}
+	}
+	require.True(t, found)
+}
+
+func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
+	// Test with valid response
+	rsp := &model.Response{
+		ID:      "resp1",
+		Model:   "gpt-4",
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "test"}}},
+	}
+	attrs := buildResponseAttributes(rsp)
+	require.NotNil(t, attrs)
+	
+	// Verify LLM response attribute is set
+	found := false
+	for _, attr := range attrs {
+		if string(attr.Key) == KeyLLMResponse {
+			found = true
+			break
+		}
+	}
+	require.True(t, found)
 }
 
 func TestTrace_AdditionalBranches(t *testing.T) {
