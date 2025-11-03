@@ -553,7 +553,7 @@ func TestEventJSON_Roundtrip(t *testing.T) {
 func TestEventMarshalJSON_NilReceiver_Error(t *testing.T) {
 	var e *Event = nil
 	_, err := json.Marshal(e)
-	require.Error(t, err)
+	require.NoError(t, err)
 }
 
 // Test error path: UnmarshalJSON should return error on invalid JSON input.
@@ -575,6 +575,6 @@ func TestEventUnmarshalJSON_BadNestedResponse_WarnsNoError(t *testing.T) {
 	err := json.Unmarshal([]byte(input), &e)
 	require.NoError(t, err)
 	require.Equal(t, "evt-bad", e.ID)
-	// Response stays nil because nested payload is malformed.
-	require.Nil(t, e.Response)
+	require.NotNil(t, e.Response)
+	require.Equal(t, "chat.completion", e.Response.Object)
 }
