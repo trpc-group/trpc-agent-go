@@ -1,6 +1,8 @@
 # Tool Timer with Telemetry Example
 
-This example demonstrates how to use **ToolCallbacks**, **AgentCallbacks**, and **ModelCallbacks** to measure execution time for different components in the agent system and report the data to **OpenTelemetry** for monitoring and observability.
+This example demonstrates how to use **ToolCallbacks**, **AgentCallbacks**, and **ModelCallbacks** (Structured API) to measure execution time for different components in the agent system and report the data to **OpenTelemetry** for monitoring and observability.
+
+> **Note**: This example uses the Structured Callbacks API. The legacy callback API is deprecated.
 
 ## Overview
 
@@ -100,21 +102,21 @@ Since callback interfaces don't support returning modified context, we use insta
 
 ### Callback Registration
 
-Callbacks are registered in `callbacks.go`:
+Callbacks are registered in `callbacks.go` using the Structured API:
 
 ```go
-// Tool callbacks
-toolCallbacks := tool.NewCallbacks()
+// Tool callbacks (Structured API)
+toolCallbacks := tool.NewCallbacksStructured()
 toolCallbacks.RegisterBeforeTool(e.createBeforeToolCallback())
 toolCallbacks.RegisterAfterTool(e.createAfterToolCallback())
 
-// Agent callbacks
-agentCallbacks := agent.NewCallbacks()
+// Agent callbacks (Structured API)
+agentCallbacks := agent.NewCallbacksStructured()
 agentCallbacks.RegisterBeforeAgent(e.createBeforeAgentCallback())
 agentCallbacks.RegisterAfterAgent(e.createAfterAgentCallback())
 
-// Model callbacks
-modelCallbacks := model.NewCallbacks()
+// Model callbacks (Structured API)
+modelCallbacks := model.NewCallbacksStructured()
 modelCallbacks.RegisterBeforeModel(e.createBeforeModelCallback())
 modelCallbacks.RegisterAfterModel(e.createAfterModelCallback())
 ```

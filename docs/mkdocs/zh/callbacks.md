@@ -2,6 +2,9 @@
 
 本文介绍项目中的回调系统，用于拦截、观测与定制模型推理、工具调用、Agent 执行以及 AG-UI 事件翻译。
 
+> **注意**：从 trpc-agent-go v0.5.0 版本开始，旧版回调 API 已废弃。本文档介绍新的 Structured Callbacks API，
+> 提供更好的类型安全性和可扩展性。
+
 回调分为四类：
 
 - ModelCallbacks（模型回调）
@@ -23,36 +26,63 @@
 签名：
 
 ```go
-type BeforeModelCallback func(ctx context.Context, req *model.Request) (*model.Response, error)
-type AfterModelCallback  func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error)
+type BeforeModelCallbackStructured func(
+  ctx context.Context,
+  args *model.BeforeModelArgs,
+) (*model.BeforeModelResult, error)
+
+type AfterModelCallbackStructured func(> **注意**：旧版回调 API 已废弃。本文档介绍新的 Structured Callbacks API，
+> 提供更好的类型安全性和可扩展性。
+
+  args *model.AfterModelArgs,
+) (*model.AfterModelResult, error)
 ```
 
 要点：
 
-- Before 可返回非空响应以跳过模型调用
-- After 可获取原始请求 `req`，便于内容还原与后处理
+- Before 可通过 `BeforeModelResult.CustomResponse` 返回自定义响应以跳过模型调用
+- After 可通过 `AfterModelArgs.Request` 获取原始请求，便于内容还原与后处理
+- After 可通过 `AfterModelResult.CustomResponse` 返回自定义响应以替换原始响应
 - Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 示例：
 
 ```go
-modelCallbacks := model.NewCallbacks().
+modelCallbacks := model.NewCallbacksStructured().
   // Before：对特定提示直接返回固定响应，跳过真实模型调用
-  RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-    if len(req.Messages) > 0 && strings.Contains(req.Messages[len(req.Messages)-1].Content, "/ping") {
-      return &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "pong"}}}}, nil
+  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (
+    *model.BeforeModelResult, error,
+  ) {
+    if len(args.Request.Messages) > 0 &&
+      strings.Contains(args.Request.Messages[len(args.Request.Messages)-1].Content, "/ping") {
+      return &model.BeforeModelResult{
+        CustomResponse: &model.Response{
+          Choices: []model.Choice{{
+            Message: model.Message{
+              Role:    model.RoleAssistant,
+              Content: "pong",
+            },
+          }},
+        },
+      }, nil
     }
     return nil, nil
   }).
   // After：在成功时追加提示信息，或在出错时包装错误信息
-  RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-    if runErr != nil || resp == nil || len(resp.Choices) == 0 {
-      return resp, runErr
+  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (
+    *model.AfterModelResult, error,
+  ) {
+    if args.Error != nil || args.Response == nil ||
+      len(args.Response.Choices) == 0 {
+      return nil, nil
     }
-    c := resp.Choices[0]
+    c := args.Response.Choices[0]
     c.Message.Content = c.Message.Content + "\n\n-- answered by callback"
-    resp.Choices[0] = c
-    return resp, nil
+    return &model.AfterModelResult{
+      CustomResponse: &model.Response{
+        Choices: []model.Choice{c},
+      },
+    }, nil
   })
 ```
 
@@ -68,63 +98,63 @@ modelCallbacks := model.NewCallbacks().
 签名：
 
 ```go
-// Before：可提前返回，并可通过指针修改参数
-type BeforeToolCallback func(
+type BeforeToolCallbackStructured func(
   ctx context.Context,
-  toolName string,
-  toolDeclaration *tool.Declaration,
-  jsonArgs *[]byte, // 指针：可修改，修改对调用方可见
-) (any, error)
+  args *tool.BeforeToolArgs,
+) (*tool.BeforeToolResult, error)
 
-// After：可覆盖结果
-type AfterToolCallback func(
+type AfterToolCallbackStructured func(
   ctx context.Context,
-  toolName string,
-  toolDeclaration *tool.Declaration,
-  jsonArgs []byte,
-  result any,
-  runErr error,
-) (any, error)
+  args *tool.AfterToolArgs,
+) (*tool.AfterToolResult, error)
 ```
 
 参数修改（重要）：
 
-- BeforeToolCallback 接收 `*[]byte`，回调内部可替换切片（如 `*jsonArgs = newBytes`）
+- BeforeToolCallback 可通过 `BeforeToolResult.ModifiedArguments` 修改参数
 - 修改后的参数将用于：
   - 实际工具执行
   - 可观测 Trace 与图事件（emitToolStartEvent/emitToolCompleteEvent）上报
 
 提前返回：
 
-- BeforeToolCallback 返回非空结果时，会跳过实际工具执行，直接使用该结果
+- BeforeToolCallback 返回非空 `BeforeToolResult.CustomResult` 时，会跳过实际工具执行，直接使用该结果
 
 示例：
 
 ```go
-toolCallbacks := tool.NewCallbacks().
-  RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    if jsonArgs != nil && toolName == "calculator" {
-      origin := string(*jsonArgs)
-      enriched := []byte(fmt.Sprintf(`{"original":%s,"ts":%d}`, origin, time.Now().Unix()))
-      *jsonArgs = enriched
+toolCallbacks := tool.NewCallbacksStructured().
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (
+    *tool.BeforeToolResult, error,
+  ) {
+    if args.Arguments != nil && args.ToolName == "calculator" {
+      origin := string(args.Arguments)
+      enriched := []byte(fmt.Sprintf(`{"original":%s,"ts":%d}`,
+        origin, time.Now().Unix()))
+      return &tool.BeforeToolResult{
+        ModifiedArguments: enriched,
+      }, nil
     }
     return nil, nil
   }).
-  RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
-    if runErr != nil {
-      return nil, runErr
+  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (
+    *tool.AfterToolResult, error,
+  ) {
+    if args.Error != nil {
+      return nil, nil
     }
-    if s, ok := result.(string); ok {
-      return s + "\n-- post processed by tool callback", nil
+    if s, ok := args.Result.(string); ok {
+      return &tool.AfterToolResult{
+        CustomResult: s + "\n-- post processed by tool callback",
+      }, nil
     }
-    return result, nil
+    return nil, nil
   })
 ```
 
 可观测与事件：
 
 - 修改后的参数会同步到：
-
   - `TraceToolCall` 可观测属性
   - 图事件 `emitToolStartEvent` 与 `emitToolCompleteEvent`
 
@@ -138,39 +168,64 @@ toolCallbacks := tool.NewCallbacks().
 签名：
 
 ```go
-type BeforeAgentCallback func(ctx context.Context, inv *agent.Invocation) (*model.Response, error)
-type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error)
+type BeforeAgentCallbackStructured func(
+  ctx context.Context,
+  args *agent.BeforeAgentArgs,
+) (*agent.BeforeAgentResult, error)
+
+type AfterAgentCallbackStructured func(
+  ctx context.Context,
+  args *agent.AfterAgentArgs,
+) (*agent.AfterAgentResult, error)
 ```
 
 要点：
 
-- Before 可返回自定义 `*model.Response` 以中止后续模型调用
-- After 可返回替换响应
+- Before 可通过 `BeforeAgentResult.CustomResponse` 返回自定义响应以中止后续模型调用
+- After 可通过 `AfterAgentResult.CustomResponse` 返回替换响应
 - Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 示例：
 
 ```go
-agentCallbacks := agent.NewCallbacks().
+agentCallbacks := agent.NewCallbacksStructured().
   // Before：当用户消息包含 /abort 时，直接返回固定响应，跳过后续流程
-  RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-    if inv != nil && strings.Contains(inv.GetUserMessageContent(), "/abort") {
-      return &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "aborted by callback"}}}}, nil
+  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (
+    *agent.BeforeAgentResult, error,
+  ) {
+    if args.Invocation != nil &&
+      strings.Contains(args.Invocation.GetUserMessageContent(), "/abort") {
+      return &agent.BeforeAgentResult{
+        CustomResponse: &model.Response{
+          Choices: []model.Choice{{
+            Message: model.Message{
+              Role:    model.RoleAssistant,
+              Content: "aborted by callback",
+            },
+          }},
+        },
+      }, nil
     }
     return nil, nil
   }).
   // After：在成功响应末尾追加标注
-  RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-    if runErr != nil {
-      return nil, runErr
+  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (
+    *agent.AfterAgentResult, error,
+  ) {
+    if args.Error != nil {
+      return nil, nil
     }
+    inv := args.Invocation
     if inv == nil || inv.Response == nil || len(inv.Response.Choices) == 0 {
       return nil, nil
     }
     c := inv.Response.Choices[0]
     c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
-    inv.Response.Choices[0] = c
-    return inv.Response, nil
+    return &agent.AfterAgentResult{
+      CustomResponse: &model.Response{
+        Choices: []model.Choice{c},
+      },
+    }, nil
   })
 ```
 
@@ -246,32 +301,45 @@ if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 可通过链式注册构建可复用的全局回调配置。
 
 ```go
-_ = model.NewCallbacks().
-  RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-    fmt.Printf("Global BeforeModel: %d messages.\n", len(req.Messages))
+_ = model.NewCallbacksStructured().
+  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (
+    *model.BeforeModelResult, error,
+  ) {
+    fmt.Printf("Global BeforeModel: %d messages.\n",
+      len(args.Request.Messages))
     return nil, nil
   }).
-  RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, err error) (*model.Response, error) {
+  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (
+    *model.AfterModelResult, error,
+  ) {
     fmt.Println("Global AfterModel: completed.")
     return nil, nil
   })
 
-_ = tool.NewCallbacks().
-  RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    fmt.Printf("Global BeforeTool: %s.\n", toolName)
+_ = tool.NewCallbacksStructured().
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (
+    *tool.BeforeToolResult, error,
+  ) {
+    fmt.Printf("Global BeforeTool: %s.\n", args.ToolName)
     return nil, nil
   }).
-  RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-    fmt.Printf("Global AfterTool: %s done.\n", toolName)
+  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (
+    *tool.AfterToolResult, error,
+  ) {
+    fmt.Printf("Global AfterTool: %s done.\n", args.ToolName)
     return nil, nil
   })
 
-_ = agent.NewCallbacks().
-  RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-    fmt.Printf("Global BeforeAgent: %s.\n", inv.AgentName)
+_ = agent.NewCallbacksStructured().
+  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (
+    *agent.BeforeAgentResult, error,
+  ) {
+    fmt.Printf("Global BeforeAgent: %s.\n", args.Invocation.AgentName)
     return nil, nil
   }).
-  RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (
+    *agent.AfterAgentResult, error,
+  ) {
     fmt.Println("Global AfterAgent: completed.")
     return nil, nil
   })
@@ -284,9 +352,19 @@ _ = agent.NewCallbacks().
 Mock 工具结果并中止后续工具调用：
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
-  if toolName == "calculator" && jsonArgs != nil && strings.Contains(string(*jsonArgs), "42") {
-    return calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242}, nil
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (
+  *tool.BeforeToolResult, error,
+) {
+  if args.ToolName == "calculator" && args.Arguments != nil &&
+    strings.Contains(string(args.Arguments), "42") {
+    return &tool.BeforeToolResult{
+      CustomResult: calculatorResult{
+        Operation: "custom",
+        A:         42,
+        B:         42,
+        Result:    4242,
+      },
+    }, nil
   }
   return nil, nil
 })
@@ -295,11 +373,16 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 执行前修改参数（并在可观测/事件中体现）：
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
-  if jsonArgs != nil && toolName == "calculator" {
-    originalArgs := string(*jsonArgs)
-    modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-    *jsonArgs = []byte(modifiedArgs)
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (
+  *tool.BeforeToolResult, error,
+) {
+  if args.Arguments != nil && args.ToolName == "calculator" {
+    originalArgs := string(args.Arguments)
+    modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`,
+      originalArgs, time.Now().Unix())
+    return &tool.BeforeToolResult{
+      ModifiedArguments: []byte(modifiedArgs),
+    }, nil
   }
   return nil, nil
 })

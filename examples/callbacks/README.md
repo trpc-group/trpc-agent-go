@@ -1,6 +1,8 @@
 # Multi-turn Chat with Callbacks Example
 
-This example demonstrates how to use the `Runner` orchestration component in a multi-turn chat system, with a focus on registering and utilizing **ModelCallbacks**, **ToolCallbacks**, and **AgentCallbacks**. These callbacks allow you to intercept, log, and customize key steps in LLM inference, tool invocation, and agent execution.
+This example demonstrates how to use the `Runner` orchestration component in a multi-turn chat system, with a focus on registering and utilizing **ModelCallbacks**, **ToolCallbacks**, and **AgentCallbacks** (Structured API). These callbacks allow you to intercept, log, and customize key steps in LLM inference, tool invocation, and agent execution.
+
+> **Note**: This example uses the Structured Callbacks API. The legacy callback API is deprecated.
 
 ---
 
@@ -90,24 +92,32 @@ The framework supports both traditional and chain registration patterns. Chain r
 
 ```go
 // Traditional registration
-modelCallbacks := model.NewCallbacks()
-modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+modelCallbacks := model.NewCallbacksStructured()
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (
+    *model.BeforeModelResult, error,
+) {
     // Your logic here
     return nil, nil
 })
-modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-    // Your logic here - now with access to original request
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (
+    *model.AfterModelResult, error,
+) {
+    // Your logic here - access original request via args.Request
     return nil, nil
 })
 
 // Chain registration (recommended)
-modelCallbacks := model.NewCallbacks().
-    RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+modelCallbacks := model.NewCallbacksStructured().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (
+        *model.BeforeModelResult, error,
+    ) {
         // Your logic here
         return nil, nil
     }).
-    RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-        // Your logic here - now with access to original request
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (
+        *model.AfterModelResult, error,
+    ) {
+        // Your logic here - access original request via args.Request
         return nil, nil
     })
 ```
@@ -116,23 +126,31 @@ modelCallbacks := model.NewCallbacks().
 
 ```go
 // Traditional registration
-toolCallbacks := tool.NewCallbacks()
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
+toolCallbacks := tool.NewCallbacksStructured()
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (
+    *tool.BeforeToolResult, error,
+) {
     // Your logic here
     return nil, nil
 })
-toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (
+    *tool.AfterToolResult, error,
+) {
     // Your logic here
     return nil, nil
 })
 
 // Chain registration (recommended)
-toolCallbacks := tool.NewCallbacks().
-    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
+toolCallbacks := tool.NewCallbacksStructured().
+    RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (
+        *tool.BeforeToolResult, error,
+    ) {
         // Your logic here
         return nil, nil
     }).
-    RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+    RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (
+        *tool.AfterToolResult, error,
+    ) {
         // Your logic here
         return nil, nil
     })
@@ -142,23 +160,31 @@ toolCallbacks := tool.NewCallbacks().
 
 ```go
 // Traditional registration
-agentCallbacks := agent.NewCallbacks()
-agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+agentCallbacks := agent.NewCallbacksStructured()
+agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (
+    *agent.BeforeAgentResult, error,
+) {
     // Your logic here
     return nil, nil
 })
-agentCallbacks.RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+agentCallbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (
+    *agent.AfterAgentResult, error,
+) {
     // Your logic here
     return nil, nil
 })
 
 // Chain registration (recommended)
-agentCallbacks := agent.NewCallbacks().
-    RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+agentCallbacks := agent.NewCallbacksStructured().
+    RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (
+        *agent.BeforeAgentResult, error,
+    ) {
         // Your logic here
         return nil, nil
     }).
-    RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+    RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (
+        *agent.AfterAgentResult, error,
+    ) {
         // Your logic here
         return nil, nil
     })
@@ -170,22 +196,26 @@ After declaring and registering your callbacks, pass them to the agent during co
 
 ## Skipping Execution in Callbacks
 
-You can short-circuit (skip) the default execution of a model, tool, or agent by returning a non-nil response/result from the corresponding callback. This is useful for mocking, early returns, blocking, or custom logic.
+You can short-circuit (skip) the default execution of a model, tool, or agent by returning a custom response/result from the corresponding callback. This is useful for mocking, early returns, blocking, or custom logic.
 
-- **ModelCallbacks**: If `BeforeModelCallback` returns a non-nil `*model.Response`, the model will not be called and this response will be used directly.
-- **ToolCallbacks**: If `BeforeToolCallback` returns a non-nil result, the tool will not be executed and this result will be used directly. Additionally, `BeforeToolCallback` can modify tool arguments via the `jsonArgs` pointer parameter.
-- **AgentCallbacks**: If `BeforeAgentCallback` returns a non-nil `*model.Response`, the agent execution will be skipped and this response will be used.
+- **ModelCallbacks**: If `BeforeModelCallback` returns a non-nil `BeforeModelResult.CustomResponse`, the model will not be called and this response will be used directly.
+- **ToolCallbacks**: If `BeforeToolCallback` returns a non-nil `BeforeToolResult.CustomResult`, the tool will not be executed and this result will be used directly. Additionally, `BeforeToolCallback` can modify tool arguments via `BeforeToolResult.ModifiedArguments`.
+- **AgentCallbacks**: If `BeforeAgentCallback` returns a non-nil `BeforeAgentResult.CustomResponse`, the agent execution will be skipped and this response will be used.
 
 **Example: Using original request in AfterModelCallback**
 
 ```go
-modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (
+    *model.AfterModelResult, error,
+) {
     // Access the original request for content restoration
-    if req != nil && len(req.Messages) > 0 {
-        originalText := req.Messages[len(req.Messages)-1].Content
+    if args.Request != nil && len(args.Request.Messages) > 0 {
+        originalText := args.Request.Messages[len(args.Request.Messages)-1].Content
         // Process response with original context
         if strings.Contains(originalText, "restore") {
-            return restoreFormatting(resp, originalText), nil
+            return &model.AfterModelResult{
+                CustomResponse: restoreFormatting(args.Response, originalText),
+            }, nil
         }
     }
     return nil, nil
@@ -195,10 +225,20 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 **Example: Mocking a tool result in BeforeToolCallback**
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    if toolName == "calculator" && jsonArgs != nil && strings.Contains(string(*jsonArgs), "42") {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (
+    *tool.BeforeToolResult, error,
+) {
+    if args.ToolName == "calculator" && args.Arguments != nil &&
+        strings.Contains(string(args.Arguments), "42") {
         // Return a mock result and skip actual tool execution.
-        return calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242}, nil
+        return &tool.BeforeToolResult{
+            CustomResult: calculatorResult{
+                Operation: "custom",
+                A:         42,
+                B:         42,
+                Result:    4242,
+            },
+        }, nil
     }
     return nil, nil
 })
@@ -207,13 +247,18 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, tool
 **Example: Modifying tool arguments in BeforeToolCallback**
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    if jsonArgs != nil && toolName == "calculator" {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (
+    *tool.BeforeToolResult, error,
+) {
+    if args.Arguments != nil && args.ToolName == "calculator" {
         // Add timestamp to arguments for logging purposes
-        originalArgs := string(*jsonArgs)
-        modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-        *jsonArgs = []byte(modifiedArgs)
-        fmt.Printf("Modified args for %s: %s\n", toolName, modifiedArgs)
+        originalArgs := string(args.Arguments)
+        modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`,
+            originalArgs, time.Now().Unix())
+        fmt.Printf("Modified args for %s: %s\n", args.ToolName, modifiedArgs)
+        return &tool.BeforeToolResult{
+            ModifiedArguments: []byte(modifiedArgs),
+        }, nil
     }
     return nil, nil
 })
@@ -222,11 +267,20 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, tool
 **Example: Blocking a model call in BeforeModelCallback**
 
 ```go
-modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-    if strings.Contains(req.Messages[len(req.Messages)-1].Content, "block me") {
-        return &model.Response{Choices: []model.Choice{{
-            Message: model.Message{Role: model.RoleAssistant, Content: "This request was blocked by a callback."},
-        }}}, nil
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (
+    *model.BeforeModelResult, error,
+) {
+    if strings.Contains(args.Request.Messages[len(args.Request.Messages)-1].Content, "block me") {
+        return &model.BeforeModelResult{
+            CustomResponse: &model.Response{
+                Choices: []model.Choice{{
+                    Message: model.Message{
+                        Role:    model.RoleAssistant,
+                        Content: "This request was blocked by a callback.",
+                    },
+                }},
+            },
+        }, nil
     }
     return nil, nil
 })
