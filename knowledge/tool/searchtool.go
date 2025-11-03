@@ -113,20 +113,24 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 		}
 		invocation, ok := agent.InvocationFromContext(ctx)
 		var runnerFilter map[string]any
+		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
 		if !ok {
 			log.Debugf("knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
+			runnerConditionedFilter = invocation.RunOptions.KnowledgeConditionedFilter
 		}
-		finalFilter := getStaticFilter(opt.staticFilter, runnerFilter)
+
+		agentFilterCondition := convertMetadataToFilterCondition(opt.staticFilter)
+		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
+		finalFilter := mergeFilterConditions(agentFilterCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter)
 
 		// Create search request - for tools, we don't have conversation history yet.
 		// This could be enhanced in the future to extract context from the agent's session.
 		searchReq := &knowledge.SearchRequest{
 			Query: req.Query,
 			SearchFilter: &knowledge.SearchFilter{
-				Metadata:        finalFilter,
-				FilterCondition: opt.conditionedFilter,
+				FilterCondition: finalFilter,
 			},
 			MaxResults: opt.maxResults,
 			// History, UserID, SessionID could be filled from agent context in the future.
@@ -230,30 +234,32 @@ func NewAgenticFilterSearchTool(
 
 		invocation, ok := agent.InvocationFromContext(ctx)
 		var runnerFilter map[string]any
+		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
 		if !ok {
 			log.Debugf("knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
+			runnerConditionedFilter = invocation.RunOptions.KnowledgeConditionedFilter
 		}
 
 		// Convert request filter to UniversalFilterCondition if provided
-		var requestFilterCondition *searchfilter.UniversalFilterCondition
+		var llmFilterCondition *searchfilter.UniversalFilterCondition
 		if req.Filter != nil {
 			var err error
-			requestFilterCondition, err = convertConditionedFilterToUniversal(req.Filter)
+			llmFilterCondition, err = convertConditionedFilterToUniversal(req.Filter)
 			if err != nil {
 				return nil, fmt.Errorf("invalid filter: %w", err)
 			}
 		}
 
-		finalConditionedFilter := combineFilterConditions(opt.conditionedFilter, requestFilterCondition)
-		metaDataFilter := getStaticFilter(opt.staticFilter, runnerFilter)
+		agentMetadataCondition := convertMetadataToFilterCondition(opt.staticFilter)
+		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
+		finalFilter := mergeFilterConditions(agentMetadataCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter, llmFilterCondition)
 
 		searchReq := &knowledge.SearchRequest{
 			Query: req.Query,
 			SearchFilter: &knowledge.SearchFilter{
-				Metadata:        metaDataFilter,
-				FilterCondition: finalConditionedFilter,
+				FilterCondition: finalFilter,
 			},
 			MaxResults: opt.maxResults,
 		}
@@ -306,18 +312,59 @@ func NewAgenticFilterSearchTool(
 	)
 }
 
-func getStaticFilter(
-	agentFilter map[string]any,
-	runnerFilter map[string]any,
-) map[string]any {
-	filter := make(map[string]any)
-	for k, v := range runnerFilter {
-		filter[k] = v
+// convertMetadataToFilterCondition converts a metadata map to UniversalFilterCondition.
+func convertMetadataToFilterCondition(metadata map[string]any) *searchfilter.UniversalFilterCondition {
+	if len(metadata) == 0 {
+		return nil
 	}
-	for k, v := range agentFilter {
-		filter[k] = v
+
+	var conditions []*searchfilter.UniversalFilterCondition
+	for k, v := range metadata {
+		conditions = append(conditions, &searchfilter.UniversalFilterCondition{
+			Field:    k,
+			Operator: searchfilter.OperatorEqual,
+			Value:    v,
+		})
 	}
-	return filter
+
+	if len(conditions) == 0 {
+		return nil
+	}
+	if len(conditions) == 1 {
+		return conditions[0]
+	}
+
+	return &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value:    conditions,
+	}
+}
+
+// mergeFilterConditions merges multiple filter conditions with priority order.
+// Priority: earlier conditions have higher priority (cannot be overridden by later ones).
+// All conditions are combined with AND operator.
+// Returns nil if all conditions are nil.
+func mergeFilterConditions(
+	conditions ...*searchfilter.UniversalFilterCondition,
+) *searchfilter.UniversalFilterCondition {
+	var nonNilConditions []*searchfilter.UniversalFilterCondition
+	for _, cond := range conditions {
+		if cond != nil {
+			nonNilConditions = append(nonNilConditions, cond)
+		}
+	}
+
+	if len(nonNilConditions) == 0 {
+		return nil
+	}
+	if len(nonNilConditions) == 1 {
+		return nonNilConditions[0]
+	}
+
+	return &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value:    nonNilConditions,
+	}
 }
 
 // filterMetadata removes internal metadata keys with MetaPrefix from the metadata map.
@@ -328,7 +375,7 @@ func filterMetadata(metadata map[string]any) map[string]any {
 	filtered := make(map[string]any)
 	for k, v := range metadata {
 		// Skip internal metadata keys with trpc_agent_go_ prefix
-		if !strings.HasPrefix(k, source.MetaPrefix) {
+		if !strings.HasPrefix(k, source.MetaPrefix) || k == source.MetaChunkIndex {
 			filtered[k] = v
 		}
 	}
@@ -393,31 +440,6 @@ You MUST use these exact keys and values when constructing filters.
 	}
 
 	return b.String()
-}
-
-// combineFilterConditions combines multiple filter conditions using AND operator.
-// Returns nil if all conditions are nil.
-func combineFilterConditions(
-	conditions ...*searchfilter.UniversalFilterCondition,
-) *searchfilter.UniversalFilterCondition {
-	var nonNilConditions []*searchfilter.UniversalFilterCondition
-	for _, cond := range conditions {
-		if cond != nil {
-			nonNilConditions = append(nonNilConditions, cond)
-		}
-	}
-
-	if len(nonNilConditions) == 0 {
-		return nil
-	}
-	if len(nonNilConditions) == 1 {
-		return nonNilConditions[0]
-	}
-
-	return &searchfilter.UniversalFilterCondition{
-		Operator: searchfilter.OperatorAnd,
-		Value:    nonNilConditions,
-	}
 }
 
 // convertConditionedFilterToUniversal converts a ConditionedFilterRequest to UniversalFilterCondition.

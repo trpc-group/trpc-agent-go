@@ -380,34 +380,80 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 	})
 }
 
-func TestGetFinalFilter(t *testing.T) {
-	t.Run("merge filters with priority", func(t *testing.T) {
-		agentFilter := map[string]any{
-			"source": "agent",
-			"common": "agent_value",
+func TestConvertMetadataToFilterCondition(t *testing.T) {
+	t.Run("convert single metadata", func(t *testing.T) {
+		metadata := map[string]any{"category": "doc"}
+		result := convertMetadataToFilterCondition(metadata)
+
+		require.NotNil(t, result)
+		require.Equal(t, "category", result.Field)
+		require.Equal(t, searchfilter.OperatorEqual, result.Operator)
+		require.Equal(t, "doc", result.Value)
+	})
+
+	t.Run("convert multiple metadata with AND", func(t *testing.T) {
+		metadata := map[string]any{
+			"category": "doc",
+			"source":   "official",
 		}
-		runnerFilter := map[string]any{
-			"runner": "runner_value",
-			"common": "runner_value", // Will be overridden by agent
+		result := convertMetadataToFilterCondition(metadata)
+
+		require.NotNil(t, result)
+		require.Equal(t, searchfilter.OperatorAnd, result.Operator)
+		conditions := result.Value.([]*searchfilter.UniversalFilterCondition)
+		require.Len(t, conditions, 2)
+	})
+
+	t.Run("handle empty metadata", func(t *testing.T) {
+		result := convertMetadataToFilterCondition(nil)
+		require.Nil(t, result)
+
+		result = convertMetadataToFilterCondition(map[string]any{})
+		require.Nil(t, result)
+	})
+}
+
+func TestMergeFilterConditions(t *testing.T) {
+	t.Run("merge with priority - agent > runner", func(t *testing.T) {
+		// Agent level filter (highest priority)
+		agentCondition := &searchfilter.UniversalFilterCondition{
+			Field:    "source",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "agent",
 		}
 
-		result := getStaticFilter(agentFilter, runnerFilter)
+		// Runner level filter (medium priority)
+		runnerCondition := &searchfilter.UniversalFilterCondition{
+			Field:    "region",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "china",
+		}
 
-		require.Equal(t, "agent", result["source"])
-		require.Equal(t, "runner_value", result["runner"])
-		require.Equal(t, "agent_value", result["common"]) // Agent has highest priority (added last)
+		result := mergeFilterConditions(agentCondition, runnerCondition)
+
+		require.NotNil(t, result)
+		require.Equal(t, searchfilter.OperatorAnd, result.Operator)
+		conditions := result.Value.([]*searchfilter.UniversalFilterCondition)
+		require.Len(t, conditions, 2)
+		// Agent condition comes first (higher priority)
+		require.Equal(t, "source", conditions[0].Field)
+		require.Equal(t, "region", conditions[1].Field)
 	})
 
 	t.Run("handle nil filters", func(t *testing.T) {
-		result := getStaticFilter(nil, nil)
-		require.Empty(t, result)
+		result := mergeFilterConditions(nil, nil)
+		require.Nil(t, result)
 	})
 
-	t.Run("partial nil filters", func(t *testing.T) {
-		agentFilter := map[string]any{"agent": "value"}
-		result := getStaticFilter(agentFilter, nil)
-		require.Equal(t, "value", result["agent"])
-		require.Len(t, result, 1)
+	t.Run("single non-nil filter", func(t *testing.T) {
+		condition := &searchfilter.UniversalFilterCondition{
+			Field:    "category",
+			Operator: searchfilter.OperatorEqual,
+			Value:    "doc",
+		}
+		result := mergeFilterConditions(condition, nil)
+		require.NotNil(t, result)
+		require.Equal(t, "category", result.Field)
 	})
 }
 

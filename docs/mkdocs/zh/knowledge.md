@@ -658,7 +658,7 @@ eventCh, err := runner.Run(
 )
 ```
 
-Runner 级过滤器的优先级高于 Agent 级过滤器，相同键的值会被覆盖：
+**重要**：Agent 级过滤器的优先级高于 Runner 级过滤器，相同键的值会被 Agent 级覆盖：
 
 ```go
 // Agent 级过滤器
@@ -671,19 +671,19 @@ llmAgent := llmagent.New(
     }),
 )
 
-// Runner 级过滤器会覆盖相同的键
+// Runner 级过滤器的同名键会被 Agent 级覆盖
 eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "source": "external",  // 覆盖 Agent 级的 "internal"
-        "topic":  "api",       // 新增过滤条件
+        "source": "external",  // 会被 Agent 级的 "internal" 覆盖
+        "topic":  "api",       // 新增过滤条件（Agent 级没有此键）
     }),
 )
 
 // 最终生效的过滤器：
 // {
 //     "category": "general",   // 来自 Agent 级
-//     "source":   "external",  // 来自 Runner 级（覆盖）
+//     "source":   "internal",  // 来自 Agent 级（覆盖了 Runner 级的 "external"）
 //     "topic":    "api",       // 来自 Runner 级（新增）
 // }
 ```
@@ -712,62 +712,138 @@ llmAgent := llmagent.New(
 )
 ```
 
-#### 过滤器优先级
+#### 过滤器层级
 
-系统支持多层过滤器，分为两种类型：
+Knowledge 系统支持多层过滤器，所有过滤器统一使用 FilterCondition 实现，通过 **AND 逻辑**组合。系统不区分优先级，所有层级的过滤器平等合并。
 
-##### 1. 简单元数据过滤器（Metadata Filter）
+**过滤器层级**：
 
-简单键值对过滤器，按以下优先级合并（后者覆盖前者）：
+1. **Agent 级过滤器**：
+   - 通过 `llmagent.WithKnowledgeFilter()` 设置元数据过滤器
+   - 通过 `llmagent.WithKnowledgeConditionedFilter()` 设置复杂条件过滤器
 
-1. **Tool 级过滤器**：通过 `WithFilter()` 设置的静态过滤器（优先级高）
-2. **智能过滤器**：LLM 动态生成的过滤条件
+2. **Tool 级过滤器**：
+   - 通过 `tool.WithFilter()` 设置元数据过滤器
+   - 通过 `tool.WithConditionedFilter()` 设置复杂条件过滤器
+   - 注：Agent 级过滤器实际上是通过 Tool 级过滤器实现的
 
+3. **Runner 级过滤器**：
+   - 通过 `agent.WithKnowledgeFilter()` 在 `runner.Run()` 时传递元数据过滤器
+   - 通过 `agent.WithKnowledgeConditionedFilter()` 在 `runner.Run()` 时传递复杂条件过滤器
+
+4. **LLM 智能过滤器**：
+   - LLM 根据用户查询动态生成的过滤条件（仅支持复杂条件过滤器）
+
+> **重要说明**：
+> - 所有过滤器通过 **AND 逻辑**组合，即必须同时满足所有层级的过滤条件
+> - 不存在优先级覆盖关系，所有过滤器都是平等的约束条件
+> - 每个层级都支持元数据过滤器和复杂条件过滤器（LLM 除外，仅支持复杂条件）
+
+##### 示例：过滤器组合
 
 ```go
-// Tool 级过滤器（创建 Tool 时设置）
-tool.WithFilter(map[string]any{
-    "source":   "official",
-    "category": "documentation",
-})
+import "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 
-// 智能过滤器由 LLM 根据用户查询动态生成
-// 例如：用户问 "查找 API 相关文档"，LLM 可能生成 {"topic": "api"}
-```
-
-##### 2. 复杂条件过滤器（FilterCondition）
-
-支持复杂逻辑（AND/OR/嵌套）的过滤器，按以下规则合并：
-
-1. **Tool 级条件过滤器**：通过 `WithConditionedFilter()` 设置的静态条件
-2. **智能过滤器**：LLM 动态生成的过滤条件
-
-```go
-tool.WithConditionedFilter(
-    searchfilter.Or(
-        searchfilter.Equal("topic", "programming"),
-        searchfilter.Equal("content_type", "llm"),
+// 1. Agent 级过滤器
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithKnowledge(kb),
+    // Agent 级元数据过滤器
+    llmagent.WithKnowledgeFilter(map[string]any{
+        "source":   "official",      // 官方来源
+        "category": "documentation", // 文档类别
+    }),
+    // Agent 级复杂条件过滤器
+    llmagent.WithKnowledgeConditionedFilter(
+        searchfilter.Equal("status", "published"), // 已发布状态
     ),
 )
 
+// 2. Runner 级过滤器
+eventCh, err := runner.Run(
+    ctx, userID, sessionID, message,
+    // Runner 级元数据过滤器
+    agent.WithKnowledgeFilter(map[string]any{
+        "region":   "china",  // 中国区域
+        "language": "zh",     // 中文
+    }),
+    // Runner 级复杂条件过滤器
+    agent.WithKnowledgeConditionedFilter(
+        searchfilter.GreaterThan("priority", 5), // 优先级大于 5
+    ),
+)
 
-// 常用辅助函数：
-// - searchfilter.Equal(field, value)        // field = value
-// - searchfilter.NotEqual(field, value)     // field != value
-// - searchfilter.GreaterThan(field, value)  // field > value
-// - searchfilter.LessThan(field, value)     // field < value
-// - searchfilter.In(field, values...)       // field IN (...)
-// - searchfilter.And(conditions...)         // AND 组合
-// - searchfilter.Or(conditions...)          // OR 组合
+// 3. LLM 智能过滤器（由 LLM 动态生成）
+// 例如：用户问 "查找 API 相关文档"，LLM 可能生成 {"topic": "api"}
+
+// 最终生效的过滤条件（所有条件通过 AND 组合）：
+// source = "official" AND 
+// category = "documentation" AND 
+// status = "published" AND
+// region = "china" AND 
+// language = "zh" AND 
+// priority > 5 AND
+// topic = "api"
+//
+// 即：必须同时满足所有层级的所有条件
+```
+
+##### 复杂条件过滤器示例
+
+```go
+// 手动创建带有复杂条件过滤器的 Tool
+searchTool := tool.NewKnowledgeSearchTool(
+    kb,
+    // Agent 级元数据过滤器
+    tool.WithFilter(map[string]any{
+        "source": "official",
+    }),
+    // Agent 级复杂条件过滤器
+    tool.WithConditionedFilter(
+        searchfilter.Or(
+            searchfilter.Equal("topic", "programming"),
+            searchfilter.Equal("topic", "llm"),
+        ),
+    ),
+)
+
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(searchTool),  // 手动传递 Tool
+)
+
+// 最终过滤条件：
+// source = "official" AND (topic = "programming" OR topic = "llm")
+// 即：必须是官方来源，且主题是编程或 LLM
+```
+
+##### 常用过滤器辅助函数
+
+```go
+// 比较操作符
+searchfilter.Equal(field, value)              // field = value
+searchfilter.NotEqual(field, value)           // field != value
+searchfilter.GreaterThan(field, value)        // field > value
+searchfilter.GreaterThanOrEqual(field, value) // field >= value
+searchfilter.LessThan(field, value)           // field < value
+searchfilter.LessThanOrEqual(field, value)    // field <= value
+searchfilter.In(field, values...)             // field IN (...)
+searchfilter.NotIn(field, values...)          // field NOT IN (...)
+searchfilter.Like(field, pattern)             // field LIKE pattern
+searchfilter.Between(field, min, max)         // field BETWEEN min AND max
+
+// 逻辑操作符
+searchfilter.And(conditions...)               // AND 组合
+searchfilter.Or(conditions...)                // OR 组合
 
 // 嵌套示例：(status = 'published') AND (category = 'doc' OR category = 'tutorial')
-tool.WithConditionedFilter(
-    searchfilter.And(
-        searchfilter.Equal("status", "published"),
-        searchfilter.Or(
-            searchfilter.Equal("category", "documentation"),
-            searchfilter.Equal("category", "tutorial"),
-        ),
+searchfilter.And(
+    searchfilter.Equal("status", "published"),
+    searchfilter.Or(
+        searchfilter.Equal("category", "documentation"),
+        searchfilter.Equal("category", "tutorial"),
     ),
 )
 ```

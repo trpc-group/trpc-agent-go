@@ -196,6 +196,7 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		c.kb,
 		sourcesMetadata,
 		knowledgetool.WithToolName("knowledge_search"),
+		// filter by topic = programming and content_type = llm
 		knowledgetool.WithConditionedFilter(
 			searchfilter.Or(
 				searchfilter.Equal("topic", "programming"),
