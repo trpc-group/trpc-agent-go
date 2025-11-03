@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -322,4 +323,26 @@ func TestLLMNode_PlaceholdersOptionalMissing(t *testing.T) {
 	require.Contains(t, sys.Content, "AI")
 	require.NotContains(t, sys.Content, "{user:topics?")
 	require.NotContains(t, sys.Content, "{app:banner?")
+}
+
+// Verify StateSchema.ApplyUpdate skips unknown internal keys while still
+// applying other unknown keys using default override behavior.
+func TestStateSchema_ApplyUpdate_SkipsInternalUnknownKeys(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("x", StateField{Type: reflect.TypeOf(0), Reducer: DefaultReducer})
+
+	current := State{"x": 1}
+	update := State{
+		StateKeyExecContext: map[string]any{"should": "skip"},
+		"y":                 2,
+	}
+
+	result := schema.ApplyUpdate(current, update)
+
+	// Internal key should be ignored entirely.
+	require.NotContains(t, result, StateKeyExecContext)
+	// Unknown non-internal key should be applied with default override.
+	require.Equal(t, 2, result["y"])
+	// Existing schema field remains unless overridden.
+	require.Equal(t, 1, result["x"])
 }

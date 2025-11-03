@@ -583,6 +583,25 @@ func TestBasicConditionalRouting(t *testing.T) {
 	})
 }
 
+// Ensure updateStateFromResult drops internal keys like exec_context from
+// user-provided State updates to avoid leaking executor-owned data.
+func TestExecutor_UpdateStateFromResult_SkipsInternal(t *testing.T) {
+	exec := &Executor{}
+	execCtx := &ExecutionContext{State: make(State)}
+
+	// Update contains an internal key and a regular key.
+	update := State{
+		StateKeyExecContext: &ExecutionContext{InvocationID: "x"},
+		"foo":               "bar",
+	}
+
+	exec.updateStateFromResult(execCtx, update)
+
+	// Internal key must be dropped; regular key must be applied.
+	require.NotContains(t, execCtx.State, StateKeyExecContext)
+	require.Equal(t, "bar", execCtx.State["foo"])
+}
+
 // TestBasicCommandRouting tests routing using Command objects
 func TestBasicCommandRouting(t *testing.T) {
 	// Create state schema
