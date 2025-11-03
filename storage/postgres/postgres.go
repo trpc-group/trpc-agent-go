@@ -102,10 +102,8 @@ func RegisterPostgresInstance(name string, opts ...ClientBuilderOpt) {
 
 // GetPostgresInstance gets the postgres instance options by name.
 func GetPostgresInstance(name string) ([]ClientBuilderOpt, bool) {
-	if _, ok := postgresRegistry[name]; !ok {
-		return nil, false
-	}
-	return postgresRegistry[name], true
+	instance, ok := postgresRegistry[name]
+	return instance, ok
 }
 
 // Client defines the interface for PostgreSQL operations.

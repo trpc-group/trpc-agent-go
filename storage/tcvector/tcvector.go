@@ -36,7 +36,7 @@ type ClientInterface interface {
 type clientBuilder func(builderOpts ...ClientBuilderOpt) (ClientInterface, error)
 
 // clientBuilder is the function to build the global tcvectordb client.
-var globalBuilder clientBuilder = DefaultClientBuilder
+var globalBuilder clientBuilder = defaultClientBuilder
 
 // SetClientBuilder sets the client builder for tcvectordb.
 func SetClientBuilder(builder clientBuilder) {
@@ -48,8 +48,8 @@ func GetClientBuilder() clientBuilder {
 	return globalBuilder
 }
 
-// DefaultClientBuilder is the default client builder for tcvectordb.
-func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
+// defaultClientBuilder is the default client builder for tcvectordb.
+func defaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
 	opts := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(opts)
@@ -111,8 +111,6 @@ func RegisterTcVectorInstance(name string, opts ...ClientBuilderOpt) {
 
 // GetTcVectorInstance gets the tcvectordb instance options.
 func GetTcVectorInstance(name string) ([]ClientBuilderOpt, bool) {
-	if _, ok := tcvectorRegistry[name]; !ok {
-		return nil, false
-	}
-	return tcvectorRegistry[name], true
+	instance, ok := tcvectorRegistry[name]
+	return instance, ok
 }

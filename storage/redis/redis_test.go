@@ -45,7 +45,7 @@ func TestSetGetClientBuilder(t *testing.T) {
 // Test the default builder validates empty URL.
 func TestDefaultClientBuilder_EmptyURL(t *testing.T) {
 	const expected = "redis: url is empty"
-	_, err := DefaultClientBuilder()
+	_, err := defaultClientBuilder()
 	require.Error(t, err)
 	require.Equal(t, expected, err.Error())
 }
@@ -56,7 +56,7 @@ func TestDefaultClientBuilder_InvalidURL(t *testing.T) {
 		badURL = "127.0.0.1:6379"
 		prefix = "redis: parse url 127.0.0.1:6379:"
 	)
-	_, err := DefaultClientBuilder(WithClientBuilderURL(badURL))
+	_, err := defaultClientBuilder(WithClientBuilderURL(badURL))
 	require.Error(t, err)
 	require.True(t, strings.HasPrefix(err.Error(), prefix))
 }
@@ -65,7 +65,7 @@ func TestDefaultClientBuilder_InvalidURL(t *testing.T) {
 // non-nil client without connecting.
 func TestDefaultClientBuilder_ParseURLSuccess(t *testing.T) {
 	const urlStr = "redis://user:pass@127.0.0.1:6379/0"
-	client, err := DefaultClientBuilder(
+	client, err := defaultClientBuilder(
 		WithClientBuilderURL(urlStr),
 	)
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestRegisterAndGetRedisInstance(t *testing.T) {
 	require.NotEmpty(t, opts, "expected at least one option")
 
 	// Build a client using the stored options to ensure they are usable.
-	client, err := DefaultClientBuilder(opts...)
+	client, err := defaultClientBuilder(opts...)
 	require.NoError(t, err, "unexpected error building client with stored opts")
 	require.NotNil(t, client, "expected non-nil client from stored options")
 }

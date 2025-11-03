@@ -25,7 +25,7 @@ var redisRegistry map[string][]ClientBuilderOpt
 
 type clientBuilder func(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error)
 
-var globalBuilder clientBuilder = DefaultClientBuilder
+var globalBuilder clientBuilder = defaultClientBuilder
 
 // SetClientBuilder sets the redis client builder.
 func SetClientBuilder(builder clientBuilder) {
@@ -37,8 +37,8 @@ func GetClientBuilder() clientBuilder {
 	return globalBuilder
 }
 
-// DefaultClientBuilder is the default redis client builder.
-func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) {
+// defaultClientBuilder is the default redis client builder.
+func defaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) {
 	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)
@@ -113,8 +113,6 @@ func RegisterRedisInstance(name string, opts ...ClientBuilderOpt) {
 
 // GetRedisInstance gets the redis instance options.
 func GetRedisInstance(name string) ([]ClientBuilderOpt, bool) {
-	if _, ok := redisRegistry[name]; !ok {
-		return nil, false
-	}
-	return redisRegistry[name], true
+	instance, ok := redisRegistry[name]
+	return instance, ok
 }
