@@ -155,6 +155,7 @@ coordinator := llmagent.New(
 ```
 
 Notes:
+
 - These options do not change the actual handoff logic; they only affect user‑visible texts or whether a fallback `message` is injected.
 - Transfer announcements are emitted as Events with `Response.Object == "agent.transfer"`. If your UI should not display system‑level notices, filter this object type at the renderer/service layer.
 
@@ -281,6 +282,61 @@ type Invocation struct {
 	noticeMu      *sync.Mutex
 }
 ```
+
+#### Invocation State
+
+`Invocation` provides a general-purpose state storage mechanism for sharing data within the lifecycle of a single invocation. This is useful for callbacks, middleware, or any scenario that requires storing temporary data at the invocation level.
+
+**Core Methods:**
+
+```go
+// Set a state value
+inv.SetState(key string, value any)
+
+// Get a state value
+value, ok := inv.GetState(key string)
+
+// Delete a state value
+inv.DeleteState(key string)
+```
+
+**Features:**
+
+- **Invocation-scoped**: State is automatically scoped to a single invocation
+- **Thread-safe**: Built-in RWMutex protection for concurrent access
+- **Lazy initialization**: Memory allocated only on first use
+- **General-purpose**: Can be used for callbacks, middleware, custom logic, and more
+
+**Usage Example:**
+
+```go
+// Store data in BeforeAgentCallback
+func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+    inv.SetState("agent:start_time", time.Now())
+    inv.SetState("custom:request_id", "req-123")
+    return nil, nil
+}
+
+// Read data in AfterAgentCallback
+func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+    if startTime, ok := inv.GetState("agent:start_time"); ok {
+        duration := time.Since(startTime.(time.Time))
+        log.Printf("Execution took: %v", duration)
+        inv.DeleteState("agent:start_time")
+    }
+    return nil, nil
+}
+```
+
+**Recommended Key Naming Convention:**
+
+- Agent callbacks: `"agent:xxx"`
+- Model callbacks: `"model:xxx"`
+- Tool callbacks: `"tool:toolName:xxx"`
+- Middleware: `"middleware:xxx"`
+- Custom logic: `"custom:xxx"`
+
+For detailed usage and more examples, please refer to [Callbacks](./callbacks.md#invocation-state-sharing-data-between-callbacks).
 
 ### Event
 
