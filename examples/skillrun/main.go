@@ -49,6 +49,17 @@ var (
 
 const defaultSkillsDir = "skills"
 
+// instructionText guides the assistant behavior in a general way so it
+// works with different skills repositories without assuming specifics.
+const instructionText = `
+Be a concise, helpful assistant that can use Agent Skills.
+
+When a task may need tools, first ask to list skills or suggest one.
+Load a skill only when needed, then run commands from its docs exactly.
+Prefer safe defaults; ask clarifying questions if anything is ambiguous.
+When running, include output_files patterns if files are expected.
+Summarize results, note saved files, and propose next steps briefly.`
+
 func main() {
 	flag.Parse()
 
@@ -130,10 +141,11 @@ func (c *skillChat) setup(_ context.Context) error {
 		"skills-chat",
 		llmagent.WithModel(mdl),
 		llmagent.WithDescription(
-			"Helpful assistant with Agent Skills enabled.",
+			"General assistant that can use Agent Skills to run commands "+
+				"and handle files.",
 		),
 		llmagent.WithInstruction(
-			"Be concise and helpful. Summarize results clearly.",
+			instructionText,
 		),
 		llmagent.WithGenerationConfig(gen),
 		llmagent.WithSkills(repo),
@@ -154,9 +166,12 @@ func (c *skillChat) setup(_ context.Context) error {
 	fmt.Printf("Session: %s\n", c.sessionID)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Println("Tips:")
-	fmt.Println(" - Ask to list skills and pick one.")
-	fmt.Println(" - Ask the assistant to run a command from SKILL.md.")
-	fmt.Println(" - Example: 'Load <skill> and run its example build'.")
+	fmt.Println(" - Ask to list skills and choose one.")
+	fmt.Println(" - Say 'load <name>' before you ask to run.")
+	fmt.Println(
+		" - Ask to run a command exactly as in the docs.",
+	)
+	fmt.Println(" - Type /exit to quit.")
 	fmt.Println()
 	return nil
 }

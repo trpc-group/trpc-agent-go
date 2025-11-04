@@ -45,6 +45,32 @@ export OPENAI_API_KEY="your-api-key"
 go run .
 ```
 
+### Use with anthropics/skills
+
+You can test against the public Anthropics skills repository.
+
+```bash
+# 1) Clone the repo anywhere you like
+git clone https://github.com/anthropics/skills \
+  "$HOME/src/anthropics-skills"
+
+# 2) Point skillrun at that repo
+export SKILLS_ROOT="$HOME/src/anthropics-skills"
+
+# 3) Run the example (local workspace executor)
+go run .
+
+# Optional: Use container executor for extra isolation (needs Docker)
+go run . -executor container
+```
+
+In chat:
+- Ask to "list skills" and pick one you see.
+- Say "load <name>" when you want to use it.
+- Ask to run a command exactly as shown in the skill docs.
+- If you expect files, mention patterns to collect (for example,
+  `output_files: ["out/**"]`).
+
 ### Examples
 
 ```bash
@@ -65,7 +91,7 @@ go run . -executor container
 
 - Ask the assistant to list available skills and choose one.
 - Use natural language to request loading docs or running a command.
-- Example: "Load <skill-name> and run the example build command."
+- Example: "Load <name> and run the sample build command."
 
 ## What You’ll See
 
@@ -79,8 +105,8 @@ Session: chat-1703123456
 ==================================================
 Tips:
  - Ask to list skills and pick one.
- - Ask the assistant to run a command from SKILL.md.
- - Example: 'Load <skill> and run its example build'.
+ - Ask the assistant to run a command from the skill docs.
+ - Example: 'Load <name> and run the sample build'.
 
 👤 You: list skills
 🔧 CallableTool calls initiated:
