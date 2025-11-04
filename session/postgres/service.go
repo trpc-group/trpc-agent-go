@@ -735,7 +735,7 @@ func (s *Service) getSession(
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
 		AND (expires_at IS NULL OR expires_at > $4)
 		AND deleted_at IS NULL`, s.tableSessionSummaries)
-	summaryArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now()}
+	summaryArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now().UTC()}
 
 	err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {

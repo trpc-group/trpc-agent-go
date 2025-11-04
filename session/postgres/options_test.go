@@ -11,6 +11,7 @@ package postgres
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -155,4 +156,144 @@ func TestWithInitDBTablePrefix_Validation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Test all ServiceOpt functions
+func TestServiceOptions(t *testing.T) {
+	t.Run("WithSessionEventLimit", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithSessionEventLimit(100)(opts)
+		assert.Equal(t, 100, opts.sessionEventLimit)
+	})
+
+	t.Run("WithHost", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithHost("testhost")(opts)
+		assert.Equal(t, "testhost", opts.host)
+	})
+
+	t.Run("WithPort", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithPort(5433)(opts)
+		assert.Equal(t, 5433, opts.port)
+	})
+
+	t.Run("WithUser", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithUser("testuser")(opts)
+		assert.Equal(t, "testuser", opts.user)
+	})
+
+	t.Run("WithPassword", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithPassword("testpass")(opts)
+		assert.Equal(t, "testpass", opts.password)
+	})
+
+	t.Run("WithDatabase", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithDatabase("testdb")(opts)
+		assert.Equal(t, "testdb", opts.database)
+	})
+
+	t.Run("WithSSLMode", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithSSLMode("require")(opts)
+		assert.Equal(t, "require", opts.sslMode)
+	})
+
+	t.Run("WithSessionTTL", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		ttl := 24 * time.Hour
+		WithSessionTTL(ttl)(opts)
+		assert.Equal(t, ttl, opts.sessionTTL)
+	})
+
+	t.Run("WithAppStateTTL", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		ttl := 48 * time.Hour
+		WithAppStateTTL(ttl)(opts)
+		assert.Equal(t, ttl, opts.appStateTTL)
+	})
+
+	t.Run("WithUserStateTTL", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		ttl := 72 * time.Hour
+		WithUserStateTTL(ttl)(opts)
+		assert.Equal(t, ttl, opts.userStateTTL)
+	})
+
+	t.Run("WithEnableAsyncPersist", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithEnableAsyncPersist(true)(opts)
+		assert.True(t, opts.enableAsyncPersist)
+	})
+
+	t.Run("WithAsyncPersisterNum", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithAsyncPersisterNum(5)(opts)
+		assert.Equal(t, 5, opts.asyncPersisterNum)
+	})
+
+	t.Run("WithSummarizer", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		// mockSummarizer is an interface, we cannot test it easily without a concrete implementation
+		// Just verify the function doesn't crash with nil
+		WithSummarizer(nil)(opts)
+		assert.Nil(t, opts.summarizer)
+	})
+
+	t.Run("WithAsyncSummaryNum", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithAsyncSummaryNum(5)(opts)
+		assert.Equal(t, 5, opts.asyncSummaryNum)
+	})
+
+	t.Run("WithSummaryQueueSize", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithSummaryQueueSize(512)(opts)
+		assert.Equal(t, 512, opts.summaryQueueSize)
+	})
+
+	t.Run("WithSummaryJobTimeout", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		timeout := 60 * time.Second
+		WithSummaryJobTimeout(timeout)(opts)
+		assert.Equal(t, timeout, opts.summaryJobTimeout)
+	})
+
+	t.Run("WithPostgresInstance", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithPostgresInstance("test-instance")(opts)
+		assert.Equal(t, "test-instance", opts.instanceName)
+	})
+
+	t.Run("WithExtraOptions", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		// extraOptions are variadic interface{}, hard to test directly
+		WithExtraOptions("opt1", "opt2")(opts)
+		assert.Len(t, opts.extraOptions, 2)
+	})
+
+	t.Run("WithSoftDelete", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithSoftDelete(false)(opts)
+		assert.False(t, opts.softDelete)
+
+		WithSoftDelete(true)(opts)
+		assert.True(t, opts.softDelete)
+	})
+
+	t.Run("WithCleanupInterval", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		interval := 10 * time.Minute
+		WithCleanupInterval(interval)(opts)
+		assert.Equal(t, interval, opts.cleanupInterval)
+	})
+
+	t.Run("WithSkipDBInit", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithSkipDBInit(true)(opts)
+		assert.True(t, opts.skipDBInit)
+	})
 }
