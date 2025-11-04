@@ -308,19 +308,26 @@ func (r *Runtime) Collect(
 	for _, p := range patterns {
 		// Use doublestar to support ** patterns.
 		abs := filepath.Join(root, p)
-		matches, err := ds.Glob(os.DirFS("/"), "/"+abs)
+		// Doublestar on os.DirFS("/") expects patterns relative to "/".
+		pattern := strings.TrimPrefix(abs, "/")
+		matches, err := ds.Glob(os.DirFS("/"), pattern)
 		if err != nil {
 			return nil, err
 		}
 		for _, m := range matches {
-			// m is absolute; ensure it is within root.
-			if !strings.HasPrefix(m, root+string(os.PathSeparator)) &&
-				m != root {
+			// Convert match back to absolute path.
+			mAbs := "/" + strings.TrimPrefix(m, "/")
+			// Ensure it is within root.
+			if !strings.HasPrefix(
+				mAbs, root+string(os.PathSeparator),
+			) && mAbs != root {
 				continue
 			}
 			// Trim root prefix for Name.
-			name := strings.TrimPrefix(m, root+string(os.PathSeparator))
-			content, mime, err := readLimited(m)
+			name := strings.TrimPrefix(
+				mAbs, root+string(os.PathSeparator),
+			)
+			content, mime, err := readLimited(mAbs)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				return nil, err

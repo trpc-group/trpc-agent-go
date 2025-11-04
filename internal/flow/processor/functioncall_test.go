@@ -796,6 +796,55 @@ func TestConvertToolArguments(t *testing.T) {
 	}
 }
 
+func TestSetDefaultTransferMessage(t *testing.T) {
+	// Change default, then verify conversion uses it when message empty.
+	SetDefaultTransferMessage("delegated")
+	defer func() { SetDefaultTransferMessage("Task delegated from coordinator") }()
+
+	res := convertToolArguments("agent-x", []byte("{}"),
+		transfer.TransferToolName)
+	require.NotNil(t, res)
+	var got transfer.Request
+	require.NoError(t, json.Unmarshal(res, &got))
+	require.Equal(t, "agent-x", got.AgentName)
+	require.Equal(t, "delegated", got.Message)
+}
+
+// tool that reports a state delta
+type deltaTool struct{}
+
+func (d *deltaTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "withdelta"}
+}
+func (d *deltaTool) Call(ctx context.Context, _ []byte) (any, error) {
+	return "ok", nil
+}
+func (d *deltaTool) StateDelta(_ []byte, _ []byte) map[string][]byte {
+	return map[string][]byte{"x": []byte("y")}
+}
+
+func TestExecuteSingleToolCallSequential_AttachesStateDelta(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	tc := model.ToolCall{
+		ID: "c1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "withdelta",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tools := map[string]tool.Tool{"withdelta": &deltaTool{}}
+	ch := make(chan *event.Event, 4)
+	ev, err := p.executeSingleToolCallSequential(
+		context.Background(), inv, rsp, tools, ch, 0, tc,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.NotNil(t, ev.StateDelta)
+	require.Equal(t, []byte("y"), ev.StateDelta["x"])
+}
+
 func TestSubAgentCall(t *testing.T) {
 	t.Run("should unmarshal message field correctly", func(t *testing.T) {
 		input := subAgentCall{}
