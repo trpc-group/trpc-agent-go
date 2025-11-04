@@ -119,3 +119,39 @@ func TestSkillsRequestProcessor_NoDuplicateOverview(t *testing.T) {
 	cnt := strings.Count(sys, "Available skills:")
 	require.Equal(t, 1, cnt)
 }
+
+func TestSkillsRequestProcessor_ArrayDocs_NoSystemMessage(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Body:    "B",
+				Docs: []skill.Doc{
+					{Path: "USAGE.md", Content: "use"},
+					{Path: "EXTRA.txt", Content: "x"},
+				},
+			},
+		},
+	}
+	inv := &agent.Invocation{Session: &session.Session{
+		State: session.StateMap{
+			skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+			skill.StateKeyDocsPrefix + "calc":   []byte("[\"USAGE.md\"]"),
+		},
+	}}
+	// No system message initially.
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	ch := make(chan *event.Event, 2)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "Available skills:")
+	require.Contains(t, sys, "[Loaded] calc")
+	require.Contains(t, sys, "USAGE.md")
+	// EXTRA.txt not selected
+	require.NotContains(t, sys, "EXTRA.txt")
+}

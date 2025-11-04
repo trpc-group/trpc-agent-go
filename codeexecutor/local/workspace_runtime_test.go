@@ -12,7 +12,9 @@ package local_test
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -65,4 +67,142 @@ func TestRuntime_ExecuteInline_PythonOrSkip(t *testing.T) {
 	res, err := rt.ExecuteInline(ctx, "rt-inline", blocks, 5*time.Second)
 	require.NoError(t, err)
 	require.Contains(t, res.Stdout, "hi v2")
+}
+
+func TestRuntime_PutDirectory_And_Collect(t *testing.T) {
+	const short = 5 * time.Second
+
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-dir", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Build a source directory with nested files.
+	src := t.TempDir()
+	sub := filepath.Join(src, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "a.txt"), []byte("alpha"), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(src, "img.bin"), []byte{0x1, 0x2, 0x3}, 0o644,
+	))
+
+	// Copy directory into workspace under dst/.
+	require.NoError(t, rt.PutDirectory(ctx, ws, src, "dst"))
+
+	// Collect using doublestar patterns.
+	files, err := rt.Collect(ctx, ws, []string{
+		"dst/**/*.txt", "dst/*.bin",
+	})
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	// Names are relative to workspace root.
+	require.Contains(t, []string{files[0].Name, files[1].Name},
+		"dst/sub/a.txt")
+	require.Contains(t, []string{files[0].Name, files[1].Name},
+		"dst/img.bin")
+}
+
+func TestRuntime_PutSkill_ReadOnly(t *testing.T) {
+	const short = 5 * time.Second
+
+	rt := local.NewRuntimeWithOptions(
+		"", local.WithReadOnlyStagedSkill(true),
+	)
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-skill", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Prepare a skill directory.
+	skillDir := t.TempDir()
+	f := filepath.Join(skillDir, "script.sh")
+	require.NoError(t, os.WriteFile(f, []byte("echo ok"), 0o755))
+
+	// Stage skill under target path and make it read-only.
+	require.NoError(t, rt.PutSkill(ctx, ws, skillDir, "tool"))
+
+	// Attempt to append to the file should fail due to a-w.
+	target := filepath.Join(ws.Path, "tool", "script.sh")
+	ff, err := os.OpenFile(target, os.O_WRONLY|os.O_APPEND, 0)
+	require.Error(t, err)
+	if ff != nil {
+		_ = ff.Close()
+	}
+
+	// Still executable: run it.
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:     "bash",
+		Args:    []string{"-lc", "./tool/script.sh"},
+		Timeout: short,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, res.ExitCode)
+	require.Contains(t, res.Stdout, "ok")
+}
+
+func TestRuntime_PutFiles_PathEscapeRejected(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-escape", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    "../evil.txt",
+		Content: []byte("x"),
+		Mode:    0,
+	}})
+	require.Error(t, err)
+}
+
+func TestRuntime_RunProgram_EnvAndStdin(t *testing.T) {
+	const short = 5 * time.Second
+
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-env", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-lc", "cat; echo $FOO"},
+		Env:  map[string]string{"FOO": "BAR"},
+		// Provide data via stdin so cat prints it.
+		Stdin:   "HELLO\n",
+		Timeout: short,
+	})
+	require.NoError(t, err)
+	require.Contains(t, res.Stdout, "HELLO")
+	require.Contains(t, res.Stdout, "BAR")
+}
+
+func TestRuntime_RunProgram_Timeout(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-timeout", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Intentionally time out a sleeping command.
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:     "bash",
+		Args:    []string{"-lc", "sleep 1; echo late"},
+		Timeout: 100 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	require.True(t, res.TimedOut)
 }

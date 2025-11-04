@@ -114,3 +114,20 @@ func TestRunTool_ErrorOnNilExecutor(t *testing.T) {
 func jsonMarshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
+
+func TestRunTool_Declaration_And_InvalidArgs(t *testing.T) {
+	rt := NewRunTool(nil, nil)
+	d := rt.Declaration()
+	require.Equal(t, "skill_run", d.Name)
+	require.NotNil(t, d.InputSchema)
+	require.NotNil(t, d.OutputSchema)
+
+	// invalid json
+	_, err := rt.Call(context.Background(), []byte("{"))
+	require.Error(t, err)
+
+	// missing fields
+	b, _ := json.Marshal(map[string]any{"skill": "x"})
+	_, err = rt.Call(context.Background(), b)
+	require.Error(t, err)
+}
