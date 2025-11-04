@@ -205,11 +205,18 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 ) (*event.Event, error) {
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	defer span.End()
-	choice, modifiedArgs, err := p.executeToolCall(
+	startTime := time.Now()
+	choice, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
 		ctx, invocation, toolCall, tools, index, eventChan,
 	)
 	if err != nil {
-		return nil, err
+		if shouldIgnoreError {
+			// Create error choice for ignorable errors
+			choice = p.createErrorChoice(index, toolCall.ID, err.Error())
+		} else {
+			// Return critical errors (e.g., stop errors) immediately
+			return nil, err
+		}
 	}
 	if choice == nil {
 		return nil, nil
@@ -226,13 +233,34 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 
-	var sess *session.Session
-	if invocation != nil {
-		sess = invocation.Session
-	}
-	itelemetry.TraceToolCall(
-		span, sess, decl, modifiedArgs, toolEvent,
+	var (
+		sess      = &session.Session{}
+		modelName string
+		agentName string
 	)
+
+	if invocation != nil {
+		if invocation.Session != nil {
+			sess = invocation.Session
+		}
+		if invocation.Model != nil {
+			modelName = invocation.Model.Info().Name
+		}
+		if invocation.AgentName != "" {
+			agentName = invocation.AgentName
+		}
+	}
+
+	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolEvent, err)
+	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
+		RequestModelName: modelName,
+		ToolName:         toolCall.Function.Name,
+		AppName:          sess.AppName,
+		UserID:           sess.UserID,
+		SessionID:        sess.ID,
+		AgentName:        agentName,
+		Error:            err,
+	}, time.Since(startTime))
 	return toolEvent, nil
 }
 
@@ -309,12 +337,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	// Trace the tool execution for observability.
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
 	defer span.End()
-
+	startTime := time.Now()
 	// Execute the tool (streamable or callable) with callbacks.
-	choice, modifiedArgs, err := p.executeToolCall(
+	choice, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
 		ctx, invocation, tc, tools, index, eventChan,
 	)
-	// If error is not nil, it must be a stopError, so we need to return this error.
+	// Handle errors based on whether they are ignorable or critical.
 	if err != nil {
 		log.Errorf(
 			"Tool execution error for %s (index: %d, ID: %s, agent: %s): %v",
@@ -330,7 +358,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		if tc.Function.Name == transfer.TransferToolName {
 			errorEvent.Tag = TransferTag
 		}
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: err})
+		// Only propagate the error if it's not ignorable (e.g., stop errors)
+		var returnErr error
+		if !shouldIgnoreError {
+			returnErr = err
+		}
+		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: returnErr})
 		return
 	}
 	// Long-running tools may return nil to indicate no immediate event.
@@ -353,11 +386,32 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	// Include declaration for telemetry even when tool is missing.
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
 
-	var sess *session.Session
+	var (
+		sess      = &session.Session{}
+		modelName string
+		agentName string
+	)
 	if invocation != nil {
-		sess = invocation.Session
+		if invocation.Session != nil {
+			sess = invocation.Session
+		}
+		if invocation.Model != nil {
+			modelName = invocation.Model.Info().Name
+		}
+		if invocation.AgentName != "" {
+			agentName = invocation.AgentName
+		}
 	}
-	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent)
+	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
+	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
+		RequestModelName: modelName,
+		ToolName:         tc.Function.Name,
+		AppName:          sess.AppName,
+		UserID:           sess.UserID,
+		SessionID:        sess.ID,
+		AgentName:        agentName,
+		Error:            err,
+	}, time.Since(startTime))
 	// Send result back to aggregator.
 	p.sendToolResult(
 		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},
@@ -447,9 +501,10 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 //   - eventChan: channel for emitting events during execution
 //
 // Returns:
-//   - *model.Choice: the result choice containing tool response
+//   - *model.Choice: the result choice containing tool response (nil if error occurred)
 //   - []byte: the modified arguments after before-tool callbacks (for telemetry)
-//   - error: any error that occurred during execution
+//   - bool: shouldIgnoreError - true if the error is ignorable (e.g., tool not found, marshal error), false for critical errors (e.g., stop errors)
+//   - error: any error that occurred during execution (no longer swallowed)
 func (p *FunctionCallResponseProcessor) executeToolCall(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -457,7 +512,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	tools map[string]tool.Tool,
 	index int,
 	eventChan chan<- *event.Event,
-) (*model.Choice, []byte, error) {
+) (*model.Choice, []byte, bool, error) {
 	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
@@ -474,7 +529,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		} else {
 			log.Errorf("CallableTool %s not found (agent=%s, model=%s)",
 				toolCall.Function.Name, invocation.AgentName, invocation.Model.Info().Name)
-			return p.createErrorChoice(index, toolCall.ID, ErrorToolNotFound), toolCall.Function.Arguments, nil
+			return nil, toolCall.Function.Arguments, true, fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
 		}
 	}
 
@@ -485,14 +540,14 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	// Only return error when it's a stop error
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
-			return nil, modifiedArgs, err
+			return nil, modifiedArgs, false, err
 		}
-		return p.createErrorChoice(index, toolCall.ID, err.Error()), modifiedArgs, nil
+		return nil, modifiedArgs, true, err
 	}
 	//  allow to return nil not provide function response.
 	if r, ok := tl.(function.LongRunner); ok && r.LongRunning() {
 		if result == nil {
-			return nil, modifiedArgs, nil
+			return nil, modifiedArgs, true, nil
 		}
 	}
 
@@ -500,7 +555,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		log.Errorf("Failed to marshal tool result for %s: %v", toolCall.Function.Name, err)
-		return p.createErrorChoice(index, toolCall.ID, ErrorMarshalResult), modifiedArgs, nil
+		return nil, modifiedArgs, true, fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
 
 	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
@@ -512,7 +567,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			Content: string(resultBytes),
 			ToolID:  toolCall.ID,
 		},
-	}, modifiedArgs, nil
+	}, modifiedArgs, true, nil
 }
 
 // createErrorChoice creates an error choice for tool execution failures.
@@ -569,6 +624,9 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (any, []byte, error) {
+	// Inject tool call ID into context for callbacks to use.
+	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
+
 	toolDeclaration := tl.Declaration()
 	// Run before tool callbacks if they exist.
 	if p.toolCallbacks != nil {

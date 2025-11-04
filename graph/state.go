@@ -109,8 +109,13 @@ func (s *StateSchema) ApplyUpdate(currentState State, update State) State {
 	for key, updateValue := range update {
 		field, exists := s.Fields[key]
 		if !exists {
-			// If no field definition, use default behavior (override) with deep copy
-			// to avoid sharing mutable references (maps/slices) across goroutines.
+			// Ignore internal/ephemeral keys in updates. They are owned by
+			// the executor and may contain concurrently-mutated maps.
+			if isInternalStateKey(key) {
+				continue
+			}
+			// If no field definition, use default behavior (override) with
+			// deep copy to avoid sharing mutable references across goroutines.
 			result[key] = deepCopyAny(updateValue)
 			continue
 		}

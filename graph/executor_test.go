@@ -221,6 +221,43 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 	})
 }
 
+// Ensure handleInterrupt still emits the interrupt event even when
+// the provided context is canceled, because it uses a fresh background
+// context with a timeout for emission.
+func TestHandleInterrupt_EmitsEvent_WithCanceledContext(t *testing.T) {
+	exec := &Executor{}
+	ch := make(chan *event.Event, 1)
+	inv := &agent.Invocation{InvocationID: "inv-int"}
+	execCtx := &ExecutionContext{InvocationID: "inv-int", EventChan: ch}
+
+	intr := &InterruptError{NodeID: "N1", Value: "ask"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil)
+	require.True(t, IsInterruptError(err))
+	// Same interrupt should be propagated.
+	require.Same(t, intr, err)
+
+	// We should still receive the interrupt event.
+	select {
+	case e := <-ch:
+		require.NotNil(t, e)
+		if e.StateDelta != nil {
+			if b, ok := e.StateDelta[MetadataKeyPregel]; ok {
+				var meta PregelStepMetadata
+				if json.Unmarshal(b, &meta) == nil {
+					require.Equal(t, "N1", meta.NodeID)
+					require.Equal(t, "ask", meta.InterruptValue)
+				}
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected interrupt event emission")
+	}
+}
+
 // Cover empty WithDefaultRetryPolicy branch ensuring no defaults are set.
 func TestExecutor_WithDefaultRetryPolicy_EmptyCoversNoop(t *testing.T) {
 	sg := NewStateGraph(NewStateSchema())
@@ -544,6 +581,25 @@ func TestBasicConditionalRouting(t *testing.T) {
 		require.True(t, ok, "Expected path field")
 		assert.Equal(t, "long", path, "Expected long path")
 	})
+}
+
+// Ensure updateStateFromResult drops internal keys like exec_context from
+// user-provided State updates to avoid leaking executor-owned data.
+func TestExecutor_UpdateStateFromResult_SkipsInternal(t *testing.T) {
+	exec := &Executor{}
+	execCtx := &ExecutionContext{State: make(State)}
+
+	// Update contains an internal key and a regular key.
+	update := State{
+		StateKeyExecContext: &ExecutionContext{InvocationID: "x"},
+		"foo":               "bar",
+	}
+
+	exec.updateStateFromResult(execCtx, update)
+
+	// Internal key must be dropped; regular key must be applied.
+	require.NotContains(t, execCtx.State, StateKeyExecContext)
+	require.Equal(t, "bar", execCtx.State["foo"])
 }
 
 // TestBasicCommandRouting tests routing using Command objects
