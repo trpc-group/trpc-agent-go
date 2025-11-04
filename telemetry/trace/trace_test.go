@@ -233,6 +233,8 @@ func TestStart_WithResourceAttributesAndEnv(t *testing.T) {
 		serviceNamespace: itelemetry.ServiceNamespace,
 	}
 	WithServiceName("option-service")(opts)
+	WithServiceNamespace("custom-ns")(opts)
+	WithServiceVersion("1.2.3")(opts)
 	WithResourceAttributes(
 		attribute.String("team", "ml"),
 		attribute.String("custom", "value"),
@@ -266,6 +268,12 @@ func TestStart_WithResourceAttributesAndEnv(t *testing.T) {
 	}
 	if attrMap["custom"] != "value" {
 		t.Fatalf("expected custom=value, got %q", attrMap["custom"])
+	}
+	if attrMap[string(semconv.ServiceNamespaceKey)] != "custom-ns" {
+		t.Fatalf("expected service.namespace custom-ns, got %q", attrMap[string(semconv.ServiceNamespaceKey)])
+	}
+	if attrMap[string(semconv.ServiceVersionKey)] != "1.2.3" {
+		t.Fatalf("expected service.version 1.2.3, got %q", attrMap[string(semconv.ServiceVersionKey)])
 	}
 }
 
