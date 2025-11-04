@@ -180,3 +180,56 @@ func TestSkillsRequestProcessor_MergeIntoEmptySystem(t *testing.T) {
 	require.NotEmpty(t, req.Messages[0].Content)
 	require.Contains(t, req.Messages[0].Content, "[Loaded] calc")
 }
+
+func TestSkillsRequestProcessor_InvalidDocsSelectionJSON(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Body:    "B",
+				Docs:    []skill.Doc{{Path: "USAGE.md", Content: "use"}},
+			},
+		},
+	}
+	// Docs selection is invalid JSON; should be ignored.
+	inv := &agent.Invocation{Session: &session.Session{
+		State: session.StateMap{
+			skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+			skill.StateKeyDocsPrefix + "calc":   []byte("[bad]"),
+		},
+	}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	ch := make(chan *event.Event, 2)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	// Body present, docs ignored
+	require.Contains(t, sys, "[Loaded] calc")
+	require.NotContains(t, sys, "USAGE.md")
+}
+
+func TestSkillsRequestProcessor_NoOverviewWhenNoSummaries(t *testing.T) {
+	repo := &mockRepo{sums: nil, full: map[string]*skill.Skill{}}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(repo)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+	// No system message injected when no summaries.
+	require.Empty(t, req.Messages)
+	// Still emits a preprocessing instruction for trace consistency.
+	e := <-ch
+	require.NotNil(t, e)
+	require.Equal(t, model.ObjectTypePreprocessingInstruction, e.Object)
+}
+
+func TestSkillsRequestProcessor_BuildDocsText_EdgeCases(t *testing.T) {
+	p := NewSkillsRequestProcessor(&mockRepo{})
+	// nil skill yields empty
+	require.Equal(t, "", p.buildDocsText(nil, []string{"a"}))
+	// no matching docs yields empty
+	sk := &skill.Skill{Docs: []skill.Doc{{Path: "X.md", Content: "x"}}}
+	require.Equal(t, "", p.buildDocsText(sk, []string{"Y.md"}))
+}

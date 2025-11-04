@@ -436,6 +436,149 @@ func TestWorkspaceRuntime_ExecuteInline(t *testing.T) {
 	require.GreaterOrEqual(t, execCount, 1)
 }
 
+func TestWorkspaceRuntime_PutDirectory_TarFallback(t *testing.T) {
+	// skillsHostBase empty triggers tar CopyToContainer path.
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(src, "a.txt"), []byte("AA"), 0o644,
+	))
+
+	var mkdirCalled, putCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			// mkdir -p dest
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			mkdirCalled = true
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Receive tar and verify our file is present.
+			tr := tar.NewReader(r.Body)
+			found := false
+			for {
+				hdr, err := tr.Next()
+				if err != nil {
+					break
+				}
+				if strings.HasSuffix(hdr.Name, "a.txt") {
+					found = true
+					break
+				}
+			}
+			require.True(t, found)
+			putCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &WorkspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "w4", Path: path.Join(testRunBase, "w4")}
+	err := rt.PutDirectory(context.Background(), ws, src, "dst")
+	require.NoError(t, err)
+	require.True(t, mkdirCalled)
+	require.True(t, putCalled)
+}
+
+func TestWorkspaceRuntime_PutSkill_TarFallback(t *testing.T) {
+	// Without skillsHostBase, PutSkill falls back to PutDirectory path.
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(src, "b.txt"), []byte("BB"), 0o644,
+	))
+
+	var mkdirCalled, putCalled bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			mkdirCalled = true
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Receive tar and verify our file is present.
+			tr := tar.NewReader(r.Body)
+			found := false
+			for {
+				hdr, err := tr.Next()
+				if err != nil {
+					break
+				}
+				if strings.HasSuffix(hdr.Name, "b.txt") {
+					found = true
+					break
+				}
+			}
+			require.True(t, found)
+			putCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &WorkspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "w5", Path: path.Join(testRunBase, "w5")}
+	err := rt.PutSkill(context.Background(), ws, src, "tool")
+	require.NoError(t, err)
+	require.True(t, mkdirCalled)
+	require.True(t, putCalled)
+}
+
+func TestWorkspaceRuntime_Cleanup_EmptyOK(t *testing.T) {
+	rt := &WorkspaceRuntime{}
+	err := rt.Cleanup(context.Background(), codeexecutor.Workspace{})
+	require.NoError(t, err)
+}
+
 func TestHelpers_Sanitize_ShellQuote_TarFromFiles(t *testing.T) {
 	// sanitize
 	require.Equal(t, "abc_123", sanitize("abc 123"))

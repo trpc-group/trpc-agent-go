@@ -20,7 +20,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -78,6 +81,120 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, "out/a.txt", out.OutputFiles[0].Name)
 	require.Contains(t, out.OutputFiles[0].Content, "hi")
+}
+
+func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.NewRuntime("")
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "mkdir -p out; echo hi > out/a.txt",
+		OutputFiles: []string{
+			"out/*.txt",
+		},
+		Timeout:           timeoutSecSmall,
+		SaveAsArtifacts:   true,
+		OmitInlineContent: true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	// Build invocation with artifact service and session info.
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.ArtifactFiles, 1)
+	require.Equal(t, "out/a.txt", out.ArtifactFiles[0].Name)
+	require.Equal(t, 0, out.ArtifactFiles[0].Version)
+	// Inline content omitted.
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "", out.OutputFiles[0].Content)
+}
+
+func TestRunTool_SaveAsArtifacts_WithPrefix_NoOmit(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.NewRuntime("")
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "mkdir -p out; echo hi > out/a.txt",
+		OutputFiles: []string{
+			"out/*.txt",
+		},
+		Timeout:         timeoutSecSmall,
+		SaveAsArtifacts: true,
+		// keep inline contents; set a prefix
+		ArtifactPrefix: "user:",
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Len(t, out.ArtifactFiles, 1)
+	require.Equal(t, "user:out/a.txt", out.ArtifactFiles[0].Name)
+	// Inline content is kept (no omit flag).
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, "hi")
+}
+
+func TestRunTool_SaveAsArtifacts_NoInvocationContext(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.NewRuntime("")
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "mkdir -p out; echo hi > out/a.txt",
+		OutputFiles: []string{
+			"out/*.txt",
+		},
+		SaveAsArtifacts: true,
+		Timeout:         timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
 }
 
 func TestRunTool_ErrorOnMissingSkill(t *testing.T) {

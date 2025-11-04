@@ -178,14 +178,25 @@ Input:
 - `cwd`, `env` (optional)
 - `output_files` (optional glob patterns)
 - `timeout` (optional seconds)
+- `save_as_artifacts` (optional, production‑ready): save collected
+   files into the Artifact service and return artifact references; this
+   requires an Invocation context with an injected ArtifactService.
+- `omit_inline_content` (optional): when used with
+   `save_as_artifacts`, omit `output_files[*].content` and only return
+   metadata plus `artifact_files`, reducing payload size.
+- `artifact_prefix` (optional): filename prefix when saving artifacts;
+   for a user namespace, set `user:`.
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
 - `output_files` with `name`, `content`, `mime_type`
+- `artifact_files` with `name`, `version` when artifacts are saved
 
 Typical flow:
 1) Call `skill_load` to inject body/docs
 2) Call `skill_run` to execute and collect output files
+  - With `save_as_artifacts`, you’ll also get `artifact_files` in the
+     result that your UI can render as downloadable items.
 
 ## Workspace Executors
 

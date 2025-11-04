@@ -17,6 +17,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -27,6 +28,8 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -35,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var (
@@ -45,9 +49,16 @@ var (
 		"executor", "local",
 		"workspace executor: local|container",
 	)
+	flagArtifacts = flag.Bool("artifacts", false,
+		"save output files via artifact service")
+	flagOmitInline = flag.Bool("omit-inline", false,
+		"omit inline file contents when saving artifacts")
+	flagArtifactPref = flag.String("artifact-prefix", "",
+		"artifact filename prefix (e.g., user:)")
 )
 
 const defaultSkillsDir = "skills"
+const appName = "skill-run-chat"
 
 // instructionText guides the assistant behavior in a general way so it
 // works with different skills repositories without assuming specifics.
@@ -94,6 +105,7 @@ type skillChat struct {
 	userID     string
 	sessionID  string
 	executor   string
+	artSvc     artifact.Service
 }
 
 func (c *skillChat) run() error {
@@ -150,10 +162,15 @@ func (c *skillChat) setup(_ context.Context) error {
 		llmagent.WithGenerationConfig(gen),
 		llmagent.WithSkills(repo),
 		llmagent.WithWorkspaceExecutor(we),
+		llmagent.WithToolCallbacks(buildToolCallbacks()),
 	)
 
-	// Runner.
-	c.runner = runner.NewRunner("skill-run-chat", llm)
+	// Runner + artifact service (in-memory for demo).
+	svc := inmemory.NewService()
+	c.artSvc = svc
+	c.runner = runner.NewRunner(
+		appName, llm, runner.WithArtifactService(svc),
+	)
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("chat-%d", time.Now().Unix())
 
@@ -176,6 +193,45 @@ func (c *skillChat) setup(_ context.Context) error {
 	return nil
 }
 
+// buildToolCallbacks injects default artifact parameters into
+// skill_run calls based on CLI flags, without overriding explicit
+// arguments the model already provided.
+func buildToolCallbacks() *tool.Callbacks {
+	cbs := tool.NewCallbacks()
+	cbs.RegisterBeforeTool(func(
+		_ context.Context, name string, _ *tool.Declaration, args *[]byte,
+	) (any, error) {
+		if name != "skill_run" || args == nil {
+			return nil, nil
+		}
+		if !*flagArtifacts && !*flagOmitInline && *flagArtifactPref == "" {
+			return nil, nil
+		}
+		// Parse JSON args to a small map and merge defaults.
+		var m map[string]any
+		if err := json.Unmarshal(*args, &m); err != nil {
+			return nil, nil
+		}
+		if *flagArtifacts {
+			m["save_as_artifacts"] = true
+			if *flagOmitInline {
+				m["omit_inline_content"] = true
+			}
+			if *flagArtifactPref != "" {
+				if _, ok := m["artifact_prefix"]; !ok {
+					m["artifact_prefix"] = *flagArtifactPref
+				}
+			}
+		}
+		b, err := json.Marshal(m)
+		if err == nil {
+			*args = b
+		}
+		return nil, nil
+	})
+	return cbs
+}
+
 func (c *skillChat) startChat(ctx context.Context) error {
 	in := bufio.NewScanner(os.Stdin)
 	for {
@@ -190,6 +246,13 @@ func (c *skillChat) startChat(ctx context.Context) error {
 		if strings.EqualFold(text, "/exit") {
 			fmt.Println("👋 Bye!")
 			return nil
+		}
+		if strings.HasPrefix(text, "/pull ") {
+			if err := c.handlePull(text); err != nil {
+				fmt.Printf("❌ Pull error: %v\n", err)
+			}
+			fmt.Println()
+			continue
 		}
 		if err := c.processMessage(ctx, text); err != nil {
 			fmt.Printf("❌ Error: %v\n", err)
@@ -232,6 +295,57 @@ func (c *skillChat) processResponse(
 		}
 	}
 	return nil
+}
+
+// handlePull downloads an artifact from the service and writes it to disk.
+// Usage: /pull <name> [version]
+func (c *skillChat) handlePull(text string) error {
+	if c.artSvc == nil {
+		return fmt.Errorf("artifact service not available")
+	}
+	fields := strings.Fields(text)
+	if len(fields) < 2 {
+		return fmt.Errorf("usage: /pull <name> [version]")
+	}
+	name := fields[1]
+	var verPtr *int
+	if len(fields) >= 3 {
+		if v, err := parseInt(fields[2]); err == nil {
+			verPtr = &v
+		}
+	}
+	si := artifact.SessionInfo{
+		AppName: appName, UserID: c.userID, SessionID: c.sessionID,
+	}
+	art, err := c.artSvc.LoadArtifact(context.Background(), si, name, verPtr)
+	if err != nil {
+		return err
+	}
+	if art == nil || len(art.Data) == 0 {
+		return fmt.Errorf("artifact not found: %s", name)
+	}
+	dir := "downloads"
+	_ = os.MkdirAll(dir, 0o755)
+	out := filepath.Join(dir, filepath.Base(name))
+	if err := os.WriteFile(out, art.Data, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf(
+		"📥 Saved %s (%d bytes, %s)\n",
+		out, len(art.Data), art.MimeType,
+	)
+	return nil
+}
+
+func parseInt(s string) (int, error) {
+	var n int
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return 0, fmt.Errorf("invalid int: %s", s)
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n, nil
 }
 
 func (c *skillChat) handleEvent(
@@ -282,6 +396,20 @@ func (c *skillChat) handleToolResponses(ev *event.Event) bool {
 				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
 					ch.Message.ToolID,
 					strings.TrimSpace(ch.Message.Content))
+				// Try to surface artifact refs if present.
+				var v struct {
+					ArtifactFiles []struct {
+						Name    string `json:"name"`
+						Version int    `json:"version"`
+					} `json:"artifact_files"`
+				}
+				if json.Unmarshal([]byte(ch.Message.Content), &v) == nil &&
+					len(v.ArtifactFiles) > 0 {
+					fmt.Printf("   Saved artifacts:\n")
+					for _, a := range v.ArtifactFiles {
+						fmt.Printf("   - %s (v%d)\n", a.Name, a.Version)
+					}
+				}
 				has = true
 			}
 		}

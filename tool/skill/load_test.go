@@ -85,3 +85,20 @@ func TestLoadTool_Declaration(t *testing.T) {
 	require.NotNil(t, d.InputSchema)
 	require.NotNil(t, d.OutputSchema)
 }
+
+func TestLoadTool_StateDelta_InvalidArgs(t *testing.T) {
+	lt := NewLoadTool(nil)
+	// invalid json should return nil delta
+	delta := lt.StateDelta([]byte("{"), nil)
+	require.Nil(t, delta)
+}
+
+func TestLoadTool_Call_NoRepoSkipsValidation(t *testing.T) {
+	lt := NewLoadTool(nil)
+	// unknown skill is accepted when repo is nil
+	out, err := lt.Call(context.Background(), []byte(
+		`{"skill":"x"}`,
+	))
+	require.NoError(t, err)
+	require.Equal(t, "loaded: x", out)
+}

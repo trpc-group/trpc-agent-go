@@ -12,6 +12,7 @@ tool calls and tool responses, and executes skill scripts via the
 - `skill_load` to load SKILL.md/doc content on demand
 - `skill_run` to execute commands safely in a workspace, returning
   stdout/stderr and output files
+  (and optionally saving files as artifacts)
 - Clear visualization of tool calls and tool responses
 
 ## Prerequisites
@@ -35,6 +36,9 @@ tool calls and tool responses, and executes skill scripts via the
 | `-stream`       | Stream responses                   | `true`           |
 | `-skills-root`  | Skills repository root directory   | `env or ./skills` |
 | `-executor`     | Workspace executor: local|container | `local`          |
+| `-artifacts`    | Save files via artifact service     | `false`          |
+| `-omit-inline`  | Omit inline file contents           | `false`          |
+| `-artifact-prefix` | Artifact filename prefix (e.g., `user:`) | ``     |
 
 ## Usage
 
@@ -70,6 +74,20 @@ In chat:
 - Ask to run a command exactly as shown in the skill docs.
 - If you expect files, mention patterns to collect (for example,
   `output_files: ["out/**"]`).
+- For production, prefer `save_as_artifacts: true` and
+  `omit_inline_content: true` to store files via the artifact
+  service and reduce payload size.
+- This example wires an in-memory artifact service by default,
+  so `save_as_artifacts` works out of the box.
+- You can also use CLI flags to enable artifact saving without
+  hand-crafting JSON arguments in chat:
+  `-artifacts -omit-inline -artifact-prefix user:`
+
+Download saved artifacts locally:
+
+- Use the built-in command:
+  `/pull <artifact_files.name> [version]`
+  It writes files under the `downloads/` directory.
 
 ### Examples
 
@@ -124,6 +142,10 @@ Tips:
 
 🔄 Executing tools...
 ✅ CallableTool response (ID: call_def456): {"stdout":"...","output_files":[...]}
+
+# If artifacts were saved, you'll also see:
+   Saved artifacts:
+   - out/report.pptx (v0)
 
 🤖 Assistant: Build completed. Output: ...
 ```

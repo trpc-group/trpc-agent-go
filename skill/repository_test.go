@@ -128,3 +128,37 @@ func TestParseHelpers_And_DocFlags(t *testing.T) {
 	require.True(t, isDocFile("y.TXT"))
 	require.False(t, isDocFile("z.bin"))
 }
+
+func TestFSRepository_DuplicateSkill_PrefersFirst(t *testing.T) {
+	r1 := t.TempDir()
+	r2 := t.TempDir()
+	// Same skill name in two roots; body texts differ.
+	sdir1 := writeSkill(t, r1, "alpha")
+	sdir2 := writeSkill(t, r2, "alpha")
+	// modify bodies to distinguish
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sdir1, skillFile), []byte(
+			"---\nname: alpha\n---\nfrom root1\n",
+		), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sdir2, skillFile), []byte(
+			"---\nname: alpha\n---\nfrom root2\n",
+		), 0o644,
+	))
+
+	repo, err := NewFSRepository(r1, r2)
+	require.NoError(t, err)
+
+	sk, err := repo.Get("alpha")
+	require.NoError(t, err)
+	require.Contains(t, sk.Body, "from root1")
+}
+
+func TestSplitFrontMatter_NoClosing(t *testing.T) {
+	txt := "---\nname: z\n"
+	m, body := splitFrontMatter(txt)
+	// No closing delimiter: body should be original text.
+	require.Equal(t, 0, len(m))
+	require.Equal(t, txt, body)
+}
