@@ -235,10 +235,8 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		}
 
 		// Filter content
-		if filterMode == IncludeContentFilterKeyPrefix && !evt.Filter(filter) {
-			continue
-		}
-		if filterMode == IncludeContentFilterKeyExact && evt.FilterKey != filter {
+		if (filterMode == IncludeContentFilterKeyPrefix && !evt.Filter(filter)) ||
+			(filterMode == IncludeContentFilterKeyExact && evt.FilterKey != filter) {
 			continue
 		}
 
