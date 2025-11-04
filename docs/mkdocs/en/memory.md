@@ -250,9 +250,9 @@ if err != nil {
 }
 
 // MySQL implementation for production (relational database).
+// Table is automatically created on service initialization. Panics if creation fails.
 mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
-    memorymysql.WithAutoCreateTable(true), // Auto-create table.
     memorymysql.WithToolEnabled(memory.DeleteToolName, true), // Enable delete.
 )
 if err != nil {
@@ -560,7 +560,6 @@ import memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
 // Create MySQL memory service
 mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
-    memorymysql.WithAutoCreateTable(true), // Auto-create table
     memorymysql.WithMemoryLimit(1000), // Set memory limit
     memorymysql.WithTableName("memories"), // Custom table name (optional)
     memorymysql.WithToolEnabled(memory.DeleteToolName, true), // Enable delete tool
@@ -583,12 +582,13 @@ if err != nil {
 
 - `WithMySQLClientDSN(dsn string)`: Set MySQL Data Source Name (DSN)
 - `WithMySQLInstance(name string)`: Use pre-registered MySQL instance
-- `WithAutoCreateTable(auto bool)`: Auto-create table (default false)
-- `WithTableName(name string)`: Custom table name (default "memories")
+- `WithTableName(name string)`: Custom table name (default "memories"). Panics if invalid.
 - `WithMemoryLimit(limit int)`: Set maximum memories per user
 - `WithSoftDelete(enabled bool)`: Enable soft delete (default false). When enabled, delete operations set `deleted_at` and queries filter out soft-deleted rows.
 - `WithToolEnabled(toolName string, enabled bool)`: Enable or disable specific tools
 - `WithCustomTool(toolName string, creator ToolCreator)`: Use custom tool implementation
+
+**Note:** The table is automatically created when the service is initialized. If table creation fails, the service will panic.
 
 **DSN Format:**
 
@@ -605,7 +605,7 @@ if err != nil {
 
 **Table Schema:**
 
-MySQL memory service automatically creates the following table structure (when `WithAutoCreateTable(true)`):
+MySQL memory service automatically creates the following table structure on initialization:
 
 ```sql
 CREATE TABLE IF NOT EXISTS memories (
@@ -655,7 +655,6 @@ storage.RegisterMySQLInstance("my-mysql",
 // Use registered instance
 mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLInstance("my-mysql"),
-    memorymysql.WithAutoCreateTable(true),
 )
 ```
 

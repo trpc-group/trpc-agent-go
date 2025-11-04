@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -111,23 +112,23 @@ func TestNewService_InstanceNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
-// TestNewService_InvalidTableName tests that service creation fails with an invalid table name.
+// TestNewService_InvalidTableName tests that service creation panics with an invalid table name.
 // Table names with dashes are not allowed in MySQL.
 func TestNewService_InvalidTableName(t *testing.T) {
-	originalBuilder := storage.GetClientBuilder()
-	storage.SetClientBuilder(mockClientBuilder)
-	defer storage.SetClientBuilder(originalBuilder)
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic for invalid table name")
+		assert.Contains(t, fmt.Sprintf("%v", r), "invalid table name")
+	}()
 
-	_, err := NewService(
+	NewService(
 		WithMySQLClientDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
 		WithTableName("invalid-table-name"),
 	)
-	require.Error(t, err, "expected error for invalid table name")
-	assert.Contains(t, err.Error(), "invalid table name")
 }
 
-// TestNewService_WithAutoCreateTable tests that the service automatically creates the table when enabled.
-func TestNewService_WithAutoCreateTable(t *testing.T) {
+// TestNewService_AutoCreateTable tests that the service automatically creates the table.
+func TestNewService_AutoCreateTable(t *testing.T) {
 	mockDB, mock := setupMockDB(t)
 	defer mockDB.Close()
 
@@ -137,12 +138,11 @@ func TestNewService_WithAutoCreateTable(t *testing.T) {
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
-	// Expect table creation.
+	// Expect table creation (always happens now).
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	service, err := NewService(
 		WithMySQLClientDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
-		WithAutoCreateTable(true),
 	)
 	require.NoError(t, err)
 	assert.NotNil(t, service)
@@ -165,9 +165,6 @@ func TestServiceOpts(t *testing.T) {
 
 	WithTableName("custom_memories")(&opts)
 	assert.Equal(t, "custom_memories", opts.tableName)
-
-	WithAutoCreateTable(true)(&opts)
-	assert.True(t, opts.autoCreateTable)
 }
 
 // TestWithCustomTool tests registering custom tool creators.

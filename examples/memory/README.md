@@ -140,13 +140,13 @@ The following memory tools are manually registered via `memoryService.Tools()`:
 
 ## Command Line Arguments
 
-| Argument      | Description                                           | Default Value    |
-| ------------- | ----------------------------------------------------- | ---------------- |
-| `-model`      | Name of the model to use                              | `deepseek-chat`  |
-| `-memory`     | Memory service: `inmemory`, `redis`, or `mysql`       | `inmemory`       |
-| `-redis-addr` | Redis server address (when using redis memory)        | `localhost:6379` |
-| `-mysql-dsn`  | MySQL DSN (when using mysql memory, required)         | ``               |
-| `-streaming`  | Enable streaming mode for responses                   | `true`           |
+| Argument      | Description                                     | Default Value    |
+| ------------- | ----------------------------------------------- | ---------------- |
+| `-model`      | Name of the model to use                        | `deepseek-chat`  |
+| `-memory`     | Memory service: `inmemory`, `redis`, or `mysql` | `inmemory`       |
+| `-redis-addr` | Redis server address (when using redis memory)  | `localhost:6379` |
+| `-mysql-dsn`  | MySQL DSN (when using mysql memory, required)   | ``               |
+| `-streaming`  | Enable streaming mode for responses             | `true`           |
 
 ## Usage
 
@@ -210,11 +210,11 @@ go run . -memory mysql -mysql-dsn "user:password@tcp(localhost:3306)/dbname?pars
 
 **Available service combinations:**
 
-| Memory Service | Session Service | Status   | Description                                    |
-| -------------- | --------------- | -------- | ---------------------------------------------- |
-| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration                          |
-| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session               |
-| `mysql`        | `inmemory`      | ✅ Ready | MySQL memory + in-memory session (DSN required)|
+| Memory Service | Session Service | Status   | Description                                     |
+| -------------- | --------------- | -------- | ----------------------------------------------- |
+| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration                           |
+| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session                |
+| `mysql`        | `inmemory`      | ✅ Ready | MySQL memory + in-memory session (DSN required) |
 
 ### Help and Available Options
 
@@ -658,7 +658,6 @@ The example supports MySQL-based memory service for persistent relational storag
 // MySQL memory service
 memoryService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
-    memorymysql.WithAutoCreateTable(true),
     memorymysql.WithToolEnabled(memory.DeleteToolName, false),
     memorymysql.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )

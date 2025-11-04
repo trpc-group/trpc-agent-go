@@ -128,7 +128,6 @@ func (c *memoryChat) setup(_ context.Context) error {
 		}
 		memoryService, err = memorymysql.NewService(
 			memorymysql.WithMySQLClientDSN(*mysqlDSN),
-			memorymysql.WithAutoCreateTable(true),
 			memorymysql.WithSoftDelete(*softDelete),
 			// You can enable or disable tools and create custom tools here.
 			memorymysql.WithToolEnabled(memory.DeleteToolName, false),               // delete tool is disabled by default

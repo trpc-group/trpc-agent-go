@@ -225,9 +225,9 @@ if err != nil {
 }
 
 // MySQL 实现，用于生产环境（关系型数据库）
+// 服务初始化时会自动创建表。如果创建失败会 panic。
 mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
-    memorymysql.WithAutoCreateTable(true), // 自动创建表
     memorymysql.WithToolEnabled(memory.DeleteToolName, true), // 启用删除工具
 )
 if err != nil {
@@ -516,7 +516,6 @@ import memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
 // 创建 MySQL 记忆服务
 mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
-    memorymysql.WithAutoCreateTable(true), // 自动创建表
     memorymysql.WithMemoryLimit(1000), // 设置记忆数量限制
     memorymysql.WithTableName("memories"), // 自定义表名（可选）
     memorymysql.WithToolEnabled(memory.DeleteToolName, true), // 启用删除工具
@@ -539,12 +538,13 @@ if err != nil {
 
 - `WithMySQLClientDSN(dsn string)`: 设置 MySQL 数据源名称（DSN）
 - `WithMySQLInstance(name string)`: 使用预注册的 MySQL 实例
-- `WithAutoCreateTable(auto bool)`: 是否自动创建表（默认 false）
-- `WithTableName(name string)`: 自定义表名（默认 "memories"）
+- `WithTableName(name string)`: 自定义表名（默认 "memories"）。如果表名无效会 panic。
 - `WithMemoryLimit(limit int)`: 设置每个用户的最大记忆数量
 - `WithSoftDelete(enabled bool)`: 启用软删除（默认 false）。启用后，删除操作设置 `deleted_at`，查询会过滤已软删除的记录。
 - `WithToolEnabled(toolName string, enabled bool)`: 启用或禁用特定工具
 - `WithCustomTool(toolName string, creator ToolCreator)`: 使用自定义工具实现
+
+**注意：** 服务初始化时会自动创建表。如果表创建失败，服务会 panic。
 
 **DSN 格式：**
 
@@ -561,7 +561,7 @@ if err != nil {
 
 **表结构：**
 
-MySQL 记忆服务会自动创建以下表结构（当 `WithAutoCreateTable(true)` 时）：
+MySQL 记忆服务在初始化时会自动创建以下表结构：
 
 ```sql
 CREATE TABLE IF NOT EXISTS memories (
@@ -611,7 +611,6 @@ storage.RegisterMySQLInstance("my-mysql",
 // 使用注册的实例
 mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLInstance("my-mysql"),
-    memorymysql.WithAutoCreateTable(true),
 )
 ```
 
