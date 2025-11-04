@@ -13,6 +13,11 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
 func TestGRPCTracesEndpoint(t *testing.T) {
@@ -202,6 +207,66 @@ func TestStartGRPC_DefaultNoEnv_NoEndpoint(t *testing.T) {
 		t.Fatalf("expected cleanup")
 	}
 	_ = clean()
+}
+
+func TestStart_WithResourceAttributesAndEnv(t *testing.T) {
+	origTrace := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	origGeneric := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	origService := os.Getenv("OTEL_SERVICE_NAME")
+	origAttrs := os.Getenv("OTEL_RESOURCE_ATTRIBUTES")
+	defer func() {
+		_ = os.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", origTrace)
+		_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", origGeneric)
+		_ = os.Setenv("OTEL_SERVICE_NAME", origService)
+		_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", origAttrs)
+	}()
+
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	_ = os.Setenv("OTEL_SERVICE_NAME", "env-service")
+	_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team=ai,env=staging")
+
+	ctx := context.Background()
+	opts := &options{
+		serviceName:      itelemetry.ServiceName,
+		serviceVersion:   itelemetry.ServiceVersion,
+		serviceNamespace: itelemetry.ServiceNamespace,
+	}
+	WithServiceName("option-service")(opts)
+	WithResourceAttributes(
+		attribute.String("team", "ml"),
+		attribute.String("custom", "value"),
+	)(opts)
+
+	res, err := buildResource(ctx, opts)
+	if err != nil {
+		t.Fatalf("buildResource returned error: %v", err)
+	}
+
+	attrMap := make(map[string]string)
+	iter := res.Iter()
+	for iter.Next() {
+		kv := iter.Attribute()
+		if kv.Value.Type() == attribute.STRING {
+			attrMap[string(kv.Key)] = kv.Value.AsString()
+		}
+	}
+
+	// option overrides env
+	if attrMap[string(semconv.ServiceNameKey)] != "option-service" {
+		t.Fatalf("service.name mismatch, got %q", attrMap[string(semconv.ServiceNameKey)])
+	}
+	// env attributes present unless overridden
+	if attrMap["env"] != "staging" {
+		t.Fatalf("expected env=staging, got %q", attrMap["env"])
+	}
+	// option attribute overrides
+	if attrMap["team"] != "ml" {
+		t.Fatalf("expected team=ml, got %q", attrMap["team"])
+	}
+	if attrMap["custom"] != "value" {
+		t.Fatalf("expected custom=value, got %q", attrMap["custom"])
+	}
 }
 
 func TestStartHTTP_WithURL_NoScheme(t *testing.T) {

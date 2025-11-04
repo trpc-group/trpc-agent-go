@@ -13,6 +13,11 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
 // TestMetricsEndpoint validates metrics endpoint precedence rules.
@@ -154,6 +159,56 @@ func TestOptions(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:   "WithServiceName",
+			option: WithServiceName("custom-service"),
+			validate: func(t *testing.T, opts *options) {
+				if opts.serviceName != "custom-service" {
+					t.Errorf("expected service name custom-service, got %s", opts.serviceName)
+				}
+				if !opts.serviceNameSet {
+					t.Errorf("expected serviceNameSet to be true")
+				}
+			},
+		},
+		{
+			name:   "WithServiceNamespace",
+			option: WithServiceNamespace("custom-ns"),
+			validate: func(t *testing.T, opts *options) {
+				if opts.serviceNamespace != "custom-ns" {
+					t.Errorf("expected service namespace custom-ns, got %s", opts.serviceNamespace)
+				}
+				if !opts.serviceNamespaceSet {
+					t.Errorf("expected serviceNamespaceSet to be true")
+				}
+			},
+		},
+		{
+			name:   "WithServiceVersion",
+			option: WithServiceVersion("1.2.3"),
+			validate: func(t *testing.T, opts *options) {
+				if opts.serviceVersion != "1.2.3" {
+					t.Errorf("expected service version 1.2.3, got %s", opts.serviceVersion)
+				}
+				if !opts.serviceVersionSet {
+					t.Errorf("expected serviceVersionSet to be true")
+				}
+			},
+		},
+		{
+			name: "WithResourceAttributes",
+			option: WithResourceAttributes(
+				attribute.String("key", "value"),
+			),
+			validate: func(t *testing.T, opts *options) {
+				if len(opts.resourceAttributes) != 1 {
+					t.Fatalf("expected 1 resource attribute, got %d", len(opts.resourceAttributes))
+				}
+				if opts.resourceAttributes[0].Key != "key" || opts.resourceAttributes[0].Value.AsString() != "value" {
+					t.Fatalf("unexpected resource attribute: %v", opts.resourceAttributes[0])
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -163,5 +218,62 @@ func TestOptions(t *testing.T) {
 			tt.option(&testOpts)
 			tt.validate(t, &testOpts)
 		})
+	}
+}
+
+func TestBuildResource_WithResourceAttributesAndEnv(t *testing.T) {
+	origMetric := os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+	origGeneric := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	origService := os.Getenv("OTEL_SERVICE_NAME")
+	origAttrs := os.Getenv("OTEL_RESOURCE_ATTRIBUTES")
+	defer func() {
+		_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", origMetric)
+		_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", origGeneric)
+		_ = os.Setenv("OTEL_SERVICE_NAME", origService)
+		_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", origAttrs)
+	}()
+
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	_ = os.Setenv("OTEL_SERVICE_NAME", "env-metric-service")
+	_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team=ops,region=us-east")
+
+	ctx := context.Background()
+	opts := &options{
+		serviceName:      itelemetry.ServiceName,
+		serviceVersion:   itelemetry.ServiceVersion,
+		serviceNamespace: itelemetry.ServiceNamespace,
+	}
+	WithServiceName("metric-option-service")(opts)
+	WithResourceAttributes(
+		attribute.String("team", "ml"),
+		attribute.String("priority", "high"),
+	)(opts)
+
+	res, err := buildResource(ctx, opts)
+	if err != nil {
+		t.Fatalf("buildResource returned error: %v", err)
+	}
+
+	attrMap := make(map[string]string)
+	iter := res.Iter()
+	for iter.Next() {
+		kv := iter.Attribute()
+		if kv.Value.Type() == attribute.STRING {
+			attrMap[string(kv.Key)] = kv.Value.AsString()
+		}
+	}
+
+	if attrMap[string(semconv.ServiceNameKey)] != "metric-option-service" {
+		t.Fatalf("expected service.name metric-option-service, got %q", attrMap[string(semconv.ServiceNameKey)])
+	}
+	if attrMap["region"] != "us-east" {
+		t.Fatalf("expected region=us-east, got %q", attrMap["region"])
+	}
+	if attrMap["team"] != "ml" {
+		t.Fatalf("expected team=ml, got %q", attrMap["team"])
+	}
+	if attrMap["priority"] != "high" {
+		t.Fatalf("expected priority=high, got %q", attrMap["priority"])
 	}
 }

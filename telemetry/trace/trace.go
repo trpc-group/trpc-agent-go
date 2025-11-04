@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
@@ -59,13 +60,7 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 		options.tracesEndpoint = tracesEndpoint(options.protocol)
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceNamespace(options.serviceNamespace),
-			semconv.ServiceName(options.serviceName),
-			semconv.ServiceVersion(options.serviceVersion),
-		),
-	)
+	res, err := buildResource(ctx, options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
@@ -95,13 +90,17 @@ type Option func(*options)
 
 // options holds the configuration options for tracer.
 type options struct {
-	tracesEndpoint    string
-	tracesEndpointURL string
-	serviceName       string
-	serviceVersion    string
-	serviceNamespace  string
-	protocol          string            // Protocol to use (grpc or http)
-	headers           map[string]string // Headers to send with the request
+	tracesEndpoint      string
+	tracesEndpointURL   string
+	serviceName         string
+	serviceVersion      string
+	serviceNamespace    string
+	protocol            string            // Protocol to use (grpc or http)
+	headers             map[string]string // Headers to send with the request
+	serviceNameSet      bool
+	serviceVersionSet   bool
+	serviceNamespaceSet bool
+	resourceAttributes  []attribute.KeyValue
 }
 
 // WithEndpoint sets the traces endpoint(host and port) the Exporter will connect to.
@@ -148,11 +147,80 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
+// WithServiceName overrides the service.name resource attribute.
+func WithServiceName(serviceName string) Option {
+	return func(opts *options) {
+		if serviceName != "" {
+			opts.serviceName = serviceName
+			opts.serviceNameSet = true
+		}
+	}
+}
+
+// WithServiceNamespace overrides the service.namespace resource attribute.
+func WithServiceNamespace(serviceNamespace string) Option {
+	return func(opts *options) {
+		if serviceNamespace != "" {
+			opts.serviceNamespace = serviceNamespace
+			opts.serviceNamespaceSet = true
+		}
+	}
+}
+
+// WithServiceVersion overrides the service.version resource attribute.
+func WithServiceVersion(serviceVersion string) Option {
+	return func(opts *options) {
+		if serviceVersion != "" {
+			opts.serviceVersion = serviceVersion
+			opts.serviceVersionSet = true
+		}
+	}
+}
+
+// WithResourceAttributes appends custom resource attributes.
+func WithResourceAttributes(attrs ...attribute.KeyValue) Option {
+	return func(opts *options) {
+		if len(attrs) == 0 {
+			return
+		}
+		opts.resourceAttributes = append(opts.resourceAttributes, attrs...)
+	}
+}
+
 // WithHeaders sets the headers to include in the trace requests.
 func WithHeaders(headers map[string]string) Option {
 	return func(opts *options) {
 		opts.headers = headers
 	}
+}
+
+func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
+	resourceOpts := []resource.Option{
+		resource.WithAttributes(
+			semconv.ServiceNamespace(itelemetry.ServiceNamespace),
+			semconv.ServiceName(itelemetry.ServiceName),
+			semconv.ServiceVersion(itelemetry.ServiceVersion),
+		),
+		resource.WithFromEnv(),
+		resource.WithProcess(),
+		resource.WithOS(),
+	}
+
+	if options.serviceNamespaceSet {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceNamespace(options.serviceNamespace)))
+	}
+	if options.serviceNameSet {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceName(options.serviceName)))
+	}
+	if options.serviceVersionSet {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceVersion(options.serviceVersion)))
+	}
+
+	if len(options.resourceAttributes) > 0 {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(options.resourceAttributes...))
+	}
+
+	return resource.New(ctx, resourceOpts...)
 }
 
 func tracesEndpoint(protocol string) string {
