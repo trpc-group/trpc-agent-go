@@ -11,6 +11,7 @@ package processor
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -1068,6 +1070,1259 @@ func TestContentRequestProcessor_Integration_MaxHistoryRunsAndAddSessionSummary(
 			}
 
 			assert.Equal(t, tt.expectedCount, messageCount, tt.description)
+		})
+	}
+}
+
+func TestWithAppendHistoryMessage(t *testing.T) {
+	type args struct {
+		append bool
+	}
+	tests := []struct {
+		name string
+		args args
+		want ContentOption
+	}{
+		{
+			name: "set to true",
+			args: args{append: true},
+			want: func(p *ContentRequestProcessor) {
+				p.AppendHistoryMessage = true
+			},
+		},
+		{
+			name: "set to false",
+			args: args{append: false},
+			want: func(p *ContentRequestProcessor) {
+				p.AppendHistoryMessage = false
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			processor := &ContentRequestProcessor{}
+
+			got := WithAppendHistoryMessage(tt.args.append)
+
+			got(processor)
+
+			if processor.AppendHistoryMessage != tt.args.append {
+				t.Errorf("AppendHistoryMessage = %v, want %v",
+					processor.AppendHistoryMessage, tt.args.append)
+			}
+		})
+	}
+}
+
+func Test_toMap(t *testing.T) {
+	type args struct {
+		ids []string
+	}
+	tests := []struct {
+		name string
+		args args
+		want map[string]bool
+	}{
+		{
+			name: "empty slice",
+			args: args{ids: []string{}},
+			want: map[string]bool{},
+		},
+		{
+			name: "single element",
+			args: args{ids: []string{"a"}},
+			want: map[string]bool{"a": true},
+		},
+		{
+			name: "multiple unique elements",
+			args: args{ids: []string{"a", "b", "c"}},
+			want: map[string]bool{"a": true, "b": true, "c": true},
+		},
+		{
+			name: "duplicate elements",
+			args: args{ids: []string{"a", "a", "b"}},
+			want: map[string]bool{"a": true, "b": true},
+		},
+		{
+			name: "empty string element",
+			args: args{ids: []string{"", "b"}},
+			want: map[string]bool{"": true, "b": true},
+		},
+		{
+			name: "nil slice",
+			args: args{ids: nil},
+			want: map[string]bool{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := toMap(tt.args.ids); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("toMap() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContentRequestProcessor_getIncludeContentFilterMode(t *testing.T) {
+
+	tests := []struct {
+		name           string
+		processorMode  string
+		runtimeState   map[string]any
+		expectedResult string
+	}{
+		{
+			name:           "Default mode when no runtime config",
+			processorMode:  IncludeContentFilterKeyPrefix,
+			runtimeState:   nil,
+			expectedResult: IncludeContentFilterKeyPrefix,
+		},
+		{
+			name:          "Override to prefix mode",
+			processorMode: IncludeContentFilterKeyAll,
+			runtimeState: map[string]any{
+				graph.CfgKeyIncludeFilterKeyMode: IncludeContentFilterKeyPrefix,
+			},
+			expectedResult: IncludeContentFilterKeyPrefix,
+		},
+		{
+			name:          "Override to all mode",
+			processorMode: IncludeContentFilterKeyPrefix,
+			runtimeState: map[string]any{
+				graph.CfgKeyIncludeFilterKeyMode: IncludeContentFilterKeyAll,
+			},
+			expectedResult: IncludeContentFilterKeyAll,
+		},
+		{
+			name:          "Override to exact mode",
+			processorMode: IncludeContentFilterKeyAll,
+			runtimeState: map[string]any{
+				graph.CfgKeyIncludeFilterKeyMode: IncludeContentFilterKeyExact,
+			},
+			expectedResult: IncludeContentFilterKeyExact,
+		},
+		{
+			name:          "Empty runtime value",
+			processorMode: IncludeContentFilterKeyPrefix,
+			runtimeState: map[string]any{
+				graph.CfgKeyIncludeFilterKeyMode: "",
+			},
+			expectedResult: IncludeContentFilterKeyPrefix,
+		},
+		{
+			name:          "Invalid runtime value",
+			processorMode: IncludeContentFilterKeyPrefix,
+			runtimeState: map[string]any{
+				graph.CfgKeyIncludeFilterKeyMode: "invalid_mode",
+			},
+			expectedResult: IncludeContentFilterKeyPrefix,
+		},
+		{
+			name:          "Non-string runtime value",
+			processorMode: IncludeContentFilterKeyPrefix,
+			runtimeState: map[string]any{
+				graph.CfgKeyIncludeFilterKeyMode: 123,
+			},
+			expectedResult: IncludeContentFilterKeyPrefix,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			processor := &ContentRequestProcessor{
+				IncludeContentFilterMode: tt.processorMode,
+			}
+
+			inv := &agent.Invocation{
+				RunOptions: agent.RunOptions{
+					RuntimeState: tt.runtimeState,
+				},
+			}
+
+			result := processor.getIncludeContentFilterMode(inv)
+
+			assert.Equal(t, tt.expectedResult, result)
+		})
+	}
+}
+
+func TestContentRequestProcessor_needAppendHistoryMessage(t *testing.T) {
+	type fields struct {
+		AppendHistoryMessage bool
+	}
+	type args struct {
+		inv *agent.Invocation
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   bool
+	}{
+		{
+			name: "use processor config when runtime state not set",
+			fields: fields{
+				AppendHistoryMessage: true,
+			},
+			args: args{
+				inv: &agent.Invocation{
+					RunOptions: agent.RunOptions{
+						RuntimeState: map[string]any{},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "use processor config when runtime state is nil",
+			fields: fields{
+				AppendHistoryMessage: false,
+			},
+			args: args{
+				inv: &agent.Invocation{
+					RunOptions: agent.RunOptions{
+						RuntimeState: nil,
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "use runtime state when set to true",
+			fields: fields{
+				AppendHistoryMessage: false,
+			},
+			args: args{
+				inv: &agent.Invocation{
+					RunOptions: agent.RunOptions{
+						RuntimeState: map[string]any{
+							graph.CfgKeyAppendHistoryMessage: true,
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "use runtime state when set to false",
+			fields: fields{
+				AppendHistoryMessage: true,
+			},
+			args: args{
+				inv: &agent.Invocation{
+					RunOptions: agent.RunOptions{
+						RuntimeState: map[string]any{
+							graph.CfgKeyAppendHistoryMessage: false,
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "use processor config when runtime state value is not bool",
+			fields: fields{
+				AppendHistoryMessage: true,
+			},
+			args: args{
+				inv: &agent.Invocation{
+					RunOptions: agent.RunOptions{
+						RuntimeState: map[string]any{
+							graph.CfgKeyAppendHistoryMessage: "not a bool",
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "use processor config when runtime state value is int",
+			fields: fields{
+				AppendHistoryMessage: false,
+			},
+			args: args{
+				inv: &agent.Invocation{
+					RunOptions: agent.RunOptions{
+						RuntimeState: map[string]any{
+							graph.CfgKeyAppendHistoryMessage: 1,
+						},
+					},
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		p := &ContentRequestProcessor{
+			AppendHistoryMessage: tt.fields.AppendHistoryMessage,
+		}
+		if got := p.needAppendHistoryMessage(tt.args.inv); got != tt.want {
+			t.Errorf("%q. needAppendHistoryMessage() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestWithIncludeContentFilterMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		wantMode string
+	}{
+		{
+			name:     "empty mode",
+			mode:     "",
+			wantMode: "",
+		},
+		{
+			name:     "valid mode prefix",
+			mode:     "prefix",
+			wantMode: "prefix",
+		},
+		{
+			name:     "valid mode all",
+			mode:     "all",
+			wantMode: "all",
+		},
+		{
+			name:     "special characters mode",
+			mode:     "!@#$%^&*()",
+			wantMode: "!@#$%^&*()",
+		},
+		{
+			name:     "long mode string",
+			mode:     "very_long_mode_string_with_more_than_50_characters_1234567890",
+			wantMode: "very_long_mode_string_with_more_than_50_characters_1234567890",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			processor := &ContentRequestProcessor{}
+
+			option := WithIncludeContentFilterMode(tt.mode)
+
+			option(processor)
+
+			assert.Equal(t, tt.wantMode, processor.IncludeContentFilterMode,
+				"IncludeContentFilterMode should be set correctly")
+		})
+	}
+}
+
+func TestWithIncludeContentFilterMode_Type(t *testing.T) {
+	option := WithIncludeContentFilterMode("test")
+
+	assert.True(t, reflect.TypeOf(option).Kind() == reflect.Func,
+		"Return value should be a function")
+
+	expectedType := reflect.TypeOf(func(*ContentRequestProcessor) {})
+	actualType := reflect.TypeOf(option)
+	assert.True(t, actualType.AssignableTo(expectedType),
+		"Return function should match ContentOption type")
+}
+
+func TestNewContentRequestProcessor(t *testing.T) {
+
+	defaultWant := &ContentRequestProcessor{
+		IncludeContentFilterMode: "prefix",
+		AddContextPrefix:         true,
+		PreserveSameBranch:       true,
+		AppendHistoryMessage:     true,
+		AddSessionSummary:        false,
+		MaxHistoryRuns:           0,
+	}
+
+	tests := []struct {
+		name string
+		args []ContentOption
+		want *ContentRequestProcessor
+	}{
+
+		{
+			name: "no options",
+			args: nil,
+			want: defaultWant,
+		},
+
+		{
+			name: "single option - AddContextPrefix false",
+			args: []ContentOption{WithAddContextPrefix(false)},
+			want: func() *ContentRequestProcessor {
+				w := *defaultWant
+				w.AddContextPrefix = false
+				return &w
+			}(),
+		},
+
+		{
+			name: "multiple options",
+			args: []ContentOption{
+				WithAddContextPrefix(false),
+				WithPreserveSameBranch(false),
+				WithAppendHistoryMessage(false),
+				WithIncludeContentFilterMode("all"),
+			},
+			want: &ContentRequestProcessor{
+				IncludeContentFilterMode: "all",
+				AddContextPrefix:         false,
+				PreserveSameBranch:       false,
+				AppendHistoryMessage:     false,
+				AddSessionSummary:        false,
+				MaxHistoryRuns:           0,
+			},
+		},
+
+		{
+			name: "option override",
+			args: []ContentOption{
+				WithAddContextPrefix(true),
+				WithAddContextPrefix(false),
+				WithPreserveSameBranch(true),
+				WithPreserveSameBranch(false),
+			},
+			want: func() *ContentRequestProcessor {
+				w := *defaultWant
+				w.AddContextPrefix = false
+				w.PreserveSameBranch = false
+				return &w
+			}(),
+		},
+
+		{
+			name: "empty options slice",
+			args: []ContentOption{},
+			want: defaultWant,
+		},
+
+		{
+			name: "unhandled fields remain default",
+			args: []ContentOption{
+				WithIncludeContentFilterMode("exact"),
+			},
+			want: func() *ContentRequestProcessor {
+				w := *defaultWant
+				w.IncludeContentFilterMode = "exact"
+				return &w
+			}(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewContentRequestProcessor(tt.args...)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("NewContentRequestProcessor() = %v, want %v", got, tt.want)
+			}
+
+			assert.Equal(t, tt.want.IncludeContentFilterMode, got.IncludeContentFilterMode, "IncludeContentFilterMode mismatch")
+			assert.Equal(t, tt.want.AddContextPrefix, got.AddContextPrefix, "AddContextPrefix mismatch")
+			assert.Equal(t, tt.want.PreserveSameBranch, got.PreserveSameBranch, "PreserveSameBranch mismatch")
+			assert.Equal(t, tt.want.AppendHistoryMessage, got.AppendHistoryMessage, "AppendHistoryMessage mismatch")
+			assert.Equal(t, tt.want.AddSessionSummary, got.AddSessionSummary, "AddSessionSummary mismatch")
+			assert.Equal(t, tt.want.MaxHistoryRuns, got.MaxHistoryRuns, "MaxHistoryRuns mismatch")
+		})
+	}
+}
+
+func TestContentRequestProcessor_mergeFunctionResponseEvents(t *testing.T) {
+	type fields struct {
+		IncludeContentFilterMode string
+		AddContextPrefix         bool
+		AddSessionSummary        bool
+		MaxHistoryRuns           int
+		PreserveSameBranch       bool
+		AppendHistoryMessage     bool
+	}
+	type args struct {
+		functionResponseEvents []event.Event
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   event.Event
+	}{
+		{
+			name: "empty input",
+			args: args{
+				functionResponseEvents: []event.Event{},
+			},
+			want: event.Event{},
+		},
+		{
+			name: "single event with valid choices",
+			args: args{
+				functionResponseEvents: []event.Event{
+					{
+						Author: "agent1",
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										ToolID:  "tool1",
+										Content: "result1",
+									},
+								},
+								{
+									Message: model.Message{
+										ToolID:  "tool2",
+										Content: "result2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: event.Event{
+				Author: "agent1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolID:  "tool1",
+								Content: "result1",
+							},
+						},
+						{
+							Message: model.Message{
+								ToolID:  "tool2",
+								Content: "result2",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "multiple events with valid choices",
+			args: args{
+				functionResponseEvents: []event.Event{
+					{
+						Author: "agent1",
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										ToolID:  "tool1",
+										Content: "result1",
+									},
+								},
+							},
+						},
+					},
+					{
+						Author: "agent2",
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										ToolID:  "tool2",
+										Content: "result2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: event.Event{
+				Author: "agent1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolID:  "tool1",
+								Content: "result1",
+							},
+						},
+						{
+							Message: model.Message{
+								ToolID:  "tool2",
+								Content: "result2",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "event with invalid choices",
+			args: args{
+				functionResponseEvents: []event.Event{
+					{
+						Author: "agent1",
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										ToolID: "tool1",
+									},
+								},
+								{
+									Message: model.Message{
+										Content: "result2",
+									},
+								},
+								{
+									Message: model.Message{
+										ToolID:  "tool3",
+										Content: "result3",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: event.Event{
+				Author: "agent1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolID:  "tool3",
+								Content: "result3",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "multiple events with mixed choices",
+			args: args{
+				functionResponseEvents: []event.Event{
+					{
+						Author: "agent1",
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										ToolID: "tool1",
+									},
+								},
+								{
+									Message: model.Message{
+										ToolID:  "tool2",
+										Content: "result2",
+									},
+								},
+							},
+						},
+					},
+					{
+						Author: "agent2",
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										ToolID:  "tool3",
+										Content: "result3",
+									},
+								},
+								{
+									Message: model.Message{
+										Content: "result4",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: event.Event{
+				Author: "agent1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolID:  "tool2",
+								Content: "result2",
+							},
+						},
+						{
+							Message: model.Message{
+								ToolID:  "tool3",
+								Content: "result3",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "first event has no choices",
+			args: args{
+				functionResponseEvents: []event.Event{
+					{
+						Author:   "agent1",
+						Response: &model.Response{},
+					},
+					{
+						Author: "agent2",
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										ToolID:  "tool1",
+										Content: "result1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: event.Event{
+				Author: "agent1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolID:  "tool1",
+								Content: "result1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &ContentRequestProcessor{
+				IncludeContentFilterMode: tt.fields.IncludeContentFilterMode,
+				AddContextPrefix:         tt.fields.AddContextPrefix,
+				AddSessionSummary:        tt.fields.AddSessionSummary,
+				MaxHistoryRuns:           tt.fields.MaxHistoryRuns,
+				PreserveSameBranch:       tt.fields.PreserveSameBranch,
+				AppendHistoryMessage:     tt.fields.AppendHistoryMessage,
+			}
+			if got := p.mergeFunctionResponseEvents(tt.args.functionResponseEvents); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("%q. mergeFunctionResponseEvents() = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContentRequestProcessor_isOtherAgentReply(t *testing.T) {
+	type fields struct {
+		PreserveSameBranch bool
+	}
+	type args struct {
+		currentAgentName string
+		currentBranch    string
+		evt              *event.Event
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   bool
+	}{
+
+		{
+			name: "nil event",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt:              nil,
+			},
+			want: false,
+		},
+
+		{
+			name: "empty agent name",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "branch2",
+				},
+			},
+			want: false,
+		},
+
+		{
+			name: "user event",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "user",
+				},
+			},
+			want: false,
+		},
+
+		{
+			name: "self agent event",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "agent1",
+					Branch: "branch1",
+				},
+			},
+			want: false,
+		},
+
+		{
+			name: "same branch with preserve",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "branch1",
+				},
+			},
+			want: false,
+		},
+
+		{
+			name: "child branch with preserve",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "branch1/child",
+				},
+			},
+			want: false,
+		},
+
+		{
+			name: "parent branch with preserve",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1/child",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "branch1",
+				},
+			},
+			want: false,
+		},
+
+		{
+			name: "unrelated branch with preserve",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "branch2",
+				},
+			},
+			want: true,
+		},
+
+		{
+			name: "same branch without preserve",
+			fields: fields{
+				PreserveSameBranch: false,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "branch1",
+				},
+			},
+			want: true,
+		},
+
+		{
+			name: "empty branch",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "",
+				},
+			},
+			want: true,
+		},
+
+		{
+			name: "exact branch match",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "branch1",
+				},
+			},
+			want: false,
+		},
+
+		{
+			name: "branch prefix match",
+			fields: fields{
+				PreserveSameBranch: true,
+			},
+			args: args{
+				currentAgentName: "agent1",
+				currentBranch:    "branch1",
+				evt: &event.Event{
+					Author: "agent2",
+					Branch: "branch1/child",
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &ContentRequestProcessor{
+				PreserveSameBranch: tt.fields.PreserveSameBranch,
+			}
+			if got := p.isOtherAgentReply(
+				tt.args.currentAgentName,
+				tt.args.currentBranch,
+				tt.args.evt,
+			); got != tt.want {
+				t.Errorf("isOtherAgentReply() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func getSession() *session.Session {
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	return &session.Session{
+		Events: []event.Event{
+			{
+				Author:    "user",
+				RequestID: "test-request-id-1",
+				FilterKey: "test-filter",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+			},
+			{
+				Author:    "user",
+				RequestID: "test-request-id-1",
+				FilterKey: "test-filter",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					IsPartial: true,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{
+								Role:    model.RoleUser,
+								Content: "test-request-id-1/test-filter/part message",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:    "user",
+				RequestID: "test-request-id",
+				FilterKey: "test-filter",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					IsPartial: true,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{
+								Role:    model.RoleUser,
+								Content: "test-request-id/test-filter/part message",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:    "user",
+				RequestID: "test-request-id-1",
+				FilterKey: "test-filter/a",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "test-request-id-1/test-filter/a/old message",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:    "user",
+				RequestID: "test-request-id",
+				FilterKey: "test-filter/a",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "test-request-id/test-filter/a/old message",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:    "assistant",
+				RequestID: "test-request-id",
+				FilterKey: "test-filter-a",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "test-request-id/test-filter-a",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:    "assistant",
+				RequestID: "test-request-id-1",
+				FilterKey: "test-filter-a",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "test-request-id-1/test-filter-a",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:    "assistant",
+				RequestID: "test-request-id",
+				FilterKey: "test-filter",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "test-request-id/test-filter",
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:    "assistant",
+				RequestID: "test-request-id-1",
+				FilterKey: "test-filter",
+				Timestamp: baseTime.Add(-1 * time.Hour),
+				Version:   event.CurrentVersion,
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "test-request-id-1/test-filter",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationEventFilterKey("test-filter"),
+		agent.WithInvocationSession(getSession()),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "test-request-id",
+		}),
+	)
+
+	tests := []struct {
+		name                     string
+		summaryUpdatedAt         time.Time
+		expectedCount            int
+		expectedContent          []string
+		appendHistoryMessage     bool
+		includeContentFilterMode string
+		invocation               *agent.Invocation
+	}{
+		{
+			name:             "nil session",
+			summaryUpdatedAt: baseTime,
+			expectedCount:    0,
+			expectedContent:  []string{},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{RequestID: "test-request-id"},
+			},
+			appendHistoryMessage:     true,
+			includeContentFilterMode: IncludeContentFilterKeyPrefix,
+		},
+		{
+			name:             "append history and all mode",
+			summaryUpdatedAt: time.Time{},
+			expectedCount:    6,
+			expectedContent: []string{
+				"test-request-id-1/test-filter/a/old message",
+				"test-request-id/test-filter/a/old message",
+				"test-request-id/test-filter-a",
+				"test-request-id-1/test-filter-a",
+				"test-request-id/test-filter",
+				"test-request-id-1/test-filter",
+			},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{RequestID: "test-request-id"},
+			},
+			appendHistoryMessage:     true,
+			includeContentFilterMode: IncludeContentFilterKeyAll,
+		},
+		{
+			name:             "append history and prefix mode",
+			summaryUpdatedAt: time.Time{},
+			expectedCount:    4,
+			expectedContent: []string{
+				"test-request-id-1/test-filter/a/old message",
+				"test-request-id/test-filter/a/old message",
+				"test-request-id/test-filter",
+				"test-request-id-1/test-filter",
+			},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{RequestID: "test-request-id"},
+			},
+			appendHistoryMessage:     true,
+			includeContentFilterMode: IncludeContentFilterKeyPrefix,
+		},
+		{
+			name:             "append history and exact mode",
+			summaryUpdatedAt: time.Time{},
+			expectedCount:    2,
+			expectedContent: []string{
+				"test-request-id/test-filter",
+				"test-request-id-1/test-filter",
+			},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{RequestID: "test-request-id"},
+			},
+			appendHistoryMessage:     true,
+			includeContentFilterMode: IncludeContentFilterKeyExact,
+		},
+		{
+			name:             "not append history and all mode",
+			summaryUpdatedAt: time.Time{},
+			expectedCount:    3,
+			expectedContent: []string{
+				"test-request-id/test-filter/a/old message",
+				"test-request-id/test-filter-a",
+				"test-request-id/test-filter",
+			},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{RequestID: "test-request-id"},
+			},
+			appendHistoryMessage:     false,
+			includeContentFilterMode: IncludeContentFilterKeyAll,
+		},
+		{
+			name:             "not append history and prefix mode",
+			summaryUpdatedAt: time.Time{},
+			expectedCount:    2,
+			expectedContent: []string{
+				"test-request-id/test-filter/a/old message",
+				"test-request-id/test-filter",
+			},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{RequestID: "test-request-id"},
+			},
+			appendHistoryMessage:     false,
+			includeContentFilterMode: IncludeContentFilterKeyPrefix,
+		},
+		{
+			name:             "not append history and exact mode",
+			summaryUpdatedAt: time.Time{},
+			expectedCount:    1,
+			expectedContent: []string{
+				"test-request-id/test-filter",
+			},
+			invocation: &agent.Invocation{
+				RunOptions: agent.RunOptions{RequestID: "test-request-id"},
+			},
+			appendHistoryMessage:     false,
+			includeContentFilterMode: IncludeContentFilterKeyExact,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewContentRequestProcessor(
+				WithIncludeContentFilterMode(tt.includeContentFilterMode),
+				WithAppendHistoryMessage(tt.appendHistoryMessage),
+			)
+
+			messages := p.getIncrementMessages(inv, tt.summaryUpdatedAt)
+
+			assert.Len(t, messages, tt.expectedCount)
+
+			for i, expectedContent := range tt.expectedContent {
+				assert.Equal(t, expectedContent, messages[i].Content)
+			}
 		})
 	}
 }
