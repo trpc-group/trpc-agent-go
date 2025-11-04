@@ -15,6 +15,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -191,6 +192,74 @@ func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, rr.ExitCode)
 	require.Contains(t, rr.Stdout, "run-out")
+}
+
+func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
+	// Capture the ExecCreate request to inspect constructed shell.
+	var capturedCmd []string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Accept staged files
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			// Decode ExecCreate payload to grab Cmd
+			var payload struct {
+				Cmd []string `json:"Cmd"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			capturedCmd = payload.Cmd
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "OUT", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &WorkspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{
+			runHostBase:      t.TempDir(),
+			runContainerBase: testRunBase,
+		},
+	}
+	ws := codeexecutor.Workspace{ID: "wENV", Path: path.Join(testRunBase, "wENV")}
+	// Stage a dummy file to allow cd into workspace.
+	err := rt.PutFiles(context.Background(), ws,
+		[]codeexecutor.PutFile{{Path: "d.txt", Content: []byte("x"),
+			Mode: 0o644}})
+	require.NoError(t, err)
+
+	// Run without explicit WORKSPACE_DIR; runtime should inject it.
+	_, err = rt.RunProgram(context.Background(), ws,
+		codeexecutor.RunProgramSpec{Cmd: "bash", Args: []string{"-lc", "true"}})
+	require.NoError(t, err)
+	require.NotEmpty(t, capturedCmd)
+	// Join the command string array; the env is embedded in -lc string.
+	joined := strings.Join(capturedCmd, " ")
+	require.Contains(t, joined, codeexecutor.WorkspaceEnvDirKey+"=")
+	require.Contains(t, joined, ws.Path)
 }
 
 func TestWorkspaceRuntime_Collect(t *testing.T) {

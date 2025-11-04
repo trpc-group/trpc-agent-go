@@ -155,3 +155,28 @@ func TestSkillsRequestProcessor_ArrayDocs_NoSystemMessage(t *testing.T) {
 	// EXTRA.txt not selected
 	require.NotContains(t, sys, "EXTRA.txt")
 }
+
+func TestSkillsRequestProcessor_MergeIntoEmptySystem(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+	inv := &agent.Invocation{Session: &session.Session{
+		State: session.StateMap{
+			skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+		},
+	}}
+	// Pre-existing empty system message.
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage(""),
+	}}
+	p := NewSkillsRequestProcessor(repo)
+	ch := make(chan *event.Event, 2)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+	// Should fill content into the empty system message.
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.NotEmpty(t, req.Messages[0].Content)
+	require.Contains(t, req.Messages[0].Content, "[Loaded] calc")
+}
