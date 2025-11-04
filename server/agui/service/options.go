@@ -9,12 +9,19 @@
 
 package service
 
-// defaultPath is the default path for the AG-UI service.
-const defaultPath = "/"
+const (
+	// defaultPath is the default path for the AG-UI service.
+	defaultPath = "/"
+	// defaultMessagesSnapshotPath is the default path for the messages snapshot handler.
+	defaultMessagesSnapshotPath = "/history"
+)
 
 // Options holds the options for an AG-UI transport implementation.
 type Options struct {
-	Path string // Path is the request URL path served by the handler.
+	AppName                 string // AppName is the name of the application.
+	Path                    string // Path is the request URL path served by the handler.
+	MessagesSnapshotEnabled bool   // MessagesSnapshotEnabled enables the messages snapshot handler.
+	MessagesSnapshotPath    string // MessagesSnapshotPath is the HTTP path for the messages snapshot handler.
 }
 
 // NewOptions creates a new options instance.
@@ -26,6 +33,9 @@ func NewOptions(opt ...Option) *Options {
 	if opts.Path == "" {
 		opts.Path = defaultPath
 	}
+	if opts.MessagesSnapshotEnabled && opts.MessagesSnapshotPath == "" {
+		opts.MessagesSnapshotPath = defaultMessagesSnapshotPath
+	}
 	return opts
 }
 
@@ -33,8 +43,22 @@ func NewOptions(opt ...Option) *Options {
 type Option func(*Options)
 
 // WithPath sets the request path.
-func WithPath(path string) Option {
+func WithPath(p string) Option {
 	return func(s *Options) {
-		s.Path = path
+		s.Path = p
+	}
+}
+
+// WithMessagesSnapshot enables the messages snapshot handler and configures its dependencies.
+func WithMessagesSnapshotEnabled(e bool) Option {
+	return func(s *Options) {
+		s.MessagesSnapshotEnabled = e
+	}
+}
+
+// WithMessagesSnapshotPath sets the HTTP path for the snapshot handler.
+func WithMessagesSnapshotPath(p string) Option {
+	return func(s *Options) {
+		s.MessagesSnapshotPath = p
 	}
 }

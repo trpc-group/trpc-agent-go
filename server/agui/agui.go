@@ -17,12 +17,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // Server provides AG-UI server.
 type Server struct {
-	path    string
-	handler http.Handler
+	appName        string          // appName is required when history snapshots are enabled.
+	path           string          // path is the primary AG-UI chat endpoint.
+	handler        http.Handler    // handler serves chat and optional history routes.
+	sessionService session.Service // sessionService backs stored conversations for snapshots.
 }
 
 // New creates a AG-UI server instance.
@@ -35,10 +38,26 @@ func New(runner runner.Runner, opt ...Option) (*Server, error) {
 		return nil, errors.New("agui: serviceFactory must not be nil")
 	}
 	aguiRunner := aguirunner.New(runner, opts.aguiRunnerOptions...)
-	aguiService := opts.serviceFactory(aguiRunner, service.WithPath(opts.path))
+	serviceOpts := []service.Option{service.WithPath(opts.path)}
+	if opts.messagesSnapshotEnabled {
+		if opts.appName == "" {
+			return nil, errors.New("agui: app name is required when messages snapshot is enabled")
+		}
+		if opts.sessionService == nil {
+			return nil, errors.New("agui: session service is required when messages snapshot is enabled")
+		}
+		serviceOpts = append(
+			serviceOpts,
+			service.WithMessagesSnapshotEnabled(true),
+			service.WithMessagesSnapshotPath(opts.messagesSnapshotPath),
+		)
+	}
+	aguiService := opts.serviceFactory(aguiRunner, serviceOpts...)
 	return &Server{
-		path:    opts.path,
-		handler: aguiService.Handler(),
+		appName:        opts.appName,
+		path:           opts.path,
+		sessionService: opts.sessionService,
+		handler:        aguiService.Handler(),
 	}, nil
 }
 
