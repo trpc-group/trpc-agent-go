@@ -17,8 +17,8 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 
 - 🔎 自动注入技能“概览”（名称与描述），引导模型选择
 - 📥 `skill_load` 按需注入 `SKILL.md` 正文与选定文档
-- 🏃 `skill_run` 在工作区执行命令，返回 stdout/stderr 与产物
-- 🗂️ 按通配符收集产物（artifacts）并回传内容与 MIME 类型
+- 🏃 `skill_run` 在工作区执行命令，返回 stdout/stderr 与输出文件
+- 🗂️ 按通配符收集输出文件并回传内容与 MIME 类型
 - 🧩 可选择本地或容器工作区执行器（默认本地）
 
 ### 核心概念：三层信息模型
@@ -34,7 +34,7 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 3) 文档/脚本层（精确选择 + 隔离执行）
    - 关联文档按需选择（`docs` 或 `include_all_docs`），仅把文本
      内容注入；脚本不会被内联到提示词，而是在工作区中执行，并
-     回传结果与产物。
+     回传结果与输出文件。
 
 ### 目录结构
 
@@ -120,7 +120,7 @@ go run . -executor container
 自然语言交互建议：
 - 直接说明你要做什么；模型会根据概览判断是否需要某个技能。
 - 当需要时，模型会先调用 `skill_load` 注入正文/文档，再调用
-  `skill_run` 执行命令并回传产物。
+  `skill_run` 执行命令并回传输出文件。
 
 ## `SKILL.md` 结构与示例
 
@@ -143,14 +143,14 @@ Examples
    Command:
    python3 scripts/fib.py 10 > out/fib.txt
 
-Artifacts
+Output Files
 
 - out/fib.txt
 ```
 
 建议：
 - 头信息的 `name`/`description` 要简洁，便于“概览注入”
-- 正文给出“使用时机”“步骤/命令”“产物位置”等
+- 正文给出“使用时机”“步骤/命令”“输出文件位置”等
 - 把脚本放入 `scripts/`，命令中引用脚本路径而非内联源码
 
 更多可参考 Anthropic 的开源库：
@@ -185,16 +185,16 @@ https://github.com/anthropics/skills
 - `command`（必填）：Shell 命令（通过 `bash -lc` 执行）
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
-- `artifacts`（可选）：通配符列表（如 `out/*.txt`）
+- `output_files`（可选）：通配符列表（如 `out/*.txt`）
 - `timeout`（可选）：超时秒数（执行器有默认值）
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
-- `artifacts`：文件列表（`name`、`content`、`mime_type`）
+- `output_files`：文件列表（`name`、`content`、`mime_type`）
 
 典型流程：
 1) 模型先调用 `skill_load` 注入正文/文档
-2) 随后调用 `skill_run` 执行命令并收集产物
+2) 随后调用 `skill_run` 执行命令并收集输出文件
 
 ## 工作区执行器
 
@@ -214,7 +214,7 @@ https://github.com/anthropics/skills
 安全与资源：
 - 本地/容器均限制读取与写入在工作区内
 - 可通过超时、脚本权限（如只读挂载技能树）降低风险
-- 产物读取大小有限制，避免过大文件影响
+- 输出文件读取大小有限制，避免过大文件影响
 
 ## 事件与追踪
 
@@ -235,8 +235,8 @@ https://github.com/anthropics/skills
 - 注入与状态：通过事件中的 `StateDelta` 将加载选择以键值形式
   写入临时会话，下一轮请求处理器据此拼接系统消息，形成“概览 →
   正文/文档”的渐进式上下文。
-- 执行隔离：脚本以工作区为边界，产物由通配符精确收集，避免将
-  脚本源码或非必要文件带入模型上下文。
+- 执行隔离：脚本以工作区为边界，输出文件由通配符精确收集，避免
+  将脚本源码或非必要文件带入模型上下文。
 
 ## 故障排查
 
@@ -246,7 +246,7 @@ https://github.com/anthropics/skills
   `WithWorkspaceExecutor`，或使用默认本地执行器
 - 超时/非零退出码：检查命令、依赖与 `timeout` 参数；容器模式下
   网络默认关闭，避免依赖网络的脚本
-- 产物未返回：检查 `artifacts` 通配符是否指向正确位置
+- 输出文件未返回：检查 `output_files` 通配符是否指向正确位置
 
 ## 参考与示例
 

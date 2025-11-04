@@ -11,7 +11,7 @@ tool calls and tool responses, and executes skill scripts via the
 - Agent Skills repository injection and overview
 - `skill_load` to load SKILL.md/doc content on demand
 - `skill_run` to execute commands safely in a workspace, returning
-  stdout/stderr and file artifacts
+  stdout/stderr and output files
 - Clear visualization of tool calls and tool responses
 
 ## Prerequisites
@@ -97,7 +97,7 @@ Tips:
      Args: {"skill":"demo-skill","command":"bash scripts/build.sh"}
 
 🔄 Executing tools...
-✅ CallableTool response (ID: call_def456): {"stdout":"...","artifacts":[...]}
+✅ CallableTool response (ID: call_def456): {"stdout":"...","output_files":[...]}
 
 🤖 Assistant: Build completed. Output: ...
 ```

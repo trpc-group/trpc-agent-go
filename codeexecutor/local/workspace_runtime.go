@@ -37,7 +37,7 @@ import (
 const (
 	defaultTimeoutSec = 10
 	defaultFileMode   = 0o644
-	maxReadSizeBytes  = 4 * 1024 * 1024 // 4 MiB per artifact
+	maxReadSizeBytes  = 4 * 1024 * 1024 // 4 MiB per output file
 )
 
 // Runtime implements the workspace-based executor using local processes.
@@ -293,7 +293,7 @@ func (r *Runtime) RunProgram(
 	return res, nil
 }
 
-// Collect finds artifacts by glob patterns relative to workspace root.
+// Collect finds output files by glob patterns relative to workspace root.
 func (r *Runtime) Collect(
 	ctx context.Context,
 	ws codeexecutor.Workspace,

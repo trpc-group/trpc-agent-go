@@ -238,7 +238,8 @@ func TestLocalCodeExecutor_ExecuteCode_WithRelativeWorkDir(t *testing.T) {
 
 	executor := local.New(
 		local.WithWorkDir(workDirArg),
-		local.WithCleanTempFiles(false), // keep artifacts to verify path correctness
+		local.WithCleanTempFiles(false), // keep output files to verify
+		// path correctness
 	)
 
 	input := codeexecutor.CodeExecutionInput{

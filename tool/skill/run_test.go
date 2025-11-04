@@ -43,7 +43,7 @@ func writeSkill(t *testing.T, root, name string) string {
 	return dir
 }
 
-func TestRunTool_ExecutesAndCollectsArtifacts(t *testing.T) {
+func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
 
@@ -57,7 +57,7 @@ func TestRunTool_ExecutesAndCollectsArtifacts(t *testing.T) {
 	args := runInput{
 		Skill:   testSkillName,
 		Command: "mkdir -p out; echo hi > out/a.txt; echo ZZZ",
-		Artifacts: []string{
+		OutputFiles: []string{
 			"out/*.txt",
 		},
 		Timeout: timeoutSecSmall,
@@ -75,9 +75,9 @@ func TestRunTool_ExecutesAndCollectsArtifacts(t *testing.T) {
 	require.False(t, out.TimedOut)
 	require.NotEmpty(t, out.Duration)
 
-	require.Len(t, out.Artifacts, 1)
-	require.Equal(t, "out/a.txt", out.Artifacts[0].Name)
-	require.Contains(t, out.Artifacts[0].Content, "hi")
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "out/a.txt", out.OutputFiles[0].Name)
+	require.Contains(t, out.OutputFiles[0].Content, "hi")
 }
 
 func TestRunTool_ErrorOnMissingSkill(t *testing.T) {

@@ -17,8 +17,9 @@ Background references:
 
 - 🔎 Overview injection (name + description) to guide selection
 - 📥 `skill_load` to pull `SKILL.md` body and selected docs on demand
-- 🏃 `skill_run` to execute commands, returning stdout/stderr and files
-- 🗂️ Artifact collection via glob patterns with MIME detection
+- 🏃 `skill_run` to execute commands, returning stdout/stderr and
+  output files
+- 🗂️ Output file collection via glob patterns with MIME detection
 - 🧩 Pluggable local or container workspace executors (local by default)
 
 ### Three‑Layer Information Model
@@ -33,7 +34,7 @@ Background references:
 
 3) Docs/Scripts (selective + isolated execution)
    - Docs are included only when requested; scripts are not inlined but
-     executed inside a workspace, returning results and artifacts.
+     executed inside a workspace, returning results and output files.
 
 ### File Layout
 
@@ -116,7 +117,7 @@ Natural prompts:
 - Say what you want to accomplish; the model will decide if a skill is
   needed based on the overview.
 - When needed, the model calls `skill_load` for body/docs, then
-  `skill_run` to execute and return artifacts.
+  `skill_run` to execute and return output files.
 
 ## SKILL.md Anatomy
 
@@ -135,13 +136,13 @@ Examples
 1) Print the first N Fibonacci numbers
    Command: python3 scripts/fib.py 10 > out/fib.txt
 
-Artifacts
+Output Files
 - out/fib.txt
 ```
 
 Recommendations:
 - Keep `name`/`description` succinct for the overview
-- In the body, include when‑to‑use, steps/commands, artifact paths
+- In the body, include when‑to‑use, steps/commands, output file paths
 - Put scripts under `scripts/` and reference them in commands
 
 For more examples, see:
@@ -175,16 +176,16 @@ Input:
 - `skill` (required)
 - `command` (required, runs via `bash -lc`)
 - `cwd`, `env` (optional)
-- `artifacts` (optional glob patterns)
+- `output_files` (optional glob patterns)
 - `timeout` (optional seconds)
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
-- `artifacts` with `name`, `content`, `mime_type`
+- `output_files` with `name`, `content`, `mime_type`
 
 Typical flow:
 1) Call `skill_load` to inject body/docs
-2) Call `skill_run` to execute and collect artifacts
+2) Call `skill_run` to execute and collect output files
 
 ## Workspace Executors
 
@@ -204,7 +205,7 @@ Container notes:
 Security & limits:
 - Reads/writes confined to the workspace
 - Timeouts and read‑only skill trees reduce risk
-- Artifact read size is capped to prevent oversized payloads
+- Output file read size is capped to prevent oversized payloads
 
 ## Events and Tracing
 
@@ -225,7 +226,7 @@ Common spans:
 - Injection & state: Tools write temporary keys (via `StateDelta`), and
   the next request processor builds the system message accordingly.
 - Isolation: Scripts run within a workspace boundary and only selected
-  artifacts are brought back, not the script source.
+  output files are brought back, not the script source.
 
 ## Troubleshooting
 
@@ -235,7 +236,7 @@ Common spans:
   default
 - Timeouts/non‑zero exit codes: inspect command/deps/`timeout`; in
   container mode, network is disabled by default
-- Missing artifacts: check your glob patterns and output locations
+- Missing output files: check your glob patterns and output locations
 
 ## References and Examples
 

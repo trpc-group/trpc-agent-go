@@ -10,7 +10,7 @@
 
 // Package codeexecutor adds a higher level execution interface that
 // supports workspaces, staging files, running programs, and collecting
-// artifacts. It coexists with the original CodeExecutor for backward
+// output files. It coexists with the original CodeExecutor for backward
 // compatibility.
 package codeexecutor
 
@@ -148,7 +148,7 @@ type WorkspaceExecutor interface {
 		spec RunProgramSpec,
 	) (RunResult, error)
 
-	// Collect returns artifacts matched by glob patterns relative to
+	// Collect returns output files matched by glob patterns relative to
 	// the workspace root.
 	Collect(
 		ctx context.Context,

@@ -48,7 +48,8 @@ func (r CodeExecutionResult) String() string {
 			filesNames = append(filesNames, file.Name)
 		}
 
-		return "Code execution result:\n Saved artifacts:\n" + strings.Join(filesNames, "\n")
+		return "Code execution result:\n Saved output files:\n" +
+			strings.Join(filesNames, "\n")
 	}
 
 	return "Code execution result: No output or errors."

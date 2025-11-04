@@ -28,8 +28,7 @@ Examples
 
    tar -czf out/sample.tgz -C out .
 
-Artifacts
+Output Files
 
 - out/sample.txt
 - out/sample.tgz
-

@@ -6,7 +6,7 @@ description: Small Python utilities for math and text files.
 Overview
 
 Run short Python scripts inside the skill workspace. Results can be
-returned as text and saved as artifacts.
+returned as text and saved as output files.
 
 Examples
 
@@ -26,7 +26,6 @@ nums = [int(x) for x in stdin.read().split()]
 print(sum(nums))
 PY
 
-Artifacts
+Output Files
 
 - out/fib.txt
-

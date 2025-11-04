@@ -39,22 +39,22 @@ func NewRunTool(repo skill.Repository,
 
 // runInput is the JSON schema for skill_run.
 type runInput struct {
-	Skill     string            `json:"skill"`
-	Command   string            `json:"command"`
-	Cwd       string            `json:"cwd,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	Artifacts []string          `json:"artifacts,omitempty"`
-	Timeout   int               `json:"timeout,omitempty"`
+	Skill       string            `json:"skill"`
+	Command     string            `json:"command"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	OutputFiles []string          `json:"output_files,omitempty"`
+	Timeout     int               `json:"timeout,omitempty"`
 }
 
 // runOutput is the structured result returned by skill_run.
 type runOutput struct {
-	Stdout    string              `json:"stdout"`
-	Stderr    string              `json:"stderr"`
-	ExitCode  int                 `json:"exit_code"`
-	TimedOut  bool                `json:"timed_out"`
-	Duration  int64               `json:"duration_ms"`
-	Artifacts []codeexecutor.File `json:"artifacts"`
+	Stdout      string              `json:"stdout"`
+	Stderr      string              `json:"stderr"`
+	ExitCode    int                 `json:"exit_code"`
+	TimedOut    bool                `json:"timed_out"`
+	Duration    int64               `json:"duration_ms"`
+	OutputFiles []codeexecutor.File `json:"output_files"`
 }
 
 // Declaration implements tool.Tool.
@@ -84,7 +84,7 @@ func (t *RunTool) Declaration() *tool.Declaration {
 					Description:          "Environment variables",
 					AdditionalProperties: &tool.Schema{Type: "string"},
 				},
-				"artifacts": {
+				"output_files": {
 					Type:        "array",
 					Items:       &tool.Schema{Type: "string"},
 					Description: "Glob patterns to collect",
@@ -97,7 +97,7 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		},
 		OutputSchema: &tool.Schema{
 			Type:        "object",
-			Description: "Run result with artifacts",
+			Description: "Run result with output files",
 		},
 	}
 }
@@ -147,22 +147,22 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 		return nil, err
 	}
 
-	// Collect artifacts if patterns provided.
+	// Collect output files if patterns provided.
 	var files []codeexecutor.File
-	if len(in.Artifacts) > 0 {
-		files, err = t.exec.Collect(ctx, ws, in.Artifacts)
+	if len(in.OutputFiles) > 0 {
+		files, err = t.exec.Collect(ctx, ws, in.OutputFiles)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	out := runOutput{
-		Stdout:    rr.Stdout,
-		Stderr:    rr.Stderr,
-		ExitCode:  rr.ExitCode,
-		TimedOut:  rr.TimedOut,
-		Duration:  rr.Duration.Milliseconds(),
-		Artifacts: files,
+		Stdout:      rr.Stdout,
+		Stderr:      rr.Stderr,
+		ExitCode:    rr.ExitCode,
+		TimedOut:    rr.TimedOut,
+		Duration:    rr.Duration.Milliseconds(),
+		OutputFiles: files,
 	}
 	return out, nil
 }
