@@ -412,6 +412,138 @@ func TestToolEvents_And_ExecuteSingleToolCall(t *testing.T) {
 	require.Error(t, err)
 }
 
+// interruptTool is a dummy tool that always interrupts.
+type interruptTool struct{ name string }
+
+func (it *interruptTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: it.name}
+}
+
+func (it *interruptTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return nil, NewInterruptError("ask?")
+}
+
+// When a tool interrupts, executeSingleToolCall should:
+// - emit a tool complete event WITHOUT an error payload, and
+// - return the interrupt error (not wrapped).
+func TestExecuteSingleToolCall_Interrupt_NoErrorInEvent(t *testing.T) {
+	ch := make(chan *event.Event, 4)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("test-int")
+	ctx, span := tracer.Start(context.Background(), "span")
+	defer span.End()
+
+	// Configure a tool call that yields an interrupt.
+	args := []byte(`{"x":1}`)
+	cfg := singleToolCallConfig{
+		ToolCall: model.ToolCall{ID: "tid",
+			Function: model.FunctionDefinitionParam{
+				Name:      "interrupt",
+				Arguments: args,
+			}},
+		Tools: map[string]tool.Tool{
+			"interrupt": &interruptTool{name: "interrupt"},
+		},
+		InvocationID: "inv-int",
+		EventChan:    ch,
+		Span:         span,
+		State:        State{StateKeyCurrentNodeID: "nodeInt"},
+	}
+
+	_, err := executeSingleToolCall(ctx, cfg)
+	require.Error(t, err)
+	require.True(t, IsInterruptError(err))
+	if intr, ok := GetInterruptError(err); ok {
+		require.Equal(t, "ask?", intr.Value)
+	}
+
+	// Drain events; find the tool complete event and assert no error.
+	var complete *event.Event
+	drain := len(ch)
+	for i := 0; i < drain; i++ {
+		e := <-ch
+		if e == nil || e.StateDelta == nil {
+			continue
+		}
+		if b, ok := e.StateDelta[MetadataKeyTool]; ok {
+			var meta ToolExecutionMetadata
+			if json.Unmarshal(b, &meta) == nil &&
+				meta.Phase == ToolExecutionPhaseComplete {
+				complete = e
+				// Meta.Error must be empty for interrupts
+				require.Equal(t, "", meta.Error)
+				break
+			}
+		}
+	}
+	require.NotNil(t, complete, "expected tool complete event")
+	// Response.Error must be nil for interrupt tool completes.
+	if complete.Response != nil {
+		require.Nil(t, complete.Response.Error)
+	}
+}
+
+// A tool that returns a normal error should produce an error payload in the
+// tool complete event and return a wrapped error from executeSingleToolCall.
+type errorTool struct{ name string }
+
+func (et *errorTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: et.name}
+}
+
+func (et *errorTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return nil, fmt.Errorf("boom")
+}
+
+func TestExecuteSingleToolCall_Error_ErrorInEvent(t *testing.T) {
+	ch := make(chan *event.Event, 4)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("test-err")
+	ctx, span := tracer.Start(context.Background(), "span")
+	defer span.End()
+
+	args := []byte(`{"x":1}`)
+	cfg := singleToolCallConfig{
+		ToolCall: model.ToolCall{ID: "tid2",
+			Function: model.FunctionDefinitionParam{
+				Name:      "errtool",
+				Arguments: args,
+			}},
+		Tools: map[string]tool.Tool{
+			"errtool": &errorTool{name: "errtool"},
+		},
+		InvocationID: "inv-err",
+		EventChan:    ch,
+		Span:         span,
+		State:        State{StateKeyCurrentNodeID: "nodeErr"},
+	}
+
+	_, err := executeSingleToolCall(ctx, cfg)
+	require.Error(t, err)
+	// Should not be an interrupt error
+	require.False(t, IsInterruptError(err))
+
+	// Find the tool complete event and assert error surfaced.
+	var complete *event.Event
+	drain := len(ch)
+	for i := 0; i < drain; i++ {
+		e := <-ch
+		if e == nil || e.StateDelta == nil {
+			continue
+		}
+		if b, ok := e.StateDelta[MetadataKeyTool]; ok {
+			var meta ToolExecutionMetadata
+			if json.Unmarshal(b, &meta) == nil &&
+				meta.Phase == ToolExecutionPhaseComplete {
+				complete = e
+				require.NotEqual(t, "", meta.Error)
+				break
+			}
+		}
+	}
+	require.NotNil(t, complete)
+	require.NotNil(t, complete.Response)
+	require.NotNil(t, complete.Response.Error)
+}
+
 func TestExtractToolCallbacks_NotFound(t *testing.T) {
 	_, ok := extractToolCallbacks(State{})
 	require.False(t, ok)
@@ -913,6 +1045,8 @@ func TestExecuteModelWithEvents_NoResponseError(t *testing.T) {
 		EventChan:      make(chan *event.Event, 1),
 		InvocationID:   "inv",
 		SessionID:      "sid",
+		AppName:        "app",
+		UserID:         "user",
 		Span:           span,
 		NodeID:         "n",
 	})
@@ -937,7 +1071,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 	// Event emission path
 	evch := make(chan *event.Event, 1)
 	rsp := &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
-	err := processModelResponse(context.Background(), modelResponseConfig{
+	_, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       rsp,
 		ModelCallbacks: nil,
 		EventChan:      evch,
@@ -953,7 +1087,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 
 	// Model API error path
 	errRsp := &model.Response{Error: &model.ResponseError{Message: "boom"}}
-	err = processModelResponse(context.Background(), modelResponseConfig{
+	_, err = processModelResponse(context.Background(), modelResponseConfig{
 		Response:     errRsp,
 		EventChan:    make(chan *event.Event, 1),
 		InvocationID: "inv",
@@ -968,7 +1102,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// unbuffered channel; since ctx already canceled, select should choose ctx.Done
-	err = processModelResponse(ctx, modelResponseConfig{
+	_, err = processModelResponse(ctx, modelResponseConfig{
 		Response:     rsp,
 		EventChan:    make(chan *event.Event),
 		InvocationID: "inv",
@@ -985,7 +1119,7 @@ func TestProcessModelResponse_DoneSkipsEvent(t *testing.T) {
 	_, span := tracer.Start(context.Background(), "s")
 	evch := make(chan *event.Event, 1)
 	rsp := &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
-	err := processModelResponse(context.Background(), modelResponseConfig{
+	_, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:     rsp,
 		EventChan:    evch,
 		InvocationID: "inv",
@@ -1010,7 +1144,7 @@ func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {
 		return &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("after")}}}, nil
 	})
 	evch := make(chan *event.Event, 1)
-	err := processModelResponse(context.Background(), modelResponseConfig{
+	_, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
 		ModelCallbacks: cbs,
 		EventChan:      evch,
@@ -1045,6 +1179,8 @@ func TestExecuteModelWithEvents_ToolCallsMerged(t *testing.T) {
 		EventChan:      make(chan *event.Event, 2),
 		InvocationID:   "inv",
 		SessionID:      "sid",
+		AppName:        "app",
+		UserID:         "user",
 		Span:           span,
 		NodeID:         "node",
 	})
@@ -1112,15 +1248,19 @@ func TestEnsureSystemHead_And_ExtractExecutionContext(t *testing.T) {
 	require.Equal(t, model.RoleSystem, out2[0].Role)
 	// extractExecutionContext: only execctx
 	exec := &ExecutionContext{InvocationID: "inv", EventChan: make(chan *event.Event, 1)}
-	inv, sess, ch := extractExecutionContext(State{StateKeyExecContext: exec})
+	inv, sess, appName, userID, ch := extractExecutionContext(State{StateKeyExecContext: exec})
 	require.Equal(t, "inv", inv)
 	require.Equal(t, "", sess)
+	require.Equal(t, "", appName)
+	require.Equal(t, "", userID)
 	require.NotNil(t, ch)
 	// extractExecutionContext: only session
-	s := &session.Session{ID: "sid"}
-	inv2, sess2, ch2 := extractExecutionContext(State{StateKeySession: s})
+	s := &session.Session{ID: "sid", AppName: "app", UserID: "user"}
+	inv2, sess2, appName2, userID2, ch2 := extractExecutionContext(State{StateKeySession: s})
 	require.Equal(t, "", inv2)
 	require.Equal(t, "sid", sess2)
+	require.Equal(t, "app", appName2)
+	require.Equal(t, "user", userID2)
 	require.Nil(t, ch2)
 }
 
@@ -1204,7 +1344,7 @@ func TestProcessModelResponse_AfterModelError(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
 		return nil, assert.AnError
 	})
-	err := processModelResponse(context.Background(), modelResponseConfig{
+	_, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
 		ModelCallbacks: cbs,
 		EventChan:      make(chan *event.Event, 1),

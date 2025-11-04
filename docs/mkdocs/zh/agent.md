@@ -155,6 +155,7 @@ coordinator := llmagent.New(
 ```
 
 说明：
+
 - 这些选项不会改变真实的委托/切换逻辑，只影响“对外可见的提示文本”或“是否注入默认占位消息”。
 - 转移提示事件统一以 `Response.Object == "agent.transfer"` 输出；如需在 UI 层隐藏系统级提示，可直接过滤该对象类型的事件。
 
@@ -285,6 +286,61 @@ type Invocation struct {
 	noticeMu      *sync.Mutex
 }
 ```
+
+#### Invocation State
+
+`Invocation` 提供了通用的状态存储机制，用于在单次调用的生命周期内共享数据。这对于 callbacks、middleware 或任何需要在 invocation 级别存储临时数据的场景都很有用。
+
+**核心方法：**
+
+```go
+// 设置状态值
+inv.SetState(key string, value any)
+
+// 获取状态值
+value, ok := inv.GetState(key string)
+
+// 删除状态值
+inv.DeleteState(key string)
+```
+
+**特点：**
+
+- **Invocation 级作用域**：状态自动限定在单次 Invocation 内
+- **线程安全**：内置 RWMutex 保护，支持并发访问
+- **懒初始化**：首次使用时才分配内存
+- **通用性强**：可用于 callbacks、middleware、自定义逻辑等多种场景
+
+**使用示例：**
+
+```go
+// 在 BeforeAgentCallback 中存储数据
+func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+    inv.SetState("agent:start_time", time.Now())
+    inv.SetState("custom:request_id", "req-123")
+    return nil, nil
+}
+
+// 在 AfterAgentCallback 中读取数据
+func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+    if startTime, ok := inv.GetState("agent:start_time"); ok {
+        duration := time.Since(startTime.(time.Time))
+        log.Printf("Execution took: %v", duration)
+        inv.DeleteState("agent:start_time")
+    }
+    return nil, nil
+}
+```
+
+**推荐的键名约定：**
+
+- Agent 回调：`"agent:xxx"`
+- Model 回调：`"model:xxx"`
+- Tool 回调：`"tool:toolName:xxx"`
+- 中间件：`"middleware:xxx"`
+- 自定义逻辑：`"custom:xxx"`
+
+详细的使用说明和更多示例请参考 [Callbacks](./callbacks.md#invocation-state在回调间共享状态)。
 
 ### Event
 

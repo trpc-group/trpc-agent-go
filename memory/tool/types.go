@@ -24,7 +24,7 @@ type Result struct {
 
 // AddMemoryRequest represents the input for the add memory tool.
 type AddMemoryRequest struct {
-	Memory string   `json:"memory" jsonschema:"description=The memory content to store. Should be a brief, third-person statement that captures key information about the user"`
+	Memory string   `json:"memory" jsonschema:"description=The memory content to store. Should be a brief. third-person statement that captures key information about the user"`
 	Topics []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
 }
 

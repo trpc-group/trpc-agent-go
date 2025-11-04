@@ -2092,6 +2092,22 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 	execCtx.stateMutex.Lock()
 	defer execCtx.stateMutex.Unlock()
 
+	// Sanitize: drop internal/ephemeral keys from user node updates.
+	// These keys (e.g., exec_context) are maintained by the executor and
+	// may contain concurrently-mutated maps. Accepting them causes
+	// reflective deep copies to iterate maps while other goroutines write.
+	// That leads to "concurrent map iteration and map write" panics.
+	if stateResult != nil {
+		cleaned := make(State, len(stateResult))
+		for k, v := range stateResult {
+			if isInternalStateKey(k) {
+				continue
+			}
+			cleaned[k] = v
+		}
+		stateResult = cleaned
+	}
+
 	// Use schema-based reducers when available for proper merging.
 	if e.graph != nil && e.graph.Schema() != nil {
 		execCtx.State = e.graph.Schema().ApplyUpdate(execCtx.State, stateResult)
@@ -2524,7 +2540,11 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventInterruptValue(interrupt.Value),
 	)
 
-	agent.EmitEvent(ctx, invocation, execCtx.EventChan, interruptEvent)
+	// Replace ctx with a fresh eventCtx derived from background to avoid cancel warning.
+	const defaultEmitTimeout = time.Second
+	eventCtx, cancel := context.WithTimeout(context.Background(), defaultEmitTimeout)
+	defer cancel()
+	agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, interruptEvent)
 
 	// Return the interrupt error to propagate it to the caller.
 	return interrupt
