@@ -78,6 +78,15 @@ type Usage struct {
 
 	// TotalTokens is the total number of tokens in the response.
 	TotalTokens int `json:"total_tokens"`
+
+	// PromptTokensDetails is the details of the prompt tokens.
+	PromptTokensDetails PromptTokensDetails `json:"prompt_tokens_details"`
+}
+
+// PromptTokensDetails is the details of the prompt tokens.
+type PromptTokensDetails struct {
+	// CachedTokens is the number of cached tokens in the prompt.
+	CachedTokens int `json:"cached_tokens"`
 }
 
 // Response is the response from the model.

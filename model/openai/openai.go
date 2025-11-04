@@ -1339,6 +1339,9 @@ func (m *Model) createFinalResponse(
 			PromptTokens:     int(acc.Usage.PromptTokens),
 			CompletionTokens: int(acc.Usage.CompletionTokens),
 			TotalTokens:      int(acc.Usage.TotalTokens),
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: int(acc.Usage.PromptTokensDetails.CachedTokens),
+			},
 		},
 		Timestamp: time.Now(),
 		Done:      !hasToolCall,
@@ -1461,6 +1464,9 @@ func (m *Model) handleNonStreamingResponse(
 			PromptTokens:     int(chatCompletion.Usage.PromptTokens),
 			CompletionTokens: int(chatCompletion.Usage.CompletionTokens),
 			TotalTokens:      int(chatCompletion.Usage.TotalTokens),
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: int(chatCompletion.Usage.PromptTokensDetails.CachedTokens),
+			},
 		}
 	}
 
