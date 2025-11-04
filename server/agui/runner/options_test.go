@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 func TestNewOptionsDefaults(t *testing.T) {
@@ -93,4 +94,14 @@ func TestWithRunAgentInputHook(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, called)
 	assert.Equal(t, custom, got)
+}
+
+func TestWithAppName(t *testing.T) {
+	opts := NewOptions(WithAppName("custom-app"))
+	assert.Equal(t, "custom-app", opts.AppName)
+}
+
+func TestWithSessionService(t *testing.T) {
+	opts := NewOptions(WithSessionService(inmemory.NewSessionService()))
+	assert.NotNil(t, opts.SessionService)
 }
