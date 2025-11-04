@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -42,6 +43,12 @@ import (
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
+
+// localruntimeFallback returns a simple local workspace executor used when
+// no explicit executor is provided.
+func localruntimeFallback() codeexecutor.WorkspaceExecutor {
+	return localexec.NewRuntime("")
+}
 
 var defaultChannelBufferSize = 256
 
@@ -114,6 +121,14 @@ func WithCodeExecutor(ce codeexecutor.CodeExecutor) Option {
 	}
 }
 
+// WithWorkspaceExecutor sets a workspace-based executor used by skills and
+// similar tools. When not provided, a local executor is used by default.
+func WithWorkspaceExecutor(ex codeexecutor.WorkspaceExecutor) Option {
+	return func(opts *Options) {
+		opts.WorkspaceExecutor = ex
+	}
+}
+
 // WithTools sets the list of tools available to the agent.
 func WithTools(tools []tool.Tool) Option {
 	return func(opts *Options) {
@@ -134,13 +149,6 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.SkillsRepository = repo
-	}
-}
-
-// WithSkillsOverview toggles overview injection (names + descriptions).
-func WithSkillsOverview(show bool) Option {
-	return func(opts *Options) {
-		opts.SkillsOverview = show
 	}
 }
 
@@ -456,8 +464,11 @@ type Options struct {
 
 	// SkillsRepository enables Agent Skills if non-nil.
 	SkillsRepository skill.Repository
-	// SkillsOverview controls whether to inject overview.
-	SkillsOverview bool
+
+	// WorkspaceExecutor preconfigures a workspace-based executor for
+	// skills and related tooling (local or container). When nil, tools
+	// may fall back to a default local runtime.
+	WorkspaceExecutor codeexecutor.WorkspaceExecutor
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -668,9 +679,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 	// 6a. Skills processor (overview + loaded content/docs).
 	if options.SkillsRepository != nil {
-		sp := processor.NewSkillsRequestProcessor(
-			options.SkillsRepository, options.SkillsOverview,
-		)
+		sp := processor.NewSkillsRequestProcessor(options.SkillsRepository)
 		requestProcessors = append(requestProcessors, sp)
 	}
 
@@ -775,10 +784,17 @@ func registerTools(options *Options) []tool.Tool {
 		}
 	}
 
-	// Add skill_load tool when skills are enabled.
+	// Add skill tools when skills are enabled.
 	if options.SkillsRepository != nil {
 		allTools = append(allTools,
 			toolskill.NewLoadTool(options.SkillsRepository))
+		// Provide workspace executor to skill_run, fallback to local.
+		exec := options.WorkspaceExecutor
+		if exec == nil {
+			exec = localruntimeFallback()
+		}
+		allTools = append(allTools,
+			toolskill.NewRunTool(options.SkillsRepository, exec))
 	}
 
 	return allTools

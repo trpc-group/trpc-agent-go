@@ -1,0 +1,116 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights
+// reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package skill
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
+)
+
+const (
+	testSkillName   = "demo"
+	skillFileName   = "SKILL.md"
+	timeoutSecSmall = 5
+)
+
+// writeSkill creates a minimal skill folder.
+func writeSkill(t *testing.T, root, name string) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	data := "---\nname: " + name + "\n" +
+		"description: test skill\n---\nbody\n"
+	err := os.WriteFile(filepath.Join(dir, skillFileName),
+		[]byte(data), 0o644)
+	require.NoError(t, err)
+	return dir
+}
+
+func TestRunTool_ExecutesAndCollectsArtifacts(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	// Use local runtime. No special options needed.
+	exec := localexec.NewRuntime("")
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "mkdir -p out; echo hi > out/a.txt; echo ZZZ",
+		Artifacts: []string{
+			"out/*.txt",
+		},
+		Timeout: timeoutSecSmall,
+	}
+
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Contains(t, out.Stdout, "ZZZ")
+	require.False(t, out.TimedOut)
+	require.NotEmpty(t, out.Duration)
+
+	require.Len(t, out.Artifacts, 1)
+	require.Equal(t, "out/a.txt", out.Artifacts[0].Name)
+	require.Contains(t, out.Artifacts[0].Content, "hi")
+}
+
+func TestRunTool_ErrorOnMissingSkill(t *testing.T) {
+	root := t.TempDir()
+	// No skill written.
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.NewRuntime("")
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{Skill: "missing", Command: "echo hello"}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+func TestRunTool_ErrorOnNilExecutor(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, nil)
+	args := runInput{Skill: testSkillName, Command: "echo ok"}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+// jsonMarshal is a tiny wrapper to keep tests tidy.
+func jsonMarshal(v any) ([]byte, error) {
+	return json.Marshal(v)
+}

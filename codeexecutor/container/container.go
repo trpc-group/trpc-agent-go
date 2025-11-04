@@ -34,7 +34,7 @@ import (
 
 const (
 	// defaultImageTag is the default Docker image tag for code execution
-	defaultImageTag            = "trpc-agent-go-code-executor:latest"
+	defaultImageTag            = "python:3.9-slim"
 	defaultContainerWorkingDir = "/workspace"
 )
 

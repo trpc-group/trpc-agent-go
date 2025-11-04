@@ -37,18 +37,14 @@ import (
 //   - skill.StateKeyDocsPrefix+name ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo         skill.Repository
-	showOverview bool
+	repo skill.Repository
 }
 
 // NewSkillsRequestProcessor creates a processor instance.
 func NewSkillsRequestProcessor(
-	repo skill.Repository, showOverview bool,
+	repo skill.Repository,
 ) *SkillsRequestProcessor {
-	return &SkillsRequestProcessor{
-		repo:         repo,
-		showOverview: showOverview,
-	}
+	return &SkillsRequestProcessor{repo: repo}
 }
 
 // ProcessRequest implements flow.RequestProcessor.
@@ -60,20 +56,15 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// 1) Overview (names + descriptions)
-	if p.showOverview {
-		p.injectOverview(req)
-	}
+	// 1) Always inject overview (names + descriptions) into system
+	//    message. Merge into existing system message if present.
+	p.injectOverview(req)
 
-	// 2) Loaded skills full content
+	// 2) Loaded skills full content (merge into existing system message).
 	loaded := p.getLoadedSkills(inv)
-	if len(loaded) == 0 {
-		return
-	}
+	sort.Strings(loaded) // stable prompt order
 
-	// Deterministic order for stable prompts
-	sort.Strings(loaded)
-
+	var lb strings.Builder
 	for _, name := range loaded {
 		sk, err := p.repo.Get(name)
 		if err != nil || sk == nil {
@@ -81,22 +72,25 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 			continue
 		}
 		if sk.Body != "" {
-			msg := model.NewSystemMessage(sk.Body)
-			req.Messages = append(req.Messages, msg)
+			lb.WriteString("\n[Loaded] ")
+			lb.WriteString(name)
+			lb.WriteString("\n\n")
+			lb.WriteString(sk.Body)
+			lb.WriteString("\n")
 		}
 		// Docs
-		docNames := p.getDocsSelection(inv, name)
-		if len(docNames) == 0 {
-			continue
-		}
-		docText := p.buildDocsText(sk, docNames)
-		if docText != "" {
-			msg := model.NewSystemMessage(docText)
-			req.Messages = append(req.Messages, msg)
+		if docNames := p.getDocsSelection(inv, name); len(docNames) > 0 {
+			if docText := p.buildDocsText(sk, docNames); docText != "" {
+				lb.WriteString(docText)
+			}
 		}
 	}
+	if s := lb.String(); s != "" {
+		p.mergeIntoSystem(req, s)
+	}
 
-	// Send a preprocessing trace event.
+	// Send a preprocessing trace event even when only overview is
+	// injected, for consistent trace semantics.
 	agent.EmitEvent(ctx, inv, ch, event.New(
 		inv.InvocationID, inv.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingInstruction),
@@ -104,18 +98,45 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 }
 
 func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
+	const header = "Available skills:"
 	sums := p.repo.Summaries()
 	if len(sums) == 0 {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("Available skills:\n")
+	b.WriteString(header)
+	b.WriteString("\n")
 	for _, s := range sums {
 		line := fmt.Sprintf("- %s: %s\n", s.Name, s.Description)
 		b.WriteString(line)
 	}
-	req.Messages = append(req.Messages,
-		model.NewSystemMessage(b.String()))
+	// Add concise guidance for tool usage; keep each bullet as a single
+	// logical line in the prompt (no forced line-wrapping in content).
+	b.WriteString("\nTooling guidance:\n")
+	b.WriteString(
+		"- When you need to use a skill, first check if it is " +
+			"already loaded (its SKILL.md and selected docs are present " +
+			"in context). If not, call skill_load to load that skill and " +
+			"any needed docs. If it is already loaded, call skill_run to " +
+			"execute commands and rely on the loaded content as reference.\n",
+	)
+	overview := b.String()
+
+	idx := findSystemMessageIndex(req.Messages)
+	if idx >= 0 {
+		sys := &req.Messages[idx]
+		if !strings.Contains(sys.Content, header) {
+			if sys.Content != "" {
+				sys.Content += "\n\n" + overview
+			} else {
+				sys.Content = overview
+			}
+		}
+		return
+	}
+	// No system message yet: create one at the front.
+	msg := model.NewSystemMessage(overview)
+	req.Messages = append([]model.Message{msg}, req.Messages...)
 }
 
 func (p *SkillsRequestProcessor) getLoadedSkills(
@@ -189,4 +210,25 @@ func (p *SkillsRequestProcessor) buildDocsText(
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// mergeIntoSystem appends content into the existing system message when
+// available; otherwise, it creates a new system message at the front.
+func (p *SkillsRequestProcessor) mergeIntoSystem(
+	req *model.Request, content string,
+) {
+	if req == nil || content == "" {
+		return
+	}
+	idx := findSystemMessageIndex(req.Messages)
+	if idx >= 0 {
+		if req.Messages[idx].Content != "" {
+			req.Messages[idx].Content += "\n\n" + content
+		} else {
+			req.Messages[idx].Content = content
+		}
+		return
+	}
+	msg := model.NewSystemMessage(content)
+	req.Messages = append([]model.Message{msg}, req.Messages...)
 }

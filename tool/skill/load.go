@@ -50,8 +50,12 @@ type loadInput struct {
 // Declaration implements tool.Tool.
 func (t *LoadTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        "skill_load",
-		Description: "Load a skill and optional docs",
+		Name: "skill_load",
+		Description: "Load a skill and optional docs. Do not call " +
+			"this tool to list skills; name and description are " +
+			"already in context. Call only when the task actually " +
+			"needs to use a specific skill (to inject SKILL.md " +
+			"body and selected docs).",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Load skill input",

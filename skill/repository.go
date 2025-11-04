@@ -27,6 +27,11 @@ import (
 // skillFile is the canonical skill definition filename.
 const skillFile = "SKILL.md"
 
+// EnvSkillsRoot is the environment variable name that points to the
+// skills repository root directory used by examples and runtimes.
+// Defining it here avoids repeated string literals across the codebase.
+const EnvSkillsRoot = "SKILLS_ROOT"
+
 // Summary contains the minimal information for a skill.
 type Summary struct {
 	Name        string
@@ -52,6 +57,9 @@ type Repository interface {
 	Summaries() []Summary
 	// Get returns a full skill by name.
 	Get(name string) (*Skill, error)
+	// Path returns the directory path that contains the given skill.
+	// It allows staging the whole skill folder for execution.
+	Path(name string) (string, error)
 }
 
 // FSRepository implements Repository backed by filesystem roots.
@@ -68,6 +76,16 @@ func NewFSRepository(roots ...string) (*FSRepository, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// Path returns the directory path that contains the given skill.
+// It allows staging the whole skill folder for execution.
+func (r *FSRepository) Path(name string) (string, error) {
+	dir, ok := r.index[name]
+	if !ok {
+		return "", fmt.Errorf("skill %q not found", name)
+	}
+	return dir, nil
 }
 
 func (r *FSRepository) scan() error {
