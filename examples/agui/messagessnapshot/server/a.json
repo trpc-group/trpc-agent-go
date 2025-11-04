@@ -1,0 +1,60 @@
+{
+    "type": "MESSAGES_SNAPSHOT",
+    "timestamp": 1762185444864,
+    "messages": [
+        {
+            "id": "7f492774-51e4-4206-bbc5-4f2627785472",
+            "role": "user",
+            "content": "请帮我计算 2*(10+11), 先解释思路, 再计算, 并给出最终结论."
+        },
+        {
+            "id": "480b253e-5c0b-4d38-9365-cf367f65d6fe",
+            "role": "assistant",
+            "content": "我来帮您计算 2*(10+11)。\n\n**计算思路：**\n根据数学运算顺序（先乘除后加减，有括号先算括号内），我们需要：\n1. 先计算括号内的加法：10 + 11\n2. 然后将括号内的结果乘以 2\n\n**计算过程：**\n第一步：计算括号内的加法",
+            "toolCalls": [
+                {
+                    "id": "call_00_c7zizEnLysBl4nVbde2B2FN2",
+                    "type": "function",
+                    "function": {
+                        "name": "calculator",
+                        "arguments": "{\"a\": 10, \"b\": 11, \"operation\": \"add\"}"
+                    }
+                }
+            ]
+        },
+        {
+            "id": "d1b6c764-c5c8-4387-81e6-c9f8cbfcaf1c",
+            "role": "tool",
+            "content": "{\"result\":21}",
+            "name": "calculator",
+            "toolCallId": "call_00_c7zizEnLysBl4nVbde2B2FN2"
+        },
+        {
+            "id": "454e0346-f08c-4ece-bd83-e5605ef24b9d",
+            "role": "assistant",
+            "content": "第二步：将结果乘以 2",
+            "toolCalls": [
+                {
+                    "id": "call_00_YlQUs4O5DKmxMXDJZbnQl4GE",
+                    "type": "function",
+                    "function": {
+                        "name": "calculator",
+                        "arguments": "{\"a\": 2, \"b\": 21, \"operation\": \"multiply\"}"
+                    }
+                }
+            ]
+        },
+        {
+            "id": "e6df108c-141f-4ed3-aed3-6d400125a438",
+            "role": "tool",
+            "content": "{\"result\":42}",
+            "name": "calculator",
+            "toolCallId": "call_00_YlQUs4O5DKmxMXDJZbnQl4GE"
+        },
+        {
+            "id": "82a4d1e1-69fa-43e9-a72f-f621b83859f3",
+            "role": "assistant",
+            "content": "**最终结论：**\n2*(10+11) = 42\n\n计算过程验证：\n- 10 + 11 = 21\n- 2 × 21 = 42"
+        }
+    ]
+}
