@@ -12,6 +12,7 @@ import (
 	eventpkg "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -265,6 +266,41 @@ func TestConvertToMessagesSnapshotEventSkipsNilResponse(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, snapshot)
 	assert.Len(t, snapshot.Messages, 0)
+}
+
+// TestConvertToMessagesSnapshotEventBeforeCallbackMutates ensures before callbacks update messages.
+func TestConvertToMessagesSnapshotEventBeforeCallbackMutates(t *testing.T) {
+	callbacks := translator.NewCallbacks().
+		RegisterBeforeTranslate(func(ctx context.Context, evt *eventpkg.Event) (*eventpkg.Event, error) {
+			if evt.Response != nil && len(evt.Response.Choices) > 0 {
+				evt.Response.Choices[0].Message.Content = "patched"
+			}
+			return evt, nil
+		})
+	r := &runner{
+		translateCallbacks: callbacks,
+	}
+	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(),
+		[]eventpkg.Event{newResponse(model.RoleUser, "hello", nil)})
+	assert.NoError(t, err)
+	assert.NotNil(t, snapshot)
+	assert.Len(t, snapshot.Messages, 1)
+	assert.Equal(t, "patched", *snapshot.Messages[0].Content)
+}
+
+// TestConvertToMessagesSnapshotEventBeforeCallbackError ensures errors bubble up.
+func TestConvertToMessagesSnapshotEventBeforeCallbackError(t *testing.T) {
+	callbacks := translator.NewCallbacks().
+		RegisterBeforeTranslate(func(ctx context.Context, evt *eventpkg.Event) (*eventpkg.Event, error) {
+			return nil, errors.New("fail")
+		})
+	r := &runner{
+		translateCallbacks: callbacks,
+	}
+	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(),
+		[]eventpkg.Event{newResponse(model.RoleUser, "hello", nil)})
+	assert.Nil(t, snapshot)
+	assert.Error(t, err)
 }
 
 func newResponse(role model.Role, content string, mutate func(*model.Message)) eventpkg.Event {

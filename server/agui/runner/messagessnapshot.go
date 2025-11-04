@@ -109,14 +109,18 @@ func (r *runner) getSessionEvents(ctx context.Context, sessionKey session.Key) (
 }
 
 // convertToMessagesSnapshotEvent converts runner events to AG-UI MessagesSnapshotEvent.
-func (r *runner) convertToMessagesSnapshotEvent(_ context.Context,
+func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context,
 	events []event.Event) (*aguievents.MessagesSnapshotEvent, error) {
 	messages := make([]aguievents.Message, 0)
 	if len(events) == 0 {
 		return aguievents.NewMessagesSnapshotEvent(messages), nil
 	}
 	for _, event := range events {
-		if event.Response == nil || len(event.Response.Choices) == 0 {
+		event, err := r.handleBeforeTranslate(ctx, &event)
+		if err != nil {
+			return nil, fmt.Errorf("handle before translate: %w", err)
+		}
+		if event == nil || event.Response == nil || len(event.Response.Choices) == 0 {
 			continue
 		}
 		for _, choice := range event.Response.Choices {
