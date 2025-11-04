@@ -215,9 +215,11 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	}
 	isZeroTime := since.IsZero()
 	filter := inv.GetEventFilterKey()
+	filterMode := p.getIncludeContentFilterMode(inv)
+	needAppendHistoryMesesage := p.needAppendHistoryMessage(inv)
+
 	var events []event.Event
 	inv.Session.EventMu.RLock()
-	filterMode := p.getIncludeContentFilterMode(inv)
 	for _, evt := range inv.Session.Events {
 		// Filter invalid content
 		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
@@ -225,7 +227,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		}
 
 		// Filter historical messages
-		if !p.needAppendHistoryMessage(inv) && inv.RunOptions.RequestID != evt.RequestID {
+		if !needAppendHistoryMesesage && inv.RunOptions.RequestID != evt.RequestID {
 			continue
 		}
 
