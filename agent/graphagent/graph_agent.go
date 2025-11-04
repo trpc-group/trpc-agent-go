@@ -194,21 +194,45 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		// Docs note: If RuntimeState[CfgKeyIncludeContents] is not one of
 		// {none, filtered, all}, ignore it and fall back to the default (all)
 		// to avoid accidental context loss.
-		include := processor.IncludeContentsAll
+		include := processor.IncludeContentFilterKeyPrefix
+		appendHistoryMessage := true
+		var includeKeyExists, appendHistoryKeyExists bool
+
+		if appendHistory, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyAppendHistoryMessage].(bool); ok {
+			appendHistoryKeyExists = true
+			appendHistoryMessage = appendHistory
+		}
+		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeFilterKeyMode].(string); ok && mode != "" {
+			includeKeyExists = true
+			switch strings.ToLower(mode) {
+			case processor.IncludeContentFilterKeyPrefix:
+				include = processor.IncludeContentFilterKeyPrefix
+			case processor.IncludeContentFilterKeyAll:
+				include = processor.IncludeContentFilterKeyAll
+			case processor.IncludeContentFilterKeyExact:
+				include = processor.IncludeContentFilterKeyExact
+			}
+		}
 		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok && mode != "" {
 			switch strings.ToLower(mode) {
-			case processor.IncludeContentsNone:
-				include = processor.IncludeContentsNone
-			case processor.IncludeContentsFiltered:
-				include = processor.IncludeContentsFiltered
-			case processor.IncludeContentsAll:
-				include = processor.IncludeContentsAll
+			case "none":
+				if !includeKeyExists {
+					include = processor.IncludeContentFilterKeyExact
+				}
+				if !appendHistoryKeyExists {
+					appendHistoryMessage = false
+				}
+			case "all":
+				if !includeKeyExists {
+					include = processor.IncludeContentFilterKeyAll
+				}
 			}
 		}
 		// Default processor: include (possibly overridden) + preserve same branch.
 		p := processor.NewContentRequestProcessor(
-			processor.WithIncludeContents(include),
+			processor.WithIncludeContentFilterMode(include),
 			processor.WithPreserveSameBranch(true),
+			processor.WithAppendHistoryMessage(appendHistoryMessage),
 		)
 		// We only need messages side effect; no output channel needed.
 		p.ProcessRequest(ctx, invocation, req, nil)

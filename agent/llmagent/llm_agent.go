@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -26,7 +25,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -626,25 +624,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, timeProcessor)
 	}
 
-	// 6. Content processor - handles messages from invocation.
-	// Align with GraphAgent: honor runtime include_contents if provided.
-	includeMode := processor.IncludeContentsFiltered
-	if inv, ok := agent.InvocationFromContext(context.Background()); ok && inv != nil {
-		if inv.RunOptions.RuntimeState != nil {
-			if mode, ok2 := inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok2 && mode != "" {
-				switch strings.ToLower(mode) {
-				case processor.IncludeContentsNone:
-					includeMode = processor.IncludeContentsNone
-				case processor.IncludeContentsFiltered:
-					includeMode = processor.IncludeContentsFiltered
-				case processor.IncludeContentsAll:
-					includeMode = processor.IncludeContentsAll
-				}
-			}
-		}
-	}
 	contentProcessor := processor.NewContentRequestProcessor(
-		processor.WithIncludeContents(includeMode),
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),

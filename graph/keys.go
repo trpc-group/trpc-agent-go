@@ -20,7 +20,9 @@ const (
 	// seeds model request messages from the session history for a run.
 	// Accepted values: "none", "filtered", "all". See
 	// internal/flow/processor.ContentRequestProcessor.IncludeContents.
-	CfgKeyIncludeContents = "include_contents"
+	CfgKeyIncludeContents      = "include_contents"
+	CfgKeyIncludeFilterKeyMode = "include_filter_key_mode"
+	CfgKeyAppendHistoryMessage = "append_history_message"
 )
 
 // State map keys (stored into execution state)

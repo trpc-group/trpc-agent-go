@@ -285,14 +285,15 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 		{
 			name:            "nil session",
 			session:         nil,
-			includeContents: IncludeContentsFiltered,
-			expectedMsg:     nil,
-			expectedTime:    time.Time{},
+			includeContents: IncludeContentFilterKeyPrefix,
+
+			expectedMsg:  nil,
+			expectedTime: time.Time{},
 		},
 		{
 			name:            "nil summaries",
 			session:         &session.Session{},
-			includeContents: IncludeContentsFiltered,
+			includeContents: IncludeContentFilterKeyPrefix,
 			expectedMsg:     nil,
 			expectedTime:    time.Time{},
 		},
@@ -306,7 +307,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 					},
 				},
 			},
-			includeContents: IncludeContentsFiltered,
+			includeContents: IncludeContentFilterKeyPrefix,
 			expectedMsg:     nil,
 			expectedTime:    time.Time{},
 		},
@@ -320,7 +321,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 					},
 				},
 			},
-			includeContents: IncludeContentsFiltered,
+			includeContents: IncludeContentFilterKeyPrefix,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
 				Content: "Test summary content",
@@ -341,7 +342,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 					},
 				},
 			},
-			includeContents: IncludeContentsAll,
+			includeContents: IncludeContentFilterKeyAll,
 			expectedMsg: &model.Message{
 				Role:    model.RoleSystem,
 				Content: "Full session summary",
@@ -352,7 +353,7 @@ func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewContentRequestProcessor(WithIncludeContents(tt.includeContents))
+			p := NewContentRequestProcessor(WithIncludeContentFilterMode(tt.includeContents))
 
 			inv := agent.NewInvocation(
 				agent.WithInvocationSession(tt.session),
@@ -527,7 +528,7 @@ func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing
 				agent.WithInvocationEventFilterKey("test-filter"),
 			)
 
-			messages := p.getHistoryMessages(inv, tt.summaryUpdatedAt)
+			messages := p.getIncrementMessages(inv, tt.summaryUpdatedAt)
 
 			assert.Len(t, messages, tt.expectedCount)
 
@@ -676,7 +677,7 @@ func TestContentRequestProcessor_ConcurrentFilterIncrementalMessages(t *testing.
 	)
 
 	// Test single call
-	messages := p.getHistoryMessages(inv, time.Time{})
+	messages := p.getIncrementMessages(inv, time.Time{})
 	assert.Len(t, messages, 1, "Should get one message")
 	assert.Equal(t, "test message", messages[0].Content)
 
@@ -688,7 +689,7 @@ func TestContentRequestProcessor_ConcurrentFilterIncrementalMessages(t *testing.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			messages := p.getHistoryMessages(inv, time.Time{})
+			messages := p.getIncrementMessages(inv, time.Time{})
 			results <- len(messages)
 		}()
 	}
@@ -871,7 +872,7 @@ func TestContentRequestProcessor_getFilterHistoryMessages(t *testing.T) {
 				agent.WithInvocationEventFilterKey("test-filter"),
 			)
 
-			messages := tt.processor.getHistoryMessages(inv, time.Time{})
+			messages := tt.processor.getIncrementMessages(inv, time.Time{})
 
 			assert.Equal(t, tt.expectedCount, len(messages))
 			for i, expectedContent := range tt.expectedContent {
