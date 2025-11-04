@@ -382,6 +382,173 @@ func TestWorkspaceRuntime_MountOptimizations(t *testing.T) {
 	require.GreaterOrEqual(t, execCalls, 2)
 }
 
+func TestWorkspaceRuntime_PutDirectory_EmptyError(t *testing.T) {
+	rt := &WorkspaceRuntime{}
+	ws := codeexecutor.Workspace{ID: "w", Path: "/w"}
+	err := rt.PutDirectory(context.Background(), ws, "", "dst")
+	require.Error(t, err)
+}
+
+func TestWorkspaceRuntime_CopyFileOut_SkipsDirHeader(t *testing.T) {
+	// copyFileOut should skip directory headers until a file is seen.
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Build tar: first a directory, then a file entry.
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			_ = tw.WriteHeader(&tar.Header{
+				Name:     "dir/",
+				Mode:     0o755,
+				Typeflag: tar.TypeDir,
+			})
+			data := []byte("abc")
+			_ = tw.WriteHeader(&tar.Header{
+				Name: "file.txt",
+				Mode: 0o644,
+				Size: int64(len(data)),
+			})
+			_, _ = tw.Write(data)
+			_ = tw.Close()
+			_, _ = w.Write(buf.Bytes())
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &WorkspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	b, mime, err := rt.copyFileOut(
+		context.Background(), "/work/file.txt",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "abc", string(b))
+	require.NotEmpty(t, mime)
+}
+
+func TestWorkspaceRuntime_PutDirectory_TarCopy_Error(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(src, "f.txt"), []byte("v"), 0o644,
+	))
+
+	var mkdirOK bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			// mkdir -p dest
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			mkdirOK = true
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Simulate copy failure
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &WorkspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "w6", Path: path.Join(testRunBase, "w6")}
+	err := rt.PutDirectory(context.Background(), ws, src, "dst")
+	require.Error(t, err)
+	require.True(t, mkdirOK)
+}
+
+func TestWorkspaceRuntime_Collect_NoMatches_And_CopyError(t *testing.T) {
+	// Two phases: first no matches, then copy error on a listed file.
+	phase := 0
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			if phase == 0 {
+				// no results
+				writeHijackStream(t, conn, buf, "", "")
+			} else {
+				// single file
+				writeHijackStream(t, conn, buf, "/work/x.txt\n", "")
+			}
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// For phase 1 we do not reach here; for phase 2 force error.
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &WorkspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "w7", Path: "/work"}
+
+	// Phase 0: no matches
+	files, err := rt.Collect(
+		context.Background(), ws, []string{"out/*.none"},
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 0)
+
+	// Phase 1: one file listed, but copy fails
+	phase = 1
+	_, err = rt.Collect(
+		context.Background(), ws, []string{"x.txt"},
+	)
+	require.Error(t, err)
+}
+
 func TestWorkspaceRuntime_ExecuteInline(t *testing.T) {
 	var execCount int
 	handler := func(w http.ResponseWriter, r *http.Request) {

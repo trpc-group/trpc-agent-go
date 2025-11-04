@@ -14,6 +14,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -194,6 +196,74 @@ func TestRunTool_SaveAsArtifacts_NoInvocationContext(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+// errArtifactService always fails on save to cover error path.
+type errArtifactService struct{}
+
+func (e *errArtifactService) SaveArtifact(
+	ctx context.Context, sessionInfo artifact.SessionInfo,
+	filename string, a *artifact.Artifact,
+) (int, error) {
+	return 0, fmt.Errorf("forced-error")
+}
+func (e *errArtifactService) LoadArtifact(
+	ctx context.Context, sessionInfo artifact.SessionInfo,
+	filename string, version *int,
+) (*artifact.Artifact, error) {
+	return nil, nil
+}
+func (e *errArtifactService) ListArtifactKeys(
+	ctx context.Context, sessionInfo artifact.SessionInfo,
+) ([]string, error) {
+	return nil, nil
+}
+func (e *errArtifactService) DeleteArtifact(
+	ctx context.Context, sessionInfo artifact.SessionInfo,
+	filename string,
+) error {
+	return nil
+}
+func (e *errArtifactService) ListVersions(
+	ctx context.Context, sessionInfo artifact.SessionInfo,
+	filename string,
+) ([]int, error) {
+	return nil, nil
+}
+
+func TestRunTool_SaveAsArtifacts_SaveError(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.NewRuntime("")
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "mkdir -p out; echo hi > out/a.txt",
+		OutputFiles: []string{
+			"out/*.txt",
+		},
+		Timeout:         timeoutSecSmall,
+		SaveAsArtifacts: true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(&errArtifactService{}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	_, err = rt.Call(ctx, enc)
 	require.Error(t, err)
 }
 

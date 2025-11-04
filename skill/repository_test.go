@@ -13,6 +13,7 @@ package skill
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,4 +162,26 @@ func TestSplitFrontMatter_NoClosing(t *testing.T) {
 	// No closing delimiter: body should be original text.
 	require.Equal(t, 0, len(m))
 	require.Equal(t, txt, body)
+}
+
+// errAfterReader returns one line then a non-EOF error to exercise the
+// ioReadAll branch that returns accumulated text on unexpected errors.
+type errAfterReader struct {
+	gave bool
+}
+
+func (e *errAfterReader) Read(p []byte) (int, error) {
+	if !e.gave {
+		e.gave = true
+		copy(p, []byte("A\n"))
+		return 2, nil
+	}
+	return 0, errors.New("boom")
+}
+
+func TestIOReadAll_NonEOFErrorReturnsAccumulated(t *testing.T) {
+	rd := bufio.NewReader(&errAfterReader{})
+	s, err := ioReadAll(rd)
+	require.NoError(t, err)
+	require.Equal(t, "A\n", s)
 }

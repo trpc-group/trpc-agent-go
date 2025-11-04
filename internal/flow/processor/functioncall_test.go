@@ -810,6 +810,39 @@ func TestSetDefaultTransferMessage(t *testing.T) {
 	require.Equal(t, "delegated", got.Message)
 }
 
+// Tool that returns an unmarshable result to trigger marshal error.
+type badResultTool struct{ dec *tool.Declaration }
+
+func (b *badResultTool) Declaration() *tool.Declaration { return b.dec }
+func (b *badResultTool) Call(_ context.Context, _ []byte) (any, error) {
+	ch := make(chan int)
+	close(ch)
+	return ch, nil
+}
+
+func TestExecuteToolCall_MarshalError_IsIgnorable(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	pc := model.ToolCall{
+		ID: "c1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "bad",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tools := map[string]tool.Tool{
+		"bad": &badResultTool{dec: &tool.Declaration{Name: "bad"}},
+	}
+	choice, _, ignorable, err := p.executeToolCall(
+		ctx, inv, pc, tools, 0, nil,
+	)
+	require.Error(t, err)
+	require.True(t, ignorable)
+	require.Nil(t, choice)
+	require.Contains(t, err.Error(), ErrorMarshalResult)
+}
+
 // tool that reports a state delta
 type deltaTool struct{}
 

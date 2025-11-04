@@ -238,6 +238,25 @@ func TestRuntime_RunProgram_DefaultTimeoutUsed(t *testing.T) {
 	require.False(t, res.TimedOut)
 }
 
+func TestRuntime_RunProgram_NonexistentCommandExitCode(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-missing-cmd", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:     "this-command-should-not-exist",
+		Args:    []string{"--version"},
+		Timeout: 500 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	// Non-ExitError maps to -1 per implementation.
+	require.Equal(t, -1, res.ExitCode)
+}
+
 func TestRuntime_PutSkill_ReadOnly_EmptyDir(t *testing.T) {
 	// Exercise makeTreeReadOnly without file permission churn by
 	// staging an empty directory and enabling read-only flag.
