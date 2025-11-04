@@ -542,6 +542,7 @@ if err != nil {
 - `WithAutoCreateTable(auto bool)`: 是否自动创建表（默认 false）
 - `WithTableName(name string)`: 自定义表名（默认 "memories"）
 - `WithMemoryLimit(limit int)`: 设置每个用户的最大记忆数量
+- `WithSoftDelete(enabled bool)`: 启用软删除（默认 false）。启用后，删除操作设置 `deleted_at`，查询会过滤已软删除的记录。
 - `WithToolEnabled(toolName string, enabled bool)`: 启用或禁用特定工具
 - `WithCustomTool(toolName string, creator ToolCreator)`: 使用自定义工具实现
 
@@ -570,7 +571,8 @@ CREATE TABLE IF NOT EXISTS memories (
     memory_id VARCHAR(64) NOT NULL,
     memory_data JSON NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
     INDEX idx_app_user (app_name, user_id),
     UNIQUE INDEX idx_app_user_memory (app_name, user_id, memory_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -615,16 +617,16 @@ mysqlService, err := memorymysql.NewService(
 
 ### 存储后端对比
 
-| 特性 | 内存存储 | Redis 存储 | MySQL 存储 |
-|------|---------|-----------|-----------|
-| 数据持久化 | ❌ | ✅ | ✅ |
-| 分布式支持 | ❌ | ✅ | ✅ |
-| 事务支持 | ❌ | 部分 | ✅ (ACID) |
-| 查询能力 | 简单 | 中等 | 强大 (SQL) |
-| 性能 | 极高 | 高 | 中高 |
-| 配置复杂度 | 低 | 中 | 中 |
-| 适用场景 | 开发/测试 | 生产环境 | 生产环境 |
-| 监控工具 | 无 | 丰富 | 非常丰富 |
+| 特性       | 内存存储  | Redis 存储 | MySQL 存储 |
+| ---------- | --------- | ---------- | ---------- |
+| 数据持久化 | ❌        | ✅         | ✅         |
+| 分布式支持 | ❌        | ✅         | ✅         |
+| 事务支持   | ❌        | 部分       | ✅ (ACID)  |
+| 查询能力   | 简单      | 中等       | 强大 (SQL) |
+| 性能       | 极高      | 高         | 中高       |
+| 配置复杂度 | 低        | 中         | 中         |
+| 适用场景   | 开发/测试 | 生产环境   | 生产环境   |
+| 监控工具   | 无        | 丰富       | 非常丰富   |
 
 **选择建议：**
 

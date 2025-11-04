@@ -586,6 +586,7 @@ if err != nil {
 - `WithAutoCreateTable(auto bool)`: Auto-create table (default false)
 - `WithTableName(name string)`: Custom table name (default "memories")
 - `WithMemoryLimit(limit int)`: Set maximum memories per user
+- `WithSoftDelete(enabled bool)`: Enable soft delete (default false). When enabled, delete operations set `deleted_at` and queries filter out soft-deleted rows.
 - `WithToolEnabled(toolName string, enabled bool)`: Enable or disable specific tools
 - `WithCustomTool(toolName string, creator ToolCreator)`: Use custom tool implementation
 
@@ -614,7 +615,8 @@ CREATE TABLE IF NOT EXISTS memories (
     memory_id VARCHAR(64) NOT NULL,
     memory_data JSON NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
     INDEX idx_app_user (app_name, user_id),
     UNIQUE INDEX idx_app_user_memory (app_name, user_id, memory_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -659,16 +661,16 @@ mysqlService, err := memorymysql.NewService(
 
 ### Storage Backend Comparison
 
-| Feature | In-Memory | Redis | MySQL |
-|---------|-----------|-------|-------|
-| Data Persistence | ❌ | ✅ | ✅ |
-| Distributed Support | ❌ | ✅ | ✅ |
-| Transaction Support | ❌ | Partial | ✅ (ACID) |
-| Query Capability | Simple | Medium | Powerful (SQL) |
-| Performance | Very High | High | Medium-High |
-| Configuration Complexity | Low | Medium | Medium |
-| Use Case | Dev/Test | Production | Production |
-| Monitoring Tools | None | Rich | Very Rich |
+| Feature                  | In-Memory | Redis      | MySQL          |
+| ------------------------ | --------- | ---------- | -------------- |
+| Data Persistence         | ❌        | ✅         | ✅             |
+| Distributed Support      | ❌        | ✅         | ✅             |
+| Transaction Support      | ❌        | Partial    | ✅ (ACID)      |
+| Query Capability         | Simple    | Medium     | Powerful (SQL) |
+| Performance              | Very High | High       | Medium-High    |
+| Configuration Complexity | Low       | Medium     | Medium         |
+| Use Case                 | Dev/Test  | Production | Production     |
+| Monitoring Tools         | None      | Rich       | Very Rich      |
 
 **Selection Guide:**
 

@@ -21,6 +21,7 @@ type ServiceOpts struct {
 	memoryLimit     int
 	tableName       string
 	autoCreateTable bool
+	softDelete      bool
 
 	// Tool related settings.
 	toolCreators map[string]memory.ToolCreator
@@ -72,6 +73,15 @@ func WithTableName(tableName string) ServiceOpt {
 func WithAutoCreateTable(autoCreate bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.autoCreateTable = autoCreate
+	}
+}
+
+// WithSoftDelete enables or disables soft delete behavior.
+// When enabled, delete operations set deleted_at and queries filter deleted rows.
+// Default is disabled (hard delete).
+func WithSoftDelete(enabled bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.softDelete = enabled
 	}
 }
 

@@ -49,6 +49,7 @@ func setupMockService(_ *testing.T, db *sql.DB) *Service {
 			toolCreators: make(map[string]memory.ToolCreator),
 			enabledTools: make(map[string]bool),
 			tableName:    "memories",
+			softDelete:   true,
 		},
 		db:          storage.WrapSQLDB(db),
 		tableName:   "memories",
