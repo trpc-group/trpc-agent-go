@@ -577,6 +577,7 @@ CREATE TABLE session_events (
     session_id VARCHAR(255) NOT NULL,
     event JSONB NOT NULL,                     -- 事件数据（JSONB 格式）
     created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,            -- 更新时间
     expires_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
@@ -623,6 +624,67 @@ CREATE TABLE user_states (
 );
 ```
 
+#### Schema 与表前缀支持
+
+PostgreSQL 存储支持 schema 和表前缀配置，适用于多租户和多环境场景：
+
+**Schema 支持：**
+
+```go
+// 使用自定义 schema（表将创建在指定 schema 下）
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithDatabase("mydb"),
+    postgres.WithSchema("my_schema"),  // 表名：my_schema.session_states
+)
+
+// 独立初始化数据库到指定 schema
+err := postgres.InitDB(
+    context.Background(),
+    postgres.WithInitDBHost("localhost"),
+    postgres.WithInitDBDatabase("mydb"),
+    postgres.WithInitDBSchema("my_schema"),
+)
+```
+
+**表前缀支持：**
+
+```go
+// 使用表前缀（适用于多应用共享数据库）
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithTablePrefix("app1_"),  // 表名：app1_session_states
+)
+
+// 结合 schema 和表前缀使用
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSchema("tenant_a"),
+    postgres.WithTablePrefix("app1_"),  // 表名：tenant_a.app1_session_states
+)
+```
+
+**表命名规则：**
+
+| Schema | Prefix | 最终表名 |
+|--------|--------|---------|
+| （无） | （无） | `session_states` |
+| （无） | `app1_` | `app1_session_states` |
+| `my_schema` | （无） | `my_schema.session_states` |
+| `my_schema` | `app1_` | `my_schema.app1_session_states` |
+
+**使用场景：**
+
+1. **多租户隔离**：不同租户使用不同 schema
+2. **环境隔离**：开发、测试、生产环境使用不同 schema
+3. **多应用共享**：多个应用使用不同表前缀避免冲突
+4. **权限控制**：通过 schema 级别的权限管理访问控制
+
+**注意事项：**
+
+- Schema 必须在使用前创建：`CREATE SCHEMA IF NOT EXISTS my_schema;`
+- Schema 和表前缀仅允许字母、数字和下划线，防止 SQL 注入
+- 使用 `WithSkipDBInit()` 可跳过自动建表，适用于无 DDL 权限的场景
 
 #### 软删除与 TTL 清理
 

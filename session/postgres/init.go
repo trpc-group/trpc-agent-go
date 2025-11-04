@@ -142,14 +142,14 @@ const (
 )
 
 // buildCreateTableSQL builds CREATE TABLE SQL with table prefix.
-func buildCreateTableSQL(prefix, tableName, template string) string {
-	fullTableName := prefix + tableName
+func buildCreateTableSQL(schema, prefix, tableName, template string) string {
+	fullTableName := buildFullTableName(schema, prefix, tableName)
 	return strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
 }
 
 // buildIndexSQL builds CREATE INDEX SQL with table and index prefix.
-func buildIndexSQL(prefix, tableName, template string) string {
-	fullTableName := prefix + tableName
+func buildIndexSQL(schema, prefix, tableName, template string) string {
+	fullTableName := buildFullTableName(schema, prefix, tableName)
 	// Extract original index name from template (e.g., idx_session_states_unique_active)
 	// and prepend the prefix
 	sql := strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
@@ -268,12 +268,12 @@ var expectedSchema = map[string]struct {
 // initDB initializes the database schema
 func (s *Service) initDB(ctx context.Context) {
 	// Create tables
-	if err := createTables(ctx, s.pgClient, s.opts.tablePrefix); err != nil {
+	if err := createTables(ctx, s.pgClient, s.opts.schema, s.opts.tablePrefix); err != nil {
 		panic(fmt.Sprintf("create tables failed: %v", err))
 	}
 
 	// Create indexes
-	if err := createIndexes(ctx, s.pgClient, s.opts.tablePrefix); err != nil {
+	if err := createIndexes(ctx, s.pgClient, s.opts.schema, s.opts.tablePrefix); err != nil {
 		panic(fmt.Sprintf("create indexes failed: %v", err))
 	}
 
@@ -285,7 +285,7 @@ func (s *Service) initDB(ctx context.Context) {
 
 // createTables creates all required tables with the given prefix.
 // This function can be used by both Service and standalone InitDB.
-func createTables(ctx context.Context, client storage.Client, prefix string) error {
+func createTables(ctx context.Context, client storage.Client, schema, prefix string) error {
 	tables := []struct {
 		name     string
 		template string
@@ -298,9 +298,10 @@ func createTables(ctx context.Context, client storage.Client, prefix string) err
 	}
 
 	for _, table := range tables {
-		tableSQL := buildCreateTableSQL(prefix, table.name, table.template)
+		tableSQL := buildCreateTableSQL(schema, prefix, table.name, table.template)
+		fullTableName := buildFullTableName(schema, prefix, table.name)
 		if _, err := client.ExecContext(ctx, tableSQL); err != nil {
-			return fmt.Errorf("create table %s%s failed: %w", prefix, table.name, err)
+			return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 		}
 	}
 
@@ -309,7 +310,7 @@ func createTables(ctx context.Context, client storage.Client, prefix string) err
 
 // createIndexes creates all required indexes with the given prefix.
 // This function can be used by both Service and standalone InitDB.
-func createIndexes(ctx context.Context, client storage.Client, prefix string) error {
+func createIndexes(ctx context.Context, client storage.Client, schema, prefix string) error {
 	indexes := []struct {
 		table    string
 		template string
@@ -330,9 +331,10 @@ func createIndexes(ctx context.Context, client storage.Client, prefix string) er
 	}
 
 	for _, idx := range indexes {
-		indexSQL := buildIndexSQL(prefix, idx.table, idx.template)
+		indexSQL := buildIndexSQL(schema, prefix, idx.table, idx.template)
+		fullTableName := buildFullTableName(schema, prefix, idx.table)
 		if _, err := client.ExecContext(ctx, indexSQL); err != nil {
-			return fmt.Errorf("create index on %s%s failed: %w", prefix, idx.table, err)
+			return fmt.Errorf("create index on %s failed: %w", fullTableName, err)
 		}
 	}
 
@@ -341,9 +343,8 @@ func createIndexes(ctx context.Context, client storage.Client, prefix string) er
 
 // verifySchema verifies that the database schema matches expectations
 func (s *Service) verifySchema(ctx context.Context) error {
-	prefix := s.opts.tablePrefix
 	for tableName, schema := range expectedSchema {
-		fullTableName := prefix + tableName
+		fullTableName := buildFullTableName(s.opts.schema, s.opts.tablePrefix, tableName)
 
 		// Check if table exists
 		exists, err := s.tableExists(ctx, fullTableName)
@@ -369,7 +370,8 @@ func (s *Service) verifySchema(ctx context.Context) error {
 }
 
 // tableExists checks if a table exists
-func (s *Service) tableExists(ctx context.Context, tableName string) (bool, error) {
+func (s *Service) tableExists(ctx context.Context, fullTableName string) (bool, error) {
+	schema, tableName := parseTableName(fullTableName)
 	var exists bool
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		if rows.Next() {
@@ -378,15 +380,16 @@ func (s *Service) tableExists(ctx context.Context, tableName string) (bool, erro
 		return nil
 	}, `SELECT EXISTS (
 		SELECT FROM information_schema.tables
-		WHERE table_schema = 'public'
-		AND table_name = $1
-	)`, tableName)
+		WHERE table_schema = $1
+		AND table_name = $2
+	)`, schema, tableName)
 
 	return exists, err
 }
 
 // verifyColumns verifies that table columns match expectations
-func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedColumns []tableColumn) error {
+func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expectedColumns []tableColumn) error {
+	schema, tableName := parseTableName(fullTableName)
 	// Get actual columns from database
 	actualColumns := make(map[string]tableColumn)
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
@@ -405,9 +408,9 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 		return nil
 	}, `SELECT column_name, data_type, is_nullable
 		FROM information_schema.columns
-		WHERE table_schema = 'public'
-		AND table_name = $1
-		ORDER BY ordinal_position`, tableName)
+		WHERE table_schema = $1
+		AND table_name = $2
+		ORDER BY ordinal_position`, schema, tableName)
 
 	if err != nil {
 		return fmt.Errorf("query columns failed: %w", err)
@@ -437,7 +440,8 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 }
 
 // verifyIndexes verifies that table indexes exist
-func (s *Service) verifyIndexes(ctx context.Context, tableName string, expectedIndexes []tableIndex) error {
+func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expectedIndexes []tableIndex) error {
+	schema, tableName := parseTableName(fullTableName)
 	// Get actual indexes from database
 	actualIndexes := make(map[string]bool)
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
@@ -451,8 +455,8 @@ func (s *Service) verifyIndexes(ctx context.Context, tableName string, expectedI
 		return nil
 	}, `SELECT indexname
 		FROM pg_indexes
-		WHERE schemaname = 'public'
-		AND tablename = $1`, tableName)
+		WHERE schemaname = $1
+		AND tablename = $2`, schema, tableName)
 
 	if err != nil {
 		return fmt.Errorf("query indexes failed: %w", err)
@@ -503,6 +507,7 @@ type InitDBConfig struct {
 	database     string
 	sslMode      string
 	tablePrefix  string
+	schema       string
 	instanceName string
 	extraOptions []any
 }
@@ -560,6 +565,20 @@ func WithInitDBTablePrefix(prefix string) InitDBOpt {
 			panic(fmt.Sprintf("invalid table prefix: %v", err))
 		}
 		c.tablePrefix = prefix
+	}
+}
+
+// WithInitDBSchema sets the PostgreSQL schema name where tables will be created.
+// Note: The schema must already exist in the database before calling InitDB.
+// Security: Only alphanumeric characters and underscore are allowed to prevent SQL injection.
+func WithInitDBSchema(schema string) InitDBOpt {
+	return func(c *InitDBConfig) {
+		if schema != "" {
+			if err := validateTablePrefix(schema); err != nil {
+				panic(fmt.Sprintf("invalid schema name: %v", err))
+			}
+		}
+		c.schema = schema
 	}
 }
 
@@ -671,12 +690,12 @@ func InitDB(ctx context.Context, opts ...InitDBOpt) error {
 	defer pgClient.Close()
 
 	// Create tables using shared function
-	if err := createTables(ctx, pgClient, config.tablePrefix); err != nil {
+	if err := createTables(ctx, pgClient, config.schema, config.tablePrefix); err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
 	// Create indexes using shared function
-	if err := createIndexes(ctx, pgClient, config.tablePrefix); err != nil {
+	if err := createIndexes(ctx, pgClient, config.schema, config.tablePrefix); err != nil {
 		return fmt.Errorf("failed to create indexes: %w", err)
 	}
 

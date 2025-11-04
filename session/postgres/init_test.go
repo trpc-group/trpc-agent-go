@@ -33,7 +33,7 @@ func TestCreateTables_Success(t *testing.T) {
 	}
 
 	// Test createTables with no prefix
-	err = createTables(context.Background(), client, "")
+	err = createTables(context.Background(), client, "", "")
 	require.NoError(t, err)
 
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -54,7 +54,7 @@ func TestCreateTables_WithPrefix(t *testing.T) {
 	}
 
 	// Test createTables with prefix
-	err = createTables(context.Background(), client, prefix)
+	err = createTables(context.Background(), client, "", prefix)
 	require.NoError(t, err)
 
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -74,7 +74,7 @@ func TestCreateIndexes_Success(t *testing.T) {
 	}
 
 	// Test createIndexes
-	err = createIndexes(context.Background(), client, "")
+	err = createIndexes(context.Background(), client, "", "")
 	require.NoError(t, err)
 
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -104,7 +104,7 @@ func TestBuildCreateTableSQL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			template := "CREATE TABLE {{TABLE_NAME}} (id INT)"
-			result := buildCreateTableSQL(tt.prefix, tt.table, template)
+			result := buildCreateTableSQL("", tt.prefix, tt.table, template)
 			assert.Contains(t, result, tt.expected)
 		})
 	}
@@ -134,7 +134,7 @@ func TestBuildIndexSQL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			template := "CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}} (id)"
-			result := buildIndexSQL(tt.prefix, tt.table, template)
+			result := buildIndexSQL("", tt.prefix, tt.table, template)
 			assert.Contains(t, result, tt.expected)
 		})
 	}
@@ -366,7 +366,7 @@ func TestCreateTables(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
-	err = createTables(context.Background(), mockClient, "")
+	err = createTables(context.Background(), mockClient, "", "")
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -385,7 +385,7 @@ func TestCreateTables_WithPrefixMock(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
-	err = createTables(context.Background(), mockClient, "myapp_")
+	err = createTables(context.Background(), mockClient, "", "myapp_")
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -403,7 +403,7 @@ func TestCreateIndexes(t *testing.T) {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
-	err = createIndexes(context.Background(), mockClient, "")
+	err = createIndexes(context.Background(), mockClient, "", "")
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -421,28 +421,28 @@ func TestCreateIndexes_WithPrefix(t *testing.T) {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
-	err = createIndexes(context.Background(), mockClient, "myapp_")
+	err = createIndexes(context.Background(), mockClient, "", "myapp_")
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestBuildCreateTableSQL_NoPrefix tests SQL template replacement without prefix
 func TestBuildCreateTableSQL_NoPrefix(t *testing.T) {
-	sql := buildCreateTableSQL("", "session_states", sqlCreateSessionStatesTable)
+	sql := buildCreateTableSQL("", "", "session_states", sqlCreateSessionStatesTable)
 	assert.Contains(t, sql, "CREATE TABLE IF NOT EXISTS session_states")
 	assert.NotContains(t, sql, "{{TABLE_NAME}}")
 }
 
 // TestBuildCreateTableSQL_WithPrefixMock tests SQL template replacement with prefix
 func TestBuildCreateTableSQL_WithPrefixMock(t *testing.T) {
-	sql := buildCreateTableSQL("test_", "session_states", sqlCreateSessionStatesTable)
+	sql := buildCreateTableSQL("", "test_", "session_states", sqlCreateSessionStatesTable)
 	assert.Contains(t, sql, "CREATE TABLE IF NOT EXISTS test_session_states")
 	assert.NotContains(t, sql, "{{TABLE_NAME}}")
 }
 
 // TestBuildIndexSQL_Mock tests index SQL template replacement
 func TestBuildIndexSQL_Mock(t *testing.T) {
-	sql := buildIndexSQL("", "test_table", "CREATE UNIQUE INDEX IF NOT EXISTS idx_test_table ON {{TABLE_NAME}}(id)")
+	sql := buildIndexSQL("", "", "test_table", "CREATE UNIQUE INDEX IF NOT EXISTS idx_test_table ON {{TABLE_NAME}}(id)")
 	assert.Contains(t, sql, "ON test_table(id)")
 	assert.NotContains(t, sql, "{{TABLE_NAME}}")
 }

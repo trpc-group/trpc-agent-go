@@ -571,6 +571,7 @@ CREATE TABLE session_events (
     session_id VARCHAR(255) NOT NULL,
     event JSONB NOT NULL,                     -- Event data (JSONB format)
     created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,            -- Update timestamp
     expires_at TIMESTAMP,
     deleted_at TIMESTAMP
 );
@@ -616,6 +617,68 @@ CREATE TABLE user_states (
     UNIQUE(app_name, user_id, key)
 );
 ```
+
+#### Schema and Table Prefix Support
+
+PostgreSQL storage supports schema and table prefix configuration for multi-tenant and multi-environment scenarios:
+
+**Schema Support:**
+
+```go
+// Use custom schema (tables will be created in the specified schema)
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithDatabase("mydb"),
+    postgres.WithSchema("my_schema"),  // Table name: my_schema.session_states
+)
+
+// Standalone database initialization with schema
+err := postgres.InitDB(
+    context.Background(),
+    postgres.WithInitDBHost("localhost"),
+    postgres.WithInitDBDatabase("mydb"),
+    postgres.WithInitDBSchema("my_schema"),
+)
+```
+
+**Table Prefix Support:**
+
+```go
+// Use table prefix (useful for multi-application shared database)
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithTablePrefix("app1_"),  // Table name: app1_session_states
+)
+
+// Combine schema and table prefix
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSchema("tenant_a"),
+    postgres.WithTablePrefix("app1_"),  // Table name: tenant_a.app1_session_states
+)
+```
+
+**Table Naming Rules:**
+
+| Schema | Prefix | Final Table Name |
+|--------|--------|------------------|
+| (none) | (none) | `session_states` |
+| (none) | `app1_` | `app1_session_states` |
+| `my_schema` | (none) | `my_schema.session_states` |
+| `my_schema` | `app1_` | `my_schema.app1_session_states` |
+
+**Use Cases:**
+
+1. **Multi-tenant Isolation**: Different tenants use different schemas
+2. **Environment Isolation**: Development, testing, and production use different schemas
+3. **Multi-application Sharing**: Multiple applications use different table prefixes to avoid conflicts
+4. **Access Control**: Manage permissions at the schema level
+
+**Important Notes:**
+
+- Schema must be created before use: `CREATE SCHEMA IF NOT EXISTS my_schema;`
+- Schema and table prefix names only allow letters, numbers, and underscores to prevent SQL injection
+- Use `WithSkipDBInit()` to skip automatic table creation for scenarios without DDL permissions
 
 #### Soft Delete and TTL Cleanup
 

@@ -29,7 +29,7 @@ func TestTableExists_TableFound(t *testing.T) {
 	// Mock information_schema.tables query
 	rows := sqlmock.NewRows([]string{"exists"}).AddRow(true)
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
 	exists, err := s.tableExists(context.Background(), "session_states")
@@ -49,7 +49,7 @@ func TestTableExists_TableNotFound(t *testing.T) {
 	// Mock information_schema.tables query
 	rows := sqlmock.NewRows([]string{"exists"}).AddRow(false)
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("non_existent_table").
+		WithArgs("public", "non_existent_table").
 		WillReturnRows(rows)
 
 	exists, err := s.tableExists(context.Background(), "non_existent_table")
@@ -68,7 +68,7 @@ func TestTableExists_QueryError(t *testing.T) {
 
 	// Mock query error
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnError(assert.AnError)
 
 	_, err = s.tableExists(context.Background(), "session_states")
@@ -93,7 +93,7 @@ func TestVerifyColumns_Success(t *testing.T) {
 		AddRow("state", "jsonb", "YES")
 
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
 	expectedColumns := []tableColumn{
@@ -123,7 +123,7 @@ func TestVerifyColumns_MissingColumn(t *testing.T) {
 		AddRow("app_name", "character varying", "NO")
 
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
 	expectedColumns := []tableColumn{
@@ -152,7 +152,7 @@ func TestVerifyColumns_TypeMismatch(t *testing.T) {
 		AddRow("state", "text", "YES") // Wrong type, should be jsonb
 
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
 	expectedColumns := []tableColumn{
@@ -179,7 +179,7 @@ func TestVerifyColumns_NullabilityMismatch(t *testing.T) {
 		AddRow("id", "bigint", "YES") // Should be NOT NULL
 
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
 	expectedColumns := []tableColumn{
@@ -202,7 +202,7 @@ func TestVerifyColumns_QueryError(t *testing.T) {
 
 	// Mock query error
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnError(assert.AnError)
 
 	expectedColumns := []tableColumn{
@@ -229,7 +229,7 @@ func TestVerifyIndexes_Success(t *testing.T) {
 		AddRow("idx_session_states_expires")
 
 	mock.ExpectQuery("SELECT indexname").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
 	expectedIndexes := []tableIndex{
@@ -256,7 +256,7 @@ func TestVerifyIndexes_MissingIndex(t *testing.T) {
 	// idx_session_states_expires is missing
 
 	mock.ExpectQuery("SELECT indexname").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
 	expectedIndexes := []tableIndex{
@@ -280,7 +280,7 @@ func TestVerifyIndexes_QueryError(t *testing.T) {
 
 	// Mock query error
 	mock.ExpectQuery("SELECT indexname").
-		WithArgs("session_states").
+		WithArgs("public", "session_states").
 		WillReturnError(assert.AnError)
 
 	expectedIndexes := []tableIndex{
@@ -352,9 +352,9 @@ func TestVerifySchema_Success(t *testing.T) {
 	}
 
 	for _, columns := range tableSchemas {
-		// Mock tableExists
+		// Mock tableExists - now expects schema and tableName
 		mock.ExpectQuery("SELECT EXISTS").
-			WithArgs(sqlmock.AnyArg()).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 		// Mock verifyColumns - return columns for this table
@@ -383,12 +383,12 @@ func TestVerifySchema_Success(t *testing.T) {
 		}
 
 		mock.ExpectQuery("SELECT column_name, data_type, is_nullable").
-			WithArgs(sqlmock.AnyArg()).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
 		// Mock verifyIndexes - return empty (indexes are non-fatal)
 		mock.ExpectQuery("SELECT indexname").
-			WithArgs(sqlmock.AnyArg()).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"indexname"}))
 	}
 
@@ -407,7 +407,7 @@ func TestVerifySchema_TableMissing(t *testing.T) {
 
 	// Mock first table not existing
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
 	err = s.verifySchema(context.Background())
@@ -426,12 +426,12 @@ func TestVerifySchema_ColumnVerificationFails(t *testing.T) {
 
 	// Mock tableExists succeeds
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs(sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 	// Mock verifyColumns returns wrong data
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable").
-		WithArgs(sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
 			AddRow("id", "bigint", "NO"))
 	// Missing many columns

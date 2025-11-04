@@ -88,6 +88,32 @@ type summaryJob struct {
 	session    *session.Session
 }
 
+// buildFullTableName builds a full table name with optional schema and prefix.
+// Examples:
+// - schema="", prefix="", table="session_states" -> "session_states"
+// - schema="myschema", prefix="", table="session_states" -> "myschema.session_states"
+// - schema="", prefix="trpc_", table="session_states" -> "trpc_session_states"
+// - schema="myschema", prefix="trpc_", table="session_states" -> "myschema.trpc_session_states"
+func buildFullTableName(schema, prefix, tableName string) string {
+	fullTableName := prefix + tableName
+	if schema != "" {
+		return schema + "." + fullTableName
+	}
+	return fullTableName
+}
+
+// parseTableName parses a full table name into schema and table components.
+// Examples:
+// - "session_states" -> ("public", "session_states")
+// - "myschema.session_states" -> ("myschema", "session_states")
+func parseTableName(fullTableName string) (schema, tableName string) {
+	parts := strings.Split(fullTableName, ".")
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "public", fullTableName
+}
+
 // buildConnString builds a PostgreSQL connection string from options.
 func buildConnString(opts ServiceOpts) string {
 	// Default values
@@ -186,12 +212,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL: opts.userStateTTL,
 		cleanupDone:  make(chan struct{}),
 
-		// Initialize table names with prefix
-		tableSessionStates:    opts.tablePrefix + "session_states",
-		tableSessionEvents:    opts.tablePrefix + "session_events",
-		tableSessionSummaries: opts.tablePrefix + "session_summaries",
-		tableAppStates:        opts.tablePrefix + "app_states",
-		tableUserStates:       opts.tablePrefix + "user_states",
+		// Initialize table names with schema and prefix
+		tableSessionStates:    buildFullTableName(opts.schema, opts.tablePrefix, "session_states"),
+		tableSessionEvents:    buildFullTableName(opts.schema, opts.tablePrefix, "session_events"),
+		tableSessionSummaries: buildFullTableName(opts.schema, opts.tablePrefix, "session_summaries"),
+		tableAppStates:        buildFullTableName(opts.schema, opts.tablePrefix, "app_states"),
+		tableUserStates:       buildFullTableName(opts.schema, opts.tablePrefix, "user_states"),
 	}
 
 	// Initialize database schema unless skipped

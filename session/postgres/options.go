@@ -52,6 +52,9 @@ type ServiceOpts struct {
 	// tablePrefix is the prefix for all table names.
 	// Default is empty string (no prefix).
 	tablePrefix string
+	// schema is the PostgreSQL schema name where tables are created.
+	// Default is empty string (uses default schema, typically "public").
+	schema string
 }
 
 // ServiceOpt is the option for the postgres session service.
@@ -262,5 +265,25 @@ func WithTablePrefix(prefix string) ServiceOpt {
 			panic(fmt.Sprintf("invalid table prefix: %v", err))
 		}
 		opts.tablePrefix = prefix
+	}
+}
+
+// WithSchema sets the PostgreSQL schema name where tables will be created.
+// If not set, tables will be created in the default schema (typically "public").
+// For example, with schema "my_schema", tables will be qualified as:
+// - my_schema.session_states
+// - my_schema.session_events
+// - etc.
+//
+// Note: The schema must already exist in the database before using this option.
+// Security: Only alphanumeric characters and underscore are allowed to prevent SQL injection.
+func WithSchema(schema string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if schema != "" {
+			if err := validateTablePrefix(schema); err != nil {
+				panic(fmt.Sprintf("invalid schema name: %v", err))
+			}
+		}
+		opts.schema = schema
 	}
 }
