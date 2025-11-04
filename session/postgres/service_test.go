@@ -666,7 +666,7 @@ func TestAppendEvent_SyncMode(t *testing.T) {
 	// Mock insert event
 	mock.ExpectExec("INSERT INTO session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()
@@ -957,7 +957,7 @@ func TestAppendEvent_PartialEvent(t *testing.T) {
 	// So partial events might still be inserted. We need to expect the INSERT.
 	mock.ExpectExec("INSERT INTO session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()

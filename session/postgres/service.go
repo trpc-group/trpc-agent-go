@@ -935,9 +935,9 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		// Insert event if it has response and is not partial
 		if event.Response != nil && !event.IsPartial && event.IsValidContent() {
 			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, expires_at)
-				 VALUES ($1, $2, $3, $4, $5, $6)`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID, eventBytes, now, expiresAt)
+				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at, expires_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7)`, s.tableSessionEvents),
+				key.AppName, key.UserID, key.SessionID, eventBytes, now, now, expiresAt)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
 			}

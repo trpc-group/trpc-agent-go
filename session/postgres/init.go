@@ -42,6 +42,7 @@ const (
 			session_id VARCHAR(255) NOT NULL,
 			event JSONB NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			expires_at TIMESTAMP DEFAULT NULL,
 			deleted_at TIMESTAMP DEFAULT NULL
 		)`
@@ -203,6 +204,7 @@ var expectedSchema = map[string]struct {
 			{"session_id", "character varying", false},
 			{"event", "jsonb", false},
 			{"created_at", "timestamp without time zone", false},
+			{"updated_at", "timestamp without time zone", false},
 			{"expires_at", "timestamp without time zone", true},
 			{"deleted_at", "timestamp without time zone", true},
 		},
