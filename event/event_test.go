@@ -470,7 +470,7 @@ func TestEventMarshalJSON_IncludesNestedResponse(t *testing.T) {
 	var rsp model.Response
 	require.NoError(t, json.Unmarshal(nested, &rsp))
 	require.Equal(t, "resp-1", rsp.ID)
-	require.Equal(t, model.ObjectTypeChatCompletion, rsp.Object)
+	require.Equal(t, "", rsp.Object)
 }
 
 // Test that UnmarshalJSON prefers nested response over flattened fields when both

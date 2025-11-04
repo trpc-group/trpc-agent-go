@@ -283,12 +283,18 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 }
 
 // MarshalJSON implements json.Marshaler and produces a format that
-// preserves legacy flattened fields while also embedding the
-// response under the dedicated "response" key.
+// preserves legacy flattened fields while also embedding minimal
+// response metadata (ID/timestamp) under the dedicated "response" key.
 func (e *Event) MarshalJSON() ([]byte, error) {
 	payload := jsonEvent{
 		eventNoMethods: (*eventNoMethods)(e),
-		Response:       e.Response,
+	}
+	if e.Response != nil {
+		meta := responseMeta{
+			ID:        e.Response.ID,
+			Timestamp: e.Response.Timestamp,
+		}
+		payload.Response = &meta
 	}
 	return json.Marshal(payload)
 }
@@ -303,14 +309,18 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	}
 	*e = Event(flat)
 	var nested struct {
-		Response *model.Response `json:"response,omitempty"`
+		Response *responseMeta `json:"response,omitempty"`
 	}
 	if err := json.Unmarshal(data, &nested); err != nil {
 		log.Warnf("unmarshal response: %v", err)
 		return nil
 	}
 	if nested.Response != nil {
-		e.Response = nested.Response
+		if e.Response == nil {
+			e.Response = &model.Response{}
+		}
+		e.Response.ID = nested.Response.ID
+		e.Response.Timestamp = nested.Response.Timestamp
 	}
 	return nil
 }
@@ -322,5 +332,11 @@ type eventNoMethods Event
 // jsonEvent is the JSON representation of the event.
 type jsonEvent struct {
 	*eventNoMethods
-	Response *model.Response `json:"response,omitempty"`
+	Response *responseMeta `json:"response,omitempty"`
+}
+
+// responseMeta stores only metadata fields that may conflict with Event-level fields.
+type responseMeta struct {
+	ID        string    `json:"id,omitempty"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
