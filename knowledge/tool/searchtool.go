@@ -28,20 +28,6 @@ import (
 
 const defaultMaxResults = 10
 
-// operatorAliasMap maps operator aliases to standard operators.
-var operatorAliasMap = map[string]string{
-	"=":     searchfilter.OperatorEqual,
-	"==":    searchfilter.OperatorEqual,
-	"!=":    searchfilter.OperatorNotEqual,
-	">":     searchfilter.OperatorGreaterThan,
-	">=":    searchfilter.OperatorGreaterThanOrEqual,
-	"<":     searchfilter.OperatorLessThan,
-	"<=":    searchfilter.OperatorLessThanOrEqual,
-	"&&":    searchfilter.OperatorAnd,
-	"||":    searchfilter.OperatorOr,
-	"equal": searchfilter.OperatorEqual,
-}
-
 // KnowledgeSearchRequest represents the input for the knowledge search tool.
 type KnowledgeSearchRequest struct {
 	Query string `json:"query" jsonschema:"description=The search query to find relevant information in the knowledge base"`
@@ -95,7 +81,7 @@ func WithFilter(filter map[string]any) Option {
 }
 
 // WithConditionedFilter sets a static complex filter with OR/AND/nested logic.
-// Supports operators: eq, ne, gt, gte, lt, lte, in, not in, like, and, or.
+// Supports operators: eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or.
 // For simple AND-only filters, use WithFilter instead.
 func WithConditionedFilter(filterCondition *searchfilter.UniversalFilterCondition) Option {
 	return func(opts *options) {
@@ -176,28 +162,8 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 
 // KnowledgeSearchRequestWithFilter represents the input with filter for the knowledge search tool.
 type KnowledgeSearchRequestWithFilter struct {
-	Query  string                    `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
-	Filter *ConditionedFilterRequest `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators: 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not in', 'like', 'not like', 'between', 'and', 'or'."`
-}
-
-// ConditionedFilterRequest represents an advanced filter condition that can be used in tool requests.
-type ConditionedFilterRequest struct {
-	// Field is the metadata field to filter on (not used for logical operators like AND/OR).
-	Field string `json:"field,omitempty" jsonschema:"description=The metadata field to filter on"`
-
-	// Operator is the comparison or logical operator.
-	// Comparison operators: "eq", "ne", "gt", "gte", "lt", "lte", "in", "not in", "like", "not like", "between"
-	// Logical operators: "and", "or"
-	Operator string `json:"operator" jsonschema:"description=The operator to use (eq/ne/gt/gte/lt/lte/in/not in/like/not like/between/and/or),enum=eq,enum=ne,enum=gt,enum=gte,enum=lt,enum=lte,enum=in,enum=not in,enum=like,enum=not like,enum=between,enum=and,enum=or"`
-
-	// Value is the value to compare against.
-	// For comparison operators: single value or array for "in"/"not in"/"between"
-	// For logical operators (and/or): array of ConditionedFilterRequest
-	Value any `json:"value,omitempty" jsonschema:"description=The value to compare against or array of sub-conditions for logical operators"`
-
-	// Conditions is used for logical operators (and/or) to specify sub-conditions.
-	// This is an alternative to using Value for better type safety.
-	Conditions []*ConditionedFilterRequest `json:"conditions,omitempty" jsonschema:"description=Sub-conditions for logical operators (and/or)"`
+	Query  string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
+	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators: 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not in', 'like', 'not like', 'between', 'and', 'or'."`
 }
 
 // NewAgenticFilterSearchTool creates a knowledge search tool with dynamic agent-controlled filtering.
@@ -234,19 +200,9 @@ func NewAgenticFilterSearchTool(
 			runnerConditionedFilter = invocation.RunOptions.KnowledgeConditionedFilter
 		}
 
-		// Convert request filter to UniversalFilterCondition if provided
-		var llmFilterCondition *searchfilter.UniversalFilterCondition
-		if req.Filter != nil {
-			var err error
-			llmFilterCondition, err = convertConditionedFilterToUniversal(req.Filter)
-			if err != nil {
-				return nil, fmt.Errorf("invalid filter: %w", err)
-			}
-		}
-
 		agentMetadataCondition := convertMetadataToFilterCondition(opt.staticFilter)
 		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
-		finalFilter := mergeFilterConditions(agentMetadataCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter, llmFilterCondition)
+		finalFilter := mergeFilterConditions(agentMetadataCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter, req.Filter)
 
 		searchReq := &knowledge.SearchRequest{
 			Query: req.Query,
@@ -395,35 +351,22 @@ func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
 	fmt.Fprintf(&b, `You are a helpful assistant that can search for relevant information in the knowledge base. Available metadata filters: %s.
 
 Filter Usage:
-1. Query parameter:
-   - Can be empty when using only metadata filters
-   - Provide semantic search query when available for semantic matching
-
-2. Filter object: Use 'filter' field for filter conditions (both simple and complex)
-   - Supported operators (case insensitive): 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not in', 'like', 'not like', 'between', 'and', 'or'
-   - Single condition: Use field, operator, and value directly
-   - Multiple conditions: Use 'and'/'or' operator with 'conditions' array to combine multiple filters
-   - Nested conditions: Combine 'and'/'or' operators for complex logic
+- Query: Can be empty when using only metadata filters
+- Filter: Use 'filter' field with standard operators (lowercase): eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or
 
 Filter Examples:
-- Single condition: {'field': 'category', 'operator': 'eq', 'value': 'documentation'}
-- OR condition: {'operator': 'or', 'conditions': [{'field': 'content_type', 'operator': 'eq', 'value': 'golang'}, {'field': 'content_type', 'operator': 'eq', 'value': 'llm'}]}
-- AND condition: {'operator': 'and', 'conditions': [{'field': 'category', 'operator': 'eq', 'value': 'documentation'}, {'field': 'topic', 'operator': 'eq', 'value': 'programming'}]}
-- IN operator: {'field': 'content_type', 'operator': 'in', 'value': ['golang', 'llm', 'wiki']}
-- NOT IN operator: {'field': 'status', 'operator': 'not in', 'value': ['archived', 'deleted']}
-- LIKE operator: {'field': 'title', 'operator': 'like', 'value': '%%tutorial%%'}
-- BETWEEN operator: {'field': 'score', 'operator': 'between', 'value': [0.5, 0.9]}
-- Nested: {'operator': 'and', 'conditions': [{'field': 'category', 'operator': 'eq', 'value': 'documentation'}, {'operator': 'or', 'conditions': [{'field': 'topic', 'operator': 'eq', 'value': 'programming'}, {'field': 'topic', 'operator': 'eq', 'value': 'machine_learning'}]}]}
+- Single: {'field': 'category', 'operator': 'eq', 'value': 'documentation'}
+- OR: {'operator': 'or', 'value': [{'field': 'type', 'operator': 'eq', 'value': 'golang'}, {'field': 'type', 'operator': 'eq', 'value': 'llm'}]}
+- AND: {'operator': 'and', 'value': [{'field': 'category', 'operator': 'eq', 'value': 'doc'}, {'field': 'topic', 'operator': 'eq', 'value': 'programming'}]}
+- IN: {'field': 'type', 'operator': 'in', 'value': ['golang', 'llm', 'wiki']}
+- NOT IN: {'field': 'status', 'operator': 'not in', 'value': ['archived', 'deleted']}
+- LIKE: {'field': 'title', 'operator': 'like', 'value': '%%tutorial%%'}
+- BETWEEN: {'field': 'score', 'operator': 'between', 'value': [0.5, 0.9]}
+- Nested: {'operator': 'and', 'value': [{'field': 'category', 'operator': 'eq', 'value': 'doc'}, {'operator': 'or', 'value': [{'field': 'topic', 'operator': 'eq', 'value': 'programming'}, {'field': 'topic', 'operator': 'eq', 'value': 'ml'}]}]}
 
-Query Examples:
-1. "find golang or llm content" -> query='golang llm', filter={'operator': 'or', 'conditions': [{'field': 'content_type', 'operator': 'eq', 'value': 'golang'}, {'field': 'content_type', 'operator': 'eq', 'value': 'llm'}]}
-2. "show documentation" -> query='', filter={'field': 'category', 'operator': 'eq', 'value': 'documentation'}
-3. "programming or machine learning docs" -> query='', filter={'operator': 'and', 'conditions': [{'field': 'category', 'operator': 'eq', 'value': 'documentation'}, {'operator': 'or', 'conditions': [{'field': 'topic', 'operator': 'eq', 'value': 'programming'}, {'field': 'topic', 'operator': 'eq', 'value': 'machine_learning'}]}]}
+Note: For logical operators (and/or), use 'value' field to specify an array of sub-conditions.
 
-IMPORTANT - Available Filter Values:
-The following metadata keys and values are extracted from ALL documents in the knowledge base.
-These are the ACTUAL metadata tags that exist in the documents.
-You MUST use these exact keys and values when constructing filters.
+Available Filter Values (use exact keys and values):
 
 `, keysStr)
 
@@ -436,173 +379,4 @@ You MUST use these exact keys and values when constructing filters.
 	}
 
 	return b.String()
-}
-
-// convertConditionedFilterToUniversal converts a ConditionedFilterRequest to UniversalFilterCondition.
-func convertConditionedFilterToUniversal(filter *ConditionedFilterRequest) (*searchfilter.UniversalFilterCondition, error) {
-	if filter == nil {
-		return nil, nil
-	}
-
-	if filter.Operator == "" {
-		return nil, fmt.Errorf("operator is required")
-	}
-
-	normalizedOp := normalizeOperator(filter.Operator)
-
-	// Handle logical operators (and/or)
-	if isLogicalOperator(normalizedOp) {
-		return convertLogicalFilter(filter, normalizedOp)
-	}
-
-	// Handle comparison operators
-	return convertComparisonFilter(filter, normalizedOp)
-}
-
-// normalizeOperator normalizes operator to lowercase and maps aliases to standard operators.
-func normalizeOperator(operator string) string {
-	normalizedOp := strings.ToLower(operator)
-
-	if mappedOp, ok := operatorAliasMap[normalizedOp]; ok {
-		return mappedOp
-	}
-	return normalizedOp
-}
-
-// isLogicalOperator checks if the operator is a logical operator (and/or).
-func isLogicalOperator(operator string) bool {
-	return operator == searchfilter.OperatorAnd || operator == searchfilter.OperatorOr
-}
-
-// convertLogicalFilter converts a logical filter (and/or) to UniversalFilterCondition.
-func convertLogicalFilter(filter *ConditionedFilterRequest, operator string) (*searchfilter.UniversalFilterCondition, error) {
-	var subConditions []*searchfilter.UniversalFilterCondition
-	var err error
-
-	if len(filter.Conditions) > 0 {
-		subConditions, err = convertConditionsArray(filter.Conditions)
-	} else if filter.Value != nil {
-		subConditions, err = convertValueArray(filter.Value, filter.Operator)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	if len(subConditions) == 0 {
-		return nil, fmt.Errorf("logical operator %s requires at least one sub-condition", operator)
-	}
-
-	return &searchfilter.UniversalFilterCondition{
-		Operator: operator,
-		Value:    subConditions,
-	}, nil
-}
-
-// convertConditionsArray converts an array of ConditionedFilterRequest to UniversalFilterCondition.
-func convertConditionsArray(conditions []*ConditionedFilterRequest) ([]*searchfilter.UniversalFilterCondition, error) {
-	subConditions := make([]*searchfilter.UniversalFilterCondition, 0, len(conditions))
-
-	for _, subFilter := range conditions {
-		subCond, err := convertConditionedFilterToUniversal(subFilter)
-		if err != nil {
-			return nil, fmt.Errorf("invalid sub-condition: %w", err)
-		}
-		subConditions = append(subConditions, subCond)
-	}
-
-	return subConditions, nil
-}
-
-// convertValueArray converts a Value array to UniversalFilterCondition array.
-func convertValueArray(value any, operator string) ([]*searchfilter.UniversalFilterCondition, error) {
-	valueSlice, ok := value.([]any)
-	if !ok {
-		return nil, fmt.Errorf("logical operator %s requires an array of conditions", operator)
-	}
-
-	subConditions := make([]*searchfilter.UniversalFilterCondition, 0, len(valueSlice))
-
-	for i, v := range valueSlice {
-		subFilter, err := parseFilterFromMap(v, i)
-		if err != nil {
-			return nil, err
-		}
-
-		subCond, err := convertConditionedFilterToUniversal(subFilter)
-		if err != nil {
-			return nil, fmt.Errorf("invalid sub-condition at index %d: %w", i, err)
-		}
-		subConditions = append(subConditions, subCond)
-	}
-
-	return subConditions, nil
-}
-
-// parseFilterFromMap parses a ConditionedFilterRequest from a map.
-func parseFilterFromMap(v any, index int) (*ConditionedFilterRequest, error) {
-	vMap, ok := v.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("condition at index %d is not a valid object", index)
-	}
-
-	subFilter := &ConditionedFilterRequest{}
-
-	if field, ok := vMap["field"].(string); ok {
-		subFilter.Field = field
-	}
-	if operator, ok := vMap["operator"].(string); ok {
-		subFilter.Operator = operator
-	}
-	if value, ok := vMap["value"]; ok {
-		subFilter.Value = value
-	}
-	if conditions, ok := vMap["conditions"].([]any); ok {
-		subFilter.Conditions = parseNestedConditions(conditions)
-	}
-
-	return subFilter, nil
-}
-
-// parseNestedConditions parses nested conditions from an array.
-func parseNestedConditions(conditions []any) []*ConditionedFilterRequest {
-	result := make([]*ConditionedFilterRequest, 0, len(conditions))
-
-	for _, c := range conditions {
-		cMap, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		cond := &ConditionedFilterRequest{}
-		if f, ok := cMap["field"].(string); ok {
-			cond.Field = f
-		}
-		if o, ok := cMap["operator"].(string); ok {
-			cond.Operator = o
-		}
-		if v, ok := cMap["value"]; ok {
-			cond.Value = v
-		}
-		// Recursively parse nested conditions
-		if nestedConditions, ok := cMap["conditions"].([]any); ok {
-			cond.Conditions = parseNestedConditions(nestedConditions)
-		}
-		result = append(result, cond)
-	}
-
-	return result
-}
-
-// convertComparisonFilter converts a comparison filter to UniversalFilterCondition.
-func convertComparisonFilter(filter *ConditionedFilterRequest, operator string) (*searchfilter.UniversalFilterCondition, error) {
-	if filter.Field == "" {
-		return nil, fmt.Errorf("field is required for comparison operator %s", operator)
-	}
-
-	return &searchfilter.UniversalFilterCondition{
-		Field:    filter.Field,
-		Operator: operator,
-		Value:    filter.Value,
-	}, nil
 }

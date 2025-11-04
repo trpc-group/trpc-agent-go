@@ -9,18 +9,6 @@
 
 package searchfilter
 
-// Builder provides a fluent interface for building UniversalFilterCondition.
-type Builder struct {
-	condition *UniversalFilterCondition
-}
-
-// NewBuilder creates a new filter condition builder.
-func NewBuilder() *Builder {
-	return &Builder{
-		condition: &UniversalFilterCondition{},
-	}
-}
-
 // Equal creates a condition for equality comparison.
 func Equal(field string, value any) *UniversalFilterCondition {
 	return &UniversalFilterCondition{
@@ -135,4 +123,3 @@ func Or(conditions ...*UniversalFilterCondition) *UniversalFilterCondition {
 		Value:    conditions,
 	}
 }
-

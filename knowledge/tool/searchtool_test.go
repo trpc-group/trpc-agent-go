@@ -42,7 +42,7 @@ func marshalArgs(t *testing.T, query string) []byte {
 	return bts
 }
 
-func marshalArgsWithFilter(t *testing.T, query string, filter *ConditionedFilterRequest) []byte {
+func marshalArgsWithFilter(t *testing.T, query string, filter *searchfilter.UniversalFilterCondition) []byte {
 	t.Helper()
 	bts, err := json.Marshal(&KnowledgeSearchRequestWithFilter{Query: query, Filter: filter})
 	require.NoError(t, err)
@@ -215,7 +215,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 	t.Run("search error", func(t *testing.T) {
 		kb := stubKnowledge{err: errors.New("search failed")}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filter := &ConditionedFilterRequest{Field: "category", Operator: "eq", Value: "documentation"}
+		filter := &searchfilter.UniversalFilterCondition{Field: "category", Operator: "eq", Value: "documentation"}
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filter))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "search failed")
@@ -224,7 +224,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 	t.Run("no result", func(t *testing.T) {
 		kb := stubKnowledge{}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filter := &ConditionedFilterRequest{Field: "category", Operator: "eq", Value: "documentation"}
+		filter := &searchfilter.UniversalFilterCondition{Field: "category", Operator: "eq", Value: "documentation"}
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filter))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no relevant information found")
@@ -240,7 +240,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 			},
 		}}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filter := &ConditionedFilterRequest{Field: "category", Operator: "eq", Value: "documentation"}
+		filter := &searchfilter.UniversalFilterCondition{Field: "category", Operator: "eq", Value: "documentation"}
 		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filter))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
@@ -260,9 +260,9 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 			},
 		}}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filter := &ConditionedFilterRequest{
+		filter := &searchfilter.UniversalFilterCondition{
 			Operator: "and",
-			Conditions: []*ConditionedFilterRequest{
+			Value: []*searchfilter.UniversalFilterCondition{
 				{Field: "category", Operator: "eq", Value: "documentation"},
 				{Field: "protocol", Operator: "eq", Value: "trpc-go"},
 				{Field: "level", Operator: "eq", Value: "intermediate"},
@@ -337,7 +337,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 			},
 		}}
 		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
-		filter := &ConditionedFilterRequest{Field: "category", Operator: "eq", Value: "documentation"}
+		filter := &searchfilter.UniversalFilterCondition{Field: "category", Operator: "eq", Value: "documentation"}
 		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filter))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
@@ -483,19 +483,17 @@ func TestGenerateAgenticFilterPrompt(t *testing.T) {
 		require.Contains(t, prompt, "filter")
 
 		// Check for operator information
-		require.Contains(t, prompt, "Supported operators")
 		require.Contains(t, prompt, "eq")
 		require.Contains(t, prompt, "or")
 		require.Contains(t, prompt, "and")
 
 		// Check for examples
 		require.Contains(t, prompt, "Filter Examples")
-		require.Contains(t, prompt, "Query Examples")
-		require.Contains(t, prompt, "OR condition")
-		require.Contains(t, prompt, "AND condition")
+		require.Contains(t, prompt, "OR:")
+		require.Contains(t, prompt, "AND:")
 
 		// Check for value handling
-		require.Contains(t, prompt, "any value accepted")
+		require.Contains(t, prompt, "exact keys and values")
 	})
 }
 
@@ -519,7 +517,7 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 
 		req := &KnowledgeSearchRequestWithFilter{
 			Query: "test query",
-			Filter: &ConditionedFilterRequest{
+			Filter: &searchfilter.UniversalFilterCondition{
 				Field:    "status",
 				Operator: "eq",
 				Value:    "active",
@@ -557,9 +555,9 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 
 		req := &KnowledgeSearchRequestWithFilter{
 			Query: "test query",
-			Filter: &ConditionedFilterRequest{
+			Filter: &searchfilter.UniversalFilterCondition{
 				Operator: "and",
-				Conditions: []*ConditionedFilterRequest{
+				Value: []*searchfilter.UniversalFilterCondition{
 					{
 						Field:    "status",
 						Operator: "eq",
@@ -603,9 +601,9 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 
 		req := &KnowledgeSearchRequestWithFilter{
 			Query: "test query",
-			Filter: &ConditionedFilterRequest{
+			Filter: &searchfilter.UniversalFilterCondition{
 				Operator: "or",
-				Conditions: []*ConditionedFilterRequest{
+				Value: []*searchfilter.UniversalFilterCondition{
 					{
 						Field:    "category",
 						Operator: "eq",
@@ -663,191 +661,5 @@ func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 		_, err = tool.(ctool.CallableTool).Call(context.Background(), args)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "search failed")
-	})
-}
-
-func TestConvertConditionedFilterToUniversal(t *testing.T) {
-	t.Run("simple equality filter", func(t *testing.T) {
-		filter := &ConditionedFilterRequest{
-			Field:    "status",
-			Operator: "eq",
-			Value:    "active",
-		}
-
-		result, err := convertConditionedFilterToUniversal(filter)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.Equal(t, "status", result.Field)
-		require.Equal(t, searchfilter.OperatorEqual, result.Operator)
-		require.Equal(t, "active", result.Value)
-	})
-
-	t.Run("greater than filter", func(t *testing.T) {
-		filter := &ConditionedFilterRequest{
-			Field:    "age",
-			Operator: "gt",
-			Value:    float64(18),
-		}
-
-		result, err := convertConditionedFilterToUniversal(filter)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.Equal(t, "age", result.Field)
-		require.Equal(t, searchfilter.OperatorGreaterThan, result.Operator)
-		require.Equal(t, float64(18), result.Value)
-	})
-
-	t.Run("AND filter with conditions", func(t *testing.T) {
-		filter := &ConditionedFilterRequest{
-			Operator: "and",
-			Conditions: []*ConditionedFilterRequest{
-				{
-					Field:    "status",
-					Operator: "eq",
-					Value:    "active",
-				},
-				{
-					Field:    "age",
-					Operator: "gt",
-					Value:    float64(18),
-				},
-			},
-		}
-
-		result, err := convertConditionedFilterToUniversal(filter)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.Equal(t, searchfilter.OperatorAnd, result.Operator)
-
-		conditions := result.Value.([]*searchfilter.UniversalFilterCondition)
-		require.Len(t, conditions, 2)
-		require.Equal(t, "status", conditions[0].Field)
-		require.Equal(t, "age", conditions[1].Field)
-	})
-
-	t.Run("OR filter with conditions", func(t *testing.T) {
-		filter := &ConditionedFilterRequest{
-			Operator: "or",
-			Conditions: []*ConditionedFilterRequest{
-				{
-					Field:    "category",
-					Operator: "eq",
-					Value:    "A",
-				},
-				{
-					Field:    "category",
-					Operator: "eq",
-					Value:    "B",
-				},
-			},
-		}
-
-		result, err := convertConditionedFilterToUniversal(filter)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.Equal(t, searchfilter.OperatorOr, result.Operator)
-
-		conditions := result.Value.([]*searchfilter.UniversalFilterCondition)
-		require.Len(t, conditions, 2)
-	})
-
-	t.Run("nil filter", func(t *testing.T) {
-		result, err := convertConditionedFilterToUniversal(nil)
-		require.NoError(t, err)
-		require.Nil(t, result)
-	})
-
-	t.Run("missing operator", func(t *testing.T) {
-		filter := &ConditionedFilterRequest{
-			Field: "status",
-			Value: "active",
-		}
-
-		_, err := convertConditionedFilterToUniversal(filter)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "operator is required")
-	})
-
-	t.Run("missing field for comparison operator", func(t *testing.T) {
-		filter := &ConditionedFilterRequest{
-			Operator: "eq",
-			Value:    "active",
-		}
-
-		_, err := convertConditionedFilterToUniversal(filter)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "field is required")
-	})
-
-	t.Run("logical operator without conditions", func(t *testing.T) {
-		filter := &ConditionedFilterRequest{
-			Operator: "and",
-		}
-
-		_, err := convertConditionedFilterToUniversal(filter)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "requires at least one sub-condition")
-	})
-
-	t.Run("uppercase operator normalization", func(t *testing.T) {
-		filter := &ConditionedFilterRequest{
-			Operator: "OR",
-			Conditions: []*ConditionedFilterRequest{
-				{Field: "status", Operator: "EQ", Value: "active"},
-				{Field: "status", Operator: "EQ", Value: "pending"},
-			},
-		}
-
-		result, err := convertConditionedFilterToUniversal(filter)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.Equal(t, searchfilter.OperatorOr, result.Operator)
-
-		conditions := result.Value.([]*searchfilter.UniversalFilterCondition)
-		require.Len(t, conditions, 2)
-		require.Equal(t, searchfilter.OperatorEqual, conditions[0].Operator)
-		require.Equal(t, searchfilter.OperatorEqual, conditions[1].Operator)
-	})
-
-	t.Run("operator alias mapping", func(t *testing.T) {
-		testCases := []struct {
-			name     string
-			operator string
-			expected string
-		}{
-			{"equal sign", "=", searchfilter.OperatorEqual},
-			{"double equal", "==", searchfilter.OperatorEqual},
-			{"not equal", "!=", searchfilter.OperatorNotEqual},
-			{"greater than", ">", searchfilter.OperatorGreaterThan},
-			{"greater or equal", ">=", searchfilter.OperatorGreaterThanOrEqual},
-			{"less than", "<", searchfilter.OperatorLessThan},
-			{"less or equal", "<=", searchfilter.OperatorLessThanOrEqual},
-			{"logical and", "&&", searchfilter.OperatorAnd},
-			{"logical or", "||", searchfilter.OperatorOr},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				var filter *ConditionedFilterRequest
-				if tc.expected == searchfilter.OperatorAnd || tc.expected == searchfilter.OperatorOr {
-					filter = &ConditionedFilterRequest{
-						Operator: tc.operator,
-						Conditions: []*ConditionedFilterRequest{
-							{Field: "a", Operator: "eq", Value: 1},
-						},
-					}
-				} else {
-					filter = &ConditionedFilterRequest{
-						Field:    "test",
-						Operator: tc.operator,
-						Value:    "value",
-					}
-				}
-
-				result, err := convertConditionedFilterToUniversal(filter)
-				require.NoError(t, err)
-				require.Equal(t, tc.expected, result.Operator)
-			})
-		}
 	})
 }
