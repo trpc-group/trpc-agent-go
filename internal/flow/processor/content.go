@@ -222,17 +222,9 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
 		// Filter invalid content
-		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
-			continue
-		}
-
-		// Filter historical messages
-		if !needAppendHistoryMesesage && inv.RunOptions.RequestID != evt.RequestID {
-			continue
-		}
-
-		// Filter non incremental messages
-		if !isZeroTime && evt.Timestamp.Before(since) {
+		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() ||
+			(!isZeroTime && evt.Timestamp.Before(since)) ||
+			(!needAppendHistoryMesesage && inv.RunOptions.RequestID != evt.RequestID) {
 			continue
 		}
 
