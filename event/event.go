@@ -39,9 +39,6 @@ const (
 
 	// TagDelimiter is the delimiter for event tags.
 	TagDelimiter = ";"
-
-	// jsonKeyResponse is the nested response object key to preserve response fields.
-	jsonKeyResponse = "response"
 )
 
 // Event represents an event in conversation between agents and users.
@@ -285,55 +282,45 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	return nil
 }
 
-// MarshalJSON provides the format for Event that avoids anonymous
-// embedding conflicts by always including a nested "response" object while
-// preserving legacy flattened fields for backward compatibility.
+// MarshalJSON implements json.Marshaler and produces a format that
+// preserves legacy flattened fields while also embedding the
+// response under the dedicated "response" key.
 func (e *Event) MarshalJSON() ([]byte, error) {
-	// Avoid recursion by using a no-method alias.
-	type noMethods Event
-	flat, err := json.Marshal((*noMethods)(e))
-	if err != nil {
-		return nil, err
-	}
-	// Convert to a raw payload map and inject the nested response.
-	payload := make(map[string]json.RawMessage)
-	if err := json.Unmarshal(flat, &payload); err != nil {
-		return nil, err
-	}
-	if e != nil && e.Response != nil {
-		rspBytes, err := json.Marshal(e.Response)
-		if err != nil {
-			return nil, err
-		}
-		payload[jsonKeyResponse] = rspBytes
+	payload := jsonEvent{
+		eventNoMethods: (*eventNoMethods)(e),
+		Response:       e.Response,
 	}
 	return json.Marshal(payload)
 }
 
-// UnmarshalJSON accepts both legacy flattened Event JSON and the new format
-// that includes a nested "response" object. When nested "response" is present,
-// it takes precedence for populating the Response fields.
+// UnmarshalJSON implements json.Unmarshaler by accepting both legacy flattened
+// payloads and the new nested-response representation, preferring the nested
+// response when present.
 func (e *Event) UnmarshalJSON(data []byte) error {
-	// Unmarshal into alias to populate legacy flattened fields.
-	type noMethods Event
-	var noMethodEvent noMethods
-	if err := json.Unmarshal(data, &noMethodEvent); err != nil {
+	var flat eventNoMethods
+	if err := json.Unmarshal(data, &flat); err != nil {
 		return err
 	}
-	*e = Event(noMethodEvent)
-	// If a nested response is present, hydrate it to avoid conflicts.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		log.Warnf("Event raw unmarshal: %w", err)
+	*e = Event(flat)
+	var nested struct {
+		Response *model.Response `json:"response,omitempty"`
+	}
+	if err := json.Unmarshal(data, &nested); err != nil {
+		log.Warnf("unmarshal response: %v", err)
 		return nil
 	}
-	if rspBytes, ok := raw[jsonKeyResponse]; ok && len(rspBytes) > 0 {
-		var rsp model.Response
-		if err := json.Unmarshal(rspBytes, &rsp); err != nil {
-			log.Warnf("Event response unmarshal: %w", err)
-			return nil
-		}
-		e.Response = &rsp
+	if nested.Response != nil {
+		e.Response = nested.Response
 	}
 	return nil
+}
+
+// eventNoMethods is an alias for Event without methods.
+// It is used to avoid recursive calls to MarshalJSON and UnmarshalJSON.
+type eventNoMethods Event
+
+// jsonEvent is the JSON representation of the event.
+type jsonEvent struct {
+	*eventNoMethods
+	Response *model.Response `json:"response,omitempty"`
 }

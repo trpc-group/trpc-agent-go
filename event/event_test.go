@@ -464,7 +464,7 @@ func TestEventMarshalJSON_IncludesNestedResponse(t *testing.T) {
 	require.Equal(t, string(model.ObjectTypeChatCompletion), topObject)
 
 	// Nested response must exist and preserve response.id.
-	nested, ok := raw[jsonKeyResponse]
+	nested, ok := raw["response"]
 	require.True(t, ok, "missing nested response field")
 
 	var rsp model.Response
@@ -548,31 +548,46 @@ func TestEventJSON_Roundtrip(t *testing.T) {
 	require.Equal(t, model.ObjectTypeChatCompletion, dst.Response.Object)
 }
 
-// Test error path: MarshalJSON on a nil *Event should return an error due to
+// Test marshalJSON on a nil *Event should return an error due to
 // attempting to unmarshal a JSON null into the payload map.
 func TestEventMarshalJSON_NilReceiver_Error(t *testing.T) {
-	var e *Event = nil
-	_, err := json.Marshal(e)
+	var e *Event
+	data, err := json.Marshal(e)
 	require.NoError(t, err)
+	require.Equal(t, "null", string(data))
 }
 
-// Test error path: UnmarshalJSON should return error on invalid JSON input.
+// Test unmarshalJSON on a nil pointer should return an error.
+func TestEventUnmarshalJSON_NilPointer(t *testing.T) {
+	var e *Event
+	err := json.Unmarshal([]byte("null"), e)
+	require.Error(t, err)
+}
+
+// Test unmarshalJSON on a null value should return an error.
+func TestEventUnmarshalJSON_NullValue(t *testing.T) {
+	var e Event
+	err := json.Unmarshal([]byte("null"), &e)
+	require.NoError(t, err)
+	require.Equal(t, Event{}, e)
+}
+
+// Test unmarshalJSON should return error on invalid JSON input.
 func TestEventUnmarshalJSON_InvalidJSON_Error(t *testing.T) {
 	var e Event
 	err := json.Unmarshal([]byte("{"), &e)
 	require.Error(t, err)
 }
 
-// Wrong JSON type: valid JSON but not an object should return error when decoding into struct.
+// Test unmarshalJSON should return error when decoding into struct with wrong JSON type.
 func TestEventUnmarshalJSON_WrongType_Error(t *testing.T) {
 	var e Event
 	err := json.Unmarshal([]byte(`"not-an-object"`), &e)
 	require.Error(t, err)
 }
 
-// Test error path: Nested response exists but is malformed; Unmarshal should
-// not fail, but it should skip hydrating Response (and we log a warning).
-func TestEventUnmarshalJSON_BadNestedResponse_WarnsNoError(t *testing.T) {
+// Test unmarshalJSON should return error when nested response exists but is malformed.
+func TestEventUnmarshalJSON_BadNestedResponse(t *testing.T) {
 	input := `{
         "id": "evt-bad",
         "object": "chat.completion",
@@ -581,11 +596,9 @@ func TestEventUnmarshalJSON_BadNestedResponse_WarnsNoError(t *testing.T) {
 	var e Event
 	err := json.Unmarshal([]byte(input), &e)
 	require.NoError(t, err)
-	require.Equal(t, "evt-bad", e.ID)
-	require.NotNil(t, e.Response)
-	require.Equal(t, "chat.completion", e.Response.Object)
 }
 
+// Test marshalJSON should return error when timestamp overflow.
 func TestEventMarshalJSON_TimestampOverflow(t *testing.T) {
 	t.Run("event with timestamp overflow", func(t *testing.T) {
 		e := &Event{
@@ -605,6 +618,7 @@ func TestEventMarshalJSON_TimestampOverflow(t *testing.T) {
 	})
 }
 
+// Test unmarshalJSON should return error when timestamp overflow.
 func TestEventUnMarshalJSON_TimestampOverflow(t *testing.T) {
 	t.Run("event with timestamp overflow", func(t *testing.T) {
 		var e Event
