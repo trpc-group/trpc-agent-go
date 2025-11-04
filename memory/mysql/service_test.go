@@ -640,7 +640,7 @@ func TestDeleteMemory_InvalidMemoryKey(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestDeleteMemory_Success tests successful memory deletion.
+// TestDeleteMemory_Success tests successful memory deletion (soft delete).
 func TestDeleteMemory_Success(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -649,8 +649,8 @@ func TestDeleteMemory_Success(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "mem123"}
 
-	mock.ExpectExec("DELETE FROM").
-		WithArgs("app", "user", "mem123").
+	mock.ExpectExec("UPDATE.*SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "app", "user", "mem123").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err := s.DeleteMemory(ctx, memKey)
@@ -668,8 +668,8 @@ func TestDeleteMemory_Error(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "mem123"}
 
-	mock.ExpectExec("DELETE FROM").
-		WithArgs("app", "user", "mem123").
+	mock.ExpectExec("UPDATE.*SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "app", "user", "mem123").
 		WillReturnError(errors.New("delete error"))
 
 	err := s.DeleteMemory(ctx, memKey)
@@ -690,7 +690,7 @@ func TestClearMemories_InvalidUserKey(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestClearMemories_Success tests successful clearing of all memories for a user.
+// TestClearMemories_Success tests successful clearing of all memories for a user (soft delete).
 func TestClearMemories_Success(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -699,8 +699,8 @@ func TestClearMemories_Success(t *testing.T) {
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "app", UserID: "user"}
 
-	mock.ExpectExec("DELETE FROM").
-		WithArgs("app", "user").
+	mock.ExpectExec("UPDATE.*SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "app", "user").
 		WillReturnResult(sqlmock.NewResult(0, 5))
 
 	err := s.ClearMemories(ctx, userKey)
@@ -718,8 +718,8 @@ func TestClearMemories_Error(t *testing.T) {
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "app", UserID: "user"}
 
-	mock.ExpectExec("DELETE FROM").
-		WithArgs("app", "user").
+	mock.ExpectExec("UPDATE.*SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), "app", "user").
 		WillReturnError(errors.New("clear error"))
 
 	err := s.ClearMemories(ctx, userKey)
@@ -805,7 +805,7 @@ func TestReadMemories_NoLimit(t *testing.T) {
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "app", UserID: "user"}
 
-	mock.ExpectQuery("SELECT memory_data FROM memories WHERE app_name = \\? AND user_id = \\? ORDER BY updated_at DESC, created_at DESC$").
+	mock.ExpectQuery("SELECT memory_data FROM memories WHERE app_name = \\? AND user_id = \\? AND deleted_at IS NULL ORDER BY updated_at DESC, created_at DESC$").
 		WithArgs("app", "user").
 		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}))
 

@@ -124,10 +124,12 @@ func (s *Service) initTable(ctx context.Context) error {
 			user_id VARCHAR(255) NOT NULL,
 			memory_id VARCHAR(64) NOT NULL,
 			memory_data JSON NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
 			PRIMARY KEY (app_name, user_id, memory_id),
-			INDEX idx_app_user (app_name, user_id)
+			INDEX idx_app_user (app_name, user_id),
+			INDEX idx_deleted_at (deleted_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`, s.tableName)
 
@@ -145,7 +147,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	if s.opts.memoryLimit > 0 {
 		// Table name is validated in NewService.
 		// #nosec G201
-		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = ? AND user_id = ?", s.tableName)
+		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = ? AND user_id = ? AND deleted_at IS NULL", s.tableName)
 		var count int
 		if err := s.db.QueryRow(ctx, []any{&count}, countQuery, userKey.AppName, userKey.UserID); err != nil {
 			return fmt.Errorf("mysql memory service check memory count failed: %w", err)
@@ -200,7 +202,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	// Table name is validated in NewService.
 	// #nosec G201
 	selectQuery := fmt.Sprintf(
-		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ? AND deleted_at IS NULL",
 		s.tableName,
 	)
 	var memoryData []byte
@@ -231,7 +233,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	// Table name is validated in NewService.
 	// #nosec G201
 	updateQuery := fmt.Sprintf(
-		"UPDATE %s SET memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		"UPDATE %s SET memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ? AND deleted_at IS NULL",
 		s.tableName,
 	)
 	_, err = s.db.Exec(ctx, updateQuery, updated, now, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
@@ -242,19 +244,20 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	return nil
 }
 
-// DeleteMemory deletes a memory for a user.
+// DeleteMemory deletes a memory for a user (soft delete).
 func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
 
+	now := time.Now()
 	// Table name is validated in NewService.
 	// #nosec G201
 	deleteQuery := fmt.Sprintf(
-		"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		"UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ? AND deleted_at IS NULL",
 		s.tableName,
 	)
-	_, err := s.db.Exec(ctx, deleteQuery, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
+	_, err := s.db.Exec(ctx, deleteQuery, now, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
 	if err != nil {
 		return fmt.Errorf("delete memory entry failed: %w", err)
 	}
@@ -262,19 +265,20 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 	return nil
 }
 
-// ClearMemories clears all memories for a user.
+// ClearMemories clears all memories for a user (soft delete).
 func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
 
+	now := time.Now()
 	// Table name is validated in NewService.
 	// #nosec G201
 	deleteQuery := fmt.Sprintf(
-		"DELETE FROM %s WHERE app_name = ? AND user_id = ?",
+		"UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND deleted_at IS NULL",
 		s.tableName,
 	)
-	_, err := s.db.Exec(ctx, deleteQuery, userKey.AppName, userKey.UserID)
+	_, err := s.db.Exec(ctx, deleteQuery, now, userKey.AppName, userKey.UserID)
 	if err != nil {
 		return fmt.Errorf("clear memories failed: %w", err)
 	}
@@ -291,7 +295,7 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 	// Table name is validated in NewService.
 	// #nosec G201
 	query := fmt.Sprintf(
-		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? ORDER BY updated_at DESC, created_at DESC",
+		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC, created_at DESC",
 		s.tableName,
 	)
 	if limit > 0 {
@@ -330,7 +334,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	// Table name is validated in NewService.
 	// #nosec G201
 	selectQuery := fmt.Sprintf(
-		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ?",
+		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND deleted_at IS NULL",
 		s.tableName,
 	)
 
