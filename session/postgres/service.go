@@ -66,6 +66,13 @@ type Service struct {
 	cleanupDone     chan struct{}            // signal to stop cleanup routine
 	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
 	once            sync.Once
+
+	// Table names with prefix applied
+	tableSessionStates    string
+	tableSessionEvents    string
+	tableSessionSummaries string
+	tableAppStates        string
+	tableUserStates       string
 }
 
 type sessionEventPair struct {
@@ -178,11 +185,18 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		appStateTTL:  opts.appStateTTL,
 		userStateTTL: opts.userStateTTL,
 		cleanupDone:  make(chan struct{}),
+
+		// Initialize table names with prefix
+		tableSessionStates:    opts.tablePrefix + "session_states",
+		tableSessionEvents:    opts.tablePrefix + "session_events",
+		tableSessionSummaries: opts.tablePrefix + "session_summaries",
+		tableAppStates:        opts.tablePrefix + "app_states",
+		tableUserStates:       opts.tablePrefix + "user_states",
 	}
 
-	// Initialize database schema
-	if err := s.initDB(context.Background()); err != nil {
-		return nil, fmt.Errorf("initialize database schema failed: %w", err)
+	// Initialize database schema unless skipped
+	if !opts.skipDBInit {
+		s.initDB(context.Background())
 	}
 
 	if opts.enableAsyncPersist {
@@ -236,22 +250,47 @@ func (s *Service) CreateSession(
 		expiresAt = &t
 	}
 
-	// Delete existing session if any (to avoid unique constraint violation on expired sessions)
-	if err := s.deleteSessionState(ctx, key); err != nil {
-		log.Infof("delete existing session before create: %v", err)
+	// Check if session already exists
+	var sessionExists bool
+	var existingExpiresAt sql.NullTime
+	err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+		if rows.Next() {
+			sessionExists = true
+			if err := rows.Scan(&existingExpiresAt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, fmt.Sprintf(`SELECT expires_at FROM %s
+		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+		AND deleted_at IS NULL`, s.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("check existing session failed: %w", err)
+	}
+
+	if sessionExists {
+		if !existingExpiresAt.Valid {
+			return nil, fmt.Errorf("session already exists and has not expired")
+		}
+		if existingExpiresAt.Time.After(now) {
+			return nil, fmt.Errorf("session already exists and has not expired")
+		}
+		log.Infof("found expired session (app=%s,. user=%s, session=%s), triggering cleanup",
+			key.AppName, key.UserID, key.SessionID)
+		s.cleanupExpiredForUser(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
 	}
 
 	// Insert session state
 	_, err = s.pgClient.ExecContext(ctx,
-		`INSERT INTO session_states (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID, sessBytes, sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create session failed: %w", err)
 	}
 
-	// Query app and user states
 	appState, err := s.ListAppStates(ctx, key.AppName)
 	if err != nil {
 		return nil, fmt.Errorf("list app states failed: %w", err)
@@ -290,6 +329,15 @@ func (s *Service) GetSession(
 	if err != nil {
 		return nil, fmt.Errorf("postgres session service get session state failed: %w", err)
 	}
+
+	// Refresh session TTL if configured and session exists
+	if sess != nil && s.sessionTTL > 0 {
+		if err := s.refreshSessionTTL(ctx, key); err != nil {
+			log.Warnf("failed to refresh session TTL: %v", err)
+			// Don't fail the GetSession call, just log the warning
+		}
+	}
+
 	return sess, nil
 }
 
@@ -340,9 +388,15 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
+		// Use UPSERT to handle conflicts - update if exists, insert if not
 		_, err := s.pgClient.ExecContext(ctx,
-			`INSERT INTO app_states (app_name, key, value, updated_at, expires_at)
-			 VALUES ($1, $2, $3, $4, $5)`,
+			fmt.Sprintf(`INSERT INTO %s (app_name, key, value, updated_at, expires_at, deleted_at)
+			 VALUES ($1, $2, $3, $4, $5, NULL)
+			 ON CONFLICT (app_name, key) WHERE deleted_at IS NULL
+			 DO UPDATE SET
+			   value = EXCLUDED.value,
+			   updated_at = EXCLUDED.updated_at,
+			   expires_at = EXCLUDED.expires_at`, s.tableAppStates),
 			appName, k, v, now, expiresAt,
 		)
 		if err != nil {
@@ -369,10 +423,10 @@ func (s *Service) ListAppStates(ctx context.Context, appName string) (session.St
 			appStateMap[key] = value
 		}
 		return nil
-	}, `SELECT key, value FROM app_states
+	}, fmt.Sprintf(`SELECT key, value FROM %s
 		WHERE app_name = $1
 		AND (expires_at IS NULL OR expires_at > $2)
-		AND deleted_at IS NULL`,
+		AND deleted_at IS NULL`, s.tableAppStates),
 		appName, time.Now().UTC())
 
 	if err != nil {
@@ -394,14 +448,14 @@ func (s *Service) DeleteAppState(ctx context.Context, appName string, key string
 	if s.opts.softDelete {
 		// Soft delete: set deleted_at timestamp
 		_, err = s.pgClient.ExecContext(ctx,
-			`UPDATE app_states SET deleted_at = $1
-			 WHERE app_name = $2 AND key = $3 AND deleted_at IS NULL`,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+			 WHERE app_name = $2 AND key = $3 AND deleted_at IS NULL`, s.tableAppStates),
 			time.Now().UTC(), appName, key)
 	} else {
 		// Hard delete: permanently remove record
 		_, err = s.pgClient.ExecContext(ctx,
-			`DELETE FROM app_states
-			 WHERE app_name = $1 AND key = $2`,
+			fmt.Sprintf(`DELETE FROM %s
+			 WHERE app_name = $1 AND key = $2`, s.tableAppStates),
 			appName, key)
 	}
 
@@ -426,9 +480,15 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateUserPrefix)
+		// Use UPSERT to handle conflicts - update if exists, insert if not
 		_, err := s.pgClient.ExecContext(ctx,
-			`INSERT INTO user_states (app_name, user_id, key, value, updated_at, expires_at)
-			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, key, value, updated_at, expires_at, deleted_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, NULL)
+			 ON CONFLICT (app_name, user_id, key) WHERE deleted_at IS NULL
+			 DO UPDATE SET
+			   value = EXCLUDED.value,
+			   updated_at = EXCLUDED.updated_at,
+			   expires_at = EXCLUDED.expires_at`, s.tableUserStates),
 			userKey.AppName, userKey.UserID, k, v, now, expiresAt,
 		)
 		if err != nil {
@@ -455,10 +515,10 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 			userStateMap[key] = value
 		}
 		return nil
-	}, `SELECT key, value FROM user_states
+	}, fmt.Sprintf(`SELECT key, value FROM %s
 		WHERE app_name = $1 AND user_id = $2
 		AND (expires_at IS NULL OR expires_at > $3)
-		AND deleted_at IS NULL`,
+		AND deleted_at IS NULL`, s.tableUserStates),
 		userKey.AppName, userKey.UserID, time.Now().UTC())
 
 	if err != nil {
@@ -479,13 +539,13 @@ func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, 
 	var err error
 	if s.opts.softDelete {
 		_, err = s.pgClient.ExecContext(ctx,
-			`UPDATE user_states SET deleted_at = $1
-			 WHERE app_name = $2 AND user_id = $3 AND key = $4 AND deleted_at IS NULL`,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+			 WHERE app_name = $2 AND user_id = $3 AND key = $4 AND deleted_at IS NULL`, s.tableUserStates),
 			time.Now().UTC(), userKey.AppName, userKey.UserID, key)
 	} else {
 		_, err = s.pgClient.ExecContext(ctx,
-			`DELETE FROM user_states
-			 WHERE app_name = $1 AND user_id = $2 AND key = $3`,
+			fmt.Sprintf(`DELETE FROM %s
+			 WHERE app_name = $1 AND user_id = $2 AND key = $3`, s.tableUserStates),
 			userKey.AppName, userKey.UserID, key)
 	}
 	if err != nil {
@@ -574,10 +634,10 @@ func (s *Service) getSession(
 ) (*session.Session, error) {
 	// Query session state (always filter deleted records)
 	var sessState *SessionState
-	stateQuery := `SELECT state, created_at, updated_at FROM session_states
+	stateQuery := fmt.Sprintf(`SELECT state, created_at, updated_at FROM %s
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
 		AND (expires_at IS NULL OR expires_at > $4)
-		AND deleted_at IS NULL`
+		AND deleted_at IS NULL`, s.tableSessionStates)
 	stateArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now().UTC()}
 
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
@@ -620,27 +680,28 @@ func (s *Service) getSession(
 	}
 
 	// Query events (always filter deleted records)
+	// Note: limit here only controls how many events to return, not delete from database
 	events := []event.Event{}
+	now := time.Now().UTC()
 	var eventQuery string
 	var eventArgs []interface{}
 
-	now := time.Now().UTC()
 	if limit > 0 {
-		eventQuery = `SELECT event FROM session_events
+		eventQuery = fmt.Sprintf(`SELECT event FROM %s
 			WHERE app_name = $1 AND user_id = $2 AND session_id = $3
 			AND (expires_at IS NULL OR expires_at > $4)
 			AND created_at > $5
 			AND deleted_at IS NULL
 			ORDER BY created_at DESC
-			LIMIT $6`
+			LIMIT $6`, s.tableSessionEvents)
 		eventArgs = []interface{}{key.AppName, key.UserID, key.SessionID, now, afterTime, limit}
 	} else {
-		eventQuery = `SELECT event FROM session_events
+		eventQuery = fmt.Sprintf(`SELECT event FROM %s
 			WHERE app_name = $1 AND user_id = $2 AND session_id = $3
 			AND (expires_at IS NULL OR expires_at > $4)
 			AND created_at > $5
 			AND deleted_at IS NULL
-			ORDER BY created_at DESC`
+			ORDER BY created_at DESC`, s.tableSessionEvents)
 		eventArgs = []interface{}{key.AppName, key.UserID, key.SessionID, now, afterTime}
 	}
 
@@ -670,10 +731,10 @@ func (s *Service) getSession(
 
 	// Query summaries (always filter deleted records)
 	summaries := make(map[string]*session.Summary)
-	summaryQuery := `SELECT filter_key, summary FROM session_summaries
+	summaryQuery := fmt.Sprintf(`SELECT filter_key, summary FROM %s
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
 		AND (expires_at IS NULL OR expires_at > $4)
-		AND deleted_at IS NULL`
+		AND deleted_at IS NULL`, s.tableSessionSummaries)
 	summaryArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now()}
 
 	err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
@@ -730,11 +791,11 @@ func (s *Service) listSessions(
 
 	// Query all session states for this user (always filter deleted records)
 	var sessStates []*SessionState
-	listQuery := `SELECT session_id, state, created_at, updated_at FROM session_states
+	listQuery := fmt.Sprintf(`SELECT session_id, state, created_at, updated_at FROM %s
 		WHERE app_name = $1 AND user_id = $2
 		AND (expires_at IS NULL OR expires_at > $3)
 		AND deleted_at IS NULL
-		ORDER BY updated_at DESC`
+		ORDER BY updated_at DESC`, s.tableSessionStates)
 	listArgs := []interface{}{key.AppName, key.UserID, time.Now().UTC()}
 
 	err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
@@ -772,6 +833,7 @@ func (s *Service) listSessions(
 	}
 
 	// Batch load events for all sessions
+	// Note: limit here only controls how many events to return per session, not delete from database
 	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get events list failed: %w", err)
@@ -819,9 +881,9 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			}
 		}
 		return nil
-	}, `SELECT state, expires_at FROM session_states
+	}, fmt.Sprintf(`SELECT state, expires_at FROM %s
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-		AND deleted_at IS NULL`,
+		AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
 
 	if err != nil {
@@ -862,8 +924,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
 		// Update session state
 		_, err := tx.ExecContext(ctx,
-			`UPDATE session_states SET state = $1, updated_at = $2, expires_at = $3
-			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`,
+			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
+			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
 			updatedStateBytes, sessState.UpdatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
@@ -873,55 +935,88 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		// Insert event if it has response and is not partial
 		if event.Response != nil && !event.IsPartial && event.IsValidContent() {
 			_, err = tx.ExecContext(ctx,
-				`INSERT INTO session_events (app_name, user_id, session_id, event, created_at, expires_at)
-				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, expires_at)
+				 VALUES ($1, $2, $3, $4, $5, $6)`, s.tableSessionEvents),
 				key.AppName, key.UserID, key.SessionID, eventBytes, now, expiresAt)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
 			}
 
-			// Delete old events if limit is set
+			// Enforce event limit if configured
 			if s.opts.sessionEventLimit > 0 {
-				if s.opts.softDelete {
-					// Soft delete: mark older events as deleted to enforce retention
-					_, err = tx.ExecContext(ctx,
-						`UPDATE session_events SET deleted_at = $4
-						 WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-						 AND deleted_at IS NULL
-						 AND id NOT IN (
-							 SELECT id FROM session_events
-							 WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-							 AND deleted_at IS NULL
-							 ORDER BY created_at DESC
-							 LIMIT $5
-						 )`,
-						key.AppName, key.UserID, key.SessionID, now.UTC(), s.opts.sessionEventLimit)
-				} else {
-					// Hard delete: physically remove older events
-					_, err = tx.ExecContext(ctx,
-						`DELETE FROM session_events
-						 WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-						 AND deleted_at IS NULL
-						 AND id NOT IN (
-							 SELECT id FROM session_events
-							 WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-							 AND deleted_at IS NULL
-							 ORDER BY created_at DESC
-							 LIMIT $4
-						 )`,
-						key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit)
-				}
-				if err != nil {
-					return fmt.Errorf("delete old events failed: %w", err)
+				if err := s.enforceEventLimit(ctx, tx, key, now); err != nil {
+					return err
 				}
 			}
 		}
-
 		return nil
 	})
 
 	if err != nil {
 		return fmt.Errorf("store event failed: %w", err)
+	}
+	return nil
+}
+
+// enforceEventLimit removes old events beyond the configured limit.
+// Strategy: Find the Nth newest event's created_at, then delete all events older than that.
+func (s *Service) enforceEventLimit(ctx context.Context, tx *sql.Tx, key session.Key, now time.Time) error {
+	if s.opts.softDelete {
+		// Soft delete: mark events older than the Nth newest event
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE %s
+			SET deleted_at = $4
+			WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+			AND deleted_at IS NULL
+			AND created_at < (
+				SELECT created_at
+				FROM %s
+				WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+				AND deleted_at IS NULL
+				ORDER BY created_at DESC
+				OFFSET $5 LIMIT 1
+			)`, s.tableSessionEvents, s.tableSessionEvents),
+			key.AppName, key.UserID, key.SessionID, now, s.opts.sessionEventLimit)
+		if err != nil {
+			return fmt.Errorf("soft delete old events failed: %w", err)
+		}
+	} else {
+		// Hard delete: physically remove events older than the Nth newest event
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s
+			WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+			AND deleted_at IS NULL
+			AND created_at < (
+				SELECT created_at
+				FROM %s
+				WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+				AND deleted_at IS NULL
+				ORDER BY created_at DESC
+				OFFSET $4 LIMIT 1
+			)`, s.tableSessionEvents, s.tableSessionEvents),
+			key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit)
+		if err != nil {
+			return fmt.Errorf("hard delete old events failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// refreshSessionTTL updates the session's updated_at and expires_at timestamps.
+// This effectively "renews" the session, extending its lifetime by the configured TTL.
+func (s *Service) refreshSessionTTL(ctx context.Context, key session.Key) error {
+	now := time.Now().UTC()
+	expiresAt := now.Add(s.sessionTTL)
+
+	_, err := s.pgClient.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s
+		SET updated_at = $1, expires_at = $2
+		WHERE app_name = $3 AND user_id = $4 AND session_id = $5
+		AND deleted_at IS NULL`, s.tableSessionStates),
+		now, expiresAt, key.AppName, key.UserID, key.SessionID)
+
+	if err != nil {
+		return fmt.Errorf("refresh session TTL failed: %w", err)
 	}
 	return nil
 }
@@ -934,8 +1029,8 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 
 			// Soft delete session state
 			_, err := tx.ExecContext(ctx,
-				`UPDATE session_states SET deleted_at = $1
-				 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+				 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`, s.tableSessionStates),
 				now, key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err
@@ -943,8 +1038,8 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 
 			// Soft delete session summaries
 			_, err = tx.ExecContext(ctx,
-				`UPDATE session_summaries SET deleted_at = $1
-				 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+				 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`, s.tableSessionSummaries),
 				now, key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err
@@ -952,8 +1047,8 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 
 			// Soft delete session events
 			_, err = tx.ExecContext(ctx,
-				`UPDATE session_events SET deleted_at = $1
-				 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+				 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`, s.tableSessionEvents),
 				now, key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err
@@ -963,8 +1058,8 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 
 			// Delete session state
 			_, err := tx.ExecContext(ctx,
-				`DELETE FROM session_states
-				 WHERE app_name = $1 AND user_id = $2 AND session_id = $3`,
+				fmt.Sprintf(`DELETE FROM %s
+				 WHERE app_name = $1 AND user_id = $2 AND session_id = $3`, s.tableSessionStates),
 				key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err
@@ -972,8 +1067,8 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 
 			// Delete session summaries
 			_, err = tx.ExecContext(ctx,
-				`DELETE FROM session_summaries
-				 WHERE app_name = $1 AND user_id = $2 AND session_id = $3`,
+				fmt.Sprintf(`DELETE FROM %s
+				 WHERE app_name = $1 AND user_id = $2 AND session_id = $3`, s.tableSessionSummaries),
 				key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err
@@ -981,8 +1076,8 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 
 			// Delete session events
 			_, err = tx.ExecContext(ctx,
-				`DELETE FROM session_events
-				 WHERE app_name = $1 AND user_id = $2 AND session_id = $3`,
+				fmt.Sprintf(`DELETE FROM %s
+				 WHERE app_name = $1 AND user_id = $2 AND session_id = $3`, s.tableSessionEvents),
 				key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err
@@ -1065,6 +1160,7 @@ func applyOptions(opts ...session.Option) *session.Options {
 }
 
 // getEventsList batch loads events for multiple sessions.
+// Note: limit here only controls how many events to return per session, not delete from database
 func (s *Service) getEventsList(
 	ctx context.Context,
 	sessionKeys []session.Key,
@@ -1081,18 +1177,17 @@ func (s *Service) getEventsList(
 		sessionIDs[i] = key.SessionID
 	}
 
-	// Build query for all sessions (always filter deleted records)
+	// Query events for all sessions
 	var query string
 	var args []interface{}
 
 	if limit > 0 {
-		// With limit: use LIMIT clause for each session
-		// Use LATERAL join to get limited events per session
-		query = `
+		// With limit: use LATERAL JOIN to apply limit per session
+		query = fmt.Sprintf(`
 			SELECT s.session_id, e.event
 			FROM (SELECT UNNEST($1::varchar[]) as session_id) s
 			LEFT JOIN LATERAL (
-				SELECT event FROM session_events
+				SELECT event FROM %s
 				WHERE app_name = $2 AND user_id = $3 AND session_id = s.session_id
 				AND (expires_at IS NULL OR expires_at > $4)
 				AND created_at > $5
@@ -1100,25 +1195,20 @@ func (s *Service) getEventsList(
 				ORDER BY created_at DESC
 				LIMIT $6
 			) e ON true
-			ORDER BY s.session_id, e.event`
-
+			ORDER BY s.session_id`, s.tableSessionEvents)
 		args = []interface{}{sessionIDs, sessionKeys[0].AppName, sessionKeys[0].UserID, time.Now().UTC(), afterTime, limit}
 	} else {
-		// Without limit: return all events for each session
-		query = `
-			SELECT s.session_id, e.event
-			FROM (SELECT UNNEST($1::varchar[]) as session_id) s
-			LEFT JOIN LATERAL (
-				SELECT event FROM session_events
-				WHERE app_name = $2 AND user_id = $3 AND session_id = s.session_id
-				AND (expires_at IS NULL OR expires_at > $4)
-				AND created_at > $5
-				AND deleted_at IS NULL
-				ORDER BY created_at DESC
-			) e ON true
-			ORDER BY s.session_id, e.event`
-
-		args = []interface{}{sessionIDs, sessionKeys[0].AppName, sessionKeys[0].UserID, time.Now().UTC(), afterTime}
+		// Without limit: simple query with IN clause
+		query = fmt.Sprintf(`
+			SELECT session_id, event
+			FROM %s
+			WHERE app_name = $1 AND user_id = $2
+			AND session_id = ANY($3::varchar[])
+			AND (expires_at IS NULL OR expires_at > $4)
+			AND created_at > $5
+			AND deleted_at IS NULL
+			ORDER BY session_id, created_at DESC`, s.tableSessionEvents)
+		args = []interface{}{sessionKeys[0].AppName, sessionKeys[0].UserID, sessionIDs, time.Now().UTC(), afterTime}
 	}
 
 	// Execute query and group events by session
@@ -1182,10 +1272,10 @@ func (s *Service) getSummariesList(
 	}
 
 	// Query all summaries for all sessions (always filter deleted records)
-	summaryQuery := `SELECT session_id, filter_key, summary FROM session_summaries
+	summaryQuery := fmt.Sprintf(`SELECT session_id, filter_key, summary FROM %s
 		WHERE app_name = $1 AND user_id = $2 AND session_id = ANY($3)
 		AND (expires_at IS NULL OR expires_at > $4)
-		AND deleted_at IS NULL`
+		AND deleted_at IS NULL`, s.tableSessionSummaries)
 
 	// Query all summaries for all sessions
 	summariesMap := make(map[string]map[string]*session.Summary)
@@ -1230,133 +1320,123 @@ func (s *Service) getSummariesList(
 // cleanupExpired removes or soft-deletes all expired sessions and states.
 func (s *Service) cleanupExpired() {
 	ctx := context.Background()
+	s.cleanupExpiredData(ctx, nil)
+}
 
-	if s.opts.softDelete {
-		// Soft delete expired data
-		s.softDeleteExpired(ctx)
+// cleanupExpiredForUser removes or soft-deletes expired sessions for a specific user.
+func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.UserKey) {
+	s.cleanupExpiredData(ctx, &userKey)
+}
+
+// cleanupExpiredData is the unified cleanup function that handles both global and user-scoped cleanup.
+// If userKey is nil, it cleans up all expired data globally.
+// If userKey is provided, it only cleans up expired data for that specific user.
+func (s *Service) cleanupExpiredData(ctx context.Context, userKey *session.UserKey) {
+	now := time.Now().UTC()
+
+	// Define cleanup tasks: table name, TTL, and whether it's session-scoped
+	type cleanupTask struct {
+		tableName      string
+		ttl            time.Duration
+		isSessionScope bool // true for session-related tables, false for app/user states
+	}
+
+	tasks := []cleanupTask{
+		{s.tableSessionStates, s.sessionTTL, true},
+		{s.tableSessionEvents, s.sessionTTL, true},
+		{s.tableSessionSummaries, s.sessionTTL, true},
+		{s.tableAppStates, s.appStateTTL, false},
+		{s.tableUserStates, s.userStateTTL, false},
+	}
+
+	for _, task := range tasks {
+		// Skip if TTL is not set
+		if task.ttl <= 0 {
+			continue
+		}
+
+		// Skip app_states when cleaning up for a specific user (app states are global)
+		if userKey != nil && task.tableName == s.tableAppStates {
+			continue
+		}
+
+		if s.opts.softDelete {
+			s.softDeleteExpiredTable(ctx, task.tableName, now, userKey, task.isSessionScope)
+		} else {
+			s.hardDeleteExpiredTable(ctx, task.tableName, now, userKey, task.isSessionScope)
+		}
+	}
+}
+
+// softDeleteExpiredTable soft-deletes expired records from a specific table.
+func (s *Service) softDeleteExpiredTable(
+	ctx context.Context,
+	tableName string,
+	now time.Time,
+	userKey *session.UserKey,
+	isSessionScope bool,
+) {
+	var query string
+	var args []interface{}
+
+	if userKey != nil && isSessionScope {
+		// User-scoped cleanup for session-related tables
+		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+			WHERE app_name = $2 AND user_id = $3
+			AND expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
+		args = []interface{}{now, userKey.AppName, userKey.UserID}
+	} else if userKey != nil && !isSessionScope {
+		// User-scoped cleanup for user_states table
+		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+			WHERE app_name = $2 AND user_id = $3
+			AND expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
+		args = []interface{}{now, userKey.AppName, userKey.UserID}
 	} else {
-		// Hard delete expired data
-		s.hardDeleteExpired(ctx)
+		// Global cleanup
+		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+			WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
+		args = []interface{}{now}
+	}
+
+	_, err := s.pgClient.ExecContext(ctx, query, args...)
+	if err != nil {
+		log.Errorf("soft delete expired %s failed: %v", tableName, err)
 	}
 }
 
-// softDeleteExpired marks expired data as deleted.
-func (s *Service) softDeleteExpired(ctx context.Context) {
-	now := time.Now().UTC()
+// hardDeleteExpiredTable physically removes expired records from a specific table.
+func (s *Service) hardDeleteExpiredTable(
+	ctx context.Context,
+	tableName string,
+	now time.Time,
+	userKey *session.UserKey,
+	isSessionScope bool,
+) {
+	var query string
+	var args []interface{}
 
-	// Soft delete expired session states
-	if s.sessionTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`UPDATE session_states SET deleted_at = $1
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`,
-			now)
-		if err != nil {
-			log.Errorf("soft delete expired session states failed: %v", err)
-		}
+	if userKey != nil && isSessionScope {
+		// User-scoped cleanup for session-related tables
+		query = fmt.Sprintf(`DELETE FROM %s
+			WHERE app_name = $1 AND user_id = $2
+			AND expires_at IS NOT NULL AND expires_at <= $3`, tableName)
+		args = []interface{}{userKey.AppName, userKey.UserID, now}
+	} else if userKey != nil && !isSessionScope {
+		// User-scoped cleanup for user_states table
+		query = fmt.Sprintf(`DELETE FROM %s
+			WHERE app_name = $1 AND user_id = $2
+			AND expires_at IS NOT NULL AND expires_at <= $3`, tableName)
+		args = []interface{}{userKey.AppName, userKey.UserID, now}
+	} else {
+		// Global cleanup
+		query = fmt.Sprintf(`DELETE FROM %s
+			WHERE expires_at IS NOT NULL AND expires_at <= $1`, tableName)
+		args = []interface{}{now}
 	}
 
-	// Soft delete expired session events
-	if s.sessionTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`UPDATE session_events SET deleted_at = $1
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`,
-			now)
-		if err != nil {
-			log.Errorf("soft delete expired session events failed: %v", err)
-		}
-	}
-
-	// Soft delete expired session summaries
-	if s.sessionTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`UPDATE session_summaries SET deleted_at = $1
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`,
-			now)
-		if err != nil {
-			log.Errorf("soft delete expired session summaries failed: %v", err)
-		}
-	}
-
-	// Soft delete expired app states
-	if s.appStateTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`UPDATE app_states SET deleted_at = $1
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`,
-			now)
-		if err != nil {
-			log.Errorf("soft delete expired app states failed: %v", err)
-		}
-	}
-
-	// Soft delete expired user states
-	if s.userStateTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`UPDATE user_states SET deleted_at = $1
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`,
-			now)
-		if err != nil {
-			log.Errorf("soft delete expired user states failed: %v", err)
-		}
-	}
-}
-
-// hardDeleteExpired physically removes expired data.
-func (s *Service) hardDeleteExpired(ctx context.Context) {
-	now := time.Now().UTC()
-
-	// Hard delete expired session states
-	if s.sessionTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`DELETE FROM session_states
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1`,
-			now)
-		if err != nil {
-			log.Errorf("hard delete expired session states failed: %v", err)
-		}
-	}
-
-	// Hard delete expired session events
-	if s.sessionTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`DELETE FROM session_events
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1`,
-			now)
-		if err != nil {
-			log.Errorf("hard delete expired session events failed: %v", err)
-		}
-	}
-
-	// Hard delete expired session summaries
-	if s.sessionTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`DELETE FROM session_summaries
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1`,
-			now)
-		if err != nil {
-			log.Errorf("hard delete expired session summaries failed: %v", err)
-		}
-	}
-
-	// Hard delete expired app states
-	if s.appStateTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`DELETE FROM app_states
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1`,
-			now)
-		if err != nil {
-			log.Errorf("hard delete expired app states failed: %v", err)
-		}
-	}
-
-	// Hard delete expired user states
-	if s.userStateTTL > 0 {
-		_, err := s.pgClient.ExecContext(ctx,
-			`DELETE FROM user_states
-			 WHERE expires_at IS NOT NULL AND expires_at <= $1`,
-			now)
-		if err != nil {
-			log.Errorf("hard delete expired user states failed: %v", err)
-		}
+	_, err := s.pgClient.ExecContext(ctx, query, args...)
+	if err != nil {
+		log.Errorf("hard delete expired %s failed: %v", tableName, err)
 	}
 }
 

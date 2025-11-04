@@ -13,175 +13,152 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
 // SQL templates for table creation
 const (
 	sqlCreateSessionStatesTable = `
-		CREATE TABLE IF NOT EXISTS session_states (
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGSERIAL PRIMARY KEY,
 			app_name VARCHAR(255) NOT NULL,
 			user_id VARCHAR(255) NOT NULL,
 			session_id VARCHAR(255) NOT NULL,
-			state JSONB,
+			state JSONB DEFAULT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP,
-			deleted_at TIMESTAMP
+			expires_at TIMESTAMP DEFAULT NULL,
+			deleted_at TIMESTAMP DEFAULT NULL
 		)`
 
 	sqlCreateSessionEventsTable = `
-		CREATE TABLE IF NOT EXISTS session_events (
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGSERIAL PRIMARY KEY,
 			app_name VARCHAR(255) NOT NULL,
 			user_id VARCHAR(255) NOT NULL,
 			session_id VARCHAR(255) NOT NULL,
 			event JSONB NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP,
-			deleted_at TIMESTAMP
+			expires_at TIMESTAMP DEFAULT NULL,
+			deleted_at TIMESTAMP DEFAULT NULL
 		)`
 
 	sqlCreateSessionSummariesTable = `
-		CREATE TABLE IF NOT EXISTS session_summaries (
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGSERIAL PRIMARY KEY,
 			app_name VARCHAR(255) NOT NULL,
 			user_id VARCHAR(255) NOT NULL,
 			session_id VARCHAR(255) NOT NULL,
 			filter_key VARCHAR(255) NOT NULL DEFAULT '',
-			summary JSONB,
+			summary JSONB DEFAULT NULL,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP,
-			deleted_at TIMESTAMP
+			expires_at TIMESTAMP DEFAULT NULL,
+			deleted_at TIMESTAMP DEFAULT NULL
 		)`
 
 	sqlCreateAppStatesTable = `
-		CREATE TABLE IF NOT EXISTS app_states (
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGSERIAL PRIMARY KEY,
 			app_name VARCHAR(255) NOT NULL,
 			key VARCHAR(255) NOT NULL,
-			value JSONB,
+			value JSONB DEFAULT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP,
-			deleted_at TIMESTAMP
+			expires_at TIMESTAMP DEFAULT NULL,
+			deleted_at TIMESTAMP DEFAULT NULL
 		)`
 
 	sqlCreateUserStatesTable = `
-		CREATE TABLE IF NOT EXISTS user_states (
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGSERIAL PRIMARY KEY,
 			app_name VARCHAR(255) NOT NULL,
 			user_id VARCHAR(255) NOT NULL,
 			key VARCHAR(255) NOT NULL,
-			value JSONB,
+			value JSONB DEFAULT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP,
-			deleted_at TIMESTAMP
+			expires_at TIMESTAMP DEFAULT NULL,
+			deleted_at TIMESTAMP DEFAULT NULL
 		)`
 
 	// Index creation SQL
 	// session_states: partial unique index on (app_name, user_id, session_id) - only for non-deleted records
 	sqlCreateSessionStatesUniqueIndex = `
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_session_states_unique_active
-		ON session_states(app_name, user_id, session_id)
+		CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id)
 		WHERE deleted_at IS NULL`
-
-	// session_states: lookup index on (app_name, user_id, session_id)
-	sqlCreateSessionStatesIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_states_lookup
-		ON session_states(app_name, user_id, session_id)`
 
 	// session_states: TTL index on (expires_at) - partial index for non-null values
 	sqlCreateSessionStatesExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_states_expires
-		ON session_states(expires_at) WHERE expires_at IS NOT NULL`
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
 
 	// session_events: lookup index on (app_name, user_id, session_id, created_at)
 	sqlCreateSessionEventsIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_events_lookup
-		ON session_events(app_name, user_id, session_id, created_at)`
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, created_at)`
 
 	// session_events: TTL index on (expires_at) - partial index for non-null values
 	sqlCreateSessionEventsExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_events_expires
-		ON session_events(expires_at) WHERE expires_at IS NOT NULL`
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
 
 	// session_summaries: partial unique index on (app_name, user_id, session_id, filter_key) - only for non-deleted records
 	sqlCreateSessionSummariesUniqueIndex = `
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_session_summaries_unique_active
-		ON session_summaries(app_name, user_id, session_id, filter_key)
+		CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, filter_key)
 		WHERE deleted_at IS NULL`
-
-	// session_summaries: lookup index on (app_name, user_id, session_id, filter_key)
-	sqlCreateSessionSummariesIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_summaries_lookup
-		ON session_summaries(app_name, user_id, session_id, filter_key)`
 
 	// session_summaries: TTL index on (expires_at) - partial index for non-null values
 	sqlCreateSessionSummariesExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_summaries_expires
-		ON session_summaries(expires_at) WHERE expires_at IS NOT NULL`
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
 
 	// app_states: partial unique index on (app_name, key) - only for non-deleted records
 	sqlCreateAppStatesUniqueIndex = `
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_app_states_unique_active
-		ON app_states(app_name, key)
+		CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, key)
 		WHERE deleted_at IS NULL`
-
-	// app_states: lookup index on (app_name, key)
-	sqlCreateAppStatesIndex = `
-		CREATE INDEX IF NOT EXISTS idx_app_states_lookup
-		ON app_states(app_name, key)`
 
 	// app_states: TTL index on (expires_at) - partial index for non-null values
 	sqlCreateAppStatesExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS idx_app_states_expires
-		ON app_states(expires_at) WHERE expires_at IS NOT NULL`
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
 
 	// user_states: partial unique index on (app_name, user_id, key) - only for non-deleted records
 	sqlCreateUserStatesUniqueIndex = `
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_user_states_unique_active
-		ON user_states(app_name, user_id, key)
+		CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, key)
 		WHERE deleted_at IS NULL`
-
-	// user_states: lookup index on (app_name, user_id, key)
-	sqlCreateUserStatesIndex = `
-		CREATE INDEX IF NOT EXISTS idx_user_states_lookup
-		ON user_states(app_name, user_id, key)`
 
 	// user_states: TTL index on (expires_at) - partial index for non-null values
 	sqlCreateUserStatesExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS idx_user_states_expires
-		ON user_states(expires_at) WHERE expires_at IS NOT NULL`
-
-	// session_states: soft delete index on (deleted_at) - partial index for non-null values
-	sqlCreateSessionStatesDeletedIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_states_deleted
-		ON session_states(deleted_at) WHERE deleted_at IS NOT NULL`
-
-	// session_events: soft delete index on (deleted_at) - partial index for non-null values
-	sqlCreateSessionEventsDeletedIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_events_deleted
-		ON session_events(deleted_at) WHERE deleted_at IS NOT NULL`
-
-	// session_summaries: soft delete index on (deleted_at) - partial index for non-null values
-	sqlCreateSessionSummariesDeletedIndex = `
-		CREATE INDEX IF NOT EXISTS idx_session_summaries_deleted
-		ON session_summaries(deleted_at) WHERE deleted_at IS NOT NULL`
-
-	// app_states: soft delete index on (deleted_at) - partial index for non-null values
-	sqlCreateAppStatesDeletedIndex = `
-		CREATE INDEX IF NOT EXISTS idx_app_states_deleted
-		ON app_states(deleted_at) WHERE deleted_at IS NOT NULL`
-
-	// user_states: soft delete index on (deleted_at) - partial index for non-null values
-	sqlCreateUserStatesDeletedIndex = `
-		CREATE INDEX IF NOT EXISTS idx_user_states_deleted
-		ON user_states(deleted_at) WHERE deleted_at IS NOT NULL`
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
 )
+
+// buildCreateTableSQL builds CREATE TABLE SQL with table prefix.
+func buildCreateTableSQL(prefix, tableName, template string) string {
+	fullTableName := prefix + tableName
+	return strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
+}
+
+// buildIndexSQL builds CREATE INDEX SQL with table and index prefix.
+func buildIndexSQL(prefix, tableName, template string) string {
+	fullTableName := prefix + tableName
+	// Extract original index name from template (e.g., idx_session_states_unique_active)
+	// and prepend the prefix
+	sql := strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
+
+	// Replace {{INDEX_NAME}} placeholder with prefixed index name
+	// The index name pattern: idx_{prefix}{table}_{suffix}
+	sql = strings.ReplaceAll(sql, "{{INDEX_NAME}}", "idx_"+fullTableName)
+
+	return sql
+}
 
 // tableColumn represents a table column definition
 type tableColumn struct {
@@ -215,9 +192,7 @@ var expectedSchema = map[string]struct {
 		},
 		indexes: []tableIndex{
 			{"idx_session_states_unique_active", []string{"app_name", "user_id", "session_id"}},
-			{"idx_session_states_lookup", []string{"app_name", "user_id", "session_id"}},
 			{"idx_session_states_expires", []string{"expires_at"}},
-			{"idx_session_states_deleted", []string{"deleted_at"}},
 		},
 	},
 	"session_events": {
@@ -234,7 +209,6 @@ var expectedSchema = map[string]struct {
 		indexes: []tableIndex{
 			{"idx_session_events_lookup", []string{"app_name", "user_id", "session_id", "created_at"}},
 			{"idx_session_events_expires", []string{"expires_at"}},
-			{"idx_session_events_deleted", []string{"deleted_at"}},
 		},
 	},
 	"session_summaries": {
@@ -251,9 +225,7 @@ var expectedSchema = map[string]struct {
 		},
 		indexes: []tableIndex{
 			{"idx_session_summaries_unique_active", []string{"app_name", "user_id", "session_id", "filter_key"}},
-			{"idx_session_summaries_lookup", []string{"app_name", "user_id", "session_id", "filter_key"}},
 			{"idx_session_summaries_expires", []string{"expires_at"}},
-			{"idx_session_summaries_deleted", []string{"deleted_at"}},
 		},
 	},
 	"app_states": {
@@ -269,9 +241,7 @@ var expectedSchema = map[string]struct {
 		},
 		indexes: []tableIndex{
 			{"idx_app_states_unique_active", []string{"app_name", "key"}},
-			{"idx_app_states_lookup", []string{"app_name", "key"}},
 			{"idx_app_states_expires", []string{"expires_at"}},
-			{"idx_app_states_deleted", []string{"deleted_at"}},
 		},
 	},
 	"user_states": {
@@ -288,83 +258,79 @@ var expectedSchema = map[string]struct {
 		},
 		indexes: []tableIndex{
 			{"idx_user_states_unique_active", []string{"app_name", "user_id", "key"}},
-			{"idx_user_states_lookup", []string{"app_name", "user_id", "key"}},
 			{"idx_user_states_expires", []string{"expires_at"}},
-			{"idx_user_states_deleted", []string{"deleted_at"}},
 		},
 	},
 }
 
 // initDB initializes the database schema
-func (s *Service) initDB(ctx context.Context) error {
+func (s *Service) initDB(ctx context.Context) {
 	// Create tables
-	if err := s.createTables(ctx); err != nil {
-		return fmt.Errorf("create tables failed: %w", err)
+	if err := createTables(ctx, s.pgClient, s.opts.tablePrefix); err != nil {
+		panic(fmt.Sprintf("create tables failed: %v", err))
 	}
 
 	// Create indexes
-	if err := s.createIndexes(ctx); err != nil {
-		return fmt.Errorf("create indexes failed: %w", err)
+	if err := createIndexes(ctx, s.pgClient, s.opts.tablePrefix); err != nil {
+		panic(fmt.Sprintf("create indexes failed: %v", err))
 	}
 
 	// Verify schema
 	if err := s.verifySchema(ctx); err != nil {
-		return fmt.Errorf("schema verification failed: %w", err)
+		panic(fmt.Sprintf("schema verification failed: %v", err))
 	}
-
-	return nil
 }
 
-// createTables creates all required tables
-func (s *Service) createTables(ctx context.Context) error {
-	tables := []string{
-		sqlCreateSessionStatesTable,
-		sqlCreateSessionEventsTable,
-		sqlCreateSessionSummariesTable,
-		sqlCreateAppStatesTable,
-		sqlCreateUserStatesTable,
+// createTables creates all required tables with the given prefix.
+// This function can be used by both Service and standalone InitDB.
+func createTables(ctx context.Context, client storage.Client, prefix string) error {
+	tables := []struct {
+		name     string
+		template string
+	}{
+		{"session_states", sqlCreateSessionStatesTable},
+		{"session_events", sqlCreateSessionEventsTable},
+		{"session_summaries", sqlCreateSessionSummariesTable},
+		{"app_states", sqlCreateAppStatesTable},
+		{"user_states", sqlCreateUserStatesTable},
 	}
 
-	for _, tableSQL := range tables {
-		if _, err := s.pgClient.ExecContext(ctx, tableSQL); err != nil {
-			return fmt.Errorf("create table failed: %w", err)
+	for _, table := range tables {
+		tableSQL := buildCreateTableSQL(prefix, table.name, table.template)
+		if _, err := client.ExecContext(ctx, tableSQL); err != nil {
+			return fmt.Errorf("create table %s%s failed: %w", prefix, table.name, err)
 		}
 	}
 
 	return nil
 }
 
-// createIndexes creates all required indexes
-func (s *Service) createIndexes(ctx context.Context) error {
-	indexes := []string{
+// createIndexes creates all required indexes with the given prefix.
+// This function can be used by both Service and standalone InitDB.
+func createIndexes(ctx context.Context, client storage.Client, prefix string) error {
+	indexes := []struct {
+		table    string
+		template string
+	}{
 		// Partial unique indexes (only for non-deleted records)
-		sqlCreateSessionStatesUniqueIndex,
-		sqlCreateSessionSummariesUniqueIndex,
-		sqlCreateAppStatesUniqueIndex,
-		sqlCreateUserStatesUniqueIndex,
-		// Lookup indexes
-		sqlCreateSessionStatesIndex,
-		sqlCreateSessionEventsIndex,
-		sqlCreateSessionSummariesIndex,
-		sqlCreateAppStatesIndex,
-		sqlCreateUserStatesIndex,
+		{"session_states", sqlCreateSessionStatesUniqueIndex},
+		{"session_summaries", sqlCreateSessionSummariesUniqueIndex},
+		{"app_states", sqlCreateAppStatesUniqueIndex},
+		{"user_states", sqlCreateUserStatesUniqueIndex},
+		// Lookup indexes (only session_events needs a separate lookup index)
+		{"session_events", sqlCreateSessionEventsIndex},
 		// TTL indexes
-		sqlCreateSessionStatesExpiresIndex,
-		sqlCreateSessionEventsExpiresIndex,
-		sqlCreateSessionSummariesExpiresIndex,
-		sqlCreateAppStatesExpiresIndex,
-		sqlCreateUserStatesExpiresIndex,
-		// Soft delete indexes
-		sqlCreateSessionStatesDeletedIndex,
-		sqlCreateSessionEventsDeletedIndex,
-		sqlCreateSessionSummariesDeletedIndex,
-		sqlCreateAppStatesDeletedIndex,
-		sqlCreateUserStatesDeletedIndex,
+		{"session_states", sqlCreateSessionStatesExpiresIndex},
+		{"session_events", sqlCreateSessionEventsExpiresIndex},
+		{"session_summaries", sqlCreateSessionSummariesExpiresIndex},
+		{"app_states", sqlCreateAppStatesExpiresIndex},
+		{"user_states", sqlCreateUserStatesExpiresIndex},
 	}
 
-	for _, indexSQL := range indexes {
-		if _, err := s.pgClient.ExecContext(ctx, indexSQL); err != nil {
-			return fmt.Errorf("create index failed: %w", err)
+	for _, idx := range indexes {
+		indexSQL := buildIndexSQL(prefix, idx.table, idx.template)
+		if _, err := client.ExecContext(ctx, indexSQL); err != nil {
+			return fmt.Errorf("create index on %s%s failed: %w", prefix, idx.table, err)
 		}
 	}
 
@@ -373,24 +339,27 @@ func (s *Service) createIndexes(ctx context.Context) error {
 
 // verifySchema verifies that the database schema matches expectations
 func (s *Service) verifySchema(ctx context.Context) error {
+	prefix := s.opts.tablePrefix
 	for tableName, schema := range expectedSchema {
+		fullTableName := prefix + tableName
+
 		// Check if table exists
-		exists, err := s.tableExists(ctx, tableName)
+		exists, err := s.tableExists(ctx, fullTableName)
 		if err != nil {
-			return fmt.Errorf("check table %s existence failed: %w", tableName, err)
+			return fmt.Errorf("check table %s existence failed: %w", fullTableName, err)
 		}
 		if !exists {
-			return fmt.Errorf("table %s does not exist", tableName)
+			return fmt.Errorf("table %s does not exist", fullTableName)
 		}
 
 		// Verify columns
-		if err := s.verifyColumns(ctx, tableName, schema.columns); err != nil {
-			return fmt.Errorf("verify columns for table %s failed: %w", tableName, err)
+		if err := s.verifyColumns(ctx, fullTableName, schema.columns); err != nil {
+			return fmt.Errorf("verify columns for table %s failed: %w", fullTableName, err)
 		}
 
 		// Verify indexes
-		if err := s.verifyIndexes(ctx, tableName, schema.indexes); err != nil {
-			log.Warnf("verify indexes for table %s failed (non-fatal): %v", tableName, err)
+		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
+			log.Warnf("verify indexes for table %s failed (non-fatal): %v", fullTableName, err)
 		}
 	}
 
@@ -521,4 +490,193 @@ func isCompatibleType(actual, expected string) bool {
 	}
 
 	return actualNorm == expectedNorm
+}
+
+// InitDBConfig contains configuration for standalone database initialization.
+type InitDBConfig struct {
+	host         string
+	port         int
+	user         string
+	password     string
+	database     string
+	sslMode      string
+	tablePrefix  string
+	instanceName string
+	extraOptions []any
+}
+
+// InitDBOpt is the option for InitDB.
+type InitDBOpt func(*InitDBConfig)
+
+// WithInitDBHost sets the PostgreSQL host.
+func WithInitDBHost(host string) InitDBOpt {
+	return func(c *InitDBConfig) {
+		c.host = host
+	}
+}
+
+// WithInitDBPort sets the PostgreSQL port.
+func WithInitDBPort(port int) InitDBOpt {
+	return func(c *InitDBConfig) {
+		c.port = port
+	}
+}
+
+// WithInitDBUser sets the database user.
+func WithInitDBUser(user string) InitDBOpt {
+	return func(c *InitDBConfig) {
+		c.user = user
+	}
+}
+
+// WithInitDBPassword sets the database password.
+func WithInitDBPassword(password string) InitDBOpt {
+	return func(c *InitDBConfig) {
+		c.password = password
+	}
+}
+
+// WithInitDBDatabase sets the database name.
+func WithInitDBDatabase(database string) InitDBOpt {
+	return func(c *InitDBConfig) {
+		c.database = database
+	}
+}
+
+// WithInitDBSSLMode sets the SSL mode.
+func WithInitDBSSLMode(sslMode string) InitDBOpt {
+	return func(c *InitDBConfig) {
+		c.sslMode = sslMode
+	}
+}
+
+// WithInitDBTablePrefix sets the table name prefix.
+// Security: Only alphanumeric characters and underscore are allowed to prevent SQL injection.
+func WithInitDBTablePrefix(prefix string) InitDBOpt {
+	return func(c *InitDBConfig) {
+		if err := validateTablePrefix(prefix); err != nil {
+			panic(fmt.Sprintf("invalid table prefix: %v", err))
+		}
+		c.tablePrefix = prefix
+	}
+}
+
+// WithInitDBInstanceName uses a postgres instance from storage.
+// Note: Direct connection settings (WithInitDBHost, WithInitDBPort, etc.) have higher priority.
+// If both are specified, direct connection settings will be used.
+func WithInitDBInstanceName(instanceName string) InitDBOpt {
+	return func(c *InitDBConfig) {
+		c.instanceName = instanceName
+	}
+}
+
+// WithInitDBExtraOptions sets extra options for the postgres client builder.
+// This option is mainly used for customized postgres client builders.
+func WithInitDBExtraOptions(extraOptions ...any) InitDBOpt {
+	return func(c *InitDBConfig) {
+		c.extraOptions = append(c.extraOptions, extraOptions...)
+	}
+}
+
+// InitDB initializes the database schema with tables and indexes.
+// This is a standalone function that can be used independently of the Service.
+// It's useful for:
+// - Manual database setup/migration
+// - CI/CD pipelines
+// - Initial deployment setup
+//
+// Note: You must import a PostgreSQL driver before calling this function:
+//
+//	import _ "github.com/lib/pq"
+//
+// Example usage:
+//
+//	err := postgres.InitDB(context.Background(),
+//	    postgres.WithInitDBHost("localhost"),
+//	    postgres.WithInitDBPort(5432),
+//	    postgres.WithInitDBUser("admin"),
+//	    postgres.WithInitDBPassword("secret"),
+//	    postgres.WithInitDBDatabase("sessions"),
+//	    postgres.WithInitDBSSLMode("disable"),
+//	    postgres.WithInitDBTablePrefix("trpc_"),
+//	)
+//	if err != nil {
+//	    panic(err)
+//	}
+//
+// Or use registered instance:
+//
+//	err := postgres.InitDB(context.Background(),
+//	    postgres.WithInitDBInstanceName("my-postgres"),
+//	    postgres.WithInitDBTablePrefix("trpc_"),
+//	)
+func InitDB(ctx context.Context, opts ...InitDBOpt) error {
+	config := &InitDBConfig{
+		host:     defaultHost,
+		port:     defaultPort,
+		database: defaultDatabase,
+		sslMode:  defaultSSLMode,
+	}
+
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	// Get postgres client builder
+	builder := storage.GetClientBuilder()
+	var pgClient storage.Client
+	var err error
+
+	// Priority: direct connection settings > instance name
+	// If direct connection settings are provided, use them
+	if config.host != "" || config.port != 0 || config.database != "" {
+		serviceOpts := ServiceOpts{
+			host:     config.host,
+			port:     config.port,
+			user:     config.user,
+			password: config.password,
+			database: config.database,
+			sslMode:  config.sslMode,
+		}
+		connString := buildConnString(serviceOpts)
+
+		pgClient, err = builder(ctx,
+			storage.WithClientConnString(connString),
+			storage.WithExtraOptions(config.extraOptions...),
+		)
+		if err != nil {
+			return fmt.Errorf("create postgres client from connection settings failed: %w", err)
+		}
+	} else if config.instanceName != "" {
+		// Otherwise, use instance name if provided
+		builderOpts, ok := storage.GetPostgresInstance(config.instanceName)
+		if !ok {
+			return fmt.Errorf("postgres instance %s not found", config.instanceName)
+		}
+
+		// Append extra options if provided
+		if len(config.extraOptions) > 0 {
+			builderOpts = append(builderOpts, storage.WithExtraOptions(config.extraOptions...))
+		}
+
+		pgClient, err = builder(ctx, builderOpts...)
+		if err != nil {
+			return fmt.Errorf("create postgres client from instance name failed: %w", err)
+		}
+	} else {
+		return fmt.Errorf("either connection settings or instance name must be provided")
+	}
+	defer pgClient.Close()
+
+	// Create tables using shared function
+	if err := createTables(ctx, pgClient, config.tablePrefix); err != nil {
+		return fmt.Errorf("failed to create tables: %w", err)
+	}
+
+	// Create indexes using shared function
+	if err := createIndexes(ctx, pgClient, config.tablePrefix); err != nil {
+		return fmt.Errorf("failed to create indexes: %w", err)
+	}
+
+	return nil
 }

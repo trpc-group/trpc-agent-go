@@ -11,7 +11,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -21,112 +20,28 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
-// mockPostgresClient wraps sql.DB to implement postgres.Client for testing
-type mockPostgresClient struct {
-	db *sql.DB
-}
-
-func (c *mockPostgresClient) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return c.db.ExecContext(ctx, query, args...)
-}
-
-func (c *mockPostgresClient) Query(ctx context.Context, handler postgres.HandlerFunc, query string, args ...any) error {
-	rows, err := c.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	if err := handler(rows); err != nil {
-		return err
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("rows iteration: %w", err)
-	}
-
-	return nil
-}
-
-func (c *mockPostgresClient) Transaction(ctx context.Context, fn postgres.TxFunc) error {
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-
-	defer func() {
-		if p := recover(); p != nil {
-			_ = tx.Rollback()
-			panic(p)
-		} else if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	err = fn(tx)
-	if err != nil {
-		return err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
-	}
-
-	return nil
-}
-
-func (c *mockPostgresClient) Close() error {
-	return c.db.Close()
-}
-
-// mockSummarizer is a mock summarizer for testing
-type mockSummarizer struct {
+// mockSummarizerImpl is a mock summarizer for testing
+type mockSummarizerImpl struct {
 	summaryText     string
 	err             error
 	shouldSummarize bool
 }
 
-func (m *mockSummarizer) ShouldSummarize(sess *session.Session) bool {
+func (m *mockSummarizerImpl) ShouldSummarize(sess *session.Session) bool {
 	return m.shouldSummarize
 }
 
-func (m *mockSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+func (m *mockSummarizerImpl) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	if m.err != nil {
 		return "", m.err
 	}
 	return m.summaryText, nil
 }
 
-func (m *mockSummarizer) Metadata() map[string]any {
+func (m *mockSummarizerImpl) Metadata() map[string]any {
 	return map[string]any{}
-}
-
-// setupMockService creates a Service with mocked postgres client
-func setupMockService(t *testing.T, summarizer *mockSummarizer) (*Service, sqlmock.Sqlmock, *sql.DB) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	require.NoError(t, err)
-
-	client := &mockPostgresClient{db: db}
-
-	s := &Service{
-		pgClient:   client,
-		sessionTTL: 0,
-		opts: ServiceOpts{
-			summarizer: summarizer,
-			softDelete: true, // Enable soft delete by default
-		},
-		summaryJobChans: make([]chan *summaryJob, 3),
-	}
-
-	// Initialize summary job channels
-	for i := range s.summaryJobChans {
-		s.summaryJobChans[i] = make(chan *summaryJob, 10)
-	}
-
-	return s, mock, db
 }
 
 func TestCreateSessionSummary_NoSummarizer(t *testing.T) {
@@ -149,8 +64,8 @@ func TestCreateSessionSummary_NoSummarizer(t *testing.T) {
 }
 
 func TestCreateSessionSummary_InvalidKey(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "test summary", shouldSummarize: true}
-	s, _, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	// Test with empty session ID
@@ -165,8 +80,8 @@ func TestCreateSessionSummary_InvalidKey(t *testing.T) {
 }
 
 func TestCreateSessionSummary_ExistingSummaryRecent(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "new summary", shouldSummarize: true}
-	s, mock, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "new summary", shouldSummarize: true}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -198,8 +113,8 @@ func TestCreateSessionSummary_ExistingSummaryRecent(t *testing.T) {
 }
 
 func TestCreateSessionSummary_CreateNewSummary(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "new summary", shouldSummarize: true}
-	s, mock, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "new summary", shouldSummarize: true}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -215,11 +130,7 @@ func TestCreateSessionSummary_CreateNewSummary(t *testing.T) {
 		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	// Mock upsert: first UPDATE (returns 0 rows), then INSERT
-	mock.ExpectExec("UPDATE session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
+	// Mock UPSERT (INSERT ... ON CONFLICT)
 	mock.ExpectExec("INSERT INTO session_summaries").
 		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -232,8 +143,8 @@ func TestCreateSessionSummary_CreateNewSummary(t *testing.T) {
 }
 
 func TestCreateSessionSummary_WithTTL(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "new summary", shouldSummarize: true}
-	s, mock, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "new summary", shouldSummarize: true}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	s.sessionTTL = 1 * time.Hour
 	defer db.Close()
 
@@ -250,11 +161,7 @@ func TestCreateSessionSummary_WithTTL(t *testing.T) {
 		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	// Mock upsert: first UPDATE (returns 0 rows), then INSERT
-	mock.ExpectExec("UPDATE session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
+	// Mock UPSERT (INSERT ... ON CONFLICT)
 	mock.ExpectExec("INSERT INTO session_summaries").
 		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -267,8 +174,8 @@ func TestCreateSessionSummary_WithTTL(t *testing.T) {
 }
 
 func TestCreateSessionSummary_ForcedUpdate(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "forced summary", shouldSummarize: true}
-	s, mock, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "forced summary", shouldSummarize: true}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -279,11 +186,7 @@ func TestCreateSessionSummary_ForcedUpdate(t *testing.T) {
 	}
 
 	// When force=true, should skip checking existing summary
-	// and directly create new one (upsert: UPDATE then INSERT)
-	mock.ExpectExec("UPDATE session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
+	// and directly create new one (UPSERT)
 	mock.ExpectExec("INSERT INTO session_summaries").
 		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -296,8 +199,8 @@ func TestCreateSessionSummary_ForcedUpdate(t *testing.T) {
 }
 
 func TestCreateSessionSummary_SummarizerError(t *testing.T) {
-	summarizer := &mockSummarizer{err: fmt.Errorf("summarizer error"), shouldSummarize: true}
-	s, mock, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{err: fmt.Errorf("summarizer error"), shouldSummarize: true}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -341,8 +244,8 @@ func TestEnqueueSummaryJob_NoSummarizer(t *testing.T) {
 }
 
 func TestEnqueueSummaryJob_InvalidKey(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "test summary", shouldSummarize: true}
-	s, _, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	// Test with empty session ID
@@ -357,8 +260,8 @@ func TestEnqueueSummaryJob_InvalidKey(t *testing.T) {
 }
 
 func TestEnqueueSummaryJob_Success(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "test summary", shouldSummarize: true}
-	s, _, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -375,8 +278,8 @@ func TestEnqueueSummaryJob_Success(t *testing.T) {
 }
 
 func TestEnqueueSummaryJob_ContextCanceled(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "test summary", shouldSummarize: true}
-	s, _, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	// Fill up all channels first
@@ -401,8 +304,8 @@ func TestEnqueueSummaryJob_ContextCanceled(t *testing.T) {
 }
 
 func TestEnqueueSummaryJob_QueueFullFallbackToSync(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "test summary", shouldSummarize: true}
-	s, mock, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	// Fill up all channels
@@ -425,11 +328,7 @@ func TestEnqueueSummaryJob_QueueFullFallbackToSync(t *testing.T) {
 		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	// Mock upsert: first UPDATE (returns 0 rows), then INSERT
-	mock.ExpectExec("UPDATE session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
+	// Mock UPSERT (INSERT ... ON CONFLICT)
 	mock.ExpectExec("INSERT INTO session_summaries").
 		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -442,8 +341,8 @@ func TestEnqueueSummaryJob_QueueFullFallbackToSync(t *testing.T) {
 }
 
 func TestEnqueueSummaryJob_ChannelClosedPanicRecovery(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "test summary", shouldSummarize: true}
-	s, _, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	// Close all channels to trigger panic
@@ -467,7 +366,7 @@ func TestEnqueueSummaryJob_ChannelClosedPanicRecovery(t *testing.T) {
 
 func TestGetSessionSummaryText_Success(t *testing.T) {
 	// GetSessionSummaryText doesn't need summarizer
-	s, mock, db := setupMockService(t, &mockSummarizer{shouldSummarize: false})
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: &mockSummarizerImpl{shouldSummarize: false}})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -498,7 +397,7 @@ func TestGetSessionSummaryText_Success(t *testing.T) {
 }
 
 func TestGetSessionSummaryText_NoSummary(t *testing.T) {
-	s, mock, db := setupMockService(t, &mockSummarizer{shouldSummarize: false})
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: &mockSummarizerImpl{shouldSummarize: false}})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -539,7 +438,7 @@ func TestGetSessionSummaryText_InvalidKey(t *testing.T) {
 }
 
 func TestGetSessionSummaryText_QueryError(t *testing.T) {
-	s, mock, db := setupMockService(t, &mockSummarizer{shouldSummarize: false})
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: &mockSummarizerImpl{shouldSummarize: false}})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -562,7 +461,7 @@ func TestGetSessionSummaryText_QueryError(t *testing.T) {
 }
 
 func TestGetSessionSummaryText_EmptySummaryText(t *testing.T) {
-	s, mock, db := setupMockService(t, &mockSummarizer{shouldSummarize: false})
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: &mockSummarizerImpl{shouldSummarize: false}})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -593,8 +492,8 @@ func TestGetSessionSummaryText_EmptySummaryText(t *testing.T) {
 }
 
 func TestCreateSessionSummary_WithFilterKey(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "filtered summary", shouldSummarize: true}
-	s, mock, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "filtered summary", shouldSummarize: true}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -610,11 +509,7 @@ func TestCreateSessionSummary_WithFilterKey(t *testing.T) {
 		WithArgs("test-app", "test-user", "test-session", "filter1", sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	// Mock upsert: first UPDATE (returns 0 rows), then INSERT
-	mock.ExpectExec("UPDATE session_summaries").
-		WithArgs("test-app", "test-user", "test-session", "filter1", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
+	// Mock UPSERT (INSERT ... ON CONFLICT)
 	mock.ExpectExec("INSERT INTO session_summaries").
 		WithArgs("test-app", "test-user", "test-session", "filter1", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -627,8 +522,8 @@ func TestCreateSessionSummary_WithFilterKey(t *testing.T) {
 }
 
 func TestCreateSessionSummary_UnmarshalError(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "new summary", shouldSummarize: true}
-	s, mock, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "new summary", shouldSummarize: true}
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -655,7 +550,7 @@ func TestCreateSessionSummary_UnmarshalError(t *testing.T) {
 }
 
 func TestGetSessionSummaryText_UnmarshalError(t *testing.T) {
-	s, mock, db := setupMockService(t, &mockSummarizer{shouldSummarize: false})
+	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: &mockSummarizerImpl{shouldSummarize: false}})
 	defer db.Close()
 
 	sess := &session.Session{
@@ -681,8 +576,8 @@ func TestGetSessionSummaryText_UnmarshalError(t *testing.T) {
 }
 
 func TestEnqueueSummaryJob_HashDistribution(t *testing.T) {
-	summarizer := &mockSummarizer{summaryText: "test summary", shouldSummarize: true}
-	s, _, db := setupMockService(t, summarizer)
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
 	defer db.Close()
 
 	// Test that different sessions are distributed across channels

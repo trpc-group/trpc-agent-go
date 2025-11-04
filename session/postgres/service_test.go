@@ -36,21 +36,11 @@ func TestCreateSession_Success(t *testing.T) {
 		"key1": []byte("value1"),
 	}
 
-	// Mock deleteSessionState (soft delete transaction)
-	mock.ExpectBegin()
-	// Soft delete session_states
-	mock.ExpectExec("UPDATE session_states SET deleted_at").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	// Soft delete session_summaries
-	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	// Soft delete session_events
-	mock.ExpectExec("UPDATE session_events SET deleted_at").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectCommit()
+	// Mock check for existing session (returns no rows - session doesn't exist)
+	checkRows := sqlmock.NewRows([]string{"expires_at"})
+	mock.ExpectQuery("SELECT expires_at FROM session_states").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
+		WillReturnRows(checkRows)
 
 	// Mock INSERT session state
 	mock.ExpectExec("INSERT INTO session_states").
@@ -105,21 +95,11 @@ func TestCreateSession_WithSessionID(t *testing.T) {
 		SessionID: "custom-session-id",
 	}
 
-	// Mock deleteSessionState (soft delete transaction)
-	mock.ExpectBegin()
-	// Soft delete session_states
-	mock.ExpectExec("UPDATE session_states SET deleted_at").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "custom-session-id").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	// Soft delete session_summaries
-	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "custom-session-id").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	// Soft delete session_events
-	mock.ExpectExec("UPDATE session_events SET deleted_at").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "custom-session-id").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectCommit()
+	// Mock check for existing session (returns no rows - session doesn't exist)
+	checkRows := sqlmock.NewRows([]string{"expires_at"})
+	mock.ExpectQuery("SELECT expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "custom-session-id").
+		WillReturnRows(checkRows)
 
 	// Mock INSERT session state
 	mock.ExpectExec("INSERT INTO session_states").
@@ -143,6 +123,115 @@ func TestCreateSession_WithSessionID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "custom-session-id", sess.ID)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSession_ExistingNotExpired(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "existing-session",
+	}
+
+	// Mock check for existing session - returns a future expires_at (not expired)
+	futureTime := time.Now().Add(1 * time.Hour)
+	checkRows := sqlmock.NewRows([]string{"expires_at"}).
+		AddRow(futureTime)
+	mock.ExpectQuery("SELECT expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "existing-session").
+		WillReturnRows(checkRows)
+
+	// Should return error without trying to insert
+	_, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session already exists and has not expired")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSession_ExistingNeverExpires(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "existing-session",
+	}
+
+	// Mock check for existing session - returns NULL expires_at (never expires)
+	checkRows := sqlmock.NewRows([]string{"expires_at"}).
+		AddRow(nil)
+	mock.ExpectQuery("SELECT expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "existing-session").
+		WillReturnRows(checkRows)
+
+	// Should return error without trying to insert
+	_, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session already exists and has not expired")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSession_ExistingExpired(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	// Set sessionTTL so cleanup will be triggered
+	s.sessionTTL = 1 * time.Hour
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "expired-session",
+	}
+
+	// Mock check for existing session - returns a past expires_at (expired)
+	pastTime := time.Now().Add(-1 * time.Hour)
+	checkRows := sqlmock.NewRows([]string{"expires_at"}).
+		AddRow(pastTime)
+	mock.ExpectQuery("SELECT expires_at FROM session_states").
+		WithArgs("test-app", "test-user", "expired-session").
+		WillReturnRows(checkRows)
+
+	// Mock cleanup for expired sessions (soft delete) - order matters!
+	// 1. Soft delete session_states
+	mock.ExpectExec(`UPDATE session_states SET deleted_at = \$1`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// 2. Soft delete session_events
+	mock.ExpectExec(`UPDATE session_events SET deleted_at = \$1`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// 3. Soft delete session_summaries
+	mock.ExpectExec(`UPDATE session_summaries SET deleted_at = \$1`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock INSERT session state
+	mock.ExpectExec("INSERT INTO session_states").
+		WithArgs("test-app", "test-user", "expired-session", sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock SELECT app_states
+	appRows := sqlmock.NewRows([]string{"key", "value"})
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("test-app", sqlmock.AnyArg()).
+		WillReturnRows(appRows)
+
+	// Mock SELECT user_states
+	userRows := sqlmock.NewRows([]string{"key", "value"})
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
+		WillReturnRows(userRows)
+
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "expired-session", sess.ID)
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -730,7 +819,7 @@ func TestGetSession_WithEventLimit(t *testing.T) {
 		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
 		WillReturnRows(userRows)
 
-	// Mock events with LIMIT
+	// Mock events - with LIMIT in query (limit controls how many to return, not delete)
 	eventRows := sqlmock.NewRows([]string{"event"})
 	mock.ExpectQuery("SELECT event FROM session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(), sqlmock.AnyArg(), 5).
@@ -742,9 +831,75 @@ func TestGetSession_WithEventLimit(t *testing.T) {
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
 		WillReturnRows(summaryRows)
 
+	// WithEventNum(5) controls how many events to return in the query
+	// Note: This does NOT delete events from database, only limits the result set
 	sess, err := s.GetSession(context.Background(), key, session.WithEventNum(5))
 	require.NoError(t, err)
 	require.NotNil(t, sess)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSession_WithTTLRefresh(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	// Enable session TTL to trigger refresh
+	s.sessionTTL = 1 * time.Hour
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	// Mock session state
+	sessState := &SessionState{
+		ID:    "test-session",
+		State: session.StateMap{"key1": []byte("value1")},
+	}
+	stateBytes, _ := json.Marshal(sessState)
+	stateRows := sqlmock.NewRows([]string{"state", "created_at", "updated_at"}).
+		AddRow(stateBytes, time.Now(), time.Now())
+
+	mock.ExpectQuery("SELECT state, created_at, updated_at FROM session_states").
+		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
+		WillReturnRows(stateRows)
+
+	// Mock app_states
+	appRows := sqlmock.NewRows([]string{"key", "value"})
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("test-app", sqlmock.AnyArg()).
+		WillReturnRows(appRows)
+
+	// Mock user_states
+	userRows := sqlmock.NewRows([]string{"key", "value"})
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
+		WillReturnRows(userRows)
+
+	// Mock events
+	eventRows := sqlmock.NewRows([]string{"event"})
+	mock.ExpectQuery("SELECT event FROM session_events").
+		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(eventRows)
+
+	// Mock summaries
+	summaryRows := sqlmock.NewRows([]string{"filter_key", "summary"})
+	mock.ExpectQuery("SELECT filter_key, summary FROM session_summaries").
+		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
+		WillReturnRows(summaryRows)
+
+	// Mock TTL refresh UPDATE - this should be called after successful GetSession
+	mock.ExpectExec("UPDATE session_states").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	sess, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "test-session", sess.ID)
+	assert.Equal(t, []byte("value1"), sess.State["key1"])
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }

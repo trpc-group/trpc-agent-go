@@ -10,6 +10,7 @@
 package postgres
 
 import (
+	"fmt"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -45,6 +46,12 @@ type ServiceOpts struct {
 	summaryQueueSize int
 	// summaryJobTimeout is the timeout for processing a single summary job.
 	summaryJobTimeout time.Duration
+	// skipDBInit skips database initialization (table and index creation).
+	// Useful when user doesn't have DDL permissions or when tables are managed externally.
+	skipDBInit bool
+	// tablePrefix is the prefix for all table names.
+	// Default is empty string (no prefix).
+	tablePrefix string
 }
 
 // ServiceOpt is the option for the postgres session service.
@@ -211,5 +218,49 @@ func WithSoftDelete(enable bool) ServiceOpt {
 func WithCleanupInterval(interval time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.cleanupInterval = interval
+	}
+}
+
+// WithSkipDBInit skips database initialization (table and index creation).
+// Useful when:
+// - User doesn't have DDL permissions
+// - Tables are managed by migration tools
+// - Running in production environment where schema is pre-created
+func WithSkipDBInit(skip bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.skipDBInit = skip
+	}
+}
+
+// validateTablePrefix validates that table prefix only contains safe characters.
+// Only allows: alphanumeric characters (a-z, A-Z, 0-9) and underscore (_).
+func validateTablePrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	for _, ch := range prefix {
+		if !((ch >= 'a' && ch <= 'z') ||
+			(ch >= 'A' && ch <= 'Z') ||
+			(ch >= '0' && ch <= '9') ||
+			ch == '_') {
+			return fmt.Errorf("table prefix contains invalid character: %c (only alphanumeric and underscore allowed)", ch)
+		}
+	}
+	return nil
+}
+
+// WithTablePrefix sets a prefix for all table names.
+// For example, with prefix "trpc_", tables will be named:
+// - trpc_session_states
+// - trpc_session_events
+// - etc.
+//
+// Security: Only alphanumeric characters and underscore are allowed to prevent SQL injection.
+func WithTablePrefix(prefix string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if err := validateTablePrefix(prefix); err != nil {
+			panic(fmt.Sprintf("invalid table prefix: %v", err))
+		}
+		opts.tablePrefix = prefix
 	}
 }

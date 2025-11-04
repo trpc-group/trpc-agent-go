@@ -70,10 +70,10 @@ func (s *Service) createSessionSummary(
 				existingSummary = &sum
 			}
 			return nil
-		}, `SELECT summary, updated_at FROM session_summaries
+		}, fmt.Sprintf(`SELECT summary, updated_at FROM %s
 			WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
 			AND (expires_at IS NULL OR expires_at > $5)
-			AND deleted_at IS NULL`,
+			AND deleted_at IS NULL`, s.tableSessionSummaries),
 			key.AppName, key.UserID, key.SessionID, filterKey, time.Now().UTC())
 
 		if err != nil {
@@ -114,29 +114,21 @@ func (s *Service) createSessionSummary(
 		expiresAt = &t
 	}
 
-	// Note: With partial unique index (WHERE deleted_at IS NULL), we need to handle conflicts manually
-	// First try to update existing active summary
-	result, err := s.pgClient.ExecContext(ctx,
-		`UPDATE session_summaries
-		 SET summary = $5, updated_at = $6, expires_at = $7
-		 WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
-		 AND deleted_at IS NULL AND updated_at < $6`,
+	// Use UPSERT (INSERT ... ON CONFLICT) for atomic operation
+	// This handles both insert and update in a single, race-condition-free operation
+	// Note: Last write wins - no timestamp comparison to avoid silent failures
+	_, err = s.pgClient.ExecContext(ctx,
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
+		 DO UPDATE SET
+		   summary = EXCLUDED.summary,
+		   updated_at = EXCLUDED.updated_at,
+		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries),
 		key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, summary.UpdatedAt, expiresAt)
 
 	if err != nil {
-		return nil, fmt.Errorf("update summary failed: %w", err)
-	}
-
-	// If no rows updated, insert new summary
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		_, err = s.pgClient.ExecContext(ctx,
-			`INSERT INTO session_summaries (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, summary.UpdatedAt, expiresAt)
-		if err != nil {
-			return nil, fmt.Errorf("insert summary failed: %w", err)
-		}
+		return nil, fmt.Errorf("upsert summary failed: %w", err)
 	}
 
 	return summary, nil
@@ -230,11 +222,11 @@ func (s *Service) GetSessionSummaryText(
 			summaryText = sum.Summary
 		}
 		return nil
-	}, `SELECT summary FROM session_summaries
+	}, fmt.Sprintf(`SELECT summary FROM %s
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
 		AND (expires_at IS NULL OR expires_at > $5)
-		AND deleted_at IS NULL`,
-		key.AppName, key.UserID, key.SessionID, filterKey, time.Now())
+		AND deleted_at IS NULL`, s.tableSessionSummaries),
+		key.AppName, key.UserID, key.SessionID, filterKey, time.Now().UTC())
 
 	if err != nil {
 		return "", false
