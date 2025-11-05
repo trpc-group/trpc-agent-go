@@ -1958,6 +1958,148 @@ func TestProcessConditionalEdges_DedupMulti(t *testing.T) {
 	require.Equal(t, int64(1), chC.Version)
 }
 
+// TestProcessConditionalEdges_Multi_Error covers the error path when the
+// MultiCondition function returns an error and ensures the executor
+// returns a wrapped error with node information.
+func TestProcessConditionalEdges_Multi_Error(t *testing.T) {
+	const (
+		nodeStart = "start"
+		nodeB     = "B"
+		msgPrefix = "conditional edge evaluation failed for node "
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, minimalNoopNode)
+	sg.AddNode(nodeB, minimalNoopNode)
+	sg.SetEntryPoint(nodeStart)
+	// PathMap must reference existing nodes for validation.
+	sg.AddMultiConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) ([]string, error) {
+			return nil, fmt.Errorf("mc boom")
+		},
+		map[string]string{"b": nodeB},
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        State{},
+		EventChan:    make(chan *event.Event, 8),
+		InvocationID: "inv-multi-err",
+	}
+
+	err = exec.processConditionalEdges(
+		context.Background(), nil, execCtx, nodeStart, 0,
+	)
+	require.Error(t, err)
+	// Wrapped error should include the node id and original message.
+	require.Contains(t, err.Error(), msgPrefix+nodeStart)
+	require.Contains(t, err.Error(), "mc boom")
+}
+
+// TestProcessConditionalEdges_Condition_Error covers the error path when the
+// single Condition function returns an error.
+func TestProcessConditionalEdges_Condition_Error(t *testing.T) {
+	const (
+		nodeStart = "start"
+		nodeA     = "A"
+		msgPrefix = "conditional edge evaluation failed for node "
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, minimalNoopNode)
+	sg.AddNode(nodeA, minimalNoopNode)
+	sg.SetEntryPoint(nodeStart)
+	sg.AddConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) (string, error) {
+			return "", fmt.Errorf("sc boom")
+		},
+		map[string]string{"a": nodeA},
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        State{},
+		EventChan:    make(chan *event.Event, 8),
+		InvocationID: "inv-cond-err",
+	}
+
+	err = exec.processConditionalEdges(
+		context.Background(), nil, execCtx, nodeStart, 0,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), msgPrefix+nodeStart)
+	require.Contains(t, err.Error(), "sc boom")
+}
+
+// TestProcessConditionalEdges_Multi_SkipEmpty verifies that empty strings
+// in MultiCondition results are ignored and do not produce channels, and
+// duplicates still deduplicate to one trigger.
+func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
+	const (
+		nodeStart = "start"
+		nodeB     = "B"
+		nodeC     = "C"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, minimalNoopNode)
+	sg.AddNode(nodeB, minimalNoopNode)
+	sg.AddNode(nodeC, minimalNoopNode)
+	sg.SetEntryPoint(nodeStart)
+	sg.AddMultiConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) ([]string, error) {
+			// Includes duplicates and empty keys.
+			return []string{"b", "", "b", "c", "", "c"}, nil
+		},
+		map[string]string{"b": nodeB, "c": nodeC},
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        State{},
+		EventChan:    make(chan *event.Event, 8),
+		InvocationID: "inv-multi-skip",
+	}
+
+	require.NoError(t, exec.processConditionalEdges(
+		context.Background(), nil, execCtx, nodeStart, 0,
+	))
+
+	// Expect channels only for B and C, one update each.
+	chB, okB := g.getChannel(ChannelBranchPrefix + nodeB)
+	chC, okC := g.getChannel(ChannelBranchPrefix + nodeC)
+	require.True(t, okB)
+	require.True(t, okC)
+	require.Equal(t, int64(1), chB.Version)
+	require.Equal(t, int64(1), chC.Version)
+
+	// No channel should be created for empty branch key.
+	if _, ok := g.getChannel(ChannelBranchPrefix + ""); ok {
+		t.Fatalf("unexpected channel for empty branch key created")
+	}
+}
+
 // minimalNoopNode returns a trivial node function for building test graphs.
 func minimalNoopNode(_ context.Context, _ State) (any, error) { return nil, nil }
 
