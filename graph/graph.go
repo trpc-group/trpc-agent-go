@@ -149,7 +149,10 @@ type Edge struct {
 type ConditionalEdge struct {
 	From      string
 	Condition ConditionalFunc
-	PathMap   map[string]string // Maps condition result to target node.
+	// MultiCondition allows returning multiple next nodes for fan-out.
+	// Exactly one of Condition or MultiCondition should be non-nil.
+	MultiCondition MultiConditionalFunc
+	PathMap        map[string]string // Maps condition result to target node.
 }
 
 // Graph represents a directed graph of nodes and edges.
@@ -409,6 +412,11 @@ func (g *Graph) addConditionalEdge(condEdge *ConditionalEdge) error {
 	defer g.mu.Unlock()
 	if condEdge.From == "" {
 		return fmt.Errorf("conditional edge from cannot be empty")
+	}
+	// Validate condition presence and exclusivity.
+	if (condEdge.Condition == nil && condEdge.MultiCondition == nil) ||
+		(condEdge.Condition != nil && condEdge.MultiCondition != nil) {
+		return fmt.Errorf("exactly one of Condition or MultiCondition must be set")
 	}
 	if condEdge.From != Start {
 		if _, exists := g.nodes[condEdge.From]; !exists {

@@ -273,6 +273,70 @@ func TestExecutor_ResumeFromCheckpoint_Paths(t *testing.T) {
 	require.Len(t, writes, 0)
 }
 
+// Ensure NextChannels fallback in resumeFromCheckpoint updates channels
+// when there are no pending writes and no NextNodes.
+func TestExecutor_ResumeFromCheckpoint_NextChannelsFallback(t *testing.T) {
+	g := New(NewStateSchema())
+	// Pre-create the branch channel so resumeFromCheckpoint can update it.
+	g.addChannel(ChannelBranchPrefix+"A", ichannel.BehaviorLastValue)
+
+	exec := &Executor{graph: g}
+	tuple := &CheckpointTuple{Checkpoint: &Checkpoint{
+		ID:            "c3",
+		ChannelValues: map[string]any{},
+		NextChannels:  []string{ChannelBranchPrefix + "A"},
+	}}
+	exec.checkpointSaver = &resumeMockSaver{tuple: tuple}
+
+	st, ckpt, writes, err := exec.resumeFromCheckpoint(
+		context.Background(), nil,
+		CreateCheckpointConfig("ln", "id", "ns"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ckpt)
+	require.Empty(t, writes)
+	// State should not contain next nodes key in this fallback path.
+	require.NotContains(t, st, StateKeyNextNodes)
+
+	// The channel should have been updated once by the fallback.
+	ch, _ := g.getChannel(ChannelBranchPrefix + "A")
+	require.NotNil(t, ch)
+	require.Equal(t, int64(1), ch.Version)
+}
+
+// Verify restoreStateFromCheckpoint fills schema defaults and zero values
+// for fields missing from the checkpoint.
+func TestExecutor_RestoreStateFromCheckpoint_DefaultsAndZero(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("opt", StateField{
+			Type:    reflect.TypeOf(0),
+			Default: func() any { return 42 },
+			Reducer: DefaultReducer,
+		}).
+		AddField("names", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+		})
+	g := New(schema)
+	exec := &Executor{graph: g}
+
+	tuple := &CheckpointTuple{Checkpoint: &Checkpoint{
+		ID:            "ck",
+		ChannelValues: map[string]any{"x": 1},
+	}}
+
+	st := exec.restoreStateFromCheckpoint(tuple)
+	// Existing non-schema key remains.
+	require.Equal(t, 1, st["x"])
+	// Missing schema field with Default gets populated.
+	require.Equal(t, 42, st["opt"])
+	// Missing slice field present with zero (typed nil) value.
+	v, ok := st["names"]
+	require.True(t, ok)
+	_, isSlice := v.([]string)
+	require.True(t, isSlice)
+}
+
 func TestExecutor_HelperMethods(t *testing.T) {
 	exec := &Executor{graph: New(NewStateSchema())}
 	// getConfigKeys

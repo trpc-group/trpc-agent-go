@@ -2388,6 +2388,30 @@ func (e *Executor) processConditionalEdges(
 	stateCopy := make(State, len(execCtx.State))
 	maps.Copy(stateCopy, execCtx.State)
 	execCtx.stateMutex.RUnlock()
+	if condEdge.MultiCondition != nil {
+		results, err := condEdge.MultiCondition(ctx, stateCopy)
+		if err != nil {
+			return fmt.Errorf(
+				"conditional edge evaluation failed for node %s: %w",
+				nodeID, err,
+			)
+		}
+		// Deduplicate results to avoid double triggers.
+		seen := make(map[string]bool)
+		for _, r := range results {
+			if r == "" || seen[r] {
+				continue
+			}
+			seen[r] = true
+			if err := e.processConditionalResult(
+				ctx, invocation, execCtx, condEdge, r, step,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	result, err := condEdge.Condition(ctx, stateCopy)
 	if err != nil {
 		return fmt.Errorf("conditional edge evaluation failed for node %s: %w", nodeID, err)

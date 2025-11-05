@@ -677,6 +677,33 @@ func decideNode(ctx context.Context, s graph.State) (any, error) {
 
 完整可运行示例：`examples/graph/multiends`。
 
+### 4.2 多条件扇出（并行）
+
+当一次决策需要“同时”走多个分支（例如同时做摘要与打标签），可使用
+`AddMultiConditionalEdges`：
+
+```go
+// 返回多个分支键，每个分支键解析为一个具体目标节点。
+sg.AddMultiConditionalEdges(
+    "router",
+    func(ctx context.Context, s graph.State) ([]string, error) {
+        // 一次决策，同时走两个分支
+        return []string{"toA", "toB"}, nil
+    },
+    map[string]string{
+        "toA": "A", // 分支键 -> 目标节点
+        "toB": "B",
+    },
+)
+```
+
+说明：
+- 返回结果会先去重，同一分支键在同一步内只触发一次；
+- 每个分支键的解析优先级与单条件路由一致：
+  1) 条件边 `pathMap`；2) 节点 Ends；3) 直接当作节点 ID；
+- 可视化：当未提供 `pathMap` 时，DOT 会回退使用该节点的 Ends 来渲染虚线
+  条件边（仅用于可视化，方便理解流程）。
+
 ### 5. 工具节点集成
 
 ```go

@@ -601,6 +601,36 @@ Notes:
 
 Runnable example: `examples/graph/multiends`.
 
+### 4.2 Multi‑conditional Fan‑out
+
+Sometimes a single decision needs to spawn multiple branches in parallel
+for independent processing (e.g., route to both summarization and tagging).
+
+API:
+
+```go
+// Return multiple branch keys, each resolved to a concrete target.
+sg.AddMultiConditionalEdges(
+    "router",
+    func(ctx context.Context, s graph.State) ([]string, error) {
+        // Decide multiple paths at once
+        return []string{"toA", "toB"}, nil
+    },
+    map[string]string{
+        "toA": "A", // branch key -> target node
+        "toB": "B",
+    },
+)
+```
+
+Notes:
+- Results are de‑duplicated before triggering; repeated keys do not trigger a
+  target more than once in the same step.
+- Resolution precedence for each branch key mirrors single‑conditional routing:
+  1) explicit `pathMap`; 2) node’s Ends; 3) treat as node ID.
+- Visualization: when `pathMap` is omitted, DOT falls back to the node’s Ends
+  mapping to render dashed conditional edges.
+
 ### 5. Tool Node Integration
 
 ```go

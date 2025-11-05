@@ -480,6 +480,22 @@ func (sg *StateGraph) AddConditionalEdges(
 	return sg
 }
 
+// AddMultiConditionalEdges adds multi-conditional routing from a node.
+// The condition returns multiple branch keys for parallel routing.
+func (sg *StateGraph) AddMultiConditionalEdges(
+	from string,
+	condition MultiConditionalFunc,
+	pathMap map[string]string,
+) *StateGraph {
+	condEdge := &ConditionalEdge{
+		From:           from,
+		MultiCondition: condition,
+		PathMap:        pathMap,
+	}
+	sg.graph.addConditionalEdge(condEdge)
+	return sg
+}
+
 // AddToolsConditionalEdges adds conditional routing from a LLM node to a tools node.
 // If the last message has tool calls, route to the tools node.
 // Otherwise, route to the fallback node.
