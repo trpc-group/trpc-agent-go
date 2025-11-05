@@ -225,8 +225,8 @@ appRunner := runner.NewRunner(
 
 ### Memory Service
 
-Configure the memory service in code. Two backends are supported: in-memory
-and Redis.
+Configure the memory service in code. Three backends are supported: in-memory,
+Redis, and MySQL.
 
 #### Configuration Example
 
@@ -234,6 +234,7 @@ and Redis.
 import (
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+    memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
 )
 
 // In-memory implementation for development and testing.
@@ -248,17 +249,27 @@ if err != nil {
     // Handle error.
 }
 
+// MySQL implementation for production (relational database).
+// Table is automatically created on service initialization. Panics if creation fails.
+mysqlService, err := memorymysql.NewService(
+    memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysql.WithToolEnabled(memory.DeleteToolName, true), // Enable delete.
+)
+if err != nil {
+    // Handle error.
+}
+
 // Register memory tools with the Agent.
 llmAgent := llmagent.New(
     "memory-assistant",
-    llmagent.WithTools(memService.Tools()), // Or use redisService.Tools().
+    llmagent.WithTools(memService.Tools()), // Or redisService.Tools() or mysqlService.Tools().
 )
 
 // Set memory service in the Runner.
 runner := runner.NewRunner(
     "app",
     llmAgent,
-    runner.WithMemoryService(memService), // Or use redisService.
+    runner.WithMemoryService(memService), // Or redisService or mysqlService.
 )
 ```
 
@@ -476,7 +487,193 @@ go run main.go -memory inmemory
 go run main.go -memory redis -redis-addr localhost:6379
 
 # Flags:
-# -memory: memory service type (inmemory, redis), default is inmemory.
+# -memory: memory service type (inmemory, redis, mysql), default is inmemory.
 # -redis-addr: Redis server address, default is localhost:6379.
+# -mysql-dsn: MySQL Data Source Name (DSN), required when using MySQL.
 # -model: model name, default is deepseek-chat.
 ```
+
+## Storage Backends
+
+### In-Memory Storage
+
+In-memory storage is suitable for development and testing:
+
+```go
+import memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+
+// Create in-memory service
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithMemoryLimit(100), // Set memory limit
+    memoryinmemory.WithToolEnabled(memory.DeleteToolName, true), // Enable delete tool
+)
+```
+
+**Features:**
+
+- ✅ Zero configuration, ready to use
+- ✅ High performance, no network overhead
+- ❌ No data persistence, lost on restart
+- ❌ No distributed deployment support
+
+### Redis Storage
+
+Redis storage is suitable for production and distributed applications:
+
+```go
+import memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+
+// Create Redis memory service
+redisService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithMemoryLimit(1000), // Set memory limit
+    memoryredis.WithToolEnabled(memory.DeleteToolName, true), // Enable delete tool
+)
+if err != nil {
+    log.Fatalf("Failed to create redis memory service: %v", err)
+}
+```
+
+**Features:**
+
+- ✅ Data persistence, survives restarts
+- ✅ High performance for high concurrency
+- ✅ Distributed deployment support
+- ✅ Cluster and sentinel mode support
+- ⚙️ Requires Redis server
+
+**Redis Configuration Options:**
+
+- `WithRedisClientURL(url string)`: Set Redis connection URL
+- `WithRedisInstance(name string)`: Use pre-registered Redis instance
+- `WithMemoryLimit(limit int)`: Set maximum memories per user
+- `WithToolEnabled(toolName string, enabled bool)`: Enable or disable specific tools
+- `WithCustomTool(toolName string, creator ToolCreator)`: Use custom tool implementation
+
+### MySQL Storage
+
+MySQL storage is suitable for production environments requiring relational databases:
+
+```go
+import memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+
+// Create MySQL memory service
+mysqlService, err := memorymysql.NewService(
+    memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysql.WithMemoryLimit(1000), // Set memory limit
+    memorymysql.WithTableName("memories"), // Custom table name (optional)
+    memorymysql.WithToolEnabled(memory.DeleteToolName, true), // Enable delete tool
+)
+if err != nil {
+    log.Fatalf("Failed to create mysql memory service: %v", err)
+}
+```
+
+**Features:**
+
+- ✅ Data persistence with ACID transaction guarantees
+- ✅ Relational database with complex query support
+- ✅ Master-slave replication and clustering support
+- ✅ Automatic table creation
+- ✅ Comprehensive monitoring and management tools
+- ⚙️ Requires MySQL server (5.7+ or 8.0+)
+
+**MySQL Configuration Options:**
+
+- `WithMySQLClientDSN(dsn string)`: Set MySQL Data Source Name (DSN)
+- `WithMySQLInstance(name string)`: Use pre-registered MySQL instance
+- `WithTableName(name string)`: Custom table name (default "memories"). Panics if invalid.
+- `WithMemoryLimit(limit int)`: Set maximum memories per user
+- `WithSoftDelete(enabled bool)`: Enable soft delete (default false). When enabled, delete operations set `deleted_at` and queries filter out soft-deleted rows.
+- `WithToolEnabled(toolName string, enabled bool)`: Enable or disable specific tools
+- `WithCustomTool(toolName string, creator ToolCreator)`: Use custom tool implementation
+
+**Note:** The table is automatically created when the service is initialized. If table creation fails, the service will panic.
+
+**DSN Format:**
+
+```
+[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
+```
+
+**Common DSN Parameters:**
+
+- `parseTime=true`: Parse DATE and DATETIME to time.Time (required)
+- `charset=utf8mb4`: Character set
+- `loc=Local`: Location for time.Time values
+- `timeout=10s`: Connection timeout
+
+**Table Schema:**
+
+MySQL memory service automatically creates the following table structure on initialization:
+
+```sql
+CREATE TABLE IF NOT EXISTS memories (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    memory_id VARCHAR(64) NOT NULL,
+    memory_data JSON NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_app_user (app_name, user_id),
+    UNIQUE INDEX idx_app_user_memory (app_name, user_id, memory_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+```
+
+**Start MySQL with Docker:**
+
+```bash
+# Start MySQL container
+docker run -d --name mysql-memory \
+  -e MYSQL_ROOT_PASSWORD=password \
+  -e MYSQL_DATABASE=memory_db \
+  -p 3306:3306 \
+  mysql:8.0
+
+# Wait for MySQL to be ready
+docker exec mysql-memory mysqladmin ping -h localhost -u root -ppassword
+
+# Use MySQL memory service
+go run main.go -memory mysql -mysql-dsn "root:password@tcp(localhost:3306)/memory_db?parseTime=true"
+```
+
+**Register MySQL Instance (Optional):**
+
+```go
+import (
+    storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+    memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+)
+
+// Register MySQL instance
+storage.RegisterMySQLInstance("my-mysql",
+    storage.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+)
+
+// Use registered instance
+mysqlService, err := memorymysql.NewService(
+    memorymysql.WithMySQLInstance("my-mysql"),
+)
+```
+
+### Storage Backend Comparison
+
+| Feature                  | In-Memory | Redis      | MySQL          |
+| ------------------------ | --------- | ---------- | -------------- |
+| Data Persistence         | ❌        | ✅         | ✅             |
+| Distributed Support      | ❌        | ✅         | ✅             |
+| Transaction Support      | ❌        | Partial    | ✅ (ACID)      |
+| Query Capability         | Simple    | Medium     | Powerful (SQL) |
+| Performance              | Very High | High       | Medium-High    |
+| Configuration Complexity | Low       | Medium     | Medium         |
+| Use Case                 | Dev/Test  | Production | Production     |
+| Monitoring Tools         | None      | Rich       | Very Rich      |
+
+**Selection Guide:**
+
+- **Development/Testing**: Use in-memory storage for fast iteration
+- **Production (High Performance)**: Use Redis storage for high concurrency scenarios
+- **Production (Data Integrity)**: Use MySQL storage when ACID guarantees and complex queries are needed
+- **Hybrid Deployment**: Choose different storage backends based on different application scenarios
