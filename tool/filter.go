@@ -64,7 +64,12 @@ func NewIncludeToolNamesFilter(names ...string) FilterFunc {
 		allowedNames[name] = struct{}{}
 	}
 	return func(ctx context.Context, tool Tool) bool {
-		_, isAllowed := allowedNames[tool.Declaration().Name]
+		declaration := tool.Declaration()
+		if declaration == nil {
+			return false
+		}
+
+		_, isAllowed := allowedNames[declaration.Name]
 		return isAllowed
 	}
 }
@@ -76,7 +81,12 @@ func NewExcludeToolNamesFilter(names ...string) FilterFunc {
 		excludedNames[name] = struct{}{}
 	}
 	return func(ctx context.Context, tool Tool) bool {
-		_, isExcluded := excludedNames[tool.Declaration().Name]
+		declaration := tool.Declaration()
+		if declaration == nil {
+			return false
+		}
+
+		_, isExcluded := excludedNames[declaration.Name]
 		return !isExcluded
 	}
 }

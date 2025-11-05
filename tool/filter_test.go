@@ -70,6 +70,10 @@ func TestNewIncludeToolNamesFilter(t *testing.T) {
 	if filter(ctx, newMockTool("blocked")) {
 		t.Fatalf("expected tool %q to be excluded", "blocked")
 	}
+
+	if filter(ctx, newMockNilTool()) {
+		t.Fatalf("expected tool with nil declaration to be excluded")
+	}
 }
 
 func TestNewExcludeToolNamesFilter(t *testing.T) {
@@ -82,6 +86,10 @@ func TestNewExcludeToolNamesFilter(t *testing.T) {
 
 	if !filter(ctx, newMockTool("allowed")) {
 		t.Fatalf("expected tool %q to be included", "allowed")
+	}
+
+	if filter(ctx, newMockNilTool()) {
+		t.Fatalf("expected tool with nil declaration to be excluded")
 	}
 }
 
@@ -108,6 +116,10 @@ func newMockTool(name string) Tool {
 	return &mockTool{
 		decl: &Declaration{Name: name},
 	}
+}
+
+func newMockNilTool() Tool {
+	return &mockTool{}
 }
 
 func (m *mockTool) Declaration() *Declaration {
