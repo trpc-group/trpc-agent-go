@@ -14,6 +14,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -25,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -34,8 +36,10 @@ import (
 
 var (
 	modelName      = flag.String("model", "deepseek-chat", "Name of the model to use")
-	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis")
+	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis / mysql")
 	redisAddr      = flag.String("redis-addr", "localhost:6379", "Redis address")
+	mysqlDSN       = flag.String("mysql-dsn", "", "MySQL DSN (e.g., user:password@tcp(localhost:3306)/dbname?parseTime=true)")
+	softDelete     = flag.Bool("soft-delete", false, "Enable soft delete for MySQL memory service")
 	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
@@ -48,6 +52,10 @@ func main() {
 	fmt.Printf("Memory Service: %s\n", *memServiceName)
 	if *memServiceName == "redis" {
 		fmt.Printf("Redis: %s\n", *redisAddr)
+	}
+	if *memServiceName == "mysql" {
+		fmt.Printf("MySQL: %s\n", *mysqlDSN)
+		fmt.Printf("Soft delete: %t\n", *softDelete)
 	}
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Available tools: memory_add, memory_update, memory_search, memory_load\n")
@@ -113,6 +121,20 @@ func (c *memoryChat) setup(_ context.Context) error {
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create redis memory service: %w", err)
+		}
+	case "mysql":
+		if *mysqlDSN == "" {
+			return errors.New("mysql DSN is required, set via --mysql-dsn flag")
+		}
+		memoryService, err = memorymysql.NewService(
+			memorymysql.WithMySQLClientDSN(*mysqlDSN),
+			memorymysql.WithSoftDelete(*softDelete),
+			// You can enable or disable tools and create custom tools here.
+			memorymysql.WithToolEnabled(memory.DeleteToolName, false),               // delete tool is disabled by default
+			memorymysql.WithCustomTool(memory.ClearToolName, customClearMemoryTool), // custom clear tool
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create mysql memory service: %w", err)
 		}
 	default: // inmemory
 		memoryService = memoryinmemory.NewMemoryService(
