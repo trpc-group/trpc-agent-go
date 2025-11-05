@@ -23,15 +23,15 @@ func TestModelUnknownProvider(t *testing.T) {
 }
 
 func TestRegisterFactoryOverridesDefault(t *testing.T) {
-	original, ok := GetFactory("openai")
+	original, ok := Get("openai")
 	assert.True(t, ok)
 
 	var captured *Options
-	RegisterFactory("openai", func(opts *Options) (model.Model, error) {
+	Register("openai", func(opts *Options) (model.Model, error) {
 		captured = opts
 		return testModel{}, nil
 	})
-	defer RegisterFactory("openai", original)
+	defer Register("openai", original)
 
 	_, err := Model("openai", "test-model", WithAPIKey("key"), WithChannelBufferSize(16))
 	assert.NoError(t, err)
@@ -73,28 +73,28 @@ func TestOpenAIFactoryAppliesOptions(t *testing.T) {
 	WithTokenCounter(counter)(opts)
 	WithTailoringStrategy(strategy)(opts)
 
-	modelInstance, err := openaiFactory(opts)
+	modelInstance, err := openaiProvider(opts)
 	assert.NoError(t, err)
 
 	// Ensure original map mutation doesn't leak
 	fields["tenant"] = "changed"
 
-	aiModel, ok := modelInstance.(*openai.Model)
+	openaiModel, ok := modelInstance.(*openai.Model)
 	assert.True(t, ok)
 
 	assert.Equal(t, "gpt-4", modelInstance.Info().Name)
-	assert.Equal(t, "https://api.example.com", readStringField(aiModel, "baseURL"))
-	assert.Equal(t, "openai-key", readStringField(aiModel, "apiKey"))
-	assert.Equal(t, 42, readIntField(aiModel, "channelBufferSize"))
-	assert.True(t, readBoolField(aiModel, "enableTokenTailoring"))
-	assert.Equal(t, 256, readIntField(aiModel, "maxInputTokens"))
-	assert.Equal(t, "internal", readMapField(aiModel, "extraFields")["tenant"])
-	assert.Equal(t, counter, readInterfaceField(aiModel, "tokenCounter"))
-	assert.Equal(t, strategy, readInterfaceField(aiModel, "tailoringStrategy"))
-	assert.NotNil(t, readInterfaceField(aiModel, "chatRequestCallback"))
-	assert.NotNil(t, readInterfaceField(aiModel, "chatResponseCallback"))
-	assert.NotNil(t, readInterfaceField(aiModel, "chatChunkCallback"))
-	assert.NotNil(t, readInterfaceField(aiModel, "chatStreamCompleteCallback"))
+	assert.Equal(t, "https://api.example.com", readStringField(openaiModel, "baseURL"))
+	assert.Equal(t, "openai-key", readStringField(openaiModel, "apiKey"))
+	assert.Equal(t, 42, readIntField(openaiModel, "channelBufferSize"))
+	assert.True(t, readBoolField(openaiModel, "enableTokenTailoring"))
+	assert.Equal(t, 256, readIntField(openaiModel, "maxInputTokens"))
+	assert.Equal(t, "internal", readMapField(openaiModel, "extraFields")["tenant"])
+	assert.Equal(t, counter, readInterfaceField(openaiModel, "tokenCounter"))
+	assert.Equal(t, strategy, readInterfaceField(openaiModel, "tailoringStrategy"))
+	assert.NotNil(t, readInterfaceField(openaiModel, "chatRequestCallback"))
+	assert.NotNil(t, readInterfaceField(openaiModel, "chatResponseCallback"))
+	assert.NotNil(t, readInterfaceField(openaiModel, "chatChunkCallback"))
+	assert.NotNil(t, readInterfaceField(openaiModel, "chatStreamCompleteCallback"))
 }
 
 func TestAnthropicFactoryAppliesOptions(t *testing.T) {
@@ -115,7 +115,7 @@ func TestAnthropicFactoryAppliesOptions(t *testing.T) {
 	WithChannelBufferSize(bufSize)(opts)
 	WithAnthropicOption(anthropic.WithAnthropicRequestOptions(option.WithJSONSet("tenant", "internal")))(opts)
 
-	modelInstance, err := anthropicFactory(opts)
+	modelInstance, err := anthropicProvider(opts)
 	assert.NoError(t, err)
 
 	anthropicModel, ok := modelInstance.(*anthropic.Model)
@@ -141,9 +141,9 @@ func TestWithOpenAIOptionOverwrites(t *testing.T) {
 		WithBaseURL("c"),
 	)
 	assert.NoError(t, err)
-	aiModel, ok := model.(*openai.Model)
+	openaiModel, ok := model.(*openai.Model)
 	assert.True(t, ok)
-	assert.Equal(t, "b", readStringField(aiModel, "baseURL"))
+	assert.Equal(t, "b", readStringField(openaiModel, "baseURL"))
 }
 
 func TestWithAnthropicOptionOverwrites(t *testing.T) {

@@ -10,34 +10,34 @@ import (
 )
 
 func init() {
-	RegisterFactory("openai", openaiFactory)
-	RegisterFactory("anthropic", anthropicFactory)
+	Register("openai", openaiProvider)
+	Register("anthropic", anthropicProvider)
 }
 
-// Factory builds a model.Model instance for a provider.
-type Factory func(*Options) (model.Model, error)
+// Provider builds a model.Model instance.
+type Provider func(opts *Options) (model.Model, error)
 
 var (
-	registryMu sync.RWMutex               // registryMu guards registry access.
-	registry   = make(map[string]Factory) // registry stores provider name to factory mappings.
+	providersMu sync.RWMutex                // providersMu guards providers access.
+	providers   = make(map[string]Provider) // providers stores provider name to provider mappings.
 )
 
-// RegisterFactory registers or overrides a provider factory.
-func RegisterFactory(name string, factory Factory) {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registry[name] = factory
+// Register registers a provider by name.
+func Register(name string, provider Provider) {
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	providers[name] = provider
 }
 
-// GetFactory returns the factory for the given provider name or nil if none registered.
-func GetFactory(name string) (Factory, bool) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	factory, ok := registry[name]
-	return factory, ok
+// Get returns the provider by name or nil if not found.
+func Get(name string) (Provider, bool) {
+	providersMu.RLock()
+	defer providersMu.RUnlock()
+	provider, ok := providers[name]
+	return provider, ok
 }
 
-// Model constructs a model.Model with the given provider, model name and options.
+// Model constructs a model.Model with the given provider name, model name and options.
 func Model(providerName, modelName string, opt ...Option) (model.Model, error) {
 	opts := &Options{
 		ProviderName: providerName,
@@ -46,15 +46,15 @@ func Model(providerName, modelName string, opt ...Option) (model.Model, error) {
 	for _, o := range opt {
 		o(opts)
 	}
-	factory, ok := GetFactory(providerName)
+	provider, ok := Get(providerName)
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", providerName)
 	}
-	return factory(opts)
+	return provider(opts)
 }
 
-// openaiFactory builds an OpenAI-compatible model instance using the resolved options.
-func openaiFactory(opts *Options) (model.Model, error) {
+// openaiProvider builds an OpenAI-compatible model instance using the resolved options.
+func openaiProvider(opts *Options) (model.Model, error) {
 	var res []openai.Option
 	if opts.APIKey != "" {
 		res = append(res, openai.WithAPIKey(opts.APIKey))
@@ -108,8 +108,8 @@ func openaiFactory(opts *Options) (model.Model, error) {
 	return openai.New(opts.ModelName, res...), nil
 }
 
-// anthropicFactory builds an Anthropic-compatible model instance using the resolved options.
-func anthropicFactory(opts *Options) (model.Model, error) {
+// anthropicProvider builds an Anthropic-compatible model instance using the resolved options.
+func anthropicProvider(opts *Options) (model.Model, error) {
 	var res []anthropic.Option
 	if opts.APIKey != "" {
 		res = append(res, anthropic.WithAPIKey(opts.APIKey))
