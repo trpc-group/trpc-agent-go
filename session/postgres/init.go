@@ -19,6 +19,22 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
+// Table names
+const (
+	tableNameSessionStates    = "session_states"
+	tableNameSessionEvents    = "session_events"
+	tableNameSessionSummaries = "session_summaries"
+	tableNameAppStates        = "app_states"
+	tableNameUserStates       = "user_states"
+)
+
+// Index suffixes
+const (
+	indexSuffixUniqueActive = "unique_active"
+	indexSuffixLookup       = "lookup"
+	indexSuffixExpires      = "expires"
+)
+
 // SQL templates for table creation
 const (
 	sqlCreateSessionStatesTable = `
@@ -141,26 +157,6 @@ const (
 		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
 )
 
-// buildCreateTableSQL builds CREATE TABLE SQL with table prefix.
-func buildCreateTableSQL(schema, prefix, tableName, template string) string {
-	fullTableName := buildFullTableName(schema, prefix, tableName)
-	return strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
-}
-
-// buildIndexSQL builds CREATE INDEX SQL with table and index prefix.
-func buildIndexSQL(schema, prefix, tableName, template string) string {
-	fullTableName := buildFullTableName(schema, prefix, tableName)
-	// Extract original index name from template (e.g., idx_session_states_unique_active)
-	// and prepend the prefix
-	sql := strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
-
-	// Replace {{INDEX_NAME}} placeholder with prefixed index name
-	// The index name pattern: idx_{prefix}{table}_{suffix}
-	sql = strings.ReplaceAll(sql, "{{INDEX_NAME}}", "idx_"+fullTableName)
-
-	return sql
-}
-
 // tableColumn represents a table column definition
 type tableColumn struct {
 	name     string
@@ -170,7 +166,7 @@ type tableColumn struct {
 
 // tableIndex represents a table index definition
 type tableIndex struct {
-	name    string
+	suffix  string // Index suffix like "unique_active", "lookup", "expires"
 	columns []string
 }
 
@@ -179,7 +175,7 @@ var expectedSchema = map[string]struct {
 	columns []tableColumn
 	indexes []tableIndex
 }{
-	"session_states": {
+	tableNameSessionStates: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
 			{"app_name", "character varying", false},
@@ -192,11 +188,11 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{"idx_session_states_unique_active", []string{"app_name", "user_id", "session_id"}},
-			{"idx_session_states_expires", []string{"expires_at"}},
+			{indexSuffixUniqueActive, []string{"app_name", "user_id", "session_id"}},
+			{indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
-	"session_events": {
+	tableNameSessionEvents: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
 			{"app_name", "character varying", false},
@@ -209,11 +205,11 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{"idx_session_events_lookup", []string{"app_name", "user_id", "session_id", "created_at"}},
-			{"idx_session_events_expires", []string{"expires_at"}},
+			{indexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}},
+			{indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
-	"session_summaries": {
+	tableNameSessionSummaries: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
 			{"app_name", "character varying", false},
@@ -226,11 +222,11 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{"idx_session_summaries_unique_active", []string{"app_name", "user_id", "session_id", "filter_key"}},
-			{"idx_session_summaries_expires", []string{"expires_at"}},
+			{indexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "filter_key"}},
+			{indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
-	"app_states": {
+	tableNameAppStates: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
 			{"app_name", "character varying", false},
@@ -242,11 +238,11 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{"idx_app_states_unique_active", []string{"app_name", "key"}},
-			{"idx_app_states_expires", []string{"expires_at"}},
+			{indexSuffixUniqueActive, []string{"app_name", "key"}},
+			{indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
-	"user_states": {
+	tableNameUserStates: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
 			{"app_name", "character varying", false},
@@ -259,10 +255,78 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{"idx_user_states_unique_active", []string{"app_name", "user_id", "key"}},
-			{"idx_user_states_expires", []string{"expires_at"}},
+			{indexSuffixUniqueActive, []string{"app_name", "user_id", "key"}},
+			{indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
+}
+
+// indexDefinition defines an index with its table, suffix and SQL template
+type indexDefinition struct {
+	table    string
+	suffix   string
+	template string
+}
+
+// tableDefinition defines a table with its SQL template
+type tableDefinition struct {
+	name     string
+	template string
+}
+
+// Global table definitions
+var tableDefs = []tableDefinition{
+	{tableNameSessionStates, sqlCreateSessionStatesTable},
+	{tableNameSessionEvents, sqlCreateSessionEventsTable},
+	{tableNameSessionSummaries, sqlCreateSessionSummariesTable},
+	{tableNameAppStates, sqlCreateAppStatesTable},
+	{tableNameUserStates, sqlCreateUserStatesTable},
+}
+
+// Global index definitions
+var indexDefs = []indexDefinition{
+	// Partial unique indexes (only for non-deleted records)
+	{tableNameSessionStates, indexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{tableNameSessionSummaries, indexSuffixUniqueActive, sqlCreateSessionSummariesUniqueIndex},
+	{tableNameAppStates, indexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
+	{tableNameUserStates, indexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
+	// Lookup indexes (only session_events needs a separate lookup index)
+	{tableNameSessionEvents, indexSuffixLookup, sqlCreateSessionEventsIndex},
+	// TTL indexes
+	{tableNameSessionStates, indexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
+	{tableNameSessionEvents, indexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
+	{tableNameSessionSummaries, indexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
+	{tableNameAppStates, indexSuffixExpires, sqlCreateAppStatesExpiresIndex},
+	{tableNameUserStates, indexSuffixExpires, sqlCreateUserStatesExpiresIndex},
+}
+
+// buildCreateTableSQL builds CREATE TABLE SQL with table prefix.
+func buildCreateTableSQL(schema, prefix, tableName, template string) string {
+	fullTableName := buildFullTableName(schema, prefix, tableName)
+	return strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
+}
+
+// buildIndexName constructs an index name with schema/prefix.
+// Example: schema="new", prefix="app_", tableName="session_states", suffix="unique_active"
+// Result: "idx_new_app_session_states_unique_active"
+func buildIndexName(schema, prefix, tableName, suffix string) string {
+	// Build the prefixed table name for index
+	// Convert dots to underscores for index names (schema.table -> schema_table)
+	prefixedTableName := strings.ReplaceAll(buildFullTableName(schema, prefix, tableName), ".", "_")
+
+	// Construct index name: idx_{prefixed_table}_{suffix}
+	return fmt.Sprintf("idx_%s_%s", prefixedTableName, suffix)
+}
+
+// buildIndexSQL builds CREATE INDEX SQL with table and index prefix.
+// suffix should be the index suffix like "unique_active", "lookup", "expires".
+func buildIndexSQL(schema, prefix, tableName, suffix, template string) string {
+	fullTableName := buildFullTableName(schema, prefix, tableName)
+	finalIndexName := buildIndexName(schema, prefix, tableName, suffix)
+
+	sql := strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
+	sql = strings.ReplaceAll(sql, "{{INDEX_NAME}}", finalIndexName)
+	return sql
 }
 
 // initDB initializes the database schema
@@ -286,18 +350,7 @@ func (s *Service) initDB(ctx context.Context) {
 // createTables creates all required tables with the given prefix.
 // This function can be used by both Service and standalone InitDB.
 func createTables(ctx context.Context, client storage.Client, schema, prefix string) error {
-	tables := []struct {
-		name     string
-		template string
-	}{
-		{"session_states", sqlCreateSessionStatesTable},
-		{"session_events", sqlCreateSessionEventsTable},
-		{"session_summaries", sqlCreateSessionSummariesTable},
-		{"app_states", sqlCreateAppStatesTable},
-		{"user_states", sqlCreateUserStatesTable},
-	}
-
-	for _, table := range tables {
+	for _, table := range tableDefs {
 		tableSQL := buildCreateTableSQL(schema, prefix, table.name, table.template)
 		fullTableName := buildFullTableName(schema, prefix, table.name)
 		if _, err := client.ExecContext(ctx, tableSQL); err != nil {
@@ -311,27 +364,8 @@ func createTables(ctx context.Context, client storage.Client, schema, prefix str
 // createIndexes creates all required indexes with the given prefix.
 // This function can be used by both Service and standalone InitDB.
 func createIndexes(ctx context.Context, client storage.Client, schema, prefix string) error {
-	indexes := []struct {
-		table    string
-		template string
-	}{
-		// Partial unique indexes (only for non-deleted records)
-		{"session_states", sqlCreateSessionStatesUniqueIndex},
-		{"session_summaries", sqlCreateSessionSummariesUniqueIndex},
-		{"app_states", sqlCreateAppStatesUniqueIndex},
-		{"user_states", sqlCreateUserStatesUniqueIndex},
-		// Lookup indexes (only session_events needs a separate lookup index)
-		{"session_events", sqlCreateSessionEventsIndex},
-		// TTL indexes
-		{"session_states", sqlCreateSessionStatesExpiresIndex},
-		{"session_events", sqlCreateSessionEventsExpiresIndex},
-		{"session_summaries", sqlCreateSessionSummariesExpiresIndex},
-		{"app_states", sqlCreateAppStatesExpiresIndex},
-		{"user_states", sqlCreateUserStatesExpiresIndex},
-	}
-
-	for _, idx := range indexes {
-		indexSQL := buildIndexSQL(schema, prefix, idx.table, idx.template)
+	for _, idx := range indexDefs {
+		indexSQL := buildIndexSQL(schema, prefix, idx.table, idx.suffix, idx.template)
 		fullTableName := buildFullTableName(schema, prefix, idx.table)
 		if _, err := client.ExecContext(ctx, indexSQL); err != nil {
 			return fmt.Errorf("create index on %s failed: %w", fullTableName, err)
@@ -464,8 +498,11 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 
 	// Check each expected index
 	for _, expected := range expectedIndexes {
-		if !actualIndexes[expected.name] {
-			log.Warnf("index %s on table %s is missing", expected.name, tableName)
+		// Build the expected index name using suffix
+		expectedIndexName := buildIndexName(s.opts.schema, s.opts.tablePrefix, tableName, expected.suffix)
+
+		if !actualIndexes[expectedIndexName] {
+			log.Warnf("index %s on table %s is missing", expectedIndexName, fullTableName)
 		}
 	}
 

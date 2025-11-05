@@ -110,31 +110,93 @@ func TestBuildCreateTableSQL(t *testing.T) {
 	}
 }
 
+func TestBuildIndexName(t *testing.T) {
+	tests := []struct {
+		name      string
+		schema    string
+		prefix    string
+		tableName string
+		suffix    string
+		expected  string
+	}{
+		{
+			name:      "no schema, no prefix",
+			schema:    "",
+			prefix:    "",
+			tableName: "session_states",
+			suffix:    "unique_active",
+			expected:  "idx_session_states_unique_active",
+		},
+		{
+			name:      "with prefix only",
+			schema:    "",
+			prefix:    "app1_",
+			tableName: "session_states",
+			suffix:    "unique_active",
+			expected:  "idx_app1_session_states_unique_active",
+		},
+		{
+			name:      "with schema only",
+			schema:    "new",
+			prefix:    "",
+			tableName: "session_states",
+			suffix:    "unique_active",
+			expected:  "idx_new_session_states_unique_active",
+		},
+		{
+			name:      "with both schema and prefix",
+			schema:    "new",
+			prefix:    "app1_",
+			tableName: "session_states",
+			suffix:    "unique_active",
+			expected:  "idx_new_app1_session_states_unique_active",
+		},
+		{
+			name:      "different index suffix",
+			schema:    "new",
+			prefix:    "app1_",
+			tableName: "session_states",
+			suffix:    "expires",
+			expected:  "idx_new_app1_session_states_expires",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildIndexName(tt.schema, tt.prefix, tt.tableName, tt.suffix)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestBuildIndexSQL(t *testing.T) {
 	tests := []struct {
 		name     string
 		prefix   string
 		table    string
+		suffix   string
 		expected string
 	}{
 		{
 			name:     "no prefix",
 			prefix:   "",
 			table:    "session_states",
-			expected: "idx_session_states",
+			suffix:   "test",
+			expected: "idx_session_states_test",
 		},
 		{
 			name:     "with prefix",
 			prefix:   "app1_",
 			table:    "session_states",
-			expected: "idx_app1_session_states",
+			suffix:   "test",
+			expected: "idx_app1_session_states_test",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			template := "CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}} (id)"
-			result := buildIndexSQL("", tt.prefix, tt.table, template)
+			result := buildIndexSQL("", tt.prefix, tt.table, tt.suffix, template)
 			assert.Contains(t, result, tt.expected)
 		})
 	}
@@ -442,7 +504,9 @@ func TestBuildCreateTableSQL_WithPrefixMock(t *testing.T) {
 
 // TestBuildIndexSQL_Mock tests index SQL template replacement
 func TestBuildIndexSQL_Mock(t *testing.T) {
-	sql := buildIndexSQL("", "", "test_table", "CREATE UNIQUE INDEX IF NOT EXISTS idx_test_table ON {{TABLE_NAME}}(id)")
+	sql := buildIndexSQL("", "", "test_table", "test_suffix", "CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}} ON {{TABLE_NAME}}(id)")
 	assert.Contains(t, sql, "ON test_table(id)")
+	assert.Contains(t, sql, "idx_test_table_test_suffix")
 	assert.NotContains(t, sql, "{{TABLE_NAME}}")
+	assert.NotContains(t, sql, "{{INDEX_NAME}}")
 }
