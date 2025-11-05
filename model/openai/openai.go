@@ -483,12 +483,12 @@ func New(name string, opts ...Option) *Model {
 	}
 
 	// Set default API key and base URL if not specified.
-	if _, ok := variantConfigs[o.Variant]; ok {
-		if val, ok := os.LookupEnv(variantConfigs[o.Variant].apiKeyName); ok && o.APIKey == "" {
+	if cfg, ok := variantConfigs[o.Variant]; ok {
+		if val, ok := os.LookupEnv(cfg.apiKeyName); ok && o.APIKey == "" {
 			o.APIKey = val
 		}
-		if val, ok := os.LookupEnv(variantConfigs[o.Variant].defaultBaseURL); ok && o.BaseURL == "" {
-			o.BaseURL = val
+		if cfg.defaultBaseURL != "" && o.BaseURL == "" {
+			o.BaseURL = cfg.defaultBaseURL
 		}
 	}
 

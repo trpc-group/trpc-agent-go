@@ -40,10 +40,10 @@ func TestMain(m *testing.M) {
 
 func TestNew(t *testing.T) {
 	tests := []struct {
-		name        string
-		modelName   string
-		opts        []Option
-		expectError bool
+		name       string
+		modelName  string
+		opts       []Option
+		expectOpts []Option
 	}{
 		{
 			name:      "valid openai model",
@@ -51,7 +51,6 @@ func TestNew(t *testing.T) {
 			opts: []Option{
 				WithAPIKey("test-key"),
 			},
-			expectError: false,
 		},
 		{
 			name:      "valid model with base url",
@@ -60,7 +59,6 @@ func TestNew(t *testing.T) {
 				WithAPIKey("test-key"),
 				WithBaseURL("https://api.custom.com"),
 			},
-			expectError: false,
 		},
 		{
 			name:      "empty api key",
@@ -68,7 +66,16 @@ func TestNew(t *testing.T) {
 			opts: []Option{
 				WithAPIKey(""),
 			},
-			expectError: false, // Should still create model, but may fail on actual calls
+		},
+		{
+			name:      "variant deepseek",
+			modelName: "deepseek",
+			opts: []Option{
+				WithVariant(VariantDeepSeek),
+			},
+			expectOpts: []Option{
+				WithBaseURL(defaultDeepSeekBaseURL),
+			},
 		},
 	}
 
@@ -79,6 +86,9 @@ func TestNew(t *testing.T) {
 
 			o := options{}
 			for _, opt := range tt.opts {
+				opt(&o)
+			}
+			for _, opt := range tt.expectOpts {
 				opt(&o)
 			}
 
@@ -3535,8 +3545,8 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 		}))
 		defer server.Close()
 
-		m := New("gpt-3.5-turbo", 
-			WithBaseURL(server.URL), 
+		m := New("gpt-3.5-turbo",
+			WithBaseURL(server.URL),
 			WithAPIKey("test-key"),
 			WithChatStreamCompleteCallback(callback),
 		)
@@ -3595,8 +3605,8 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 		}))
 		defer server.Close()
 
-		m := New("gpt-3.5-turbo", 
-			WithBaseURL(server.URL), 
+		m := New("gpt-3.5-turbo",
+			WithBaseURL(server.URL),
 			WithAPIKey("test-key"),
 		)
 
@@ -3623,7 +3633,7 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 
 		// Verify that we received responses with reasoning content
 		assert.NotEmpty(t, responses, "expected to receive responses")
-		
+
 		// Check that at least one response has reasoning content
 		var hasReasoning bool
 		for _, resp := range responses {
