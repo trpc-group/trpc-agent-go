@@ -293,37 +293,6 @@ func TestVerifyIndexes_QueryError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestIsCompatibleType tests type compatibility checking
-func TestIsCompatibleType(t *testing.T) {
-	tests := []struct {
-		name     string
-		actual   string
-		expected string
-		want     bool
-	}{
-		{"exact match - varchar", "character varying", "character varying", true},
-		{"normalized match - varchar", "character varying", "varchar", true},
-		{"normalized match - reverse", "varchar", "character varying", true},
-		{"exact match - timestamp", "timestamp without time zone", "timestamp without time zone", true},
-		{"normalized match - timestamp", "timestamp without time zone", "timestamp", true},
-		{"normalized match - reverse timestamp", "timestamp", "timestamp without time zone", true},
-		{"exact match - bigint", "bigint", "bigint", true},
-		{"exact match - jsonb", "jsonb", "jsonb", true},
-		{"mismatch - varchar vs bigint", "character varying", "bigint", false},
-		{"mismatch - timestamp vs bigint", "timestamp", "bigint", false},
-		{"mismatch - jsonb vs text", "jsonb", "text", false},
-		{"unknown type - exact match", "custom_type", "custom_type", true},
-		{"unknown type - mismatch", "custom_type", "other_type", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isCompatibleType(tt.actual, tt.expected)
-			assert.Equal(t, tt.want, got, "isCompatibleType(%q, %q)", tt.actual, tt.expected)
-		})
-	}
-}
-
 // TestVerifySchema_Success tests verifySchema when all tables/columns/indexes match
 // NOTE: This test can be flaky due to Go map iteration being random.
 // The test covers all 5 tables but mock expectations may not match the iteration order.

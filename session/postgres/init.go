@@ -459,7 +459,7 @@ func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expec
 		}
 
 		// Check data type
-		if !isCompatibleType(actual.dataType, expected.dataType) {
+		if actual.dataType != expected.dataType {
 			return fmt.Errorf("column %s.%s has type %s, expected %s",
 				tableName, expected.name, actual.dataType, expected.dataType)
 		}
@@ -508,32 +508,6 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 	}
 
 	return nil
-}
-
-// isCompatibleType checks if two PostgreSQL data types are compatible
-func isCompatibleType(actual, expected string) bool {
-	// Normalize type names
-	typeMap := map[string]string{
-		"character varying":           "varchar",
-		"varchar":                     "varchar",
-		"timestamp without time zone": "timestamp",
-		"timestamp":                   "timestamp",
-		"bigint":                      "bigint",
-		"bytea":                       "bytea",
-		"jsonb":                       "jsonb",
-	}
-
-	actualNorm := typeMap[actual]
-	expectedNorm := typeMap[expected]
-
-	if actualNorm == "" {
-		actualNorm = actual
-	}
-	if expectedNorm == "" {
-		expectedNorm = expected
-	}
-
-	return actualNorm == expectedNorm
 }
 
 // InitDBConfig contains configuration for standalone database initialization.
