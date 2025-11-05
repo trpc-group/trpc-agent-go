@@ -7,11 +7,14 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package main shows how to interrupt a graph-based workflow inside a tool
-// node, wait for human input, and resume execution with the provided data.
-// The example runs an interactive command-line application that streams LLM
-// output, pauses when the tool asks for external facts, and resumes once the
-// user supplies the missing information.
+// Package main demonstrates model‑orchestrated external tools that run
+// outside the graph process. The Large Language Model (LLM) first returns
+// a tool call (for example: extract document content), the client executes
+// that tool out‑of‑process and feeds the result back, then the model may
+// request another tool (for example: summarize the extracted content) and
+// continue. We implement this by intercepting tool calls in a callback,
+// emitting a graph interrupt with the tool call details, and resuming with
+// the user‑supplied tool result.
 package main
 
 import (
@@ -45,11 +48,16 @@ const (
 
 	nodePrepare   = "prepare_input"
 	nodeAssistant = "assistant_plan"
-	nodeTools     = "external_lookup"
+	nodeTools     = "external_tools"
 	nodeFinish    = "finalize"
 
-	toolNameLookup = "manual_lookup"
-	interruptKey   = "lookup_result"
+	// External + internal tool names for the demo.
+	toolNameFetch     = "external_fetch"
+	toolNameSummarize = "summarize_text"
+	toolNameFormat    = "format_bullets"
+
+	// Interrupt key for passing external tool results back to callback.
+	interruptKeyTool = "external_tool_result"
 
 	stateKeyQuestion = "user_question"
 )
@@ -81,7 +89,9 @@ type externalToolWorkflow struct {
 	saver     graph.CheckpointSaver
 	manager   *graph.CheckpointManager
 
-	lookupTool *manualLookupTool
+	// coordinator intercepts tool calls and raises interrupts so the
+	// client can execute tools externally and feed results back.
+	coordinator *externalCoordinator
 
 	currentLineage string
 	pending        *pendingResume
@@ -89,7 +99,7 @@ type externalToolWorkflow struct {
 
 // setup prepares the graph, agent, runner, and checkpoint services.
 func (w *externalToolWorkflow) setup() error {
-	w.lookupTool = &manualLookupTool{}
+	w.coordinator = &externalCoordinator{}
 
 	g, err := w.buildGraph()
 	if err != nil {
@@ -124,8 +134,11 @@ func (w *externalToolWorkflow) setup() error {
 func (w *externalToolWorkflow) buildGraph() (*graph.Graph, error) {
 	schema := graph.MessagesStateSchema()
 
+	// Only external_fetch is external; others run as normal tools.
 	tools := map[string]tool.Tool{
-		toolNameLookup: w.lookupTool,
+		toolNameFetch:     declaredTool(fetchDecl()),
+		toolNameSummarize: summarizerTool{},
+		toolNameFormat:    formatterTool{},
 	}
 
 	stateGraph := graph.NewStateGraph(schema)
@@ -135,13 +148,16 @@ func (w *externalToolWorkflow) buildGraph() (*graph.Graph, error) {
 	// tool usage more consistent for this demo.
 	var temp float64 = 0.0
 
+	// Lower temperature to reduce chatty clarifications and keep tools
+	// deterministic for this demo.
 	stateGraph.
 		AddNode(
 			nodePrepare,
 			w.prepareInput,
 			graph.WithName("Capture Question"),
 			graph.WithDescription(
-				"Validates and stores the user question for later nodes.",
+				"Validates and stores the user question for later "+
+					"nodes.",
 			),
 		).
 		AddLLMNode(
@@ -155,19 +171,19 @@ func (w *externalToolWorkflow) buildGraph() (*graph.Graph, error) {
 				Stream:      true,
 			}),
 			graph.WithDescription(
-				"Plans the answer and calls the manual lookup tool when needed.",
+				"Plans the answer and requests external tools in "+
+					"order.",
 			),
 		).
 		AddNode(
 			nodeTools,
-			w.wrapToolsNode(graph.NewToolsNodeFunc(
-				tools,
-				graph.WithToolCallbacks(tool.NewCallbacksStructured()),
-			)),
+			w.wrapToolsNode(graph.NewToolsNodeFunc(tools)),
 			graph.WithNodeType(graph.NodeTypeTool),
-			graph.WithName("Manual Lookup Tool"),
+			graph.WithToolCallbacks(w.coordinator.callbacks()),
+			graph.WithName("External Tools"),
 			graph.WithDescription(
-				"Calls graph.Interrupt to pause until human-provided data arrives.",
+				"Intercepts tool calls and pauses for client‑executed "+
+					"results.",
 			),
 		).
 		AddNode(
@@ -195,15 +211,12 @@ func (w *externalToolWorkflow) buildGraph() (*graph.Graph, error) {
 // assistantPrompt defines the system prompt passed to the LLM node.
 func assistantPrompt() string {
 	return strings.Join([]string{
-		"You are a helpful assistant that can ask a human for missing facts.",
-		"When you need outside data you MUST call the manual_lookup tool.",
-		"The tool pauses execution, so use it only when the answer depends",
-		"on information that is not in the conversation.",
-		"If the user's question is ambiguous or lacks key specifics, do not",
-		"ask clarifying questions in a normal reply. Instead, call",
-		"manual_lookup with topic set to your exact clarification.",
-		"After the tool returns, incorporate the provided data and craft a",
-		"clear final answer for the user. Do not expose internal details.",
+		"You coordinate external + internal tools.",
+		"Workflow: first call external_fetch to obtain content.",
+		"Then call summarize_text on that content.",
+		"Optionally call format_bullets to format output.",
+		"Do not fabricate tool results. Wait for the resume.",
+		"Follow user instructions if they change the order.",
 	}, "\n")
 }
 
@@ -241,22 +254,22 @@ func (w *externalToolWorkflow) wrapToolsNode(
 	base graph.NodeFunc,
 ) graph.NodeFunc {
 	return func(ctx context.Context, state graph.State) (any, error) {
-		w.lookupTool.setState(state)
-		defer w.lookupTool.clearState()
-		result, err := base(ctx, state)
+		w.coordinator.setState(state)
+		defer w.coordinator.clearState()
+		res, err := base(ctx, state)
 		if err != nil {
 			var interrupt *graph.InterruptError
 			if errors.As(err, &interrupt) {
 				return nil, interrupt
 			}
 		}
-		return result, err
+		return res, err
 	}
 }
 
 // interactive provides the command-line interface.
 func (w *externalToolWorkflow) interactive(ctx context.Context) error {
-	fmt.Println("🔌 External Tool Interrupt Demo")
+	fmt.Println("🔌 External Tools (Client‑Executed)")
 	fmt.Printf("Model: %s\n", w.modelName)
 	fmt.Println(strings.Repeat("=", 50))
 	w.printHelp()
@@ -279,12 +292,15 @@ func (w *externalToolWorkflow) interactive(ctx context.Context) error {
 		case line == "/help":
 			w.printHelp()
 		case strings.HasPrefix(line, "/resume"):
-			arg := strings.TrimSpace(strings.TrimPrefix(line, "/resume"))
-			if arg == "" {
-				fmt.Println("Usage: /resume <value>")
+			// Submit a simple placeholder content for external extract.
+			content := strings.TrimSpace(
+				strings.TrimPrefix(line, "/resume"),
+			)
+			if content == "" {
+				fmt.Println("Usage: /resume <content>")
 				continue
 			}
-			if err := w.resume(ctx, arg); err != nil {
+			if err := w.resume(ctx, content); err != nil {
 				fmt.Printf("resume error: %v\n", err)
 			}
 		default:
@@ -303,7 +319,7 @@ func (w *externalToolWorkflow) interactive(ctx context.Context) error {
 func (w *externalToolWorkflow) printHelp() {
 	fmt.Println("Type a question to start the workflow.")
 	fmt.Println("Commands:")
-	fmt.Println("  /resume <value>  Resume the paused run with tool output")
+	fmt.Println("  /resume <content> Resume with extract result")
 	fmt.Println("  /help            Show this help message")
 	fmt.Println("  /exit            Quit the program")
 	fmt.Println()
@@ -312,7 +328,7 @@ func (w *externalToolWorkflow) printHelp() {
 // ask launches a new run unless an interrupt is waiting for resume.
 func (w *externalToolWorkflow) ask(ctx context.Context, input string) error {
 	if w.pending != nil {
-		fmt.Println("⚠️  Workflow is paused. Use /resume <value> to continue.")
+		fmt.Println("⚠️  Workflow is paused. Use /resume <content>.")
 		return nil
 	}
 	runtimeState := map[string]any{
@@ -327,7 +343,7 @@ func (w *externalToolWorkflow) ask(ctx context.Context, input string) error {
 		return err
 	}
 	if interrupted {
-		fmt.Println("\n⏸️  Workflow paused for manual data.")
+		fmt.Println("\n⏸️  Waiting for external tool result.")
 	} else {
 		w.currentLineage = w.newLineage()
 	}
@@ -337,20 +353,16 @@ func (w *externalToolWorkflow) ask(ctx context.Context, input string) error {
 // resume continues a paused run with the provided tool result.
 func (w *externalToolWorkflow) resume(
 	ctx context.Context,
-	value string,
+	content string,
 ) error {
 	if w.pending == nil {
 		fmt.Println("Nothing to resume right now.")
-		fmt.Println(
-			"Tip: ask a question and wait for '🛑 Manual data required:'",
-		)
-		fmt.Println("before using /resume <value>.")
+		fmt.Println("Tip: wait for a tool call first.")
 		return nil
 	}
-	// Use graph.Command to carry resume values.
-	// Executor applies resume only for *graph.Command, not ResumeCommand.
+	// Provide a simple placeholder content to the external tool.
 	cmd := &graph.Command{ResumeMap: map[string]any{
-		interruptKey: value,
+		interruptKeyTool: content,
 	}}
 	runtimeState := map[string]any{
 		graph.StateKeyCommand:    cmd,
@@ -366,7 +378,7 @@ func (w *externalToolWorkflow) resume(
 		return err
 	}
 	if interrupted {
-		fmt.Println("\n⚠️  Workflow paused again.")
+		fmt.Println("\n⚠️  Waiting for next external tool result.")
 	} else {
 		w.pending = nil
 		w.currentLineage = w.newLineage()
@@ -417,7 +429,9 @@ func (w *externalToolWorkflow) runAndStream(
 	}
 
 	if !interrupted && w.manager != nil {
-		if latest, err := w.manager.Latest(ctx, w.currentLineage, ""); err == nil && latest != nil && latest.Checkpoint != nil && latest.Checkpoint.IsInterrupted() {
+		latest, err := w.manager.Latest(ctx, w.currentLineage, "")
+		if err == nil && latest != nil && latest.Checkpoint != nil &&
+			latest.Checkpoint.IsInterrupted() {
 			interrupted = true
 			interruptSource = latest.Checkpoint.GetInterruptValue()
 		}
@@ -462,9 +476,9 @@ func (w *externalToolWorkflow) printPending() {
 	if w.pending == nil {
 		return
 	}
-	fmt.Println("\n🛑 Manual data required:")
+	fmt.Println("\n🛑 External tool requested:")
 	fmt.Printf("   %s\n", w.pending.prompt)
-	fmt.Println("   Resume with: /resume <value>")
+	fmt.Println("   Reply: /resume <content>")
 }
 
 // printToolCalls displays tool call requests issued by the LLM.
@@ -561,107 +575,6 @@ type pendingResume struct {
 	raw          any
 }
 
-// manualLookupInput describes the tool arguments sent by the LLM node.
-type manualLookupInput struct {
-	Topic string `json:"topic"`
-}
-
-// manualLookupResult is the structured output returned to the LLM node.
-type manualLookupResult struct {
-	Data string `json:"data"`
-}
-
-// manualLookupTool calls graph.Interrupt and waits for manual input.
-type manualLookupTool struct {
-	mu    sync.Mutex
-	state graph.State
-}
-
-func (t *manualLookupTool) Declaration() *tool.Declaration {
-	return &tool.Declaration{
-		Name:        toolNameLookup,
-		Description: "Pauses execution so a human can supply external data.",
-		InputSchema: &tool.Schema{
-			Type: "object",
-			Properties: map[string]*tool.Schema{
-				"topic": {
-					Type:        "string",
-					Description: "Information the assistant needs.",
-				},
-			},
-			Required: []string{"topic"},
-		},
-		OutputSchema: &tool.Schema{
-			Type: "object",
-			Properties: map[string]*tool.Schema{
-				"data": {
-					Type:        "string",
-					Description: "Human-provided answer.",
-				},
-			},
-			Required: []string{"data"},
-		},
-	}
-}
-
-func (t *manualLookupTool) Call(
-	ctx context.Context,
-	jsonArgs []byte,
-) (any, error) {
-	var input manualLookupInput
-	if err := json.Unmarshal(jsonArgs, &input); err != nil {
-		return nil, fmt.Errorf("manual_lookup: bad arguments: %w", err)
-	}
-
-	t.mu.Lock()
-	state := t.state
-	t.mu.Unlock()
-	if state == nil {
-		return nil, errors.New("manual_lookup: state unavailable")
-	}
-
-	topic := strings.TrimSpace(input.Topic)
-	if topic == "" {
-		return nil, errors.New("manual_lookup: topic is empty")
-	}
-
-	prompt := map[string]any{
-		"message": fmt.Sprintf(
-			"Manual lookup required for %q. Provide the missing data.",
-			topic,
-		),
-		"topic": topic,
-		"node":  nodeTools,
-	}
-
-	resumeValue, err := graph.Interrupt(ctx, state, interruptKey, prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	answer, ok := resumeValue.(string)
-	if !ok {
-		return nil, errors.New("manual_lookup: resume value must be a string")
-	}
-	answer = strings.TrimSpace(answer)
-	if answer == "" {
-		return nil, errors.New("manual_lookup: resume value is empty")
-	}
-	return manualLookupResult{Data: answer}, nil
-}
-
-func (t *manualLookupTool) setState(state graph.State) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.state = state
-}
-
-func (t *manualLookupTool) clearState() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.state = nil
-}
-
 // formatInterruptPrompt converts the interrupt payload into a
 // human-friendly text block.
 func formatInterruptPrompt(value any) string {
@@ -678,4 +591,254 @@ func formatInterruptPrompt(value any) string {
 		return fmt.Sprint(value)
 	}
 	return string(bytes)
+}
+
+// ----- External tool interception layer -----
+
+// externalCoordinator implements a ToolCallbacks.BeforeTool that pauses the
+// graph and resumes with client‑provided tool results.
+type externalCoordinator struct {
+	mu    sync.Mutex
+	state graph.State
+}
+
+func (c *externalCoordinator) setState(state graph.State) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = state
+}
+
+func (c *externalCoordinator) clearState() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = nil
+}
+
+func (c *externalCoordinator) callbacks() *tool.Callbacks {
+	cb := tool.NewCallbacks()
+	cb.RegisterBeforeTool(c.before)
+	return cb
+}
+
+// before intercepts tool execution, raises an interrupt and waits for
+// the client to submit the tool result.
+func (c *externalCoordinator) before(
+	ctx context.Context,
+	toolName string,
+	decl *tool.Declaration,
+	jsonArgs *[]byte,
+) (any, error) {
+	// Only intercept the external extract tool; others run normally.
+	if toolName != toolNameFetch {
+		return nil, nil
+	}
+	_, _ = tool.ToolCallIDFromContext(ctx)
+	state := c.getState()
+	if state == nil {
+		return nil, errors.New("externalCoordinator: state unavailable")
+	}
+	prompt := map[string]any{
+		"message": "Run extract externally and return content.",
+		"tool":    toolName,
+	}
+	resume, err := graph.Interrupt(
+		ctx, state, interruptKeyTool, prompt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// Convert a simple string into {"content": string} object.
+	parsed := parseExternalResult(resume)
+	return parsed, nil
+}
+
+func (c *externalCoordinator) getState() graph.State {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state
+}
+
+// parseExternalResult converts the resume payload into a Go value.
+// Accepts either a raw JSON string or a map with field "result".
+func parseExternalResult(v any) any {
+	// Preferred: plain string becomes content field.
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			s = "EXTERNAL_CONTENT"
+		}
+		return map[string]any{"content": s}
+	}
+	// If client provided a map with content, pass it.
+	if m, ok := v.(map[string]any); ok {
+		if _, ok2 := m["content"]; ok2 {
+			return m
+		}
+		if s, ok2 := m["result"].(string); ok2 {
+			return map[string]any{"content": s}
+		}
+	}
+	// Fallback: stringify.
+	return map[string]any{"content": fmt.Sprint(v)}
+}
+
+// decodeJSONAny decodes a JSON string to an arbitrary Go value.
+// (decodeJSONAny removed; not needed in simplified flow)
+
+// declaredTool wraps a declaration as a non‑callable tool so that the
+// BeforeTool callback can fully control execution.
+type declaredToolWrapper struct{ d *tool.Declaration }
+
+func (w declaredToolWrapper) Declaration() *tool.Declaration { return w.d }
+
+func declaredTool(d *tool.Declaration) tool.Tool {
+	return declaredToolWrapper{d: d}
+}
+
+// Declarations for demo tools.
+func fetchDecl() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        toolNameFetch,
+		Description: "Fetch plain text content externally (URL or hint).",
+		InputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"source": {Type: "string", Description: "URL or source"},
+			},
+		},
+		OutputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"content": {
+					Type:        "string",
+					Description: "Fetched text content",
+				},
+			},
+		},
+	}
+}
+
+func summarizeDecl() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        toolNameSummarize,
+		Description: "Summarize given text into concise bullet points.",
+		InputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"text": {
+					Type:        "string",
+					Description: "Input text to summarize",
+				},
+			},
+			Required: []string{"text"},
+		},
+		OutputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"summary": {Type: "string"},
+			},
+		},
+	}
+}
+
+func formatDecl() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        toolNameFormat,
+		Description: "Format text into bullet points.",
+		InputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"text": {Type: "string"},
+			},
+			Required: []string{"text"},
+		},
+		OutputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"formatted": {Type: "string"},
+			},
+		},
+	}
+}
+
+// ----- Internal logic tools (callable) -----
+
+// summarizerTool implements a simple in-process summarization.
+type summarizerTool struct{}
+
+func (summarizerTool) Declaration() *tool.Declaration {
+	return summarizeDecl()
+}
+
+func (summarizerTool) Call(
+	ctx context.Context, jsonArgs []byte,
+) (any, error) {
+	var in struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(jsonArgs, &in); err != nil {
+		return nil, fmt.Errorf("summarize: bad args: %w", err)
+	}
+	txt := strings.TrimSpace(in.Text)
+	if txt == "" {
+		return nil, errors.New("summarize: text is empty")
+	}
+	// Create a tiny, readable summary for demo purposes.
+	sum := clip(txt, 120)
+	if len(sum) < len(txt) {
+		sum += " ..."
+	}
+	return map[string]any{"summary": sum}, nil
+}
+
+// formatterTool formats text into simple bullets.
+type formatterTool struct{}
+
+func (formatterTool) Declaration() *tool.Declaration { return formatDecl() }
+
+func (formatterTool) Call(
+	ctx context.Context, jsonArgs []byte,
+) (any, error) {
+	var in struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(jsonArgs, &in); err != nil {
+		return nil, fmt.Errorf("format: bad args: %w", err)
+	}
+	t := strings.TrimSpace(in.Text)
+	if t == "" {
+		return nil, errors.New("format: text is empty")
+	}
+	lines := toBullets(t)
+	return map[string]any{"formatted": lines}, nil
+}
+
+// clip returns a string trimmed to n runes.
+func clip(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len([]rune(s)) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n])
+}
+
+// toBullets turns text into a bullet list.
+func toBullets(s string) string {
+	// Split by sentences; keep it simple for demo.
+	parts := strings.Split(s, ".")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, "• "+p)
+	}
+	if len(out) == 0 {
+		return "• " + s
+	}
+	return strings.Join(out, "\n")
 }

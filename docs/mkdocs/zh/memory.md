@@ -201,7 +201,7 @@ appRunner := runner.NewRunner(
 
 ### 记忆服务 (Memory Service)
 
-记忆服务可在代码中通过选项配置，支持内存和 Redis 两种后端：
+记忆服务可在代码中通过选项配置，支持内存、Redis 和 MySQL 三种后端：
 
 #### 记忆服务配置示例
 
@@ -209,6 +209,7 @@ appRunner := runner.NewRunner(
 import (
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+    memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
 )
 
 // 内存实现，可用于测试和开发
@@ -223,17 +224,27 @@ if err != nil {
     // 处理错误
 }
 
+// MySQL 实现，用于生产环境（关系型数据库）
+// 服务初始化时会自动创建表。如果创建失败会 panic。
+mysqlService, err := memorymysql.NewService(
+    memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysql.WithToolEnabled(memory.DeleteToolName, true), // 启用删除工具
+)
+if err != nil {
+    // 处理错误
+}
+
 // 向 Agent 注册记忆工具
 llmAgent := llmagent.New(
     "memory-assistant",
-    llmagent.WithTools(memService.Tools()), // 或 redisService.Tools()
+    llmagent.WithTools(memService.Tools()), // 或 redisService.Tools() 或 mysqlService.Tools()
 )
 
 // 在 Runner 中设置记忆服务
 runner := runner.NewRunner(
     "app",
     llmAgent,
-    runner.WithMemoryService(memService), // 或 redisService
+    runner.WithMemoryService(memService), // 或 redisService 或 mysqlService
 )
 ```
 
@@ -429,9 +440,196 @@ export OPENAI_BASE_URL="your-openai-base-url"
 # 运行示例时可以通过命令行参数选择组件类型
 go run main.go -memory inmemory
 go run main.go -memory redis -redis-addr localhost:6379
+go run main.go -memory mysql -mysql-dsn "user:password@tcp(localhost:3306)/dbname?parseTime=true"
 
 # 参数说明：
-# -memory: 选择记忆服务类型 (inmemory, redis)，默认为 inmemory
+# -memory: 选择记忆服务类型 (inmemory, redis, mysql)，默认为 inmemory
 # -redis-addr: Redis 服务器地址，默认为 localhost:6379
+# -mysql-dsn: MySQL 数据源名称（DSN），使用 MySQL 时必需
 # -model: 选择模型名称，默认为 deepseek-chat
 ```
+
+## 存储后端
+
+### 内存存储
+
+内存存储适用于开发和测试环境：
+
+```go
+import memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+
+// 创建内存记忆服务
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithMemoryLimit(100), // 设置记忆数量限制
+    memoryinmemory.WithToolEnabled(memory.DeleteToolName, true), // 启用删除工具
+)
+```
+
+**特点：**
+
+- ✅ 零配置，开箱即用
+- ✅ 高性能，无网络开销
+- ❌ 数据不持久化，重启后丢失
+- ❌ 不支持分布式部署
+
+### Redis 存储
+
+Redis 存储适用于生产环境和分布式应用：
+
+```go
+import memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+
+// 创建 Redis 记忆服务
+redisService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithMemoryLimit(1000), // 设置记忆数量限制
+    memoryredis.WithToolEnabled(memory.DeleteToolName, true), // 启用删除工具
+)
+if err != nil {
+    log.Fatalf("Failed to create redis memory service: %v", err)
+}
+```
+
+**特点：**
+
+- ✅ 数据持久化，支持重启恢复
+- ✅ 高性能，适合高并发场景
+- ✅ 支持分布式部署
+- ✅ 支持集群和哨兵模式
+- ⚙️ 需要 Redis 服务器
+
+**Redis 配置选项：**
+
+- `WithRedisClientURL(url string)`: 设置 Redis 连接 URL
+- `WithRedisInstance(name string)`: 使用预注册的 Redis 实例
+- `WithMemoryLimit(limit int)`: 设置每个用户的最大记忆数量
+- `WithToolEnabled(toolName string, enabled bool)`: 启用或禁用特定工具
+- `WithCustomTool(toolName string, creator ToolCreator)`: 使用自定义工具实现
+
+### MySQL 存储
+
+MySQL 存储适用于需要关系型数据库的生产环境：
+
+```go
+import memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+
+// 创建 MySQL 记忆服务
+mysqlService, err := memorymysql.NewService(
+    memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysql.WithMemoryLimit(1000), // 设置记忆数量限制
+    memorymysql.WithTableName("memories"), // 自定义表名（可选）
+    memorymysql.WithToolEnabled(memory.DeleteToolName, true), // 启用删除工具
+)
+if err != nil {
+    log.Fatalf("Failed to create mysql memory service: %v", err)
+}
+```
+
+**特点：**
+
+- ✅ 数据持久化，ACID 事务保证
+- ✅ 关系型数据库，支持复杂查询
+- ✅ 支持主从复制和集群
+- ✅ 自动创建表结构
+- ✅ 完善的监控和管理工具
+- ⚙️ 需要 MySQL 服务器（5.7+ 或 8.0+）
+
+**MySQL 配置选项：**
+
+- `WithMySQLClientDSN(dsn string)`: 设置 MySQL 数据源名称（DSN）
+- `WithMySQLInstance(name string)`: 使用预注册的 MySQL 实例
+- `WithTableName(name string)`: 自定义表名（默认 "memories"）。如果表名无效会 panic。
+- `WithMemoryLimit(limit int)`: 设置每个用户的最大记忆数量
+- `WithSoftDelete(enabled bool)`: 启用软删除（默认 false）。启用后，删除操作设置 `deleted_at`，查询会过滤已软删除的记录。
+- `WithToolEnabled(toolName string, enabled bool)`: 启用或禁用特定工具
+- `WithCustomTool(toolName string, creator ToolCreator)`: 使用自定义工具实现
+
+**注意：** 服务初始化时会自动创建表。如果表创建失败，服务会 panic。
+
+**DSN 格式：**
+
+```
+[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
+```
+
+**常用 DSN 参数：**
+
+- `parseTime=true`: 解析 DATE 和 DATETIME 为 time.Time（必需）
+- `charset=utf8mb4`: 字符集
+- `loc=Local`: time.Time 值的时区
+- `timeout=10s`: 连接超时时间
+
+**表结构：**
+
+MySQL 记忆服务在初始化时会自动创建以下表结构：
+
+```sql
+CREATE TABLE IF NOT EXISTS memories (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    memory_id VARCHAR(64) NOT NULL,
+    memory_data JSON NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_app_user (app_name, user_id),
+    UNIQUE INDEX idx_app_user_memory (app_name, user_id, memory_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+```
+
+**使用 Docker 启动 MySQL：**
+
+```bash
+# 启动 MySQL 容器
+docker run -d --name mysql-memory \
+  -e MYSQL_ROOT_PASSWORD=password \
+  -e MYSQL_DATABASE=memory_db \
+  -p 3306:3306 \
+  mysql:8.0
+
+# 等待 MySQL 就绪
+docker exec mysql-memory mysqladmin ping -h localhost -u root -ppassword
+
+# 使用 MySQL 记忆服务
+go run main.go -memory mysql -mysql-dsn "root:password@tcp(localhost:3306)/memory_db?parseTime=true"
+```
+
+**注册 MySQL 实例（可选）：**
+
+```go
+import (
+    storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+    memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+)
+
+// 注册 MySQL 实例
+storage.RegisterMySQLInstance("my-mysql",
+    storage.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+)
+
+// 使用注册的实例
+mysqlService, err := memorymysql.NewService(
+    memorymysql.WithMySQLInstance("my-mysql"),
+)
+```
+
+### 存储后端对比
+
+| 特性       | 内存存储  | Redis 存储 | MySQL 存储 |
+| ---------- | --------- | ---------- | ---------- |
+| 数据持久化 | ❌        | ✅         | ✅         |
+| 分布式支持 | ❌        | ✅         | ✅         |
+| 事务支持   | ❌        | 部分       | ✅ (ACID)  |
+| 查询能力   | 简单      | 中等       | 强大 (SQL) |
+| 性能       | 极高      | 高         | 中高       |
+| 配置复杂度 | 低        | 中         | 中         |
+| 适用场景   | 开发/测试 | 生产环境   | 生产环境   |
+| 监控工具   | 无        | 丰富       | 非常丰富   |
+
+**选择建议：**
+
+- **开发/测试**：使用内存存储，快速迭代
+- **生产环境（高性能）**：使用 Redis 存储，适合高并发场景
+- **生产环境（数据完整性）**：使用 MySQL 存储，需要 ACID 保证和复杂查询
+- **混合部署**：可以根据不同应用场景选择不同的存储后端
