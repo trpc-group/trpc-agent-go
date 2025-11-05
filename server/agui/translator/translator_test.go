@@ -429,3 +429,14 @@ func TestParallelToolCallResultEvents(t *testing.T) {
 	assert.Equal(t, "call-2", res2.ToolCallID)
 	assert.Equal(t, "result2", res2.Content)
 }
+
+func TestToolNilResponse(t *testing.T) {
+	translator, ok := New("thread", "run").(*translator)
+	assert.True(t, ok)
+	events, err := translator.toolCallEvent(nil)
+	assert.Empty(t, events)
+	assert.NoError(t, err)
+	events, err = translator.toolResultEvent(nil)
+	assert.Empty(t, events)
+	assert.NoError(t, err)
+}
