@@ -52,6 +52,9 @@ const (
 	defaultOutputTokensFloor      = 256  // Minimum output tokens to ensure meaningful response.
 	defaultSafetyMarginRatio      = 0.10 // Safety margin ratio (10%) to account for token counting inaccuracies.
 	defaultMaxInputTokensRatio    = 0.65 // Maximum input tokens ratio (65%) of context window for stability.
+
+	deepSeekAPIKey         = "DEEPSEEK_API_KEY"
+	defaultDeepSeekBaseURL = "https://api.deepseek.com"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -62,6 +65,8 @@ const (
 	VariantOpenAI Variant = "openai"
 	// VariantHunyuan is the Hunyuan variant with specific file handling.
 	VariantHunyuan Variant = "hunyuan"
+	// VariantDeepSeek is the DeepSeek variant with specific base_url handling.
+	VariantDeepSeek Variant = "deepseek"
 )
 
 // variantConfig holds configuration for different variants.
@@ -77,8 +82,12 @@ type variantConfig struct {
 	fileUploadRequestConvertor fileUploadRequestConvertor
 	// Whether to skip file type in content parts for this variant.
 	skipFileTypeInContent bool
-}
 
+	// Default base URL for this variant.
+	defaultBaseURL string
+	// Default API key name for this variant.
+	apiKeyName string
+}
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
 type fileUploadRequestConvertor func(r *http.Request, file *os.File, fileOpts *FileOptions) (*http.Request, error)
@@ -93,6 +102,17 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
 			return body
 		},
+	},
+	VariantDeepSeek: {
+		fileUploadPath:        "/openapi/v1/files",
+		filePurpose:           openai.FilePurposeUserData,
+		fileDeletionMethod:    http.MethodDelete,
+		skipFileTypeInContent: false,
+		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
+			return body
+		},
+		apiKeyName:     deepSeekAPIKey,
+		defaultBaseURL: defaultDeepSeekBaseURL,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -461,6 +481,17 @@ func New(name string, opts ...Option) *Model {
 	for _, opt := range opts {
 		opt(o)
 	}
+
+	// Set default API key and base URL if not specified.
+	if _, ok := variantConfigs[o.Variant]; ok {
+		if val, ok := os.LookupEnv(variantConfigs[o.Variant].apiKeyName); ok && o.APIKey == "" {
+			o.APIKey = val
+		}
+		if val, ok := os.LookupEnv(variantConfigs[o.Variant].defaultBaseURL); ok && o.BaseURL == "" {
+			o.BaseURL = val
+		}
+	}
+
 	var clientOpts []openaiopt.RequestOption
 
 	if o.APIKey != "" {
