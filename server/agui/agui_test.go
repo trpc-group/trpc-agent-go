@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -75,6 +76,73 @@ func TestEndToEndServerSendsSSEEvents(t *testing.T) {
 	assert.Equal(t, model.RoleUser, agent.lastInvocation.Message.Role)
 }
 
+func TestNewMessagesSnapshotRequiresAppName(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithMessagesSnapshotEnabled(true), WithSessionService(inmemory.NewSessionService()))
+	assert.Nil(t, srv)
+	assert.Error(t, err)
+}
+
+func TestNewMessagesSnapshotRequiresSessionService(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithMessagesSnapshotEnabled(true), WithAppName("demo"))
+	assert.Nil(t, srv)
+	assert.Error(t, err)
+}
+
+func TestNewMessagesSnapshotEnabledSuccess(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	sessionSvc := inmemory.NewSessionService()
+	srv, err := New(r,
+		WithPath("/agui"),
+		WithMessagesSnapshotEnabled(true),
+		WithMessagesSnapshotPath("/history"),
+		WithAppName(agent.Info().Name),
+		WithSessionService(sessionSvc),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.Equal(t, "/agui", srv.Path())
+}
+
+func TestPathDefault(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r)
+	assert.NoError(t, err)
+	assert.Equal(t, "/", srv.BasePath())
+	assert.Equal(t, "/", srv.Path())
+}
+
+func TestBasePathDefault(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithPath("/chat"))
+	assert.NoError(t, err)
+	assert.Equal(t, "/", srv.BasePath())
+	assert.Equal(t, "/chat", srv.Path())
+}
+
+func TestBasePath(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithBasePath("/agui"), WithPath("/chat"))
+	assert.NoError(t, err)
+	assert.Equal(t, "/agui", srv.BasePath())
+	assert.Equal(t, "/agui/chat", srv.Path())
+}
+
+func TestInvalidChatPath(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithBasePath("\x01"), WithPath("/chat"))
+	assert.Nil(t, srv)
+	assert.Error(t, err)
+}
+
 type mockAgent struct {
 	info           agent.Info
 	runCalls       int
@@ -109,10 +177,18 @@ func (a *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 	return ch, nil
 }
 
-func (a *mockAgent) Tools() []tool.Tool { return nil }
+func (a *mockAgent) Tools() []tool.Tool {
+	return nil
+}
 
-func (a *mockAgent) Info() agent.Info { return a.info }
+func (a *mockAgent) Info() agent.Info {
+	return a.info
+}
 
-func (a *mockAgent) SubAgents() []agent.Agent { return nil }
+func (a *mockAgent) SubAgents() []agent.Agent {
+	return nil
+}
 
-func (a *mockAgent) FindSubAgent(string) agent.Agent { return nil }
+func (a *mockAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}

@@ -23,4 +23,13 @@ func TestWithPath(t *testing.T) {
 	// Test with path
 	opts = NewOptions(WithPath("/sse"))
 	assert.Equal(t, opts.Path, "/sse")
+
+	// Test with messages snapshot enabled
+	opts = NewOptions(WithMessagesSnapshotEnabled(true))
+	assert.True(t, opts.MessagesSnapshotEnabled)
+	assert.Equal(t, opts.MessagesSnapshotPath, "/history")
+
+	opts = NewOptions(WithMessagesSnapshotPath("/custom"))
+	assert.False(t, opts.MessagesSnapshotEnabled)
+	assert.Equal(t, opts.MessagesSnapshotPath, "/custom")
 }

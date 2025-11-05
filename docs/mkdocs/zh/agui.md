@@ -240,3 +240,59 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunAgent
 - 返回 `nil` 会保留原始输入，但保留原位修改。
 - 返回自定义的 `*adapter.RunAgentInput` 会覆盖原始输入；返回 `nil` 表示使用原输入。
 - 返回错误会中止本次请求，客户端会收到 `RunError` 事件。
+
+### 消息快照
+
+消息快照用于在页面初始化或断线重连时恢复历史对话，通过 `agui.WithMessagesSnapshotEnabled(true)` 控制功能是否开启，默认关闭。启用该能力后，AG-UI 会同时提供聊天路由和消息快照路由：
+
+- 聊天路由默认是 `/`，可通过 `agui.WithPath` 自定义；
+- 消息快照路由默认是 `/history`， 可通过 `WithMessagesSnapshotPath` 自定义，负责返回 `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED` 的事件流。
+
+启用消息快照功能时需要配置下列参数：
+
+- `agui.WithMessagesSnapshotEnabled(true)` 启用消息快照功能；
+- `agui.WithMessagesSnapshotPath` 设置消息快照路由的自定义路径，默认为 `/history`；
+- `agui.WithAppName(name)` 指定应用名；
+- `agui.WithSessionService(service)` 注入 `session.Service` 用于查询历史事件；
+- `aguirunner.WithUserIDResolver(resolver)` 自定义 `userID` 解析逻辑，默认恒为 `"user"`。
+
+框架在处理消息快照请求时会从 AG-UI 请求体 `RunAgentInput` 中解析 `threadId` 作为 `SessionID`，结合自定义 `UserIDResolver` 得到 `userID`，再与 `appName` 组装得到 `session.Key`，然后通过 `session.Service` 查询 `Session`。将 `Session` 中存储的事件 `Session.Events` 转换为 AG-UI 消息并封装成 `MESSAGES_SNAPSHOT` 事件，同时发送配套的 `RUN_STARTED`、`RUN_FINISHED` 事件。
+
+代码示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
+        return user, nil
+    }
+    return "anonymous", nil
+}
+
+sessionService := inmemory.NewService(context.Background())
+server, err := agui.New(
+    runner,
+    agui.WithPath("/chat"),                    // 自定义聊天路由，默认为 "/"
+    agui.WithAppName("demo-app"),              // 设置 AppName，用于构造 Session Key
+    agui.WithSessionService(sessionService),   // 设置 Session Service，用于查询 Session
+    agui.WithMessagesSnapshotEnabled(true),    // 开启消息快照功能
+    agui.WithMessagesSnapshotPath("/history"), // 设置消息快照路由，默认为 "/history"
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithUserIDResolver(resolver), // 自定义 UserID 解析逻辑
+    ),
+)
+if err != nil {
+	log.Fatalf("create agui server failed: %v", err)
+}
+if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
+	log.Fatalf("server stopped with error: %v", err)
+}
+```
+
+完整的示例可参考 [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot)。

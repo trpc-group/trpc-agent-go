@@ -1,0 +1,20 @@
+{
+  "name": "agui-historysync-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@ag-ui/client": "^0.0.40",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@tsconfig/node18": "^18.2.2",
+    "@types/node": "^18.19.30",
+    "@types/uuid": "^9.0.8",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.5"
+  }
+}
