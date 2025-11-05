@@ -2098,3 +2098,47 @@ func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
 	require.Contains(t, runErr.Error(), "kaboom")
 	require.Contains(t, runErr.Error(), "node boom panic")
 }
+
+// PlanStep should honor StateKeyNextNodes and remove the key after planning.
+func TestPlanStep_UsesNextNodesAndDeletesKey(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("A", minimalNoopNode)
+	sg.AddNode("B", minimalNoopNode)
+	sg.SetEntryPoint("A")
+	sg.SetFinishPoint("B")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	evCh := make(chan *event.Event, 8)
+	ec := &ExecutionContext{
+		Graph:        g,
+		State:        State{StateKeyNextNodes: []string{"A", "B"}},
+		EventChan:    evCh,
+		InvocationID: "inv-plan",
+	}
+	tasks, perr := exec.planStep(context.Background(), nil, ec, 1)
+	require.NoError(t, perr)
+	require.Len(t, tasks, 2)
+	// Key should be removed after consumption.
+	require.NotContains(t, ec.State, StateKeyNextNodes)
+}
+
+// resolveTargetByEnds should map symbolic names via per-node ends.
+func TestResolveTargetByEnds(t *testing.T) {
+	g := New(NewStateSchema())
+	n := &Node{ID: "X"}
+	n.ends = map[string]string{"ok": "B"}
+	_ = g.addNode(n)
+	exec := &Executor{graph: g}
+
+	// Known mapping
+	got := exec.resolveTargetByEnds("X", "ok")
+	require.Equal(t, "B", got)
+	// Unknown key returns empty
+	require.Equal(t, "", exec.resolveTargetByEnds("X", "nope"))
+	// Unknown node returns empty
+	require.Equal(t, "", exec.resolveTargetByEnds("ZZ", "ok"))
+}
