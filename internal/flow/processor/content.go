@@ -168,7 +168,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	if invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
-		if p.AddSessionSummary || p.TimelineFilterMode == TimelineFilterAll {
+		if p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
 			// Prepend session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
