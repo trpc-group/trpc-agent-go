@@ -17,6 +17,7 @@ import (
 )
 
 var (
+	defaultBasePath              = "/"
 	defaultPath                  = "/"
 	defaultServiceFactory        = sse.New
 	defaultMessagesSnapshotPath  = "/history"
@@ -25,6 +26,7 @@ var (
 
 // options holds the options for the AG-UI server.
 type options struct {
+	basePath                string
 	path                    string
 	serviceFactory          ServiceFactory
 	aguiRunnerOptions       []aguirunner.Option
@@ -37,6 +39,7 @@ type options struct {
 // newOptions creates a new options instance.
 func newOptions(opt ...Option) *options {
 	opts := &options{
+		basePath:                defaultBasePath,
 		path:                    defaultPath,
 		serviceFactory:          defaultServiceFactory,
 		messagesSnapshotPath:    defaultMessagesSnapshotPath,
@@ -51,7 +54,14 @@ func newOptions(opt ...Option) *options {
 // Option is a function that configures the options.
 type Option func(*options)
 
-// WithPath sets the path for service listening, "/" in default.
+// WithBasePath sets the base path for service listening, "/" in default.
+func WithBasePath(basePath string) Option {
+	return func(o *options) {
+		o.basePath = basePath
+	}
+}
+
+// WithPath sets the chat message endpoint path for AG-UI service, "/" in default.
 func WithPath(path string) Option {
 	return func(o *options) {
 		o.path = path

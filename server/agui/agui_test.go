@@ -108,6 +108,41 @@ func TestNewMessagesSnapshotEnabledSuccess(t *testing.T) {
 	assert.Equal(t, "/agui", srv.Path())
 }
 
+func TestPathDefault(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r)
+	assert.NoError(t, err)
+	assert.Equal(t, "/", srv.BasePath())
+	assert.Equal(t, "/", srv.Path())
+}
+
+func TestBasePathDefault(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithPath("/chat"))
+	assert.NoError(t, err)
+	assert.Equal(t, "/", srv.BasePath())
+	assert.Equal(t, "/chat", srv.Path())
+}
+
+func TestBasePath(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithBasePath("/agui"), WithPath("/chat"))
+	assert.NoError(t, err)
+	assert.Equal(t, "/agui", srv.BasePath())
+	assert.Equal(t, "/agui/chat", srv.Path())
+}
+
+func TestInvalidChatPath(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithBasePath("\x01"), WithPath("/chat"))
+	assert.Nil(t, srv)
+	assert.Error(t, err)
+}
+
 type mockAgent struct {
 	info           agent.Info
 	runCalls       int
