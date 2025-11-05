@@ -79,6 +79,49 @@ func TestAddEdge(t *testing.T) {
 	assert.Equal(t, "node2", edges[0].To, "Expected edge to 'node2'")
 }
 
+// TestAddConditionalEdge_Exclusivity checks that exactly one of Condition
+// and MultiCondition must be set when adding a conditional edge.
+func TestAddConditionalEdge_Exclusivity(t *testing.T) {
+	schema := NewStateSchema()
+	g := New(schema)
+
+	// Add a minimal node as source.
+	testFunc := func(ctx context.Context, s State) (any, error) {
+		return s, nil
+	}
+	_ = g.addNode(&Node{ID: "A", Name: "A", Function: testFunc})
+	_ = g.addNode(&Node{ID: "B", Name: "B", Function: testFunc})
+
+	// Neither condition set should error.
+	err := g.addConditionalEdge(&ConditionalEdge{From: "A"})
+	if err == nil {
+		t.Fatal("expected error when no condition provided")
+	}
+
+	// Both set should error.
+	both := &ConditionalEdge{
+		From:      "A",
+		Condition: func(ctx context.Context, s State) (string, error) { return "B", nil },
+		MultiCondition: func(ctx context.Context, s State) ([]string, error) {
+			return []string{"B"}, nil
+		},
+		PathMap: map[string]string{"B": "B"},
+	}
+	if err := g.addConditionalEdge(both); err == nil {
+		t.Fatal("expected error when both conditions are set")
+	}
+
+	// Only MultiCondition set should succeed.
+	mc := &ConditionalEdge{
+		From:           "A",
+		MultiCondition: func(ctx context.Context, s State) ([]string, error) { return []string{"B"}, nil },
+		PathMap:        map[string]string{"B": "B"},
+	}
+	if err := g.addConditionalEdge(mc); err != nil {
+		t.Fatalf("unexpected error adding multi-conditional edge: %v", err)
+	}
+}
+
 func TestValidate_NoStaticReachabilityRequired(t *testing.T) {
 	schema := NewStateSchema()
 	sg := NewStateGraph(schema)
