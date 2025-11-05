@@ -6,9 +6,9 @@ import "context"
 type FilterFunc func(ctx context.Context, tool Tool) bool
 
 // FilterTools filters tools from a list of tools based on a filter function.
-func FilterTools(ctx context.Context, toolset []Tool, filter FilterFunc) []Tool {
-	filtered := make([]Tool, 0, len(toolset))
-	for _, tool := range toolset {
+func FilterTools(ctx context.Context, tools []Tool, filter FilterFunc) []Tool {
+	filtered := make([]Tool, 0, len(tools))
+	for _, tool := range tools {
 		if filter(ctx, tool) {
 			filtered = append(filtered, tool)
 		}
