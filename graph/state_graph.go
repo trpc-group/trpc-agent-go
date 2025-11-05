@@ -481,7 +481,7 @@ func (sg *StateGraph) AddConditionalEdges(
 }
 
 // AddMultiConditionalEdges adds multi-conditional routing from a node.
-// The condition returns multiple branch keys which will be routed in parallel.
+// The condition returns multiple branch keys for parallel routing.
 func (sg *StateGraph) AddMultiConditionalEdges(
 	from string,
 	condition MultiConditionalFunc,

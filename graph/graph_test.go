@@ -122,6 +122,23 @@ func TestAddConditionalEdge_Exclusivity(t *testing.T) {
 	}
 }
 
+// Additional coverage: path map target validation should reject
+// non-existent target nodes.
+func TestAddConditionalEdge_PathMapValidation(t *testing.T) {
+	g := New(NewStateSchema())
+	// Add only source node A.
+	_ = g.addNode(&Node{ID: "A", Name: "A", Function: func(ctx context.Context, s State) (any, error) { return s, nil }})
+	// PathMap refers to Z which does not exist.
+	ce := &ConditionalEdge{
+		From:      "A",
+		Condition: func(ctx context.Context, s State) (string, error) { return "Z", nil },
+		PathMap:   map[string]string{"Z": "Z"},
+	}
+	if err := g.addConditionalEdge(ce); err == nil {
+		t.Fatalf("expected error when path map points to missing node")
+	}
+}
+
 func TestValidate_NoStaticReachabilityRequired(t *testing.T) {
 	schema := NewStateSchema()
 	sg := NewStateGraph(schema)

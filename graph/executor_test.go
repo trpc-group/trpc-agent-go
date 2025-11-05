@@ -1930,6 +1930,34 @@ func TestProcessConditionalEdgesConcurrency(t *testing.T) {
 	close(stopCh)
 }
 
+// TestProcessConditionalEdges_DedupMulti ensures duplicate branch keys in a
+// multi-conditional result do not trigger the same target twice.
+func TestProcessConditionalEdges_DedupMulti(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("start", minimalNoopNode)
+	sg.AddNode("B", minimalNoopNode)
+	sg.AddNode("C", minimalNoopNode)
+	sg.SetEntryPoint("start")
+	sg.AddMultiConditionalEdges("start", func(ctx context.Context, s State) ([]string, error) {
+		return []string{"b", "b", "c"}, nil // duplicate "b"
+	}, map[string]string{"b": "B", "c": "C"})
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+	execCtx := &ExecutionContext{Graph: g, State: State{}, EventChan: make(chan *event.Event, 16)}
+
+	// Process and verify only one update per target channel.
+	require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, "start", 0))
+	chB, _ := g.getChannel("branch:to:B")
+	chC, _ := g.getChannel("branch:to:C")
+	require.NotNil(t, chB)
+	require.NotNil(t, chC)
+	require.Equal(t, int64(1), chB.Version)
+	require.Equal(t, int64(1), chC.Version)
+}
+
 // minimalNoopNode returns a trivial node function for building test graphs.
 func minimalNoopNode(_ context.Context, _ State) (any, error) { return nil, nil }
 
