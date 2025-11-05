@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/metric"
@@ -120,13 +121,7 @@ func NewMeterProvider(ctx context.Context, opts ...Option) (*sdkmetric.MeterProv
 		options.metricsEndpoint = metricsEndpoint(options.protocol)
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceNamespace(options.serviceNamespace),
-			semconv.ServiceName(options.serviceName),
-			semconv.ServiceVersion(options.serviceVersion),
-		),
-	)
+	res, err := buildResource(ctx, options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
@@ -204,11 +199,12 @@ type Option func(*options)
 
 // options holds the configuration options for meter.
 type options struct {
-	metricsEndpoint  string
-	serviceName      string
-	serviceVersion   string
-	serviceNamespace string
-	protocol         string // Protocol to use (grpc or http)
+	metricsEndpoint    string
+	serviceName        string
+	serviceVersion     string
+	serviceNamespace   string
+	protocol           string // Protocol to use (grpc or http)
+	resourceAttributes *[]attribute.KeyValue
 }
 
 // WithEndpoint sets the metrics endpoint(host and port) the Exporter will connect to.
@@ -229,4 +225,59 @@ func WithProtocol(protocol string) Option {
 	return func(opts *options) {
 		opts.protocol = protocol
 	}
+}
+
+// WithServiceName overrides the service.name resource attribute.
+func WithServiceName(serviceName string) Option {
+	return func(opts *options) {
+		opts.serviceName = serviceName
+	}
+}
+
+// WithServiceNamespace overrides the service.namespace resource attribute.
+func WithServiceNamespace(serviceNamespace string) Option {
+	return func(opts *options) {
+		opts.serviceNamespace = serviceNamespace
+	}
+}
+
+// WithServiceVersion overrides the service.version resource attribute.
+func WithServiceVersion(serviceVersion string) Option {
+	return func(opts *options) {
+		opts.serviceVersion = serviceVersion
+	}
+}
+
+// WithResourceAttributes appends custom resource attributes.
+func WithResourceAttributes(attrs ...attribute.KeyValue) Option {
+	return func(opts *options) {
+		if len(attrs) == 0 {
+			return
+		}
+		if opts.resourceAttributes == nil {
+			opts.resourceAttributes = &[]attribute.KeyValue{}
+		}
+		*opts.resourceAttributes = append(*opts.resourceAttributes, attrs...)
+	}
+}
+
+func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
+	// Build resource with options values
+	resourceOpts := []resource.Option{
+		resource.WithAttributes(
+			semconv.ServiceNamespace(options.serviceNamespace),
+			semconv.ServiceName(options.serviceName),
+			semconv.ServiceVersion(options.serviceVersion),
+		),
+		resource.WithFromEnv(),
+		resource.WithHost(),         // Adds host.name
+		resource.WithTelemetrySDK(), // Adds telemetry.sdk.{name,language,version}
+	}
+
+	// Append custom resource attributes
+	if options.resourceAttributes != nil && len(*options.resourceAttributes) > 0 {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(*options.resourceAttributes...))
+	}
+
+	return resource.New(ctx, resourceOpts...)
 }
