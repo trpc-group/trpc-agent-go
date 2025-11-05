@@ -2,10 +2,10 @@ package tool
 
 import "context"
 
-// FilterFunc defines a filter function for tools based on their names.
+// FilterFunc is a function that filters tools based on a context and a tool.
 type FilterFunc func(ctx context.Context, tool Tool) bool
 
-// FilterTools creates a new ToolSet that filters tools from the original ToolSet.
+// FilterTools filters tools from a list of tools based on a filter function.
 func FilterTools(ctx context.Context, toolset []Tool, filter FilterFunc) []Tool {
 	filtered := make([]Tool, 0, len(toolset))
 	for _, tool := range toolset {
