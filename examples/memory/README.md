@@ -29,6 +29,7 @@ This implementation showcases the essential features for building AI application
 - **🎨 Custom Tool Support**: Ability to override default tool implementations with custom ones
 - **⚙️ Configurable Tools**: Enable or disable specific memory tools as needed
 - **🔴 Redis Support**: Support for Redis-based memory service (ready to use)
+- **🗄️ MySQL Support**: Support for MySQL-based memory service with persistent storage
 
 ### Key Features
 
@@ -139,12 +140,13 @@ The following memory tools are manually registered via `memoryService.Tools()`:
 
 ## Command Line Arguments
 
-| Argument      | Description                                      | Default Value    |
-| ------------- | ------------------------------------------------ | ---------------- |
-| `-model`      | Name of the model to use                         | `deepseek-chat`  |
-| `-memory`     | Memory service: `inmemory` or `redis`            | `inmemory`       |
-| `-redis-addr` | Redis server address (when using redis services) | `localhost:6379` |
-| `-streaming`  | Enable streaming mode for responses              | `true`           |
+| Argument      | Description                                     | Default Value    |
+| ------------- | ----------------------------------------------- | ---------------- |
+| `-model`      | Name of the model to use                        | `deepseek-chat`  |
+| `-memory`     | Memory service: `inmemory`, `redis`, or `mysql` | `inmemory`       |
+| `-redis-addr` | Redis server address (when using redis memory)  | `localhost:6379` |
+| `-mysql-dsn`  | MySQL DSN (when using mysql memory, required)   | ``               |
+| `-streaming`  | Enable streaming mode for responses             | `true`           |
 
 ## Usage
 
@@ -193,22 +195,26 @@ go run . -model gpt-4o -streaming=false
 
 ### Service Configuration
 
-Currently, the example supports both in-memory and Redis memory services, while always using in-memory session service for simplicity:
+The example supports three memory service backends: in-memory, Redis, and MySQL, while always using in-memory session service for simplicity:
 
 ```bash
 # Default in-memory memory service
 go run .
 
-# Redis memory service (ready to use)
+# Redis memory service
 go run . -memory redis -redis-addr localhost:6379
+
+# MySQL memory service (DSN required via command line)
+go run . -memory mysql -mysql-dsn "user:password@tcp(localhost:3306)/dbname?parseTime=true"
 ```
 
 **Available service combinations:**
 
-| Memory Service | Session Service | Status   | Description                      |
-| -------------- | --------------- | -------- | -------------------------------- |
-| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration            |
-| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session |
+| Memory Service | Session Service | Status   | Description                                     |
+| -------------- | --------------- | -------- | ----------------------------------------------- |
+| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration                           |
+| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session                |
+| `mysql`        | `inmemory`      | ✅ Ready | MySQL memory + in-memory session (DSN required) |
 
 ### Help and Available Options
 
@@ -221,13 +227,15 @@ go run . --help
 Output:
 
 ```
-Usage of ./memory_chat:
+Usage of ./memory_example:
   -memory string
-        Name of the memory service to use, inmemory / redis (default "inmemory")
+        Name of the memory service to use inmemory / redis / mysql (default "inmemory")
   -model string
         Name of the model to use (default "deepseek-chat")
+  -mysql-dsn string
+        MySQL DSN (e.g. user:password@tcp(localhost:3306)/dbname?parseTime=true)
   -redis-addr string
-        Redis server address (when using redis services) (default "localhost:6379")
+        Redis address (default "localhost:6379")
   -streaming
         Enable streaming mode for responses (default true)
 ```
@@ -498,7 +506,10 @@ Custom tools can provide enhanced functionality:
 
 ### Memory Service Integration
 
-- Uses `inmemory.NewMemoryService()` for in-memory storage
+- Supports multiple backends: in-memory, Redis, and MySQL
+- Uses `memoryinmemory.NewMemoryService()` for in-memory storage
+- Uses `memoryredis.NewService()` for Redis-based storage
+- Uses `memorymysql.NewService()` for MySQL-based storage
 - Memory tools directly access the memory service
 - Two-step integration: Step 1 (manual tool registration) + Step 2 (runner service setup)
 - Explicit control over tool registration and service management
@@ -637,6 +648,93 @@ go run . -memory redis -redis-addr localhost:6380
 go run . -memory redis -redis-addr redis://username:password@localhost:6379
 ```
 
+## MySQL Memory Service
+
+### MySQL Support
+
+The example supports MySQL-based memory service for persistent relational storage:
+
+```go
+// MySQL memory service
+memoryService, err := memorymysql.NewService(
+    memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysql.WithToolEnabled(memory.DeleteToolName, false),
+    memorymysql.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+)
+
+// Session service always uses in-memory for simplicity
+sessionService := sessioninmemory.NewSessionService()
+```
+
+**Benefits of MySQL support:**
+
+- **Persistence**: Memories stored in relational database
+- **ACID Compliance**: Full transaction support and data integrity
+- **Scalability**: Support for MySQL replication and clustering
+- **Query Flexibility**: Rich SQL query capabilities
+- **Monitoring**: Comprehensive MySQL monitoring tools
+- **Auto Table Creation**: Automatically creates required tables
+
+### MySQL Configuration
+
+To use MySQL memory service, you need a running MySQL instance:
+
+```bash
+# Start MySQL with Docker (recommended for testing)
+docker run -d --name mysql-memory \
+  -e MYSQL_ROOT_PASSWORD=password \
+  -e MYSQL_DATABASE=memory_db \
+  -p 3306:3306 \
+  mysql:8.0
+
+# Wait for MySQL to be ready
+docker exec mysql-memory mysqladmin ping -h localhost -u root -ppassword
+```
+
+**Usage examples:**
+
+```bash
+# Connect to MySQL with DSN
+go run . -memory mysql -mysql-dsn "root:password@tcp(localhost:3306)/memory_db?parseTime=true"
+
+# Connect to custom MySQL port
+go run . -memory mysql -mysql-dsn "root:password@tcp(localhost:3307)/memory_db?parseTime=true"
+
+# Connect with custom table name (via code configuration)
+# See memorymysql.WithTableName() option in the code
+```
+
+**DSN Format:**
+
+```
+[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
+```
+
+**Common DSN parameters:**
+
+- `parseTime=true` - Parse DATE and DATETIME to time.Time (required)
+- `charset=utf8mb4` - Character set
+- `loc=Local` - Location for time.Time values
+- `timeout=10s` - Connection timeout
+
+**Table Schema:**
+
+The MySQL memory service automatically creates the following table structure:
+
+```sql
+CREATE TABLE IF NOT EXISTS memories (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    memory_id VARCHAR(64) NOT NULL,
+    memory_data JSON NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_app_user (app_name, user_id),
+    UNIQUE INDEX idx_app_user_memory (app_name, user_id, memory_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+```
+
 ## Extensibility
 
 This example demonstrates how to:
@@ -652,7 +750,6 @@ This example demonstrates how to:
 
 Future enhancements could include:
 
-- Persistent storage (database integration)
 - Memory expiration and cleanup
 - Memory priority and relevance scoring
 - Automatic memory summarization and compression
@@ -661,5 +758,7 @@ Future enhancements could include:
 - Tool enablement configuration via configuration files
 - Dynamic tool registration and unregistration
 - Redis cluster and sentinel support
-- Memory replication and synchronization
+- MySQL replication and clustering support
+- Memory replication and synchronization across services
 - Advanced memory analytics and insights
+- Cross-service memory migration tools
