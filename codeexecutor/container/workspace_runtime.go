@@ -527,7 +527,9 @@ func (r *WorkspaceRuntime) execCmd(
 	}
 	insp, err := r.ce.client.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {
-		return "", "", 0, false, err
+		// If context timed out during inspect, surface TimedOut=true.
+		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
+		return stdout.String(), stderr.String(), 0, timed, err
 	}
 	timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
 	return stdout.String(), stderr.String(), insp.ExitCode, timed, nil
