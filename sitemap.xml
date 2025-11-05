@@ -64,6 +64,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/ecosystem/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/evaluation/</loc>
+        <lastmod>2025-11-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/evaluation/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/evaluation/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/event/</loc>
         <lastmod>2025-11-05</lastmod>
         <changefreq>daily</changefreq>
@@ -202,6 +209,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/ecosystem/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/ecosystem/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/evaluation/</loc>
+        <lastmod>2025-11-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/evaluation/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/evaluation/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/event/</loc>
