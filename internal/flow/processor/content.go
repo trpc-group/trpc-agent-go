@@ -234,20 +234,9 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
-		// Filter invalid content
-		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() ||
-			(!isZeroTime && evt.Timestamp.Before(since)) ||
-			(p.TimelineFilterMode == TimelineFilterCurrentRequest && inv.RunOptions.RequestID != evt.RequestID) ||
-			(p.TimelineFilterMode == TimelineFilterCurrentInvocation && inv.InvocationID != evt.InvocationID) {
+		if !p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since) {
 			continue
 		}
-
-		// Filter content
-		if (p.BranchFilterMode == BranchFilterModePrefix && !evt.Filter(filter)) ||
-			(p.BranchFilterMode == BranchFilterModeExact && evt.FilterKey != filter) {
-			continue
-		}
-
 		events = append(events, evt)
 	}
 	inv.Session.EventMu.RUnlock()
@@ -275,6 +264,35 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		messages = messages[startIdx:]
 	}
 	return messages
+}
+
+func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
+	isZeroTime bool, since time.Time) bool {
+	if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+		return false
+	}
+
+	if !isZeroTime && evt.Timestamp.Before(since) {
+		return false
+	}
+
+	if p.TimelineFilterMode == TimelineFilterCurrentRequest && inv.RunOptions.RequestID != evt.RequestID {
+		return false
+	}
+
+	if p.TimelineFilterMode == TimelineFilterCurrentInvocation && inv.InvocationID != evt.InvocationID {
+		return false
+	}
+
+	if p.BranchFilterMode == BranchFilterModeExact && evt.FilterKey != filter {
+		return false
+	}
+
+	if p.BranchFilterMode == BranchFilterModePrefix && !evt.Filter(filter) {
+		return false
+	}
+
+	return true
 }
 
 // isOtherAgentReply checks whether the event is a reply from another agent.
