@@ -1095,6 +1095,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#basepath" class="md-nav__link">
+    <span class="md-ellipsis">
+      设置路由前缀 BasePath
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1277,6 +1286,15 @@
   <a href="#_5" class="md-nav__link">
     <span class="md-ellipsis">
       消息快照
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#basepath" class="md-nav__link">
+    <span class="md-ellipsis">
+      设置路由前缀 BasePath
     </span>
   </a>
   
@@ -1762,6 +1780,31 @@
 </span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整的示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot">examples/agui/messagessnapshot</a>。</p>
+<h3 id="basepath">设置路由前缀 BasePath</h3>
+<p><code>agui.WithBasePath</code> 设置 AG-UI 服务的基础路由前缀，默认值为 <code>/</code>，用于在统一前缀下挂载聊天路由与消息快照路由，避免与现有服务冲突.</p>
+<p><code>agui.WithPath</code> 与 <code>agui.WithMessagesSnapshotPath</code> 仅定义基础路径下的子路由，框架会通过 <code>url.JoinPath</code> 将它们与基础路径拼接成最终可访问的路由.</p>
+<p>使用示例如下所示</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-7-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-7-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-7-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-7-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-7-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-7-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-7-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithBasePath</span><span class="p">(</span><span class="s">&quot;/agui&quot;</span><span class="p">),</span><span class="w">                </span><span class="c1">// 设置 AG-UI 前缀路由</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">),</span><span class="w">                    </span><span class="c1">// 设置聊天路由，默认为 &quot;/&quot;</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">    </span><span class="c1">// 开启消息快照功能</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// 设置消息快照路由，默认为 &quot;/history&quot;</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="p">)</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create agui server failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>此时聊天路由为 <code>/agui/chat</code>，用消息快照路由为 <code>/agui/history</code>。</p>
 
 
 
@@ -1784,7 +1827,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月5日 09:37:50 UTC">2025-11-05 09:37:50</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月5日 14:05:00 UTC">2025-11-05 14:05:00</span>
   </span>
 
     
