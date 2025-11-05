@@ -297,4 +297,4 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 完整的示例可参考 [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot)。
 
-AG-UI 的 MessagesSnapshotEvent 事件格式可见 (messages)[https://docs.ag-ui.com/concepts/messages]。
+AG-UI 的 MessagesSnapshotEvent 事件格式可见 [messages](https://docs.ag-ui.com/concepts/messages)。

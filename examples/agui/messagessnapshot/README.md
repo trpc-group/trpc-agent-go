@@ -5,7 +5,7 @@ This example demonstrates how to expose both the regular AG-UI chat endpoint and
 - `server/`: Go server that runs an agent, persists events in an in-memory session store, and enables `MessagesSnapshot`.
 - `client/`: Minimal TypeScript script that first triggers a chat run and then fetches the snapshot history for the same thread.
 
-The format of AG-UI MessagesSnapshotEvent can be found at (messages)[https://docs.ag-ui.com/concepts/messages].
+The format of AG-UI MessagesSnapshotEvent can be found at [messages](https://docs.ag-ui.com/concepts/messages).
 
 ## Run the server
 
