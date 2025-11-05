@@ -141,7 +141,7 @@ func (g *Graph) DOT(opts ...VizOption) string {
 	writeVirtualStartEnd(&b, o)
 	writeNodes(&b, g, nodeIDs)
 	writeRuntimeEdges(&b, edgesCopy, o)
-	writeConditionalEdges(&b, condCopy, o)
+	writeConditionalEdges(&b, g, condCopy, o)
 	writeDestinations(&b, g, nodeIDs, o)
 	highlightEntry(&b, entry, o)
 	b.WriteString("}\n")
@@ -222,7 +222,7 @@ func writeRuntimeEdges(b *strings.Builder, edges map[string][]*Edge, o *VizOptio
 }
 
 // writeConditionalEdges emits dashed edges with branch labels.
-func writeConditionalEdges(b *strings.Builder, cond map[string]*ConditionalEdge, o *VizOptions) {
+func writeConditionalEdges(b *strings.Builder, g *Graph, cond map[string]*ConditionalEdge, o *VizOptions) {
 	var fromIDs []string
 	for from := range cond {
 		fromIDs = append(fromIDs, from)
@@ -234,9 +234,26 @@ func writeConditionalEdges(b *strings.Builder, cond map[string]*ConditionalEdge,
 		for k := range ce.PathMap {
 			keys = append(keys, k)
 		}
+		// For MultiCondition with empty PathMap, fallback to node-level ends
+		// to render potential branches for visualization.
+		if len(keys) == 0 && ce.MultiCondition != nil {
+			if n, ok := g.nodes[from]; ok && n != nil && n.ends != nil {
+				for k := range n.ends {
+					keys = append(keys, k)
+				}
+			}
+		}
 		sort.Strings(keys)
 		for _, k := range keys {
 			to := ce.PathMap[k]
+			if to == "" && ce.MultiCondition != nil {
+				// Resolve through ends map for display purposes.
+				if n, ok := g.nodes[from]; ok && n != nil && n.ends != nil {
+					if v, ok2 := n.ends[k]; ok2 {
+						to = v
+					}
+				}
+			}
 			if !o.IncludeStartEnd && (from == Start || to == End) {
 				continue
 			}
