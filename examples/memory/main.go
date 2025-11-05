@@ -39,10 +39,10 @@ var (
 	modelName      = flag.String("model", "deepseek-chat", "Name of the model to use")
 	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis / mysql / postgres")
 	redisAddr      = flag.String("redis-addr", "localhost:6379", "Redis address")
-	mysqlDSN       = flag.String("mysql-dsn", "", "MySQL DSN (e.g., user:password@tcp(localhost:3306)/dbname?parseTime=true)")
-	postgresDSN    = flag.String("postgres-dsn", "", "PostgreSQL DSN (e.g., postgres://user:password@localhost:5432/dbname)")
-	softDelete     = flag.Bool("soft-delete", false, "Enable soft delete for MySQL/PostgreSQL memory service")
-	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	dsn            = flag.String("dsn", "", "Database DSN (MySQL: user:password@tcp(localhost:3306)/dbname?parseTime=true, "+
+		"PostgreSQL: postgres://user:password@localhost:5432/dbname)")
+	softDelete = flag.Bool("soft-delete", false, "Enable soft delete for MySQL/PostgreSQL memory service")
+	streaming  = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
 func main() {
@@ -56,11 +56,11 @@ func main() {
 		fmt.Printf("Redis: %s\n", *redisAddr)
 	}
 	if *memServiceName == "mysql" {
-		fmt.Printf("MySQL: %s\n", *mysqlDSN)
+		fmt.Printf("MySQL: %s\n", *dsn)
 		fmt.Printf("Soft delete: %t\n", *softDelete)
 	}
 	if *memServiceName == "postgres" {
-		fmt.Printf("PostgreSQL: %s\n", *postgresDSN)
+		fmt.Printf("PostgreSQL: %s\n", *dsn)
 		fmt.Printf("Soft delete: %t\n", *softDelete)
 	}
 	fmt.Printf("Streaming: %t\n", *streaming)
@@ -73,7 +73,7 @@ func main() {
 		modelName:      *modelName,
 		memServiceName: *memServiceName,
 		redisAddr:      *redisAddr,
-		postgresDSN:    *postgresDSN,
+		dsn:            *dsn,
 		streaming:      *streaming,
 	}
 
@@ -87,7 +87,7 @@ type memoryChat struct {
 	modelName      string
 	memServiceName string
 	redisAddr      string
-	postgresDSN    string
+	dsn            string
 	streaming      bool
 	runner         runner.Runner
 	userID         string
@@ -131,11 +131,11 @@ func (c *memoryChat) setup(_ context.Context) error {
 			return fmt.Errorf("failed to create redis memory service: %w", err)
 		}
 	case "mysql":
-		if *mysqlDSN == "" {
-			return errors.New("mysql DSN is required, set via --mysql-dsn flag")
+		if c.dsn == "" {
+			return errors.New("DSN is required for MySQL, set via --dsn flag")
 		}
 		memoryService, err = memorymysql.NewService(
-			memorymysql.WithMySQLClientDSN(*mysqlDSN),
+			memorymysql.WithMySQLClientDSN(c.dsn),
 			memorymysql.WithSoftDelete(*softDelete),
 			// You can enable or disable tools and create custom tools here.
 			memorymysql.WithToolEnabled(memory.DeleteToolName, false),               // delete tool is disabled by default
@@ -145,11 +145,11 @@ func (c *memoryChat) setup(_ context.Context) error {
 			return fmt.Errorf("failed to create mysql memory service: %w", err)
 		}
 	case "postgres":
-		if c.postgresDSN == "" {
-			return errors.New("postgres DSN is required, set via --postgres-dsn flag")
+		if c.dsn == "" {
+			return errors.New("DSN is required for PostgreSQL, set via --dsn flag")
 		}
 		memoryService, err = memorypostgres.NewService(
-			memorypostgres.WithPostgresConnString(c.postgresDSN),
+			memorypostgres.WithPostgresConnString(c.dsn),
 			memorypostgres.WithSoftDelete(*softDelete),
 			// You can enable or disable tools and create custom tools here.
 			memorypostgres.WithToolEnabled(memory.DeleteToolName, false),               // delete tool is disabled by default
