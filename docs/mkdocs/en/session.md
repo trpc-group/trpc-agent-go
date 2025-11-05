@@ -595,7 +595,7 @@ CREATE TABLE app_states (
     id BIGSERIAL PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     key VARCHAR(255) NOT NULL,
-    value JSONB NOT NULL,                     -- State value (JSONB format)
+    value BYTEA NOT NULL,
     created_at TIMESTAMP NOT NULL,
     updated_at TIMESTAMP NOT NULL,
     expires_at TIMESTAMP,
@@ -609,7 +609,7 @@ CREATE TABLE user_states (
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     key VARCHAR(255) NOT NULL,
-    value JSONB NOT NULL,                     -- State value (JSONB format)
+    value BYTEA NOT NULL,
     created_at TIMESTAMP NOT NULL,
     updated_at TIMESTAMP NOT NULL,
     expires_at TIMESTAMP,
