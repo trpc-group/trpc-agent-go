@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 // Package appid records and provides default app/agent names.
 // It captures the first Runner's app and agent names as defaults and
 // offers safe getters for fallback in observability or reporting paths.
