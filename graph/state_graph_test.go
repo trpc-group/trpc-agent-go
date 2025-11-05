@@ -628,6 +628,84 @@ func TestConditionalEdgeWithTools(t *testing.T) {
 	t.Log("Tools conditional edge test completed")
 }
 
+// TestMultiConditionalEdges_FanOut verifies that a multi-conditional edge
+// can trigger multiple next nodes in parallel by returning multiple branch
+// keys. Each target node writes to a distinct state key so both effects are
+// visible in the final state.
+func TestMultiConditionalEdges_FanOut(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("a", StateField{Type: reflect.TypeOf(0),
+			Reducer: DefaultReducer}).
+		AddField("b", StateField{Type: reflect.TypeOf(0),
+			Reducer: DefaultReducer})
+
+	sg := NewStateGraph(schema)
+	// Router does nothing; branching decided by multi-condition.
+	sg.AddNode("router", func(ctx context.Context,
+		s State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode("A", func(ctx context.Context,
+		s State) (any, error) {
+		return State{"a": 1}, nil
+	})
+	sg.AddNode("B", func(ctx context.Context,
+		s State) (any, error) {
+		return State{"b": 2}, nil
+	})
+	sg.SetEntryPoint("router")
+	// Return two branch keys -> both A and B should run.
+	sg.AddMultiConditionalEdges("router",
+		func(ctx context.Context, s State) ([]string, error) {
+			return []string{"toA", "toB"}, nil
+		}, map[string]string{
+			"toA": "A",
+			"toB": "B",
+		})
+	sg.SetFinishPoint("A").SetFinishPoint("B")
+
+	g, err := sg.Compile()
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	exec, err := NewExecutor(g)
+	if err != nil {
+		t.Fatalf("executor create failed: %v", err)
+	}
+
+	ch, err := exec.Execute(context.Background(), State{},
+		&agent.Invocation{InvocationID: "inv-multi-cond"})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode ||
+					k == MetadataKeyPregel ||
+					k == MetadataKeyChannel ||
+					k == MetadataKeyState ||
+					k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+	// Both branches should have run and set their keys.
+	if final["a"] != float64(1) && final["a"] != 1 {
+		t.Fatalf("final[a]=%v, want 1", final["a"])
+	}
+	if final["b"] != float64(2) && final["b"] != 2 {
+		t.Fatalf("final[b]=%v, want 2", final["b"])
+	}
+}
+
 func dummyReducer(existing, update any) any {
 	return update
 }
