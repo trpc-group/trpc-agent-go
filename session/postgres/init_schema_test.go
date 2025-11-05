@@ -233,8 +233,8 @@ func TestVerifyIndexes_Success(t *testing.T) {
 		WillReturnRows(rows)
 
 	expectedIndexes := []tableIndex{
-		{"unique_active", []string{"app_name", "user_id", "session_id"}},
-		{"expires", []string{"expires_at"}},
+		{"session_states", "unique_active", []string{"app_name", "user_id", "session_id"}},
+		{"session_states", "expires", []string{"expires_at"}},
 	}
 
 	err = s.verifyIndexes(context.Background(), "session_states", expectedIndexes)
@@ -260,8 +260,8 @@ func TestVerifyIndexes_MissingIndex(t *testing.T) {
 		WillReturnRows(rows)
 
 	expectedIndexes := []tableIndex{
-		{"unique_active", []string{"app_name", "user_id", "session_id"}},
-		{"expires", []string{"expires_at"}}, // This is missing
+		{"session_states", "unique_active", []string{"app_name", "user_id", "session_id"}},
+		{"session_states", "expires", []string{"expires_at"}}, // This is missing
 	}
 
 	// verifyIndexes should succeed but log a warning (we can't test the log here)
@@ -284,7 +284,7 @@ func TestVerifyIndexes_QueryError(t *testing.T) {
 		WillReturnError(assert.AnError)
 
 	expectedIndexes := []tableIndex{
-		{"idx_session_states_unique_active", []string{"app_name", "user_id", "session_id"}},
+		{"session_states", "unique_active", []string{"app_name", "user_id", "session_id"}},
 	}
 
 	err = s.verifyIndexes(context.Background(), "session_states", expectedIndexes)

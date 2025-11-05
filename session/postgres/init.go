@@ -166,6 +166,7 @@ type tableColumn struct {
 
 // tableIndex represents a table index definition
 type tableIndex struct {
+	table   string // Base table name (without prefix/schema) like "session_states"
 	suffix  string // Index suffix like "unique_active", "lookup", "expires"
 	columns []string
 }
@@ -188,8 +189,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{indexSuffixUniqueActive, []string{"app_name", "user_id", "session_id"}},
-			{indexSuffixExpires, []string{"expires_at"}},
+			{tableNameSessionStates, indexSuffixUniqueActive, []string{"app_name", "user_id", "session_id"}},
+			{tableNameSessionStates, indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
 	tableNameSessionEvents: {
@@ -205,8 +206,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{indexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}},
-			{indexSuffixExpires, []string{"expires_at"}},
+			{tableNameSessionEvents, indexSuffixLookup, []string{"app_name", "user_id", "session_id", "created_at"}},
+			{tableNameSessionEvents, indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
 	tableNameSessionSummaries: {
@@ -222,8 +223,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{indexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "filter_key"}},
-			{indexSuffixExpires, []string{"expires_at"}},
+			{tableNameSessionSummaries, indexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "filter_key"}},
+			{tableNameSessionSummaries, indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
 	tableNameAppStates: {
@@ -238,8 +239,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{indexSuffixUniqueActive, []string{"app_name", "key"}},
-			{indexSuffixExpires, []string{"expires_at"}},
+			{tableNameAppStates, indexSuffixUniqueActive, []string{"app_name", "key"}},
+			{tableNameAppStates, indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
 	tableNameUserStates: {
@@ -255,8 +256,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp without time zone", true},
 		},
 		indexes: []tableIndex{
-			{indexSuffixUniqueActive, []string{"app_name", "user_id", "key"}},
-			{indexSuffixExpires, []string{"expires_at"}},
+			{tableNameUserStates, indexSuffixUniqueActive, []string{"app_name", "user_id", "key"}},
+			{tableNameUserStates, indexSuffixExpires, []string{"expires_at"}},
 		},
 	},
 }
@@ -498,8 +499,8 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 
 	// Check each expected index
 	for _, expected := range expectedIndexes {
-		// Build the expected index name using suffix
-		expectedIndexName := buildIndexName(s.opts.schema, s.opts.tablePrefix, tableName, expected.suffix)
+		// Use buildIndexName to construct the expected index name
+		expectedIndexName := buildIndexName(s.opts.schema, s.opts.tablePrefix, expected.table, expected.suffix)
 
 		if !actualIndexes[expectedIndexName] {
 			log.Warnf("index %s on table %s is missing", expectedIndexName, fullTableName)
@@ -595,11 +596,24 @@ func WithInitDBSSLMode(sslMode string) InitDBOpt {
 }
 
 // WithInitDBTablePrefix sets the table name prefix.
+// Note: An underscore will be automatically added if not present.
+// "trpc" and "trpc_" both result in "trpc_" prefix.
+//
 // Security: Only alphanumeric characters and underscore are allowed to prevent SQL injection.
 func WithInitDBTablePrefix(prefix string) InitDBOpt {
 	return func(c *InitDBConfig) {
+		if prefix == "" {
+			c.tablePrefix = ""
+			return
+		}
+
 		if err := validateTablePrefix(prefix); err != nil {
 			panic(fmt.Sprintf("invalid table prefix: %v", err))
+		}
+
+		// Automatically add underscore if not present
+		if !strings.HasSuffix(prefix, "_") {
+			prefix += "_"
 		}
 		c.tablePrefix = prefix
 	}

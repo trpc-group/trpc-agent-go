@@ -11,6 +11,7 @@ package postgres
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -253,16 +254,29 @@ func validateTablePrefix(prefix string) error {
 }
 
 // WithTablePrefix sets a prefix for all table names.
-// For example, with prefix "trpc_", tables will be named:
+// For example, with prefix "trpc", tables will be named:
 // - trpc_session_states
 // - trpc_session_events
 // - etc.
 //
+// Note: An underscore will be automatically added if not present.
+// "trpc" and "trpc_" both result in "trpc_" prefix.
+//
 // Security: Only alphanumeric characters and underscore are allowed to prevent SQL injection.
 func WithTablePrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
+		if prefix == "" {
+			opts.tablePrefix = ""
+			return
+		}
+
 		if err := validateTablePrefix(prefix); err != nil {
 			panic(fmt.Sprintf("invalid table prefix: %v", err))
+		}
+
+		// Automatically add underscore if not present
+		if !strings.HasSuffix(prefix, "_") {
+			prefix += "_"
 		}
 		opts.tablePrefix = prefix
 	}

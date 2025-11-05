@@ -122,6 +122,28 @@ func TestWithTablePrefix_Validation(t *testing.T) {
 	}
 }
 
+func TestWithTablePrefix_AutoUnderscore(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"no_underscore", "trpc", "trpc_"},
+		{"with_underscore", "trpc_", "trpc_"},
+		{"empty_string", "", ""},
+		{"single_char", "a", "a_"},
+		{"already_has_underscore", "my_prefix_", "my_prefix_"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &ServiceOpts{}
+			WithTablePrefix(tt.input)(opts)
+			assert.Equal(t, tt.expected, opts.tablePrefix)
+		})
+	}
+}
+
 func TestWithInitDBTablePrefix_Validation(t *testing.T) {
 	tests := []struct {
 		name        string
