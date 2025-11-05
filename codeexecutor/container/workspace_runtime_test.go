@@ -397,6 +397,11 @@ func TestWorkspaceRuntime_CopyFileOut_SkipsDirHeader(t *testing.T) {
 			strings.Contains(r.URL.Path,
 				"/containers/"+testCID+"/archive"):
 			// Build tar: first a directory, then a file entry.
+			// Docker API requires X-Docker-Container-Path-Stat header.
+			w.Header().Set(
+				"X-Docker-Container-Path-Stat",
+				b64PathStat+b64PathStat2+b64PathStat3,
+			)
 			var buf bytes.Buffer
 			tw := tar.NewWriter(&buf)
 			_ = tw.WriteHeader(&tar.Header{
