@@ -36,8 +36,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
+	ollamaembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
-
 	// Source.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
@@ -60,7 +60,7 @@ import (
 var (
 	modelName     = flag.String("model", "deepseek-chat", "Name of the model to use")
 	streaming     = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	embedderType  = flag.String("embedder", "openai", "Embedder type: openai, gemini")
+	embedderType  = flag.String("embedder", "openai", "Embedder type: openai, gemini, ollama")
 	vectorStore   = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
 	esVersion     = flag.String("es-version", "v9", "Elasticsearch version: v7, v8, v9 (only used when vectorstore=elasticsearch)")
 	agenticFilter = flag.Bool("agentic_filter", true, "Enable agentic filter for knowledge search")
@@ -352,6 +352,8 @@ func (c *knowledgeChat) setupEmbedder(ctx context.Context) (embedder.Embedder, e
 	switch strings.ToLower(c.embedderType) {
 	case "gemini":
 		return geminiembedder.New(ctx)
+	case "ollama":
+		return ollamaembedder.New(), nil
 	default: // openai
 		return openaiembedder.New(
 			openaiembedder.WithModel(openaiEmbeddingModel),
