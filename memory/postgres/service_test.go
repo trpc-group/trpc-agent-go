@@ -1230,3 +1230,303 @@ func TestService_SearchMemories_InvalidKey(t *testing.T) {
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestNewService_ConnStringBuilderError(t *testing.T) {
+	originalBuilder := storage.GetClientBuilder()
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return nil, fmt.Errorf("connection failed")
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	_, err := NewService(WithPostgresConnString("postgres://localhost:5432/testdb"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create postgres client from connection string failed")
+}
+
+func TestNewService_InstanceNameBuilderError(t *testing.T) {
+	originalBuilder := storage.GetClientBuilder()
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return nil, fmt.Errorf("connection failed")
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Register instance first
+	storage.RegisterPostgresInstance("test-instance",
+		storage.WithClientConnString("postgres://localhost:5432/testdb"),
+	)
+
+	_, err := NewService(WithPostgresInstance("test-instance"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create postgres client from instance name failed")
+}
+
+func TestNewService_ConnStringPriority(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	receivedConnString := ""
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		opts := &storage.ClientBuilderOpts{}
+		for _, opt := range builderOpts {
+			opt(opts)
+		}
+		receivedConnString = opts.ConnString
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.RegisterPostgresInstance("test-instance",
+		storage.WithClientConnString("postgres://localhost:5432/testdb"),
+	)
+
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	service, err := NewService(
+		WithPostgresConnString("postgres://localhost:5432/customdb"),
+		WithPostgresInstance("test-instance"),
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+	assert.Equal(t, "postgres://localhost:5432/customdb", receivedConnString, "connString should have priority over instanceName")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	service.Close()
+}
+
+func TestService_AddMemory_CountQueryError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(1))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectQuery("SELECT COUNT").WillReturnError(fmt.Errorf("database error"))
+
+	err := svc.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "check memory count failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_InsertError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectExec("INSERT INTO").WillReturnError(fmt.Errorf("insert failed"))
+
+	err := svc.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store memory entry failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_SelectQueryError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	mock.ExpectQuery("SELECT memory_data").WillReturnError(fmt.Errorf("database error"))
+
+	err := svc.UpdateMemory(ctx, memoryKey, "new content", []string{"new"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get memory entry failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_UnmarshalError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	// Return invalid JSON
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}).AddRow([]byte("invalid json")),
+	)
+
+	err := svc.UpdateMemory(ctx, memoryKey, "new content", []string{"new"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_UpdateError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	entry := &memory.Entry{
+		ID:      memoryKey.MemoryID,
+		AppName: memoryKey.AppName,
+		UserID:  memoryKey.UserID,
+		Memory:  &memory.Memory{Memory: "old content", Topics: []string{"old"}},
+	}
+	entryData, _ := json.Marshal(entry)
+
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}).AddRow(entryData),
+	)
+	mock.ExpectExec("UPDATE.*SET memory_data").WillReturnError(fmt.Errorf("update failed"))
+
+	err := svc.UpdateMemory(ctx, memoryKey, "new content", []string{"new"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update memory entry failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ReadMemories_ScanError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Return wrong number of columns to cause scan error
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data", "extra_column"}).AddRow([]byte("{}"), "extra"),
+	)
+
+	_, err := svc.ReadMemories(ctx, userKey, 0)
+	require.Error(t, err)
+	// The error may be scan error or unmarshal error depending on implementation
+	assert.Contains(t, err.Error(), "list memories failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ReadMemories_UnmarshalError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Return invalid JSON
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}).AddRow([]byte("invalid json")),
+	)
+
+	_, err := svc.ReadMemories(ctx, userKey, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_QueryError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectQuery("SELECT memory_data").WillReturnError(fmt.Errorf("database error"))
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "search memories failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_ScanError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Return wrong number of columns to cause scan error
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data", "extra_column"}).AddRow([]byte("{}"), "extra"),
+	)
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	// The error may be scan error or unmarshal error depending on implementation
+	assert.Contains(t, err.Error(), "search memories failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_UnmarshalError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Return invalid JSON
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}).AddRow([]byte("invalid json")),
+	)
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_Close_NilDB(t *testing.T) {
+	svc := &Service{
+		db: nil,
+	}
+
+	err := svc.Close()
+	require.NoError(t, err)
+}
+
+func TestService_AddMemory_CountQueryNoRows(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(1))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// COUNT query returns no rows (should still work, count will be 0)
+	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}))
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
