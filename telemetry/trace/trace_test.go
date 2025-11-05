@@ -16,8 +16,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
-
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
 func TestGRPCTracesEndpoint(t *testing.T) {
@@ -227,11 +225,7 @@ func TestStart_WithResourceAttributesAndEnv(t *testing.T) {
 	_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team=ai,env=staging")
 
 	ctx := context.Background()
-	opts := &options{
-		serviceName:      itelemetry.ServiceName,
-		serviceVersion:   itelemetry.ServiceVersion,
-		serviceNamespace: itelemetry.ServiceNamespace,
-	}
+	opts := &options{}
 	WithServiceName("option-service")(opts)
 	WithServiceNamespace("custom-ns")(opts)
 	WithServiceVersion("1.2.3")(opts)

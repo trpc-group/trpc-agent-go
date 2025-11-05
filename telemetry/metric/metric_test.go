@@ -162,9 +162,6 @@ func TestOptions(t *testing.T) {
 				if opts.serviceName != "custom-service" {
 					t.Errorf("expected service name custom-service, got %s", opts.serviceName)
 				}
-				if !opts.serviceNameSet {
-					t.Errorf("expected serviceNameSet to be true")
-				}
 			},
 		},
 		{
@@ -173,9 +170,6 @@ func TestOptions(t *testing.T) {
 			validate: func(t *testing.T, opts *options) {
 				if opts.serviceNamespace != "custom-ns" {
 					t.Errorf("expected service namespace custom-ns, got %s", opts.serviceNamespace)
-				}
-				if !opts.serviceNamespaceSet {
-					t.Errorf("expected serviceNamespaceSet to be true")
 				}
 			},
 		},
@@ -186,9 +180,6 @@ func TestOptions(t *testing.T) {
 				if opts.serviceVersion != "1.2.3" {
 					t.Errorf("expected service version 1.2.3, got %s", opts.serviceVersion)
 				}
-				if !opts.serviceVersionSet {
-					t.Errorf("expected serviceVersionSet to be true")
-				}
 			},
 		},
 		{
@@ -197,11 +188,11 @@ func TestOptions(t *testing.T) {
 				attribute.String("key", "value"),
 			),
 			validate: func(t *testing.T, opts *options) {
-				if len(opts.resourceAttributes) != 1 {
-					t.Fatalf("expected 1 resource attribute, got %d", len(opts.resourceAttributes))
+				if opts.resourceAttributes == nil || len(*opts.resourceAttributes) != 1 {
+					t.Fatalf("expected 1 resource attribute, got %v", opts.resourceAttributes)
 				}
-				if opts.resourceAttributes[0].Key != "key" || opts.resourceAttributes[0].Value.AsString() != "value" {
-					t.Fatalf("unexpected resource attribute: %v", opts.resourceAttributes[0])
+				if (*opts.resourceAttributes)[0].Key != "key" || (*opts.resourceAttributes)[0].Value.AsString() != "value" {
+					t.Fatalf("unexpected resource attribute: %v", (*opts.resourceAttributes)[0])
 				}
 			},
 		},
@@ -209,8 +200,8 @@ func TestOptions(t *testing.T) {
 			name:   "WithResourceAttributes empty",
 			option: WithResourceAttributes(),
 			validate: func(t *testing.T, opts *options) {
-				if len(opts.resourceAttributes) != 0 {
-					t.Fatalf("expected no resource attributes, got %d", len(opts.resourceAttributes))
+				if opts.resourceAttributes != nil && len(*opts.resourceAttributes) != 0 {
+					t.Fatalf("expected no resource attributes, got %d", len(*opts.resourceAttributes))
 				}
 			},
 		},
@@ -244,11 +235,7 @@ func TestBuildResource_WithResourceAttributesAndEnv(t *testing.T) {
 	_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team=ops,region=us-east")
 
 	ctx := context.Background()
-	opts := &options{
-		serviceName:      itelemetry.ServiceName,
-		serviceVersion:   itelemetry.ServiceVersion,
-		serviceNamespace: itelemetry.ServiceNamespace,
-	}
+	opts := &options{}
 	WithServiceName("metric-option-service")(opts)
 	WithServiceNamespace("metric-ns")(opts)
 	WithServiceVersion("9.9.9")(opts)

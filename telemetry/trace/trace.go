@@ -90,17 +90,14 @@ type Option func(*options)
 
 // options holds the configuration options for tracer.
 type options struct {
-	tracesEndpoint      string
-	tracesEndpointURL   string
-	serviceName         string
-	serviceVersion      string
-	serviceNamespace    string
-	protocol            string            // Protocol to use (grpc or http)
-	headers             map[string]string // Headers to send with the request
-	serviceNameSet      bool
-	serviceVersionSet   bool
-	serviceNamespaceSet bool
-	resourceAttributes  []attribute.KeyValue
+	tracesEndpoint     string
+	tracesEndpointURL  string
+	serviceName        string
+	serviceVersion     string
+	serviceNamespace   string
+	protocol           string            // Protocol to use (grpc or http)
+	headers            map[string]string // Headers to send with the request
+	resourceAttributes *[]attribute.KeyValue
 }
 
 // WithEndpoint sets the traces endpoint(host and port) the Exporter will connect to.
@@ -150,30 +147,21 @@ func WithProtocol(protocol string) Option {
 // WithServiceName overrides the service.name resource attribute.
 func WithServiceName(serviceName string) Option {
 	return func(opts *options) {
-		if serviceName != "" {
-			opts.serviceName = serviceName
-			opts.serviceNameSet = true
-		}
+		opts.serviceName = serviceName
 	}
 }
 
 // WithServiceNamespace overrides the service.namespace resource attribute.
 func WithServiceNamespace(serviceNamespace string) Option {
 	return func(opts *options) {
-		if serviceNamespace != "" {
-			opts.serviceNamespace = serviceNamespace
-			opts.serviceNamespaceSet = true
-		}
+		opts.serviceNamespace = serviceNamespace
 	}
 }
 
 // WithServiceVersion overrides the service.version resource attribute.
 func WithServiceVersion(serviceVersion string) Option {
 	return func(opts *options) {
-		if serviceVersion != "" {
-			opts.serviceVersion = serviceVersion
-			opts.serviceVersionSet = true
-		}
+		opts.serviceVersion = serviceVersion
 	}
 }
 
@@ -183,7 +171,10 @@ func WithResourceAttributes(attrs ...attribute.KeyValue) Option {
 		if len(attrs) == 0 {
 			return
 		}
-		opts.resourceAttributes = append(opts.resourceAttributes, attrs...)
+		if opts.resourceAttributes == nil {
+			opts.resourceAttributes = &[]attribute.KeyValue{}
+		}
+		*opts.resourceAttributes = append(*opts.resourceAttributes, attrs...)
 	}
 }
 
@@ -195,6 +186,7 @@ func WithHeaders(headers map[string]string) Option {
 }
 
 func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
+	// Start with default values
 	resourceOpts := []resource.Option{
 		resource.WithAttributes(
 			semconv.ServiceNamespace(itelemetry.ServiceNamespace),
@@ -206,18 +198,19 @@ func buildResource(ctx context.Context, options *options) (*resource.Resource, e
 		resource.WithOS(),
 	}
 
-	if options.serviceNamespaceSet {
+	// User-provided options override environment variables
+	if options.serviceNamespace != "" && options.serviceNamespace != itelemetry.ServiceNamespace {
 		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceNamespace(options.serviceNamespace)))
 	}
-	if options.serviceNameSet {
+	if options.serviceName != "" && options.serviceName != itelemetry.ServiceName {
 		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceName(options.serviceName)))
 	}
-	if options.serviceVersionSet {
+	if options.serviceVersion != "" && options.serviceVersion != itelemetry.ServiceVersion {
 		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceVersion(options.serviceVersion)))
 	}
 
-	if len(options.resourceAttributes) > 0 {
-		resourceOpts = append(resourceOpts, resource.WithAttributes(options.resourceAttributes...))
+	if options.resourceAttributes != nil && len(*options.resourceAttributes) > 0 {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(*options.resourceAttributes...))
 	}
 
 	return resource.New(ctx, resourceOpts...)
