@@ -2,7 +2,7 @@ package tool
 
 import "context"
 
-// ToolFilter defines a filter function for tools based on their names.
+// FilterFunc defines a filter function for tools based on their names.
 type FilterFunc func(ctx context.Context, tool Tool) bool
 
 // FilterTools creates a new ToolSet that filters tools from the original ToolSet.
