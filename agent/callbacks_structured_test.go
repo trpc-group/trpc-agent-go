@@ -86,6 +86,38 @@ func TestCallbacksStructured_BeforeAgent(t *testing.T) {
 			wantCustomRsp: false,
 			wantErr:       false,
 		},
+		{
+			name: "multiple callbacks, first returns custom response",
+			callbacks: []BeforeAgentCallbackStructured{
+				func(ctx context.Context, args *BeforeAgentArgs) (
+					*BeforeAgentResult, error,
+				) {
+					return &BeforeAgentResult{
+						CustomResponse: &model.Response{},
+					}, nil
+				},
+				func(ctx context.Context, args *BeforeAgentArgs) (
+					*BeforeAgentResult, error,
+				) {
+					t.Error("second callback should not be called")
+					return nil, nil
+				},
+			},
+			wantCustomRsp: true,
+			wantErr:       false,
+		},
+		{
+			name: "callback returns result without custom response",
+			callbacks: []BeforeAgentCallbackStructured{
+				func(ctx context.Context, args *BeforeAgentArgs) (
+					*BeforeAgentResult, error,
+				) {
+					return &BeforeAgentResult{}, nil
+				},
+			},
+			wantCustomRsp: false,
+			wantErr:       false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -171,6 +203,38 @@ func TestCallbacksStructured_AfterAgent(t *testing.T) {
 						t.Error("expected error in args")
 					}
 					return nil, nil
+				},
+			},
+			wantCustomRsp: false,
+			wantErr:       false,
+		},
+		{
+			name: "multiple callbacks, first returns custom response",
+			callbacks: []AfterAgentCallbackStructured{
+				func(ctx context.Context, args *AfterAgentArgs) (
+					*AfterAgentResult, error,
+				) {
+					return &AfterAgentResult{
+						CustomResponse: &model.Response{},
+					}, nil
+				},
+				func(ctx context.Context, args *AfterAgentArgs) (
+					*AfterAgentResult, error,
+				) {
+					t.Error("second callback should not be called")
+					return nil, nil
+				},
+			},
+			wantCustomRsp: true,
+			wantErr:       false,
+		},
+		{
+			name: "callback returns result without custom response",
+			callbacks: []AfterAgentCallbackStructured{
+				func(ctx context.Context, args *AfterAgentArgs) (
+					*AfterAgentResult, error,
+				) {
+					return &AfterAgentResult{}, nil
 				},
 			},
 			wantCustomRsp: false,

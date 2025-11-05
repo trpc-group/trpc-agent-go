@@ -89,6 +89,32 @@ func TestCallbacksStructured_BeforeModel(t *testing.T) {
 			wantCustomRsp: true,
 			wantErr:       false,
 		},
+		{
+			name: "callback can modify request",
+			callbacks: []BeforeModelCallbackStructured{
+				func(ctx context.Context, args *BeforeModelArgs) (
+					*BeforeModelResult, error,
+				) {
+					args.Request.Messages = append(args.Request.Messages,
+						Message{Role: RoleUser, Content: "modified"})
+					return nil, nil
+				},
+			},
+			wantCustomRsp: false,
+			wantErr:       false,
+		},
+		{
+			name: "callback returns result without custom response",
+			callbacks: []BeforeModelCallbackStructured{
+				func(ctx context.Context, args *BeforeModelArgs) (
+					*BeforeModelResult, error,
+				) {
+					return &BeforeModelResult{}, nil
+				},
+			},
+			wantCustomRsp: false,
+			wantErr:       false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -174,6 +200,38 @@ func TestCallbacksStructured_AfterModel(t *testing.T) {
 						t.Error("expected error in args")
 					}
 					return nil, nil
+				},
+			},
+			wantCustomRsp: false,
+			wantErr:       false,
+		},
+		{
+			name: "multiple callbacks, first returns custom response",
+			callbacks: []AfterModelCallbackStructured{
+				func(ctx context.Context, args *AfterModelArgs) (
+					*AfterModelResult, error,
+				) {
+					return &AfterModelResult{
+						CustomResponse: &Response{},
+					}, nil
+				},
+				func(ctx context.Context, args *AfterModelArgs) (
+					*AfterModelResult, error,
+				) {
+					t.Error("second callback should not be called")
+					return nil, nil
+				},
+			},
+			wantCustomRsp: true,
+			wantErr:       false,
+		},
+		{
+			name: "callback returns result without custom response",
+			callbacks: []AfterModelCallbackStructured{
+				func(ctx context.Context, args *AfterModelArgs) (
+					*AfterModelResult, error,
+				) {
+					return &AfterModelResult{}, nil
 				},
 			},
 			wantCustomRsp: false,

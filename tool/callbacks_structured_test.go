@@ -85,6 +85,39 @@ func TestCallbacksStructured_BeforeTool(t *testing.T) {
 			wantCustomResult: false,
 			wantErr:          true,
 		},
+		{
+			name: "multiple callbacks, first returns custom result",
+			callbacks: []BeforeToolCallbackStructured{
+				func(ctx context.Context, args *BeforeToolArgs) (
+					*BeforeToolResult, error,
+				) {
+					return &BeforeToolResult{
+						CustomResult: "custom",
+					}, nil
+				},
+				func(ctx context.Context, args *BeforeToolArgs) (
+					*BeforeToolResult, error,
+				) {
+					t.Error("second callback should not be called")
+					return nil, nil
+				},
+			},
+			wantCustomResult: true,
+			wantErr:          false,
+		},
+		{
+			name: "callback returns result without custom result or modified args",
+			callbacks: []BeforeToolCallbackStructured{
+				func(ctx context.Context, args *BeforeToolArgs) (
+					*BeforeToolResult, error,
+				) {
+					return &BeforeToolResult{}, nil
+				},
+			},
+			wantCustomResult: false,
+			wantModifiedArgs: false,
+			wantErr:          false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -178,6 +211,38 @@ func TestCallbacksStructured_AfterTool(t *testing.T) {
 						t.Error("expected error in args")
 					}
 					return nil, nil
+				},
+			},
+			wantCustomResult: false,
+			wantErr:          false,
+		},
+		{
+			name: "multiple callbacks, first returns custom result",
+			callbacks: []AfterToolCallbackStructured{
+				func(ctx context.Context, args *AfterToolArgs) (
+					*AfterToolResult, error,
+				) {
+					return &AfterToolResult{
+						CustomResult: "custom",
+					}, nil
+				},
+				func(ctx context.Context, args *AfterToolArgs) (
+					*AfterToolResult, error,
+				) {
+					t.Error("second callback should not be called")
+					return nil, nil
+				},
+			},
+			wantCustomResult: true,
+			wantErr:          false,
+		},
+		{
+			name: "callback returns result without custom result",
+			callbacks: []AfterToolCallbackStructured{
+				func(ctx context.Context, args *AfterToolArgs) (
+					*AfterToolResult, error,
+				) {
+					return &AfterToolResult{}, nil
 				},
 			},
 			wantCustomResult: false,
