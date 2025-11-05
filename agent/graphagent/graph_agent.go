@@ -13,7 +13,6 @@ package graphagent
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -70,6 +69,26 @@ func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
 	}
 }
 
+// WithMessageTimelineFilterMode sets the message timeline filter mode.
+func WithMessageTimelineFilterMode(mode string) Option {
+	return func(opts *Options) {
+		if mode != processor.TimelineFilterCurrentInvocation && mode != processor.TimelineFilterCurrentRequest {
+			mode = processor.TimelineFilterAll
+		}
+		opts.messageTimelineFilterMode = mode
+	}
+}
+
+// WithMessageBranchFilterMode sets the message branch filter mode.
+func WithMessageBranchFilterMode(mode string) Option {
+	return func(opts *Options) {
+		if mode != processor.BranchFilterModeExact && mode != processor.BranchFilterModeAll {
+			mode = processor.BranchFilterModePrefix
+		}
+		opts.messageBranchFilterMode = mode
+	}
+}
+
 // Options contains configuration options for creating a GraphAgent.
 type Options struct {
 	// Description is a description of the agent.
@@ -84,6 +103,11 @@ type Options struct {
 	ChannelBufferSize int
 	// CheckpointSaver is the checkpoint saver for the executor.
 	CheckpointSaver graph.CheckpointSaver
+
+	// MessageTimelineFilterMode is the message timeline filter mode.
+	messageTimelineFilterMode string
+	// MessageBranchFilterMode is the message branch filter mode.
+	messageBranchFilterMode string
 }
 
 // GraphAgent is an agent that executes a graph.
@@ -96,12 +120,17 @@ type GraphAgent struct {
 	agentCallbacks    *agent.Callbacks
 	initialState      graph.State
 	channelBufferSize int
+	options           Options
 }
 
 // New creates a new GraphAgent with the given graph and options.
 func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	// set default channel buffer size.
-	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
+	var options Options = Options{
+		ChannelBufferSize:         defaultChannelBufferSize,
+		messageTimelineFilterMode: processor.TimelineFilterAll,
+		messageBranchFilterMode:   processor.BranchFilterModePrefix,
+	}
 
 	// Apply function options.
 	for _, opt := range opts {
@@ -131,6 +160,7 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		agentCallbacks:    options.AgentCallbacks,
 		initialState:      options.InitialState,
 		channelBufferSize: options.ChannelBufferSize,
+		options:           options,
 	}, nil
 }
 
@@ -190,49 +220,12 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	if invocation.Session != nil {
 		// Build a temporary request to reuse the processor logic.
 		req := &model.Request{}
-		// Default include mode is All for graphs unless overridden by runtime state.
-		// Docs note: If RuntimeState[CfgKeyIncludeContents] is not one of
-		// {none, filtered, all}, ignore it and fall back to the default (all)
-		// to avoid accidental context loss.
-		include := processor.IncludeContentFilterKeyPrefix
-		appendHistoryMessage := true
-		var includeKeyExists, appendHistoryKeyExists bool
 
-		if appendHistory, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyAppendHistoryMessage].(bool); ok {
-			appendHistoryKeyExists = true
-			appendHistoryMessage = appendHistory
-		}
-		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeFilterKeyMode].(string); ok && mode != "" {
-			includeKeyExists = true
-			switch strings.ToLower(mode) {
-			case processor.IncludeContentFilterKeyPrefix:
-				include = processor.IncludeContentFilterKeyPrefix
-			case processor.IncludeContentFilterKeyAll:
-				include = processor.IncludeContentFilterKeyAll
-			case processor.IncludeContentFilterKeyExact:
-				include = processor.IncludeContentFilterKeyExact
-			}
-		}
-		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok && mode != "" {
-			switch strings.ToLower(mode) {
-			case "none":
-				if !includeKeyExists {
-					include = processor.IncludeContentFilterKeyExact
-				}
-				if !appendHistoryKeyExists {
-					appendHistoryMessage = false
-				}
-			case "all":
-				if !includeKeyExists {
-					include = processor.IncludeContentFilterKeyAll
-				}
-			}
-		}
 		// Default processor: include (possibly overridden) + preserve same branch.
 		p := processor.NewContentRequestProcessor(
-			processor.WithIncludeContentFilterMode(include),
+			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
 			processor.WithPreserveSameBranch(true),
-			processor.WithAppendHistoryMessage(appendHistoryMessage),
+			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 		)
 		// We only need messages side effect; no output channel needed.
 		p.ProcessRequest(ctx, invocation, req, nil)

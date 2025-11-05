@@ -334,6 +334,26 @@ func WithEndInvocationAfterTransfer(end bool) Option {
 	}
 }
 
+// WithMessageTimelineFilterMode sets the message timeline filter mode.
+func WithMessageTimelineFilterMode(mode string) Option {
+	return func(opts *Options) {
+		if mode != processor.TimelineFilterCurrentInvocation && mode != processor.TimelineFilterCurrentRequest {
+			mode = processor.TimelineFilterAll
+		}
+		opts.messageTimelineFilterMode = mode
+	}
+}
+
+// WithMessageBranchFilterMode sets the message branch filter mode.
+func WithMessageBranchFilterMode(mode string) Option {
+	return func(opts *Options) {
+		if mode != processor.BranchFilterModeExact && mode != processor.BranchFilterModeAll {
+			mode = processor.BranchFilterModePrefix
+		}
+		opts.messageBranchFilterMode = mode
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -433,6 +453,9 @@ type Options struct {
 	//   - Configured with empty string: use built-in default message.
 	//   - Configured with non-empty: use the provided message.
 	DefaultTransferMessage *string
+
+	messageTimelineFilterMode string
+	messageBranchFilterMode   string
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -465,7 +488,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		EndInvocationAfterTransfer: true,
 		// Default to preserving same-branch lineage so assistant/tool roles
 		// from parent/child branches are retained for downstream agents.
-		PreserveSameBranch: true,
+		PreserveSameBranch:        true,
+		messageTimelineFilterMode: processor.TimelineFilterAll,
+		messageBranchFilterMode:   processor.BranchFilterModePrefix,
 	}
 
 	// Apply function options.
@@ -629,6 +654,8 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
+		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
+		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
