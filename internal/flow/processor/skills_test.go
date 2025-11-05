@@ -233,3 +233,16 @@ func TestSkillsRequestProcessor_BuildDocsText_EdgeCases(t *testing.T) {
 	sk := &skill.Skill{Docs: []skill.Doc{{Path: "X.md", Content: "x"}}}
 	require.Equal(t, "", p.buildDocsText(sk, []string{"Y.md"}))
 }
+
+func TestSkillsRequestProcessor_MergeIntoSystem_Edge(t *testing.T) {
+	p := NewSkillsRequestProcessor(&mockRepo{})
+	// nil request should be a no-op
+	p.mergeIntoSystem(nil, "content")
+
+	// empty content should not modify messages
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+	}}
+	p.mergeIntoSystem(req, "")
+	require.Equal(t, "sys", req.Messages[0].Content)
+}

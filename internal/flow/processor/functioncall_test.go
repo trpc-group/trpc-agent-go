@@ -1435,6 +1435,39 @@ func TestHandleFunctionCallsAndSendEvent_StopErrorEmitsErrorEvent(t *testing.T) 
 	}
 }
 
+func TestProcessResponse_StopError_SetsEndInvocation(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv-stop",
+	}
+	// Tool returns StopError so ProcessResponse should mark
+	// EndInvocation and return immediately.
+	errTool := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "err"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, agent.NewStopError("stop")
+		},
+	}
+	tools := map[string]tool.Tool{"err": errTool}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "err",
+				Arguments: []byte(`{}`),
+			},
+		}}},
+	}}}
+
+	ch := make(chan *event.Event, 2)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	require.True(t, inv.EndInvocation)
+}
+
 func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(true, nil)
 	ctx, cancel := context.WithCancel(context.Background())

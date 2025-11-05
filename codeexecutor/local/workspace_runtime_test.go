@@ -25,7 +25,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 )
 
-const permDenied = "permission denied"
+const (
+	permDenied        = "permission denied"
+	unsupportedLangJS = "unsupported language: javascript"
+)
 
 func TestRuntime_RunProgram_Basic(t *testing.T) {
 	rt := local.NewRuntime("")
@@ -290,6 +293,21 @@ func TestRuntime_ExecuteInline_Bash(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Contains(t, res.Stdout, "hi-bash")
+}
+
+func TestRuntime_ExecuteInline_InvalidLanguageAndValid(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	blocks := []codeexecutor.CodeBlock{
+		{Language: "javascript", Code: "console.log('x')"},
+		{Language: "bash", Code: "echo ok"},
+	}
+	res, err := rt.ExecuteInline(
+		ctx, "rt-inline-mixed", blocks, 2*time.Second,
+	)
+	require.NoError(t, err)
+	require.Contains(t, res.Stderr, unsupportedLangJS)
+	require.Contains(t, res.Stdout, "ok")
 }
 
 func TestRuntime_Collect_EmptyPatterns(t *testing.T) {

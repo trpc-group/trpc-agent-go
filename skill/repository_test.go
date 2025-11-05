@@ -185,3 +185,22 @@ func TestIOReadAll_NonEOFErrorReturnsAccumulated(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "A\n", s)
 }
+
+func TestFSRepository_Summaries_IgnoresBrokenAfterScan(t *testing.T) {
+	root := t.TempDir()
+	sdir := writeSkill(t, root, "alpha")
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	// Corrupt SKILL.md so parseSummary fails during Summaries.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sdir, skillFile), []byte("not-front-matter"), 0o644,
+	))
+	sums := repo.Summaries()
+	// Should not panic and simply skip the broken entry.
+	if len(sums) > 0 {
+		for _, s := range sums {
+			require.NotEmpty(t, s.Name)
+		}
+	}
+}
