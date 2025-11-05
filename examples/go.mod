@@ -4,6 +4,7 @@ go 1.21.0
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter => ../codeexecutor/jupyter
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../memory/mysql
@@ -23,10 +24,10 @@ require (
 	go.opentelemetry.io/otel/trace v1.29.0
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v0.4.0
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.2.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.5
 )
 
@@ -46,6 +47,7 @@ require (
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.3 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
