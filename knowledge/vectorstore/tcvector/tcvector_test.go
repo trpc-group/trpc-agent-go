@@ -313,6 +313,83 @@ func (m *mockClient) Search(ctx context.Context, db, collection string, vectors 
 	return &tcvectordb.SearchDocumentResult{Documents: results}, nil
 }
 
+// SearchByText simulates text-based search with remote embedding
+// For testing purposes, we generate a simple vector from the text hash
+func (m *mockClient) SearchByText(ctx context.Context, db, collection string, textMap map[string][]string, params ...*tcvectordb.SearchDocumentParams) (*tcvectordb.SearchDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.searchCalls++
+
+	if m.searchError != nil {
+		return nil, m.searchError
+	}
+
+	// For testing, generate a simple vector from text
+	// In real implementation, this would be done by the server
+	var queryVectors [][]float32
+	for _, texts := range textMap {
+		for _, text := range texts {
+			// Simple hash-based vector generation for testing
+			vector := make([]float32, 3) // Assuming dimension 3 for tests
+			for i, c := range text {
+				vector[i%3] += float32(c) / 1000.0
+			}
+			queryVectors = append(queryVectors, vector)
+		}
+	}
+
+	// Reuse the Search logic
+	var results [][]tcvectordb.Document
+	for _, queryVector := range queryVectors {
+		var batch []tcvectordb.Document
+
+		// Calculate similarity scores
+		type docWithScore struct {
+			doc   tcvectordb.Document
+			score float32
+		}
+		var scored []docWithScore
+
+		for _, doc := range m.documents {
+			score := cosineSimilarity(queryVector, doc.Vector)
+			docCopy := doc
+			docCopy.Score = score
+			scored = append(scored, docWithScore{doc: docCopy, score: score})
+		}
+
+		// Sort by score descending
+		sort.Slice(scored, func(i, j int) bool {
+			return scored[i].score > scored[j].score
+		})
+
+		// Apply limit if specified
+		limit := len(scored)
+		if len(params) > 0 && params[0] != nil && params[0].Limit > 0 {
+			limit = int(params[0].Limit)
+			if limit > len(scored) {
+				limit = len(scored)
+			}
+		}
+
+		// Apply score threshold if specified
+		minScore := float32(0.0)
+		if len(params) > 0 && params[0] != nil && params[0].Radius != nil {
+			minScore = *params[0].Radius
+		}
+
+		for i := 0; i < limit; i++ {
+			if scored[i].score >= minScore {
+				batch = append(batch, scored[i].doc)
+			}
+		}
+
+		results = append(results, batch)
+	}
+
+	return &tcvectordb.SearchDocumentResult{Documents: results}, nil
+}
+
 // cosineSimilarity calculates cosine similarity between two vectors
 func cosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) {

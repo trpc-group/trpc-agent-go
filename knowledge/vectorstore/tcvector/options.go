@@ -34,6 +34,10 @@ type options struct {
 	enableTSVector bool
 	instanceName   string
 
+	// Remote embedding configuration.
+	// When embeddingModel is set, remote embedding is automatically enabled.
+	embeddingModel string // Embedding model name for remote computation
+
 	// Hybrid search scoring weights.
 	vectorWeight float64 // Default: Vector similarity weight 70%
 	textWeight   float64 // Default: Text relevance weight 30%
@@ -74,6 +78,7 @@ var defaultOptions = options{
 	replicas:              0,
 	sharding:              1,
 	enableTSVector:        true,
+	embeddingModel:        "",
 	vectorWeight:          0.7,
 	textWeight:            0.3,
 	language:              "en",
@@ -293,5 +298,16 @@ func WithUpdatedAtField(field string) Option {
 func WithSparseVectorField(field string) Option {
 	return func(o *options) {
 		o.sparseVectorFieldName = field
+	}
+}
+
+// WithRemoteEmbeddingModel sets the embedding model name for remote computation.
+// When set, remote embedding is automatically enabled, and text queries will be sent
+// directly to tcvectordb for embedding computation.
+// Common models: bge-base-zh, bge-large-zh, m3e-base, text2vec-large-chinese, etc.
+// Set to empty string to disable remote embedding.
+func WithRemoteEmbeddingModel(model string) Option {
+	return func(o *options) {
+		o.embeddingModel = model
 	}
 }

@@ -121,6 +121,12 @@ func New(opts ...Option) (*VectorStore, error) {
 	}, nil
 }
 
+// isRemoteEmbeddingEnabled checks if remote embedding is enabled.
+// Remote embedding is enabled when embeddingModel is set.
+func (vs *VectorStore) isRemoteEmbeddingEnabled() bool {
+	return vs.option.embeddingModel != ""
+}
+
 func initVectorDB(client storage.ClientInterface, options options) error {
 	_, err := client.CreateDatabaseIfNotExists(context.Background(), options.database)
 	if err != nil {
@@ -184,6 +190,19 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 		})
 	}
 
+	// Prepare collection creation parameters
+	var createParams *tcvectordb.CreateCollectionParams
+	if options.embeddingModel != "" {
+		// Configure remote embedding when model is specified
+		createParams = &tcvectordb.CreateCollectionParams{
+			Embedding: &tcvectordb.Embedding{
+				Field:       options.contentFieldName,
+				VectorField: options.embeddingFieldName,
+				ModelName:   options.embeddingModel,
+			},
+		}
+	}
+
 	if _, err := db.CreateCollectionIfNotExists(
 		context.Background(),
 		options.collection,
@@ -191,7 +210,7 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 		options.replicas,
 		"trpc-agent-go documents storage collection",
 		indexes,
-		nil,
+		createParams,
 	); err != nil {
 		return fmt.Errorf("tcvectordb create collection: %w", err)
 	}
@@ -266,10 +285,11 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	if doc.ID == "" {
 		return errDocumentIDRequired
 	}
-	if len(embedding) != int(vs.option.indexDimension) {
+
+	if !vs.isRemoteEmbeddingEnabled() && len(embedding) != int(vs.option.indexDimension) {
 		return fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(embedding))
 	}
-	embedding32 := covertToVector32(embedding)
+
 	now := time.Now().Unix()
 	fields := map[string]tcvectordb.Field{
 		vs.option.nameFieldName:      {Val: doc.Name},
@@ -288,8 +308,12 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 
 	tcDoc := tcvectordb.Document{
 		Id:     doc.ID,
-		Vector: embedding32,
 		Fields: fields,
+	}
+
+	// Only set vector when not using remote embedding
+	if !vs.isRemoteEmbeddingEnabled() {
+		tcDoc.Vector = covertToVector32(embedding)
 	}
 
 	if vs.option.enableTSVector {
@@ -349,8 +373,13 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	if doc.ID == "" {
 		return errDocumentIDRequired
 	}
-	if len(embedding) != int(vs.option.indexDimension) {
-		return fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(embedding))
+
+	// When remote embedding is enabled, embedding parameter can be empty
+	// The server will compute the embedding from the content field
+	if !vs.isRemoteEmbeddingEnabled() {
+		if len(embedding) != int(vs.option.indexDimension) {
+			return fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(embedding))
+		}
 	}
 
 	updateFields := map[string]tcvectordb.Field{}
@@ -383,7 +412,12 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	updateParams := tcvectordb.UpdateDocumentParams{}
 	updateParams.QueryIds = []string{doc.ID}
 	updateParams.UpdateFields = updateFields
-	updateParams.UpdateVector = covertToVector32(embedding)
+
+	// Only set vector when not using remote embedding
+	if !vs.isRemoteEmbeddingEnabled() {
+		updateParams.UpdateVector = covertToVector32(embedding)
+	}
+
 	if len(sparseVector) > 0 {
 		updateParams.UpdateSparseVec = sparseVector
 	}
@@ -447,8 +481,23 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	}
 }
 
-// vectorSearch performs pure vector similarity search using dense embeddings
+// searchByVector performs pure vector similarity search using dense embeddings.
+// It routes to either local embedding search or remote embedding search based on configuration.
 func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	hasVector := len(query.Vector) > 0
+	hasText := query.Query != ""
+
+	// Route to remote embedding search if enabled and only text is provided
+	if vs.isRemoteEmbeddingEnabled() && hasText && !hasVector {
+		return vs.searchWithRemoteEmbedding(ctx, query)
+	}
+
+	// Otherwise use local embedding search
+	return vs.searchWithLocalEmbedding(ctx, query)
+}
+
+// searchWithLocalEmbedding performs vector search using pre-computed local embeddings.
+func (vs *VectorStore) searchWithLocalEmbedding(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
 		return nil, errors.New("tcvectordb: searching with a nil or empty vector is not supported")
 	}
@@ -488,10 +537,56 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	return vs.convertSearchResult(vectorstore.SearchModeVector, searchResult)
 }
 
+// searchWithRemoteEmbedding performs vector search using remote embedding computation.
+// The text will be sent to tcvectordb server for embedding.
+func (vs *VectorStore) searchWithRemoteEmbedding(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	if query.Query == "" {
+		return nil, errors.New("tcvectordb: query text is required for remote embedding search")
+	}
+
+	cond, err := vs.getCondFromQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+
+	queryParams := tcvectordb.SearchDocumentParams{
+		Filter:         cond,
+		Limit:          int64(vs.getMaxResult(query.Limit)),
+		RetrieveVector: true,
+	}
+
+	// Set minimum score threshold if specified.
+	if query.MinScore > 0 {
+		radius := float32(query.MinScore)
+		queryParams.Radius = &radius
+	}
+
+	// Use SearchByText API which sends text to server for embedding
+	textMap := map[string][]string{
+		vs.option.contentFieldName: {query.Query},
+	}
+
+	searchResult, err := vs.client.SearchByText(
+		ctx,
+		vs.option.database,
+		vs.option.collection,
+		textMap,
+		&queryParams,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tcvectordb remote embedding search: %w", err)
+	}
+
+	return vs.convertSearchResult(vectorstore.SearchModeVector, searchResult)
+}
+
 // keywordSearch performs pure keyword search using BM25 sparse vectors.
 func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query.Query == "" {
 		return nil, errors.New("tcvectordb keyword is required for keyword search")
+	}
+	if !vs.option.enableTSVector {
+		return nil, errors.New("tcvectordb: keyword search requires enableTSVector to be enabled")
 	}
 	cond, err := vs.getCondFromQuery(query.Filter)
 	if err != nil {
@@ -526,10 +621,28 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	return vs.convertSearchResult(vectorstore.SearchModeKeyword, searchResult)
 }
 
-// hybridSearch performs hybrid search combining dense vector similarity and BM25 keyword matching.
+// searchByHybrid performs hybrid search combining dense vector similarity and BM25 keyword matching.
+// It routes to either local embedding hybrid search or remote embedding hybrid search based on configuration.
 func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	hasVector := len(query.Vector) > 0
+	hasText := query.Query != ""
+
+	// Route to remote embedding hybrid search if enabled and only text is provided
+	if vs.isRemoteEmbeddingEnabled() && hasText && !hasVector {
+		return vs.hybridSearchWithRemoteEmbedding(ctx, query)
+	}
+
+	// Otherwise use local embedding hybrid search
+	return vs.hybridSearchWithLocalEmbedding(ctx, query)
+}
+
+// hybridSearchWithLocalEmbedding performs hybrid search using pre-computed local embeddings.
+func (vs *VectorStore) hybridSearchWithLocalEmbedding(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
 		return nil, errors.New("tcvectordb vector is required for hybrid search")
+	}
+	if !vs.option.enableTSVector {
+		return nil, errors.New("tcvectordb: hybrid search requires enableTSVector to be enabled")
 	}
 
 	vectorWeight := vs.option.vectorWeight
@@ -550,7 +663,6 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
 	}
 
-	vector32 := covertToVector32(query.Vector)
 	limit := vs.getMaxResult(query.Limit)
 	queryParams := tcvectordb.HybridSearchDocumentParams{
 		Limit:          &limit,
@@ -558,7 +670,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		AnnParams: []*tcvectordb.AnnParam{
 			{
 				FieldName: vs.option.embeddingFieldName,
-				Data:      vector32,
+				Data:      covertToVector32(query.Vector),
 			},
 		},
 		Match: []*tcvectordb.MatchOption{
@@ -583,6 +695,68 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	)
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb hybrid search: %w", err)
+	}
+
+	return vs.convertSearchResult(vectorstore.SearchModeHybrid, searchResult)
+}
+
+// hybridSearchWithRemoteEmbedding performs hybrid search using remote embedding for dense vector
+// and local BM25 encoding for sparse vector.
+func (vs *VectorStore) hybridSearchWithRemoteEmbedding(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	if query.Query == "" {
+		return nil, errors.New("tcvectordb: query text is required for hybrid search with remote embedding")
+	}
+	if !vs.option.enableTSVector {
+		return nil, errors.New("tcvectordb: hybrid search with remote embedding requires enableTSVector to be enabled for BM25 sparse vector encoding")
+	}
+
+	vectorWeight := vs.option.vectorWeight
+	textWeight := vs.option.textWeight
+
+	cond, err := vs.getCondFromQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+
+	// Encode the query text using BM25 for sparse vector.
+	querySparseVector, err := vs.sparseEncoder.EncodeQuery(query.Query)
+	if err != nil {
+		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
+	}
+
+	limit := vs.getMaxResult(query.Limit)
+	queryParams := tcvectordb.HybridSearchDocumentParams{
+		Limit:          &limit,
+		RetrieveVector: true,
+		AnnParams: []*tcvectordb.AnnParam{
+			{
+				FieldName: vs.option.contentFieldName,
+				Data:      query.Query, // Send text for remote embedding
+			},
+		},
+		Match: []*tcvectordb.MatchOption{
+			{
+				FieldName: vs.option.sparseVectorFieldName,
+				Data:      querySparseVector,
+			},
+		},
+		Filter: cond,
+		// Use weighted rerank
+		Rerank: &tcvectordb.RerankOption{
+			Method:    tcvectordb.RerankWeighted,
+			FieldList: []string{vs.option.embeddingFieldName, vs.option.sparseVectorFieldName},
+			Weight:    []float32{float32(vectorWeight), float32(textWeight)},
+		},
+	}
+
+	searchResult, err := vs.client.HybridSearch(
+		ctx,
+		vs.option.database,
+		vs.option.collection,
+		queryParams,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tcvectordb hybrid search with remote embedding: %w", err)
 	}
 
 	return vs.convertSearchResult(vectorstore.SearchModeHybrid, searchResult)
@@ -943,4 +1117,15 @@ func (vs *VectorStore) docBuilder(tcDoc tcvectordb.Document) (*document.Document
 		embedding[i] = float64(v)
 	}
 	return doc, embedding, nil
+}
+
+// getFilterFieldName returns the appropriate field name for filtering.
+// Fields in filterFields use dedicated index, others use JSON index path.
+func (vs *VectorStore) getFilterFieldName(field string) string {
+	for _, filterField := range vs.option.filterFields {
+		if filterField == field {
+			return field
+		}
+	}
+	return fmt.Sprintf("%s.%s", vs.option.metadataFieldName, field)
 }

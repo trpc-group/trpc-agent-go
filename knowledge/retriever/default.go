@@ -100,6 +100,7 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, er
 
 	// Step 3: Search vector store.
 	searchResults, err := dr.vectorStore.Search(ctx, &vectorstore.SearchQuery{
+		Query:      finalQuery,
 		Vector:     embedding,
 		Limit:      q.Limit,
 		MinScore:   q.MinScore,
