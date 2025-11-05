@@ -158,15 +158,15 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 	}
 }
 
-// WithOpenAI appends raw OpenAI options.
-func WithOpenAI(opt ...openai.Option) Option {
+// WithOpenAIOption appends raw OpenAI options.
+func WithOpenAIOption(opt ...openai.Option) Option {
 	return func(o *Options) {
 		o.OpenAIOption = append(o.OpenAIOption, opt...)
 	}
 }
 
-// WithAnthropic appends raw Anthropic options.
-func WithAnthropic(opt ...anthropic.Option) Option {
+// WithAnthropicOption appends raw Anthropic options.
+func WithAnthropicOption(opt ...anthropic.Option) Option {
 	return func(o *Options) {
 		o.AnthropicOption = append(o.AnthropicOption, opt...)
 	}
