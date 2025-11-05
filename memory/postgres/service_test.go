@@ -11,14 +11,18 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -106,14 +110,15 @@ func TestServiceOpts_WithTableName(t *testing.T) {
 	assert.Equal(t, tableName, opts.tableName)
 }
 
-func TestServiceOpts_WithAutoCreateTable(t *testing.T) {
+func TestServiceOpts_WithTableName_Invalid(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic for invalid table name")
+		assert.Contains(t, fmt.Sprintf("%v", r), "invalid table name")
+	}()
+
 	opts := ServiceOpts{}
-
-	WithAutoCreateTable(true)(&opts)
-	assert.True(t, opts.autoCreateTable)
-
-	WithAutoCreateTable(false)(&opts)
-	assert.False(t, opts.autoCreateTable)
+	WithTableName("invalid-table-name")(&opts)
 }
 
 func TestServiceOpts_WithCustomTool(t *testing.T) {
@@ -269,7 +274,6 @@ func newTestService(t *testing.T) (*Service, func()) {
 	connString, cleanup := setupTestPostgres(t)
 	svc, err := NewService(
 		WithPostgresConnString(connString),
-		WithAutoCreateTable(true),
 	)
 	require.NoError(t, err)
 	return svc, func() {
@@ -397,7 +401,6 @@ func TestService_MemoryLimit(t *testing.T) {
 	svc, err := NewService(
 		WithPostgresConnString(connString),
 		WithMemoryLimit(1),
-		WithAutoCreateTable(true),
 	)
 	require.NoError(t, err)
 	defer svc.Close()
@@ -587,7 +590,6 @@ func TestService_AddMemory_LimitError(t *testing.T) {
 	svc, err := NewService(
 		WithPostgresConnString(connString),
 		WithMemoryLimit(2),
-		WithAutoCreateTable(true),
 	)
 	require.NoError(t, err)
 	defer svc.Close()
@@ -628,7 +630,6 @@ func TestService_Tools_DisabledTools(t *testing.T) {
 	svc, err := NewService(
 		WithPostgresConnString(connString),
 		WithToolEnabled(memory.SearchToolName, false),
-		WithAutoCreateTable(true),
 	)
 	require.NoError(t, err)
 	defer svc.Close()
@@ -641,4 +642,591 @@ func TestService_Tools_DisabledTools(t *testing.T) {
 			assert.NotEqual(t, memory.SearchToolName, decl.Name)
 		}
 	}
+}
+
+// --- Unit tests with sqlmock ---
+
+func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	return db, mock
+}
+
+// testClient wraps sql.DB to implement storage.Client interface
+type testClient struct {
+	db *sql.DB
+}
+
+func (c *testClient) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return c.db.ExecContext(ctx, query, args...)
+}
+
+func (c *testClient) Query(ctx context.Context, handler storage.HandlerFunc, query string, args ...any) error {
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if err := handler(rows); err != nil {
+		return err
+	}
+	return rows.Err()
+}
+
+func (c *testClient) Transaction(ctx context.Context, fn storage.TxFunc) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+func (c *testClient) Close() error {
+	return c.db.Close()
+}
+
+func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...ServiceOpt) *Service {
+	originalBuilder := storage.GetClientBuilder()
+
+	// Create a test client that wraps sql.DB
+	client := &testClient{db: db}
+
+	// Set up builder to return our test client
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	// Mock table creation - initTable executes all CREATE statements in one ExecContext call
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	svc, err := NewService(opts...)
+	require.NoError(t, err)
+	return svc
+}
+
+func TestServiceOpts_WithSoftDelete(t *testing.T) {
+	opts := ServiceOpts{}
+
+	WithSoftDelete(true)(&opts)
+	assert.True(t, opts.softDelete)
+
+	WithSoftDelete(false)(&opts)
+	assert.False(t, opts.softDelete)
+}
+
+func TestValidateTableName_Empty(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic for empty table name")
+		assert.Contains(t, fmt.Sprintf("%v", r), "table name cannot be empty")
+	}()
+
+	opts := ServiceOpts{}
+	WithTableName("")(&opts)
+}
+
+func TestValidateTableName_TooLong(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic for too long table name")
+		assert.Contains(t, fmt.Sprintf("%v", r), "table name too long")
+	}()
+
+	opts := ServiceOpts{}
+	longName := string(make([]byte, 64))
+	WithTableName(longName)(&opts)
+}
+
+func TestNewService_WithDSN(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// initTable executes all CREATE statements in one ExecContext call
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	service, err := NewService(WithPostgresConnString("postgres://localhost:5432/testdb"))
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	service.Close()
+}
+
+func TestNewService_InitTableError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnError(fmt.Errorf("table creation failed"))
+
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic for table creation failure")
+		assert.Contains(t, fmt.Sprintf("%v", r), "failed to initialize table")
+	}()
+
+	NewService(WithPostgresConnString("postgres://localhost:5432/testdb"))
+}
+
+func TestService_AddMemory_Success(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_WithLimit(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(1))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_LimitExceeded(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(1))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+
+	err := svc.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "memory limit exceeded")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_WithSoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithSoftDelete(true), WithMemoryLimit(1))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectQuery("SELECT COUNT.*AND deleted_at IS NULL").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_Success(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	entry := &memory.Entry{
+		ID:      memoryKey.MemoryID,
+		AppName: memoryKey.AppName,
+		UserID:  memoryKey.UserID,
+		Memory:  &memory.Memory{Memory: "old content", Topics: []string{"old"}},
+	}
+	entryData, _ := json.Marshal(entry)
+
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryData))
+	mock.ExpectExec("UPDATE.*SET memory_data").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.UpdateMemory(ctx, memoryKey, "new content", []string{"new"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_NotFound(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	mock.ExpectQuery("SELECT memory_data").WillReturnError(sql.ErrNoRows)
+
+	err := svc.UpdateMemory(ctx, memoryKey, "new content", []string{"new"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_WithSoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithSoftDelete(true), WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	entry := &memory.Entry{
+		ID:      memoryKey.MemoryID,
+		AppName: memoryKey.AppName,
+		UserID:  memoryKey.UserID,
+		Memory:  &memory.Memory{Memory: "old content", Topics: []string{"old"}},
+	}
+	entryData, _ := json.Marshal(entry)
+
+	mock.ExpectQuery("SELECT memory_data.*AND deleted_at IS NULL").WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryData))
+	mock.ExpectExec("UPDATE.*AND deleted_at IS NULL").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.UpdateMemory(ctx, memoryKey, "new content", []string{"new"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_DeleteMemory_HardDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithSoftDelete(false), WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.DeleteMemory(ctx, memoryKey)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_DeleteMemory_SoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithSoftDelete(true), WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	mock.ExpectExec("UPDATE.*SET deleted_at.*AND deleted_at IS NULL").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.DeleteMemory(ctx, memoryKey)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ClearMemories_HardDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithSoftDelete(false), WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 2))
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ClearMemories_SoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithSoftDelete(true), WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectExec("UPDATE.*SET deleted_at.*AND deleted_at IS NULL").WillReturnResult(sqlmock.NewResult(0, 2))
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ReadMemories_Success(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	entry1 := &memory.Entry{
+		ID:        "mem-1",
+		AppName:   userKey.AppName,
+		UserID:    userKey.UserID,
+		Memory:    &memory.Memory{Memory: "content 1"},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	entry2 := &memory.Entry{
+		ID:        "mem-2",
+		AppName:   userKey.AppName,
+		UserID:    userKey.UserID,
+		Memory:    &memory.Memory{Memory: "content 2"},
+		CreatedAt: time.Now().Add(time.Second),
+		UpdatedAt: time.Now().Add(time.Second),
+	}
+	entry1Data, _ := json.Marshal(entry1)
+	entry2Data, _ := json.Marshal(entry2)
+
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(entry2Data).
+			AddRow(entry1Data),
+	)
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ReadMemories_WithLimit(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	entry := &memory.Entry{
+		ID:        "mem-1",
+		AppName:   userKey.AppName,
+		UserID:    userKey.UserID,
+		Memory:    &memory.Memory{Memory: "content 1"},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	entryData, _ := json.Marshal(entry)
+
+	mock.ExpectQuery("SELECT memory_data.*LIMIT 1").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}).AddRow(entryData),
+	)
+
+	entries, err := svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ReadMemories_WithSoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithSoftDelete(true), WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectQuery("SELECT memory_data.*AND deleted_at IS NULL").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}),
+	)
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 0)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_Success(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	entry := &memory.Entry{
+		ID:        "mem-1",
+		AppName:   userKey.AppName,
+		UserID:    userKey.UserID,
+		Memory:    &memory.Memory{Memory: "coffee brewing tips", Topics: []string{"hobby"}},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	entryData, _ := json.Marshal(entry)
+
+	mock.ExpectQuery("SELECT memory_data").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}).AddRow(entryData),
+	)
+
+	results, err := svc.SearchMemories(ctx, userKey, "coffee")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_WithSoftDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithSoftDelete(true), WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	mock.ExpectQuery("SELECT memory_data.*AND deleted_at IS NULL").WillReturnRows(
+		sqlmock.NewRows([]string{"memory_data"}),
+	)
+
+	results, err := svc.SearchMemories(ctx, userKey, "coffee")
+	require.NoError(t, err)
+	require.Len(t, results, 0)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_Tools(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	tools := svc.Tools()
+	require.NotEmpty(t, tools)
+
+	toolNames := make(map[string]bool)
+	for _, tl := range tools {
+		if decl := tl.Declaration(); decl != nil {
+			toolNames[decl.Name] = true
+		}
+	}
+
+	assert.True(t, toolNames[memory.AddToolName])
+	assert.True(t, toolNames[memory.UpdateToolName])
+	assert.True(t, toolNames[memory.SearchToolName])
+	assert.True(t, toolNames[memory.LoadToolName])
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_Close(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	mock.ExpectClose()
+
+	err := svc.Close()
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_DeleteMemory_InvalidKey(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memoryKey := memory.Key{AppName: "", UserID: "u1", MemoryID: "mem-123"}
+
+	err := svc.DeleteMemory(ctx, memoryKey)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ClearMemories_InvalidKey(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "", UserID: "u1"}
+
+	err := svc.ClearMemories(ctx, userKey)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ReadMemories_InvalidKey(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "", UserID: "u1"}
+
+	_, err := svc.ReadMemories(ctx, userKey, 10)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_InvalidKey(t *testing.T) {
+	db, mock := setupMockDB(t)
+	svc := setupMockService(t, db, mock, WithMemoryLimit(0))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "", UserID: "u1"}
+
+	_, err := svc.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }

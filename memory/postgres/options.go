@@ -10,17 +10,21 @@
 package postgres
 
 import (
+	"errors"
+	"fmt"
+	"regexp"
+
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
 // ServiceOpts is the options for the postgres memory service.
 type ServiceOpts struct {
-	connString      string
-	instanceName    string
-	tableName       string
-	memoryLimit     int
-	autoCreateTable bool
+	connString   string
+	instanceName string
+	tableName    string
+	memoryLimit  int
+	softDelete   bool
 
 	// Tool related settings.
 	toolCreators map[string]memory.ToolCreator
@@ -51,17 +55,22 @@ func WithPostgresInstance(instanceName string) ServiceOpt {
 // Default is "memories".
 // Table name must start with a letter or underscore and contain only alphanumeric characters and underscores.
 // Maximum length is 63 characters (PostgreSQL limit).
+// Panics if the table name is invalid.
 func WithTableName(tableName string) ServiceOpt {
 	return func(opts *ServiceOpts) {
+		if err := validateTableName(tableName); err != nil {
+			panic(fmt.Sprintf("invalid table name: %v", err))
+		}
 		opts.tableName = tableName
 	}
 }
 
-// WithAutoCreateTable enables automatic table creation.
-// If enabled, the service will create the table if it doesn't exist.
-func WithAutoCreateTable(autoCreate bool) ServiceOpt {
+// WithSoftDelete enables or disables soft delete behavior.
+// When enabled, delete operations set deleted_at and queries filter deleted rows.
+// Default is disabled (hard delete).
+func WithSoftDelete(enabled bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
-		opts.autoCreateTable = autoCreate
+		opts.softDelete = enabled
 	}
 }
 
@@ -102,4 +111,28 @@ func WithExtraOptions(extraOptions ...any) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extraOptions = append(opts.extraOptions, extraOptions...)
 	}
+}
+
+// tableNamePattern is the regex pattern for validating table names.
+// Only allows alphanumeric characters and underscores, must start with a letter or underscore.
+var tableNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// validateTableName validates the table name to prevent SQL injection.
+// Table name must:
+// - Start with a letter or underscore.
+// - Contain only alphanumeric characters and underscores.
+// - Not be empty.
+// - Not exceed 63 characters (PostgreSQL limit).
+func validateTableName(tableName string) error {
+	if tableName == "" {
+		return errors.New("table name cannot be empty")
+	}
+	const maxTableNameLength = 63
+	if len(tableName) > maxTableNameLength {
+		return fmt.Errorf("table name too long: %d characters (max %d)", len(tableName), maxTableNameLength)
+	}
+	if !tableNamePattern.MatchString(tableName) {
+		return fmt.Errorf("invalid table name: %s (must start with letter/underscore and contain only alphanumeric characters and underscores)", tableName)
+	}
+	return nil
 }

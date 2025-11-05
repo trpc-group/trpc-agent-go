@@ -15,9 +15,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -29,10 +27,6 @@ import (
 )
 
 var _ memory.Service = (*Service)(nil)
-
-// tableNamePattern is the regex pattern for validating table names.
-// Only allows alphanumeric characters and underscores, must start with a letter or underscore.
-var tableNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // Service is the postgres memory service.
 // Storage structure:
@@ -64,11 +58,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 	for _, option := range options {
 		option(&opts)
-	}
-
-	// Validate table name to prevent SQL injection.
-	if err := validateTableName(opts.tableName); err != nil {
-		return nil, err
 	}
 
 	builder := storage.GetClientBuilder()
@@ -105,11 +94,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		cachedTools: make(map[string]tool.Tool),
 	}
 
-	// Initialize table if auto-create is enabled.
-	if opts.autoCreateTable {
-		if err := s.initTable(context.Background()); err != nil {
-			return nil, fmt.Errorf("init table failed: %w", err)
-		}
+	// Always initialize table.
+	if err := s.initTable(context.Background()); err != nil {
+		panic(fmt.Sprintf("failed to initialize table: %v", err))
 	}
 
 	return s, nil
@@ -117,7 +104,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 // initTable creates the memories table if it doesn't exist.
 func (s *Service) initTable(ctx context.Context) error {
-	// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+	// Table name is validated in WithTableName.
 	// #nosec G201
 	query := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
@@ -125,12 +112,14 @@ func (s *Service) initTable(ctx context.Context) error {
 			app_name TEXT NOT NULL,
 			user_id TEXT NOT NULL,
 			memory_data JSONB NOT NULL,
-			created_at TIMESTAMP NOT NULL,
-			updated_at TIMESTAMP NOT NULL
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			deleted_at TIMESTAMP NULL DEFAULT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_%s_app_user ON %s(app_name, user_id);
 		CREATE INDEX IF NOT EXISTS idx_%s_updated_at ON %s(updated_at DESC);
-	`, s.tableName, s.tableName, s.tableName, s.tableName, s.tableName)
+		CREATE INDEX IF NOT EXISTS idx_%s_deleted_at ON %s(deleted_at);
+	`, s.tableName, s.tableName, s.tableName, s.tableName, s.tableName, s.tableName, s.tableName)
 
 	_, err := s.db.ExecContext(ctx, query)
 	return err
@@ -144,9 +133,12 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 
 	// Enforce memory limit.
 	if s.opts.memoryLimit > 0 {
-		// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+		// Table name is validated in WithTableName.
 		// #nosec G201
 		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = $1 AND user_id = $2", s.tableName)
+		if s.opts.softDelete {
+			countQuery += " AND deleted_at IS NULL"
+		}
 		var count int
 		err := s.db.Query(ctx, func(rows *sql.Rows) error {
 			if rows.Next() {
@@ -183,7 +175,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return fmt.Errorf("marshal memory entry failed: %w", err)
 	}
 
-	// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+	// Table name is validated in WithTableName.
 	// #nosec G201
 	insertQuery := fmt.Sprintf(
 		"INSERT INTO %s (memory_id, app_name, user_id, memory_data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -204,12 +196,15 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	}
 
 	// Get existing entry.
-	// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+	// Table name is validated in WithTableName.
 	// #nosec G201
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
 		s.tableName,
 	)
+	if s.opts.softDelete {
+		selectQuery += " AND deleted_at IS NULL"
+	}
 	var memoryData []byte
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		if rows.Next() {
@@ -240,12 +235,15 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		return fmt.Errorf("marshal updated memory entry failed: %w", err)
 	}
 
-	// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+	// Table name is validated in WithTableName.
 	// #nosec G201
 	updateQuery := fmt.Sprintf(
 		"UPDATE %s SET memory_data = $1, updated_at = $2 WHERE memory_id = $3 AND app_name = $4 AND user_id = $5",
 		s.tableName,
 	)
+	if s.opts.softDelete {
+		updateQuery += " AND deleted_at IS NULL"
+	}
 	_, err = s.db.ExecContext(ctx, updateQuery, updated, now, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
@@ -254,19 +252,33 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	return nil
 }
 
-// DeleteMemory deletes a memory for a user.
+// DeleteMemory deletes a memory for a user (soft delete).
 func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
 
-	// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+	// Table name is validated in WithTableName.
 	// #nosec G201
-	deleteQuery := fmt.Sprintf(
-		"DELETE FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
-		s.tableName,
+	var (
+		query string
+		args  []any
 	)
-	_, err := s.db.ExecContext(ctx, deleteQuery, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
+	if s.opts.softDelete {
+		now := time.Now()
+		query = fmt.Sprintf(
+			"UPDATE %s SET deleted_at = $1 WHERE memory_id = $2 AND app_name = $3 AND user_id = $4 AND deleted_at IS NULL",
+			s.tableName,
+		)
+		args = []any{now, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID}
+	} else {
+		query = fmt.Sprintf(
+			"DELETE FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
+			s.tableName,
+		)
+		args = []any{memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID}
+	}
+	_, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("delete memory entry failed: %w", err)
 	}
@@ -274,19 +286,29 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 	return nil
 }
 
-// ClearMemories clears all memories for a user.
+// ClearMemories clears all memories for a user (soft delete).
 func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
 
-	// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+	// Table name is validated in WithTableName.
 	// #nosec G201
-	deleteQuery := fmt.Sprintf(
-		"DELETE FROM %s WHERE app_name = $1 AND user_id = $2",
-		s.tableName,
-	)
-	_, err := s.db.ExecContext(ctx, deleteQuery, userKey.AppName, userKey.UserID)
+	var err error
+	if s.opts.softDelete {
+		now := time.Now()
+		query := fmt.Sprintf(
+			"UPDATE %s SET deleted_at = $1 WHERE app_name = $2 AND user_id = $3 AND deleted_at IS NULL",
+			s.tableName,
+		)
+		_, err = s.db.ExecContext(ctx, query, now, userKey.AppName, userKey.UserID)
+	} else {
+		query := fmt.Sprintf(
+			"DELETE FROM %s WHERE app_name = $1 AND user_id = $2",
+			s.tableName,
+		)
+		_, err = s.db.ExecContext(ctx, query, userKey.AppName, userKey.UserID)
+	}
 	if err != nil {
 		return fmt.Errorf("clear memories failed: %w", err)
 	}
@@ -300,28 +322,34 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		return nil, err
 	}
 
-	// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+	// Table name is validated in WithTableName.
 	// #nosec G201
 	query := fmt.Sprintf(
-		"SELECT memory_data FROM %s WHERE app_name = $1 AND user_id = $2 ORDER BY updated_at DESC, created_at DESC",
+		"SELECT memory_data FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,
 	)
+	if s.opts.softDelete {
+		query += " AND deleted_at IS NULL"
+	}
+	query += " ORDER BY updated_at DESC, created_at DESC"
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
 
 	entries := make([]*memory.Entry, 0)
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
-		var memoryData []byte
-		if err := rows.Scan(&memoryData); err != nil {
-			return fmt.Errorf("scan memory data failed: %w", err)
-		}
+		for rows.Next() {
+			var memoryData []byte
+			if err := rows.Scan(&memoryData); err != nil {
+				return fmt.Errorf("scan memory data failed: %w", err)
+			}
 
-		e := &memory.Entry{}
-		if err := json.Unmarshal(memoryData, e); err != nil {
-			return fmt.Errorf("unmarshal memory entry failed: %w", err)
+			e := &memory.Entry{}
+			if err := json.Unmarshal(memoryData, e); err != nil {
+				return fmt.Errorf("unmarshal memory entry failed: %w", err)
+			}
+			entries = append(entries, e)
 		}
-		entries = append(entries, e)
 		return nil
 	}, query, userKey.AppName, userKey.UserID)
 
@@ -339,27 +367,32 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	}
 
 	// Get all memories for the user.
-	// Table name is validated by validateTableName() using regex pattern ^[a-zA-Z_][a-zA-Z0-9_]*$
+	// Table name is validated in WithTableName.
 	// #nosec G201
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,
 	)
+	if s.opts.softDelete {
+		selectQuery += " AND deleted_at IS NULL"
+	}
 
 	results := make([]*memory.Entry, 0)
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
-		var memoryData []byte
-		if err := rows.Scan(&memoryData); err != nil {
-			return fmt.Errorf("scan memory data failed: %w", err)
-		}
+		for rows.Next() {
+			var memoryData []byte
+			if err := rows.Scan(&memoryData); err != nil {
+				return fmt.Errorf("scan memory data failed: %w", err)
+			}
 
-		e := &memory.Entry{}
-		if err := json.Unmarshal(memoryData, e); err != nil {
-			return fmt.Errorf("unmarshal memory entry failed: %w", err)
-		}
+			e := &memory.Entry{}
+			if err := json.Unmarshal(memoryData, e); err != nil {
+				return fmt.Errorf("unmarshal memory entry failed: %w", err)
+			}
 
-		if imemory.MatchMemoryEntry(e, query) {
-			results = append(results, e)
+			if imemory.MatchMemoryEntry(e, query) {
+				results = append(results, e)
+			}
 		}
 		return nil
 	}, selectQuery, userKey.AppName, userKey.UserID)
@@ -407,25 +440,6 @@ func (s *Service) Tools() []tool.Tool {
 func (s *Service) Close() error {
 	if s.db != nil {
 		return s.db.Close()
-	}
-	return nil
-}
-
-// validateTableName validates the table name to prevent SQL injection.
-// Table name must:
-// - Start with a letter or underscore.
-// - Contain only alphanumeric characters and underscores.
-// - Not be empty.
-// - Not exceed 63 characters (PostgreSQL limit).
-func validateTableName(tableName string) error {
-	if tableName == "" {
-		return errors.New("table name cannot be empty")
-	}
-	if len(tableName) > 63 {
-		return fmt.Errorf("table name too long: %d characters (max 63)", len(tableName))
-	}
-	if !tableNamePattern.MatchString(tableName) {
-		return fmt.Errorf("invalid table name: %s (must start with letter/underscore and contain only alphanumeric characters and underscores)", tableName)
 	}
 	return nil
 }
