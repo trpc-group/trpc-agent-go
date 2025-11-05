@@ -780,3 +780,120 @@ func TestHelpers_Sanitize_ShellQuote_TarFromFiles(t *testing.T) {
 	_, err = tarFromFiles([]codeexecutor.PutFile{{Path: "."}})
 	require.Error(t, err)
 }
+
+func TestWorkspaceRuntime_RunProgram_TimedOut(t *testing.T) {
+	// Delay inspect beyond timeout to trigger TimedOut=true.
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			// Sleep longer than the RunProgram timeout.
+			time.Sleep(50 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &WorkspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "wT", Path: path.Join(testRunBase, "wT")}
+	res, err := rt.RunProgram(
+		context.Background(), ws,
+		codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", "true"},
+			Timeout: 10 * time.Millisecond,
+		},
+	)
+	require.Error(t, err)
+	require.True(t, res.TimedOut)
+}
+
+func TestWorkspaceRuntime_RunProgram_NoDupWorkspaceEnv(t *testing.T) {
+	var captured []string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			var payload struct {
+				Cmd []string `json:"Cmd"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			captured = payload.Cmd
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "ok", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &WorkspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{
+			runHostBase:      t.TempDir(),
+			runContainerBase: testRunBase,
+		},
+	}
+	ws := codeexecutor.Workspace{ID: "wE", Path: path.Join(testRunBase, "wE")}
+	// Provide WORKSPACE_DIR in env; runtime should not duplicate it.
+	_, err := rt.RunProgram(
+		context.Background(), ws,
+		codeexecutor.RunProgramSpec{
+			Cmd:  "bash",
+			Args: []string{"-lc", "true"},
+			Env: map[string]string{
+				codeexecutor.WorkspaceEnvDirKey: ws.Path,
+			},
+			Timeout: time.Duration(waitShortSec) * time.Second,
+		},
+	)
+	require.NoError(t, err)
+	joined := strings.Join(captured, " ")
+	// Count occurrences of WORKSPACE_DIR= only once.
+	cnt := strings.Count(
+		joined, codeexecutor.WorkspaceEnvDirKey+"=",
+	)
+	require.Equal(t, 1, cnt)
+}

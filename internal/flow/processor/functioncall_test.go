@@ -1444,6 +1444,87 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestConvertToolArguments_DefaultMessageAndSetter(t *testing.T) {
+	// Preserve and restore default message to avoid cross‑test impact.
+	old := defaultTransferMessage
+	defer SetDefaultTransferMessage(old)
+
+	SetDefaultTransferMessage("Delegated task")
+	// No message provided in original args should use default.
+	b := convertToolArguments(
+		"weather-agent", []byte("{}"), transfer.TransferToolName,
+	)
+	require.NotNil(t, b)
+	var req transfer.Request
+	require.NoError(t, json.Unmarshal(b, &req))
+	require.Equal(t, "weather-agent", req.AgentName)
+	require.Equal(t, "Delegated task", req.Message)
+}
+
+// Tool that is streamable but opts out via StreamInnerPreference.
+type noStreamPrefTool struct{}
+
+func (n *noStreamPrefTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "s"}
+}
+func (n *noStreamPrefTool) StreamableCall(
+	_ context.Context, _ []byte,
+) (*tool.StreamReader, error) {
+	return nil, nil
+}
+func (n *noStreamPrefTool) StreamInner() bool { return false }
+
+func TestIsStreamable_RespectsPreferenceFalse(t *testing.T) {
+	require.False(t, isStreamable(&noStreamPrefTool{}))
+}
+
+// onlyTool implements Tool but neither Callable nor Streamable.
+type onlyTool struct{}
+
+func (o *onlyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "only"}
+}
+
+func TestExecuteTool_UnsupportedToolType(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
+	tc := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "only"}}
+	_, err := p.executeTool(ctx, inv, tc, &onlyTool{}, nil)
+	require.Error(t, err)
+}
+
+func TestCollectParallelToolResults_IndexOutOfRange(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(true, nil)
+	ch := make(chan toolResult, 2)
+	// One valid index, one out of range to hit the log branch.
+	ch <- toolResult{index: 5, event: &event.Event{}}
+	ch <- toolResult{index: 0, event: &event.Event{}}
+	close(ch)
+
+	evs, err := p.collectParallelToolResults(
+		context.Background(), ch, 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+}
+
+func TestProcessStreamChunk_EmptyText_NoEvent(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tc := model.ToolCall{ID: "x", Function: model.FunctionDefinitionParam{Name: "t"}}
+	out := make([]any, 0)
+	ch := make(chan *event.Event, 1)
+	// Empty string chunk should be ignored.
+	err := f.processStreamChunk(
+		ctx, inv, tc, tool.StreamChunk{Content: ""}, ch, &out,
+	)
+	require.NoError(t, err)
+	require.Empty(t, out)
+	require.Len(t, ch, 0)
+}
+
 func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 	cb := tool.NewCallbacks()
 	cb.RegisterBeforeTool(func(_ context.Context, _ string,

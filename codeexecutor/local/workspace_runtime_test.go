@@ -277,3 +277,92 @@ func TestRuntime_PutSkill_ReadOnly_EmptyDir(t *testing.T) {
 	}
 	require.NoError(t, err)
 }
+
+func TestRuntime_ExecuteInline_Bash(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	blocks := []codeexecutor.CodeBlock{{
+		Language: "bash",
+		Code:     "echo hi-bash",
+	}}
+	res, err := rt.ExecuteInline(
+		ctx, "rt-inline-bash", blocks, 5*time.Second,
+	)
+	require.NoError(t, err)
+	require.Contains(t, res.Stdout, "hi-bash")
+}
+
+func TestRuntime_Collect_EmptyPatterns(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-empty", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	files, err := rt.Collect(ctx, ws, nil)
+	require.NoError(t, err)
+	require.Nil(t, files)
+}
+
+func TestRuntime_Collect_PathTraversalFiltered(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-filter", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Write a file outside the workspace root.
+	outside := filepath.Join(filepath.Dir(ws.Path), "ext.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("x"), 0o644))
+
+	// Attempt to collect via traversal; should be filtered out.
+	files, err := rt.Collect(ctx, ws, []string{"../*.txt"})
+	require.NoError(t, err)
+	if len(files) > 0 {
+		for _, f := range files {
+			require.NotEqual(t, "ext.txt", f.Name)
+		}
+	}
+}
+
+func TestRuntime_PutFiles_EmptyPathError(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-empty-path", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    "",
+		Content: []byte("x"),
+		Mode:    0,
+	}})
+	require.Error(t, err)
+}
+
+func TestRuntime_PutDirectory_PreservesMode(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-preserve", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	src := t.TempDir()
+	execFile := filepath.Join(src, "run.sh")
+	require.NoError(t, os.WriteFile(execFile, []byte("echo"), 0o755))
+	require.NoError(t, rt.PutDirectory(ctx, ws, src, "dst"))
+
+	target := filepath.Join(ws.Path, "dst", "run.sh")
+	st, err := os.Stat(target)
+	require.NoError(t, err)
+	// Executable bit should be preserved.
+	require.NotZero(t, st.Mode()&0o111)
+}
