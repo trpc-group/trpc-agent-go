@@ -352,29 +352,47 @@ func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
 
 Filter Usage:
 - Query: Can be empty when using only metadata filters
-- Filter: Use 'filter' field with standard operators (lowercase): eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or
+- Filter: Use "filter" field with standard operators (lowercase): eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or
 
-Filter Examples:
-- Single: {'field': 'category', 'operator': 'eq', 'value': 'documentation'}
-- OR: {'operator': 'or', 'value': [{'field': 'type', 'operator': 'eq', 'value': 'golang'}, {'field': 'type', 'operator': 'eq', 'value': 'llm'}]}
-- AND: {'operator': 'and', 'value': [{'field': 'category', 'operator': 'eq', 'value': 'doc'}, {'field': 'topic', 'operator': 'eq', 'value': 'programming'}]}
-- IN: {'field': 'type', 'operator': 'in', 'value': ['golang', 'llm', 'wiki']}
-- NOT IN: {'field': 'status', 'operator': 'not in', 'value': ['archived', 'deleted']}
-- LIKE: {'field': 'title', 'operator': 'like', 'value': '%%tutorial%%'}
-- BETWEEN: {'field': 'score', 'operator': 'between', 'value': [0.5, 0.9]}
-- Nested: {'operator': 'and', 'value': [{'field': 'category', 'operator': 'eq', 'value': 'doc'}, {'operator': 'or', 'value': [{'field': 'topic', 'operator': 'eq', 'value': 'programming'}, {'field': 'topic', 'operator': 'eq', 'value': 'ml'}]}]}
+Filter Examples (use double quotes for JSON):
+- Single: {"field": "category", "operator": "eq", "value": "documentation"}
+- OR: {"operator": "or", "value": [{"field": "type", "operator": "eq", "value": "golang"}, {"field": "type", "operator": "eq", "value": "llm"}]}
+- AND: {"operator": "and", "value": [{"field": "category", "operator": "eq", "value": "doc"}, {"field": "topic", "operator": "eq", "value": "programming"}]}
+- IN: {"field": "type", "operator": "in", "value": ["golang", "llm", "wiki"]}
+- NOT IN: {"field": "status", "operator": "not in", "value": ["archived", "deleted"]}
+- LIKE: {"field": "title", "operator": "like", "value": "%%tutorial%%"}
+- BETWEEN: {"field": "score", "operator": "between", "value": [0.5, 0.9]}
+- Nested: {"operator": "and", "value": [{"field": "category", "operator": "eq", "value": "doc"}, {"operator": "or", "value": [{"field": "topic", "operator": "eq", "value": "programming"}, {"field": "topic", "operator": "eq", "value": "ml"}]}]}
 
-Note: For logical operators (and/or), use 'value' field to specify an array of sub-conditions.
+Note: For logical operators (and/or), use "value" field to specify an array of sub-conditions.
 
-Available Filter Values (use exact keys and values):
-
+Available Filter Values:
 `, keysStr)
 
+	// Separate keys with and without predefined values
+	var keysWithValues []string
+	var keysWithoutValues []string
 	for k, v := range agenticFilterInfo {
 		if len(v) == 0 {
-			fmt.Fprintf(&b, "- %s: [] (metadata key exists, any value accepted)\n", k)
+			keysWithoutValues = append(keysWithoutValues, k)
 		} else {
-			fmt.Fprintf(&b, "- %s: %v (use these exact values only)\n", k, v)
+			keysWithValues = append(keysWithValues, fmt.Sprintf("  - %s: %v", k, v))
+		}
+	}
+
+	// Print keys with predefined values first
+	if len(keysWithValues) > 0 {
+		fmt.Fprintf(&b, "\nFields with predefined values (use exact values only):\n")
+		for _, line := range keysWithValues {
+			fmt.Fprintf(&b, "%s\n", line)
+		}
+	}
+
+	// Print keys without predefined values
+	if len(keysWithoutValues) > 0 {
+		fmt.Fprintf(&b, "\nFields accepting any value:\n")
+		for _, k := range keysWithoutValues {
+			fmt.Fprintf(&b, "  - %s\n", k)
 		}
 	}
 

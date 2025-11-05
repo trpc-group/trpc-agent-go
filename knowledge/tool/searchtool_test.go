@@ -487,13 +487,41 @@ func TestGenerateAgenticFilterPrompt(t *testing.T) {
 		require.Contains(t, prompt, "or")
 		require.Contains(t, prompt, "and")
 
-		// Check for examples
+		// Check for examples with double quotes
 		require.Contains(t, prompt, "Filter Examples")
-		require.Contains(t, prompt, "OR:")
-		require.Contains(t, prompt, "AND:")
+		require.Contains(t, prompt, `"field"`)
+		require.Contains(t, prompt, `"operator"`)
+		require.Contains(t, prompt, `"value"`)
 
-		// Check for value handling
-		require.Contains(t, prompt, "exact keys and values")
+		// Check for separated value sections
+		require.Contains(t, prompt, "Fields with predefined values")
+		require.Contains(t, prompt, "Fields accepting any value")
+	})
+
+	t.Run("verify prompt format", func(t *testing.T) {
+		filterInfo := map[string][]any{
+			"category": {"doc", "tutorial"},
+			"status":   {"active"},
+			"tag":      {},
+		}
+		prompt := generateAgenticFilterPrompt(filterInfo)
+
+		// Print for manual inspection
+		t.Logf("Generated prompt:\n%s", prompt)
+
+		// Verify double quotes in examples
+		require.Contains(t, prompt, `"field":`)
+		require.Contains(t, prompt, `"operator":`)
+		require.Contains(t, prompt, `"value":`)
+
+		// Verify sections are separated
+		require.Contains(t, prompt, "Fields with predefined values (use exact values only):")
+		require.Contains(t, prompt, "Fields accepting any value:")
+
+		// Verify structure: fields with values listed first, then fields without values
+		require.Contains(t, prompt, "category:")
+		require.Contains(t, prompt, "status:")
+		require.Contains(t, prompt, "- tag")
 	})
 }
 
