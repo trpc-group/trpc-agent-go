@@ -32,10 +32,6 @@ var (
 	seen  = make(map[string]struct{})
 )
 
-// pairSepByte is the ASCII Unit Separator (US, 0x1F). It delimits the
-// app and agent when forming a compact map key for the seen set.
-const pairSepByte byte = 0x1f
-
 // pairSepStr is the string form of pairSepByte used when joining.
 const pairSepStr string = "\x1f"
 
