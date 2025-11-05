@@ -298,3 +298,5 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 ```
 
 You can find a complete example at [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot).
+
+The format of AG-UI's MessagesSnapshot event can be found at (messages)[https://docs.ag-ui.com/concepts/messages].

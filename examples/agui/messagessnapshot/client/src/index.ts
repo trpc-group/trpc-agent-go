@@ -29,21 +29,20 @@ async function main() {
     ],
   });
 
-  console.log(`Send chat request to -> ${chatUrl}`);
+  console.log(`⚙️ Send chat request to -> ${chatUrl}`);
   const chatResult = await chatAgent.runAgent({
     forwardedProps: {
       userId,
     },
   });
 
-  console.log("Latest AG-UI response:");
   chatResult.newMessages.forEach((message) => {
     if (message.role === "assistant") {
-      console.log(`assistant: ${message.content ?? ""}`);
+      console.log(`🤖 assistant: ${message.content ?? ""}`);
     }
     if (message.role === "tool") {
       console.log(
-        `tool(${message.toolCallId ?? "unknown"}): ${message.content ?? ""}`,
+        `🛠️ tool(${message.toolCallId ?? "unknown"}): ${message.content ?? ""}`,
       );
     }
   });
@@ -53,16 +52,30 @@ async function main() {
     threadId,
   });
 
-  console.log(`Load history -> ${historyUrl}`);
+  console.log(`⚙️ Load history -> ${historyUrl}`);
   await historyAgent.runAgent({
     forwardedProps: {
       userId,
     },
   });
 
-  console.log("History message snapshot:");
   historyAgent.messages.forEach((message) => {
-    console.log(JSON.stringify(message, null, 2));
+    if (message.role === "assistant") {
+      console.log(`🤖 assistant: ${message.content ?? ""}`);
+      return;
+    }
+    if (message.role === "tool") {
+      console.log(
+        `🛠️ tool(${message.toolCallId ?? "unknown"}): ${message.content ?? ""}`,
+      );
+      return;
+    }
+    if (message.role === "user") {
+      const sender = message.name ?? userId;
+      console.log(`👤 user(${sender}): ${message.content ?? ""}`);
+      return;
+    }
+    console.log(`❓ ${message.role}: ${message.content ?? ""}`);
   });
 
   console.log(`threadId=${threadId}, userId=${userId}`);
