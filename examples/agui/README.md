@@ -2,8 +2,9 @@
 
 This folder collects runnable demos that showcase how to integrate the `tRPC-Agent-Go` AG-UI server and various clients.
 
-- [`client/`](client/) – Client-side samples.
-- [`server/`](server/) – Server-side samples.
+- [`client/`](client/) – General client-side samples.
+- [`server/`](server/) – General server-side samples.
+- [`messagessnapshot/`](messagessnapshot/) – Example showing how to enable and consume message snapshots.
 
 ## Quick Start
 
