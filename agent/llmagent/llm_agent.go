@@ -337,9 +337,6 @@ func WithEndInvocationAfterTransfer(end bool) Option {
 // WithMessageTimelineFilterMode sets the message timeline filter mode.
 func WithMessageTimelineFilterMode(mode string) Option {
 	return func(opts *Options) {
-		if mode != processor.TimelineFilterCurrentInvocation && mode != processor.TimelineFilterCurrentRequest {
-			mode = processor.TimelineFilterAll
-		}
 		opts.messageTimelineFilterMode = mode
 	}
 }
@@ -347,9 +344,6 @@ func WithMessageTimelineFilterMode(mode string) Option {
 // WithMessageBranchFilterMode sets the message branch filter mode.
 func WithMessageBranchFilterMode(mode string) Option {
 	return func(opts *Options) {
-		if mode != processor.BranchFilterModeExact && mode != processor.BranchFilterModeAll {
-			mode = processor.BranchFilterModePrefix
-		}
 		opts.messageBranchFilterMode = mode
 	}
 }
