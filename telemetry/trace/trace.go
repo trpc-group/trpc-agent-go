@@ -194,8 +194,8 @@ func buildResource(ctx context.Context, options *options) (*resource.Resource, e
 			semconv.ServiceVersion(itelemetry.ServiceVersion),
 		),
 		resource.WithFromEnv(),
-		resource.WithProcess(),
-		resource.WithOS(),
+		resource.WithHost(),           // Adds host.name
+		resource.WithTelemetrySDK(),   // Adds telemetry.sdk.{name,language,version}
 	}
 
 	// User-provided options override environment variables
