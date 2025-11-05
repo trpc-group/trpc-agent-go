@@ -95,12 +95,12 @@ func (s *Server) Handler() http.Handler {
 	return s.handler
 }
 
-// Path returns the chat message endpoint path.
+// Path returns the chat message endpoint path joined with BasePath.
 func (s *Server) Path() string {
 	return s.path
 }
 
-// BasePath returns the base URL path for the service.
+// BasePath returns the base URL path prefix shared by chat and history endpoints.
 func (s *Server) BasePath() string {
 	return s.basePath
 }

@@ -298,3 +298,26 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 ```
 
 You can find a complete example at [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot).
+
+### Setting the BasePath for Routes
+
+`agui.WithBasePath` sets the base route prefix for the AG-UI service. The default value is `/`, and it is used to mount the chat route and message snapshot route under a unified prefix, avoiding conflicts with existing services.
+
+`agui.WithPath` and `agui.WithMessagesSnapshotPath` only define sub-routes under the base path. The framework will use `url.JoinPath` to concatenate them with the base path to form the final accessible routes.
+
+Here’s an example of usage:
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithBasePath("/agui"),                // Set the AG-UI prefix route
+    agui.WithPath("/chat"),                    // Set the chat route, default is "/"
+    agui.WithMessagesSnapshotEnabled(true),    // Enable message snapshot feature
+    agui.WithMessagesSnapshotPath("/history"), // Set the message snapshot route, default is "/history"
+)
+if err != nil {
+    log.Fatalf("create agui server failed: %v", err)
+}
+```
+
+In this case, the chat route will be `/agui/chat`, and the message snapshot route will be `/agui/history`.
