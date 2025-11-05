@@ -14,14 +14,17 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // Options holds the options for the runner.
 type Options struct {
-	TranslatorFactory  TranslatorFactory
-	UserIDResolver     UserIDResolver
-	TranslateCallbacks *translator.Callbacks
-	RunAgentInputHook  RunAgentInputHook
+	TranslatorFactory  TranslatorFactory     // TranslatorFactory creates a translator for an AG-UI run.
+	UserIDResolver     UserIDResolver        // UserIDResolver derives the user identifier for an AG-UI run.
+	TranslateCallbacks *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
+	RunAgentInputHook  RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
+	AppName            string                // AppName is the name of the application.
+	SessionService     session.Service       // SessionService is the session service.
 }
 
 // NewOptions creates a new options instance.
@@ -74,6 +77,20 @@ type RunAgentInputHook func(ctx context.Context, input *adapter.RunAgentInput) (
 func WithRunAgentInputHook(hook RunAgentInputHook) Option {
 	return func(o *Options) {
 		o.RunAgentInputHook = hook
+	}
+}
+
+// WithAppName sets the app name.
+func WithAppName(n string) Option {
+	return func(o *Options) {
+		o.AppName = n
+	}
+}
+
+// WithSessionService sets the session service.
+func WithSessionService(s session.Service) Option {
+	return func(o *Options) {
+		o.SessionService = s
 	}
 }
 

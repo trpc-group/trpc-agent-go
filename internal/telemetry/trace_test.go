@@ -640,21 +640,21 @@ func TestTraceToolCall_EmptyToolCallIDs(t *testing.T) {
 	span := newRecordingSpan()
 	decl := &tool.Declaration{Name: "test_tool", Description: "test description"}
 	args, _ := json.Marshal(map[string]string{"key": "value"})
-	
+
 	// Response with empty tool call IDs
 	rsp := &model.Response{
 		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{}}}},
 	}
 	evt := event.New("evt1", "author", event.WithResponse(rsp))
-	
+
 	TraceToolCall(span, nil, decl, args, evt, nil)
-	
+
 	require.True(t, hasAttr(span.attrs, KeyGenAIToolName, "test_tool"))
 }
 
 func TestTraceMergedToolCalls_WithError(t *testing.T) {
 	span := newRecordingSpan()
-	
+
 	// Response with error
 	rsp := &model.Response{
 		Error: &model.ResponseError{
@@ -664,25 +664,25 @@ func TestTraceMergedToolCalls_WithError(t *testing.T) {
 		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "call1"}}}}},
 	}
 	evt := event.New("evt1", "author", event.WithResponse(rsp))
-	
+
 	TraceMergedToolCalls(span, evt)
-	
+
 	require.Equal(t, codes.Error, span.status)
 	require.True(t, hasAttr(span.attrs, KeyGenAIToolCallID, "call1"))
 }
 
 func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 	span := newRecordingSpan()
-	
+
 	// Create an invocation with a message that contains a channel (not JSON serializable)
 	inv := &agent.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "inv1",
 		Message:      model.Message{Role: model.RoleUser, Content: "test"},
 	}
-	
+
 	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
-	
+
 	require.True(t, hasAttr(span.attrs, KeyGenAIAgentName, "test-agent"))
 }
 
@@ -693,7 +693,7 @@ func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
 	}
 	attrs := buildRequestAttributes(req)
 	require.NotNil(t, attrs)
-	
+
 	// Verify LLM request attribute is set
 	found := false
 	for _, attr := range attrs {
@@ -714,7 +714,7 @@ func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
 	}
 	attrs := buildResponseAttributes(rsp)
 	require.NotNil(t, attrs)
-	
+
 	// Verify LLM response attribute is set
 	found := false
 	for _, attr := range attrs {
