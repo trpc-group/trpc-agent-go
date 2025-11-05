@@ -1608,6 +1608,8 @@ if err != nil {
 agent := llmagent.New("chat-assistant", llmagent.WithModel(gpt))
 ```
 
+完整代码可参见 [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)。
+
 #### 注册自定义 Provider
 
 框架支持通过注册自定义 Provider 来接入其他大模型供应商或自定义实现的模型。
