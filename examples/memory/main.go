@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -36,10 +37,11 @@ import (
 
 var (
 	modelName      = flag.String("model", "deepseek-chat", "Name of the model to use")
-	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis / mysql")
+	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis / mysql / postgres")
 	redisAddr      = flag.String("redis-addr", "localhost:6379", "Redis address")
 	mysqlDSN       = flag.String("mysql-dsn", "", "MySQL DSN (e.g., user:password@tcp(localhost:3306)/dbname?parseTime=true)")
-	softDelete     = flag.Bool("soft-delete", false, "Enable soft delete for MySQL memory service")
+	postgresDSN    = flag.String("postgres-dsn", "", "PostgreSQL DSN (e.g., postgres://user:password@localhost:5432/dbname)")
+	softDelete     = flag.Bool("soft-delete", false, "Enable soft delete for MySQL/PostgreSQL memory service")
 	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
@@ -57,6 +59,10 @@ func main() {
 		fmt.Printf("MySQL: %s\n", *mysqlDSN)
 		fmt.Printf("Soft delete: %t\n", *softDelete)
 	}
+	if *memServiceName == "postgres" {
+		fmt.Printf("PostgreSQL: %s\n", *postgresDSN)
+		fmt.Printf("Soft delete: %t\n", *softDelete)
+	}
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Available tools: memory_add, memory_update, memory_search, memory_load\n")
 	fmt.Printf("(memory_delete, memory_clear disabled by default, and can be enabled or customized)\n")
@@ -67,6 +73,7 @@ func main() {
 		modelName:      *modelName,
 		memServiceName: *memServiceName,
 		redisAddr:      *redisAddr,
+		postgresDSN:    *postgresDSN,
 		streaming:      *streaming,
 	}
 
@@ -80,6 +87,7 @@ type memoryChat struct {
 	modelName      string
 	memServiceName string
 	redisAddr      string
+	postgresDSN    string
 	streaming      bool
 	runner         runner.Runner
 	userID         string
@@ -135,6 +143,20 @@ func (c *memoryChat) setup(_ context.Context) error {
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create mysql memory service: %w", err)
+		}
+	case "postgres":
+		if c.postgresDSN == "" {
+			return errors.New("postgres DSN is required, set via --postgres-dsn flag")
+		}
+		memoryService, err = memorypostgres.NewService(
+			memorypostgres.WithPostgresConnString(c.postgresDSN),
+			memorypostgres.WithSoftDelete(*softDelete),
+			// You can enable or disable tools and create custom tools here.
+			memorypostgres.WithToolEnabled(memory.DeleteToolName, false),               // delete tool is disabled by default
+			memorypostgres.WithCustomTool(memory.ClearToolName, customClearMemoryTool), // custom clear tool
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create postgres memory service: %w", err)
 		}
 	default: // inmemory
 		memoryService = memoryinmemory.NewMemoryService(
