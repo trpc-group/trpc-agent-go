@@ -186,29 +186,19 @@ func WithHeaders(headers map[string]string) Option {
 }
 
 func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
-	// Start with default values
+	// Build resource with options values
 	resourceOpts := []resource.Option{
 		resource.WithAttributes(
-			semconv.ServiceNamespace(itelemetry.ServiceNamespace),
-			semconv.ServiceName(itelemetry.ServiceName),
-			semconv.ServiceVersion(itelemetry.ServiceVersion),
+			semconv.ServiceNamespace(options.serviceNamespace),
+			semconv.ServiceName(options.serviceName),
+			semconv.ServiceVersion(options.serviceVersion),
 		),
 		resource.WithFromEnv(),
 		resource.WithHost(),         // Adds host.name
 		resource.WithTelemetrySDK(), // Adds telemetry.sdk.{name,language,version}
 	}
 
-	// User-provided options override environment variables
-	if options.serviceNamespace != "" && options.serviceNamespace != itelemetry.ServiceNamespace {
-		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceNamespace(options.serviceNamespace)))
-	}
-	if options.serviceName != "" && options.serviceName != itelemetry.ServiceName {
-		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceName(options.serviceName)))
-	}
-	if options.serviceVersion != "" && options.serviceVersion != itelemetry.ServiceVersion {
-		resourceOpts = append(resourceOpts, resource.WithAttributes(semconv.ServiceVersion(options.serviceVersion)))
-	}
-
+	// Append custom resource attributes
 	if options.resourceAttributes != nil && len(*options.resourceAttributes) > 0 {
 		resourceOpts = append(resourceOpts, resource.WithAttributes(*options.resourceAttributes...))
 	}

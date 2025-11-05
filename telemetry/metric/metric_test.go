@@ -258,18 +258,24 @@ func TestBuildResource_WithResourceAttributesAndEnv(t *testing.T) {
 		}
 	}
 
-	if attrMap[string(semconv.ServiceNameKey)] != "metric-option-service" {
-		t.Fatalf("expected service.name metric-option-service, got %q", attrMap[string(semconv.ServiceNameKey)])
+	// Per OpenTelemetry spec: environment variables take precedence over code configuration
+	// OTEL_SERVICE_NAME=env-metric-service should override WithServiceName("metric-option-service")
+	if attrMap[string(semconv.ServiceNameKey)] != "env-metric-service" {
+		t.Fatalf("service.name should be from env, got %q", attrMap[string(semconv.ServiceNameKey)])
 	}
+	// OTEL_RESOURCE_ATTRIBUTES env attributes present
 	if attrMap["region"] != "us-east" {
-		t.Fatalf("expected region=us-east, got %q", attrMap["region"])
+		t.Fatalf("expected region=us-east from OTEL_RESOURCE_ATTRIBUTES, got %q", attrMap["region"])
 	}
+	// WithResourceAttributes should override OTEL_RESOURCE_ATTRIBUTES for same keys
 	if attrMap["team"] != "ml" {
-		t.Fatalf("expected team=ml, got %q", attrMap["team"])
+		t.Fatalf("expected team=ml from WithResourceAttributes, got %q", attrMap["team"])
 	}
+	// Custom attribute from WithResourceAttributes
 	if attrMap["priority"] != "high" {
-		t.Fatalf("expected priority=high, got %q", attrMap["priority"])
+		t.Fatalf("expected priority=high from WithResourceAttributes, got %q", attrMap["priority"])
 	}
+	// service.namespace and service.version from code (no env override, so code value used)
 	if attrMap[string(semconv.ServiceNamespaceKey)] != "metric-ns" {
 		t.Fatalf("expected service.namespace metric-ns, got %q", attrMap[string(semconv.ServiceNamespaceKey)])
 	}

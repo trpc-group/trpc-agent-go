@@ -248,21 +248,24 @@ func TestStart_WithResourceAttributesAndEnv(t *testing.T) {
 		}
 	}
 
-	// option overrides env
-	if attrMap[string(semconv.ServiceNameKey)] != "option-service" {
-		t.Fatalf("service.name mismatch, got %q", attrMap[string(semconv.ServiceNameKey)])
+	// Per OpenTelemetry spec: environment variables take precedence over code configuration
+	// OTEL_SERVICE_NAME=env-service should override WithServiceName("option-service")
+	if attrMap[string(semconv.ServiceNameKey)] != "env-service" {
+		t.Fatalf("service.name should be from env, got %q", attrMap[string(semconv.ServiceNameKey)])
 	}
-	// env attributes present unless overridden
+	// OTEL_RESOURCE_ATTRIBUTES env attributes present
 	if attrMap["env"] != "staging" {
-		t.Fatalf("expected env=staging, got %q", attrMap["env"])
+		t.Fatalf("expected env=staging from OTEL_RESOURCE_ATTRIBUTES, got %q", attrMap["env"])
 	}
-	// option attribute overrides
+	// WithResourceAttributes should override OTEL_RESOURCE_ATTRIBUTES for same keys
 	if attrMap["team"] != "ml" {
-		t.Fatalf("expected team=ml, got %q", attrMap["team"])
+		t.Fatalf("expected team=ml from WithResourceAttributes, got %q", attrMap["team"])
 	}
+	// Custom attribute from WithResourceAttributes
 	if attrMap["custom"] != "value" {
-		t.Fatalf("expected custom=value, got %q", attrMap["custom"])
+		t.Fatalf("expected custom=value from WithResourceAttributes, got %q", attrMap["custom"])
 	}
+	// service.namespace and service.version from env (no env override, so code value used)
 	if attrMap[string(semconv.ServiceNamespaceKey)] != "custom-ns" {
 		t.Fatalf("expected service.namespace custom-ns, got %q", attrMap[string(semconv.ServiceNamespaceKey)])
 	}
