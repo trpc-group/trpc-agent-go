@@ -127,18 +127,18 @@ func (c *skillChat) setup(_ context.Context) error {
 	}
 
 	// Choose workspace executor.
-	var we codeexecutor.WorkspaceExecutor
+	var we codeexecutor.CodeExecutor
 	execUsed := "local"
 	switch strings.ToLower(strings.TrimSpace(*flagExec)) {
 	case "container":
-		if rt, e := containerexec.NewWorkspaceRuntime(); e == nil {
+		if rt, e := containerexec.New(); e == nil {
 			we = rt
 			execUsed = "container"
 		} else {
 			return fmt.Errorf("container executor: %w", e)
 		}
 	default:
-		we = localexec.NewRuntime("")
+		we = localexec.New()
 	}
 	c.executor = execUsed
 
@@ -161,7 +161,7 @@ func (c *skillChat) setup(_ context.Context) error {
 		),
 		llmagent.WithGenerationConfig(gen),
 		llmagent.WithSkills(repo),
-		llmagent.WithWorkspaceExecutor(we),
+		llmagent.WithCodeExecutor(we),
 		llmagent.WithToolCallbacks(buildToolCallbacks()),
 	)
 

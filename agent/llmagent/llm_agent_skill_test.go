@@ -63,7 +63,7 @@ func TestLLMAgent_SkillRunToolRegistered(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	// Do not set WorkspaceExecutor to trigger local fallback.
+	// Do not set executor to trigger local fallback.
 	a := New("tester", WithSkills(repo))
 
 	// Tool list should include both loader and runner.
@@ -112,9 +112,20 @@ func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
 	require.Contains(t, out, "hello")
 }
 
-// stubExec implements WorkspaceExecutor to verify injection via
-// WithWorkspaceExecutor. It records whether RunProgram was called.
+// stubExec implements CodeExecutor to verify injection via
+// WithCodeExecutor. It records whether RunProgram was called.
 type stubExec struct{ ran bool }
+
+func (s *stubExec) ExecuteCode(
+	ctx context.Context,
+	in codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (s *stubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
 
 func (s *stubExec) CreateWorkspace(
 	ctx context.Context, id string,
@@ -177,7 +188,7 @@ func TestLLMAgent_SkillRun_UsesInjectedExecutor(t *testing.T) {
 	require.NoError(t, err)
 	se := &stubExec{}
 	a := New("tester",
-		WithSkills(repo), WithWorkspaceExecutor(se))
+		WithSkills(repo), WithCodeExecutor(se))
 	tl := findTool(a.Tools(), "skill_run")
 	require.NotNil(t, tl)
 

@@ -8,14 +8,10 @@
 //
 //
 
-// Package codeexecutor adds a higher level execution interface that
-// supports workspaces, staging files, running programs, and collecting
-// output files. It coexists with the original CodeExecutor for backward
-// compatibility.
+// Package codeexecutor defines workspace types and helpers.
 package codeexecutor
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -105,65 +101,6 @@ type RunResult struct {
 	ExitCode int
 	Duration time.Duration
 	TimedOut bool
-}
-
-// WorkspaceExecutor is a higher-level execution interface. Implementations
-// may
-// be backed by local processes or containers. Skills should depend on
-// this interface and avoid concrete runtime details.
-type WorkspaceExecutor interface {
-	// CreateWorkspace creates a new workspace for an execution ID.
-	CreateWorkspace(
-		ctx context.Context,
-		execID string,
-		pol WorkspacePolicy,
-	) (Workspace, error)
-
-	// Cleanup removes a workspace unless pol.Persist is true.
-	Cleanup(ctx context.Context, ws Workspace) error
-
-	// PutFiles writes file blobs under the workspace root.
-	PutFiles(ctx context.Context, ws Workspace, files []PutFile) error
-
-	// PutDirectory copies a host directory into the workspace at "to".
-	PutDirectory(
-		ctx context.Context,
-		ws Workspace,
-		hostPath string,
-		to string,
-	) error
-
-	// PutSkill copies a skill root into the workspace at "to".
-	PutSkill(
-		ctx context.Context,
-		ws Workspace,
-		skillRoot string,
-		to string,
-	) error
-
-	// RunProgram runs the given command spec inside the workspace.
-	RunProgram(
-		ctx context.Context,
-		ws Workspace,
-		spec RunProgramSpec,
-	) (RunResult, error)
-
-	// Collect returns output files matched by glob patterns relative to
-	// the workspace root.
-	Collect(
-		ctx context.Context,
-		ws Workspace,
-		patterns []string,
-	) ([]File, error)
-
-	// ExecuteInline executes inline code blocks by writing temp files
-	// and invoking suitable interpreters via RunProgram.
-	ExecuteInline(
-		ctx context.Context,
-		execID string,
-		blocks []CodeBlock,
-		timeout time.Duration,
-	) (RunResult, error)
 }
 
 // Default file modes for generated code files.

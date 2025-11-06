@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -104,6 +105,7 @@ type CodeExecutor struct {
 	cli              *Client
 	ctx              context.Context
 	cancel           context.CancelFunc
+	ws               *localexec.Runtime
 }
 
 // New creates a new CodeExecutor instance
@@ -219,6 +221,7 @@ func New(opts ...Option) (*CodeExecutor, error) {
 				if err != nil {
 					return nil, err
 				}
+				c.ws = localexec.NewRuntime("")
 				return c, nil
 			}
 		}
@@ -240,6 +243,79 @@ func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeE
 	}
 
 	return c.cli.ExecuteCode(ctx, input)
+}
+
+// Workspace methods delegate to local runtime by default.
+
+func (c *CodeExecutor) ensureWS() *localexec.Runtime {
+	if c.ws == nil {
+		c.ws = localexec.NewRuntime("")
+	}
+	return c.ws
+}
+
+// CreateWorkspace implements the CodeExecutor interface.
+func (c *CodeExecutor) CreateWorkspace(
+	ctx context.Context, execID string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	return c.ensureWS().CreateWorkspace(ctx, execID, pol)
+}
+
+// Cleanup implements the CodeExecutor interface.
+func (c *CodeExecutor) Cleanup(
+	ctx context.Context, ws codeexecutor.Workspace,
+) error {
+	return c.ensureWS().Cleanup(ctx, ws)
+}
+
+// PutFiles implements the CodeExecutor interface.
+func (c *CodeExecutor) PutFiles(
+	ctx context.Context, ws codeexecutor.Workspace,
+	files []codeexecutor.PutFile,
+) error {
+	return c.ensureWS().PutFiles(ctx, ws, files)
+}
+
+// PutDirectory implements the CodeExecutor interface.
+func (c *CodeExecutor) PutDirectory(
+	ctx context.Context, ws codeexecutor.Workspace,
+	hostPath, to string,
+) error {
+	return c.ensureWS().PutDirectory(ctx, ws, hostPath, to)
+}
+
+// PutSkill implements the CodeExecutor interface.
+func (c *CodeExecutor) PutSkill(
+	ctx context.Context, ws codeexecutor.Workspace,
+	skillRoot, to string,
+) error {
+	return c.ensureWS().PutSkill(ctx, ws, skillRoot, to)
+}
+
+// RunProgram implements the CodeExecutor interface.
+func (c *CodeExecutor) RunProgram(
+	ctx context.Context, ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return c.ensureWS().RunProgram(ctx, ws, spec)
+}
+
+// Collect implements the CodeExecutor interface.
+func (c *CodeExecutor) Collect(
+	ctx context.Context, ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	return c.ensureWS().Collect(ctx, ws, patterns)
+}
+
+// ExecuteInline implements the CodeExecutor interface.
+func (c *CodeExecutor) ExecuteInline(
+	ctx context.Context, execID string,
+	blocks []codeexecutor.CodeBlock,
+	timeout time.Duration,
+) (codeexecutor.RunResult, error) {
+	return c.ensureWS().ExecuteInline(ctx, execID, blocks, timeout)
 }
 
 // silencePip silences pip install commands

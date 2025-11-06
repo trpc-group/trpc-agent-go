@@ -29,6 +29,7 @@ type CodeExecutor struct {
 	WorkDir        string        // Working directory for code execution
 	Timeout        time.Duration // The timeout for the execution of any single code block
 	CleanTempFiles bool          // Whether to clean temporary files after execution
+	ws             *Runtime      // workspace runtime
 }
 
 // CodeExecutorOption defines a function type for configuring CodeExecutor
@@ -66,6 +67,7 @@ func New(options ...CodeExecutorOption) *CodeExecutor {
 		option(executor)
 	}
 
+	// Lazy init ws; create on first use.
 	return executor
 }
 
@@ -228,4 +230,77 @@ func (e *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 		Start: "```",
 		End:   "```",
 	}
+}
+
+// Workspace methods
+
+func (e *CodeExecutor) ensureWS() *Runtime {
+	if e.ws == nil {
+		e.ws = NewRuntime("")
+	}
+	return e.ws
+}
+
+// CreateWorkspace implements the CodeExecutor interface.
+func (e *CodeExecutor) CreateWorkspace(
+	ctx context.Context, execID string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	return e.ensureWS().CreateWorkspace(ctx, execID, pol)
+}
+
+// Cleanup implements the CodeExecutor interface.
+func (e *CodeExecutor) Cleanup(
+	ctx context.Context, ws codeexecutor.Workspace,
+) error {
+	return e.ensureWS().Cleanup(ctx, ws)
+}
+
+// PutFiles implements the CodeExecutor interface.
+func (e *CodeExecutor) PutFiles(
+	ctx context.Context, ws codeexecutor.Workspace,
+	files []codeexecutor.PutFile,
+) error {
+	return e.ensureWS().PutFiles(ctx, ws, files)
+}
+
+// PutDirectory implements the CodeExecutor interface.
+func (e *CodeExecutor) PutDirectory(
+	ctx context.Context, ws codeexecutor.Workspace,
+	hostPath, to string,
+) error {
+	return e.ensureWS().PutDirectory(ctx, ws, hostPath, to)
+}
+
+// PutSkill implements the CodeExecutor interface.
+func (e *CodeExecutor) PutSkill(
+	ctx context.Context, ws codeexecutor.Workspace,
+	skillRoot, to string,
+) error {
+	return e.ensureWS().PutSkill(ctx, ws, skillRoot, to)
+}
+
+// RunProgram implements the CodeExecutor interface.
+func (e *CodeExecutor) RunProgram(
+	ctx context.Context, ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return e.ensureWS().RunProgram(ctx, ws, spec)
+}
+
+// Collect implements the CodeExecutor interface.
+func (e *CodeExecutor) Collect(
+	ctx context.Context, ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	return e.ensureWS().Collect(ctx, ws, patterns)
+}
+
+// ExecuteInline implements the CodeExecutor interface.
+func (e *CodeExecutor) ExecuteInline(
+	ctx context.Context, execID string,
+	blocks []codeexecutor.CodeBlock,
+	timeout time.Duration,
+) (codeexecutor.RunResult, error) {
+	return e.ensureWS().ExecuteInline(ctx, execID, blocks, timeout)
 }

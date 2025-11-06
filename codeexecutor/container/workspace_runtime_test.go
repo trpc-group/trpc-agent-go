@@ -105,7 +105,7 @@ func TestWorkspaceRuntime_CreateAndCleanup(t *testing.T) {
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
 
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -162,7 +162,7 @@ func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
 
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -234,7 +234,7 @@ func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
 
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -306,7 +306,7 @@ func TestWorkspaceRuntime_Collect(t *testing.T) {
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
 
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -357,7 +357,7 @@ func TestWorkspaceRuntime_MountOptimizations(t *testing.T) {
 	dir := filepath.Join(skillsRoot, "x")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -383,7 +383,7 @@ func TestWorkspaceRuntime_MountOptimizations(t *testing.T) {
 }
 
 func TestWorkspaceRuntime_PutDirectory_EmptyError(t *testing.T) {
-	rt := &WorkspaceRuntime{}
+	rt := &workspaceRuntime{}
 	ws := codeexecutor.Workspace{ID: "w", Path: "/w"}
 	err := rt.PutDirectory(context.Background(), ws, "", "dst")
 	require.Error(t, err)
@@ -425,7 +425,7 @@ func TestWorkspaceRuntime_CopyFileOut_SkipsDirHeader(t *testing.T) {
 
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -479,7 +479,7 @@ func TestWorkspaceRuntime_PutDirectory_TarCopy_Error(t *testing.T) {
 
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -530,7 +530,7 @@ func TestWorkspaceRuntime_Collect_NoMatches_And_CopyError(t *testing.T) {
 	}
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -584,7 +584,7 @@ func TestWorkspaceRuntime_ExecuteInline(t *testing.T) {
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
 
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -663,7 +663,7 @@ func TestWorkspaceRuntime_PutDirectory_TarFallback(t *testing.T) {
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
 
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -731,7 +731,7 @@ func TestWorkspaceRuntime_PutSkill_TarFallback(t *testing.T) {
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
 
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -746,7 +746,7 @@ func TestWorkspaceRuntime_PutSkill_TarFallback(t *testing.T) {
 }
 
 func TestWorkspaceRuntime_Cleanup_EmptyOK(t *testing.T) {
-	rt := &WorkspaceRuntime{}
+	rt := &workspaceRuntime{}
 	err := rt.Cleanup(context.Background(), codeexecutor.Workspace{})
 	require.NoError(t, err)
 }
@@ -810,7 +810,7 @@ func TestWorkspaceRuntime_RunProgram_TimedOut(t *testing.T) {
 
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},
@@ -866,7 +866,7 @@ func TestWorkspaceRuntime_RunProgram_NoDupWorkspaceEnv(t *testing.T) {
 
 	cli, cleanup := fakeDocker(t, handler)
 	defer cleanup()
-	rt := &WorkspaceRuntime{
+	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
 			client:    cli,
 			container: &tcontainer.Summary{ID: testCID},

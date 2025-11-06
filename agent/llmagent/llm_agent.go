@@ -46,8 +46,8 @@ import (
 
 // localruntimeFallback returns a simple local workspace executor used when
 // no explicit executor is provided.
-func localruntimeFallback() codeexecutor.WorkspaceExecutor {
-	return localexec.NewRuntime("")
+func defaultCodeExecutor() codeexecutor.CodeExecutor {
+	return localexec.New()
 }
 
 var defaultChannelBufferSize = 256
@@ -118,14 +118,6 @@ func WithChannelBufferSize(size int) Option {
 func WithCodeExecutor(ce codeexecutor.CodeExecutor) Option {
 	return func(opts *Options) {
 		opts.codeExecutor = ce
-	}
-}
-
-// WithWorkspaceExecutor sets a workspace-based executor used by skills and
-// similar tools. When not provided, a local executor is used by default.
-func WithWorkspaceExecutor(ex codeexecutor.WorkspaceExecutor) Option {
-	return func(opts *Options) {
-		opts.WorkspaceExecutor = ex
 	}
 }
 
@@ -464,11 +456,6 @@ type Options struct {
 
 	// SkillsRepository enables Agent Skills if non-nil.
 	SkillsRepository skill.Repository
-
-	// WorkspaceExecutor preconfigures a workspace-based executor for
-	// skills and related tooling (local or container). When nil, tools
-	// may fall back to a default local runtime.
-	WorkspaceExecutor codeexecutor.WorkspaceExecutor
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -788,10 +775,10 @@ func registerTools(options *Options) []tool.Tool {
 	if options.SkillsRepository != nil {
 		allTools = append(allTools,
 			toolskill.NewLoadTool(options.SkillsRepository))
-		// Provide workspace executor to skill_run, fallback to local.
-		exec := options.WorkspaceExecutor
+		// Provide executor to skill_run, fallback to local.
+		exec := options.codeExecutor
 		if exec == nil {
-			exec = localruntimeFallback()
+			exec = defaultCodeExecutor()
 		}
 		allTools = append(allTools,
 			toolskill.NewRunTool(options.SkillsRepository, exec))

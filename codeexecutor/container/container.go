@@ -47,6 +47,7 @@ type CodeExecutor struct {
 	hostConfig      container.HostConfig // Host configuration for the container
 	containerConfig container.Config     // Configuration for the container
 	containerName   string               // Name of the Docker container which is created. If empty, will autogenerate a name.
+	ws              *workspaceRuntime    // workspace runtime
 }
 
 // New creates a new CodeExecutor instance
@@ -236,7 +237,116 @@ func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	}
 }
 
-// createBuildContext creates a tar archive of the build context
+// Workspace methods
+
+func (c *CodeExecutor) ensureWS() (*workspaceRuntime, error) {
+	if c.ws != nil {
+		return c.ws, nil
+	}
+	rt, err := newWorkspaceRuntime()
+	if err != nil {
+		return nil, err
+	}
+	c.ws = rt
+	return rt, nil
+}
+
+// CreateWorkspace implements the CodeExecutor interface.
+func (c *CodeExecutor) CreateWorkspace(
+	ctx context.Context, execID string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	return rt.CreateWorkspace(ctx, execID, pol)
+}
+
+// Cleanup implements the CodeExecutor interface.
+func (c *CodeExecutor) Cleanup(
+	ctx context.Context, ws codeexecutor.Workspace,
+) error {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return err
+	}
+	return rt.Cleanup(ctx, ws)
+}
+
+// PutFiles implements the CodeExecutor interface.
+func (c *CodeExecutor) PutFiles(
+	ctx context.Context, ws codeexecutor.Workspace,
+	files []codeexecutor.PutFile,
+) error {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return err
+	}
+	return rt.PutFiles(ctx, ws, files)
+}
+
+// PutDirectory implements the CodeExecutor interface.
+func (c *CodeExecutor) PutDirectory(
+	ctx context.Context, ws codeexecutor.Workspace,
+	hostPath, to string,
+) error {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return err
+	}
+	return rt.PutDirectory(ctx, ws, hostPath, to)
+}
+
+// PutSkill implements the CodeExecutor interface.
+func (c *CodeExecutor) PutSkill(
+	ctx context.Context, ws codeexecutor.Workspace,
+	skillRoot, to string,
+) error {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return err
+	}
+	return rt.PutSkill(ctx, ws, skillRoot, to)
+}
+
+// RunProgram implements the CodeExecutor interface.
+func (c *CodeExecutor) RunProgram(
+	ctx context.Context, ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	return rt.RunProgram(ctx, ws, spec)
+}
+
+// Collect implements the CodeExecutor interface.
+func (c *CodeExecutor) Collect(
+	ctx context.Context, ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return nil, err
+	}
+	return rt.Collect(ctx, ws, patterns)
+}
+
+// ExecuteInline implements the CodeExecutor interface.
+func (c *CodeExecutor) ExecuteInline(
+	ctx context.Context, execID string,
+	blocks []codeexecutor.CodeBlock,
+	timeout time.Duration,
+) (codeexecutor.RunResult, error) {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	return rt.ExecuteInline(ctx, execID, blocks, timeout)
+}
+
 func createBuildContext(dockerPath string) (io.ReadCloser, error) {
 	return archive.TarWithOptions(dockerPath, &archive.TarOptions{})
 }

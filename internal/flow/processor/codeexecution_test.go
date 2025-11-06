@@ -10,10 +10,11 @@
 package processor_test
 
 import (
-	"context"
-	"fmt"
-	"strings"
-	"testing"
+    "context"
+    "fmt"
+    "time"
+    "strings"
+    "testing"
 
 	"github.com/stretchr/testify/assert"
 
@@ -82,8 +83,40 @@ func (s *stubExec) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecu
 	return codeexecutor.CodeExecutionResult{Output: "OK"}, nil
 }
 func (s *stubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
-	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+    return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 }
+
+func (s *stubExec) CreateWorkspace(
+    ctx context.Context, id string,
+    pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) { return codeexecutor.Workspace{}, nil }
+func (s *stubExec) Cleanup(ctx context.Context, ws codeexecutor.Workspace) error {
+    return nil
+}
+func (s *stubExec) PutFiles(
+    ctx context.Context, ws codeexecutor.Workspace,
+    files []codeexecutor.PutFile,
+) error { return nil }
+func (s *stubExec) PutDirectory(
+    ctx context.Context, ws codeexecutor.Workspace,
+    hostPath, to string,
+) error { return nil }
+func (s *stubExec) PutSkill(
+    ctx context.Context, ws codeexecutor.Workspace,
+    root, to string,
+) error { return nil }
+func (s *stubExec) RunProgram(
+    ctx context.Context, ws codeexecutor.Workspace,
+    spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) { return codeexecutor.RunResult{}, nil }
+func (s *stubExec) Collect(
+    ctx context.Context, ws codeexecutor.Workspace,
+    patterns []string,
+) ([]codeexecutor.File, error) { return nil, nil }
+func (s *stubExec) ExecuteInline(
+    ctx context.Context, id string,
+    blocks []codeexecutor.CodeBlock, timeout time.Duration,
+) (codeexecutor.RunResult, error) { return codeexecutor.RunResult{}, nil }
 
 // testAgent implements agent.Agent and agent.CodeExecutor
 type testAgent struct {

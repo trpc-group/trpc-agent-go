@@ -44,8 +44,8 @@ const (
 	defaultRunContainerBase = "/mnt/run"
 )
 
-// WorkspaceRuntime implements WorkspaceExecutor on Docker.
-type WorkspaceRuntime struct {
+// workspaceRuntime provides workspace execution on Docker.
+type workspaceRuntime struct {
 	ce  *CodeExecutor
 	cfg runtimeConfig
 }
@@ -57,11 +57,11 @@ type runtimeConfig struct {
 	runContainerBase    string
 }
 
-// NewWorkspaceRuntime creates a new container workspace runtime.
+// newWorkspaceRuntime creates a new container workspace runtime.
 // Default behavior mounts a writable host temp directory at
 // /mnt/run and, when SKILLS_ROOT is set, mounts it read-only at
 // /mnt/skills.
-func NewWorkspaceRuntime() (*WorkspaceRuntime, error) {
+func newWorkspaceRuntime() (*workspaceRuntime, error) {
 	cfg := runtimeConfig{
 		runContainerBase:    defaultRunContainerBase,
 		skillsContainerBase: defaultSkillsContainer,
@@ -98,11 +98,11 @@ func NewWorkspaceRuntime() (*WorkspaceRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &WorkspaceRuntime{ce: ce, cfg: cfg}, nil
+	return &workspaceRuntime{ce: ce, cfg: cfg}, nil
 }
 
 // CreateWorkspace ensures a per‑execution directory inside container.
-func (r *WorkspaceRuntime) CreateWorkspace(
+func (r *workspaceRuntime) CreateWorkspace(
 	ctx context.Context,
 	execID string,
 	pol codeexecutor.WorkspacePolicy,
@@ -137,7 +137,7 @@ func (r *WorkspaceRuntime) CreateWorkspace(
 }
 
 // Cleanup removes the workspace directory.
-func (r *WorkspaceRuntime) Cleanup(
+func (r *workspaceRuntime) Cleanup(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 ) error {
@@ -152,7 +152,7 @@ func (r *WorkspaceRuntime) Cleanup(
 }
 
 // PutFiles writes files via CopyToContainer.
-func (r *WorkspaceRuntime) PutFiles(
+func (r *workspaceRuntime) PutFiles(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	files []codeexecutor.PutFile,
@@ -179,7 +179,7 @@ func (r *WorkspaceRuntime) PutFiles(
 }
 
 // PutDirectory copies a host directory into the workspace.
-func (r *WorkspaceRuntime) PutDirectory(
+func (r *workspaceRuntime) PutDirectory(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	hostPath string,
@@ -256,7 +256,7 @@ func (r *WorkspaceRuntime) PutDirectory(
 }
 
 // PutSkill is PutDirectory alias.
-func (r *WorkspaceRuntime) PutSkill(
+func (r *workspaceRuntime) PutSkill(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	skillRoot string,
@@ -306,7 +306,7 @@ func (r *WorkspaceRuntime) PutSkill(
 }
 
 // RunProgram runs a command in the workspace with timeout.
-func (r *WorkspaceRuntime) RunProgram(
+func (r *workspaceRuntime) RunProgram(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
@@ -376,7 +376,7 @@ func (r *WorkspaceRuntime) RunProgram(
 }
 
 // Collect finds files via shell glob expansion and copies content.
-func (r *WorkspaceRuntime) Collect(
+func (r *workspaceRuntime) Collect(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	patterns []string,
@@ -426,7 +426,7 @@ func (r *WorkspaceRuntime) Collect(
 }
 
 // ExecuteInline writes blocks then runs them via RunProgram.
-func (r *WorkspaceRuntime) ExecuteInline(
+func (r *workspaceRuntime) ExecuteInline(
 	ctx context.Context,
 	execID string,
 	blocks []codeexecutor.CodeBlock,
@@ -493,7 +493,7 @@ func (r *WorkspaceRuntime) ExecuteInline(
 
 // Internal helpers
 
-func (r *WorkspaceRuntime) execCmd(
+func (r *workspaceRuntime) execCmd(
 	ctx context.Context,
 	argv []string,
 	timeout time.Duration,
@@ -584,7 +584,7 @@ func tarFromFiles(files []codeexecutor.PutFile) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
 }
 
-func (r *WorkspaceRuntime) copyFileOut(
+func (r *workspaceRuntime) copyFileOut(
 	ctx context.Context,
 	fullPath string,
 ) ([]byte, string, error) {

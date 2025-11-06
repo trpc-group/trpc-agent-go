@@ -30,12 +30,12 @@ import (
 // It stages the entire skill directory and runs a single command.
 type RunTool struct {
 	repo skill.Repository
-	exec codeexecutor.WorkspaceExecutor
+	exec codeexecutor.CodeExecutor
 }
 
 // NewRunTool creates a new RunTool.
 func NewRunTool(repo skill.Repository,
-	exec codeexecutor.WorkspaceExecutor) *RunTool {
+	exec codeexecutor.CodeExecutor) *RunTool {
 	return &RunTool{repo: repo, exec: exec}
 }
 
@@ -151,7 +151,7 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 
 	if t.exec == nil {
-		return nil, fmt.Errorf("workspace executor is not configured")
+		return nil, fmt.Errorf("executor is not configured")
 	}
 
 	// Create workspace and stage the skill directory.

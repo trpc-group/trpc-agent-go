@@ -78,12 +78,12 @@ import (
 )
 
 repo, _ := skill.NewFSRepository("./skills")
-exec := local.NewRuntime("")
+exec := local.New()
 
 agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
-    llmagent.WithWorkspaceExecutor(exec),
+    llmagent.WithCodeExecutor(exec),
 )
 ```
 
@@ -208,9 +208,9 @@ https://github.com/anthropics/skills
    - 若使用 `save_as_artifacts`，结果里还会给出
      `artifact_files`；可在上层服务里渲染“下载”。
 
-## 工作区执行器
+## 执行器
 
-通用接口： [codeexecutor/workspace.go](codeexecutor/workspace.go)
+接口： [codeexecutor/codeexecutor.go](codeexecutor/codeexecutor.go)
 
 实现：
 - 本地： [codeexecutor/local/workspace_runtime.go]
@@ -254,8 +254,8 @@ https://github.com/anthropics/skills
 
 - “unknown skill”：确认技能名与仓库路径；调用 `skill_load` 前
   先检查“概览注入”是否包含该技能
-- “workspace executor is not configured”：为 `LLMAgent` 配置
-  `WithWorkspaceExecutor`，或使用默认本地执行器
+- “executor is not configured”：为 `LLMAgent` 配置
+  `WithCodeExecutor`，或使用默认本地执行器
 - 超时/非零退出码：检查命令、依赖与 `timeout` 参数；容器模式下
   网络默认关闭，避免依赖网络的脚本
 - 输出文件未返回：检查 `output_files` 通配符是否指向正确位置

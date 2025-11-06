@@ -78,12 +78,12 @@ import (
 )
 
 repo, _ := skill.NewFSRepository("./skills")
-exec := local.NewRuntime("")
+exec := local.New()
 
 agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
-    llmagent.WithWorkspaceExecutor(exec),
+    llmagent.WithCodeExecutor(exec),
 )
 ```
 
@@ -198,9 +198,9 @@ Typical flow:
   - With `save_as_artifacts`, you’ll also get `artifact_files` in the
      result that your UI can render as downloadable items.
 
-## Workspace Executors
+## Executor
 
-Interface: [codeexecutor/workspace.go](codeexecutor/workspace.go)
+Interface: [codeexecutor/codeexecutor.go](codeexecutor/codeexecutor.go)
 
 Implementations:
 - Local: [codeexecutor/local/workspace_runtime.go]
@@ -243,7 +243,7 @@ Common spans:
 
 - Unknown skill: verify name and repository path; ensure the overview
   lists the skill before calling `skill_load`
-- Nil executor: configure `WithWorkspaceExecutor` or rely on the local
+- Nil executor: configure `WithCodeExecutor` or rely on the local
   default
 - Timeouts/non‑zero exit codes: inspect command/deps/`timeout`; in
   container mode, network is disabled by default

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -804,6 +805,62 @@ func (m *mockCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter 
 		Start: "```",
 		End:   "```",
 	}
+}
+
+func (m *mockCodeExecutor) CreateWorkspace(
+	ctx context.Context, id string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/mock"}, nil
+}
+
+func (m *mockCodeExecutor) Cleanup(
+	ctx context.Context, ws codeexecutor.Workspace,
+) error {
+	return nil
+}
+
+func (m *mockCodeExecutor) PutFiles(
+	ctx context.Context, ws codeexecutor.Workspace,
+	files []codeexecutor.PutFile,
+) error {
+	return nil
+}
+
+func (m *mockCodeExecutor) PutDirectory(
+	ctx context.Context, ws codeexecutor.Workspace,
+	hostPath, to string,
+) error {
+	return nil
+}
+
+func (m *mockCodeExecutor) PutSkill(
+	ctx context.Context, ws codeexecutor.Workspace,
+	root, to string,
+) error {
+	return nil
+}
+
+func (m *mockCodeExecutor) RunProgram(
+	ctx context.Context, ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{}, nil
+}
+
+func (m *mockCodeExecutor) Collect(
+	ctx context.Context, ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	return nil, nil
+}
+
+func (m *mockCodeExecutor) ExecuteInline(
+	ctx context.Context, id string,
+	blocks []codeexecutor.CodeBlock,
+	timeout time.Duration,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{}, nil
 }
 
 // TestWithModels tests the WithModels option.

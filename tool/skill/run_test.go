@@ -56,7 +56,7 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use local runtime. No special options needed.
-	exec := localexec.NewRuntime("")
+	exec := localexec.New()
 	rt := NewRunTool(repo, exec)
 
 	args := runInput{
@@ -92,7 +92,7 @@ func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	exec := localexec.NewRuntime("")
+	exec := localexec.New()
 	rt := NewRunTool(repo, exec)
 
 	args := runInput{
@@ -138,7 +138,7 @@ func TestRunTool_SaveAsArtifacts_WithPrefix_NoOmit(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	exec := localexec.NewRuntime("")
+	exec := localexec.New()
 	rt := NewRunTool(repo, exec)
 
 	args := runInput{
@@ -180,7 +180,7 @@ func TestRunTool_SaveAsArtifacts_NoInvocationContext(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	exec := localexec.NewRuntime("")
+	exec := localexec.New()
 	rt := NewRunTool(repo, exec)
 
 	args := runInput{
@@ -239,7 +239,7 @@ func TestRunTool_SaveAsArtifacts_SaveError(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	exec := localexec.NewRuntime("")
+    exec := localexec.New()
 	rt := NewRunTool(repo, exec)
 
 	args := runInput{
@@ -273,7 +273,7 @@ func TestRunTool_ErrorOnMissingSkill(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-	exec := localexec.NewRuntime("")
+    exec := localexec.New()
 	rt := NewRunTool(repo, exec)
 
 	args := runInput{Skill: "missing", Command: "echo hello"}
