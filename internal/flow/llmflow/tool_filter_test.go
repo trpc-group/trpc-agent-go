@@ -110,7 +110,7 @@ func TestGetFilteredTools_NoFilter(t *testing.T) {
 	inv.AgentName = "test-agent"
 
 	// No filter set
-	filtered := f.getFilteredTools(inv)
+	filtered := f.getFilteredTools(context.Background(), inv)
 
 	// Should return all tools
 	if len(filtered) != 2 {
@@ -118,8 +118,8 @@ func TestGetFilteredTools_NoFilter(t *testing.T) {
 	}
 }
 
-// TestGetFilteredTools_WithAllowedTools tests global tool filtering.
-func TestGetFilteredTools_WithAllowedTools(t *testing.T) {
+// TestGetFilteredTools_WithToolFilter tests tool filtering using FilterFunc.
+func TestGetFilteredTools_WithToolFilter(t *testing.T) {
 	f := New(nil, nil, Options{})
 
 	userTool1 := &mockTool{name: "user_tool_1"}
@@ -135,9 +135,9 @@ func TestGetFilteredTools_WithAllowedTools(t *testing.T) {
 	inv := agent.NewInvocation()
 	inv.Agent = mockAgent
 	inv.AgentName = "test-agent"
-	inv.RunOptions.AllowedTools = []string{"user_tool_1"}
+	inv.RunOptions.ToolFilter = tool.NewIncludeToolNamesFilter("user_tool_1")
 
-	filtered := f.getFilteredTools(inv)
+	filtered := f.getFilteredTools(context.Background(), inv)
 
 	// Should include: user_tool_1 (allowed) + framework_tool (always included)
 	if len(filtered) != 2 {
@@ -170,8 +170,8 @@ func TestGetFilteredTools_WithAllowedTools(t *testing.T) {
 	}
 }
 
-// TestGetFilteredTools_WithAllowedAgentTools tests agent-specific tool filtering.
-func TestGetFilteredTools_WithAllowedAgentTools(t *testing.T) {
+// TestGetFilteredTools_WithExcludeFilter tests tool filtering using exclude filter.
+func TestGetFilteredTools_WithExcludeFilter(t *testing.T) {
 	f := New(nil, nil, Options{})
 
 	userTool1 := &mockTool{name: "user_tool_1"}
@@ -187,15 +187,13 @@ func TestGetFilteredTools_WithAllowedAgentTools(t *testing.T) {
 	inv := agent.NewInvocation()
 	inv.Agent = mockAgent
 	inv.AgentName = "test-agent"
-	inv.RunOptions.AllowedAgentTools = map[string][]string{
-		"test-agent": {"user_tool_2"},
-	}
+	inv.RunOptions.ToolFilter = tool.NewExcludeToolNamesFilter("user_tool_2")
 
-	filtered := f.getFilteredTools(inv)
+	filtered := f.getFilteredTools(context.Background(), inv)
 
-	// Should include: user_tool_2 (allowed for this agent) + framework_tool (always included)
+	// Should include: user_tool_1 (not excluded) + framework_tool (always included)
 	if len(filtered) != 2 {
-		t.Errorf("expected 2 tools (user_tool_2 + framework_tool), got %d", len(filtered))
+		t.Errorf("expected 2 tools (user_tool_1 + framework_tool), got %d", len(filtered))
 	}
 
 	foundUserTool1 := false
@@ -213,19 +211,19 @@ func TestGetFilteredTools_WithAllowedAgentTools(t *testing.T) {
 		}
 	}
 
-	if foundUserTool1 {
-		t.Error("user_tool_1 should be filtered out")
+	if !foundUserTool1 {
+		t.Error("expected user_tool_1 to be included")
 	}
-	if !foundUserTool2 {
-		t.Error("expected user_tool_2 to be included")
+	if foundUserTool2 {
+		t.Error("user_tool_2 should be filtered out")
 	}
 	if !foundFramework {
 		t.Error("expected framework_tool to be included")
 	}
 }
 
-// TestGetFilteredTools_Priority tests that AllowedAgentTools takes priority over AllowedTools.
-func TestGetFilteredTools_Priority(t *testing.T) {
+// TestGetFilteredTools_CustomFilter tests custom filter function.
+func TestGetFilteredTools_CustomFilter(t *testing.T) {
 	f := New(nil, nil, Options{})
 
 	userTool1 := &mockTool{name: "user_tool_1"}
@@ -241,15 +239,22 @@ func TestGetFilteredTools_Priority(t *testing.T) {
 	inv := agent.NewInvocation()
 	inv.Agent = mockAgent
 	inv.AgentName = "test-agent"
-	// Set both global and agent-specific filters
-	inv.RunOptions.AllowedTools = []string{"user_tool_1"}
-	inv.RunOptions.AllowedAgentTools = map[string][]string{
-		"test-agent": {"user_tool_2"}, // This should take priority
+	// Custom filter: only allow tools with "1" in the name
+	inv.RunOptions.ToolFilter = func(ctx context.Context, t tool.Tool) bool {
+		decl := t.Declaration()
+		if decl == nil {
+			return false
+		}
+		return decl.Name == "user_tool_1"
 	}
 
-	filtered := f.getFilteredTools(inv)
+	filtered := f.getFilteredTools(context.Background(), inv)
 
-	// Should use agent-specific filter: user_tool_2 + framework_tool
+	// Should include: user_tool_1 (matches custom logic) + framework_tool (always included)
+	if len(filtered) != 2 {
+		t.Errorf("expected 2 tools, got %d", len(filtered))
+	}
+
 	foundUserTool1 := false
 	foundUserTool2 := false
 
@@ -262,11 +267,11 @@ func TestGetFilteredTools_Priority(t *testing.T) {
 		}
 	}
 
-	if foundUserTool1 {
-		t.Error("user_tool_1 should be filtered (agent-specific filter takes priority)")
+	if !foundUserTool1 {
+		t.Error("user_tool_1 should be included (matches custom filter)")
 	}
-	if !foundUserTool2 {
-		t.Error("user_tool_2 should be included (from agent-specific filter)")
+	if foundUserTool2 {
+		t.Error("user_tool_2 should be filtered out")
 	}
 }
 
@@ -286,13 +291,13 @@ func TestGetFilteredTools_AgentWithoutUserToolsProvider(t *testing.T) {
 	inv := agent.NewInvocation()
 	inv.Agent = mockAgent
 	inv.AgentName = "old-agent"
-	inv.RunOptions.AllowedTools = []string{"tool_1"}
+	inv.RunOptions.ToolFilter = tool.NewIncludeToolNamesFilter("tool_1")
 
-	filtered := f.getFilteredTools(inv)
+	filtered := f.getFilteredTools(context.Background(), inv)
 
-	// Should use old behavior: filter all tools (no distinction between user and framework)
+	// Should filter all tools (no distinction between user and framework)
 	if len(filtered) != 1 {
-		t.Errorf("expected 1 tool (old behavior), got %d", len(filtered))
+		t.Errorf("expected 1 tool, got %d", len(filtered))
 	}
 
 	if filtered[0].Declaration().Name != "tool_1" {
@@ -318,9 +323,9 @@ func TestGetFilteredTools_FrameworkToolsNeverFiltered(t *testing.T) {
 	inv.Agent = mockAgent
 	inv.AgentName = "test-agent"
 	// Allow only user_tool, but framework tools should still be included
-	inv.RunOptions.AllowedTools = []string{"user_tool"}
+	inv.RunOptions.ToolFilter = tool.NewIncludeToolNamesFilter("user_tool")
 
-	filtered := f.getFilteredTools(inv)
+	filtered := f.getFilteredTools(context.Background(), inv)
 
 	// Should include: user_tool + knowledge_search + transfer_to_agent
 	if len(filtered) != 3 {
@@ -344,31 +349,5 @@ func TestGetFilteredTools_FrameworkToolsNeverFiltered(t *testing.T) {
 	}
 	if !foundTransfer {
 		t.Error("transfer_to_agent (framework tool) should never be filtered")
-	}
-}
-
-// TestGetFilteredTools_EmptyAllowedList tests that empty allowed list returns all tools.
-func TestGetFilteredTools_EmptyAllowedList(t *testing.T) {
-	f := New(nil, nil, Options{})
-
-	tool1 := &mockTool{name: "tool_1"}
-	tool2 := &mockTool{name: "tool_2"}
-
-	mockAgent := &mockAgentWithUserTools{
-		name:      "test-agent",
-		allTools:  []tool.Tool{tool1, tool2},
-		userTools: []tool.Tool{tool1, tool2},
-	}
-
-	inv := agent.NewInvocation()
-	inv.Agent = mockAgent
-	inv.AgentName = "test-agent"
-	inv.RunOptions.AllowedTools = []string{} // Empty list
-
-	filtered := f.getFilteredTools(inv)
-
-	// Empty list should be treated as "no filter"
-	if len(filtered) != 2 {
-		t.Errorf("expected 2 tools (empty filter = no filter), got %d", len(filtered))
 	}
 }

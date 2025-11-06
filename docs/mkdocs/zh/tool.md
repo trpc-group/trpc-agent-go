@@ -515,51 +515,101 @@ combinedToolSet := mcp.NewMCPToolSet(
 - 🎯 **Per-Run 控制**：每次调用独立配置，不影响 Agent 定义
 - 💰 **成本优化**：减少发送给 LLM 的工具描述，降低 token 消耗
 - 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`）自动保留，永不被过滤
+- 🔧 **灵活定制**：支持内置过滤器和自定义 FilterFunc
 
 #### 基本用法
 
-**1. 全局过滤（WithAllowedTools）**
+**1. 排除特定工具（Exclude Filter）**
 
-统一限制所有 Agent 的可用工具：
+使用黑名单方式排除不需要的工具：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool"
+
+// 排除 text_tool，其他工具都可用
+filter := tool.NewExcludeToolNamesFilter("text_tool", "dangerous_tool")
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolFilter(filter),
+)
+```
+
+**2. 只允许特定工具（Include Filter）**
+
+使用白名单方式只允许指定的工具：
 
 ```go
 // 只允许使用计算器和时间工具
+filter := tool.NewIncludeToolNamesFilter("calculator", "time_tool")
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
-    agent.WithAllowedTools([]string{"calculator", "time_tool"}),
+    agent.WithToolFilter(filter),
 )
 ```
 
-**2. Agent 特定过滤（WithAllowedAgentTools）**
+**3. 自定义过滤逻辑（Custom FilterFunc）**
 
-为不同 Agent 设置不同的工具权限：
+实现自定义过滤函数以支持复杂的过滤逻辑：
 
 ```go
-// 为不同子 Agent 设置不同工具
+// 自定义过滤函数：只允许名称以 "safe_" 开头的工具
+filter := func(ctx context.Context, t tool.Tool) bool {
+    declaration := t.Declaration()
+    if declaration == nil {
+        return false
+    }
+    return strings.HasPrefix(declaration.Name, "safe_")
+}
+
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
-    agent.WithAllowedAgentTools(map[string][]string{
-        "math-agent": {"calculator"},           // 数学 Agent 只能用计算器
-        "time-agent": {"time_tool"},            // 时间 Agent 只能用时间工具
-        "text-agent": {"text_tool", "search"},  // 文本 Agent 可用两个工具
-    }),
+    agent.WithToolFilter(filter),
 )
 ```
 
-**3. 组合使用**
+**4. Agent 粒度过滤（Per-Agent Filtering）**
 
-设置全局默认 + Agent 特定覆盖：
+通过 `agent.InvocationFromContext` 实现不同 Agent 使用不同工具：
 
 ```go
+// 为不同 Agent 定义允许的工具
+agentAllowedTools := map[string]map[string]bool{
+    "math-agent": {
+        "calculator": true,
+    },
+    "time-agent": {
+        "time_tool": true,
+    },
+}
+
+// 自定义过滤函数：根据当前 Agent 名称过滤
+filter := func(ctx context.Context, t tool.Tool) bool {
+    declaration := t.Declaration()
+    if declaration == nil {
+        return false
+    }
+    toolName := declaration.Name
+
+    // 从 context 获取当前 Agent 信息
+    inv, ok := agent.InvocationFromContext(ctx)
+    if !ok || inv == nil {
+        return true // fallback: 允许所有工具
+    }
+
+    agentName := inv.AgentName
+
+    // 检查该工具是否在当前 Agent 的允许列表中
+    allowedTools, exists := agentAllowedTools[agentName]
+    if !exists {
+        return true // fallback: 允许所有工具
+    }
+
+    return allowedTools[toolName]
+}
+
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
-    // 全局：所有 Agent 默认可用这些工具
-    agent.WithAllowedTools([]string{"calculator", "time_tool", "search"}),
-    // Agent 特定：math-agent 只能用计算器（更严格）
-    agent.WithAllowedAgentTools(map[string][]string{
-        "math-agent": {"calculator"},
-    }),
+    agent.WithToolFilter(filter),
 )
 ```
 
-**优先级：** `WithAllowedAgentTools` > `WithAllowedTools` > Agent 注册的所有工具
+**完整示例：** 参见 `examples/toolfilter/` 目录
 
 #### 智能过滤机制
 
@@ -584,8 +634,9 @@ agent := llmagent.New("assistant",
 )
 
 // 运行时过滤：只允许 calculator
+filter := tool.NewIncludeToolNamesFilter("calculator")
 runner.Run(ctx, userID, sessionID, message,
-    agent.WithAllowedTools([]string{"calculator"}),
+    agent.WithToolFilter(filter),
 )
 
 // 实际发送给 LLM 的工具：

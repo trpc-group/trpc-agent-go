@@ -515,51 +515,101 @@ Per-run tool filtering enables dynamic control of tool availability for each `ru
 - 🎯 **Per-Run Control**: Independent configuration per invocation, no Agent modification needed
 - 💰 **Cost Optimization**: Reduce tool descriptions sent to LLM, lowering token costs
 - 🛡️ **Smart Protection**: Framework tools (`transfer_to_agent`, `knowledge_search`) automatically preserved, never filtered
+- 🔧 **Flexible Customization**: Support for built-in filters and custom FilterFunc
 
 #### Basic Usage
 
-**1. Global Filtering (WithAllowedTools)**
+**1. Exclude Specific Tools (Exclude Filter)**
 
-Uniformly restrict available tools for all Agents:
+Use blacklist approach to exclude unwanted tools:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool"
+
+// Exclude text_tool and dangerous_tool, all other tools available
+filter := tool.NewExcludeToolNamesFilter("text_tool", "dangerous_tool")
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolFilter(filter),
+)
+```
+
+**2. Include Only Specific Tools (Include Filter)**
+
+Use whitelist approach to allow only specified tools:
 
 ```go
 // Only allow calculator and time tool
+filter := tool.NewIncludeToolNamesFilter("calculator", "time_tool")
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
-    agent.WithAllowedTools([]string{"calculator", "time_tool"}),
+    agent.WithToolFilter(filter),
 )
 ```
 
-**2. Agent-Specific Filtering (WithAllowedAgentTools)**
+**3. Custom Filtering Logic (Custom FilterFunc)**
 
-Set different tool permissions for different Agents:
+Implement custom filter function for complex filtering logic:
 
 ```go
-// Configure different tools for different sub-Agents
+// Custom filter: only allow tools with names starting with "safe_"
+filter := func(ctx context.Context, t tool.Tool) bool {
+    declaration := t.Declaration()
+    if declaration == nil {
+        return false
+    }
+    return strings.HasPrefix(declaration.Name, "safe_")
+}
+
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
-    agent.WithAllowedAgentTools(map[string][]string{
-        "math-agent": {"calculator"},           // Math Agent can only use calculator
-        "time-agent": {"time_tool"},            // Time Agent can only use time tool
-        "text-agent": {"text_tool", "search"},  // Text Agent can use two tools
-    }),
+    agent.WithToolFilter(filter),
 )
 ```
 
-**3. Combined Usage**
+**4. Per-Agent Filtering**
 
-Set global default + Agent-specific overrides:
+Use `agent.InvocationFromContext` to implement different tool sets for different Agents:
 
 ```go
+// Define allowed tools for each Agent
+agentAllowedTools := map[string]map[string]bool{
+    "math-agent": {
+        "calculator": true,
+    },
+    "time-agent": {
+        "time_tool": true,
+    },
+}
+
+// Custom filter function: filter based on current Agent name
+filter := func(ctx context.Context, t tool.Tool) bool {
+    declaration := t.Declaration()
+    if declaration == nil {
+        return false
+    }
+    toolName := declaration.Name
+
+    // Get current Agent information from context
+    inv, ok := agent.InvocationFromContext(ctx)
+    if !ok || inv == nil {
+        return true // fallback: allow all tools
+    }
+
+    agentName := inv.AgentName
+
+    // Check if this tool is in the current Agent's allowed list
+    allowedTools, exists := agentAllowedTools[agentName]
+    if !exists {
+        return true // fallback: allow all tools
+    }
+
+    return allowedTools[toolName]
+}
+
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
-    // Global: all Agents can use these tools by default
-    agent.WithAllowedTools([]string{"calculator", "time_tool", "search"}),
-    // Agent-specific: math-agent can only use calculator (more restrictive)
-    agent.WithAllowedAgentTools(map[string][]string{
-        "math-agent": {"calculator"},
-    }),
+    agent.WithToolFilter(filter),
 )
 ```
 
-**Priority:** `WithAllowedAgentTools` > `WithAllowedTools` > All Agent-registered tools
+**Complete Example:** See `examples/toolfilter/` directory
 
 #### Smart Filtering Mechanism
 
@@ -584,8 +634,9 @@ agent := llmagent.New("assistant",
 )
 
 // Runtime filtering: only allow calculator
+filter := tool.NewIncludeToolNamesFilter("calculator")
 runner.Run(ctx, userID, sessionID, message,
-    agent.WithAllowedTools([]string{"calculator"}),
+    agent.WithToolFilter(filter),
 )
 
 // Tools actually sent to LLM:

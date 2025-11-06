@@ -312,7 +312,7 @@ func (f *Flow) preprocess(
 
 	// Add tools to the request with optional filtering.
 	if invocation.Agent != nil {
-		tools := f.getFilteredTools(invocation)
+		tools := f.getFilteredTools(ctx, invocation)
 		for _, t := range tools {
 			llmRequest.Tools[t.Declaration().Name] = t
 		}
@@ -323,17 +323,13 @@ func (f *Flow) preprocess(
 // which tools were explicitly registered by the user (WithTools, WithToolSets)
 // vs framework-added tools (Knowledge, SubAgents).
 //
-// User tools are subject to filtering via WithAllowedTools / WithAllowedAgentTools.
+// User tools are subject to filtering via WithToolFilter.
 // Framework tools are never filtered and always available to the agent.
 type UserToolsProvider interface {
 	UserTools() []tool.Tool
 }
 
-// getFilteredTools returns the list of tools for this invocation after applying filters.
-// It implements the following priority order:
-//  1. If AllowedAgentTools contains entry for this agent -> use those tools only
-//  2. Else if AllowedTools is set -> filter to those tools only
-//  3. Else -> use all agent's registered tools
+// getFilteredTools returns the list of tools for this invocation after applying the filter.
 //
 // User tools (can be filtered):
 //   - Tools registered via WithTools
@@ -344,32 +340,16 @@ type UserToolsProvider interface {
 //   - knowledge_search / agentic_knowledge_search (auto-added when Knowledge is configured)
 //
 // This method is called during the preprocess stage, before sending the request to the model.
-func (f *Flow) getFilteredTools(invocation *agent.Invocation) []tool.Tool {
+func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocation) []tool.Tool {
 	// Get all tools from the agent.
 	allTools := invocation.Agent.Tools()
 
-	// Step 1: Determine the allowed tool names based on priority.
-	var allowedToolNames []string
-
-	// Check for agent-specific filter first (highest priority).
-	if invocation.AgentName != "" && len(invocation.RunOptions.AllowedAgentTools) > 0 {
-		if agentAllowed, ok := invocation.RunOptions.AllowedAgentTools[invocation.AgentName]; ok {
-			allowedToolNames = agentAllowed
-		}
-	}
-
-	// Fallback to global AllowedTools if no agent-specific filter.
-	if len(allowedToolNames) == 0 && len(invocation.RunOptions.AllowedTools) > 0 {
-		allowedToolNames = invocation.RunOptions.AllowedTools
-	}
-
-	// Step 2: Apply filtering or use all tools.
-	if len(allowedToolNames) == 0 {
-		// No filter specified, use all tools.
+	// If no filter is specified, return all tools.
+	if invocation.RunOptions.ToolFilter == nil {
 		return allTools
 	}
 
-	// Step 3: Get user tools (if the agent supports it).
+	// Get user tools (if the agent supports it).
 	// User tools are those explicitly registered via WithTools and WithToolSets.
 	// Framework tools (Knowledge, SubAgents) are never filtered.
 	var userToolNames map[string]bool
@@ -384,39 +364,23 @@ func (f *Flow) getFilteredTools(invocation *agent.Invocation) []tool.Tool {
 		}
 	}
 
-	// Build allowed set from allowed tool names.
-	allowedSet := make(map[string]bool, len(allowedToolNames))
-	for _, name := range allowedToolNames {
-		allowedSet[name] = true
-	}
-
-	// Filter tools: only filter user-registered tools.
+	// Apply the filter function to each tool.
+	// Framework tools are never filtered.
 	filtered := make([]tool.Tool, 0, len(allTools))
 	for _, t := range allTools {
 		toolName := t.Declaration().Name
 
-		// Determine if this tool should be filtered:
-		// - If agent doesn't track user tools, don't filter any tools (backward compatibility)
-		// - If agent tracks user tools:
-		//   * User tools (in userToolNames): filter based on allowedSet
-		//   * Framework tools (not in userToolNames): never filter
-		shouldInclude := false
-		if !hasUserToolTracking {
-			// No user tool tracking - include if in allowed set (old behavior).
-			shouldInclude = allowedSet[toolName]
-		} else {
-			// Has user tool tracking - only filter user tools.
-			isUserTool := userToolNames[toolName]
-			if isUserTool {
-				// User tool: check if allowed.
-				shouldInclude = allowedSet[toolName]
-			} else {
-				// Framework tool: always include.
-				shouldInclude = true
-			}
+		// Determine if this is a user tool or framework tool.
+		isUserTool := !hasUserToolTracking || userToolNames[toolName]
+
+		// Framework tools are always included (never filtered).
+		if !isUserTool {
+			filtered = append(filtered, t)
+			continue
 		}
 
-		if shouldInclude {
+		// User tool: apply the filter function.
+		if invocation.RunOptions.ToolFilter(ctx, t) {
 			filtered = append(filtered, t)
 		}
 	}

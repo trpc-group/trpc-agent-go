@@ -36,7 +36,7 @@ import (
 func main() {
 	// Parse command line arguments
 	modelName := flag.String("model", "deepseek-chat", "Model name to use")
-	filterMode := flag.String("filter", "", "Filter mode: restrict-math, restrict-time, global, combined, or empty for no filter")
+	filterMode := flag.String("filter", "", "Filter mode: exclude-demo, include-demo, per-agent, or empty for no filter")
 	flag.Parse()
 
 	fmt.Printf("🚀 Multi-Agent Tool Filtering Demo\n")
@@ -164,22 +164,19 @@ func (c *toolFilterDemo) startChat(ctx context.Context) error {
 	if c.filterMode != "" {
 		fmt.Println("\n   Tool filtering is active:")
 		switch c.filterMode {
-		case "restrict-math":
-			fmt.Println("   - Using WithAllowedAgentTools")
-			fmt.Println("   - math-agent: only calculator (text_tool filtered out)")
-			fmt.Println("   - time-agent: all tools")
-		case "restrict-time":
-			fmt.Println("   - Using WithAllowedAgentTools")
-			fmt.Println("   - math-agent: all tools")
-			fmt.Println("   - time-agent: only time_tool (text_tool filtered out)")
-		case "global":
-			fmt.Println("   - Using WithAllowedTools (global filter)")
-			fmt.Println("   - All agents: only calculator and time_tool (text_tool filtered out)")
-		case "combined":
-			fmt.Println("   - Using WithAllowedTools + WithAllowedAgentTools (combined)")
-			fmt.Println("   - Global baseline: calculator and time_tool allowed")
-			fmt.Println("   - math-agent override: only calculator (more restrictive)")
-			fmt.Println("   - time-agent: uses global baseline")
+		case "exclude-demo":
+			fmt.Println("   - Demo: tool.NewExcludeToolNamesFilter")
+			fmt.Println("   - Excludes: text_tool globally")
+			fmt.Println("   - Result: All agents can use calculator/time_tool, but NOT text_tool")
+		case "include-demo":
+			fmt.Println("   - Demo: tool.NewIncludeToolNamesFilter")
+			fmt.Println("   - Includes only: calculator, time_tool")
+			fmt.Println("   - Result: All agents can ONLY use calculator and time_tool")
+		case "per-agent":
+			fmt.Println("   - Demo: Custom FilterFunc with agent.InvocationFromContext")
+			fmt.Println("   - math-agent: only calculator")
+			fmt.Println("   - time-agent: only time_tool")
+			fmt.Println("   - Shows how to implement agent-specific filtering")
 		}
 	} else {
 		fmt.Println("\n   No filtering - all agents can use all their tools")
@@ -228,32 +225,27 @@ func (c *toolFilterDemo) processMessage(ctx context.Context, userMessage string)
 	// Apply tool filtering based on filter mode
 	if c.filterMode != "" {
 		switch c.filterMode {
-		case "restrict-math", "restrict-time":
-			// Agent-specific filtering only
-			agentTools := c.getAgentToolsFilter()
-			if len(agentTools) > 0 {
-				runOpts = append(runOpts, agent.WithAllowedAgentTools(agentTools))
-				fmt.Printf("🔒 Agent-specific filter: %v\n", agentTools)
-			}
-		case "global":
-			// Global filtering using WithAllowedTools
-			// Note: transfer_to_agent is automatically included as a built-in tool
-			globalTools := []string{"calculator", "time_tool"}
-			runOpts = append(runOpts, agent.WithAllowedTools(globalTools))
-			fmt.Printf("🌍 Global filter (all agents): %v\n", globalTools)
-			fmt.Printf("   (Built-in tools like transfer_to_agent are auto-included)\n")
-		case "combined":
-			// Combined: global baseline + agent-specific override
-			// Note: Built-in tools (transfer_to_agent, knowledge_search) are auto-included
-			globalTools := []string{"calculator", "time_tool"}
-			agentTools := map[string][]string{
-				"math-agent": {"calculator"}, // Override: more restrictive than global
-			}
-			runOpts = append(runOpts, agent.WithAllowedTools(globalTools))
-			runOpts = append(runOpts, agent.WithAllowedAgentTools(agentTools))
-			fmt.Printf("🌍 Global filter: %v\n", globalTools)
-			fmt.Printf("🔒 Agent-specific override: %v\n", agentTools)
-			fmt.Printf("   (Built-in tools are auto-included)\n")
+		case "exclude-demo":
+			// Demo: Exclude specific tools using NewExcludeToolNamesFilter
+			filter := tool.NewExcludeToolNamesFilter("text_tool")
+			runOpts = append(runOpts, agent.WithToolFilter(filter))
+			fmt.Printf("� Exclude filter: text_tool\n")
+			fmt.Printf("   (Framework tools like transfer_to_agent are auto-included)\n")
+		case "include-demo":
+			// Demo: Include only specific tools using NewIncludeToolNamesFilter
+			filter := tool.NewIncludeToolNamesFilter("calculator", "time_tool")
+			runOpts = append(runOpts, agent.WithToolFilter(filter))
+			fmt.Printf("✅ Include filter: calculator, time_tool\n")
+			fmt.Printf("   (Framework tools like transfer_to_agent are auto-included)\n")
+		case "per-agent":
+			// Demo: Custom per-agent filtering using FilterFunc
+			// This demonstrates how users can implement agent-specific filtering
+			filter := c.createPerAgentFilter()
+			runOpts = append(runOpts, agent.WithToolFilter(filter))
+			fmt.Printf("🎯 Per-agent filter:\n")
+			fmt.Printf("   - math-agent: only calculator\n")
+			fmt.Printf("   - time-agent: only time_tool\n")
+			fmt.Printf("   (Framework tools are auto-included)\n")
 		}
 	}
 
@@ -267,23 +259,51 @@ func (c *toolFilterDemo) processMessage(ctx context.Context, userMessage string)
 	return c.processStreamingResponse(eventChan)
 }
 
-// getAgentToolsFilter returns agent-specific tool filters based on filter mode
-func (c *toolFilterDemo) getAgentToolsFilter() map[string][]string {
-	switch c.filterMode {
-	case "restrict-math":
-		// Restrict math-agent to only calculator
-		return map[string][]string{
-			"math-agent": {"calculator"},
-			// time-agent: no restriction, uses all its tools
+// createPerAgentFilter creates a custom filter that applies different rules per agent.
+// This demonstrates how users can implement agent-specific filtering logic.
+//
+// Key insight: The FilterFunc receives context.Context, which contains the invocation
+// information. You can use agent.InvocationFromContext(ctx) to get the current agent name
+// and apply agent-specific filtering rules.
+func (c *toolFilterDemo) createPerAgentFilter() tool.FilterFunc {
+	// Define per-agent allowed tools
+	agentAllowedTools := map[string]map[string]bool{
+		"math-agent": {
+			"calculator": true,
+			// text_tool is NOT in this list, so it will be filtered out
+		},
+		"time-agent": {
+			"time_tool": true,
+			// text_tool is NOT in this list, so it will be filtered out
+		},
+	}
+
+	return func(ctx context.Context, t tool.Tool) bool {
+		declaration := t.Declaration()
+		if declaration == nil {
+			return false
 		}
-	case "restrict-time":
-		// Restrict time-agent to only time_tool
-		return map[string][]string{
-			"time-agent": {"time_tool"},
-			// math-agent: no restriction, uses all its tools
+		toolName := declaration.Name
+
+		// Get the current agent name from invocation context
+		// The context contains invocation information during tool filtering
+		inv, ok := agent.InvocationFromContext(ctx)
+		if !ok || inv == nil {
+			// If no invocation context, allow all tools (fallback)
+			return true
 		}
-	default:
-		return nil // no filter
+
+		agentName := inv.AgentName
+
+		// Check if this tool is allowed for the current agent
+		allowedTools, exists := agentAllowedTools[agentName]
+		if !exists {
+			// If agent not in the map, allow all tools (fallback)
+			return true
+		}
+
+		// Return true only if the tool is in the agent's allowed list
+		return allowedTools[toolName]
 	}
 }
 

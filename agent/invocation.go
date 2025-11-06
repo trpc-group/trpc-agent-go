@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -190,56 +191,48 @@ func WithModelName(name string) RunOption {
 	}
 }
 
-// WithAllowedTools sets the allowed tools for this specific run.
-// This filters the tools available to the agent for this request only.
-// If empty, all tools registered with the agent will be available (default behavior).
+// WithToolFilter sets a custom tool filter function for this specific run.
+// The filter function receives a context and a tool, and returns true if the tool should be included.
 //
 // This is useful for:
-//   - Permission control: restrict tool access based on user roles
+//   - Permission control: restrict tool access based on user roles or runtime conditions
 //   - Cost optimization: reduce token usage by limiting tool descriptions
 //   - Feature isolation: limit capabilities for specific use cases
+//   - Dynamic filtering: filter tools based on runtime state, session data, etc.
 //
-// Example:
+// Example - Simple name-based filtering:
 //
 //	runner.Run(ctx, userID, sessionID, message,
-//	    agent.WithAllowedTools([]string{"calculator", "time_tool"}),
+//	    agent.WithToolFilter(tool.NewIncludeToolNamesFilter("calculator", "time_tool")),
 //	)
 //
-// Note: This is a "soft" constraint. Tools should still implement their own
-// authorization logic for security.
-func WithAllowedTools(toolNames []string) RunOption {
-	return func(opts *RunOptions) {
-		opts.AllowedTools = toolNames
-	}
-}
-
-// WithAllowedAgentTools sets the allowed tools for specific agents in this run.
-// This is useful for controlling tool access for sub-agents.
-// Key: agent name, Value: allowed tool names for that agent.
-//
-// Example:
+// Example - Custom logic with runtime state:
 //
 //	runner.Run(ctx, userID, sessionID, message,
-//	    agent.WithAllowedAgentTools(map[string][]string{
-//	        "agent1": {"tool_a", "tool_b"},  // agent1 can only use a and b
-//	        "agent2": {"tool_c"},             // agent2 can only use c
+//	    agent.WithToolFilter(func(ctx context.Context, t tool.Tool) bool {
+//	        // Access invocation from context if needed
+//	        inv, _ := agent.InvocationFromContext(ctx)
+//	        userLevel, _ := inv.Session.Get("user_level").(string)
+//
+//	        // Premium users get all tools
+//	        if userLevel == "premium" {
+//	            return true
+//	        }
+//
+//	        // Free users only get basic tools
+//	        toolName := t.Declaration().Name
+//	        return toolName == "calculator" || toolName == "time_tool"
 //	    }),
 //	)
 //
-// If an agent is not in this map, it will fall back to AllowedTools or use all
-// registered tools if neither is specified.
-func WithAllowedAgentTools(agentTools map[string][]string) RunOption {
+// Note: Framework tools (knowledge_search, transfer_to_agent) are never filtered
+// and will always be available regardless of the filter function.
+//
+// Note: This is a "soft" constraint. Tools should still implement their own
+// authorization logic for security.
+func WithToolFilter(filter tool.FilterFunc) RunOption {
 	return func(opts *RunOptions) {
-		if agentTools == nil {
-			opts.AllowedAgentTools = nil
-			return
-		}
-		// Create a shallow copy to prevent external modifications
-		copied := make(map[string][]string, len(agentTools))
-		for k, v := range agentTools {
-			copied[k] = v
-		}
-		opts.AllowedAgentTools = copied
+		opts.ToolFilter = filter
 	}
 }
 
@@ -345,26 +338,26 @@ type RunOptions struct {
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
 
-	// AllowedTools specifies which tools are allowed for this run.
-	// If set, only tools whose names are in this list will be available to the model.
-	// If nil or empty, all registered tools will be available (default behavior).
+	// ToolFilter is a custom function to filter tools for this run.
+	// If set, only tools for which the filter returns true will be available to the model.
+	// If nil, all registered tools will be available (default behavior).
+	//
+	// The filter function receives:
+	//   - ctx: The context with invocation information (use agent.InvocationFromContext)
+	//   - tool: The tool being filtered
 	//
 	// This filtering happens at the request preparation stage, before sending to the model.
-	// The model will only see the tool descriptions for allowed tools.
+	// The model will only see the tool descriptions for tools that pass the filter.
 	//
-	// Priority: AllowedAgentTools (for specific agent) > AllowedTools > Agent's registered tools
-	AllowedTools []string
-
-	// AllowedAgentTools specifies allowed tools for specific agents (including sub-agents).
-	// Key: agent name, Value: allowed tool names for that agent.
+	// Note: Framework tools (knowledge_search, transfer_to_agent) are never filtered
+	// and will always be included regardless of the filter function's return value.
 	//
-	// If an agent is in this map, only the specified tools will be available to it.
-	// If an agent is not in this map, it will fall back to AllowedTools.
-	// If neither is set, the agent will use all its registered tools.
-	//
-	// This is particularly useful for multi-agent systems where different agents
-	// need different tool access permissions.
-	AllowedAgentTools map[string][]string
+	// Example:
+	//   agent.WithToolFilter(tool.NewIncludeToolNamesFilter("calculator", "time_tool"))
+	//   agent.WithToolFilter(func(ctx context.Context, t tool.Tool) bool {
+	//       return t.Declaration().Name == "calculator"
+	//   })
+	ToolFilter tool.FilterFunc
 }
 
 // NewInvocation create a new invocation
