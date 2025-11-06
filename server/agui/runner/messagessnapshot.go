@@ -115,6 +115,7 @@ func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context, userID stri
 	if len(events) == 0 {
 		return aguievents.NewMessagesSnapshotEvent(messages), nil
 	}
+	lastRequestID := ""
 	for _, event := range events {
 		event, err := r.handleBeforeTranslate(ctx, &event)
 		if err != nil {
@@ -128,7 +129,12 @@ func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context, userID stri
 			case model.RoleSystem:
 				messages = append(messages, *r.convertToSystemMessage(event.ID, choice))
 			case model.RoleUser:
-				messages = append(messages, *r.convertToUserMessage(event.ID, userID, choice))
+				if lastRequestID != event.RequestID {
+					// User message may be repeated multiple times in multiagent scenario.
+					// Only the first message should be included in the snapshot.
+					lastRequestID = event.RequestID
+					messages = append(messages, *r.convertToUserMessage(event.ID, userID, choice))
+				}
 			case model.RoleAssistant:
 				messages = append(messages, *r.convertToAssistantMessage(event.ID, choice))
 			case model.RoleTool:
