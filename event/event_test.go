@@ -521,33 +521,6 @@ func TestEventUnmarshalJSON_LegacyFlatOnly(t *testing.T) {
 	require.Equal(t, "ok", e.Response.Choices[0].Message.Content)
 }
 
-// Test a marshal-unmarshal roundtrip preserves both event ID and response ID.
-func TestEventJSON_Roundtrip(t *testing.T) {
-	src := &Event{
-		Response: &model.Response{
-			ID:      "resp-rt",
-			Object:  model.ObjectTypeChatCompletion,
-			Done:    true,
-			Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("hi")}},
-		},
-		ID:           "evt-rt",
-		InvocationID: "inv-rt",
-		Author:       "assistant",
-		Timestamp:    time.Now(),
-	}
-
-	data, err := json.Marshal(src)
-	require.NoError(t, err)
-
-	var dst Event
-	require.NoError(t, json.Unmarshal(data, &dst))
-
-	require.NotNil(t, dst.Response)
-	require.Equal(t, "evt-rt", dst.ID)
-	require.Equal(t, "resp-rt", dst.Response.ID)
-	require.Equal(t, model.ObjectTypeChatCompletion, dst.Response.Object)
-}
-
 // Test marshalJSON on a nil *Event should return an error due to
 // attempting to unmarshal a JSON null into the payload map.
 func TestEventMarshalJSON_NilReceiver_Error(t *testing.T) {
@@ -629,5 +602,134 @@ func TestEventUnMarshalJSON_TimestampOverflow(t *testing.T) {
 		var e Event
 		err := json.Unmarshal([]byte(`{"response": {"timestamp": "12025-01-01T00:00:00Z"}}`), &e)
 		require.NoError(t, err)
+	})
+}
+
+func TestEventMarshalJSON(t *testing.T) {
+	t.Run("without struct", func(t *testing.T) {
+		e := Event{ID: "id1", Response: &model.Response{ID: "id2"}}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var dst Event
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.Equal(t, "id1", dst.ID)
+		require.Equal(t, "id2", dst.Response.ID)
+	})
+	t.Run("with pointer", func(t *testing.T) {
+		e := &Event{ID: "id1", Response: &model.Response{ID: "id2"}}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var dst Event
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.Equal(t, "id1", dst.ID)
+		require.Equal(t, "id2", dst.Response.ID)
+	})
+}
+
+func TestEventJSON_RoundTrip(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		src := &Event{
+			Response: &model.Response{
+				ID:      "resp-rt",
+				Object:  model.ObjectTypeChatCompletion,
+				Done:    true,
+				Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("hi")}},
+			},
+			ID:           "evt-rt",
+			InvocationID: "inv-rt",
+			Author:       "assistant",
+			Timestamp:    time.Now(),
+		}
+
+		data, err := json.Marshal(src)
+		require.NoError(t, err)
+
+		var dst Event
+		require.NoError(t, json.Unmarshal(data, &dst))
+
+		require.NotNil(t, dst.Response)
+		require.Equal(t, "evt-rt", dst.ID)
+		require.Equal(t, "resp-rt", dst.Response.ID)
+		require.Equal(t, model.ObjectTypeChatCompletion, dst.Response.Object)
+	})
+	t.Run("top-level value", func(t *testing.T) {
+		e := Event{ID: "id1", Response: &model.Response{ID: "id2"}}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var dst Event
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.Equal(t, "id1", dst.ID)
+		require.Equal(t, "id2", dst.Response.ID)
+	})
+	t.Run("top-level pointer", func(t *testing.T) {
+		e := &Event{ID: "id1", Response: &model.Response{ID: "id2"}}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var dst Event
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.Equal(t, "id1", dst.ID)
+		require.Equal(t, "id2", dst.Response.ID)
+	})
+	t.Run("slice element value", func(t *testing.T) {
+		in := []Event{{ID: "id1", Response: &model.Response{ID: "id2"}}}
+		data, err := json.Marshal(in)
+		require.NoError(t, err)
+		var out []Event
+		require.NoError(t, json.Unmarshal(data, &out))
+		require.Len(t, out, 1)
+		require.Equal(t, "id2", out[0].Response.ID)
+	})
+	t.Run("map value non-addressable", func(t *testing.T) {
+		m := map[string]Event{
+			"k": {ID: "id1", Response: &model.Response{ID: "id2"}},
+		}
+		data, err := json.Marshal(m)
+		require.NoError(t, err)
+		var out map[string]Event
+		require.NoError(t, json.Unmarshal(data, &out))
+		require.Equal(t, "id2", out["k"].Response.ID)
+	})
+	t.Run("omit key and stay nil on roundtrip", func(t *testing.T) {
+		e := Event{ID: "id1"}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+
+		var tmp map[string]any
+		require.NoError(t, json.Unmarshal(data, &tmp))
+		_, has := tmp["response"]
+		require.False(t, has)
+
+		var dst Event
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.Equal(t, "id1", dst.ID)
+		require.Nil(t, dst.Response)
+	})
+	t.Run("timestamp round-trip", func(t *testing.T) {
+		ts := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+		e := Event{ID: "id1", Response: &model.Response{ID: "id2", Timestamp: ts}}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var dst Event
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.True(t, dst.Response.Timestamp.Equal(ts))
+	})
+	t.Run("prefer nested over legacy", func(t *testing.T) {
+		raw := []byte(`{
+			"id": "id1",
+			"Response": {"id": "old", "timestamp": "2024-01-01T00:00:00Z"},
+			"response": {"id": "new", "timestamp": "2024-01-02T00:00:00Z"}
+		}`)
+		var dst Event
+		require.NoError(t, json.Unmarshal(raw, &dst))
+		require.Equal(t, "id1", dst.ID)
+		require.Equal(t, "new", dst.Response.ID)
+		require.Equal(t, time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), dst.Response.Timestamp)
+	})
+	t.Run("malformed nested response is ignored, flat fields still decode", func(t *testing.T) {
+		raw := []byte(`{"id":"id1","response":"oops"}`)
+		var dst Event
+		require.NoError(t, json.Unmarshal(raw, &dst))
+		require.Equal(t, "id1", dst.ID)
+		require.Nil(t, dst.Response)
 	})
 }
