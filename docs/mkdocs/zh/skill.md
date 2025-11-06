@@ -188,18 +188,18 @@ https://github.com/anthropics/skills
 - `output_files`（可选）：通配符列表（如 `out/*.txt`）
 - `timeout`（可选）：超时秒数（执行器有默认值）
 - `save_as_artifacts`（可选，推荐生产）：将收集的输出文件
-  保存到 Artifact（工件）服务，并在结果中返回工件引用；
+  保存到 Artifact（制品）服务，并在结果中返回制品引用；
   需要上下文里存在 Invocation 和已注入的 ArtifactService。
 - `omit_inline_content`（可选）：与 `save_as_artifacts` 配合使用，
   为 true 时不内联返回文件内容，仅保留文件名/MIME 信息，
   同时提供 `artifact_files` 引用，降低负载。
-- `artifact_prefix`（可选）：保存到工件时的文件名前缀；
+- `artifact_prefix`（可选）：保存到制品时的文件名前缀；
   用户域名空间请设置为 `user:`（参见内部路径规则）。
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
 - `output_files`：文件列表（`name`、`content`、`mime_type`）
-- `artifact_files`：保存到工件服务后的引用列表
+- `artifact_files`：保存到制品服务后的引用列表
   （`name`、`version`）。
 
 典型流程：
