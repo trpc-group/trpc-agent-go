@@ -501,6 +501,8 @@ graphAgent, err := graphagent.New(
     graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
+    graphagent.WithMessageTimelineFilterMode("all"),     // Set message timeline filter mode, Options：all、request、invocation, default: all
+    graphagent.WithMessageBranchFilterMode("prefix"),    // Set message branch filter mode, Options: all、prefix、exact, default: prefix
     graphagent.WithAgentCallbacks(&agent.Callbacks{
         // Agent-level callbacks.
     }),
@@ -1039,6 +1041,8 @@ ga, err := graphagent.New(
     graphagent.WithCheckpointSaver(saver),
     graphagent.WithSubAgents([]agent.Agent{subAgent}),
     graphagent.WithAgentCallbacks(agent.NewCallbacks()),
+    graphagent.WithMessageTimelineFilterMode("all"),     // Set message timeline filter mode, Options：all、request、invocation, default: all
+    graphagent.WithMessageBranchFilterMode("prefix"),    // Set message branch filter mode, Options: all、prefix、exact, default: prefix
 )
 ```
 

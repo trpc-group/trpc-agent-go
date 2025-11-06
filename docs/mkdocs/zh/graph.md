@@ -577,6 +577,8 @@ graphAgent, err := graphagent.New(
     graphagent.WithChannelBufferSize(1024),           // 调整事件通道缓冲区
     graphagent.WithCheckpointSaver(memorySaver),      // 使用持久化检查点
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
+    graphagent.WithMessageTimelineFilterMode("all"),   // 设置传给模型的消息按分支时间维度的过滤模式，可选值：all、request、invocation, 默认值: all
+    graphagent.WithMessageBranchFilterMode("prefix"),  // 设置传给模型的消息按分支维度的过滤模式, 可选值: all、prefix、exact
     graphagent.WithAgentCallbacks(&agent.Callbacks{
         // Agent 级回调配置
     }),
@@ -1053,6 +1055,8 @@ ga, err := graphagent.New(
     graphagent.WithCheckpointSaver(saver),
     graphagent.WithSubAgents([]agent.Agent{subAgent}),
     graphagent.WithAgentCallbacks(agent.NewCallbacks()),
+    graphagent.WithMessageTimelineFilterMode("all"),       // 设置传给模型的消息按分支时间维度的过滤模式，可选值：all、request、invocation, 默认值: all
+    graphagent.WithMessageBranchFilterMode("prefix"),      // 设置传给模型的消息按分支维度的过滤模式, 可选值: all、prefix、exact
 )
 ```
 
