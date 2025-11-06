@@ -191,10 +191,6 @@ func TestMultipleInvocationOptions(t *testing.T) {
 	assert.Equal(t, "multi-filter", inv.GetEventFilterKey())
 }
 
-// Tests for WithAllowedTools and WithAllowedAgentTools have been removed
-// as these APIs have been replaced by WithToolFilter.
-// See internal/flow/llmflow/tool_filter_test.go for tests of the new filtering mechanism.
-
 // Mock implementations for testing
 
 type mockModel struct {

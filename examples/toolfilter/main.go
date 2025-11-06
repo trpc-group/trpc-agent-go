@@ -7,7 +7,7 @@
 //
 //
 
-// Package main demonstrates per-run tool filtering functionality
+// Package main demonstrates per-run tool filtering functionality.
 package main
 
 import (
