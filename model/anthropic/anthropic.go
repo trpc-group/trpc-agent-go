@@ -17,13 +17,16 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -86,6 +89,12 @@ type Model struct {
 	chatResponseCallback       ChatResponseCallbackFunc
 	chatChunkCallback          ChatChunkCallbackFunc
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	enableTokenTailoring       bool                    // Enable automatic token tailoring.
+	maxInputTokens             int                     // Max input tokens for token tailoring.
+	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
+	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
+	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
+	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -119,16 +128,34 @@ type ChatStreamCompleteCallbackFunc func(
 
 // options contains configuration options for creating an Anthropic model.
 type options struct {
-	apiKey                     string                         // API key for the Anthropic client.
-	baseURL                    string                         // Base URL for the Anthropic client.
-	channelBufferSize          int                            // Buffer size for response channels (default: 256)
-	HTTPClientOptions          []HTTPClientOption             // Options for the HTTP client.
-	anthropicClientOptions     []option.RequestOption         // Options for building Anthropic client.
-	anthropicRequestOptions    []option.RequestOption         // Options for building Anthropic request.
-	chatRequestCallback        ChatRequestCallbackFunc        // Callback for the chat request.
-	chatResponseCallback       ChatResponseCallbackFunc       // Callback for the chat response.
-	chatChunkCallback          ChatChunkCallbackFunc          // Callback for the chat chunk.
-	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc // Callback for the chat stream completion.
+	// API key for the Anthropic client.
+	apiKey string
+	// Base URL for the Anthropic client.
+	baseURL string
+	// Buffer size for response channels (default: 256)
+	channelBufferSize int
+	// Options for the HTTP client.
+	httpClientOptions []HTTPClientOption
+	// Options for building Anthropic client.
+	anthropicClientOptions []option.RequestOption
+	// Options for building Anthropic request.
+	anthropicRequestOptions []option.RequestOption
+	// Callback for the chat request.
+	chatRequestCallback ChatRequestCallbackFunc
+	// Callback for the chat response.
+	chatResponseCallback ChatResponseCallbackFunc
+	// Callback for the chat chunk.
+	chatChunkCallback ChatChunkCallbackFunc
+	// Callback for the chat stream completion.
+	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	// enableTokenTailoring enables automatic token tailoring based on model context window.
+	enableTokenTailoring bool
+	// tokenCounter count tokens for token tailoring.
+	tokenCounter model.TokenCounter
+	// tailoringStrategy defines the strategy for token tailoring.
+	tailoringStrategy model.TailoringStrategy
+	// maxInputTokens is the max input tokens for token tailoring.
+	maxInputTokens int
 }
 
 // Option is a function that configures an Anthropic model.
@@ -206,7 +233,41 @@ func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 // WithHTTPClientOptions sets the HTTP client options for the Anthropic client.
 func WithHTTPClientOptions(httpOpts ...HTTPClientOption) Option {
 	return func(opts *options) {
-		opts.HTTPClientOptions = httpOpts
+		opts.httpClientOptions = httpOpts
+	}
+}
+
+// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
+// When enabled, the system will automatically calculate max input tokens using the model's
+// context window minus reserved tokens and protocol overhead.
+func WithEnableTokenTailoring(enabled bool) Option {
+	return func(opts *options) {
+		opts.enableTokenTailoring = enabled
+	}
+}
+
+// WithMaxInputTokens sets only the input token limit for token tailoring.
+// The counter/strategy will be lazily initialized if not provided.
+// Defaults to SimpleTokenCounter and MiddleOutStrategy.
+func WithMaxInputTokens(limit int) Option {
+	return func(opts *options) {
+		opts.maxInputTokens = limit
+	}
+}
+
+// WithTokenCounter sets the TokenCounter used for token tailoring.
+// If not provided and token limit is enabled, a SimpleTokenCounter will be used.
+func WithTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *options) {
+		opts.tokenCounter = counter
+	}
+}
+
+// WithTailoringStrategy sets the TailoringStrategy used for token tailoring.
+// If not provided and token limit is enabled, a MiddleOutStrategy will be used.
+func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
+	return func(opts *options) {
+		opts.tailoringStrategy = strategy
 	}
 }
 
@@ -225,9 +286,21 @@ func New(name string, opts ...Option) *Model {
 	if o.baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(o.baseURL))
 	}
-	clientOpts = append(clientOpts, option.WithHTTPClient(DefaultNewHTTPClient(o.HTTPClientOptions...)))
+	clientOpts = append(clientOpts, option.WithHTTPClient(DefaultNewHTTPClient(o.httpClientOptions...)))
 	clientOpts = append(clientOpts, o.anthropicClientOptions...)
 	client := anthropic.NewClient(clientOpts...)
+
+	// Provide defaults at construction time when token tailoring is enabled.
+	// These are best-effort defaults; user-provided counter/strategy always take priority.
+	if o.maxInputTokens > 0 {
+		if o.tokenCounter == nil {
+			o.tokenCounter = model.NewSimpleTokenCounter()
+		}
+		if o.tailoringStrategy == nil {
+			o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
+		}
+	}
+
 	return &Model{
 		client:                     client,
 		name:                       name,
@@ -239,6 +312,10 @@ func New(name string, opts ...Option) *Model {
 		chatResponseCallback:       o.chatResponseCallback,
 		chatChunkCallback:          o.chatChunkCallback,
 		chatStreamCompleteCallback: o.chatStreamCompleteCallback,
+		enableTokenTailoring:       o.enableTokenTailoring,
+		tokenCounter:               o.tokenCounter,
+		tailoringStrategy:          o.tailoringStrategy,
+		maxInputTokens:             o.maxInputTokens,
 	}
 }
 
@@ -257,6 +334,10 @@ func (m *Model) GenerateContent(
 	if request == nil {
 		return nil, errors.New("request cannot be nil")
 	}
+
+	// Apply token tailoring if configured.
+	m.applyTokenTailoring(ctx, request)
+
 	chatRequest, err := m.buildChatRequest(request)
 	if err != nil {
 		return nil, fmt.Errorf("build chat request: %w", err)
@@ -275,6 +356,75 @@ func (m *Model) GenerateContent(
 		m.handleNonStreamingResponse(ctx, *chatRequest, responseChan)
 	}()
 	return responseChan, nil
+}
+
+// applyTokenTailoring performs best-effort token tailoring if configured.
+// It uses the token tailoring strategy defined in imodel package.
+func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
+	// Early return if token tailoring is disabled or no messages to process.
+	if !m.enableTokenTailoring || len(request.Messages) == 0 {
+		return
+	}
+
+	// Determine max input tokens using priority: user config > auto calculation > default.
+	maxInputTokens := m.maxInputTokens
+	if maxInputTokens <= 0 {
+		// Auto-calculate based on model context window with safety margin and ratio limit.
+		contextWindow := imodel.ResolveContextWindow(m.name)
+		maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
+		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
+			m.name, contextWindow, maxInputTokens)
+	}
+
+	// Determine token counter using priority: user config > default.
+	tokenCounter := m.tokenCounter
+	if tokenCounter == nil {
+		m.tokenCounterOnce.Do(func() {
+			if m.tokenCounter == nil {
+				m.tokenCounter = model.NewSimpleTokenCounter()
+			}
+		})
+		tokenCounter = m.tokenCounter
+	}
+
+	// Determine tailoring strategy using priority: user config > default.
+	tailoringStrategy := m.tailoringStrategy
+	if tailoringStrategy == nil {
+		m.tailoringStrategyOnce.Do(func() {
+			if m.tailoringStrategy == nil {
+				m.tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
+			}
+		})
+		tailoringStrategy = m.tailoringStrategy
+	}
+
+	// Apply token tailoring.
+	tailored, err := tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	if err != nil {
+		log.Warn("token tailoring failed in anthropic.Model", err)
+		return
+	}
+
+	request.Messages = tailored
+
+	// Calculate remaining tokens for output and set max output tokens.
+	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	if err != nil {
+		log.Warn("failed to count tokens after tailoring", err)
+		return
+	}
+
+	remainingTokens := maxInputTokens - usedTokens
+	if remainingTokens <= 0 {
+		return
+	}
+
+	// Set max output tokens only if user hasn't specified it.
+	// This respects user's explicit configuration while providing a safe default.
+	if request.GenerationConfig.MaxTokens == nil {
+		maxOutputTokens := max(remainingTokens, imodel.DefaultOutputTokensFloor)
+		request.GenerationConfig.MaxTokens = &maxOutputTokens
+	}
 }
 
 // buildChatRequest builds the chat request for the Anthropic API.

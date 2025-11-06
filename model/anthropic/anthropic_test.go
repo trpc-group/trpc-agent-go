@@ -17,10 +17,12 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -875,3 +877,239 @@ func Test_convertMessages_AssistantWithToolCalls(t *testing.T) {
 	assert.True(t, len(converted[1].Content) >= 1)
 	assert.NotNil(t, converted[1].Content[0].OfText)
 }
+
+// testStubCounter is a stub TokenCounter for testing token tailoring.
+type testStubCounter struct{}
+
+func (testStubCounter) CountTokens(
+	ctx context.Context,
+	message model.Message,
+) (int, error) {
+	return 1, nil
+}
+
+func (testStubCounter) CountTokensRange(
+	ctx context.Context,
+	messages []model.Message,
+	start,
+	end int,
+) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+	}
+	return end - start, nil
+}
+
+// testStubStrategy is a stub TailoringStrategy for testing.
+type testStubStrategy struct{}
+
+func (testStubStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	if len(messages) <= 1 {
+		return messages, nil
+	}
+	// Drop the second message to make tailoring observable.
+	return append([]model.Message{messages[0]}, messages[2:]...), nil
+}
+
+// TestWithTokenTailoring tests token tailoring functionality in Anthropic.
+func TestWithTokenTailoring(t *testing.T) {
+	// Capture the built Anthropic request to check messages count reflects tailoring.
+	var captured *anthropic.MessageNewParams
+	m := New("test-model",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(100),
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; strategy will drop the second one.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring, messages should be reduced (1 message after tailoring).
+	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+// TestWithEnableTokenTailoring_SimpleMode tests simple token tailoring mode.
+func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
+	// Capture the built Anthropic request to check messages count reflects tailoring.
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet", // Known model with 200000 context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger tailoring.
+	// With claude-3-5-sonnet (contextWindow=200000), maxInputTokens=130000 (65% ratio).
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 500; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 100))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring, messages should be reduced.
+	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored, got %d (original: %d)", len(captured.Messages), len(messages))
+}
+
+// TestWithEnableTokenTailoring_AdvancedMode tests advanced token tailoring mode.
+func TestWithEnableTokenTailoring_AdvancedMode(t *testing.T) {
+	// Capture the built Anthropic request to check messages count reflects tailoring.
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1000), // Custom max input tokens
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; strategy will drop the second one.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring, messages should be reduced to 1 message.
+	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+// TestWithEnableTokenTailoring_Disabled tests disabled token tailoring.
+func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
+	// Capture the built Anthropic request to check messages count reflects tailoring.
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(false),
+		WithMaxInputTokens(100), // This should be ignored when tailoring is disabled
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; should NOT be tailored when disabled.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// When tailoring disabled, messages should be unchanged (2 messages).
+	require.Len(t, captured.Messages, 2, "expected 2 messages when tailoring disabled, got %d", len(captured.Messages))
+}
+
+// TestWithEnableTokenTailoring_UnknownModel tests tailoring with unknown model.
+func TestWithEnableTokenTailoring_UnknownModel(t *testing.T) {
+	// Capture the built Anthropic request.
+	var captured *anthropic.MessageNewParams
+	m := New("unknown-model-xyz", // Unknown model should fallback to default context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 50; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 50))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// Messages should be tailored even with unknown model (using fallback context window).
+	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored with unknown model, got %d (original: %d)", len(captured.Messages), len(messages))
+}
+
+// TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit tests safety margin and ratio limit.
+func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
+	// Capture the built Anthropic request.
+	var captured *anthropic.MessageNewParams
+	m := New("deepseek-chat", // Known model with 131072 context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger aggressive tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 1200; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 40))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	// Drain once to trigger request path; may error due to no API key.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// After tailoring, messages should be significantly reduced.
+	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored, got %d (original: %d)", len(captured.Messages), len(messages))
+	// With 65% ratio limit, expect roughly 55-65% of original messages.
+	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.70), "expected messages to be reduced to at most 70%% due to ratio limit, got %d (original: %d)", len(captured.Messages), len(messages))
+}
+
