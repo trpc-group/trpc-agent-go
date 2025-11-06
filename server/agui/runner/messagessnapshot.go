@@ -121,7 +121,7 @@ func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context, userID stri
 		if err != nil {
 			return nil, fmt.Errorf("handle before translate: %w", err)
 		}
-		if event == nil || event.Response == nil || len(event.Response.Choices) == 0 {
+		if r.ignoreEvent(event) {
 			continue
 		}
 		for _, choice := range event.Response.Choices {
@@ -145,6 +145,25 @@ func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context, userID stri
 		}
 	}
 	return aguievents.NewMessagesSnapshotEvent(messages), nil
+}
+
+func (r *runner) ignoreEvent(event *event.Event) bool {
+	if event == nil || event.Response == nil || len(event.Response.Choices) == 0 {
+		return true
+	}
+	switch event.Response.Object {
+	// Model response event.
+	case model.ObjectTypeChatCompletion:
+		return false
+	// Tool response event.
+	case model.ObjectTypeToolResponse:
+		return false
+	// User message event.
+	case "":
+		return false
+	default:
+		return true
+	}
 }
 
 // convertToSystemMessage converts system events to AG-UI Message.
