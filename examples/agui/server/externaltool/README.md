@@ -29,4 +29,4 @@ The server prints startup logs similar to:
 
 ## CopilotKit Front Web Page Display
 
-![CopilotKit external tool demo]()
+![CopilotKit external tool demo](../../../../.resource/images/examples/agui-externaltool.gif)
