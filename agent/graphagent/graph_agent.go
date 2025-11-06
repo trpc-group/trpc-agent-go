@@ -32,7 +32,7 @@ const (
 	// IncludeContentFilterKeyExact exact match
 	BranchFilterModeExact = processor.BranchFilterModeExact
 
-	// TimelineFilterHistory includes all historical message records
+	// TimelineFilterAll includes all historical message records
 	// Suitable for scenarios requiring full conversation context
 	TimelineFilterAll = processor.TimelineFilterAll
 	// TimelineFilterCurrentRequest only includes messages within the current request cycle
