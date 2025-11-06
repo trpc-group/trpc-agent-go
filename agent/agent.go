@@ -37,13 +37,34 @@ const ErrorTypeStopAgentError = "stop_agent_error"
 // StopError represents an error that signals the agent execution should be stopped.
 // When this error type is returned, it indicates the agent should stop processing.
 type StopError struct {
-	// Message contains the stop reason
-	Message string
+	Message string     // Message contains the stop reason.
+	reason  StopReason // reason provides the stop reason.
 }
+
+// StopReason is a type that represents the reason for a stop error.
+type StopReason string
+
+const (
+	// StopReasonGeneric means the caller did not specify a particular reason.
+	StopReasonGeneric StopReason = ""
+	// StopReasonExternalTool indicates the stop was triggered to defer execution to an external tool.
+	StopReasonExternalTool StopReason = "external_tool"
+)
+
+// StopOption customizes StopError construction.
+type StopOption func(*StopError)
 
 // Error implements the error interface.
 func (e *StopError) Error() string {
 	return e.Message
+}
+
+// Reason returns the stop reason.
+func (e *StopError) Reason() StopReason {
+	if e == nil {
+		return StopReasonGeneric
+	}
+	return e.reason
 }
 
 // AsStopError checks if an error is a StopError using errors.As.
@@ -54,8 +75,22 @@ func AsStopError(err error) (*StopError, bool) {
 }
 
 // NewStopError creates a new StopError with the given message.
-func NewStopError(message string) *StopError {
-	return &StopError{Message: message}
+func NewStopError(message string, opts ...StopOption) *StopError {
+	stopError := &StopError{
+		Message: message,
+		reason:  StopReasonGeneric,
+	}
+	for _, opt := range opts {
+		opt(stopError)
+	}
+	return stopError
+}
+
+// WithStopReason sets the stop reason on the StopError.
+func WithStopReason(reason StopReason) StopOption {
+	return func(e *StopError) {
+		e.reason = reason
+	}
 }
 
 // Agent is the interface that all agents must implement.

@@ -27,8 +27,9 @@ type Translator interface {
 // New creates a new event translator.
 func New(threadID, runID string) Translator {
 	return &translator{
-		threadID: threadID,
-		runID:    runID,
+		threadID:        threadID,
+		runID:           runID,
+		openToolCallIDs: make(map[string]struct{}),
 	}
 }
 
@@ -38,6 +39,7 @@ type translator struct {
 	runID            string
 	lastMessageID    string
 	receivingMessage bool
+	openToolCallIDs  map[string]struct{}
 }
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
@@ -72,10 +74,11 @@ func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, err
 		events = append(events, toolResultEvents...)
 	}
 	if event.IsRunnerCompletion() {
-		if t.receivingMessage {
-			events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+		runCompletionEvents, err := t.runCompletionEvent(rsp)
+		if err != nil {
+			return nil, err
 		}
-		events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
+		events = append(events, runCompletionEvents...)
 	}
 	return events, nil
 }
@@ -144,6 +147,9 @@ func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, err
 			if toolCallArguments != "" {
 				events = append(events, aguievents.NewToolCallArgsEvent(toolCall.ID, toolCallArguments))
 			}
+			if toolCall.ID != "" {
+				t.openToolCallIDs[toolCall.ID] = struct{}{}
+			}
 		}
 	}
 	t.lastMessageID = rsp.ID
@@ -152,13 +158,35 @@ func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, err
 
 // toolResultEvent translates a tool result trpc-agent-go event to AG-UI events.
 func (t *translator) toolResultEvent(rsp *model.Response) ([]aguievents.Event, error) {
+	events := make([]aguievents.Event, 0, len(rsp.Choices)*2)
+	for _, choice := range rsp.Choices {
+		toolID := choice.Message.ToolID
+		// Tool call end event.
+		events = append(events, aguievents.NewToolCallEndEvent(toolID))
+		// Tool call result event.
+		events = append(events, aguievents.NewToolCallResultEvent(t.lastMessageID, toolID, choice.Message.Content))
+		delete(t.openToolCallIDs, toolID)
+	}
+	return events, nil
+}
+
+// runCompletionEvent translates a run completion trpc-agent-go event to AG-UI events.
+func (t *translator) runCompletionEvent(_ *model.Response) ([]aguievents.Event, error) {
 	var events []aguievents.Event
-	choice := rsp.Choices[0]
-	// Tool call end event.
-	events = append(events, aguievents.NewToolCallEndEvent(choice.Message.ToolID))
-	// Tool call result event.
-	events = append(events, aguievents.NewToolCallResultEvent(t.lastMessageID,
-		choice.Message.ToolID, choice.Message.Content))
+	if t.receivingMessage {
+		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+	}
+	if len(t.openToolCallIDs) > 0 {
+		ids := make([]string, 0, len(t.openToolCallIDs))
+		for id := range t.openToolCallIDs {
+			ids = append(ids, id)
+		}
+		for _, id := range ids {
+			events = append(events, aguievents.NewToolCallEndEvent(id))
+		}
+		t.openToolCallIDs = make(map[string]struct{})
+	}
+	events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
 	return events, nil
 }
 

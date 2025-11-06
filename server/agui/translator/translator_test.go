@@ -14,6 +14,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -322,6 +323,53 @@ func TestTranslateToolResultResponse(t *testing.T) {
 	assert.Equal(t, "done", result.Content)
 }
 
+func TestTranslateStopErrorIgnored(t *testing.T) {
+	translator := New("thread", "run")
+	events, err := translator.Translate(&agentevent.Event{Response: &model.Response{
+		Error: &model.ResponseError{
+			Type:    agent.ErrorTypeStopAgentError,
+			Message: "client should execute",
+		},
+	}})
+	assert.NoError(t, err)
+	assert.Len(t, events, 0)
+}
+
+func TestTranslateToolResultResponse_MultipleChoices(t *testing.T) {
+	tr, ok := New("thread", "run").(*translator)
+	assert.True(t, ok)
+
+	_, err := tr.Translate(&agentevent.Event{Response: &model.Response{
+		ID:     "msg-seed",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: "seed"},
+		}},
+	}})
+	assert.NoError(t, err)
+
+	events, err := tr.toolResultEvent(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{ToolID: "call-1", Content: "ok"}},
+			{Message: model.Message{ToolID: "call-2", Content: "done"}},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, events, 4)
+
+	end1 := events[0].(*aguievents.ToolCallEndEvent)
+	assert.Equal(t, "call-1", end1.ToolCallID)
+	res1 := events[1].(*aguievents.ToolCallResultEvent)
+	assert.Equal(t, "call-1", res1.ToolCallID)
+	assert.Equal(t, "ok", res1.Content)
+
+	end2 := events[2].(*aguievents.ToolCallEndEvent)
+	assert.Equal(t, "call-2", end2.ToolCallID)
+	res2 := events[3].(*aguievents.ToolCallResultEvent)
+	assert.Equal(t, "call-2", res2.ToolCallID)
+	assert.Equal(t, "done", res2.Content)
+}
+
 func TestTranslateSequentialEvents(t *testing.T) {
 	translator := New("thread", "run")
 
@@ -395,6 +443,50 @@ func TestTranslateSequentialEvents(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, events, 1)
 	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), events[0])
+}
+
+func TestTranslateRunCompletionEmitsToolCallEndWhenNoResult(t *testing.T) {
+	translator := New("thread", "run")
+
+	callRsp := &model.Response{
+		ID:     "msg-tool",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				ToolCalls: []model.ToolCall{{
+					ID:       "call-1",
+					Function: model.FunctionDefinitionParam{Name: "lookup"},
+				}},
+			},
+		}},
+	}
+	_, err := translator.Translate(&agentevent.Event{Response: callRsp})
+	assert.NoError(t, err)
+
+	completionRsp := &model.Response{
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	}
+
+	events, err := translator.Translate(&agentevent.Event{Response: completionRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	endEvent, ok := events[0].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", endEvent.ToolCallID)
+	runFinished, ok := events[1].(*aguievents.RunFinishedEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "thread", runFinished.ThreadID())
+	assert.Equal(t, "run", runFinished.RunID())
+
+	// Run completion emitted again should only return RunFinished since pending IDs cleared.
+	lateEvents, err := translator.Translate(&agentevent.Event{Response: &model.Response{
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	}})
+	assert.NoError(t, err)
+	assert.Len(t, lateEvents, 1)
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), lateEvents[0])
 }
 
 func TestFormatToolCallArguments(t *testing.T) {
