@@ -554,8 +554,13 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	// Marshal the result to JSON.
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
-		log.Errorf("Failed to marshal tool result for %s: %v", toolCall.Function.Name, err)
-		return nil, modifiedArgs, true, fmt.Errorf("%s: %w", ErrorMarshalResult, err)
+		// Marshal failures (for example, NaN in floats) do not
+		// affect the overall flow. Downgrade to warning to avoid
+		// noisy alerts while still surfacing the issue.
+		log.Warnf("Failed to marshal tool result for %s: %v",
+			toolCall.Function.Name, err)
+		return nil, modifiedArgs, true,
+			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
 
 	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
