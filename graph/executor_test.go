@@ -2416,6 +2416,14 @@ func TestDisableDeepCopy(t *testing.T) {
 		Name:    "test",
 		Content: "content",
 	}
+	deepCopyPointer := &testCase{
+		Name:    "test",
+		Content: "content",
+	}
+	deepCopyMap := map[string]string{
+		"a": "111",
+		"b": "222",
+	}
 	stateSchema := NewStateSchema().AddField(
 		"DisableDeepCopyPointer",
 		StateField{
@@ -2445,6 +2453,8 @@ func TestDisableDeepCopy(t *testing.T) {
 	state := State{
 		"DisableDeepCopyMap":     disableDeepCopyMap,
 		"DisableDeepCopyPointer": disableDeepCopyPointer,
+		"deepCopyMap":            deepCopyMap,
+		"deepCopyPointer":        deepCopyPointer,
 	}
 	eventChan, err := exec.Execute(context.Background(), state, invocation)
 
@@ -2456,8 +2466,14 @@ func TestDisableDeepCopy(t *testing.T) {
 	require.Equal(t, "123", disableDeepCopyMap["a"])
 	require.Equal(t, "222", disableDeepCopyMap["b"])
 
+	require.Equal(t, "111", deepCopyMap["a"])
+	require.Equal(t, "222", deepCopyMap["b"])
+
 	require.Equal(t, "test", disableDeepCopyPointer.Name)
 	require.Equal(t, "content-123", disableDeepCopyPointer.Content)
+
+	require.Equal(t, "test", deepCopyPointer.Name)
+	require.Equal(t, "content", deepCopyPointer.Content)
 
 	require.NoError(t, err)
 }
