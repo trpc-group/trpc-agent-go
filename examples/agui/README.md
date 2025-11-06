@@ -5,6 +5,7 @@ This folder collects runnable demos that showcase how to integrate the `tRPC-Age
 - [`client/`](client/) – General client-side samples.
 - [`server/`](server/) – General server-side samples.
 - [`messagessnapshot/`](messagessnapshot/) – Example showing how to enable and consume message snapshots.
+- [`externaltool/`](externaltool/) – Example showing how to call external tool.
 
 ## Quick Start
 

@@ -56,7 +56,8 @@ main.agui-chat {
 .agui-chat__panel {
   flex: 1;
   margin: 0;
-  background: #141414;
+  /* transparent background for dynamic color overlay. */
+  background: transparent;
   border: 0;
   border-radius: 0;
   box-shadow: none;
@@ -67,7 +68,7 @@ main.agui-chat {
 .copilotKitMessages,
 .copilotKitMessagesContainer,
 .copilotKitMessagesFooter {
-  background: #141414 !important;
+  background: transparent !important;
 }
 
 .tool-message {
@@ -126,14 +127,14 @@ main.agui-chat {
 }
 
 .agui-chat .copilotKitMessage.copilotKitUserMessage {
-  background: #024a76;
+  background: rgba(2, 74, 118, 0.85);
   margin-left: auto;
   margin-right: 1.5rem;
   color: #ffffff;
 }
 
 .agui-chat .copilotKitMessage.copilotKitAssistantMessage {
-  background: #303030;
+  background: rgba(48, 48, 48, 0.85);
   margin-right: auto;
   margin-left: 1.5rem;
   padding: 1rem 1.2rem;
@@ -153,7 +154,7 @@ main.agui-chat {
 }
 
 .agui-chat .copilotKitMessage pre {
-  background: #1b1b1b;
+  background: rgba(27, 27, 27, 0.85);
   padding: 1rem;
   border-radius: 12px;
   overflow-x: auto;
@@ -228,7 +229,7 @@ main.agui-chat {
 /* Custom event specific styling. */
 .tool-message--custom,
 .tool-message[data-message-kind="custom"] {
-  background: #303030 !important;
+  background: rgba(48, 48, 48, 0.85) !important;
   box-shadow: none !important;
   border-left-color: var(--agui-custom-event-border) !important;
   border-left-width: 3px !important;
@@ -255,7 +256,7 @@ main.agui-chat {
 .tool-message--tool-result,
 .tool-message[data-message-kind="tool-call"],
 .tool-message[data-message-kind="tool-result"] {
-  background: #303030 !important;
+  background: rgba(48, 48, 48, 0.85) !important;
   box-shadow: none !important;
   border-left-color: var(--agui-tool-call-border) !important;
   border-left-width: 3px !important;

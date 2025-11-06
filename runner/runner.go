@@ -167,8 +167,34 @@ func (r *runner) Run(
 		}
 	}
 
+	// Append the incoming tool response message to the session if it has content.
+	if message.Role == model.RoleTool && message.Content != "" {
+		now := time.Now()
+		toolResponse := &model.Response{
+			Object:    model.ObjectTypeToolResponse,
+			Created:   now.Unix(),
+			Choices:   []model.Choice{{Index: 0, Message: message}},
+			Timestamp: now,
+		}
+		if invocation.Model != nil {
+			toolResponse.Model = invocation.Model.Info().Name
+		}
+		toolEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			toolResponse,
+		)
+		agent.InjectIntoEvent(invocation, toolEvent)
+		if err := r.sessionService.AppendEvent(ctx, sess, toolEvent); err != nil {
+			return nil, err
+		}
+		// Clear the current message to avoid being written as a user message again.
+		invocation.Message = model.Message{}
+		message = model.Message{}
+	}
+
 	// Append the incoming user message to the session if it has content.
-	if message.Content != "" && shouldAppendUserMessage(message, ro.Messages) {
+	if message.Role == model.RoleUser && message.Content != "" && shouldAppendUserMessage(message, ro.Messages) {
 		evt := event.NewResponseEvent(
 			invocation.InvocationID,
 			authorUser,

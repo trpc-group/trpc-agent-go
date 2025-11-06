@@ -1,5 +1,6 @@
 .resources/*.png filter=lfs diff=lfs merge=lfs -text
 .resources/**/*.png filter=lfs diff=lfs merge=lfs -text
+.resources/**/*.gif filter=lfs diff=lfs merge=lfs -text
 *.png filter=lfs diff=lfs merge=lfs -text
 examples/artifact/**/*.png filter=lfs diff=lfs merge=lfs -text
 examples/artifact/*.png filter=lfs diff=lfs merge=lfs -text

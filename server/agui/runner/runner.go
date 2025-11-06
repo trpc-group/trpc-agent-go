@@ -90,13 +90,13 @@ func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, 
 			aguievents.WithRunID(runID)), runID)
 		return
 	}
-	userMessage := runAgentInput.Messages[len(runAgentInput.Messages)-1]
-	if userMessage.Role != model.RoleUser {
-		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("last message is not a user message",
+	lastMessage := runAgentInput.Messages[len(runAgentInput.Messages)-1]
+	if lastMessage.Role != model.RoleUser && lastMessage.Role != model.RoleTool {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("last message is neither user message nor tool message",
 			aguievents.WithRunID(runID)), runID)
 		return
 	}
-	ch, err := r.runner.Run(ctx, userID, runAgentInput.ThreadID, userMessage)
+	ch, err := r.runner.Run(ctx, userID, runAgentInput.ThreadID, lastMessage)
 	if err != nil {
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err),
 			aguievents.WithRunID(runID)), runID)

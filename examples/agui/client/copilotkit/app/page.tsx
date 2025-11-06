@@ -9,7 +9,7 @@
 
 "use client";
 
-import { Fragment, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useLayoutEffect, useEffect, useCallback, useRef, useState } from "react";
 import type { InputProps, RenderMessageProps } from "@copilotkit/react-ui";
 import {
   AssistantMessage as DefaultAssistantMessage,
@@ -18,8 +18,11 @@ import {
   UserMessage as DefaultUserMessage,
   useChatContext,
 } from "@copilotkit/react-ui";
+import { useCopilotMessagesContext, useCopilotChat } from "@copilotkit/react-core";
+import { ResultMessage } from "@copilotkit/runtime-client-gql";
 
 const DEFAULT_PROMPT = "Calculate 2*(10+11), first explain the idea, then calculate, and finally give the conclusion.";
+const BACKGROUND_TOOL_NAME = "change_background";
 
 const PromptInput = ({
   inProgress,
@@ -304,6 +307,7 @@ const ToolAwareRenderMessage = ({
 export default function Home() {
   return (
     <main className="agui-chat">
+      <BackgroundColorWatcher />
       <CopilotChat
         className="agui-chat__panel"
         RenderMessage={ToolAwareRenderMessage}
@@ -314,4 +318,189 @@ export default function Home() {
       />
     </main>
   );
+}
+
+const BackgroundColorWatcher = () => {
+  const { messages } = useCopilotMessagesContext();
+  const { appendMessage } = useCopilotChat();
+  const initial = useRef<string | null>(null);
+  const lastApplied = useRef<string | null>(null);
+  const handledToolCallsRef = useRef<Set<string>>(new Set());
+
+  const applyBackground = useCallback((color: string) => {
+    if (lastApplied.current === color) {
+      return;
+    }
+    const root = typeof document !== "undefined" ? document.documentElement : null;
+    const main = typeof document !== "undefined"
+      ? document.querySelector<HTMLElement>("main.agui-chat")
+      : null;
+    document.body.style.transition = "background-color 0.6s ease";
+    document.body.style.backgroundColor = color;
+    if (root) {
+      root.style.transition = "background-color 0.6s ease";
+      root.style.backgroundColor = color;
+    }
+    if (main) {
+      main.style.transition = "background-color 0.6s ease";
+      main.style.backgroundColor = color;
+    }
+    lastApplied.current = color;
+  }, []);
+
+  useEffect(() => {
+    if (initial.current === null) {
+      initial.current = document.body.style.backgroundColor || "";
+    }
+    return () => {
+      if (initial.current !== null) {
+        document.body.style.backgroundColor = initial.current;
+        const root = document.documentElement;
+        const main = document.querySelector<HTMLElement>("main.agui-chat");
+        if (root) {
+          root.style.backgroundColor = initial.current;
+        }
+        if (main) {
+          main.style.backgroundColor = initial.current;
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return;
+    }
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i] as any;
+      const appliedColor = extractAppliedBackgroundColor(msg);
+      if (appliedColor) {
+        applyBackground(appliedColor);
+        break;
+      }
+      const pendingCall = extractPendingBackgroundCall(msg);
+      if (pendingCall && pendingCall.toolCallId) {
+        if (handledToolCallsRef.current.has(pendingCall.toolCallId)) {
+          continue;
+        }
+        handledToolCallsRef.current.add(pendingCall.toolCallId);
+        applyBackground(pendingCall.color);
+        relayToolResult(
+          appendMessage,
+          pendingCall.toolCallId,
+          pendingCall.color
+        );
+        break;
+      }
+    }
+  }, [messages, applyBackground, appendMessage]);
+
+  return null;
+};
+
+interface PendingBackgroundCall {
+  color: string;
+  toolCallId: string;
+}
+
+function extractAppliedBackgroundColor(message: any): string | null {
+  if (!message) {
+    return null;
+  }
+
+  if (message?.role === "tool" || message?.type === "ResultMessage") {
+    return parseColorPayload(message?.result ?? message?.content);
+  }
+
+  if (message?.customEvent) {
+    return parseColorPayload(message.customEvent?.value);
+  }
+
+  return null;
+}
+
+function extractPendingBackgroundCall(message: any): PendingBackgroundCall | null {
+  if (!message) {
+    return null;
+  }
+
+  const type = message?.type;
+  const name = message?.actionName ?? message?.name ?? message?.toolName;
+  const args =
+    message?.arguments ?? message?.args ?? message?.toolCallArguments ?? message?.functionArguments;
+  const toolCallId = message?.toolCallId ?? message?.id ?? message?.callId;
+
+  if (name === BACKGROUND_TOOL_NAME || type === "ActionExecutionMessage") {
+    const color = parseColorPayload(args);
+    if (color && toolCallId) {
+      return { color, toolCallId };
+    }
+  }
+
+  if (Array.isArray(message?.toolCalls)) {
+    for (const call of message.toolCalls) {
+      const callName = call?.function?.name ?? call?.name;
+      if (callName !== BACKGROUND_TOOL_NAME) {
+        continue;
+      }
+      const color = parseColorPayload(call?.function?.arguments ?? call?.arguments);
+      if (color && call?.id) {
+        return { color, toolCallId: call.id };
+      }
+    }
+  }
+
+  return null;
+}
+
+function isValidHexColor(value: string): boolean {
+  const normalized = value.trim();
+  return /^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(normalized);
+}
+
+function normalizeHexColor(value: string): string {
+  const trimmed = value.trim();
+  const hex = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+  return hex.toUpperCase();
+}
+
+function parseColorPayload(payload: unknown): string | null {
+  if (!payload) {
+    return null;
+  }
+  if (typeof payload === "string") {
+    const trimmed = payload.trim();
+    if (!trimmed) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parseColorPayload(parsed);
+    } catch {
+      return isValidHexColor(trimmed) ? normalizeHexColor(trimmed) : null;
+    }
+  }
+  if (typeof payload === "object") {
+    const maybe = (payload as any).appliedColor ?? (payload as any).color ?? (payload as any).hex;
+    if (typeof maybe === "string" && isValidHexColor(maybe)) {
+      return normalizeHexColor(maybe);
+    }
+  }
+  return null;
+}
+
+function relayToolResult(
+  appendMessage: (message: any, options?: { followUp?: boolean }) => Promise<any>,
+  toolId: string,
+  color: string
+) {
+  const message = new ResultMessage({
+    actionExecutionId: toolId,
+    actionName: BACKGROUND_TOOL_NAME,
+    result: ResultMessage.encodeResult({ status: "ok", appliedColor: color }),
+  });
+  (message as any).toolCallId = toolId;
+
+  appendMessage(message, { followUp: true }).catch(() => {});
 }

@@ -146,6 +146,9 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		eventChan,
 	)
 	if err != nil {
+		if isExternalToolStopError(err) {
+			return nil, err
+		}
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
@@ -648,7 +651,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 
 	// Execute the actual tool.
 	result, err := p.executeTool(ctx, invocation, toolCall, tl, eventChan)
-	if err != nil {
+	if err != nil && !isExternalToolStopError(err) {
 		log.Warnf("tool execute failed, function name: %v, arguments: %s, result: %v, err: %v",
 			toolCall.Function.Name, string(toolCall.Function.Arguments), result, err)
 	}
@@ -669,7 +672,9 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			result = customResult
 		}
 		if err != nil {
-			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, err)
+			if !isExternalToolStopError(err) {
+				log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, err)
+			}
 			return result, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", err)
 		}
 	}
@@ -724,7 +729,9 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 ) (any, error) {
 	result, err := tl.Call(ctx, toolCall.Function.Arguments)
 	if err != nil {
-		log.Errorf("CallableTool execution failed for %s: %v", toolCall.Function.Name, err)
+		if !isExternalToolStopError(err) {
+			log.Errorf("CallableTool execution failed for %s: %v", toolCall.Function.Name, err)
+		}
 		return nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, err)
 	}
 	return result, nil
@@ -1027,4 +1034,15 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 		}
 	}
 	return nil
+}
+
+// isExternalToolStopError checks if the error is an external tool stop error.
+func isExternalToolStopError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if stopErr, ok := agent.AsStopError(err); ok {
+		return stopErr.Reason() == agent.StopReasonExternalTool
+	}
+	return false
 }

@@ -143,6 +143,56 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
 }
 
+func TestRunner_AppendsToolMessageToSession(t *testing.T) {
+	ctx := context.Background()
+	sessionService := sessioninmemory.NewSessionService()
+	r := NewRunner("test-app", &mockAgent{name: "test-agent"}, WithSessionService(sessionService))
+
+	// Seed session with a normal user turn to mimic真实使用场景.
+	seedCh, err := r.Run(ctx, "tool-user", "tool-session", model.NewUserMessage("seed message"))
+	require.NoError(t, err)
+	for range seedCh {
+	}
+
+	toolMessage := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call-1",
+		ToolName: "change_background",
+		Content:  "{\"status\":\"ok\"}",
+	}
+
+	eventCh, err := r.Run(ctx, "tool-user", "tool-session", toolMessage)
+	require.NoError(t, err)
+	require.NotNil(t, eventCh)
+	for range eventCh {
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{
+		AppName:   "test-app",
+		UserID:    "tool-user",
+		SessionID: "tool-session",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	events := sess.GetEvents()
+	require.NotEmpty(t, events)
+	var found bool
+	for _, ev := range events {
+		if ev.Response == nil || ev.Object != model.ObjectTypeToolResponse {
+			continue
+		}
+		require.NotEmpty(t, ev.Response.Choices)
+		msg := ev.Response.Choices[0].Message
+		assert.Equal(t, model.RoleTool, msg.Role)
+		assert.Equal(t, "call-1", msg.ToolID)
+		assert.Equal(t, "{\"status\":\"ok\"}", msg.Content)
+		found = true
+		break
+	}
+	assert.True(t, found, "expected tool.response event in session events")
+}
+
 func TestRunner_SessionCreateIfMissing(t *testing.T) {
 	// Create an in-memory session service.
 	sessionService := sessioninmemory.NewSessionService()

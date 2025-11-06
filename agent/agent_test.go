@@ -17,76 +17,95 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStopError_Error(t *testing.T) {
+func TestStopError_ErrorAndReason(t *testing.T) {
 	tests := []struct {
-		name    string
-		message string
+		name         string
+		err          *StopError
+		expectError  string
+		expectReason StopReason
 	}{
 		{
-			name:    "simple message",
-			message: "stop execution",
+			name:         "generic reason",
+			err:          &StopError{Message: "stop execution"},
+			expectError:  "stop execution",
+			expectReason: StopReasonGeneric,
 		},
 		{
-			name:    "detailed message",
-			message: "agent stopped due to user request",
-		},
-		{
-			name:    "empty message",
-			message: "",
+			name:         "external tool reason",
+			err:          &StopError{Message: "handoff", reason: StopReasonExternalTool},
+			expectError:  "handoff",
+			expectReason: StopReasonExternalTool,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := &StopError{Message: tt.message}
-			assert.Equal(t, tt.message, err.Error())
+			assert.Equal(t, tt.expectError, tt.err.Error())
+			assert.Equal(t, tt.expectReason, tt.err.Reason())
 		})
 	}
 }
 
 func TestNewStopError(t *testing.T) {
 	tests := []struct {
-		name    string
-		message string
+		name         string
+		message      string
+		opts         []StopOption
+		expectReason StopReason
 	}{
 		{
-			name:    "create with message",
-			message: "execution stopped",
+			name:         "defaults to generic",
+			message:      "execution stopped",
+			expectReason: StopReasonGeneric,
 		},
 		{
-			name:    "create with empty message",
-			message: "",
+			name:         "allows empty message",
+			message:      "",
+			expectReason: StopReasonGeneric,
+		},
+		{
+			name:         "with stop reason",
+			message:      "client must confirm",
+			opts:         []StopOption{WithStopReason(StopReasonExternalTool)},
+			expectReason: StopReasonExternalTool,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := NewStopError(tt.message)
+			err := NewStopError(tt.message, tt.opts...)
 			require.NotNil(t, err)
 			assert.Equal(t, tt.message, err.Message)
 			assert.Equal(t, tt.message, err.Error())
+			assert.Equal(t, tt.expectReason, err.Reason())
 		})
 	}
 }
 
 func TestAsStopError(t *testing.T) {
 	tests := []struct {
-		name      string
-		err       error
-		expectOK  bool
-		expectMsg string
+		name         string
+		err          error
+		expectOK     bool
+		expectMsg    string
+		expectReason StopReason
 	}{
 		{
-			name:      "valid StopError",
-			err:       NewStopError("test stop"),
-			expectOK:  true,
-			expectMsg: "test stop",
+			name:         "valid StopError",
+			err:          NewStopError("test stop"),
+			expectOK:     true,
+			expectMsg:    "test stop",
+			expectReason: StopReasonGeneric,
 		},
 		{
-			name:      "wrapped StopError",
-			err:       errors.Join(errors.New("outer error"), NewStopError("inner stop")),
-			expectOK:  true,
-			expectMsg: "inner stop",
+			name: "wrapped StopError",
+			err: errors.Join(
+				errors.New("outer error"),
+				NewStopError("inner stop", WithStopReason(StopReasonExternalTool)),
+			),
+			expectOK:     true,
+			expectMsg:    "inner stop",
+			expectReason: StopReasonExternalTool,
 		},
 		{
 			name:     "not a StopError",
@@ -107,6 +126,7 @@ func TestAsStopError(t *testing.T) {
 			if tt.expectOK {
 				require.NotNil(t, stopErr)
 				assert.Equal(t, tt.expectMsg, stopErr.Message)
+				assert.Equal(t, tt.expectReason, stopErr.Reason())
 			}
 		})
 	}

@@ -1353,6 +1353,47 @@ func TestHandleFunctionCallsAndSendEvent_StopErrorEmitsErrorEvent(t *testing.T) 
 	}
 }
 
+func TestHandleFunctionCallsAndSendEvent_StopErrorExternalToolSkipsErrorEvent(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv-external",
+	}
+
+	errTool := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "err"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, agent.NewStopError("client action required", agent.WithStopReason(agent.StopReasonExternalTool))
+		},
+	}
+	tools := map[string]tool.Tool{"err": errTool}
+	rsp := &model.Response{
+		Model: "m",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				ToolCalls: []model.ToolCall{{
+					ID: "c1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "err",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	evtCh := make(chan *event.Event, 1)
+	_, err := p.handleFunctionCallsAndSendEvent(ctx, inv, rsp, tools, evtCh)
+	require.Error(t, err)
+	// Should not emit FlowError event for external tool stop.
+	select {
+	case evt := <-evtCh:
+		require.Fail(t, "unexpected event emitted", evt)
+	default:
+	}
+}
+
 func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(true, nil)
 	ctx, cancel := context.WithCancel(context.Background())
