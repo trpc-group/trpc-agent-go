@@ -324,6 +324,9 @@ func TestInitMeterProvider(t *testing.T) {
 	if itelemetry.ChatMetricGenAIClientOperationDuration == nil {
 		t.Error("ChatMetricGenAIClientOperationDuration was not created")
 	}
+	if itelemetry.ChatMetricGenAIServerTimeToFirstToken == nil {
+		t.Error("ChatMetricGenAIServerTimeToFirstToken was not created")
+	}
 	if itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken == nil {
 		t.Error("ChatMetricTRPCAgentGoClientTimeToFirstToken was not created")
 	}
