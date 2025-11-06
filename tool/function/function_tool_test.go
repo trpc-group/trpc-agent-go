@@ -434,3 +434,52 @@ func TestStreamableFunctionTool_StreamableCall_NilFunction(t *testing.T) {
 		t.Error("expected nil reader from nil function")
 	}
 }
+
+func TestFunctionTool_SkipSummarizationOption(t *testing.T) {
+	type in struct {
+		A int `json:"a"`
+	}
+	type out struct {
+		B int `json:"b"`
+	}
+	fn := func(_ context.Context, x in) (out, error) {
+		return out{B: x.A}, nil
+	}
+
+	// default false
+	f1 := function.NewFunctionTool(fn)
+	if f1.SkipSummarization() {
+		t.Errorf("default SkipSummarization should be false")
+	}
+
+	// opt-in true
+	f2 := function.NewFunctionTool(fn,
+		function.WithSkipSummarization(true),
+	)
+	if !f2.SkipSummarization() {
+		t.Errorf("expected SkipSummarization true")
+	}
+}
+
+func TestStreamableFunctionTool_SkipSummarizationOption(t *testing.T) {
+	fn := func(_ context.Context, _ streamTestInput) (*tool.StreamReader, error) {
+		s := tool.NewStream(1)
+		go func() {
+			defer s.Writer.Close()
+			_ = s.Writer.Send(tool.StreamChunk{Content: "x"}, nil)
+		}()
+		return s.Reader, nil
+	}
+
+	st1 := function.NewStreamableFunctionTool[streamTestInput, string](fn)
+	if st1.SkipSummarization() {
+		t.Errorf("default SkipSummarization should be false")
+	}
+
+	st2 := function.NewStreamableFunctionTool[streamTestInput, string](
+		fn, function.WithSkipSummarization(true),
+	)
+	if !st2.SkipSummarization() {
+		t.Errorf("expected SkipSummarization true")
+	}
+}

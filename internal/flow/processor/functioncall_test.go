@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -1151,6 +1152,140 @@ func TestMergeParallelToolCallResponseEvents_PropagatesSkipSummarization(t *test
 	require.NotNil(t, merged)
 	require.NotNil(t, merged.Actions)
 	require.True(t, merged.Actions.SkipSummarization)
+}
+
+// Ensure FunctionTool configured to skip summarization ends the turn.
+func TestHandleFunctionCalls_FunctionTool_SkipSummarization_EndInvocation(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	// Build a simple function tool returning a small map.
+	fn := func(_ context.Context, _ struct{}) (map[string]any, error) {
+		return map[string]any{"ok": true}, nil
+	}
+	ft := function.NewFunctionTool(fn,
+		function.WithName("ft"),
+		function.WithSkipSummarization(true),
+	)
+	tools := map[string]tool.Tool{"ft": ft}
+	inv := &agent.Invocation{InvocationID: "inv-ft", AgentName: "a"}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name: "ft", Arguments: []byte(`{}`),
+			},
+		}}},
+	}}}
+	ch := make(chan *event.Event, 4)
+	defer close(ch)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	var got *event.Event
+	for e := range ch {
+		got = e
+		break
+	}
+	require.NotNil(t, got)
+	require.NotNil(t, got.Actions)
+	require.True(t, got.Actions.SkipSummarization)
+	require.True(t, inv.EndInvocation)
+}
+
+// Ensure StreamableFunctionTool with skip flag ends the turn as well.
+func TestHandleFunctionCalls_StreamableFunctionTool_SkipSummarization_EndInvocation(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	// stream returns one chunk then closes
+	sfn := func(_ context.Context, _ struct{}) (*tool.StreamReader, error) {
+		s := tool.NewStream(1)
+		go func() {
+			defer s.Writer.Close()
+			_ = s.Writer.Send(tool.StreamChunk{Content: "ok"}, nil)
+		}()
+		return s.Reader, nil
+	}
+	st := function.NewStreamableFunctionTool[struct{}, string](
+		sfn,
+		function.WithName("st"),
+		function.WithSkipSummarization(true),
+	)
+	tools := map[string]tool.Tool{"st": st}
+	inv := &agent.Invocation{InvocationID: "inv-st", AgentName: "a",
+		Model: &mockModel{},
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name: "st", Arguments: []byte(`{}`),
+			},
+		}}},
+	}}}
+	ch := make(chan *event.Event, 8)
+	defer close(ch)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	// Drain until we see the non-partial tool.response
+	var final *event.Event
+	for e := range ch {
+		if e != nil && e.Response != nil && !e.IsPartial &&
+			e.Object == model.ObjectTypeToolResponse {
+			final = e
+			break
+		}
+	}
+	require.NotNil(t, final)
+	require.NotNil(t, final.Actions)
+	require.True(t, final.Actions.SkipSummarization)
+	require.True(t, inv.EndInvocation)
+}
+
+// Ensure NamedTool wrapper still propagates the skip summarization flag.
+func TestHandleFunctionCalls_NamedTool_PropagatesSkipSummarization(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	fn := func(_ context.Context, _ struct{}) (map[string]int, error) {
+		return map[string]int{"v": 1}, nil
+	}
+	ft := function.NewFunctionTool(fn,
+		function.WithName("raw"),
+		function.WithSkipSummarization(true),
+	)
+	// Wrap into NamedToolSet to prefix the name.
+	nts := itool.NewNamedToolSet(&mockToolSet{tools: []tool.Tool{ft}})
+	ts := nts.Tools(ctx)
+	require.Len(t, ts, 1)
+	named := ts[0]
+	name := named.Declaration().Name
+	tools := map[string]tool.Tool{name: named}
+
+	inv := &agent.Invocation{InvocationID: "inv-nt", AgentName: "ag"}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name: name, Arguments: []byte(`{}`),
+			},
+		}}},
+	}}}
+	ch := make(chan *event.Event, 4)
+	defer close(ch)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	var got *event.Event
+	for e := range ch {
+		got = e
+		break
+	}
+	require.NotNil(t, got)
+	require.NotNil(t, got.Actions)
+	require.True(t, got.Actions.SkipSummarization)
+	require.True(t, inv.EndInvocation)
 }
 
 // stream tool sending struct chunks to exercise JSON marshaling path
