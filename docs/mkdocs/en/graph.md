@@ -345,6 +345,8 @@ func main() {
     graphAgent, err := graphagent.New("simple-workflow", compiledGraph,
         graphagent.WithDescription("Simple workflow example"),
         graphagent.WithInitialState(graph.State{}),
+        graphagent.WithMessageTimelineFilterMode("all"),                                      // Set message timeline filter mode, Options：all、request、invocation, default: all
+        graphagent.WithMessageBranchFilterMode("prefix"),                                     // Set message branch filter mode, Options: all、prefix、exact, default: prefix
     )
     if err != nil {
         panic(err)

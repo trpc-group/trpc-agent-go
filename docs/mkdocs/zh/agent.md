@@ -69,6 +69,8 @@ llmAgent := llmagent.New(
     llmagent.WithDescription("A helpful AI assistant for demonstrations"),              // 设置描述
     llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // 设置指令
     llmagent.WithGenerationConfig(genConfig),                                           // 设置生成参数
+    llmagent.WithMessageTimelineFilterMode("all"),                                      // 设置传给模型的消息按分支时间维度的过滤模式，可选值：all、request、invocation, 默认值: all
+    llmagent.WithMessageBranchFilterMode("prefix"),                                     // 设置传给模型的消息按分支维度的过滤模式, 可选值: all、prefix、exact
 )
 ```
 

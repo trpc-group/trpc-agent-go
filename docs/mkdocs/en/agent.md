@@ -69,6 +69,8 @@ llmAgent := llmagent.New(
     llmagent.WithDescription("A helpful AI assistant for demonstrations"),              // Set description.
     llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // Set instruction.
     llmagent.WithGenerationConfig(genConfig),                                           // Set generation parameters.
+    llmagent.WithMessageTimelineFilterMode("all"),                                      // Set message timeline filter mode, Options：all、request、invocation, default: all
+    llmagent.WithMessageBranchFilterMode("prefix"),                                     // Set message branch filter mode, Options: all、prefix、exact, default: prefix
 )
 ```
 

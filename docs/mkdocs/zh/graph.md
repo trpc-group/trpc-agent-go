@@ -347,6 +347,8 @@ func main() {
     graphAgent, err := graphagent.New("simple-workflow", compiledGraph,
         graphagent.WithDescription("简单的工作流示例"),
         graphagent.WithInitialState(graph.State{}),
+        graphagent.WithMessageTimelineFilterMode("all"),                                      // 设置传给模型的消息按分支时间维度的过滤模式，可选值：all、request、invocation, 默认值: all
+        graphagent.WithMessageBranchFilterMode("prefix"),                                     // 设置传给模型的消息按分支维度的过滤模式, 可选值: all、prefix、exact
     )
     if err != nil {
         panic(err)
