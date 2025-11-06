@@ -299,6 +299,8 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 You can find a complete example at [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot).
 
+The format of AG-UI's MessagesSnapshot event can be found at [messages](https://docs.ag-ui.com/concepts/messages).
+
 ### Setting the BasePath for Routes
 
 `agui.WithBasePath` sets the base route prefix for the AG-UI service. The default value is `/`, and it is used to mount the chat route and message snapshot route under a unified prefix, avoiding conflicts with existing services.

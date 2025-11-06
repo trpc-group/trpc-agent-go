@@ -93,7 +93,7 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("runner get session events: %w", err)
 	}
-	return r.convertToMessagesSnapshotEvent(ctx, events)
+	return r.convertToMessagesSnapshotEvent(ctx, sessionKey.UserID, events)
 }
 
 // getSessionEvents retrieves all events for a given session key from session service.
@@ -109,7 +109,7 @@ func (r *runner) getSessionEvents(ctx context.Context, sessionKey session.Key) (
 }
 
 // convertToMessagesSnapshotEvent converts runner events to AG-UI MessagesSnapshotEvent.
-func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context,
+func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context, userID string,
 	events []event.Event) (*aguievents.MessagesSnapshotEvent, error) {
 	messages := make([]aguievents.Message, 0)
 	if len(events) == 0 {
@@ -128,7 +128,7 @@ func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context,
 			case model.RoleSystem:
 				messages = append(messages, *r.convertToSystemMessage(event.ID, choice))
 			case model.RoleUser:
-				messages = append(messages, *r.convertToUserMessage(event.ID, choice))
+				messages = append(messages, *r.convertToUserMessage(event.ID, userID, choice))
 			case model.RoleAssistant:
 				messages = append(messages, *r.convertToAssistantMessage(event.ID, choice))
 			case model.RoleTool:
@@ -147,15 +147,17 @@ func (r *runner) convertToSystemMessage(id string, choice model.Choice) *aguieve
 		ID:      id,
 		Role:    string(choice.Message.Role),
 		Content: &choice.Message.Content,
+		Name:    &r.appName,
 	}
 }
 
 // convertToUserMessage converts user events to AG-UI Message.
-func (r *runner) convertToUserMessage(id string, choice model.Choice) *aguievents.Message {
+func (r *runner) convertToUserMessage(id string, userID string, choice model.Choice) *aguievents.Message {
 	return &aguievents.Message{
 		ID:      id,
 		Role:    string(choice.Message.Role),
 		Content: &choice.Message.Content,
+		Name:    &userID,
 	}
 }
 
@@ -176,6 +178,7 @@ func (r *runner) convertToAssistantMessage(id string, choice model.Choice) *agui
 		ID:        id,
 		Role:      string(choice.Message.Role),
 		Content:   &choice.Message.Content,
+		Name:      &r.appName,
 		ToolCalls: toolCalls,
 	}
 }
