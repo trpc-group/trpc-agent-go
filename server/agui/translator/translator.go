@@ -132,10 +132,10 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 
 // toolCallEvent translates a tool call trpc-agent-go event to AG-UI events.
 func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, error) {
-	var events []aguievents.Event
 	if rsp == nil || len(rsp.Choices) == 0 {
-		return events, nil
+		return nil, nil
 	}
+	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
 		for _, toolCall := range choice.Message.ToolCalls {
 			// Tool Call Start Event.
@@ -158,6 +158,9 @@ func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, err
 
 // toolResultEvent translates a tool result trpc-agent-go event to AG-UI events.
 func (t *translator) toolResultEvent(rsp *model.Response) ([]aguievents.Event, error) {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return nil, nil
+	}
 	events := make([]aguievents.Event, 0, len(rsp.Choices)*2)
 	for _, choice := range rsp.Choices {
 		toolID := choice.Message.ToolID

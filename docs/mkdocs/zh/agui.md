@@ -296,3 +296,28 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 ```
 
 完整的示例可参考 [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot)。
+
+AG-UI 的 MessagesSnapshotEvent 事件格式可见 [messages](https://docs.ag-ui.com/concepts/messages)。
+
+### 设置路由前缀 BasePath
+
+`agui.WithBasePath` 设置 AG-UI 服务的基础路由前缀，默认值为 `/`，用于在统一前缀下挂载聊天路由与消息快照路由，避免与现有服务冲突.
+
+`agui.WithPath` 与 `agui.WithMessagesSnapshotPath` 仅定义基础路径下的子路由，框架会通过 `url.JoinPath` 将它们与基础路径拼接成最终可访问的路由.
+
+使用示例如下所示
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithBasePath("/agui"),                // 设置 AG-UI 前缀路由
+    agui.WithPath("/chat"),                    // 设置聊天路由，默认为 "/"
+    agui.WithMessagesSnapshotEnabled(true),    // 开启消息快照功能
+    agui.WithMessagesSnapshotPath("/history"), // 设置消息快照路由，默认为 "/history"
+)
+if err != nil {
+    log.Fatalf("create agui server failed: %v", err)
+}
+```
+
+此时聊天路由为 `/agui/chat`，用消息快照路由为 `/agui/history`。
