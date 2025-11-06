@@ -11,10 +11,13 @@ package metric
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -535,5 +538,98 @@ func TestMultipleOptions(t *testing.T) {
 
 	if mp == nil {
 		t.Fatal("expected non-nil meter provider")
+	}
+}
+
+// mockMeter is a mock implementation of metric.Meter that can return errors
+type mockMeter struct {
+	noop.Meter
+	shouldFail bool
+	failOn     string
+}
+
+func (m *mockMeter) Float64Histogram(name string, options ...metric.Float64HistogramOption) (metric.Float64Histogram, error) {
+	if m.shouldFail && name == m.failOn {
+		return nil, errors.New("mock error: failed to create histogram")
+	}
+	return noop.Float64Histogram{}, nil
+}
+
+func (m *mockMeter) Int64Counter(name string, options ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+	if m.shouldFail && name == m.failOn {
+		return nil, errors.New("mock error: failed to create counter")
+	}
+	return noop.Int64Counter{}, nil
+}
+
+func (m *mockMeter) Int64Histogram(name string, options ...metric.Int64HistogramOption) (metric.Int64Histogram, error) {
+	if m.shouldFail && name == m.failOn {
+		return nil, errors.New("mock error: failed to create histogram")
+	}
+	return noop.Int64Histogram{}, nil
+}
+
+// mockMeterProvider is a mock implementation of metric.MeterProvider
+type mockMeterProvider struct {
+	noop.MeterProvider
+	meter *mockMeter
+}
+
+func (m *mockMeterProvider) Meter(name string, opts ...metric.MeterOption) metric.Meter {
+	return m.meter
+}
+
+// TestInitMeterProvider_ErrorHandling tests error handling in InitMeterProvider
+func TestInitMeterProvider_ErrorHandling(t *testing.T) {
+	tests := []struct {
+		name        string
+		failOn      string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "fail on ChatMetricGenAIServerTimeToFirstToken",
+			failOn:      "gen_ai.server.time_to_first_token",
+			expectError: true,
+			errorMsg:    "failed to create chat metric GenAIServerTimeToFirstToken",
+		},
+		{
+			name:        "fail on ChatMetricTRPCAgentGoClientTimeToFirstToken",
+			failOn:      "trpc_agent_go.client.time_to_first_token",
+			expectError: true,
+			errorMsg:    "failed to create chat metric TRPCAgentGoClientTimeToFirstToken",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save original values
+			origMeterProvider := itelemetry.MeterProvider
+			origChatMeter := itelemetry.ChatMeter
+			defer func() {
+				itelemetry.MeterProvider = origMeterProvider
+				itelemetry.ChatMeter = origChatMeter
+			}()
+
+			// Create mock meter provider that will fail on specific metric
+			mockMeter := &mockMeter{
+				shouldFail: tt.expectError,
+				failOn:     tt.failOn,
+			}
+			mp := &mockMeterProvider{meter: mockMeter}
+
+			// Test initialization
+			err := InitMeterProvider(mp)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error containing '%s', got nil", tt.errorMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected no error, got: %v", err)
+				}
+			}
+		})
 	}
 }
