@@ -1113,3 +1113,256 @@ func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
 	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.70), "expected messages to be reduced to at most 70%% due to ratio limit, got %d (original: %d)", len(captured.Messages), len(messages))
 }
 
+// errorStrategy always returns error for testing error paths.
+type errorStrategy struct{}
+
+func (errorStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return nil, fmt.Errorf("tailoring error")
+}
+
+// TestWithEnableTokenTailoring_ErrorInTailoring tests error handling in tailoring.
+func TestWithEnableTokenTailoring_ErrorInTailoring(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(100),
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(errorStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// When tailoring fails, original messages should be preserved.
+	require.Len(t, captured.Messages, 2, "expected original messages when tailoring fails, got %d", len(captured.Messages))
+}
+
+// errorCounter always returns error for testing error paths.
+type errorCounter struct{}
+
+func (errorCounter) CountTokens(
+	ctx context.Context,
+	message model.Message,
+) (int, error) {
+	return 0, fmt.Errorf("count error")
+}
+
+func (errorCounter) CountTokensRange(
+	ctx context.Context,
+	messages []model.Message,
+	start,
+	end int,
+) (int, error) {
+	return 0, fmt.Errorf("count range error")
+}
+
+// TestWithEnableTokenTailoring_ErrorInCountTokens tests error handling in token counting.
+func TestWithEnableTokenTailoring_ErrorInCountTokens(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(100),
+		WithTokenCounter(errorCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// Tailoring succeeds but token counting fails, messages should be tailored.
+	require.Len(t, captured.Messages, 1, "expected tailored messages even when token counting fails, got %d", len(captured.Messages))
+	// MaxTokens should not be set when token counting fails.
+	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to be 0 when token counting fails")
+}
+
+// zeroTokenCounter always returns 0 for testing edge cases.
+type zeroTokenCounter struct{}
+
+func (zeroTokenCounter) CountTokens(
+	ctx context.Context,
+	message model.Message,
+) (int, error) {
+	return 0, nil
+}
+
+func (zeroTokenCounter) CountTokensRange(
+	ctx context.Context,
+	messages []model.Message,
+	start,
+	end int,
+) (int, error) {
+	return 0, nil
+}
+
+// TestWithEnableTokenTailoring_RemainingTokensNegative tests remainingTokens <= 0 case.
+func TestWithEnableTokenTailoring_RemainingTokensNegative(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1), // Very small limit to trigger negative remaining tokens.
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// When remaining tokens <= 0, MaxTokens should not be set.
+	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to be 0 when remaining tokens <= 0")
+}
+
+// TestWithEnableTokenTailoring_AutoSetMaxTokens tests automatic MaxTokens setting.
+func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(10000),
+		WithTokenCounter(zeroTokenCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// MaxTokens should be auto-set when not specified by user.
+	require.Greater(t, captured.MaxTokens, int64(0), "expected MaxTokens > 0")
+}
+
+// TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.
+func TestWithEnableTokenTailoring_UserSpecifiedMaxTokens(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(10000),
+		WithTokenCounter(zeroTokenCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	userMaxTokens := 2048
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("A"),
+			model.NewUserMessage("B"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &userMaxTokens,
+		},
+	}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// User-specified MaxTokens should be preserved.
+	require.Equal(t, int64(userMaxTokens), captured.MaxTokens, "expected user-specified MaxTokens to be preserved")
+}
+
+// TestWithEnableTokenTailoring_LazyInitialization tests lazy initialization of counter and strategy.
+func TestWithEnableTokenTailoring_LazyInitialization(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		// No counter or strategy provided, should lazy-initialize.
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	messages := []model.Message{model.NewSystemMessage("System")}
+	for i := 0; i < 100; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 20))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	// Should have tailored messages using lazy-initialized counter/strategy.
+	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored with lazy-initialized components, got %d (original: %d)", len(captured.Messages), len(messages))
+}
+
+// TestWithEnableTokenTailoring_EmptyMessages tests empty messages edge case.
+func TestWithEnableTokenTailoring_EmptyMessages(t *testing.T) {
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(100),
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+	)
+
+	req := &model.Request{Messages: []model.Message{}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.Error(t, err, "GenerateContent should fail with empty messages")
+	require.Nil(t, ch, "expected nil channel with empty messages")
+}
+
