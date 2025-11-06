@@ -1667,10 +1667,7 @@ func (e *Executor) isDisableDeepCopyKey(key string) bool {
 	if !ok {
 		return false
 	}
-	if field.DisableDeepCopy {
-		return true
-	}
-	return false
+	return field.DisableDeepCopy
 }
 
 // buildTaskStateCopy returns the per-task input state, including overlay.
