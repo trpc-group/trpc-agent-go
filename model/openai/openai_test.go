@@ -39,6 +39,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestNew(t *testing.T) {
+	var testKey = "test-key"
+	t.Setenv(deepSeekAPIKeyName, testKey)
 	tests := []struct {
 		name       string
 		modelName  string
@@ -49,14 +51,14 @@ func TestNew(t *testing.T) {
 			name:      "valid openai model",
 			modelName: "gpt-3.5-turbo",
 			opts: []Option{
-				WithAPIKey("test-key"),
+				WithAPIKey(testKey),
 			},
 		},
 		{
 			name:      "valid model with base url",
 			modelName: "custom-model",
 			opts: []Option{
-				WithAPIKey("test-key"),
+				WithAPIKey(testKey),
 				WithBaseURL("https://api.custom.com"),
 			},
 		},
@@ -74,6 +76,7 @@ func TestNew(t *testing.T) {
 				WithVariant(VariantDeepSeek),
 			},
 			expectOpts: []Option{
+				WithAPIKey(testKey),
 				WithBaseURL(defaultDeepSeekBaseURL),
 			},
 		},
