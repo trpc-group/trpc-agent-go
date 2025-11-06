@@ -435,6 +435,25 @@ func TestStreamableFunctionTool_StreamableCall_NilFunction(t *testing.T) {
 	}
 }
 
+func TestStreamableFunctionTool_LongRunning(t *testing.T) {
+	// default false
+	fn := func(_ context.Context, _ streamTestInput) (*tool.StreamReader, error) {
+		return nil, nil
+	}
+	st1 := function.NewStreamableFunctionTool[streamTestInput, string](
+		fn, function.WithName("st"),
+	)
+	if st1.LongRunning() {
+		t.Errorf("expected default LongRunning=false")
+	}
+	st2 := function.NewStreamableFunctionTool[streamTestInput, string](
+		fn, function.WithLongRunning(true),
+	)
+	if !st2.LongRunning() {
+		t.Errorf("expected LongRunning=true")
+	}
+}
+
 func TestFunctionTool_SkipSummarizationOption(t *testing.T) {
 	type in struct {
 		A int `json:"a"`
