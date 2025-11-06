@@ -53,8 +53,9 @@ const (
 	defaultSafetyMarginRatio      = 0.10 // Safety margin ratio (10%) to account for token counting inaccuracies.
 	defaultMaxInputTokensRatio    = 0.65 // Maximum input tokens ratio (65%) of context window for stability.
 
-	deepSeekAPIKey         = "DEEPSEEK_API_KEY"
-	defaultDeepSeekBaseURL = "https://api.deepseek.com"
+	//nolint:gosec
+	deepSeekAPIKeyName     string = "DEEPSEEK_API_KEY"
+	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -90,29 +91,30 @@ type variantConfig struct {
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
+// defaultFileDeletionBodyConvertor is the default file deletion body converter.
+var defaultFileDeletionBodyConvertor = func(body []byte, fileID string) []byte {
+	return body
+}
+
 type fileUploadRequestConvertor func(r *http.Request, file *os.File, fileOpts *FileOptions) (*http.Request, error)
 
 // variantConfigs maps variant names to their configurations.
 var variantConfigs = map[Variant]variantConfig{
 	VariantOpenAI: {
-		fileUploadPath:        "/openapi/v1/files",
-		filePurpose:           openai.FilePurposeUserData,
-		fileDeletionMethod:    http.MethodDelete,
-		skipFileTypeInContent: false,
-		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
-			return body
-		},
+		fileUploadPath:            "/openapi/v1/files",
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 	},
 	VariantDeepSeek: {
-		fileUploadPath:        "/openapi/v1/files",
-		filePurpose:           openai.FilePurposeUserData,
-		fileDeletionMethod:    http.MethodDelete,
-		skipFileTypeInContent: false,
-		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
-			return body
-		},
-		apiKeyName:     deepSeekAPIKey,
-		defaultBaseURL: defaultDeepSeekBaseURL,
+		fileUploadPath:            "/openapi/v1/files",
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                deepSeekAPIKeyName,
+		defaultBaseURL:            defaultDeepSeekBaseURL,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
