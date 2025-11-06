@@ -120,11 +120,7 @@ type GraphAgent struct {
 // New creates a new GraphAgent with the given graph and options.
 func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	// set default channel buffer size.
-	var options Options = Options{
-		ChannelBufferSize:         defaultChannelBufferSize,
-		messageTimelineFilterMode: processor.TimelineFilterAll,
-		messageBranchFilterMode:   processor.BranchFilterModePrefix,
-	}
+	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
 
 	// Apply function options.
 	for _, opt := range opts {

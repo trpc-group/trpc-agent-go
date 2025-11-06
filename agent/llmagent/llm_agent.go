@@ -482,9 +482,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		EndInvocationAfterTransfer: true,
 		// Default to preserving same-branch lineage so assistant/tool roles
 		// from parent/child branches are retained for downstream agents.
-		PreserveSameBranch:        true,
-		messageTimelineFilterMode: processor.TimelineFilterAll,
-		messageBranchFilterMode:   processor.BranchFilterModePrefix,
+		PreserveSameBranch: true,
 	}
 
 	// Apply function options.
