@@ -50,7 +50,7 @@ const (
 	BranchFilterModePrefix = processor.BranchFilterModePrefix
 	// BranchFilterModeAll include all
 	BranchFilterModeAll = processor.BranchFilterModeAll
-	// IncludeContentFilterKeyExact exact match
+	// BranchFilterModeExact exact match
 	BranchFilterModeExact = processor.BranchFilterModeExact
 
 	// TimelineFilterAll includes all historical message records

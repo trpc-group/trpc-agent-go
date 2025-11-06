@@ -31,10 +31,10 @@ const (
 	BranchFilterModePrefix = "prefix"
 	// BranchFilterModeAll include all
 	BranchFilterModeAll = "all"
-	// IncludeContentFilterKeyExact exact match
+	// BranchFilterModeExact exact match
 	BranchFilterModeExact = "exact"
 
-	// TimelineFilterHistory includes all historical message records
+	// TimelineFilterAll includes all historical message records
 	// Suitable for scenarios requiring full conversation context
 	TimelineFilterAll = "all"
 	// TimelineFilterCurrentRequest only includes messages within the current request cycle
