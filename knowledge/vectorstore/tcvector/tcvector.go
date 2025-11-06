@@ -191,15 +191,21 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 	}
 
 	// Prepare collection creation parameters
-	var createParams *tcvectordb.CreateCollectionParams
+	createParams := &tcvectordb.CreateCollectionParams{}
+
+	// Configure remote embedding when model is specified
 	if options.embeddingModel != "" {
-		// Configure remote embedding when model is specified
-		createParams = &tcvectordb.CreateCollectionParams{
-			Embedding: &tcvectordb.Embedding{
-				Field:       options.contentFieldName,
-				VectorField: options.embeddingFieldName,
-				ModelName:   options.embeddingModel,
-			},
+		createParams.Embedding = &tcvectordb.Embedding{
+			Field:       options.contentFieldName,
+			VectorField: options.embeddingFieldName,
+			ModelName:   options.embeddingModel,
+		}
+	}
+
+	// Configure filter index settings
+	if options.filterAll {
+		createParams.FilterIndexConfig = &tcvectordb.FilterIndexConfig{
+			FilterAll: true,
 		}
 	}
 
@@ -248,6 +254,12 @@ func checkIndexes(db *tcvectordb.Database, option options) error {
 		if !sparseVectorIndexExist {
 			return fmt.Errorf("tcvectordb collection %s sparse vector index [%s] not found, not trpc-agent-go collection, you can adjust sparse vector index by yourself", option.collection, option.sparseVectorFieldName)
 		}
+	}
+
+	// Skip filter index validation and creation when filterAll is enabled
+	if option.filterAll {
+		log.Infof("tcvectordb collection %s has filterAll enabled, skipping filter index validation and creation", option.collection)
+		// return nil
 	}
 
 	existingFilterIndex := make(map[string]struct{})
