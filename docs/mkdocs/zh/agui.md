@@ -297,6 +297,8 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 完整的示例可参考 [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot)。
 
+AG-UI 的 MessagesSnapshotEvent 事件格式可见 [messages](https://docs.ag-ui.com/concepts/messages)。
+
 ### 设置路由前缀 BasePath
 
 `agui.WithBasePath` 设置 AG-UI 服务的基础路由前缀，默认值为 `/`，用于在统一前缀下挂载聊天路由与消息快照路由，避免与现有服务冲突.
