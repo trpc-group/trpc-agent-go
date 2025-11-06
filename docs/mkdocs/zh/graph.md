@@ -348,7 +348,7 @@ func main() {
         graphagent.WithDescription("简单的工作流示例"),
         graphagent.WithInitialState(graph.State{}),
         graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
-        // 设置传给模型的消息按过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+        // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
         // 时间维度过滤条件
         // 默认值: graphagent.TimelineFilterAll
         // 可选值: 
@@ -591,7 +591,7 @@ graphAgent, err := graphagent.New(
     graphagent.WithChannelBufferSize(1024),           // 调整事件通道缓冲区
     graphagent.WithCheckpointSaver(memorySaver),      // 使用持久化检查点
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
-    // 设置传给模型的消息按过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
     // 时间维度过滤条件
     // 默认值: graphagent.TimelineFilterAll
     // 可选值: 
@@ -1083,7 +1083,7 @@ ga, err := graphagent.New(
     graphagent.WithSubAgents([]agent.Agent{subAgent}),
     graphagent.WithAgentCallbacks(agent.NewCallbacks()),
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
-    // 设置传给模型的消息按过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
     // 时间维度过滤条件
     // 默认值: graphagent.TimelineFilterAll
     // 可选值: 

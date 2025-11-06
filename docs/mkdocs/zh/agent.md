@@ -70,7 +70,7 @@ llmAgent := llmagent.New(
     llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // 设置指令
     llmagent.WithGenerationConfig(genConfig),                                           // 设置生成参数
     
-    // 设置传给模型的消息按过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
     // 时间维度过滤条件
     // 默认值: llmagent.TimelineFilterAll
     // 可选值: 
