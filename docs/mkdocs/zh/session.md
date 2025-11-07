@@ -7,11 +7,12 @@ tRPC-Agent-Go 框架提供了强大的会话（Session）管理功能，用于�
 ### 🎯 核心特性
 
 - **会话持久化**：保存完整的对话历史和上下文
-- **多存储后端**：支持内存存储和 Redis 存储
+- **多存储后端**：支持内存存储、Redis 存储和 PostgreSQL 存储
 - **事件追踪**：完整记录会话中的所有交互事件
 - **多级存储**：支持应用级、用户级和会话级数据存储
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：在 Runner 中指定 Session Service 后，即可自动处理会话的创建、加载和更新
+- **软删除支持**：PostgreSQL 存储支持软删除，数据可恢复
 
 ## 核心概念
 
@@ -46,6 +47,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
+    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 )
 
 // 选择会话服务类型
@@ -57,6 +59,15 @@ sessionService = inmemory.NewSessionService()
 // 方式2：使用 Redis 存储（生产环境）
 sessionService, err = redis.NewService(
     redis.WithRedisClientURL("redis://your-username:yourt-password@127.0.0.1:6379"),
+)
+
+// 方式3：使用 PostgreSQL 存储（生产环境，支持复杂查询）
+sessionService, err = postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithPort(5432),
+    postgres.WithUser("postgres"),
+    postgres.WithPassword("your-password"),
+    postgres.WithDatabase("trpc_sessions"),
 )
 
 // 创建 Runner 并配置会话服务
@@ -248,6 +259,14 @@ retrievedSession, err = sessionService.GetSession(
 
 ## 存储后端
 
+tRPC-Agent-Go 提供三种会话存储后端，满足不同场景需求：
+
+| 存储类型   | 适用场景           | 优势                           | 劣势                   |
+| ---------- | ------------------ | ------------------------------ | ---------------------- |
+| 内存存储   | 开发测试、小规模   | 简单快速、无需外部依赖         | 数据不持久、不支持分布式 |
+| Redis 存储 | 生产环境、分布式   | 高性能、支持分布式、自动过期   | 需要 Redis 服务        |
+| PostgreSQL | 生产环境、复杂查询 | 关系型数据库、支持复杂查询、JSONB | 相对较重、需要数据库   |
+
 ### 内存存储
 
 适用于开发环境和小规模应用：
@@ -387,6 +406,331 @@ session:{appName}:{userID} -> Hash {sessionID: SessionData(JSON)}
 # 事件记录
 events:{appName}:{userID}:{sessionID} -> SortedSet {score: timestamp, value: Event(JSON)}
 ```
+
+### PostgreSQL 存储
+
+适用于生产环境和需要复杂查询的应用：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/session/postgres"
+
+// 使用连接参数创建
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithPort(5432),
+    postgres.WithUser("postgres"),
+    postgres.WithPassword("your-password"),
+    postgres.WithDatabase("trpc_sessions"),
+    postgres.WithSessionEventLimit(500),
+)
+
+// 或使用预配置的 PostgreSQL 实例
+sessionService, err := postgres.NewService(
+    postgres.WithInstanceName("my-postgres-instance"),
+)
+```
+
+#### PostgreSQL 存储配置选项
+
+**连接配置：**
+
+- **`WithHost(host string)`**：PostgreSQL 服务器地址。默认值为 `localhost`。
+- **`WithPort(port int)`**：PostgreSQL 服务器端口。默认值为 `5432`。
+- **`WithUser(user string)`**：数据库用户名。默认值为 `postgres`。
+- **`WithPassword(password string)`**：数据库密码。默认值为空字符串。
+- **`WithDatabase(database string)`**：数据库名称。默认值为 `postgres`。
+- **`WithSSLMode(sslMode string)`**：SSL 模式。默认值为 `disable`。可选值：`disable`、`require`、`verify-ca`、`verify-full`。
+- **`WithInstanceName(name string)`**：使用预配置的 PostgreSQL 实例。注意：直接连接参数的优先级高于实例名称。
+
+**会话配置：**
+
+- **`WithSessionEventLimit(limit int)`**：设置每个会话存储的最大事件数量。默认值为 1000，超过限制时淘汰老的事件。
+- **`WithSessionTTL(ttl time.Duration)`**：设置会话状态和事件列表的 TTL。默认值为 0（不过期）。配置后自动启用 TTL 清理。
+- **`WithAppStateTTL(ttl time.Duration)`**：设置应用级状态的 TTL。默认值为 0（不过期）。配置后自动启用 TTL 清理。
+- **`WithUserStateTTL(ttl time.Duration)`**：设置用户级状态的 TTL。默认值为 0（不过期）。配置后自动启用 TTL 清理。
+- **`WithCleanupInterval(interval time.Duration)`**：设置 TTL 清理间隔。默认值为 5 分钟（当配置了任何 TTL 时自动启用）。设置为负数可禁用自动清理。
+- **`WithSoftDelete(enable bool)`**：启用或禁用软删除。默认值为 `true`（启用）。启用时删除操作标记 `deleted_at`，禁用时物理删除记录。
+
+**异步持久化配置：**
+
+- **`WithAsyncPersisterNum(num int)`**：设置异步持久化 worker 数量。默认值为 2。更多 worker 提高并发写入性能。
+- **`WithPersistQueueSize(size int)`**：设置持久化任务队列大小。默认值为 1000。
+
+**摘要配置：**
+
+- **`WithSummarizer(s summary.SessionSummarizer)`**：将摘要器注入到会话服务中。
+- **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 2。
+- **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
+
+**完整配置示例：**
+
+```go
+sessionService, err := postgres.NewService(
+    // 连接配置
+    postgres.WithHost("localhost"),
+    postgres.WithPort(5432),
+    postgres.WithUser("postgres"),
+    postgres.WithPassword("your-password"),
+    postgres.WithDatabase("trpc_sessions"),
+    postgres.WithSSLMode("require"),
+
+    // 会话配置
+    postgres.WithSessionEventLimit(1000),
+    postgres.WithSessionTTL(30*time.Minute),
+    postgres.WithAppStateTTL(24*time.Hour),
+    postgres.WithUserStateTTL(7*24*time.Hour),
+
+    // TTL 清理配置
+    postgres.WithCleanupInterval(10*time.Minute),  // 每 10 分钟清理一次过期数据
+    postgres.WithSoftDelete(true),                 // 启用软删除（默认）
+
+    // 异步持久化配置
+    postgres.WithAsyncPersisterNum(4),
+    postgres.WithPersistQueueSize(2000),
+
+    // 摘要配置
+    postgres.WithSummarizer(summarizer),
+    postgres.WithAsyncSummaryNum(2),
+    postgres.WithSummaryQueueSize(100),
+)
+
+// 配置效果说明：
+// - 连接到本地 PostgreSQL 服务器，使用 SSL 加密
+// - 每个会话最多存储 1000 个事件
+// - 会话数据在 30 分钟无活动后自动过期
+// - 应用级状态在 24 小时后过期
+// - 用户级状态在 7 天后过期
+// - 每 10 分钟自动清理过期数据（软删除模式）
+// - 使用 4 个异步 worker 处理持久化任务
+// - 持久化队列大小为 2000
+```
+
+**默认配置示例：**
+
+```go
+// 使用默认配置创建 PostgreSQL 会话服务
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithPassword("your-password"),
+)
+
+// 默认配置效果说明：
+// - 连接到 localhost:5432，数据库 postgres，用户 postgres
+// - 每个会话最多存储 1000 个事件（默认值）
+// - 所有数据永不过期（TTL 为 0）
+// - 使用 2 个异步持久化 worker
+// - 持久化队列大小为 1000
+```
+
+#### 配置复用
+
+如果你有多个组件需要用到 PostgreSQL，可以配置一个 PostgreSQL 实例，然后在多个组件中复用配置：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/storage"
+
+// 注册 PostgreSQL 实例
+storage.RegisterPostgresInstance("my-postgres-instance",
+    storage.WithPostgresHost("localhost"),
+    storage.WithPostgresPort(5432),
+    storage.WithPostgresUser("postgres"),
+    storage.WithPostgresPassword("your-password"),
+    storage.WithPostgresDatabase("trpc_sessions"),
+)
+
+// 在会话服务中使用
+sessionService, err := postgres.NewService(
+    postgres.WithInstanceName("my-postgres-instance"),
+)
+```
+
+#### PostgreSQL 存储结构
+
+PostgreSQL 存储使用关系型数据库表结构，所有 JSON 数据使用 JSONB 类型存储，支持高效查询和索引：
+
+**表结构：**
+
+```sql
+-- 会话状态表
+CREATE TABLE session_states (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    state JSONB,                              -- 会话状态（JSONB 格式）
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,                     -- TTL 支持
+    deleted_at TIMESTAMP                      -- 软删除支持
+);
+
+-- 部分唯一索引（只对未删除记录生效）
+CREATE UNIQUE INDEX idx_session_states_unique_active
+ON session_states(app_name, user_id, session_id)
+WHERE deleted_at IS NULL;
+
+-- 会话事件表
+CREATE TABLE session_events (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    event JSONB NOT NULL,                     -- 事件数据（JSONB 格式）
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,            -- 更新时间
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
+-- 会话摘要表
+CREATE TABLE session_summaries (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    filter_key VARCHAR(255) NOT NULL,
+    summary JSONB NOT NULL,                   -- 摘要数据（JSONB 格式）
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    UNIQUE(app_name, user_id, session_id, filter_key)
+);
+
+-- 应用状态表
+CREATE TABLE app_states (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    key VARCHAR(255) NOT NULL,
+    value BYTEA NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    UNIQUE(app_name, key)
+);
+
+-- 用户状态表
+CREATE TABLE user_states (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    key VARCHAR(255) NOT NULL,
+    value BYTEA NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    UNIQUE(app_name, user_id, key)
+);
+```
+
+#### Schema 与表前缀支持
+
+PostgreSQL 存储支持 schema 和表前缀配置，适用于多租户和多环境场景：
+
+**Schema 支持：**
+
+```go
+// 使用自定义 schema（表将创建在指定 schema 下）
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithDatabase("mydb"),
+    postgres.WithSchema("my_schema"),  // 表名：my_schema.session_states
+)
+
+// 独立初始化数据库到指定 schema
+err := postgres.InitDB(
+    context.Background(),
+    postgres.WithInitDBHost("localhost"),
+    postgres.WithInitDBDatabase("mydb"),
+    postgres.WithInitDBSchema("my_schema"),
+)
+```
+
+**表前缀支持：**
+
+```go
+// 使用表前缀（适用于多应用共享数据库）
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithTablePrefix("app1_"),  // 表名：app1_session_states
+)
+
+// 结合 schema 和表前缀使用
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSchema("tenant_a"),
+    postgres.WithTablePrefix("app1_"),  // 表名：tenant_a.app1_session_states
+)
+```
+
+**表命名规则：**
+
+| Schema | Prefix | 最终表名 |
+|--------|--------|---------|
+| （无） | （无） | `session_states` |
+| （无） | `app1_` | `app1_session_states` |
+| `my_schema` | （无） | `my_schema.session_states` |
+| `my_schema` | `app1_` | `my_schema.app1_session_states` |
+
+**使用场景：**
+
+1. **多租户隔离**：不同租户使用不同 schema
+2. **环境隔离**：开发、测试、生产环境使用不同 schema
+3. **多应用共享**：多个应用使用不同表前缀避免冲突
+4. **权限控制**：通过 schema 级别的权限管理访问控制
+
+**注意事项：**
+
+- Schema 必须在使用前创建：`CREATE SCHEMA IF NOT EXISTS my_schema;`
+- Schema 和表前缀仅允许字母、数字和下划线，防止 SQL 注入
+- 使用 `WithSkipDBInit()` 可跳过自动建表，适用于无 DDL 权限的场景
+
+#### 软删除与 TTL 清理
+
+PostgreSQL 存储支持软删除和自动 TTL 清理功能：
+
+**软删除配置：**
+
+```go
+// 默认启用软删除
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSoftDelete(true),  // 默认值
+)
+
+// 禁用软删除（使用硬删除）
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSoftDelete(false),
+)
+```
+
+**删除行为：**
+
+| 配置 | 删除操作 | 查询行为 | 数据恢复 |
+|------|---------|---------|---------|
+| `softDelete=true` | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复 |
+| `softDelete=false` | `DELETE FROM ...` | 过滤 `deleted_at IS NULL` | 不可恢复 |
+
+**TTL 自动清理：**
+
+```go
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSessionTTL(30*time.Minute),      // 会话 30 分钟后过期
+    postgres.WithAppStateTTL(24*time.Hour),       // 应用状态 24 小时后过期
+    postgres.WithUserStateTTL(7*24*time.Hour),    // 用户状态 7 天后过期
+    postgres.WithCleanupInterval(10*time.Minute), // 每 10 分钟清理一次（默认 5 分钟）
+    postgres.WithSoftDelete(true),                // 软删除模式（默认）
+)
+
+// 清理行为：
+// - softDelete=true：过期数据被标记为 deleted_at = NOW()
+// - softDelete=false：过期数据被物理删除
+// - 查询时始终过滤 deleted_at IS NULL
+```
+
 
 ## 会话摘要
 

@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -39,10 +40,22 @@ import (
 var (
 	provider        = flag.String("provider", "openai", "Name of the provider to use, openai or anthropic")
 	modelName       = flag.String("model", "deepseek-chat", "Name of the model to use")
-	redisAddr       = flag.String("redis-addr", "localhost:6379", "Redis address")
-	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis")
+	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / pgsql")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	enableParallel  = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
+)
+
+// Environment variables for session services.
+var (
+	// Redis.
+	redisAddr = getEnvOrDefault("REDIS_ADDR", "localhost:6379")
+
+	// PostgreSQL.
+	pgHost     = getEnvOrDefault("PG_HOST", "localhost")
+	pgPort     = getEnvOrDefault("PG_PORT", "5432")
+	pgUser     = getEnvOrDefault("PG_USER", "root")
+	pgPassword = getEnvOrDefault("PG_PASSWORD", "")
+	pgDatabase = getEnvOrDefault("PG_DATABASE", "trpc-agent-go")
 )
 
 func main() {
@@ -59,7 +72,9 @@ func main() {
 	}
 	fmt.Printf("Parallel Tools: %s\n", parallelStatus)
 	if *sessServiceName == "redis" {
-		fmt.Printf("Redis: %s\n", *redisAddr)
+		fmt.Printf("Redis: %s\n", redisAddr)
+	} else if *sessServiceName == "pgsql" {
+		fmt.Printf("PostgreSQL: %s:%s/%s\n", pgHost, pgPort, pgDatabase)
 	}
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time\n")
@@ -115,11 +130,32 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		sessionService = sessioninmemory.NewSessionService()
 
 	case "redis":
-		redisURL := fmt.Sprintf("redis://%s", *redisAddr)
+		redisURL := fmt.Sprintf("redis://%s", redisAddr)
 		sessionService, err = redis.NewService(redis.WithRedisClientURL(redisURL))
 		if err != nil {
 			return fmt.Errorf("failed to create session service: %w", err)
 		}
+
+	case "pgsql":
+		// Convert pgPort from string to int
+		port := 5432
+		if pgPort != "" {
+			if p, parseErr := fmt.Sscanf(pgPort, "%d", &port); parseErr != nil || p != 1 {
+				return fmt.Errorf("invalid PG_PORT value: %s", pgPort)
+			}
+		}
+		sessionService, err = postgres.NewService(
+			postgres.WithHost(pgHost),
+			postgres.WithPort(port),
+			postgres.WithUser(pgUser),
+			postgres.WithPassword(pgPassword),
+			postgres.WithDatabase(pgDatabase),
+			postgres.WithTablePrefix("tRPC"),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create postgres session service: %w", err)
+		}
+
 	default:
 		return fmt.Errorf("invalid session service name: %s", *sessServiceName)
 	}
@@ -396,4 +432,12 @@ func (c *multiTurnChat) startNewSession() {
 	fmt.Printf("   Current:  %s\n", c.sessionID)
 	fmt.Printf("   (Conversation history has been reset)\n")
 	fmt.Println()
+}
+
+// getEnvOrDefault returns the environment variable value or a default value if not set.
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

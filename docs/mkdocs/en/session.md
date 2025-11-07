@@ -2,16 +2,17 @@
 
 ## Overview
 
-tRPC-Agent-Go provides powerful session (Session) management capabilities to maintain conversation history and context information during interactions between Agents and users. The session management module supports multiple storage backends, including in-memory storage and Redis storage, providing flexible state persistence for Agent applications.
+tRPC-Agent-Go provides powerful session (Session) management capabilities to maintain conversation history and context information during interactions between Agents and users. The session management module supports multiple storage backends, including in-memory storage, Redis storage, and PostgreSQL storage, providing flexible state persistence for Agent applications.
 
 ### 🎯 Key Features
 
 - **Session persistence**: Save complete conversation history and context.
-- **Multiple storage backends**: Support in-memory storage and Redis storage.
+- **Multiple storage backends**: Support in-memory storage, Redis storage, and PostgreSQL storage.
 - **Event tracking**: Fully record all interaction events within a session.
 - **Multi-level storage**: Support application-level, user-level, and session-level data storage.
 - **Concurrency safety**: Built-in read-write locks ensure safe concurrent access.
 - **Automatic management**: After specifying the Session Service in Runner, sessions are automatically created, loaded, and updated.
+- **Soft delete support**: PostgreSQL storage supports soft delete with data recovery capability.
 
 ## Core Concepts
 
@@ -46,6 +47,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
+    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 )
 
 // Choose session service type.
@@ -57,6 +59,15 @@ sessionService = inmemory.NewSessionService()
 // Option 2: Use Redis storage (production).
 sessionService, err = redis.NewService(
     redis.WithRedisClientURL("redis://your-username:yourt-password@127.0.0.1:6379"),
+)
+
+// Option 3: Use PostgreSQL storage (production, supports complex queries).
+sessionService, err = postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithPort(5432),
+    postgres.WithUser("postgres"),
+    postgres.WithPassword("your-password"),
+    postgres.WithDatabase("trpc_sessions"),
 )
 
 // Create Runner and configure session service.
@@ -242,6 +253,14 @@ retrievedSession, err = sessionService.GetSession(
 
 ## Storage Backends
 
+tRPC-Agent-Go provides three session storage backends to meet different scenario requirements:
+
+| Storage Type | Use Case | Advantages | Disadvantages |
+| ------------ | -------- | ---------- | ------------- |
+| In-memory | Development/testing, small-scale | Simple and fast, no external dependencies | Data not persistent, no distributed support |
+| Redis | Production, distributed | High performance, distributed support, auto-expiration | Requires Redis service |
+| PostgreSQL | Production, complex queries | Relational database, supports complex queries, JSONB | Relatively heavy, requires database |
+
 ### In-memory Storage
 
 Suitable for development environments and small-scale applications:
@@ -380,6 +399,330 @@ session:{appName}:{userID} -> Hash {sessionID: SessionData(JSON)}
 
 # Event records
 events:{appName}:{userID}:{sessionID} -> SortedSet {score: timestamp, value: Event(JSON)}
+```
+
+### PostgreSQL Storage
+
+Suitable for production environments and applications requiring complex queries:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/session/postgres"
+
+// Create using connection parameters
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithPort(5432),
+    postgres.WithUser("postgres"),
+    postgres.WithPassword("your-password"),
+    postgres.WithDatabase("trpc_sessions"),
+    postgres.WithSessionEventLimit(500),
+)
+
+// Or use a preconfigured PostgreSQL instance
+sessionService, err := postgres.NewService(
+    postgres.WithInstanceName("my-postgres-instance"),
+)
+```
+
+#### PostgreSQL Configuration Options
+
+**Connection Configuration:**
+
+- **`WithHost(host string)`**: PostgreSQL server address. Default is `localhost`.
+- **`WithPort(port int)`**: PostgreSQL server port. Default is `5432`.
+- **`WithUser(user string)`**: Database username. Default is `postgres`.
+- **`WithPassword(password string)`**: Database password. Default is empty string.
+- **`WithDatabase(database string)`**: Database name. Default is `postgres`.
+- **`WithSSLMode(sslMode string)`**: SSL mode. Default is `disable`. Options: `disable`, `require`, `verify-ca`, `verify-full`.
+- **`WithInstanceName(name string)`**: Use a preconfigured PostgreSQL instance. Note: Direct connection parameters have higher priority than instance name.
+
+**Session Configuration:**
+
+- **`WithSessionEventLimit(limit int)`**: Sets the maximum number of events stored per session. Default is 1000. When the limit is exceeded, older events are evicted.
+- **`WithSessionTTL(ttl time.Duration)`**: Sets the TTL for session state and event list. Default is 0 (no expiration). Automatically enables TTL cleanup when configured.
+- **`WithAppStateTTL(ttl time.Duration)`**: Sets the TTL for application-level state. Default is 0 (no expiration). Automatically enables TTL cleanup when configured.
+- **`WithUserStateTTL(ttl time.Duration)`**: Sets the TTL for user-level state. Default is 0 (no expiration). Automatically enables TTL cleanup when configured.
+- **`WithCleanupInterval(interval time.Duration)`**: Sets the TTL cleanup interval. Default is 5 minutes (automatically enabled when any TTL is configured). Set to negative value to disable automatic cleanup.
+- **`WithSoftDelete(enable bool)`**: Enable or disable soft delete. Default is `true` (enabled). When enabled, delete operations mark `deleted_at`, when disabled, records are physically deleted.
+
+**Async Persistence Configuration:**
+
+- **`WithAsyncPersisterNum(num int)`**: Sets the number of async persistence workers. Default is 2. More workers improve concurrent write performance.
+- **`WithPersistQueueSize(size int)`**: Sets the persistence task queue size. Default is 1000.
+
+**Summary Configuration:**
+
+- **`WithSummarizer(s summary.SessionSummarizer)`**: Injects a summarizer into the session service.
+- **`WithAsyncSummaryNum(num int)`**: Sets the number of summary processing workers. Default is 2.
+- **`WithSummaryQueueSize(size int)`**: Sets the summary task queue size. Default is 100.
+
+**Example with full configuration:**
+
+```go
+sessionService, err := postgres.NewService(
+    // Connection configuration
+    postgres.WithHost("localhost"),
+    postgres.WithPort(5432),
+    postgres.WithUser("postgres"),
+    postgres.WithPassword("your-password"),
+    postgres.WithDatabase("trpc_sessions"),
+    postgres.WithSSLMode("require"),
+
+    // Session configuration
+    postgres.WithSessionEventLimit(1000),
+    postgres.WithSessionTTL(30*time.Minute),
+    postgres.WithAppStateTTL(24*time.Hour),
+    postgres.WithUserStateTTL(7*24*time.Hour),
+
+    // TTL cleanup configuration
+    postgres.WithCleanupInterval(10*time.Minute),  // Cleanup every 10 minutes
+    postgres.WithSoftDelete(true),                 // Enable soft delete (default)
+
+    // Async persistence configuration
+    postgres.WithAsyncPersisterNum(4),
+    postgres.WithPersistQueueSize(2000),
+
+    // Summary configuration
+    postgres.WithSummarizer(summarizer),
+    postgres.WithAsyncSummaryNum(2),
+    postgres.WithSummaryQueueSize(100),
+)
+
+// Configuration effects:
+// - Connects to local PostgreSQL server with SSL encryption
+// - Each session stores up to 1000 events
+// - Session data expires after 30 minutes of inactivity
+// - Application-level state expires after 24 hours
+// - User-level state expires after 7 days
+// - Automatically cleans expired data every 10 minutes (soft delete mode)
+// - Uses 4 async workers for persistence tasks
+// - Persistence queue size is 2000
+```
+
+**Default configuration example:**
+
+```go
+// Create PostgreSQL session service with default configuration
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithPassword("your-password"),
+)
+
+// Default configuration effects:
+// - Connects to localhost:5432, database postgres, user postgres
+// - Each session stores up to 1000 events (default value)
+// - All data never expires (TTL is 0)
+// - Uses 2 async persistence workers
+// - Persistence queue size is 1000
+```
+
+#### Configuration Reuse
+
+If multiple components need PostgreSQL, you can configure a PostgreSQL instance and reuse the configuration across components:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/storage"
+
+// Register PostgreSQL instance
+storage.RegisterPostgresInstance("my-postgres-instance",
+    storage.WithPostgresHost("localhost"),
+    storage.WithPostgresPort(5432),
+    storage.WithPostgresUser("postgres"),
+    storage.WithPostgresPassword("your-password"),
+    storage.WithPostgresDatabase("trpc_sessions"),
+)
+
+// Use in session service
+sessionService, err := postgres.NewService(
+    postgres.WithInstanceName("my-postgres-instance"),
+)
+```
+
+#### PostgreSQL Storage Structure
+
+PostgreSQL storage uses relational database table structure, with all JSON data stored using JSONB type for efficient querying and indexing:
+
+**Table Structure:**
+
+```sql
+-- Session states table
+CREATE TABLE session_states (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    state JSONB,                              -- Session state (JSONB format)
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,                     -- TTL support
+    deleted_at TIMESTAMP                      -- Soft delete support
+);
+
+-- Partial unique index (only applies to non-deleted records)
+CREATE UNIQUE INDEX idx_session_states_unique_active
+ON session_states(app_name, user_id, session_id)
+WHERE deleted_at IS NULL;
+
+-- Session events table
+CREATE TABLE session_events (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    event JSONB NOT NULL,                     -- Event data (JSONB format)
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,            -- Update timestamp
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
+-- Session summaries table
+CREATE TABLE session_summaries (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    filter_key VARCHAR(255) NOT NULL,
+    summary JSONB NOT NULL,                   -- Summary data (JSONB format)
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    UNIQUE(app_name, user_id, session_id, filter_key)
+);
+
+-- Application states table
+CREATE TABLE app_states (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    key VARCHAR(255) NOT NULL,
+    value BYTEA NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    UNIQUE(app_name, key)
+);
+
+-- User states table
+CREATE TABLE user_states (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    key VARCHAR(255) NOT NULL,
+    value BYTEA NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    UNIQUE(app_name, user_id, key)
+);
+```
+
+#### Schema and Table Prefix Support
+
+PostgreSQL storage supports schema and table prefix configuration for multi-tenant and multi-environment scenarios:
+
+**Schema Support:**
+
+```go
+// Use custom schema (tables will be created in the specified schema)
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithDatabase("mydb"),
+    postgres.WithSchema("my_schema"),  // Table name: my_schema.session_states
+)
+
+// Standalone database initialization with schema
+err := postgres.InitDB(
+    context.Background(),
+    postgres.WithInitDBHost("localhost"),
+    postgres.WithInitDBDatabase("mydb"),
+    postgres.WithInitDBSchema("my_schema"),
+)
+```
+
+**Table Prefix Support:**
+
+```go
+// Use table prefix (useful for multi-application shared database)
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithTablePrefix("app1_"),  // Table name: app1_session_states
+)
+
+// Combine schema and table prefix
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSchema("tenant_a"),
+    postgres.WithTablePrefix("app1_"),  // Table name: tenant_a.app1_session_states
+)
+```
+
+**Table Naming Rules:**
+
+| Schema | Prefix | Final Table Name |
+|--------|--------|------------------|
+| (none) | (none) | `session_states` |
+| (none) | `app1_` | `app1_session_states` |
+| `my_schema` | (none) | `my_schema.session_states` |
+| `my_schema` | `app1_` | `my_schema.app1_session_states` |
+
+**Use Cases:**
+
+1. **Multi-tenant Isolation**: Different tenants use different schemas
+2. **Environment Isolation**: Development, testing, and production use different schemas
+3. **Multi-application Sharing**: Multiple applications use different table prefixes to avoid conflicts
+4. **Access Control**: Manage permissions at the schema level
+
+**Important Notes:**
+
+- Schema must be created before use: `CREATE SCHEMA IF NOT EXISTS my_schema;`
+- Schema and table prefix names only allow letters, numbers, and underscores to prevent SQL injection
+- Use `WithSkipDBInit()` to skip automatic table creation for scenarios without DDL permissions
+
+#### Soft Delete and TTL Cleanup
+
+PostgreSQL storage supports soft delete and automatic TTL cleanup features:
+
+**Soft Delete Configuration:**
+
+```go
+// Soft delete enabled by default
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSoftDelete(true),  // Default value
+)
+
+// Disable soft delete (use hard delete)
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSoftDelete(false),
+)
+```
+
+**Delete Behavior:**
+
+| Configuration | Delete Operation | Query Behavior | Data Recovery |
+|---------------|------------------|----------------|---------------|
+| `softDelete=true` | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable |
+| `softDelete=false` | `DELETE FROM ...` | Filter `deleted_at IS NULL` | Not recoverable |
+
+**TTL Automatic Cleanup:**
+
+```go
+sessionService, err := postgres.NewService(
+    postgres.WithHost("localhost"),
+    postgres.WithSessionTTL(30*time.Minute),      // Sessions expire after 30 minutes
+    postgres.WithAppStateTTL(24*time.Hour),       // App state expires after 24 hours
+    postgres.WithUserStateTTL(7*24*time.Hour),    // User state expires after 7 days
+    postgres.WithCleanupInterval(10*time.Minute), // Cleanup every 10 minutes (default 5 minutes)
+    postgres.WithSoftDelete(true),                // Soft delete mode (default)
+)
+
+// Cleanup behavior:
+// - softDelete=true: Expired data is marked as deleted_at = NOW()
+// - softDelete=false: Expired data is physically deleted
+// - Queries always filter deleted_at IS NULL
 ```
 
 ## Session Summarization
