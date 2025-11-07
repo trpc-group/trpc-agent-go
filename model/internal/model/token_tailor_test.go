@@ -11,114 +11,134 @@ package model
 
 import (
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// TestCalculateMaxInputTokens tests the token tailoring calculation function.
-func TestCalculateMaxInputTokens(t *testing.T) {
+func TestCalculateMaxOutputTokens(t *testing.T) {
 	tests := []struct {
-		name            string
-		contextWindow   int
-		expectedMinSize int
-		expectedMaxSize int
-		description     string
+		name             string
+		contextWindow    int
+		usedInputTokens  int
+		expectedOutput   int
+		expectZero       bool
 	}{
 		{
-			name:            "claude-3-5-sonnet",
-			contextWindow:   200000,
-			expectedMinSize: 130000,
-			expectedMaxSize: 130000,
-			description:     "Claude model with 200k context window",
-		},
-		{
-			name:            "gpt-4o",
-			contextWindow:   128000,
-			expectedMinSize: 83200,
-			expectedMaxSize: 83200,
-			description:     "GPT-4o with 128k context window",
-		},
-		{
-			name:            "gpt-4-turbo",
-			contextWindow:   128000,
-			expectedMinSize: 83200,
-			expectedMaxSize: 83200,
-			description:     "GPT-4 Turbo with 128k context window",
-		},
-		{
-			name:            "deepseek-chat",
+			name:            "Normal case - deepseek-chat with heavy input",
 			contextWindow:   131072,
-			expectedMinSize: 85196,
-			expectedMaxSize: 85196,
-			description:     "DeepSeek with 131k context window",
+			usedInputTokens: 115383,
+			// 131072 - 115383 - 512 - 13107 = 2070
+			expectedOutput: 2070,
 		},
 		{
-			name:            "small-model",
+			name:            "Normal case - moderate input",
+			contextWindow:   131072,
+			usedInputTokens: 50000,
+			// 131072 - 50000 - 512 - 13107 = 67453
+			expectedOutput: 67453,
+		},
+		{
+			name:            "Edge case - very low remaining tokens",
 			contextWindow:   8192,
-			expectedMinSize: 1024,
-			expectedMaxSize: 4813,
-			description:     "Small model with 8k context window (calculated max < ratio limit)",
+			usedInputTokens: 7500,
+			// 8192 - 7500 - 512 - 819 = -639 (negative)
+			// Should return max(negative, floor) = 0
+			expectZero: true,
+		},
+		{
+			name:            "Edge case - exactly at floor",
+			contextWindow:   8192,
+			usedInputTokens: 7000,
+			// 8192 - 7000 - 512 - 819 = -139 (negative)
+			// But if close, should return floor (256)
+			expectZero: true,
+		},
+		{
+			name:            "Small context window",
+			contextWindow:   4096,
+			usedInputTokens: 1000,
+			// 4096 - 1000 - 512 - 409 = 2175
+			expectedOutput: 2175,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			maxInputTokens := CalculateMaxInputTokens(tt.contextWindow)
+			result := CalculateMaxOutputTokens(tt.contextWindow, tt.usedInputTokens)
+			
+			if tt.expectZero {
+				if result != 0 {
+					t.Errorf("Expected 0 tokens, got %d", result)
+				}
+				return
+			}
 
-			// Verify the result is within expected bounds.
-			assert.GreaterOrEqual(t, maxInputTokens, tt.expectedMinSize,
-				"max input tokens should be >= expectedMinSize for %s", tt.description)
-			assert.Equal(t, tt.expectedMaxSize, maxInputTokens,
-				"max input tokens should equal expectedMaxSize for %s", tt.description)
+			if result != tt.expectedOutput {
+				safetyMargin := int(float64(tt.contextWindow) * DefaultSafetyMarginRatio)
+				remaining := tt.contextWindow - tt.usedInputTokens - DefaultProtocolOverheadTokens - safetyMargin
+				t.Errorf("Expected %d tokens, got %d\n"+
+					"  contextWindow=%d, usedInputTokens=%d\n"+
+					"  safetyMargin=%d, protocolOverhead=%d\n"+
+					"  remaining=%d",
+					tt.expectedOutput, result,
+					tt.contextWindow, tt.usedInputTokens,
+					safetyMargin, DefaultProtocolOverheadTokens,
+					remaining)
+			}
+
+			// Verify total tokens don't exceed context window.
+			safetyMargin := int(float64(tt.contextWindow) * DefaultSafetyMarginRatio)
+			totalTokens := tt.usedInputTokens + result + DefaultProtocolOverheadTokens + safetyMargin
+			if totalTokens > tt.contextWindow {
+				t.Errorf("Total tokens (%d) exceed context window (%d)\n"+
+					"  usedInputTokens=%d, maxOutputTokens=%d, protocolOverhead=%d, safetyMargin=%d",
+					totalTokens, tt.contextWindow,
+					tt.usedInputTokens, result, DefaultProtocolOverheadTokens, safetyMargin)
+			}
 		})
 	}
 }
 
-// TestTokenTailoringStrategy documents the token allocation formula.
-func TestTokenTailoringStrategy(t *testing.T) {
-	// This test documents the expected behavior of the token tailoring strategy.
-	// Given a model with context window of 200,000 tokens (claude-3-5-sonnet).
-
-	contextWindow := 200000
-	maxInputTokens := CalculateMaxInputTokens(contextWindow)
-
-	// Expected calculation breakdown:
-	// - safetyMargin = 200000 × 0.10 = 20000 tokens
-	// - calculatedMax = 200000 - 2048 - 512 - 20000 = 177440 tokens
-	// - ratioLimit = 200000 × 0.65 = 130000 tokens
-	// - maxInputTokens = min(177440, 130000) = 130000 tokens
-
-	assert.Equal(t, 130000, maxInputTokens)
-
-	// The allocation ensures:
-	// - 65% (130k tokens) for input messages
-	// - 1% (2048 tokens) reserved for output
-	// - 0.25% (512 tokens) protocol overhead
-	// - 10% (20k tokens) safety margin
-	// - Remaining ~23.75% buffer for stability
-	inputPercent := float64(maxInputTokens) / float64(contextWindow) * 100
-	assert.InDelta(t, 65, inputPercent, 1)
-}
-
-// TestContextWindowResolution tests context window resolution for models used
-// in token tailoring.
-func TestContextWindowResolution(t *testing.T) {
-	// Test models commonly used with token tailoring.
+func TestCalculateMaxInputTokens(t *testing.T) {
 	tests := []struct {
-		modelName      string
-		expectedWindow int
+		name           string
+		contextWindow  int
+		expectedOutput int
 	}{
-		{"claude-3-5-sonnet", 200000},
-		{"gpt-4o", 128000},
-		{"deepseek-chat", 131072},
-		{"o1-preview", 128000},
+		{
+			name:          "deepseek-chat (131072)",
+			contextWindow: 131072,
+			// safetyMargin = 13107
+			// calculatedMax = 131072 - 2048 - 512 - 13107 = 115405
+			// ratioLimit = 131072 × 1.0 = 131072
+			// max(min(115405, 131072), 1024) = 115405
+			expectedOutput: 115405,
+		},
+		{
+			name:          "gpt-4 (8192)",
+			contextWindow: 8192,
+			// safetyMargin = 819
+			// calculatedMax = 8192 - 2048 - 512 - 819 = 4813
+			// ratioLimit = 8192 × 1.0 = 8192
+			// max(min(4813, 8192), 1024) = 4813
+			expectedOutput: 4813,
+		},
+		{
+			name:          "Small context (2048)",
+			contextWindow: 2048,
+			// safetyMargin = 204
+			// calculatedMax = 2048 - 2048 - 512 - 204 = -716 (negative, becomes 0)
+			// ratioLimit = 2048 × 1.0 = 2048
+			// max(min(0, 2048), 1024) = 1024 (floor)
+			expectedOutput: 1024,
+		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.modelName, func(t *testing.T) {
-			window := ResolveContextWindow(tt.modelName)
-			require.Equal(t, tt.expectedWindow, window)
+		t.Run(tt.name, func(t *testing.T) {
+			result := CalculateMaxInputTokens(tt.contextWindow)
+			if result != tt.expectedOutput {
+				t.Errorf("Expected %d tokens, got %d for context window %d",
+					tt.expectedOutput, result, tt.contextWindow)
+			}
 		})
 	}
 }

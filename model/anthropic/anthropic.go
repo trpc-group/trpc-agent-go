@@ -407,23 +407,23 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	request.Messages = tailored
 
-	// Calculate remaining tokens for output and set max output tokens.
+	// Calculate remaining tokens for output based on context window.
 	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
 	if err != nil {
 		log.Warn("failed to count tokens after tailoring", err)
 		return
 	}
 
-	remainingTokens := maxInputTokens - usedTokens
-	if remainingTokens <= 0 {
-		return
-	}
-
 	// Set max output tokens only if user hasn't specified it.
 	// This respects user's explicit configuration while providing a safe default.
 	if request.GenerationConfig.MaxTokens == nil {
-		maxOutputTokens := max(remainingTokens, imodel.DefaultOutputTokensFloor)
-		request.GenerationConfig.MaxTokens = &maxOutputTokens
+		contextWindow := imodel.ResolveContextWindow(m.name)
+		maxOutputTokens := imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
+		if maxOutputTokens > 0 {
+			request.GenerationConfig.MaxTokens = &maxOutputTokens
+			log.Debugf("token tailoring: contextWindow=%d, usedTokens=%d, maxOutputTokens=%d",
+				contextWindow, usedTokens, maxOutputTokens)
+		}
 	}
 }
 
