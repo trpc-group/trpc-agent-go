@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -192,6 +193,20 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 
 	return respChan, nil
 }
+
+// mockModelWithCallback is an extended mock model that supports callbacks.
+type mockModelWithCallback struct {
+	mockModel
+	onGenerateContent func(ctx context.Context, req *model.Request)
+}
+
+func (m *mockModelWithCallback) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	if m.onGenerateContent != nil {
+		m.onGenerateContent(ctx, req)
+	}
+	return m.mockModel.GenerateContent(ctx, req)
+}
+
 
 // mockRequestProcessor implements flow.RequestProcessor
 type mockRequestProcessor struct{}
@@ -454,3 +469,237 @@ func TestRun_NoPanicWhenModelReturnsNoResponses(t *testing.T) {
 	}
 	require.Equal(t, 1, count)
 }
+
+// TestCallLLM_StructuredBeforeModelCallback tests structured before model
+// callback returning custom response.
+func TestCallLLM_StructuredBeforeModelCallback(t *testing.T) {
+	ctx := context.Background()
+
+	customResponse := &model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant, Content: "custom"}},
+		},
+	}
+
+	callbacks := model.NewCallbacksStructured().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error,
+		) {
+			return &model.BeforeModelResult{
+				CustomResponse: customResponse,
+			}, nil
+		},
+	)
+
+	mockModel := &mockModel{
+		responses: []*model.Response{
+			{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "this should not be returned",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	f := New(nil, nil, Options{
+		ChannelBufferSize:        10,
+		ModelCallbacksStructured: callbacks,
+	})
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationModel(mockModel),
+	)
+	inv.AgentName = "test-agent"
+
+	responseChan, err := f.callLLM(ctx, inv, &model.Request{})
+	require.NoError(t, err)
+	require.NotNil(t, responseChan)
+
+	// Should receive custom response.
+	resp, ok := <-responseChan
+	require.True(t, ok)
+	assert.Equal(t, customResponse, resp)
+
+	// Channel should be closed.
+	_, ok = <-responseChan
+	assert.False(t, ok)
+}
+
+// TestCallLLM_StructuredBeforeModelCallbackError tests structured before
+// model callback returning error.
+func TestCallLLM_StructuredBeforeModelCallbackError(t *testing.T) {
+	ctx := context.Background()
+
+	expectedErr := errors.New("before model callback error")
+	callbacks := model.NewCallbacksStructured().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error,
+		) {
+			return nil, expectedErr
+		},
+	)
+
+	mockModel := &mockModel{
+		responses: []*model.Response{
+			{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "should not be called",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	f := New(nil, nil, Options{
+		ChannelBufferSize:        10,
+		ModelCallbacksStructured: callbacks,
+	})
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationModel(mockModel),
+	)
+	inv.AgentName = "test-agent"
+
+	_, err := f.callLLM(ctx, inv, &model.Request{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "before model callback error")
+}
+
+// TestCallLLM_V1AndStructuredCallbacksCoexist tests that both V1 and
+// structured callbacks can coexist.
+func TestCallLLM_V1AndStructuredCallbacksCoexist(t *testing.T) {
+	ctx := context.Background()
+
+	executionOrder := []string{}
+
+	v1Callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, req *model.Request) (*model.Response, error) {
+			executionOrder = append(executionOrder, "v1")
+			return nil, nil
+		},
+	)
+
+	structuredCallbacks := model.NewCallbacksStructured().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error,
+		) {
+			executionOrder = append(executionOrder, "structured")
+			return nil, nil
+		},
+	)
+
+	mockModel := &mockModel{
+		responses: []*model.Response{
+			{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "ok",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	f := New(nil, nil, Options{
+		ChannelBufferSize:        10,
+		ModelCallbacks:           v1Callbacks,
+		ModelCallbacksStructured: structuredCallbacks,
+	})
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationModel(mockModel),
+	)
+	inv.AgentName = "test-agent"
+
+	responseChan, err := f.callLLM(ctx, inv, &model.Request{})
+	require.NoError(t, err)
+
+	// Drain response channel.
+	for range responseChan {
+	}
+
+	// Both callbacks should have been called in order.
+	assert.Equal(t, []string{"v1", "structured"}, executionOrder)
+}
+
+// TestCallLLM_StructuredCallbackCanModifyRequest tests that structured
+// callback can modify the request.
+func TestCallLLM_StructuredCallbackCanModifyRequest(t *testing.T) {
+	ctx := context.Background()
+
+	callbacks := model.NewCallbacksStructured().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error,
+		) {
+			args.Request.Messages = append(args.Request.Messages,
+				model.Message{Role: model.RoleUser, Content: "injected"})
+			return nil, nil
+		},
+	)
+
+	receivedMessages := []model.Message{}
+	mockModel := &mockModelWithCallback{
+		mockModel: mockModel{
+			responses: []*model.Response{
+				{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleAssistant,
+								Content: "ok",
+							},
+						},
+					},
+				},
+			},
+		},
+		onGenerateContent: func(ctx context.Context, req *model.Request) {
+			receivedMessages = req.Messages
+		},
+	}
+
+	f := New(nil, nil, Options{
+		ChannelBufferSize:        10,
+		ModelCallbacksStructured: callbacks,
+	})
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationModel(mockModel),
+	)
+	inv.AgentName = "test-agent"
+
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "original"},
+		},
+	}
+
+	responseChan, err := f.callLLM(ctx, inv, req)
+	require.NoError(t, err)
+
+	// Drain response channel.
+	for range responseChan {
+	}
+
+	// Model should receive modified request.
+	require.Len(t, receivedMessages, 2)
+	assert.Equal(t, "original", receivedMessages[0].Content)
+	assert.Equal(t, "injected", receivedMessages[1].Content)
+}
+

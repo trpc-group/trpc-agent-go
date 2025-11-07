@@ -1621,3 +1621,336 @@ func (s *mockToolSet) Close() error {
 func (s *mockToolSet) Name() string {
 	return "mock"
 }
+
+// TestExecuteToolWithCallbacks_StructuredBeforeTool tests structured before
+// tool callbacks.
+func TestExecuteToolWithCallbacks_StructuredBeforeTool(t *testing.T) {
+	ctx := context.Background()
+	inv := &agent.Invocation{AgentName: "test"}
+	toolDecl := &tool.Declaration{Name: "test_tool", Description: "test"}
+
+	t.Run("custom result from before callback", func(t *testing.T) {
+		customResult := map[string]any{"custom": "result"}
+		callbacks := tool.NewCallbacksStructured().RegisterBeforeTool(
+			func(ctx context.Context, args *tool.BeforeToolArgs) (
+				*tool.BeforeToolResult, error,
+			) {
+				return &tool.BeforeToolResult{
+					CustomResult: customResult,
+				}, nil
+			},
+		)
+
+		p := NewFunctionCallResponseProcessor(false, nil)
+		p.SetToolCallbacksStructured(callbacks)
+
+		mockTool := &mockCallableTool{
+			declaration: toolDecl,
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				t.Error("tool should not be called when custom result is provided")
+				return nil, nil
+			},
+		}
+
+		toolCall := model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"key":"value"}`),
+			},
+		}
+
+		result, modifiedArgs, err := p.executeToolWithCallbacks(
+			ctx, inv, toolCall, mockTool, nil,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, customResult, result)
+		assert.Equal(t, toolCall.Function.Arguments, modifiedArgs)
+	})
+
+	t.Run("modified arguments from before callback", func(t *testing.T) {
+		modifiedArgs := []byte(`{"modified":"args"}`)
+		callbacks := tool.NewCallbacksStructured().RegisterBeforeTool(
+			func(ctx context.Context, args *tool.BeforeToolArgs) (
+				*tool.BeforeToolResult, error,
+			) {
+				return &tool.BeforeToolResult{
+					ModifiedArguments: modifiedArgs,
+				}, nil
+			},
+		)
+
+		p := NewFunctionCallResponseProcessor(false, nil)
+		p.SetToolCallbacksStructured(callbacks)
+
+		receivedArgs := []byte{}
+		mockTool := &mockCallableTool{
+			declaration: toolDecl,
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				receivedArgs = args
+				return "ok", nil
+			},
+		}
+
+		toolCall := model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"key":"value"}`),
+			},
+		}
+
+		result, retModifiedArgs, err := p.executeToolWithCallbacks(
+			ctx, inv, toolCall, mockTool, nil,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, "ok", result)
+		assert.Equal(t, modifiedArgs, retModifiedArgs)
+		assert.Equal(t, modifiedArgs, receivedArgs)
+	})
+
+	t.Run("error from before callback", func(t *testing.T) {
+		expectedErr := errors.New("before callback error")
+		callbacks := tool.NewCallbacksStructured().RegisterBeforeTool(
+			func(ctx context.Context, args *tool.BeforeToolArgs) (
+				*tool.BeforeToolResult, error,
+			) {
+				return nil, expectedErr
+			},
+		)
+
+		p := NewFunctionCallResponseProcessor(false, nil)
+		p.SetToolCallbacksStructured(callbacks)
+
+		mockTool := &mockCallableTool{
+			declaration: toolDecl,
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				t.Error("tool should not be called when callback returns error")
+				return nil, nil
+			},
+		}
+
+		toolCall := model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"key":"value"}`),
+			},
+		}
+
+		_, _, err := p.executeToolWithCallbacks(ctx, inv, toolCall, mockTool, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tool callback error")
+	})
+}
+
+// TestExecuteToolWithCallbacks_StructuredAfterTool tests structured after
+// tool callbacks.
+func TestExecuteToolWithCallbacks_StructuredAfterTool(t *testing.T) {
+	ctx := context.Background()
+	inv := &agent.Invocation{AgentName: "test"}
+	toolDecl := &tool.Declaration{Name: "test_tool", Description: "test"}
+
+	t.Run("custom result from after callback", func(t *testing.T) {
+		customResult := map[string]any{"custom": "result"}
+		callbacks := tool.NewCallbacksStructured().RegisterAfterTool(
+			func(ctx context.Context, args *tool.AfterToolArgs) (
+				*tool.AfterToolResult, error,
+			) {
+				assert.Equal(t, "original", args.Result)
+				assert.NoError(t, args.Error)
+				return &tool.AfterToolResult{
+					CustomResult: customResult,
+				}, nil
+			},
+		)
+
+		p := NewFunctionCallResponseProcessor(false, nil)
+		p.SetToolCallbacksStructured(callbacks)
+
+		mockTool := &mockCallableTool{
+			declaration: toolDecl,
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				return "original", nil
+			},
+		}
+
+		toolCall := model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"key":"value"}`),
+			},
+		}
+
+		result, _, err := p.executeToolWithCallbacks(
+			ctx, inv, toolCall, mockTool, nil,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, customResult, result)
+	})
+
+	t.Run("error from after callback", func(t *testing.T) {
+		expectedErr := errors.New("after callback error")
+		callbacks := tool.NewCallbacksStructured().RegisterAfterTool(
+			func(ctx context.Context, args *tool.AfterToolArgs) (
+				*tool.AfterToolResult, error,
+			) {
+				return nil, expectedErr
+			},
+		)
+
+		p := NewFunctionCallResponseProcessor(false, nil)
+		p.SetToolCallbacksStructured(callbacks)
+
+		mockTool := &mockCallableTool{
+			declaration: toolDecl,
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				return "ok", nil
+			},
+		}
+
+		toolCall := model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"key":"value"}`),
+			},
+		}
+
+		_, _, err := p.executeToolWithCallbacks(ctx, inv, toolCall, mockTool, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tool callback error")
+	})
+
+	t.Run("after callback receives tool error", func(t *testing.T) {
+		toolErr := errors.New("tool execution error")
+		callbackCalled := false
+		callbacks := tool.NewCallbacksStructured().RegisterAfterTool(
+			func(ctx context.Context, args *tool.AfterToolArgs) (
+				*tool.AfterToolResult, error,
+			) {
+				callbackCalled = true
+				assert.Error(t, args.Error)
+				assert.Contains(t, args.Error.Error(), "tool execution error")
+				return nil, nil
+			},
+		)
+
+		p := NewFunctionCallResponseProcessor(false, nil)
+		p.SetToolCallbacksStructured(callbacks)
+
+		mockTool := &mockCallableTool{
+			declaration: toolDecl,
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				return nil, toolErr
+			},
+		}
+
+		toolCall := model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"key":"value"}`),
+			},
+		}
+
+		_, _, err := p.executeToolWithCallbacks(ctx, inv, toolCall, mockTool, nil)
+		require.Error(t, err)
+		assert.True(t, callbackCalled)
+	})
+}
+
+// TestExecuteToolWithCallbacks_V1AndStructuredCoexist tests that both V1 and
+// structured callbacks can coexist.
+func TestExecuteToolWithCallbacks_V1AndStructuredCoexist(t *testing.T) {
+	ctx := context.Background()
+	inv := &agent.Invocation{AgentName: "test"}
+	toolDecl := &tool.Declaration{Name: "test_tool", Description: "test"}
+
+	t.Run("both before callbacks execute in order", func(t *testing.T) {
+		executionOrder := []string{}
+
+		v1Callbacks := (&tool.Callbacks{}).RegisterBeforeTool(
+			func(ctx context.Context, toolName string, decl *tool.Declaration,
+				args *[]byte) (any, error) {
+				executionOrder = append(executionOrder, "v1")
+				return nil, nil
+			},
+		)
+
+		structuredCallbacks := tool.NewCallbacksStructured().RegisterBeforeTool(
+			func(ctx context.Context, args *tool.BeforeToolArgs) (
+				*tool.BeforeToolResult, error,
+			) {
+				executionOrder = append(executionOrder, "structured")
+				return nil, nil
+			},
+		)
+
+		p := NewFunctionCallResponseProcessor(false, v1Callbacks)
+		p.SetToolCallbacksStructured(structuredCallbacks)
+
+		mockTool := &mockCallableTool{
+			declaration: toolDecl,
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				return "ok", nil
+			},
+		}
+
+		toolCall := model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"key":"value"}`),
+			},
+		}
+
+		_, _, err := p.executeToolWithCallbacks(ctx, inv, toolCall, mockTool, nil)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"v1", "structured"}, executionOrder)
+	})
+
+	t.Run("both after callbacks execute in order", func(t *testing.T) {
+		executionOrder := []string{}
+
+		v1Callbacks := (&tool.Callbacks{}).RegisterAfterTool(
+			func(ctx context.Context, toolName string, decl *tool.Declaration,
+				args []byte, result any, err error) (any, error) {
+				executionOrder = append(executionOrder, "v1")
+				return result, err
+			},
+		)
+
+		structuredCallbacks := tool.NewCallbacksStructured().RegisterAfterTool(
+			func(ctx context.Context, args *tool.AfterToolArgs) (
+				*tool.AfterToolResult, error,
+			) {
+				executionOrder = append(executionOrder, "structured")
+				return nil, nil
+			},
+		)
+
+		p := NewFunctionCallResponseProcessor(false, v1Callbacks)
+		p.SetToolCallbacksStructured(structuredCallbacks)
+
+		mockTool := &mockCallableTool{
+			declaration: toolDecl,
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				return "ok", nil
+			},
+		}
+
+		toolCall := model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"key":"value"}`),
+			},
+		}
+
+		_, _, err := p.executeToolWithCallbacks(ctx, inv, toolCall, mockTool, nil)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"v1", "structured"}, executionOrder)
+	})
+}
