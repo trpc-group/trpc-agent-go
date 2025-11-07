@@ -775,6 +775,11 @@ func registerTools(options *Options) []tool.Tool {
 	if options.SkillsRepository != nil {
 		allTools = append(allTools,
 			toolskill.NewLoadTool(options.SkillsRepository))
+		// Specialized doc tools for clarity and control.
+		allTools = append(allTools,
+			toolskill.NewSelectDocsTool(options.SkillsRepository))
+		allTools = append(allTools,
+			toolskill.NewListDocsTool(options.SkillsRepository))
 		// Provide executor to skill_run, fallback to local.
 		exec := options.codeExecutor
 		if exec == nil {

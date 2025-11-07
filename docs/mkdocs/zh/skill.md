@@ -17,6 +17,8 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 
 - 🔎 自动注入技能“概览”（名称与描述），引导模型选择
 - 📥 `skill_load` 按需注入 `SKILL.md` 正文与选定文档
+- 📚 `skill_select_docs` 增/改/清除文档选择
+- 🧾 `skill_list_docs` 列出可用文档
 - 🏃 `skill_run` 在工作区执行命令，返回 stdout/stderr 与输出文件
 - 🗂️ 按通配符收集输出文件并回传内容与 MIME 类型
 - 🧩 可选择本地或容器工作区执行器（默认本地）
@@ -94,7 +96,8 @@ agent := llmagent.New(
 - 工具自动注册：开启 `WithSkills` 后，`skill_load` 与 `skill_run`
   会自动出现在工具列表中，无需手动添加。
 - 自动提示注入：框架会在系统消息中加入简洁的“工具使用指引”，
-  引导模型在合适时机先 `skill_load` 再 `skill_run`（参见源码
+  引导模型在合适时机先 `skill_load`，需要时用 `skill_select_docs`
+  选择文档，再 `skill_run`（参见源码
   的指引文案拼接逻辑）。
   - 加载器： [tool/skill/load.go](tool/skill/load.go)
   - 运行器： [tool/skill/run.go](tool/skill/run.go)
@@ -172,6 +175,31 @@ https://github.com/anthropics/skills
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
 - 请求处理器读取这些键，把 `SKILL.md` 正文与文档注入到系统消息
+
+说明：可多次调用以新增或替换文档。
+
+### `skill_select_docs`（选择文档）
+
+声明： [tool/skill/select_docs.go](tool/skill/select_docs.go)
+
+输入：
+- `skill`（必填）
+- `docs`（可选数组）
+- `include_all_docs`（可选布尔）
+- `mode`（可选字符串）：`add` | `replace` | `clear`
+
+行为：
+- 更新 `temp:skill:docs:<name>`：`*` 表示全选；数组表示显式列表
+
+### `skill_list_docs`（列出文档）
+
+声明： [tool/skill/list_docs.go](tool/skill/list_docs.go)
+
+输入：
+- `skill`（必填）
+
+输出：
+- 可用文档文件名数组
 
 提示：这些会话键由框架自动管理；用户通常无需直接操作，仅需用
 自然语言驱动对话即可。

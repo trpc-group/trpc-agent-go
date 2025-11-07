@@ -17,6 +17,8 @@ Background references:
 
 - 🔎 Overview injection (name + description) to guide selection
 - 📥 `skill_load` to pull `SKILL.md` body and selected docs on demand
+- 📚 `skill_select_docs` to add/replace/clear docs
+- 🧾 `skill_list_docs` to list available docs
 - 🏃 `skill_run` to execute commands, returning stdout/stderr and
   output files
 - 🗂️ Output file collection via glob patterns with MIME detection
@@ -94,7 +96,8 @@ Key points:
 - Tools are auto‑registered with `WithSkills`: `skill_load` and
   `skill_run` show up automatically; no manual wiring required.
 - Auto prompt guidance is injected in the system message so the model
-  learns to `skill_load` first and then `skill_run` at the right time.
+  learns to `skill_load` first, select docs with `skill_select_docs`
+  as needed, and then `skill_run` at the right time.
   - Loader: [tool/skill/load.go](tool/skill/load.go)
   - Runner: [tool/skill/run.go](tool/skill/run.go)
 
@@ -164,6 +167,34 @@ Behavior:
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" or JSON array
 - Request processor injects `SKILL.md` body and docs into system message
+
+Notes:
+- Safe to call multiple times to add or replace docs.
+
+### `skill_select_docs`
+
+Declaration: [tool/skill/select_docs.go](tool/skill/select_docs.go)
+
+Input:
+- `skill` (required)
+- `docs` (optional array)
+- `include_all_docs` (optional bool)
+- `mode` (optional string): `add` | `replace` | `clear`
+
+Behavior:
+- Updates `temp:skill:docs:<name>` accordingly:
+  - `*` for include all
+  - JSON array for explicit list
+
+### `skill_list_docs`
+
+Declaration: [tool/skill/list_docs.go](tool/skill/list_docs.go)
+
+Input:
+- `skill` (required)
+
+Output:
+- Array of available doc filenames
 
 Note: These keys are managed by the framework; you rarely need to touch
 them directly when driving the conversation naturally.

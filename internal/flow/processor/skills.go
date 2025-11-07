@@ -79,8 +79,17 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 			lb.WriteString("\n")
 		}
 		// Docs
-		if docNames := p.getDocsSelection(inv, name); len(docNames) > 0 {
-			if docText := p.buildDocsText(sk, docNames); docText != "" {
+		sel := p.getDocsSelection(inv, name)
+		// Summary line to make selected docs explicit.
+		lb.WriteString("Docs loaded: ")
+		if len(sel) == 0 {
+			lb.WriteString("none\n")
+		} else {
+			lb.WriteString(strings.Join(sel, ", "))
+			lb.WriteString("\n")
+		}
+		if len(sel) > 0 {
+			if docText := p.buildDocsText(sk, sel); docText != "" {
 				lb.WriteString(docText)
 			}
 		}
@@ -110,16 +119,16 @@ func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
 		line := fmt.Sprintf("- %s: %s\n", s.Name, s.Description)
 		b.WriteString(line)
 	}
-	// Add concise guidance for tool usage; keep each bullet as a single
-	// logical line in the prompt (no forced line-wrapping in content).
+	// Add concise guidance for tool usage; bullets are one logical line.
 	b.WriteString("\nTooling guidance:\n")
-	b.WriteString(
-		"- When you need to use a skill, first check if it is " +
-			"already loaded (its SKILL.md and selected docs are present " +
-			"in context). If not, call skill_load to load that skill and " +
-			"any needed docs. If it is already loaded, call skill_run to " +
-			"execute commands and rely on the loaded content as reference.\n",
-	)
+	b.WriteString("- If a skill is not loaded, ")
+	b.WriteString("call skill_load (you may pass docs or ")
+	b.WriteString("include_all_docs).\n")
+	b.WriteString("- If the body is loaded but docs are missing, ")
+	b.WriteString("call skill_select_docs or call skill_load again ")
+	b.WriteString("to add docs.\n")
+	b.WriteString("- When body and needed docs are present, ")
+	b.WriteString("call skill_run to execute commands.\n")
 	overview := b.String()
 
 	idx := findSystemMessageIndex(req.Messages)
