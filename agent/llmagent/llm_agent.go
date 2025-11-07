@@ -448,7 +448,8 @@ type LLMAgent struct {
 	systemPrompt         string
 	genConfig            model.GenerationConfig
 	flow                 flow.Flow
-	tools                []tool.Tool // Tools supported by the agent
+	tools                []tool.Tool     // All tools (user tools + framework tools)
+	userToolNames        map[string]bool // Names of tools explicitly registered by user via WithTools and WithToolSets
 	codeExecutor         codeexecutor.CodeExecutor
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
@@ -489,7 +490,8 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
-	tools := registerTools(&options)
+	// Also track which tools are user-registered (via WithTools) for filtering purposes.
+	tools, userToolNames := registerTools(&options)
 
 	// Initialize models map and determine the initial model.
 	initialModel, models := initializeModels(&options)
@@ -505,6 +507,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		genConfig:            options.GenerationConfig,
 		codeExecutor:         options.codeExecutor,
 		tools:                tools,
+		userToolNames:        userToolNames,
 		planner:              options.Planner,
 		subAgents:            options.SubAgents,
 		agentCallbacks:       options.AgentCallbacks,
@@ -714,12 +717,22 @@ func initializeModels(options *Options) (model.Model, map[string]model.Model) {
 	return nil, models
 }
 
-func registerTools(options *Options) []tool.Tool {
+func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
+	// Track user-registered tool names from WithTools and WithToolSets.
+	// These are tools explicitly registered by the user and can be subject to filtering.
+	userToolNames := make(map[string]bool)
+
+	// Tools from WithTools are user tools.
+	for _, t := range options.Tools {
+		userToolNames[t.Declaration().Name] = true
+	}
+
 	// Start with direct tools.
 	allTools := make([]tool.Tool, 0, len(options.Tools))
 	allTools = append(allTools, options.Tools...)
 
 	// Add tools from each toolset with automatic namespacing.
+	// Tools from WithToolSets are also user tools (user explicitly added them).
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
 		// Create named toolset wrapper to avoid name conflicts.
@@ -727,24 +740,31 @@ func registerTools(options *Options) []tool.Tool {
 		setTools := namedToolSet.Tools(ctx)
 		for _, t := range setTools {
 			allTools = append(allTools, t)
+			// Mark toolset tools as user tools.
+			userToolNames[t.Declaration().Name] = true
 		}
 	}
 
 	// Add knowledge search tool if knowledge base is provided.
+	// This is a FRAMEWORK tool (auto-added by framework), NOT a user tool.
+	// It should never be filtered out by user tool filters.
 	if options.Knowledge != nil {
 		if options.EnableKnowledgeAgenticFilter {
 			agenticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
 				options.Knowledge, options.AgenticFilterInfo, knowledgetool.WithFilter(options.KnowledgeFilter),
 			)
 			allTools = append(allTools, agenticKnowledge)
+			// Do NOT add to userToolNames - this is a framework tool.
 		} else {
-			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(
+			knowledgeTool := knowledgetool.NewKnowledgeSearchTool(
 				options.Knowledge, knowledgetool.WithFilter(options.KnowledgeFilter),
-			))
+			)
+			allTools = append(allTools, knowledgeTool)
+			// Do NOT add to userToolNames - this is a framework tool.
 		}
 	}
 
-	return allTools
+	return allTools, userToolNames
 }
 
 // Run implements the agent.Agent interface.
@@ -951,6 +971,29 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 		}
 	}
 	return nil
+}
+
+// UserTools returns the list of tools that were explicitly registered by the user
+// via WithTools and WithToolSets options.
+//
+// User tools (can be filtered):
+//   - Tools registered via WithTools
+//   - Tools registered via WithToolSets
+//
+// Framework tools (never filtered, not included in this list):
+//   - knowledge_search / agentic_knowledge_search (auto-added when WithKnowledge is set)
+//   - transfer_to_agent (auto-added when WithSubAgents is set)
+//
+// This method is used by the tool filtering logic to distinguish user tools from framework tools.
+func (a *LLMAgent) UserTools() []tool.Tool {
+	// Filter user tools from all tools
+	userTools := make([]tool.Tool, 0, len(a.userToolNames))
+	for _, t := range a.tools {
+		if a.userToolNames[t.Declaration().Name] {
+			userTools = append(userTools, t)
+		}
+	}
+	return userTools
 }
 
 // CodeExecutor returns the code executor used by this agent.

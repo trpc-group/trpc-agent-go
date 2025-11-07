@@ -60,10 +60,13 @@ func TestRegisterTools_AddsToolSet(t *testing.T) {
 
 	kb := &fakeKnowledge{}
 
-	all := registerTools(&Options{Tools: direct, ToolSets: []tool.ToolSet{ts}, Knowledge: kb})
+	all, userToolNames := registerTools(&Options{Tools: direct, ToolSets: []tool.ToolSet{ts}, Knowledge: kb})
 
 	// Expect 1 direct + 1 from set + 1 knowledge search tool.
 	require.Equal(t, 3, len(all))
+
+	// Verify user tool tracking
+	require.True(t, userToolNames["direct"], "direct tool should be tracked as user tool")
 
 	names := []string{}
 	for _, t := range all {
