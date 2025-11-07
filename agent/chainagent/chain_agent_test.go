@@ -513,3 +513,139 @@ func TestChainAgent_BeforeCallbackError(t *testing.T) {
 	}
 	require.Equal(t, 1, cnt)
 }
+
+func TestChainAgent_StructuredBeforeCallbackResp(t *testing.T) {
+	sub := &mockNoEventAgent{name: "child"}
+
+	callbacks := agent.NewCallbacksStructured()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return &agent.BeforeAgentResult{
+			CustomResponse: &model.Response{
+				Object: "structured.before",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "structured before response",
+					},
+				}},
+			},
+		}, nil
+	})
+
+	chain := New(
+		"main",
+		WithSubAgents([]agent.Agent{sub}),
+		WithAgentCallbacks(callbacks),
+	)
+
+	ctx := context.Background()
+	events, err := chain.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "main"})
+	require.NoError(t, err)
+
+	collected := []*event.Event{}
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	require.Len(t, collected, 1)
+	require.Equal(t, "main", collected[0].Author)
+	require.Equal(t, "structured.before", collected[0].Object)
+	require.Equal(t, "structured before response", collected[0].Response.Choices[0].Message.Content)
+}
+
+func TestChainAgent_StructuredBeforeCallbackError(t *testing.T) {
+	sub := &mockNoEventAgent{name: "child"}
+
+	callbacks := agent.NewCallbacksStructured()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return nil, errors.New("structured before failed")
+	})
+
+	chain := New(
+		"main",
+		WithSubAgents([]agent.Agent{sub}),
+		WithAgentCallbacks(callbacks),
+	)
+
+	ctx := context.Background()
+	events, err := chain.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "main"})
+	require.NoError(t, err)
+
+	cnt := 0
+	for e := range events {
+		cnt++
+		require.NotNil(t, e.Error)
+		require.Equal(t, agent.ErrorTypeAgentCallbackError, e.Error.Type)
+		require.Contains(t, e.Error.Message, "structured before failed")
+	}
+	require.Equal(t, 1, cnt)
+}
+
+func TestChainAgent_StructuredAfterCallbackResp(t *testing.T) {
+	sub := &mockMinimalAgent{name: "child"}
+
+	callbacks := agent.NewCallbacksStructured()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return &agent.AfterAgentResult{
+			CustomResponse: &model.Response{
+				Object: "structured.after",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "structured after response",
+					},
+				}},
+			},
+		}, nil
+	})
+
+	chain := New(
+		"main",
+		WithSubAgents([]agent.Agent{sub}),
+		WithAgentCallbacks(callbacks),
+	)
+
+	ctx := context.Background()
+	events, err := chain.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "main"})
+	require.NoError(t, err)
+
+	collected := []*event.Event{}
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	require.Len(t, collected, 1)
+	require.Equal(t, "main", collected[0].Author)
+	require.Equal(t, "structured.after", collected[0].Object)
+	require.Equal(t, "structured after response", collected[0].Response.Choices[0].Message.Content)
+}
+
+func TestChainAgent_StructuredAfterCallbackError(t *testing.T) {
+	sub := &mockMinimalAgent{name: "child"}
+
+	callbacks := agent.NewCallbacksStructured()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, errors.New("structured after failed")
+	})
+
+	chain := New(
+		"main",
+		WithSubAgents([]agent.Agent{sub}),
+		WithAgentCallbacks(callbacks),
+	)
+
+	ctx := context.Background()
+	events, err := chain.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "main"})
+	require.NoError(t, err)
+
+	cnt := 0
+	for e := range events {
+		cnt++
+		require.NotNil(t, e.Error)
+		require.Equal(t, agent.ErrorTypeAgentCallbackError, e.Error.Type)
+		require.Contains(t, e.Error.Message, "structured after failed")
+	}
+	require.Equal(t, 1, cnt)
+}

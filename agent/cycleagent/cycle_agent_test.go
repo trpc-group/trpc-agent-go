@@ -668,3 +668,143 @@ func TestCycleAgent_MaxIterations(t *testing.T) {
 }
 
 func ptrInt(i int) *int { return &i }
+
+func TestCycleAgent_StructuredBeforeCallback(t *testing.T) {
+	cb := agent.NewCallbacksStructured()
+	cb.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return &agent.BeforeAgentResult{
+			CustomResponse: &model.Response{
+				Object: "structured.before",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "before exit",
+					},
+				}},
+			},
+		}, nil
+	})
+
+	one := 1
+	ca := New(
+		"loop",
+		WithSubAgents([]agent.Agent{&noopAgent{"a"}}),
+		WithAgentCallbacks(cb),
+		WithMaxIterations(one),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := ca.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.Equal(t, "structured.before", last.Object)
+	require.Equal(t, "before exit", last.Response.Choices[0].Message.Content)
+}
+
+func TestCycleAgent_StructuredBeforeCallbackError(t *testing.T) {
+	cb := agent.NewCallbacksStructured()
+	cb.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return nil, errors.New("structured before failed")
+	})
+
+	one := 1
+	ca := New(
+		"loop",
+		WithSubAgents([]agent.Agent{&noopAgent{"a"}}),
+		WithAgentCallbacks(cb),
+		WithMaxIterations(one),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := ca.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.NotNil(t, last.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
+	require.Contains(t, last.Error.Message, "structured before failed")
+}
+
+func TestCycleAgent_StructuredAfterCallback(t *testing.T) {
+	cb := agent.NewCallbacksStructured()
+	cb.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return &agent.AfterAgentResult{
+			CustomResponse: &model.Response{
+				Object: "structured.after",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "after response",
+					},
+				}},
+			},
+		}, nil
+	})
+
+	one := 1
+	ca := New(
+		"loop",
+		WithSubAgents([]agent.Agent{&noopAgent{"a"}}),
+		WithAgentCallbacks(cb),
+		WithMaxIterations(one),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := ca.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.Equal(t, "structured.after", last.Object)
+	require.Equal(t, "after response", last.Response.Choices[0].Message.Content)
+}
+
+func TestCycleAgent_StructuredAfterCallbackError(t *testing.T) {
+	cb := agent.NewCallbacksStructured()
+	cb.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, errors.New("structured after failed")
+	})
+
+	one := 1
+	ca := New(
+		"loop",
+		WithSubAgents([]agent.Agent{&noopAgent{"a"}}),
+		WithAgentCallbacks(cb),
+		WithMaxIterations(one),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := ca.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.NotNil(t, last.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
+	require.Contains(t, last.Error.Message, "structured after failed")
+}

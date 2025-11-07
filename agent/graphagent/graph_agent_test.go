@@ -749,3 +749,211 @@ func TestGraphAgent_MessageFilterMode(t *testing.T) {
 	require.Equal(t, options.messageTimelineFilterMode, "request")
 	require.Equal(t, options.messageBranchFilterMode, "exact")
 }
+
+func TestGraphAgent_StructuredBeforeCallback(t *testing.T) {
+	// Create a minimal graph.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("noop", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "should not run"}, nil
+		}).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+
+	// Create structured callbacks that return early.
+	callbacks := agent.NewCallbacksStructured()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return &agent.BeforeAgentResult{
+			CustomResponse: &model.Response{
+				Object: "structured.before",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "early return",
+					},
+				}},
+			},
+		}, nil
+	})
+
+	// Create graph agent with structured callbacks.
+	ga, err := New("test-before", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-structured-before",
+		AgentName:    "test-before",
+	}
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Collect events.
+	var collected []*event.Event
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	require.Len(t, collected, 1)
+	require.Equal(t, "structured.before", collected[0].Object)
+	require.Equal(t, "early return", collected[0].Response.Choices[0].Message.Content)
+}
+
+func TestGraphAgent_StructuredBeforeCallbackError(t *testing.T) {
+	// Create a minimal graph.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("noop", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "should not run"}, nil
+		}).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+
+	// Create structured callbacks that return error.
+	callbacks := agent.NewCallbacksStructured()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return nil, errors.New("structured before failed")
+	})
+
+	// Create graph agent with structured callbacks.
+	ga, err := New("test-before-err", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-structured-before-err",
+		AgentName:    "test-before-err",
+	}
+
+	_, err = ga.Run(context.Background(), inv)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "structured before failed")
+}
+
+func TestGraphAgent_StructuredAfterCallback(t *testing.T) {
+	// Create a simple graph.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "processed"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	// Create structured callbacks with after agent.
+	callbacks := agent.NewCallbacksStructured()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return &agent.AfterAgentResult{
+			CustomResponse: &model.Response{
+				Object: "structured.after",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "after callback",
+					},
+				}},
+			},
+		}, nil
+	})
+
+	// Create graph agent with structured callbacks.
+	ga, err := New("test-after", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-structured-after",
+		AgentName:    "test-after",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Collect events.
+	var collected []*event.Event
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	// Should have graph execution event(s) plus structured after callback event.
+	require.Greater(t, len(collected), 0)
+
+	// Last event should be from structured after callback.
+	last := collected[len(collected)-1]
+	require.Equal(t, "structured.after", last.Object)
+	require.Equal(t, "after callback", last.Response.Choices[0].Message.Content)
+}
+
+func TestGraphAgent_StructuredAfterCallbackError(t *testing.T) {
+	// Create a simple graph.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "processed"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	// Create structured callbacks with after agent error.
+	callbacks := agent.NewCallbacksStructured()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, errors.New("structured after failed")
+	})
+
+	// Create graph agent with structured callbacks.
+	ga, err := New("test-after-err", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-structured-after-err",
+		AgentName:    "test-after-err",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Collect events.
+	var collected []*event.Event
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	// Should have graph execution event(s) plus structured after callback error event.
+	require.Greater(t, len(collected), 0)
+
+	// Last event should be error from structured after callback.
+	last := collected[len(collected)-1]
+	require.NotNil(t, last.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
+	require.Contains(t, last.Error.Message, "structured after failed")
+}

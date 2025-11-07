@@ -487,3 +487,165 @@ func TestParallelAgent_MultiplePanics(t *testing.T) {
 	// Should have received error events for both panics
 	require.GreaterOrEqual(t, len(errorEvents), 2, "Should have error events for multiple panics")
 }
+
+func TestParallelAgent_ToolsAndAgentInfo(t *testing.T) {
+	sub1 := &silentAgent{name: "sub1"}
+	sub2 := &silentAgent{name: "sub2"}
+
+	pa := New(
+		"parallel",
+		WithSubAgents([]agent.Agent{sub1, sub2}),
+	)
+
+	// Test Tools.
+	tools := pa.Tools()
+	require.Empty(t, tools)
+
+	// Test SubAgents.
+	subs := pa.SubAgents()
+	require.Len(t, subs, 2)
+
+	// Test FindSubAgent.
+	found := pa.FindSubAgent("sub1")
+	require.NotNil(t, found)
+	require.Equal(t, "sub1", found.Info().Name)
+
+	notFound := pa.FindSubAgent("nonexistent")
+	require.Nil(t, notFound)
+
+	// Test Info.
+	info := pa.Info()
+	require.Equal(t, "parallel", info.Name)
+}
+
+func TestParallelAgent_StructuredBeforeCallback(t *testing.T) {
+	cb := agent.NewCallbacksStructured()
+	cb.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return &agent.BeforeAgentResult{
+			CustomResponse: &model.Response{
+				Object: "structured.before",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "before exit",
+					},
+				}},
+			},
+		}, nil
+	})
+
+	pa := New(
+		"parallel",
+		WithSubAgents([]agent.Agent{&silentAgent{"a"}}),
+		WithAgentCallbacks(cb),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := pa.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.Equal(t, "structured.before", last.Object)
+	require.Equal(t, "before exit", last.Response.Choices[0].Message.Content)
+}
+
+func TestParallelAgent_StructuredBeforeCallbackError(t *testing.T) {
+	cb := agent.NewCallbacksStructured()
+	cb.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return nil, errors.New("structured before failed")
+	})
+
+	pa := New(
+		"parallel",
+		WithSubAgents([]agent.Agent{&silentAgent{"a"}}),
+		WithAgentCallbacks(cb),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := pa.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.NotNil(t, last.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
+	require.Contains(t, last.Error.Message, "structured before failed")
+}
+
+func TestParallelAgent_StructuredAfterCallback(t *testing.T) {
+	cb := agent.NewCallbacksStructured()
+	cb.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return &agent.AfterAgentResult{
+			CustomResponse: &model.Response{
+				Object: "structured.after",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "after response",
+					},
+				}},
+			},
+		}, nil
+	})
+
+	pa := New(
+		"parallel",
+		WithSubAgents([]agent.Agent{&silentAgent{"a"}}),
+		WithAgentCallbacks(cb),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := pa.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.Equal(t, "structured.after", last.Object)
+	require.Equal(t, "after response", last.Response.Choices[0].Message.Content)
+}
+
+func TestParallelAgent_StructuredAfterCallbackError(t *testing.T) {
+	cb := agent.NewCallbacksStructured()
+	cb.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, errors.New("structured after failed")
+	})
+
+	pa := New(
+		"parallel",
+		WithSubAgents([]agent.Agent{&silentAgent{"a"}}),
+		WithAgentCallbacks(cb),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := pa.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.NotNil(t, last.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
+	require.Contains(t, last.Error.Message, "structured after failed")
+}
