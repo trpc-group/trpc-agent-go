@@ -27,16 +27,29 @@ import (
 
 // Content inclusion options.
 const (
-	IncludeContentsNone     = "none"
-	IncludeContentsAll      = "all"
-	IncludeContentsFiltered = "filtered"
+	// BranchFilterModePrefix Prefix matching pattern
+	BranchFilterModePrefix = "prefix"
+	// BranchFilterModeAll include all
+	BranchFilterModeAll = "all"
+	// BranchFilterModeExact exact match
+	BranchFilterModeExact = "exact"
+
+	// TimelineFilterAll includes all historical message records
+	// Suitable for scenarios requiring full conversation context
+	TimelineFilterAll = "all"
+	// TimelineFilterCurrentRequest only includes messages within the current request cycle
+	// Filters out previous historical records, keeping only messages related to this request
+	TimelineFilterCurrentRequest = "request"
+	// TimelineFilterCurrentInvocation only includes messages within the current invocation session
+	// Suitable for scenarios requiring isolation between different invocation cycles in long-running sessions
+	TimelineFilterCurrentInvocation = "invocation"
 )
 
 // ContentRequestProcessor implements content processing logic for agent requests.
 type ContentRequestProcessor struct {
-	// IncludeContents determines how to include content from session events.
-	// Options: "none", "all", "filtered" (default: "filtered").
-	IncludeContents string
+	// BranchFilterMode determines how to include content from session events.
+	// Options: "prefix", "all", "exact" (default: "prefix").
+	BranchFilterMode string
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
@@ -51,15 +64,30 @@ type ContentRequestProcessor struct {
 	// allows graph executions to retain authentic assistant/tool transcripts
 	// while still enabling cross-agent contextualization when branches differ.
 	PreserveSameBranch bool
+	// TimelineFilterMode controls whether to append history messages to the request.
+	TimelineFilterMode string
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
 type ContentOption func(*ContentRequestProcessor)
 
-// WithIncludeContents sets how to include content from session events.
-func WithIncludeContents(includeContents string) ContentOption {
+// WithBranchFilterMode sets how to include content from session events.
+func WithBranchFilterMode(mode string) ContentOption {
 	return func(p *ContentRequestProcessor) {
-		p.IncludeContents = includeContents
+		if mode != BranchFilterModeAll && mode != BranchFilterModeExact {
+			mode = BranchFilterModePrefix
+		}
+		p.BranchFilterMode = mode
+	}
+}
+
+// WithTimelineFilterMode sets whether to append history messages to the request.
+func WithTimelineFilterMode(mode string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		if mode != TimelineFilterCurrentRequest && mode != TimelineFilterCurrentInvocation {
+			mode = TimelineFilterAll
+		}
+		p.TimelineFilterMode = mode
 	}
 }
 
@@ -99,13 +127,15 @@ func WithPreserveSameBranch(preserve bool) ContentOption {
 // NewContentRequestProcessor creates a new content request processor.
 func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
 	processor := &ContentRequestProcessor{
-		IncludeContents:  IncludeContentsFiltered, // Default only to include filtered contents.
-		AddContextPrefix: true,                    // Default to add context prefix.
+		BranchFilterMode: BranchFilterModePrefix, // Default only to include filtered contents.
+		AddContextPrefix: true,                   // Default to add context prefix.
 		// Default to preserving roles for same-branch lineage so that
 		// downstream subagents keep assistant/tool roles from their parent
 		// agent's history. This produces interleaved user/assistant/tool,
 		// which is the expected default behavior for end users.
 		PreserveSameBranch: true,
+		// Default to append history message.
+		TimelineFilterMode: TimelineFilterAll,
 	}
 
 	// Apply options.
@@ -135,10 +165,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 
 	// 2) Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
-	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
+	if invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
-		if p.AddSessionSummary {
+		if p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
 			// Prepend session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
@@ -147,7 +177,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 				summaryUpdatedAt = updatedAt
 			}
 		}
-		messages = p.getHistoryMessages(invocation, summaryUpdatedAt)
+		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = summaryUpdatedAt.IsZero() && len(messages) == 0
 	}
@@ -182,7 +212,7 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	}
 	filter := inv.GetEventFilterKey()
 	// For IncludeContentsAll, prefer the full-session summary under empty filter key.
-	if p.IncludeContents == IncludeContentsAll {
+	if p.BranchFilterMode == BranchFilterModeAll {
 		filter = ""
 	}
 	sum := inv.Session.Summaries[filter]
@@ -194,20 +224,20 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 
 // getHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
 // This method is used when AddSessionSummary is false to get recent history messages.
-func (p *ContentRequestProcessor) getHistoryMessages(inv *agent.Invocation, since time.Time) []model.Message {
+func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, since time.Time) []model.Message {
 	if inv.Session == nil {
 		return nil
 	}
 	isZeroTime := since.IsZero()
 	filter := inv.GetEventFilterKey()
+
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
-		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
-			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(filter)) &&
-			(isZeroTime || evt.Timestamp.After(since)) {
-			events = append(events, evt)
+		if !p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since) {
+			continue
 		}
+		events = append(events, evt)
 	}
 	inv.Session.EventMu.RUnlock()
 
@@ -234,6 +264,35 @@ func (p *ContentRequestProcessor) getHistoryMessages(inv *agent.Invocation, sinc
 		messages = messages[startIdx:]
 	}
 	return messages
+}
+
+func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
+	isZeroTime bool, since time.Time) bool {
+	if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+		return false
+	}
+
+	if !isZeroTime && evt.Timestamp.Before(since) {
+		return false
+	}
+
+	if p.TimelineFilterMode == TimelineFilterCurrentRequest && inv.RunOptions.RequestID != evt.RequestID {
+		return false
+	}
+
+	if p.TimelineFilterMode == TimelineFilterCurrentInvocation && inv.InvocationID != evt.InvocationID {
+		return false
+	}
+
+	if p.BranchFilterMode == BranchFilterModeExact && evt.FilterKey != filter {
+		return false
+	}
+
+	if p.BranchFilterMode == BranchFilterModePrefix && !evt.Filter(filter) {
+		return false
+	}
+
+	return true
 }
 
 // isOtherAgentReply checks whether the event is a reply from another agent.
