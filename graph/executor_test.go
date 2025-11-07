@@ -2401,9 +2401,16 @@ type testCase struct {
 }
 
 func deepCopyNode(_ context.Context, state State) (any, error) {
-	deepCopyMap := state["DisableDeepCopyMap"].(map[string]string)
+	DisableDeepCopyMap := state["DisableDeepCopyMap"].(map[string]string)
+	DisableDeepCopyMap["a"] = "123"
+
+	deepCopyMap := state["deepCopyMap"].(map[string]string)
 	deepCopyMap["a"] = "123"
-	deepCopyPointer := state["DisableDeepCopyPointer"].(*testCase)
+
+	DisableDeepCopyPointer := state["DisableDeepCopyPointer"].(*testCase)
+	DisableDeepCopyPointer.Content = "content-123"
+
+	deepCopyPointer := state["deepCopyPointer"].(*testCase)
 	deepCopyPointer.Content = "content-123"
 	return state, nil
 }
