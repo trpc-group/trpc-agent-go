@@ -121,3 +121,64 @@ func TestConditionalEdgesWithEnds(t *testing.T) {
 	}
 	require.Equal(t, "ok", final["res"])
 }
+
+// TestMultiConditionalEdgesWithEnds ensures multi-conditional results are
+// resolved via per-node ends when no PathMap is provided.
+func TestMultiConditionalEdgesWithEnds(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("b", StateField{Type: reflect.TypeOf(0), Reducer: DefaultReducer}).
+		AddField("c", StateField{Type: reflect.TypeOf(0), Reducer: DefaultReducer})
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("A", func(ctx context.Context, s State) (any, error) {
+		return nil, nil
+	}, WithEndsMap(map[string]string{"goB": "B", "goC": "C"}))
+	sg.AddNode("B", func(ctx context.Context, s State) (any, error) {
+		return State{"b": 1}, nil
+	})
+	sg.AddNode("C", func(ctx context.Context, s State) (any, error) {
+		return State{"c": 1}, nil
+	})
+	sg.SetEntryPoint("A")
+	// Multi-conditional returns two symbolic keys; ends mapping should
+	// resolve them to B and C respectively.
+	sg.AddMultiConditionalEdges("A", func(ctx context.Context, s State) ([]string, error) {
+		return []string{"goB", "goC"}, nil
+	}, nil)
+	sg.SetFinishPoint("B").SetFinishPoint("C")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(), State{},
+		&agent.Invocation{InvocationID: "inv-multi-ends"},
+	)
+	require.NoError(t, err)
+
+	got := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				switch k {
+				case MetadataKeyNode, MetadataKeyPregel, MetadataKeyChannel,
+					MetadataKeyState, MetadataKeyCompletion:
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					got[k] = v
+				}
+			}
+		}
+	}
+	// Values may appear as float64 due to JSON decode.
+	if got["b"] != float64(1) && got["b"] != 1 {
+		t.Fatalf("missing or wrong b: %v", got["b"])
+	}
+	if got["c"] != float64(1) && got["c"] != 1 {
+		t.Fatalf("missing or wrong c: %v", got["c"])
+	}
+}

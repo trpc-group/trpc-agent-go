@@ -242,3 +242,84 @@ Key points:
 - Returning `nil` keeps the original input object while preserving in-place edits.
 - Returning a custom `*adapter.RunAgentInput` replaces the original input; returning `nil` keeps it.
 - Returning an error aborts the request and the client receives a `RunError` event.
+
+### Message Snapshot
+
+Message snapshots restore historical conversations when a page is first opened or a connection is re-established. The feature is controlled by `agui.WithMessagesSnapshotEnabled(true)` and is disabled by default. Once enabled, AG-UI exposes both the chat route and the snapshot route:
+
+- The chat route defaults to `/` and can be customised with `agui.WithPath`;
+- The snapshot route defaults to `/history`, can be customised with `WithMessagesSnapshotPath`, and returns the event flow `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`.
+
+When enabling message snapshots, configure the following options:
+
+- `agui.WithMessagesSnapshotEnabled(true)` enables the snapshot endpoint;
+- `agui.WithMessagesSnapshotPath` sets the custom snapshot route, defaulting to `/history`;
+- `agui.WithAppName(name)` specifies the application name;
+- `agui.WithSessionService(service)` injects the `session.Service` used to look up historical events;
+- `aguirunner.WithUserIDResolver(resolver)` customises how `userID` is resolved, defaulting to `"user"`.
+
+While serving a snapshot request, the framework parses `threadId` from the `RunAgentInput` as the `SessionID`, combines it with the custom `UserIDResolver` to obtain `userID`, and then builds a `session.Key` together with `appName`. It queries the session through `session.Service`, converts the stored events (`Session.Events`) into AG-UI messages, and wraps them in a `MESSAGES_SNAPSHOT` event alongside matching `RUN_STARTED` and `RUN_FINISHED` events.
+
+Example:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+    if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
+        return user, nil
+    }
+    return "anonymous", nil
+}
+
+sessionService := inmemory.NewService(context.Background())
+server, err := agui.New(
+    runner,
+    agui.WithPath("/chat"),                    // Custom chat route, defaults to "/"
+    agui.WithAppName("demo-app"),              // AppName used to build the session key
+    agui.WithSessionService(sessionService),   // Session Service used to query sessions
+    agui.WithMessagesSnapshotEnabled(true),    // Enable message snapshots
+    agui.WithMessagesSnapshotPath("/history"), // Snapshot route, defaults to "/history"
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithUserIDResolver(resolver), // Custom userID resolver
+    ),
+)
+if err != nil {
+	log.Fatalf("create agui server failed: %v", err)
+}
+if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
+	log.Fatalf("server stopped with error: %v", err)
+}
+```
+
+You can find a complete example at [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot).
+
+The format of AG-UI's MessagesSnapshot event can be found at [messages](https://docs.ag-ui.com/concepts/messages).
+
+### Setting the BasePath for Routes
+
+`agui.WithBasePath` sets the base route prefix for the AG-UI service. The default value is `/`, and it is used to mount the chat route and message snapshot route under a unified prefix, avoiding conflicts with existing services.
+
+`agui.WithPath` and `agui.WithMessagesSnapshotPath` only define sub-routes under the base path. The framework will use `url.JoinPath` to concatenate them with the base path to form the final accessible routes.
+
+Here’s an example of usage:
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithBasePath("/agui"),                // Set the AG-UI prefix route
+    agui.WithPath("/chat"),                    // Set the chat route, default is "/"
+    agui.WithMessagesSnapshotEnabled(true),    // Enable message snapshot feature
+    agui.WithMessagesSnapshotPath("/history"), // Set the message snapshot route, default is "/history"
+)
+if err != nil {
+    log.Fatalf("create agui server failed: %v", err)
+}
+```
+
+In this case, the chat route will be `/agui/chat`, and the message snapshot route will be `/agui/history`.

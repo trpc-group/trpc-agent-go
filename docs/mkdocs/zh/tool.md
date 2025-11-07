@@ -488,7 +488,9 @@ agent := llmagent.New("ai-assistant",
 )
 ```
 
-### 工具过滤器
+### MCP 工具过滤器
+
+MCP 工具集支持在创建时过滤工具：
 
 ```go
 // 包含过滤器：只使用指定工具
@@ -497,12 +499,170 @@ includeFilter := mcp.NewIncludeFilter("get_weather", "get_news", "calculator")
 // 排除过滤器：排除指定工具
 excludeFilter := mcp.NewExcludeFilter("deprecated_tool", "slow_tool")
 
-// 组合过滤器
+// 应用过滤器
 combinedToolSet := mcp.NewMCPToolSet(
     connectionConfig,
     mcp.WithToolFilter(includeFilter),
 )
 ```
+
+### 运行时工具过滤
+
+运行时工具过滤允许在每次 `runner.Run` 调用时动态控制工具可用性，无需修改 Agent 配置。这是一个"软约束"机制，用于优化 token 消耗和实现基于角色的工具访问控制。
+
+**核心特性：**
+
+- 🎯 **Per-Run 控制**：每次调用独立配置，不影响 Agent 定义
+- 💰 **成本优化**：减少发送给 LLM 的工具描述，降低 token 消耗
+- 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`）自动保留，永不被过滤
+- 🔧 **灵活定制**：支持内置过滤器和自定义 FilterFunc
+
+#### 基本用法
+
+**1. 排除特定工具（Exclude Filter）**
+
+使用黑名单方式排除不需要的工具：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool"
+
+// 排除 text_tool，其他工具都可用
+filter := tool.NewExcludeToolNamesFilter("text_tool", "dangerous_tool")
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolFilter(filter),
+)
+```
+
+**2. 只允许特定工具（Include Filter）**
+
+使用白名单方式只允许指定的工具：
+
+```go
+// 只允许使用计算器和时间工具
+filter := tool.NewIncludeToolNamesFilter("calculator", "time_tool")
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolFilter(filter),
+)
+```
+
+**3. 自定义过滤逻辑（Custom FilterFunc）**
+
+实现自定义过滤函数以支持复杂的过滤逻辑：
+
+```go
+// 自定义过滤函数：只允许名称以 "safe_" 开头的工具
+filter := func(ctx context.Context, t tool.Tool) bool {
+    declaration := t.Declaration()
+    if declaration == nil {
+        return false
+    }
+    return strings.HasPrefix(declaration.Name, "safe_")
+}
+
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolFilter(filter),
+)
+```
+
+**4. Agent 粒度过滤（Per-Agent Filtering）**
+
+通过 `agent.InvocationFromContext` 实现不同 Agent 使用不同工具：
+
+```go
+// 为不同 Agent 定义允许的工具
+agentAllowedTools := map[string]map[string]bool{
+    "math-agent": {
+        "calculator": true,
+    },
+    "time-agent": {
+        "time_tool": true,
+    },
+}
+
+// 自定义过滤函数：根据当前 Agent 名称过滤
+filter := func(ctx context.Context, t tool.Tool) bool {
+    declaration := t.Declaration()
+    if declaration == nil {
+        return false
+    }
+    toolName := declaration.Name
+
+    // 从 context 获取当前 Agent 信息
+    inv, ok := agent.InvocationFromContext(ctx)
+    if !ok || inv == nil {
+        return true // fallback: 允许所有工具
+    }
+
+    agentName := inv.AgentName
+
+    // 检查该工具是否在当前 Agent 的允许列表中
+    allowedTools, exists := agentAllowedTools[agentName]
+    if !exists {
+        return true // fallback: 允许所有工具
+    }
+
+    return allowedTools[toolName]
+}
+
+eventChan, err := runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolFilter(filter),
+)
+```
+
+**完整示例：** 参见 `examples/toolfilter/` 目录
+
+#### 智能过滤机制
+
+框架会自动区分**用户工具**和**框架工具**，只过滤用户工具：
+
+| 工具分类 | 包含的工具 | 是否被过滤 |
+|---------|----------|----------|
+| **用户工具** | 通过 `WithTools` 注册的工具<br>通过 `WithToolSets` 注册的工具 | ✅ 受过滤控制 |
+| **框架工具** | `transfer_to_agent`（多 Agent 协调）<br>`knowledge_search`（知识库检索）<br>`agentic_knowledge_search` | ❌ 永不过滤，自动保留 |
+
+**示例：**
+
+```go
+// Agent 注册了多个工具
+agent := llmagent.New("assistant",
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool,  // 用户工具
+        textTool,        // 用户工具
+    }),
+    llmagent.WithSubAgents([]agent.Agent{subAgent1, subAgent2}), // 自动添加 transfer_to_agent
+    llmagent.WithKnowledge(kb),                                   // 自动添加 knowledge_search
+)
+
+// 运行时过滤：只允许 calculator
+filter := tool.NewIncludeToolNamesFilter("calculator")
+runner.Run(ctx, userID, sessionID, message,
+    agent.WithToolFilter(filter),
+)
+
+// 实际发送给 LLM 的工具：
+// ✅ calculator        - 用户工具，在允许列表中
+// ❌ textTool          - 用户工具，被过滤
+// ✅ transfer_to_agent - 框架工具，自动保留
+// ✅ knowledge_search  - 框架工具，自动保留
+```
+
+#### 注意事项
+
+⚠️ **安全提示：** 运行时工具过滤是"软约束"，主要用于优化和用户体验。工具内部仍需实现自己的鉴权逻辑：
+
+```go
+func sensitiveOperation(ctx context.Context, req Request) (Result, error) {
+    // ✅ 必须：工具内部鉴权
+    if !hasPermission(ctx, req.UserID, "sensitive_operation") {
+        return nil, fmt.Errorf("permission denied")
+    }
+    
+    // 执行操作
+    return performOperation(req)
+}
+```
+
+**原因：** LLM 可能从上下文或记忆中知道工具的存在和用法，并尝试调用。工具过滤减少了这种可能性，但不能完全防止。
 
 ### 并行工具执行
 

@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/appid"
 )
 
 // Author types for events.
@@ -97,6 +98,9 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 	if options.sessionService == nil {
 		options.sessionService = inmemory.NewSessionService()
 	}
+	// Register this runner's identity for observability fallback.
+	appid.RegisterRunner(appName, agent.Info().Name)
+
 	return &runner{
 		appName:         appName,
 		agent:           agent,
