@@ -26,7 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/provider"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -37,7 +37,6 @@ import (
 )
 
 var (
-	providerName    = flag.String("provider", "openai", "Name of the provider to use, openai or anthropic")
 	modelName       = flag.String("model", "deepseek-chat", "Name of the model to use")
 	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / pgsql")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
@@ -62,7 +61,6 @@ func main() {
 	flag.Parse()
 
 	fmt.Printf("🚀 Multi-turn Chat with Runner + Tools\n")
-	fmt.Printf("Provider: %s\n", *providerName)
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
 	parallelStatus := "disabled (serial execution)"
@@ -81,9 +79,8 @@ func main() {
 
 	// Create and run the chat.
 	chat := &multiTurnChat{
-		providerName: *providerName,
-		modelName:    *modelName,
-		streaming:    *streaming,
+		modelName: *modelName,
+		streaming: *streaming,
 	}
 
 	if err := chat.run(); err != nil {
@@ -93,12 +90,11 @@ func main() {
 
 // multiTurnChat manages the conversation.
 type multiTurnChat struct {
-	providerName string
-	modelName    string
-	streaming    bool
-	runner       runner.Runner
-	userID       string
-	sessionID    string
+	modelName string
+	streaming bool
+	runner    runner.Runner
+	userID    string
+	sessionID string
 }
 
 // run starts the interactive chat session.
@@ -116,14 +112,14 @@ func (c *multiTurnChat) run() error {
 
 // setup creates the runner with LLM agent and tools.
 func (c *multiTurnChat) setup(_ context.Context) error {
-	// Create model with specified provider name and model name.
-	modelInstance, err := provider.Model(c.providerName, c.modelName)
-	if err != nil {
-		return fmt.Errorf("failed to create model: %w", err)
-	}
+	// Create model with specified model name.
+	modelInstance := openai.New(c.modelName)
 
 	// Create session service based on configuration.
-	var sessionService session.Service
+	var (
+		err            error
+		sessionService session.Service
+	)
 	switch *sessServiceName {
 	case "inmemory":
 		sessionService = sessioninmemory.NewSessionService()
