@@ -874,10 +874,12 @@ func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
 	)
 
 	// Create many messages to trigger tailoring.
-	// With gpt-4o-mini (contextWindow=200000), maxInputTokens=130000 (65% ratio).
-	// Need ~500 messages * 300 tokens each = ~150000 tokens to exceed limit.
+	// With gpt-4o-mini (contextWindow=200000), maxInputTokens calculated as:
+	// safetyMargin = 200000 * 0.10 = 20000
+	// maxInputTokens = 200000 - 2048 - 512 - 20000 = 177440 (~88.7% of context)
+	// Need ~600 messages * 300 tokens each = ~180000 tokens to exceed limit.
 	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
-	for i := 0; i < 500; i++ {
+	for i := 0; i < 600; i++ {
 		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 100))))
 	}
 
@@ -3132,11 +3134,13 @@ func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// After tailoring with safety margin and ratio limit, messages should be significantly reduced.
+	// After tailoring with safety margin, messages should be significantly reduced.
 	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored, got %d (original: %d)", len(captured.Messages), len(messages))
-	// With 65% ratio limit (safetyMargin=10%, protocolOverhead=512, reserveOutput=2048),
-	// we expect roughly 55-65% of the original messages depending on token distribution.
-	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.70), "expected messages to be reduced to at most 70%% due to ratio limit, got %d (original: %d)", len(captured.Messages), len(messages))
+	// With 100% ratio limit and safety margin (10%), protocol overhead (512), reserve output (2048),
+	// we expect roughly 88-90% of the original messages to be kept, depending on token distribution.
+	// For 1201 messages, we expect ~940-1080 messages after tailoring.
+	require.GreaterOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.70), "expected at least 70%% messages to be kept, got %d (original: %d)", len(captured.Messages), len(messages))
+	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.95), "expected at most 95%% messages to be kept due to safety margin, got %d (original: %d)", len(captured.Messages), len(messages))
 }
 
 // TestHasReasoningContent tests the hasReasoningContent method.
