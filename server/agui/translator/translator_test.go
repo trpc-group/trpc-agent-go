@@ -402,3 +402,41 @@ func TestFormatToolCallArguments(t *testing.T) {
 	assert.Equal(t, "", formatToolCallArguments([]byte{}))
 	assert.Equal(t, "{\"foo\":\"bar\"}", formatToolCallArguments([]byte(`{"foo":"bar"}`)))
 }
+
+func TestParallelToolCallResultEvents(t *testing.T) {
+	translator := New("thread", "run")
+	toolResultRsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{ToolID: "call-1", Content: "result1"},
+			},
+			{
+				Message: model.Message{ToolID: "call-2", Content: "result2"},
+			},
+		},
+	}
+	events, err := translator.Translate(&agentevent.Event{Response: toolResultRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 4)
+	assert.IsType(t, (*aguievents.ToolCallEndEvent)(nil), events[0])
+	res1, ok := events[1].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", res1.ToolCallID)
+	assert.Equal(t, "result1", res1.Content)
+	assert.IsType(t, (*aguievents.ToolCallEndEvent)(nil), events[2])
+	res2, ok := events[3].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-2", res2.ToolCallID)
+	assert.Equal(t, "result2", res2.Content)
+}
+
+func TestToolNilResponse(t *testing.T) {
+	translator, ok := New("thread", "run").(*translator)
+	assert.True(t, ok)
+	events, err := translator.toolCallEvent(nil)
+	assert.Empty(t, events)
+	assert.NoError(t, err)
+	events, err = translator.toolResultEvent(nil)
+	assert.Empty(t, events)
+	assert.NoError(t, err)
+}

@@ -13,6 +13,9 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 )
 
 func TestGRPCTracesEndpoint(t *testing.T) {
@@ -202,6 +205,73 @@ func TestStartGRPC_DefaultNoEnv_NoEndpoint(t *testing.T) {
 		t.Fatalf("expected cleanup")
 	}
 	_ = clean()
+}
+
+func TestStart_WithResourceAttributesAndEnv(t *testing.T) {
+	origTrace := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	origGeneric := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	origService := os.Getenv("OTEL_SERVICE_NAME")
+	origAttrs := os.Getenv("OTEL_RESOURCE_ATTRIBUTES")
+	defer func() {
+		_ = os.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", origTrace)
+		_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", origGeneric)
+		_ = os.Setenv("OTEL_SERVICE_NAME", origService)
+		_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", origAttrs)
+	}()
+
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	_ = os.Setenv("OTEL_SERVICE_NAME", "env-service")
+	_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", "team=ai,env=staging")
+
+	ctx := context.Background()
+	opts := &options{}
+	WithServiceName("option-service")(opts)
+	WithServiceNamespace("custom-ns")(opts)
+	WithServiceVersion("1.2.3")(opts)
+	WithResourceAttributes(
+		attribute.String("team", "ml"),
+		attribute.String("custom", "value"),
+	)(opts)
+
+	res, err := buildResource(ctx, opts)
+	if err != nil {
+		t.Fatalf("buildResource returned error: %v", err)
+	}
+
+	attrMap := make(map[string]string)
+	iter := res.Iter()
+	for iter.Next() {
+		kv := iter.Attribute()
+		if kv.Value.Type() == attribute.STRING {
+			attrMap[string(kv.Key)] = kv.Value.AsString()
+		}
+	}
+
+	// Per OpenTelemetry spec: environment variables take precedence over code configuration
+	// OTEL_SERVICE_NAME=env-service should override WithServiceName("option-service")
+	if attrMap[string(semconv.ServiceNameKey)] != "env-service" {
+		t.Fatalf("service.name should be from env, got %q", attrMap[string(semconv.ServiceNameKey)])
+	}
+	// OTEL_RESOURCE_ATTRIBUTES env attributes present
+	if attrMap["env"] != "staging" {
+		t.Fatalf("expected env=staging from OTEL_RESOURCE_ATTRIBUTES, got %q", attrMap["env"])
+	}
+	// WithResourceAttributes should override OTEL_RESOURCE_ATTRIBUTES for same keys
+	if attrMap["team"] != "ml" {
+		t.Fatalf("expected team=ml from WithResourceAttributes, got %q", attrMap["team"])
+	}
+	// Custom attribute from WithResourceAttributes
+	if attrMap["custom"] != "value" {
+		t.Fatalf("expected custom=value from WithResourceAttributes, got %q", attrMap["custom"])
+	}
+	// service.namespace and service.version from env (no env override, so code value used)
+	if attrMap[string(semconv.ServiceNamespaceKey)] != "custom-ns" {
+		t.Fatalf("expected service.namespace custom-ns, got %q", attrMap[string(semconv.ServiceNamespaceKey)])
+	}
+	if attrMap[string(semconv.ServiceVersionKey)] != "1.2.3" {
+		t.Fatalf("expected service.version 1.2.3, got %q", attrMap[string(semconv.ServiceVersionKey)])
+	}
 }
 
 func TestStartHTTP_WithURL_NoScheme(t *testing.T) {
