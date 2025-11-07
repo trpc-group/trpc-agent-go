@@ -271,10 +271,21 @@ func TestGetSessionEventsNilSession(t *testing.T) {
 // TestConvertToMessagesSnapshotEventSkipsNilResponse ensures nil response events are ignored.
 func TestConvertToMessagesSnapshotEventSkipsNilResponse(t *testing.T) {
 	r := &runner{}
-	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(), []eventpkg.Event{{}})
+	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(), "user-id", []eventpkg.Event{{}})
 	assert.NoError(t, err)
 	assert.NotNil(t, snapshot)
 	assert.Len(t, snapshot.Messages, 0)
+}
+
+func TestConvertToMessagesSnapshotEventIncludesUserIDName(t *testing.T) {
+	r := &runner{}
+	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(),
+		"user-id", []eventpkg.Event{newResponse(model.RoleUser, "hello", nil)})
+	assert.NoError(t, err)
+	assert.NotNil(t, snapshot)
+	assert.Len(t, snapshot.Messages, 1)
+	assert.NotNil(t, snapshot.Messages[0].Name)
+	assert.Equal(t, "user-id", *snapshot.Messages[0].Name)
 }
 
 // TestConvertToMessagesSnapshotEventBeforeCallbackMutates ensures before callbacks update messages.
@@ -290,7 +301,7 @@ func TestConvertToMessagesSnapshotEventBeforeCallbackMutates(t *testing.T) {
 		translateCallbacks: callbacks,
 	}
 	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(),
-		[]eventpkg.Event{newResponse(model.RoleUser, "hello", nil)})
+		"user-id", []eventpkg.Event{newResponse(model.RoleUser, "hello", nil)})
 	assert.NoError(t, err)
 	assert.NotNil(t, snapshot)
 	assert.Len(t, snapshot.Messages, 1)
@@ -307,7 +318,7 @@ func TestConvertToMessagesSnapshotEventBeforeCallbackError(t *testing.T) {
 		translateCallbacks: callbacks,
 	}
 	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(),
-		[]eventpkg.Event{newResponse(model.RoleUser, "hello", nil)})
+		"user-id", []eventpkg.Event{newResponse(model.RoleUser, "hello", nil)})
 	assert.Nil(t, snapshot)
 	assert.Error(t, err)
 }
