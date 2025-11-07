@@ -68,10 +68,11 @@ type StateReducer func(existing, update any) any
 
 // StateField defines a field in the state schema with its type and reducer.
 type StateField struct {
-	Type     reflect.Type
-	Reducer  StateReducer
-	Default  func() any
-	Required bool
+	Type            reflect.Type
+	Reducer         StateReducer
+	Default         func() any
+	Required        bool
+	DisableDeepCopy bool
 }
 
 // StateSchema defines the structure and behavior of graph state.
@@ -209,6 +210,11 @@ func DefaultReducer(existing, update any) any {
 	case map[string]any, []any, []string, []int, []float64:
 		return deepCopyAny(update)
 	}
+	return update
+}
+
+// CoverReducer overwrites the existing value with the update.
+func CoverReducer(existing, update any) any {
 	return update
 }
 
