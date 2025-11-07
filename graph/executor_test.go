@@ -2284,3 +2284,203 @@ func TestResolveTargetByEnds(t *testing.T) {
 	// Unknown node returns empty
 	require.Equal(t, "", exec.resolveTargetByEnds("ZZ", "ok"))
 }
+
+func TestExecutor_isDisableDeepCopyKey(t *testing.T) {
+	type fields struct {
+		graph *Graph
+	}
+	type args struct {
+		key string
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   bool
+	}{
+		{
+			name: "schema is nil",
+			fields: fields{
+				graph: &Graph{schema: nil},
+			},
+			args: args{key: "anyKey"},
+			want: false,
+		},
+		{
+			name: "key not found in schema",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{},
+					},
+				},
+			},
+			args: args{key: "missingKey"},
+			want: false,
+		},
+		{
+			name: "key exists with DisableDeepCopy true",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{
+							"testKey": {DisableDeepCopy: true},
+						},
+					},
+				},
+			},
+			args: args{key: "testKey"},
+			want: true,
+		},
+		{
+			name: "key exists with DisableDeepCopy false",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{
+							"testKey": {DisableDeepCopy: false},
+						},
+					},
+				},
+			},
+			args: args{key: "testKey"},
+			want: false,
+		},
+		{
+			name: "empty key not found",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{},
+					},
+				},
+			},
+			args: args{key: ""},
+			want: false,
+		},
+		{
+			name: "empty key with DisableDeepCopy true",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{
+							"": {DisableDeepCopy: true},
+						},
+					},
+				},
+			},
+			args: args{key: ""},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &Executor{
+				graph: tt.fields.graph,
+
+				channelBufferSize:     0,
+				maxSteps:              0,
+				stepTimeout:           0,
+				nodeTimeout:           0,
+				checkpointSaveTimeout: 0,
+				checkpointSaver:       nil,
+				checkpointManager:     nil,
+				defaultRetry:          nil,
+			}
+			if got := e.isDisableDeepCopyKey(tt.args.key); got != tt.want {
+				t.Errorf("isDisableDeepCopyKey() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+type testCase struct {
+	Name    string
+	Content string
+}
+
+func deepCopyNode(_ context.Context, state State) (any, error) {
+	DisableDeepCopyMap := state["DisableDeepCopyMap"].(map[string]string)
+	DisableDeepCopyMap["a"] = "123"
+
+	deepCopyMap := state["deepCopyMap"].(map[string]string)
+	deepCopyMap["a"] = "123"
+
+	DisableDeepCopyPointer := state["DisableDeepCopyPointer"].(*testCase)
+	DisableDeepCopyPointer.Content = "content-123"
+
+	deepCopyPointer := state["deepCopyPointer"].(*testCase)
+	deepCopyPointer.Content = "content-123"
+	return state, nil
+}
+func TestDisableDeepCopy(t *testing.T) {
+	disableDeepCopyMap := map[string]string{
+		"a": "111",
+		"b": "222",
+	}
+	disableDeepCopyPointer := &testCase{
+		Name:    "test",
+		Content: "content",
+	}
+	deepCopyPointer := &testCase{
+		Name:    "test",
+		Content: "content",
+	}
+	deepCopyMap := map[string]string{
+		"a": "111",
+		"b": "222",
+	}
+	stateSchema := NewStateSchema().AddField(
+		"DisableDeepCopyPointer",
+		StateField{
+			DisableDeepCopy: true,
+			Type:            reflect.TypeOf(disableDeepCopyPointer),
+			Reducer:         CoverReducer,
+		},
+	).AddField(
+		"DisableDeepCopyMap",
+		StateField{
+			DisableDeepCopy: true,
+			Type:            reflect.TypeOf(disableDeepCopyMap),
+			Reducer:         CoverReducer,
+		},
+	)
+	sg := NewStateGraph(stateSchema)
+	sg.AddNode("A", deepCopyNode)
+	sg.AddNode("B", deepCopyNode)
+	sg.SetEntryPoint("A")
+	sg.SetFinishPoint("B")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+	invocation := &agent.Invocation{InvocationID: "test-complex-doc"}
+	state := State{
+		"DisableDeepCopyMap":     disableDeepCopyMap,
+		"DisableDeepCopyPointer": disableDeepCopyPointer,
+		"deepCopyMap":            deepCopyMap,
+		"deepCopyPointer":        deepCopyPointer,
+	}
+	eventChan, err := exec.Execute(context.Background(), state, invocation)
+
+	for evt := range eventChan {
+		require.NotNil(t, evt)
+		continue
+	}
+
+	require.Equal(t, "123", disableDeepCopyMap["a"])
+	require.Equal(t, "222", disableDeepCopyMap["b"])
+
+	require.Equal(t, "111", deepCopyMap["a"])
+	require.Equal(t, "222", deepCopyMap["b"])
+
+	require.Equal(t, "test", disableDeepCopyPointer.Name)
+	require.Equal(t, "content-123", disableDeepCopyPointer.Content)
+
+	require.Equal(t, "test", deepCopyPointer.Name)
+	require.Equal(t, "content", deepCopyPointer.Content)
+
+	require.NoError(t, err)
+}

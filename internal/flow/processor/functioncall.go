@@ -422,7 +422,13 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 func (p *FunctionCallResponseProcessor) annotateSkipSummarization(
 	ev *event.Event, tl tool.Tool,
 ) {
-	if skipper, ok := tl.(summarizationSkipper); ok && skipper.SkipSummarization() {
+	// Unwrap NamedTool to inspect the original for preferences.
+	original := tl
+	if nameTool, ok := tl.(*itool.NamedTool); ok {
+		original = nameTool.Original()
+	}
+	if skipper, ok := original.(summarizationSkipper); ok &&
+		skipper.SkipSummarization() {
 		if ev.Actions == nil {
 			ev.Actions = &event.EventActions{}
 		}
@@ -471,7 +477,13 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimal)
 		for _, tc := range toolCalls {
 			if tl, ok := tools[tc.Function.Name]; ok {
-				if skipper, ok2 := tl.(summarizationSkipper); ok2 && skipper.SkipSummarization() {
+				// Unwrap NamedTool then check for preference.
+				original := tl
+				if nameTool, ok2 := tl.(*itool.NamedTool); ok2 {
+					original = nameTool.Original()
+				}
+				if skipper, ok2 := original.(summarizationSkipper); ok2 &&
+					skipper.SkipSummarization() {
 					if mergedEvent.Actions == nil {
 						mergedEvent.Actions = &event.EventActions{}
 					}
@@ -554,8 +566,13 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	// Marshal the result to JSON.
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
-		log.Errorf("Failed to marshal tool result for %s: %v", toolCall.Function.Name, err)
-		return nil, modifiedArgs, true, fmt.Errorf("%s: %w", ErrorMarshalResult, err)
+		// Marshal failures (for example, NaN in floats) do not
+		// affect the overall flow. Downgrade to warning to avoid
+		// noisy alerts while still surfacing the issue.
+		log.Warnf("Failed to marshal tool result for %s: %v",
+			toolCall.Function.Name, err)
+		return nil, modifiedArgs, true,
+			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
 
 	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))

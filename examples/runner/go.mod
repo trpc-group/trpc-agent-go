@@ -6,13 +6,16 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../model/provider
+	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../../session/postgres
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../../session/redis/
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
 )
 
 require (
 	github.com/google/uuid v1.6.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-00010101000000-000000000000
 )
 
@@ -24,6 +27,10 @@ require (
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/pgx/v5 v5.7.2 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.9.0 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
@@ -42,7 +49,9 @@ require (
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
+	golang.org/x/crypto v0.40.0 // indirect
 	golang.org/x/net v0.41.0 // indirect
+	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240822170219-fc7c04adadcd // indirect
@@ -51,5 +60,6 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-00010101000000-000000000000 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 )
