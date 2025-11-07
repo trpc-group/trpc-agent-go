@@ -98,3 +98,13 @@ func (t *NamedTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.
 	}
 	return nil, fmt.Errorf("tool is not streamable")
 }
+
+// SkipSummarization delegates to the original tool when it implements
+// a SkipSummarization() bool preference; otherwise returns false.
+func (t *NamedTool) SkipSummarization() bool {
+	type skipper interface{ SkipSummarization() bool }
+	if s, ok := t.original.(skipper); ok {
+		return s.SkipSummarization()
+	}
+	return false
+}
