@@ -103,6 +103,7 @@ var (
 	KeyGenAISystem        = semconvtrace.KeyGenAISystem
 
 	KeyGenAIRequestModel            = semconvtrace.KeyGenAIRequestModel
+	KeyGenAIRequestIsStream         = semconvtrace.KeyGenAIRequestIsStream
 	KeyGenAIRequestChoiceCount      = semconvtrace.KeyGenAIRequestChoiceCount
 	KeyGenAIInputMessages           = semconvtrace.KeyGenAIInputMessages
 	KeyGenAIOutputMessages          = semconvtrace.KeyGenAIOutputMessages
@@ -381,6 +382,10 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 
 	// Add generation config attributes
 	genConfig := req.GenerationConfig
+	// Add stream attribute only when it's true
+	if genConfig.Stream {
+		attrs = append(attrs, attribute.Bool(KeyGenAIRequestIsStream, true))
+	}
 	if fp := genConfig.FrequencyPenalty; fp != nil {
 		attrs = append(attrs, attribute.Float64(KeyGenAIRequestFrequencyPenalty, *fp))
 	}

@@ -54,6 +54,8 @@ const (
 
 	// KeyGenAIRequestModel is the attribute key for the model used in the request.
 	KeyGenAIRequestModel = "gen_ai.request.model"
+	// KeyGenAIRequestIsStream is the attribute key for whether the request is streaming.
+	KeyGenAIRequestIsStream = "gen_ai.request.is_stream"
 	// KeyGenAIRequestChoiceCount is the attribute key for the number of choices in the request.
 	KeyGenAIRequestChoiceCount = "gen_ai.request.choice.count"
 	// KeyGenAIInputMessages is the attribute key for input messages.

@@ -416,6 +416,10 @@ func TestChatMetricsTracker_RecordMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
+	ChatMetricGenAIServerTimeToFirstToken, err = ChatMeter.Float64Histogram("gen_ai.server.time_to_first_token")
+	if err != nil {
+		t.Fatalf("failed to create histogram: %v", err)
+	}
 	ChatMetricTRPCAgentGoClientTimeToFirstToken, err = ChatMeter.Float64Histogram("trpc_agent_go.client.time_to_first_token")
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)

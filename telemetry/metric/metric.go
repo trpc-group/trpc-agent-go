@@ -55,9 +55,16 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric GenAIClientOperationDuration: %w", err)
 	}
+	if itelemetry.ChatMetricGenAIServerTimeToFirstToken, err = itelemetry.ChatMeter.Float64Histogram(
+		metrics.MetricGenAIServerTimeToFirstToken,
+		metric.WithDescription("Time to first token for server"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create chat metric GenAIServerTimeToFirstToken: %w", err)
+	}
 	if itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken, err = itelemetry.ChatMeter.Float64Histogram(
 		metrics.MetricTRPCAgentGoClientTimeToFirstToken,
-		metric.WithDescription("Time to first token for client"),
+		metric.WithDescription("Time to first token (legacy metric name)"),
 		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientTimeToFirstToken: %w", err)

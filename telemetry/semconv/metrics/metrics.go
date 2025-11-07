@@ -32,6 +32,7 @@ const (
 	// MetricGenAIClientOperationDuration represents the duration of client operation.
 	MetricGenAIClientOperationDuration = "gen_ai.client.operation.duration"
 	// MetricTRPCAgentGoClientTimeToFirstToken represents the time to first token for client.
+	// Note: This metric will be reported alongside MetricGenAIServerTimeToFirstToken with the same value.
 	MetricTRPCAgentGoClientTimeToFirstToken = "trpc_agent_go.client.time_to_first_token" // #nosec G101 - this is a metric key name, not a credential.
 	// MetricTRPCAgentGoClientTimePerOutputToken represents the time per output token for client.
 	MetricTRPCAgentGoClientTimePerOutputToken = "trpc_agent_go.client.time_per_output_token" // #nosec G101 - this is a metric key name, not a credential.

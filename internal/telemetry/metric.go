@@ -27,8 +27,11 @@ var (
 	ChatMetricGenAIClientTokenUsage metric.Int64Histogram = noop.Int64Histogram{}
 	// ChatMetricGenAIClientOperationDuration records the distribution of total chat operation durations in seconds.
 	ChatMetricGenAIClientOperationDuration metric.Float64Histogram = noop.Float64Histogram{}
-	// ChatMetricTRPCAgentGoClientTimeToFirstToken records the distribution of time to first token latency in seconds.
+	// ChatMetricGenAIServerTimeToFirstToken records the distribution of time to first token latency in seconds.
 	// This measures the time from request start until the first token is received.
+	ChatMetricGenAIServerTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
+	// ChatMetricTRPCAgentGoClientTimeToFirstToken records the distribution of time to first token latency in seconds.
+	// Note: This metric is reported alongside ChatMetricGenAIServerTimeToFirstToken with the same value.
 	ChatMetricTRPCAgentGoClientTimeToFirstToken metric.Float64Histogram = noop.Float64Histogram{}
 	// ChatMetricTRPCAgentGoClientTimePerOutputToken records the distribution of average time per output token in seconds.
 	// This metric measures the decode phase performance by calculating (total_duration - time_to_first_token) / (output_tokens - first_token_count).
@@ -158,7 +161,9 @@ func (t *ChatMetricsTracker) RecordMetrics() func() {
 		// Record chat request duration
 		ChatMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
 
-		// Record time to first token
+		// Record time to first token (report both metrics with the same value)
+		ChatMetricGenAIServerTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
+			metric.WithAttributes(otelAttrs...))
 		ChatMetricTRPCAgentGoClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
 			metric.WithAttributes(otelAttrs...))
 
