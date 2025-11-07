@@ -295,6 +295,7 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 		MetadataKeyCompletion:  []byte("v"),
 		StateKeyExecContext:    "ctx",
 		StateKeyParentAgent:    "agent",
+		StateKeyNodeCallbacks:  NewNodeCallbacks(),
 		StateKeyToolCallbacks:  "tc",
 		StateKeyModelCallbacks: "mc",
 		StateKeyAgentCallbacks: "ac",
@@ -318,6 +319,7 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 	require.NotContains(t, e.StateDelta, MetadataKeyState)
 	require.NotContains(t, e.StateDelta, StateKeyExecContext)
 	require.NotContains(t, e.StateDelta, StateKeyParentAgent)
+	require.NotContains(t, e.StateDelta, StateKeyNodeCallbacks)
 	require.NotContains(t, e.StateDelta, StateKeyToolCallbacks)
 	require.NotContains(t, e.StateDelta, StateKeyModelCallbacks)
 	require.NotContains(t, e.StateDelta, StateKeyAgentCallbacks)

@@ -574,6 +574,7 @@ func isUnsafeStateKey(key string) bool {
 	switch key {
 	case StateKeyExecContext,
 		StateKeyParentAgent,
+		StateKeyNodeCallbacks,
 		StateKeyToolCallbacks,
 		StateKeyModelCallbacks,
 		StateKeyAgentCallbacks,

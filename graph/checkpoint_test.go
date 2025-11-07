@@ -187,6 +187,83 @@ func TestCheckpointManager_Put_Smoke(t *testing.T) {
 	assert.Equal(t, ck.ID, got.ID)
 }
 
+// capturingSaver captures the last Put request for assertions.
+type capturingSaver struct{ lastPut PutRequest }
+
+func (c *capturingSaver) Get(
+	_ context.Context, _ map[string]any,
+) (*Checkpoint, error) {
+	return nil, nil
+}
+func (c *capturingSaver) GetTuple(
+	_ context.Context, _ map[string]any,
+) (*CheckpointTuple, error) {
+	return nil, nil
+}
+func (c *capturingSaver) List(
+	_ context.Context, _ map[string]any, _ *CheckpointFilter,
+) ([]*CheckpointTuple, error) {
+	return nil, nil
+}
+func (c *capturingSaver) Put(
+	_ context.Context, req PutRequest,
+) (map[string]any, error) {
+	c.lastPut = req
+	// echo back config as-is
+	return req.Config, nil
+}
+func (c *capturingSaver) PutWrites(
+	_ context.Context, _ PutWritesRequest,
+) error {
+	return nil
+}
+func (c *capturingSaver) PutFull(
+	_ context.Context, req PutFullRequest,
+) (map[string]any, error) {
+	// route through Put to capture
+	return c.Put(
+		context.Background(),
+		PutRequest{
+			Config:      req.Config,
+			Checkpoint:  req.Checkpoint,
+			Metadata:    req.Metadata,
+			NewVersions: req.NewVersions,
+		},
+	)
+}
+func (c *capturingSaver) DeleteLineage(
+	_ context.Context, _ string,
+) error {
+	return nil
+}
+func (c *capturingSaver) Close() error { return nil }
+
+func TestCreateCheckpoint_SkipsUnsafeKeys(t *testing.T) {
+	saver := &capturingSaver{}
+	cm := NewCheckpointManager(saver)
+	cfg := CreateCheckpointConfig("ln-unsafe", "", "")
+	// Include both a safe key and unsafe keys (callbacks, exec context).
+	st := State{
+		"keep":                 1,
+		StateKeyNodeCallbacks:  NewNodeCallbacks(),
+		StateKeyExecContext:    &ExecutionContext{InvocationID: "x"},
+		StateKeyModelCallbacks: "mc", // unsafe
+	}
+	ck, err := cm.CreateCheckpoint(
+		context.Background(), cfg, st, CheckpointSourceInput, 0,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ck)
+
+	// Assert that unsafe keys are filtered from persisted channel values.
+	vals := saver.lastPut.Checkpoint.ChannelValues
+	require.NotNil(t, vals)
+	require.Contains(t, vals, "keep")
+	require.NotContains(t, vals, StateKeyNodeCallbacks)
+	require.NotContains(t, vals, StateKeyExecContext)
+	require.NotContains(t, vals, StateKeyModelCallbacks)
+}
+
 // minimal in-memory saver mock for manager.put test
 type mockSaver struct{ byID map[string]*CheckpointTuple }
 
