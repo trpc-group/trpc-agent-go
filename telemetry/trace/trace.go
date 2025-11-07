@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
@@ -59,13 +60,7 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 		options.tracesEndpoint = tracesEndpoint(options.protocol)
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceNamespace(options.serviceNamespace),
-			semconv.ServiceName(options.serviceName),
-			semconv.ServiceVersion(options.serviceVersion),
-		),
-	)
+	res, err := buildResource(ctx, options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
@@ -95,13 +90,14 @@ type Option func(*options)
 
 // options holds the configuration options for tracer.
 type options struct {
-	tracesEndpoint    string
-	tracesEndpointURL string
-	serviceName       string
-	serviceVersion    string
-	serviceNamespace  string
-	protocol          string            // Protocol to use (grpc or http)
-	headers           map[string]string // Headers to send with the request
+	tracesEndpoint     string
+	tracesEndpointURL  string
+	serviceName        string
+	serviceVersion     string
+	serviceNamespace   string
+	protocol           string            // Protocol to use (grpc or http)
+	headers            map[string]string // Headers to send with the request
+	resourceAttributes *[]attribute.KeyValue
 }
 
 // WithEndpoint sets the traces endpoint(host and port) the Exporter will connect to.
@@ -148,11 +144,66 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
+// WithServiceName overrides the service.name resource attribute.
+func WithServiceName(serviceName string) Option {
+	return func(opts *options) {
+		opts.serviceName = serviceName
+	}
+}
+
+// WithServiceNamespace overrides the service.namespace resource attribute.
+func WithServiceNamespace(serviceNamespace string) Option {
+	return func(opts *options) {
+		opts.serviceNamespace = serviceNamespace
+	}
+}
+
+// WithServiceVersion overrides the service.version resource attribute.
+func WithServiceVersion(serviceVersion string) Option {
+	return func(opts *options) {
+		opts.serviceVersion = serviceVersion
+	}
+}
+
+// WithResourceAttributes appends custom resource attributes.
+func WithResourceAttributes(attrs ...attribute.KeyValue) Option {
+	return func(opts *options) {
+		if len(attrs) == 0 {
+			return
+		}
+		if opts.resourceAttributes == nil {
+			opts.resourceAttributes = &[]attribute.KeyValue{}
+		}
+		*opts.resourceAttributes = append(*opts.resourceAttributes, attrs...)
+	}
+}
+
 // WithHeaders sets the headers to include in the trace requests.
 func WithHeaders(headers map[string]string) Option {
 	return func(opts *options) {
 		opts.headers = headers
 	}
+}
+
+func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
+	// Build resource with options values
+	resourceOpts := []resource.Option{
+		resource.WithAttributes(
+			semconv.ServiceNamespace(options.serviceNamespace),
+			semconv.ServiceName(options.serviceName),
+			semconv.ServiceVersion(options.serviceVersion),
+		),
+		resource.WithFromEnv(),
+		resource.WithHost(),         // Adds host.name
+		resource.WithTelemetrySDK(), // Adds telemetry.sdk.{name,language,version}
+	}
+
+	// Append custom resource attributes
+	if options.resourceAttributes != nil && len(*options.resourceAttributes) > 0 {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(*options.resourceAttributes...))
+	}
+
+	return resource.New(ctx, resourceOpts...)
 }
 
 func tracesEndpoint(protocol string) string {

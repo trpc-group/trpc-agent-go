@@ -21,6 +21,7 @@ import (
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -34,21 +35,27 @@ func New(r trunner.Runner, opt ...Option) Runner {
 	opts := NewOptions(opt...)
 	run := &runner{
 		runner:             r,
+		appName:            opts.AppName,
 		translatorFactory:  opts.TranslatorFactory,
 		userIDResolver:     opts.UserIDResolver,
 		translateCallbacks: opts.TranslateCallbacks,
 		runAgentInputHook:  opts.RunAgentInputHook,
+		sessionService:     opts.SessionService,
+		runOptionResolver:  opts.RunOptionResolver,
 	}
 	return run
 }
 
 // runner is the default implementation of the Runner.
 type runner struct {
+	appName            string
 	runner             trunner.Runner
 	translatorFactory  TranslatorFactory
 	userIDResolver     UserIDResolver
 	translateCallbacks *translator.Callbacks
 	runAgentInputHook  RunAgentInputHook
+	sessionService     session.Service
+	runOptionResolver  RunOptionResolver
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -91,7 +98,13 @@ func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, 
 			aguievents.WithRunID(runID)), runID)
 		return
 	}
-	ch, err := r.runner.Run(ctx, userID, runAgentInput.ThreadID, userMessage)
+	runOption, err := r.runOptionResolver(ctx, runAgentInput)
+	if err != nil {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("resolve run options: %v", err),
+			aguievents.WithRunID(runID)), runID)
+		return
+	}
+	ch, err := r.runner.Run(ctx, userID, runAgentInput.ThreadID, userMessage, runOption...)
 	if err != nil {
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err),
 			aguievents.WithRunID(runID)), runID)

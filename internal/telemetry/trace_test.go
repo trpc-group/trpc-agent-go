@@ -509,6 +509,24 @@ func TestBuildRequestAttributes(t *testing.T) {
 				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
 			},
 		},
+		{
+			name: "request with stream enabled",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: true,
+				},
+			},
+		},
+		{
+			name: "request with stream disabled",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -640,21 +658,21 @@ func TestTraceToolCall_EmptyToolCallIDs(t *testing.T) {
 	span := newRecordingSpan()
 	decl := &tool.Declaration{Name: "test_tool", Description: "test description"}
 	args, _ := json.Marshal(map[string]string{"key": "value"})
-	
+
 	// Response with empty tool call IDs
 	rsp := &model.Response{
 		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{}}}},
 	}
 	evt := event.New("evt1", "author", event.WithResponse(rsp))
-	
+
 	TraceToolCall(span, nil, decl, args, evt, nil)
-	
+
 	require.True(t, hasAttr(span.attrs, KeyGenAIToolName, "test_tool"))
 }
 
 func TestTraceMergedToolCalls_WithError(t *testing.T) {
 	span := newRecordingSpan()
-	
+
 	// Response with error
 	rsp := &model.Response{
 		Error: &model.ResponseError{
@@ -664,25 +682,25 @@ func TestTraceMergedToolCalls_WithError(t *testing.T) {
 		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "call1"}}}}},
 	}
 	evt := event.New("evt1", "author", event.WithResponse(rsp))
-	
+
 	TraceMergedToolCalls(span, evt)
-	
+
 	require.Equal(t, codes.Error, span.status)
 	require.True(t, hasAttr(span.attrs, KeyGenAIToolCallID, "call1"))
 }
 
 func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 	span := newRecordingSpan()
-	
+
 	// Create an invocation with a message that contains a channel (not JSON serializable)
 	inv := &agent.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "inv1",
 		Message:      model.Message{Role: model.RoleUser, Content: "test"},
 	}
-	
+
 	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
-	
+
 	require.True(t, hasAttr(span.attrs, KeyGenAIAgentName, "test-agent"))
 }
 
@@ -693,7 +711,7 @@ func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
 	}
 	attrs := buildRequestAttributes(req)
 	require.NotNil(t, attrs)
-	
+
 	// Verify LLM request attribute is set
 	found := false
 	for _, attr := range attrs {
@@ -714,7 +732,7 @@ func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
 	}
 	attrs := buildResponseAttributes(rsp)
 	require.NotNil(t, attrs)
-	
+
 	// Verify LLM response attribute is set
 	found := false
 	for _, attr := range attrs {
@@ -779,4 +797,63 @@ func TestNewConn_InvalidEndpoint(t *testing.T) {
 		t.Fatalf("expected non-nil connection")
 	}
 	_ = conn.Close()
+}
+
+// TestBuildRequestAttributes_StreamAttribute verifies that gen_ai.request.is_stream
+// is only added when stream is true.
+func TestBuildRequestAttributes_StreamAttribute(t *testing.T) {
+	tests := []struct {
+		name          string
+		req           *model.Request
+		expectStream  bool
+		streamPresent bool
+	}{
+		{
+			name: "stream enabled",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: true,
+				},
+			},
+			expectStream:  true,
+			streamPresent: true,
+		},
+		{
+			name: "stream disabled",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			},
+			expectStream:  false,
+			streamPresent: false,
+		},
+		{
+			name: "stream not set",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+			},
+			expectStream:  false,
+			streamPresent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := buildRequestAttributes(tt.req)
+			require.NotNil(t, attrs)
+
+			found := false
+			for _, attr := range attrs {
+				if string(attr.Key) == KeyGenAIRequestIsStream {
+					found = true
+					require.Equal(t, tt.expectStream, attr.Value.AsBool())
+					break
+				}
+			}
+			require.Equal(t, tt.streamPresent, found, "stream attribute presence mismatch")
+		})
+	}
 }

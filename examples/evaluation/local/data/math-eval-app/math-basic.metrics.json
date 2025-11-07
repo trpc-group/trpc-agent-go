@@ -1,0 +1,6 @@
+[
+  {
+    "metric_name": "tool_trajectory_avg_score",
+    "threshold": 1
+  }
+]
