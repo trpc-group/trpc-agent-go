@@ -16,6 +16,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../storage/postgres
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
+	trpc.group/trpc-go/trpc-mcp-go => github.com/bytethm/trpc-mcp-go v0.0.0-20251110074857-00502be163fa
 )
 
 require (
