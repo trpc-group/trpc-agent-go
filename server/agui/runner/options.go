@@ -12,6 +12,7 @@ package runner
 import (
 	"context"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -25,6 +26,7 @@ type Options struct {
 	RunAgentInputHook  RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
 	AppName            string                // AppName is the name of the application.
 	SessionService     session.Service       // SessionService is the session service.
+	RunOptionResolver  RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
 }
 
 // NewOptions creates a new options instance.
@@ -33,6 +35,7 @@ func NewOptions(opt ...Option) *Options {
 		UserIDResolver:    defaultUserIDResolver,
 		TranslatorFactory: defaultTranslatorFactory,
 		RunAgentInputHook: defaultRunAgentInputHook,
+		RunOptionResolver: defaultRunOptionResolver,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -94,6 +97,16 @@ func WithSessionService(s session.Service) Option {
 	}
 }
 
+// RunOptionResolver is a function that resolves the run options for an AG-UI run.
+type RunOptionResolver func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error)
+
+// WithRunOptionResolver sets the run option resolver.
+func WithRunOptionResolver(r RunOptionResolver) Option {
+	return func(o *Options) {
+		o.RunOptionResolver = r
+	}
+}
+
 // defaultUserIDResolver is the default user ID resolver.
 func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
 	return "user", nil
@@ -107,4 +120,9 @@ func defaultTranslatorFactory(input *adapter.RunAgentInput) translator.Translato
 // defaultRunAgentInputHook returns the input unchanged.
 func defaultRunAgentInputHook(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 	return input, nil
+}
+
+// defaultRunnerOptionResolver is the default runner option resolver.
+func defaultRunOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+	return nil, nil
 }

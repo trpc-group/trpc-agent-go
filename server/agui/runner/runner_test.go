@@ -34,6 +34,7 @@ func TestNew(t *testing.T) {
 	trans := runner.translatorFactory(&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NotNil(t, trans)
 	assert.IsType(t, translator.New("", ""), trans)
+	assert.NotNil(t, runner.runOptionResolver)
 
 	userID, err := runner.userIDResolver(context.Background(),
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
@@ -42,7 +43,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestRunValidatesInput(t *testing.T) {
-	r := &runner{}
+	r := &runner{runOptionResolver: defaultRunOptionResolver}
 	ch, err := r.Run(context.Background(), nil)
 	assert.Nil(t, ch)
 	assert.Error(t, err)
@@ -60,6 +61,7 @@ func TestRunNoMessages(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver:    NewOptions().UserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
 	}
 
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
@@ -83,6 +85,7 @@ func TestRunUserIDResolverError(t *testing.T) {
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "", errors.New("boom")
 		},
+		runOptionResolver: defaultRunOptionResolver,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -106,6 +109,7 @@ func TestRunLastMessageNotUser(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver:    NewOptions().UserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -134,6 +138,7 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 		runner:            underlying,
 		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver:    NewOptions().UserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -147,6 +152,85 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 	assert.Len(t, evts, 2)
 	_, ok := evts[1].(*aguievents.RunErrorEvent)
 	assert.True(t, ok)
+	assert.Equal(t, 1, underlying.calls)
+}
+
+func TestRunRunOptionResolverError(t *testing.T) {
+	underlying := &fakeRunner{}
+	fakeTrans := &fakeTranslator{}
+	wantErr := errors.New("resolver broke")
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		userIDResolver:    NewOptions().UserIDResolver,
+		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			assert.Same(t, input, in)
+			return nil, wantErr
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	assert.Len(t, evts, 2)
+	runErr, ok := evts[1].(*aguievents.RunErrorEvent)
+	assert.True(t, ok)
+	assert.Contains(t, runErr.Message, "resolve run options")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunRunOptionResolverOptions(t *testing.T) {
+	fakeTrans := &fakeTranslator{}
+	resolverCalled := false
+	optionsApplied := false
+	underlying := &fakeRunner{}
+	underlying.run = func(ctx context.Context,
+		userID, sessionID string,
+		message model.Message,
+		opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+		assert.Equal(t, "user-123", userID)
+		assert.Len(t, opts, 1)
+		var runOpts agent.RunOptions
+		for _, opt := range opts {
+			opt(&runOpts)
+		}
+		assert.Equal(t, "resolver-request-id", runOpts.RequestID)
+		optionsApplied = true
+		ch := make(chan *agentevent.Event)
+		go func() {
+			close(ch)
+		}()
+		return ch, nil
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			return "user-123", nil
+		},
+		runOptionResolver: func(ctx context.Context, in *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			assert.Same(t, input, in)
+			resolverCalled = true
+			return []agent.RunOption{agent.WithRequestID("resolver-request-id")}, nil
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	assert.NotEmpty(t, evts)
+	assert.True(t, resolverCalled)
+	assert.True(t, optionsApplied)
 	assert.Equal(t, 1, underlying.calls)
 }
 
@@ -169,7 +253,8 @@ func TestRunTranslateError(t *testing.T) {
 		translatorFactory: func(*adapter.RunAgentInput) translator.Translator {
 			return fakeTrans
 		},
-		userIDResolver: NewOptions().UserIDResolver,
+		userIDResolver:    NewOptions().UserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
 	}
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
@@ -209,6 +294,7 @@ func TestRunNormal(t *testing.T) {
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "user-123", nil
 		},
+		runOptionResolver: defaultRunOptionResolver,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -269,6 +355,7 @@ func TestRunAgentInputHook(t *testing.T) {
 				assert.Equal(t, baseInput, input)
 				return replaced, nil
 			},
+			runOptionResolver: defaultRunOptionResolver,
 		}
 
 		eventsCh, err := r.Run(context.Background(), baseInput)
@@ -307,6 +394,7 @@ func TestRunAgentInputHook(t *testing.T) {
 			runAgentInputHook: func(ctx context.Context, in *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 				return nil, nil
 			},
+			runOptionResolver: defaultRunOptionResolver,
 		}
 
 		ch, err := r.Run(context.Background(), input)
@@ -322,6 +410,7 @@ func TestRunAgentInputHook(t *testing.T) {
 			runAgentInputHook: func(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 				return nil, wantErr
 			},
+			runOptionResolver: defaultRunOptionResolver,
 		}
 		_, err := r.Run(context.Background(), &adapter.RunAgentInput{})
 		assert.Error(t, err)
@@ -593,6 +682,7 @@ func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 		translatorFactory:  func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver:     NewOptions().UserIDResolver,
 		translateCallbacks: callbacks,
+		runOptionResolver:  defaultRunOptionResolver,
 	}
 
 	input := &adapter.RunAgentInput{

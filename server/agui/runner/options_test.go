@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -39,6 +40,11 @@ func TestNewOptionsDefaults(t *testing.T) {
 	modified, err := opts.RunAgentInputHook(context.Background(), input)
 	assert.NoError(t, err)
 	assert.Same(t, input, modified)
+
+	assert.NotNil(t, opts.RunOptionResolver)
+	resolvedOpts, err := opts.RunOptionResolver(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Nil(t, resolvedOpts)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -104,4 +110,16 @@ func TestWithAppName(t *testing.T) {
 func TestWithSessionService(t *testing.T) {
 	opts := NewOptions(WithSessionService(inmemory.NewSessionService()))
 	assert.NotNil(t, opts.SessionService)
+}
+
+func TestWithRunOptionResolver(t *testing.T) {
+	called := false
+	resolver := func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+		called = true
+		return nil, nil
+	}
+	opts := NewOptions(WithRunOptionResolver(resolver))
+	assert.NotNil(t, opts.RunOptionResolver)
+	opts.RunOptionResolver(context.Background(), nil)
+	assert.True(t, called)
 }
