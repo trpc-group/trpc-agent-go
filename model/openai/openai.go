@@ -45,6 +45,9 @@ const (
 	defaultBatchCompletionWindow = "24h"
 	// defaultBatchEndpoint is the default batch endpoint.
 	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
+	//nolint:gosec
+	deepSeekAPIKeyName     string = "DEEPSEEK_API_KEY"
+	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -55,6 +58,8 @@ const (
 	VariantOpenAI Variant = "openai"
 	// VariantHunyuan is the Hunyuan variant with specific file handling.
 	VariantHunyuan Variant = "hunyuan"
+	// VariantDeepSeek is the DeepSeek variant with specific base_url handling.
+	VariantDeepSeek Variant = "deepseek"
 )
 
 // variantConfig holds configuration for different variants.
@@ -70,22 +75,38 @@ type variantConfig struct {
 	fileUploadRequestConvertor fileUploadRequestConvertor
 	// Whether to skip file type in content parts for this variant.
 	skipFileTypeInContent bool
-}
 
+	// Default base URL for this variant.
+	defaultBaseURL string
+	// Default API key name for this variant.
+	apiKeyName string
+}
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
+
+// defaultFileDeletionBodyConvertor is the default file deletion body converter.
+var defaultFileDeletionBodyConvertor = func(body []byte, fileID string) []byte {
+	return body
+}
 
 type fileUploadRequestConvertor func(r *http.Request, file *os.File, fileOpts *FileOptions) (*http.Request, error)
 
 // variantConfigs maps variant names to their configurations.
 var variantConfigs = map[Variant]variantConfig{
 	VariantOpenAI: {
-		fileUploadPath:        "/openapi/v1/files",
-		filePurpose:           openai.FilePurposeUserData,
-		fileDeletionMethod:    http.MethodDelete,
-		skipFileTypeInContent: false,
-		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
-			return body
-		},
+		fileUploadPath:            "/openapi/v1/files",
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+	},
+	VariantDeepSeek: {
+		fileUploadPath:            "/openapi/v1/files",
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                deepSeekAPIKeyName,
+		defaultBaseURL:            defaultDeepSeekBaseURL,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -454,6 +475,17 @@ func New(name string, opts ...Option) *Model {
 	for _, opt := range opts {
 		opt(o)
 	}
+
+	// Set default API key and base URL if not specified.
+	if cfg, ok := variantConfigs[o.Variant]; ok {
+		if val, ok := os.LookupEnv(cfg.apiKeyName); ok && o.APIKey == "" {
+			o.APIKey = val
+		}
+		if cfg.defaultBaseURL != "" && o.BaseURL == "" {
+			o.BaseURL = cfg.defaultBaseURL
+		}
+	}
+
 	var clientOpts []openaiopt.RequestOption
 
 	if o.APIKey != "" {

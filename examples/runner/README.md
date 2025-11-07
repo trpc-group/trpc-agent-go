@@ -42,7 +42,6 @@ This implementation showcases the essential features for building conversational
 | `-provider`        | Provider of the model to use                        | `openai`         |
 | `-model`           | Name of the model to use                            | `deepseek-chat`  |
 | `-session`         | Session service: `inmemory` or `redis`              | `inmemory`       |
-| `-redis-addr`      | Redis server address (when using redis session)     | `localhost:6379` |
 | `-streaming`       | Enable streaming mode for responses                 | `true`           |
 | `-enable-parallel` | Enable parallel tool execution (faster performance) | `false`          |
 
@@ -75,6 +74,34 @@ go run . -provider anthropic
 ```bash
 export OPENAI_API_KEY="your-api-key"
 go run . -session redis -redis-addr localhost:6379
+```
+
+### With PostgreSQL Session
+
+**Minimal setup** (using defaults):
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export PG_PASSWORD="your-password"
+go run . -session pgsql
+```
+
+**Custom configuration**:
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+go run . -session pgsql -pg-host localhost -pg-user postgres -pg-password your-password -pg-database trpc_sessions
+```
+
+**Using environment variables**:
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export PG_HOST="localhost"
+export PG_USER="postgres"
+export PG_PASSWORD="your-password"
+export PG_DATABASE="trpc_sessions"
+go run . -session pgsql
 ```
 
 ### Using Environment Variable
@@ -146,10 +173,8 @@ Usage of ./runner:
         Name of the model to use (default "deepseek-chat")
   -provider string
         Name of the provider to use, openai or anthropic (default "openai")
-  -redis-addr string
-        Redis address (default "localhost:6379")
   -session string
-        Name of the session service to use, inmemory / redis (default "inmemory")
+        Name of the session service to use: inmemory / redis / pgsql (default "inmemory")
   -streaming
         Enable streaming mode for responses (default true)
 ```
@@ -196,6 +221,7 @@ The interface is simple and intuitive:
 Model: gpt-4o-mini
 Streaming: true
 Parallel Tools: disabled (serial execution)
+Session: inmemory
 Type 'exit' to end the conversation
 Available tools: calculator, current_time
 ==================================================
@@ -210,6 +236,50 @@ Available tools: calculator, current_time
 👤 You: /exit
 👋 Goodbye!
 ```
+
+### Session Storage Options
+
+The runner supports three session storage backends:
+
+#### In-Memory Session (Default)
+- **Usage**: `-session inmemory` (or omit the flag)
+- **Best for**: Development, testing, single-instance applications
+- **Pros**: Fast, no external dependencies
+- **Cons**: Data lost on restart, not suitable for distributed systems
+
+#### Redis Session
+- **Usage**: `-session redis`
+- **Best for**: Production, distributed applications
+- **Pros**: Persistent, supports multiple instances, automatic TTL
+- **Cons**: Requires Redis server
+
+#### PostgreSQL Session
+- **Usage**: `-session pgsql` (minimal) or with custom options
+- **Best for**: Production, complex queries, relational data needs
+- **Pros**:
+  - Relational database with ACID guarantees
+  - JSONB storage for efficient JSON operations
+  - Soft delete & TTL cleanup (automatic data management)
+  - Built-in indexing and query optimization
+- **Cons**: Requires PostgreSQL server
+
+**Key Features:**
+
+1. **JSONB Storage**: All session data stored as JSONB for efficient querying
+2. **Soft Delete**: Deleted data marked (not removed), can be recovered
+3. **TTL Cleanup**: Automatic cleanup of expired data (configurable interval)
+4. **Partial Unique Index**: Allows recreating sessions after soft delete
+
+**Default Configuration:**
+- Host: `localhost:5432`
+- Database: `test`
+- User: `root`
+- Soft delete: enabled
+- TTL cleanup: 5 minutes (when TTL configured)
+
+3. **Automatic Schema Management**: Tables and indexes created automatically on first run
+
+4. **TTL Support**: Automatic expiration of old sessions via `expires_at` column
 
 ### Session Commands
 

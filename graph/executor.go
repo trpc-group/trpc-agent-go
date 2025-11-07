@@ -574,6 +574,7 @@ func isUnsafeStateKey(key string) bool {
 	switch key {
 	case StateKeyExecContext,
 		StateKeyParentAgent,
+		StateKeyNodeCallbacks,
 		StateKeyToolCallbacks,
 		StateKeyModelCallbacks,
 		StateKeyAgentCallbacks,
@@ -1659,6 +1660,17 @@ func (e *Executor) newNodeCallbackContext(
 	}
 }
 
+func (e *Executor) isDisableDeepCopyKey(key string) bool {
+	if e.graph.Schema() == nil {
+		return false
+	}
+	field, ok := e.graph.Schema().Fields[key]
+	if !ok {
+		return false
+	}
+	return field.DisableDeepCopy
+}
+
 // buildTaskStateCopy returns the per-task input state, including overlay.
 func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State {
 	// Always construct an isolated state copy so node code can freely mutate
@@ -1679,7 +1691,7 @@ func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State 
 
 	stateCopy := make(State, len(base))
 	for k, v := range base {
-		if isUnsafeStateKey(k) {
+		if isUnsafeStateKey(k) || e.isDisableDeepCopyKey(k) {
 			// Preserve pointer/reference without deep copying to avoid racing
 			// on nested structures (e.g., session internals) during reflection.
 			stateCopy[k] = v
@@ -1905,7 +1917,7 @@ func (e *Executor) executeNodeFunction(
 		execCtx.stateMutex.RLock()
 		tmp := make(State, len(execCtx.State))
 		for k, v := range execCtx.State {
-			if isUnsafeStateKey(k) {
+			if isUnsafeStateKey(k) || e.isDisableDeepCopyKey(k) {
 				tmp[k] = v
 				continue
 			}

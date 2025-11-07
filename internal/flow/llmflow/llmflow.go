@@ -310,12 +310,82 @@ func (f *Flow) preprocess(
 		processor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
 	}
 
-	// Add tools to the request.
+	// Add tools to the request with optional filtering.
 	if invocation.Agent != nil {
-		for _, t := range invocation.Agent.Tools() {
+		tools := f.getFilteredTools(ctx, invocation)
+		for _, t := range tools {
 			llmRequest.Tools[t.Declaration().Name] = t
 		}
 	}
+}
+
+// UserToolsProvider is an optional interface that agents can implement to expose
+// which tools were explicitly registered by the user (WithTools, WithToolSets)
+// vs framework-added tools (Knowledge, SubAgents).
+//
+// User tools are subject to filtering via WithToolFilter.
+// Framework tools are never filtered and always available to the agent.
+type UserToolsProvider interface {
+	UserTools() []tool.Tool
+}
+
+// getFilteredTools returns the list of tools for this invocation after applying the filter.
+//
+// User tools (can be filtered):
+//   - Tools registered via WithTools
+//   - Tools registered via WithToolSets
+//
+// Framework tools (never filtered):
+//   - transfer_to_agent (auto-added when SubAgents are configured)
+//   - knowledge_search / agentic_knowledge_search (auto-added when Knowledge is configured)
+//
+// This method is called during the preprocess stage, before sending the request to the model.
+func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocation) []tool.Tool {
+	// Get all tools from the agent.
+	allTools := invocation.Agent.Tools()
+
+	// If no filter is specified, return all tools.
+	if invocation.RunOptions.ToolFilter == nil {
+		return allTools
+	}
+
+	// Get user tools (if the agent supports it).
+	// User tools are those explicitly registered via WithTools and WithToolSets.
+	// Framework tools (Knowledge, SubAgents) are never filtered.
+	var userToolNames map[string]bool
+	hasUserToolTracking := false
+	if provider, ok := invocation.Agent.(UserToolsProvider); ok {
+		userTools := provider.UserTools()
+		hasUserToolTracking = true
+		// Build a map for fast lookup.
+		userToolNames = make(map[string]bool, len(userTools))
+		for _, t := range userTools {
+			userToolNames[t.Declaration().Name] = true
+		}
+	}
+
+	// Apply the filter function to each tool.
+	// Framework tools are never filtered.
+	filtered := make([]tool.Tool, 0, len(allTools))
+	for _, t := range allTools {
+		toolName := t.Declaration().Name
+
+		// Determine if this is a user tool or framework tool.
+		isUserTool := !hasUserToolTracking || userToolNames[toolName]
+
+		// Framework tools are always included (never filtered).
+		if !isUserTool {
+			filtered = append(filtered, t)
+			continue
+		}
+
+		// User tool: apply the filter function.
+		if invocation.RunOptions.ToolFilter(ctx, t) {
+			filtered = append(filtered, t)
+		}
+	}
+
+	return filtered
 }
 
 // callLLM performs the actual LLM call using core/model.

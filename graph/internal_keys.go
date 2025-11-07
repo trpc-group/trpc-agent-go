@@ -20,6 +20,7 @@ func isInternalStateKey(key string) bool {
 		MetadataKeyState, MetadataKeyCompletion,
 		// Graph execution internal wiring
 		StateKeyExecContext, StateKeyParentAgent,
+		StateKeyNodeCallbacks,
 		StateKeyToolCallbacks, StateKeyModelCallbacks,
 		StateKeyAgentCallbacks, StateKeyCurrentNodeID,
 		StateKeySession:

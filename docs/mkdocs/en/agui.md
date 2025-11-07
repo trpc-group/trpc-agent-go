@@ -156,6 +156,42 @@ runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
 ```
 
+### Custom `RunOptionResolver`
+
+By default, the AG-UI Runner does not append extra `agent.RunOption`s to the underlying `runner.Run`. Implement `RunOptionResolver`, inject it with `aguirunner.WithRunOptionResolver`, and translate client-provided configuration (for example, `modelName` or `knowledgeFilter`) from `ForwardedProps`.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+resolver := func(_ context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
+	if input == nil {
+		return nil, errors.New("empty input")
+	}
+	if input.ForwardedProps == nil {
+		return nil, nil
+	}
+	opts := make([]agent.RunOption, 0, 2)
+	if modelName, ok := input.ForwardedProps["modelName"].(string); ok && modelName != "" {
+		opts = append(opts, agent.WithModelName(modelName))
+	}
+	if filter, ok := input.ForwardedProps["knowledgeFilter"].(map[string]any); ok {
+		opts = append(opts, agent.WithKnowledgeFilter(filter))
+	}
+	return opts, nil
+}
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptionResolver(resolver)))
+```
+
+`RunOptionResolver` executes for every incoming `RunAgentInput`. Its return value is forwarded to `runner.Run` in order. Returning an error surfaces a `RunError` to the client, while returning `nil` means no extra options are added.
+
 ### Event Translation Callback
 
 AG-UI provides an event translation callback mechanism, allowing custom logic to be inserted before and after the event translation process.

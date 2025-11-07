@@ -44,6 +44,19 @@ func (s *simpleTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: s.name, Description: s.desc}
 }
 
+// skipperTool implements tool.Tool and exposes SkipSummarization preference
+// to validate NamedTool delegation behavior in tests.
+type skipperTool struct {
+	name string
+	skip bool
+}
+
+func (s *skipperTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+
+func (s *skipperTool) SkipSummarization() bool { return s.skip }
+
 // fakeToolSet implements tool.ToolSet.
 type fakeToolSet struct {
 	name   string
@@ -158,6 +171,27 @@ func TestNamedTool_CallFailures(t *testing.T) {
 	}
 	if _, err := nt.StreamableCall(context.Background(), nil); err == nil || err.Error() != "tool is not streamable" {
 		t.Fatalf("StreamableCall() expected not streamable error, got %v", err)
+	}
+}
+
+func TestNamedTool_SkipSummarizationDelegation(t *testing.T) {
+	// Wrap with NamedToolSet so we can obtain a *NamedTool instance.
+	nts := itool.NewNamedToolSet(&fakeToolSet{
+		name:  "fs",
+		tools: []tool.Tool{&skipperTool{name: "raw", skip: true}},
+	})
+	t1 := nts.Tools(context.Background())[0].(*itool.NamedTool)
+	if !t1.SkipSummarization() {
+		t.Fatalf("expected delegated SkipSummarization=true")
+	}
+
+	nts2 := itool.NewNamedToolSet(&fakeToolSet{
+		name:  "fs",
+		tools: []tool.Tool{&skipperTool{name: "raw", skip: false}},
+	})
+	t2 := nts2.Tools(context.Background())[0].(*itool.NamedTool)
+	if t2.SkipSummarization() {
+		t.Fatalf("expected delegated SkipSummarization=false")
 	}
 }
 
