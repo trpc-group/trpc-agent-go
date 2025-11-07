@@ -1257,3 +1257,63 @@ model := anthropic.New("claude-3-5-sonnet",
 
 关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#5-token-裁剪token-tailoring)。
 
+
+### 3. Provider
+
+随着多个大模型供应商的出现，一些供应商定义了各自的 API 规范。目前，框架已接入 OpenAI 和 Anthropic 的 API，并以 Model 的形式提供，用户可以通过 `openai.New` 和 `anthropic.New` 来使用不同供应商的模型。
+
+然而，不同供应商在实例化方式和配置项上存在差异，开发者在切换供应商时往往需要修改大量代码，增加了切换成本。
+
+为了解决这一问题，Provider 提供了一个统一的模型实例化入口。开发者只需指定供应商和模型名称，其他配置项通过统一的 `Option` 管理，从而简化了供应商切换的复杂度。
+
+Provider 支持以下 `Option`：
+
+| Option                                                                                            | 说明                                |
+| ------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `WithAPIKey` / `WithBaseURL`                                                                      | 设置模型的 API Key 和 Base URL                      |
+| `WithHTTPClientName` / `WithHTTPClientTransport`                                                  | 配置 HTTP 客户端属性                     |
+| `WithChannelBufferSize`                                                                           | 调整响应 channel 缓冲区容量                |
+| `WithCallbacks`                                                                                   | 配置 OpenAI / Anthropic 的请求、响应、流式回调 |
+| `WithExtraFields`                                                                                 | 配置请求体自定义字段                        |
+| `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token 裁剪相关参数                      |
+| `WithOpenAI` / `WithAnthropic`                                                                    | 透传供应商原生 Option                    |
+
+#### 使用示例
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
+)
+
+gpt, err := provider.Model("openai", "gpt-4.1-mini", provider.WithChannelBufferSize(512))
+if err != nil {
+    log.Fatalf("create openai model: %v", err)
+}
+
+claude, err := provider.Model("anthropic", "claude-sonnet-4.0", provider.WithChannelBufferSize(512))
+if err != nil {
+    log.Fatalf("create anthropic model: %v", err)
+}
+
+// 根据业务选择模型实例
+agent := llmagent.New("chat-assistant", llmagent.WithModel(gpt))
+```
+
+完整代码可参见 [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)。
+
+#### 注册自定义 Provider
+
+框架支持通过注册自定义 Provider 来接入其他大模型供应商或自定义实现的模型。
+
+通过 `provider.Register` 可以定义根据 Options 创建自定义模型实例的方法。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/provider"
+
+provider.Register("custom-provider", func(opts *provider.Options) (model.Model, error) {
+    return newCustomModel(opts.ModelName, WithAPIKey(opts.APIKey)), nil
+})
+
+customModel, err := provider.Model("custom-provider", "custom-model")
+```
