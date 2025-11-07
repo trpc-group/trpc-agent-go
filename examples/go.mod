@@ -9,8 +9,10 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../memory/mysql
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
+	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../session/postgres
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../storage/postgres
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
 )
