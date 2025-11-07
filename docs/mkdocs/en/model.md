@@ -1592,8 +1592,7 @@ The Provider supports the following `Option`:
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
 )
 
 gpt, err := provider.Model("openai", "gpt-4.1-mini", provider.WithChannelBufferSize(512))
@@ -1619,6 +1618,8 @@ The framework supports registering custom providers to integrate other large mod
 Using `provider.Register`, you can define a method to create custom model instances based on the options.
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/model/provider"
+
 provider.Register("custom-provider", func(opts *provider.Options) (model.Model, error) {
     return newCustomModel(opts.ModelName, WithAPIKey(opts.APIKey)), nil
 })

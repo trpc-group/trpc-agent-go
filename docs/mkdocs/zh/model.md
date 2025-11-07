@@ -1590,8 +1590,7 @@ Provider 支持以下 `Option`：
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
 )
 
 gpt, err := provider.Model("openai", "gpt-4.1-mini", provider.WithChannelBufferSize(512))
@@ -1617,6 +1616,8 @@ agent := llmagent.New("chat-assistant", llmagent.WithModel(gpt))
 通过 `provider.Register` 可以定义根据 Options 创建自定义模型实例的方法。
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/model/provider"
+
 provider.Register("custom-provider", func(opts *provider.Options) (model.Model, error) {
     return newCustomModel(opts.ModelName, WithAPIKey(opts.APIKey)), nil
 })
