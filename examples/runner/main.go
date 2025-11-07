@@ -43,6 +43,7 @@ var (
 	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / pgsql")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	enableParallel  = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
+	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan/ deepseek /qwen")
 )
 
 // Environment variables for session services.
@@ -84,6 +85,7 @@ func main() {
 	chat := &multiTurnChat{
 		provider:  *provider,
 		modelName: *modelName,
+		variant:   *variant,
 		streaming: *streaming,
 	}
 
@@ -96,6 +98,7 @@ func main() {
 type multiTurnChat struct {
 	provider  string
 	modelName string
+	variant   string
 	streaming bool
 	runner    runner.Runner
 	userID    string
@@ -210,7 +213,11 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 func (c *multiTurnChat) newModel(provider, modelName string) (model.Model, error) {
 	switch provider {
 	case "openai":
-		return openai.New(modelName), nil
+		var opts []openai.Option
+		if c.variant != "" {
+			opts = append(opts, openai.WithVariant(openai.Variant(c.variant)))
+		}
+		return openai.New(modelName, opts...), nil
 	case "anthropic":
 		return anthropic.New(modelName), nil
 	default:

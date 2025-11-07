@@ -38,12 +38,13 @@ This implementation showcases the essential features for building conversational
 ## Command Line Arguments
 
 | Argument           | Description                                         | Default Value    |
-| ------------------ | --------------------------------------------------- | ---------------- |
+|--------------------|-----------------------------------------------------| ---------------- |
 | `-provider`        | Provider of the model to use                        | `openai`         |
 | `-model`           | Name of the model to use                            | `deepseek-chat`  |
 | `-session`         | Session service: `inmemory` or `redis`              | `inmemory`       |
 | `-streaming`       | Enable streaming mode for responses                 | `true`           |
 | `-enable-parallel` | Enable parallel tool execution (faster performance) | `false`          |
+| `-variant`         | Variant to use when useing openai provider          | `openai`         |
 
 ## Usage
 
