@@ -17,6 +17,7 @@ import (
 	"reflect"
 
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -104,6 +105,12 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 	// Apply provided options
 	for _, opt := range opts {
 		opt(options)
+	}
+	if options.name == "" {
+		log.Warnf("FunctionTool: name is empty")
+	}
+	if options.description == "" {
+		log.Warnf("FunctionTool: description is empty")
 	}
 
 	var (
