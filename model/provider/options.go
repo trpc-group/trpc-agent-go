@@ -37,6 +37,7 @@ type Options struct {
 	TailoringStrategy    model.TailoringStrategy // TailoringStrategy defines the strategy for token tailoring.
 	OpenAIOption         []openai.Option         // OpenAIOption stores additional OpenAI options.
 	AnthropicOption      []anthropic.Option      // AnthropicOption stores additional Anthropic options.
+	Variant              string                  // Variant for model-specific behavior
 }
 
 // Callbacks collects provider specific callback hooks.
@@ -178,5 +179,12 @@ func WithOpenAIOption(opt ...openai.Option) Option {
 func WithAnthropicOption(opt ...anthropic.Option) Option {
 	return func(o *Options) {
 		o.AnthropicOption = append(o.AnthropicOption, opt...)
+	}
+}
+
+// WithVariant records variant for the provider.
+func WithVariant(v string) Option {
+	return func(o *Options) {
+		o.Variant = v
 	}
 }

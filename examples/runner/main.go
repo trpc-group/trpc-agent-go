@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -84,7 +85,7 @@ func main() {
 	chat := &multiTurnChat{
 		providerName: *providerName,
 		modelName:    *modelName,
-		variant:   *variant,
+		variant:      *variant,
 		streaming:    *streaming,
 	}
 
@@ -97,7 +98,7 @@ func main() {
 type multiTurnChat struct {
 	providerName string
 	modelName    string
-	variant   string
+	variant      string
 	streaming    bool
 	runner       runner.Runner
 	userID       string
@@ -120,7 +121,11 @@ func (c *multiTurnChat) run() error {
 // setup creates the runner with LLM agent and tools.
 func (c *multiTurnChat) setup(_ context.Context) error {
 	// Create model with specified provider name and model name.
-	modelInstance, err := provider.Model(c.providerName, c.modelName)
+	var opts []provider.Option
+	if c.providerName == string(openai.VariantOpenAI) {
+		opts = append(opts, provider.WithVariant(c.variant))
+	}
+	modelInstance, err := provider.Model(c.providerName, c.modelName, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create model: %w", err)
 	}

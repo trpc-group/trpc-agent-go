@@ -113,6 +113,9 @@ func openaiProvider(opts *Options) (model.Model, error) {
 	if opts.TailoringStrategy != nil {
 		res = append(res, openai.WithTailoringStrategy(opts.TailoringStrategy))
 	}
+	if opts.Variant != "" {
+		res = append(res, openai.WithVariant(openai.Variant(opts.Variant)))
+	}
 	res = append(res, opts.OpenAIOption...)
 	return openai.New(opts.ModelName, res...), nil
 }
