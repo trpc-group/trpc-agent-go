@@ -678,7 +678,8 @@ func TestAddDocument(t *testing.T) {
 			setupKB: func() *BuiltinKnowledge {
 				return &BuiltinKnowledge{}
 			},
-			expectError: false,
+			expectError:    true,
+			expectedErrMsg: "vector store is not configured",
 		},
 		{
 			name: "successful_add",
