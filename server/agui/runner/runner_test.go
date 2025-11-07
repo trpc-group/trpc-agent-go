@@ -749,7 +749,7 @@ func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event 
 	}
 }
 
-func TestTranslateCalbackError(t *testing.T) {
+func TestTranslateCallbackError(t *testing.T) {
 	t.Run("before translate callback error", func(t *testing.T) {
 		callbacks := translator.NewCallbacks().
 			RegisterBeforeTranslate(func(ctx context.Context, evt *agentevent.Event) (*agentevent.Event, error) {
