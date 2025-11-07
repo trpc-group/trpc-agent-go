@@ -13,7 +13,6 @@ package graphagent
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -24,6 +23,25 @@ import (
 )
 
 var defaultChannelBufferSize = 256
+
+const (
+	// BranchFilterModePrefix Prefix matching pattern
+	BranchFilterModePrefix = processor.BranchFilterModePrefix
+	// BranchFilterModeAll include all
+	BranchFilterModeAll = processor.BranchFilterModeAll
+	// BranchFilterModeExact exact match
+	BranchFilterModeExact = processor.BranchFilterModeExact
+
+	// TimelineFilterAll includes all historical message records
+	// Suitable for scenarios requiring full conversation context
+	TimelineFilterAll = processor.TimelineFilterAll
+	// TimelineFilterCurrentRequest only includes messages within the current request cycle
+	// Filters out previous historical records, keeping only messages related to this request
+	TimelineFilterCurrentRequest = processor.TimelineFilterCurrentRequest
+	// TimelineFilterCurrentInvocation only includes messages within the current invocation session
+	// Suitable for scenarios requiring isolation between different invocation cycles in long-running sessions
+	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
+)
 
 // Option is a function that configures a GraphAgent.
 type Option func(*Options)
@@ -70,6 +88,20 @@ func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
 	}
 }
 
+// WithMessageTimelineFilterMode sets the message timeline filter mode.
+func WithMessageTimelineFilterMode(mode string) Option {
+	return func(opts *Options) {
+		opts.messageTimelineFilterMode = mode
+	}
+}
+
+// WithMessageBranchFilterMode sets the message branch filter mode.
+func WithMessageBranchFilterMode(mode string) Option {
+	return func(opts *Options) {
+		opts.messageBranchFilterMode = mode
+	}
+}
+
 // Options contains configuration options for creating a GraphAgent.
 type Options struct {
 	// Description is a description of the agent.
@@ -84,6 +116,11 @@ type Options struct {
 	ChannelBufferSize int
 	// CheckpointSaver is the checkpoint saver for the executor.
 	CheckpointSaver graph.CheckpointSaver
+
+	// MessageTimelineFilterMode is the message timeline filter mode.
+	messageTimelineFilterMode string
+	// MessageBranchFilterMode is the message branch filter mode.
+	messageBranchFilterMode string
 }
 
 // GraphAgent is an agent that executes a graph.
@@ -96,6 +133,7 @@ type GraphAgent struct {
 	agentCallbacks    *agent.Callbacks
 	initialState      graph.State
 	channelBufferSize int
+	options           Options
 }
 
 // New creates a new GraphAgent with the given graph and options.
@@ -131,6 +169,7 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		agentCallbacks:    options.AgentCallbacks,
 		initialState:      options.InitialState,
 		channelBufferSize: options.ChannelBufferSize,
+		options:           options,
 	}, nil
 }
 
@@ -190,25 +229,12 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	if invocation.Session != nil {
 		// Build a temporary request to reuse the processor logic.
 		req := &model.Request{}
-		// Default include mode is All for graphs unless overridden by runtime state.
-		// Docs note: If RuntimeState[CfgKeyIncludeContents] is not one of
-		// {none, filtered, all}, ignore it and fall back to the default (all)
-		// to avoid accidental context loss.
-		include := processor.IncludeContentsAll
-		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok && mode != "" {
-			switch strings.ToLower(mode) {
-			case processor.IncludeContentsNone:
-				include = processor.IncludeContentsNone
-			case processor.IncludeContentsFiltered:
-				include = processor.IncludeContentsFiltered
-			case processor.IncludeContentsAll:
-				include = processor.IncludeContentsAll
-			}
-		}
+
 		// Default processor: include (possibly overridden) + preserve same branch.
 		p := processor.NewContentRequestProcessor(
-			processor.WithIncludeContents(include),
+			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
 			processor.WithPreserveSameBranch(true),
+			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 		)
 		// We only need messages side effect; no output channel needed.
 		p.ProcessRequest(ctx, invocation, req, nil)

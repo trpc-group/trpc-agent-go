@@ -729,3 +729,23 @@ func (m *mockCheckpointSaver) DeleteLineage(ctx context.Context, lineageID strin
 func (m *mockCheckpointSaver) Close() error {
 	return nil
 }
+
+func TestGraphAgent_MessageFilterMode(t *testing.T) {
+	options := &Options{
+		messageBranchFilterMode: "prefix",
+	}
+	WithMessageTimelineFilterMode("all")(options)
+
+	require.Equal(t, options.messageTimelineFilterMode, "all")
+	require.Equal(t, options.messageBranchFilterMode, "prefix")
+
+	options = &Options{
+		messageBranchFilterMode:   "prefix",
+		messageTimelineFilterMode: "all",
+	}
+	WithMessageTimelineFilterMode("request")(options)
+	WithMessageBranchFilterMode("exact")(options)
+
+	require.Equal(t, options.messageTimelineFilterMode, "request")
+	require.Equal(t, options.messageBranchFilterMode, "exact")
+}
