@@ -624,7 +624,7 @@ batch, err := llm.CreateBatch(ctx, requests,
 
 Batch API 的执行流程：
 
-```
+```text
 1. 准备批处理请求（BatchRequestInput 列表）
 2. 验证请求格式和 CustomID 唯一性
 3. 生成 JSONL 格式的输入文件
@@ -738,7 +738,7 @@ llm := openai.New("gpt-4o-mini",
 
 重试机制的执行流程：
 
-```
+```text
 1. 发送请求到 LLM API
 2. 如果请求失败且错误可重试：
    a. 检查是否达到最大重试次数
@@ -776,7 +776,7 @@ llm := openai.New("gpt-4o-mini",
 
 在网关、专有平台或代理环境中，请求模型 API 往往需要额外的
 HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块
-提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、
+提供两种可靠方式为"所有模型请求"添加 Header，适用于普通请求、流式、
 文件上传、批处理等全链路。
 
 推荐顺序：
@@ -789,7 +789,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 ##### 1. 使用 OpenAI RequestOption 设置全局 Header
 
 通过 `WithOpenAIOptions` 配合 `openaiopt.WithHeader` 或
-`openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的“每个请求”
+`openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的"每个请求"
 注入 Header。
 
 ```go
@@ -816,7 +816,7 @@ llm := openai.New("deepseek-chat",
     openai.WithOpenAIOptions(
         openaiopt.WithMiddleware(
             func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
-                // 例：按上下文值设置“每次请求”的头部
+                // 例：按上下文值设置"每次请求"的头部
                 if v := r.Context().Value("x-request-id"); v != nil {
                     if s, ok := v.(string); ok && s != "" {
                         r.Header.Set("X-Request-ID", s)
@@ -863,12 +863,92 @@ llm := openai.New("deepseek-chat",
 )
 ```
 
-关于“每次请求”的头部：
+关于"每次请求"的头部：
 
 - Agent/Runner 会把 `ctx` 透传至模型调用；中间件可从
   `req.Context()` 读取值，从而为“本次调用”注入头部。
 - 对“对话补全”而言，目前未暴露单次调用级别的 BaseURL 覆盖；如需切
   换，请新建一个使用不同 BaseURL 的模型，或在中间件中修改 `r.URL`。
+
+#### 5. Variant 优化：平台特有行为适配
+Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，特别是文件上传、删除和处理逻辑。
+##### 5.1. 支持的 Variant 类型
+框架目前支持以下 Variant：
+
+**1. VariantOpenAI（默认）**
+- 标准 OpenAI API 兼容行为
+- 文件上传路径：`/openapi/v1/files`
+- 文件用途：`user_data`
+- 删除文件的Http请求方法：`DELETE`
+
+**2. VariantHunyuan（混元）**
+- 腾讯混元平台特有适配
+- 文件上传路径：`/openapi/v1/files/uploads`
+- 文件用途：`file-extract`
+- 删除文件的Http请求方法：`POST`
+
+**3. VariantDeepSeek**
+- DeepSeek 平台适配
+- 默认 BaseURL：`https://api.deepseek.com`
+- API Key 环境变量名：`DEEPSEEK_API_KEY`
+- 其他行为与标准 OpenAI 一致
+
+##### 5.2. 使用方式
+
+**使用示例**：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai"
+
+// 使用混元平台
+model := openai.New("hunyuan-model",
+    openai.WithBaseURL("https://your-hunyuan-api.com"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantHunyuan), // 关键：指定混元
+)
+
+// 使用 DeepSeek 平台
+model := openai.New("deepseek-chat",
+    openai.WithBaseURL("https://api.deepseek.com/v1"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantDeepSeek), // 指定 DeepSeek
+)
+```
+##### 5.3. Variant 的行为差异示例
+
+**消息内容处理差异**：
+
+```go
+// 对于混元平台，文件 ID 会放在 extraFields 中而非 content parts
+message := model.Message{
+    Role: model.RoleUser,
+    ContentParts: []model.ContentPart{
+        {
+            Type: model.ContentTypeFile,
+            File: &model.File{
+                FileID: "file_123",
+            },
+        },
+    },
+}
+```
+
+**环境变量自动配置**：
+
+对于某些 Variant，框架支持自动从环境变量读取配置：
+
+```bash
+# DeepSeek 自动配置
+export DEEPSEEK_API_KEY="your-api-key"
+# 无需显式调用 WithAPIKey，框架会自动读取
+```
+
+```go
+// DeepSeek 自动配置示例
+model := openai.New("deepseek-chat",
+    openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
+)
+```
 
 ## Anthropic Model
 
