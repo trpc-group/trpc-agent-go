@@ -23,17 +23,6 @@ import (
 	isession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 )
 
-// // CreateSessionSummary creates a summary for a session.
-// func (s *Service) CreateSessionSummary(
-// 	ctx context.Context,
-// 	sess *session.Session,
-// 	filterKey string,
-// 	force bool,
-// ) error {
-// 	_, err := s.createSessionSummary(ctx, sess, filterKey, force)
-// 	return err
-// }
-
 // CreateSessionSummary is the internal implementation that returns the summary.
 func (s *Service) CreateSessionSummary(
 	ctx context.Context,
