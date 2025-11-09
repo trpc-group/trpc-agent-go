@@ -35,6 +35,7 @@ const (
 	defaultChanBufferSize        = 100
 	defaultAsyncPersisterNum     = 10
 	defaultCleanupIntervalSecond = 300 // 5 min
+	defaultTimeout               = 5 * time.Second
 
 	defaultAsyncSummaryNum  = 3
 	defaultSummaryQueueSize = 256
@@ -664,7 +665,7 @@ func (s *Service) getSession(
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
 		AND (expires_at IS NULL OR expires_at > $4)
 		AND deleted_at IS NULL`, s.tableSessionStates)
-	stateArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now().UTC()}
+	stateArgs := []any{key.AppName, key.UserID, key.SessionID, time.Now().UTC()}
 
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		if rows.Next() {
@@ -710,7 +711,7 @@ func (s *Service) getSession(
 	events := []event.Event{}
 	now := time.Now().UTC()
 	var eventQuery string
-	var eventArgs []interface{}
+	var eventArgs []any
 
 	if limit > 0 {
 		eventQuery = fmt.Sprintf(`SELECT event FROM %s
@@ -720,7 +721,7 @@ func (s *Service) getSession(
 			AND deleted_at IS NULL
 			ORDER BY created_at DESC
 			LIMIT $6`, s.tableSessionEvents)
-		eventArgs = []interface{}{key.AppName, key.UserID, key.SessionID, now, afterTime, limit}
+		eventArgs = []any{key.AppName, key.UserID, key.SessionID, now, afterTime, limit}
 	} else {
 		eventQuery = fmt.Sprintf(`SELECT event FROM %s
 			WHERE app_name = $1 AND user_id = $2 AND session_id = $3
@@ -728,7 +729,7 @@ func (s *Service) getSession(
 			AND created_at > $5
 			AND deleted_at IS NULL
 			ORDER BY created_at DESC`, s.tableSessionEvents)
-		eventArgs = []interface{}{key.AppName, key.UserID, key.SessionID, now, afterTime}
+		eventArgs = []any{key.AppName, key.UserID, key.SessionID, now, afterTime}
 	}
 
 	err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
@@ -761,7 +762,7 @@ func (s *Service) getSession(
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
 		AND (expires_at IS NULL OR expires_at > $4)
 		AND deleted_at IS NULL`, s.tableSessionSummaries)
-	summaryArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now().UTC()}
+	summaryArgs := []any{key.AppName, key.UserID, key.SessionID, time.Now().UTC()}
 
 	err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -822,7 +823,7 @@ func (s *Service) listSessions(
 		AND (expires_at IS NULL OR expires_at > $3)
 		AND deleted_at IS NULL
 		ORDER BY updated_at DESC`, s.tableSessionStates)
-	listArgs := []interface{}{key.AppName, key.UserID, time.Now().UTC()}
+	listArgs := []any{key.AppName, key.UserID, time.Now().UTC()}
 
 	err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -1130,10 +1131,13 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			for pair := range eventPairChan {
-				ctx := context.Background()
+				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:(app: %s, user: %s, session: %s)",
+					cap(eventPairChan), len(eventPairChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 				if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
 					log.Errorf("postgres session service async persist event failed: %v", err)
 				}
+				cancel()
 			}
 		}(eventPairChan)
 	}
@@ -1205,7 +1209,7 @@ func (s *Service) getEventsList(
 
 	// Query events for all sessions
 	var query string
-	var args []interface{}
+	var args []any
 
 	if limit > 0 {
 		// With limit: use LATERAL JOIN to apply limit per session
@@ -1222,7 +1226,7 @@ func (s *Service) getEventsList(
 				LIMIT $6
 			) e ON true
 			ORDER BY s.session_id`, s.tableSessionEvents)
-		args = []interface{}{sessionIDs, sessionKeys[0].AppName, sessionKeys[0].UserID, time.Now().UTC(), afterTime, limit}
+		args = []any{sessionIDs, sessionKeys[0].AppName, sessionKeys[0].UserID, time.Now().UTC(), afterTime, limit}
 	} else {
 		// Without limit: simple query with IN clause
 		query = fmt.Sprintf(`
@@ -1234,7 +1238,7 @@ func (s *Service) getEventsList(
 			AND created_at > $5
 			AND deleted_at IS NULL
 			ORDER BY session_id, created_at DESC`, s.tableSessionEvents)
-		args = []interface{}{sessionKeys[0].AppName, sessionKeys[0].UserID, sessionIDs, time.Now().UTC(), afterTime}
+		args = []any{sessionKeys[0].AppName, sessionKeys[0].UserID, sessionIDs, time.Now().UTC(), afterTime}
 	}
 
 	// Execute query and group events by session
@@ -1403,25 +1407,25 @@ func (s *Service) softDeleteExpiredTable(
 	isSessionScope bool,
 ) {
 	var query string
-	var args []interface{}
+	var args []any
 
 	if userKey != nil && isSessionScope {
 		// User-scoped cleanup for session-related tables
 		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			WHERE app_name = $2 AND user_id = $3
 			AND expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
-		args = []interface{}{now, userKey.AppName, userKey.UserID}
+		args = []any{now, userKey.AppName, userKey.UserID}
 	} else if userKey != nil && !isSessionScope {
 		// User-scoped cleanup for user_states table
 		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			WHERE app_name = $2 AND user_id = $3
 			AND expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
-		args = []interface{}{now, userKey.AppName, userKey.UserID}
+		args = []any{now, userKey.AppName, userKey.UserID}
 	} else {
 		// Global cleanup
 		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
-		args = []interface{}{now}
+		args = []any{now}
 	}
 
 	_, err := s.pgClient.ExecContext(ctx, query, args...)
@@ -1439,25 +1443,25 @@ func (s *Service) hardDeleteExpiredTable(
 	isSessionScope bool,
 ) {
 	var query string
-	var args []interface{}
+	var args []any
 
 	if userKey != nil && isSessionScope {
 		// User-scoped cleanup for session-related tables
 		query = fmt.Sprintf(`DELETE FROM %s
 			WHERE app_name = $1 AND user_id = $2
 			AND expires_at IS NOT NULL AND expires_at <= $3`, tableName)
-		args = []interface{}{userKey.AppName, userKey.UserID, now}
+		args = []any{userKey.AppName, userKey.UserID, now}
 	} else if userKey != nil && !isSessionScope {
 		// User-scoped cleanup for user_states table
 		query = fmt.Sprintf(`DELETE FROM %s
 			WHERE app_name = $1 AND user_id = $2
 			AND expires_at IS NOT NULL AND expires_at <= $3`, tableName)
-		args = []interface{}{userKey.AppName, userKey.UserID, now}
+		args = []any{userKey.AppName, userKey.UserID, now}
 	} else {
 		// Global cleanup
 		query = fmt.Sprintf(`DELETE FROM %s
 			WHERE expires_at IS NOT NULL AND expires_at <= $1`, tableName)
-		args = []interface{}{now}
+		args = []any{now}
 	}
 
 	_, err := s.pgClient.ExecContext(ctx, query, args...)
