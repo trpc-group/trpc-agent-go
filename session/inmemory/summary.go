@@ -208,7 +208,7 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 	}
 
 	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
-		log.Warnf("summary woker failed to create session summary: %v", err)
+		log.Warnf("summary worker failed to create session summary: %v", err)
 	}
 }
 
