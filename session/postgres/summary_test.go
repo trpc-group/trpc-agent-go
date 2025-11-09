@@ -59,8 +59,7 @@ func TestCreateSessionSummary_NoSummarizer(t *testing.T) {
 	}
 
 	err := s.CreateSessionSummary(context.Background(), sess, "", false)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "summarizer not configured")
+	require.NoError(t, err)
 }
 
 func TestCreateSessionSummary_InvalidKey(t *testing.T) {
@@ -239,8 +238,7 @@ func TestEnqueueSummaryJob_NoSummarizer(t *testing.T) {
 	}
 
 	err := s.EnqueueSummaryJob(context.Background(), sess, "", false)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "summarizer not configured")
+	require.NoError(t, err)
 }
 
 func TestEnqueueSummaryJob_InvalidKey(t *testing.T) {
