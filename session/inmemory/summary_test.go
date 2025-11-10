@@ -458,6 +458,7 @@ func TestMemoryService_CreateSessionSummary_NilSession(t *testing.T) {
 
 func TestMemoryService_CreateSessionSummary_InvalidKey(t *testing.T) {
 	s := NewSessionService(WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+	defer s.Close()
 	sess := &session.Session{ID: "", AppName: "app", UserID: "user"}
 	err := s.CreateSessionSummary(context.Background(), sess, "", false)
 	require.Error(t, err)
@@ -466,6 +467,7 @@ func TestMemoryService_CreateSessionSummary_InvalidKey(t *testing.T) {
 
 func TestMemoryService_CreateSessionSummary_SessionNotFound(t *testing.T) {
 	s := NewSessionService(WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+	defer s.Close()
 
 	// Create a session in memory to trigger the branch summary logic.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
