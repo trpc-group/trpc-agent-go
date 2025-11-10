@@ -3716,3 +3716,67 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 		assert.True(t, hasReasoning, "expected at least one response to contain reasoning content")
 	})
 }
+
+func TestQwen(t *testing.T) {
+	var testKey = "qwen-key"
+	t.Setenv(qwenAPIKeyName, testKey)
+	tests := []struct {
+		name       string
+		modelName  string
+		opts       []Option
+		expectOpts []Option
+	}{
+		{
+			name:      "valid qwen model",
+			modelName: "qwen-plus",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+		},
+		{
+			name:      "valid model with base url",
+			modelName: "qwen-plus",
+			opts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultQwenBaseURL),
+			},
+		},
+		{
+			name:      "empty api key",
+			modelName: "qwen-plus",
+			opts: []Option{
+				WithAPIKey(""),
+			},
+		},
+		{
+			name:      "variant qwen",
+			modelName: "qwen-plus",
+			opts: []Option{
+				WithVariant(VariantQwen),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultQwenBaseURL),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(tt.modelName, tt.opts...)
+			require.NotNil(t, m, "expected model to be created, got nil")
+
+			o := options{}
+			for _, opt := range tt.opts {
+				opt(&o)
+			}
+			for _, opt := range tt.expectOpts {
+				opt(&o)
+			}
+
+			assert.Equal(t, tt.modelName, m.name, "expected model name %s, got %s", tt.modelName, m.name)
+			assert.Equal(t, o.APIKey, m.apiKey, "expected api key %s, got %s", o.APIKey, m.apiKey)
+			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
+		})
+	}
+}
