@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -27,7 +26,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -693,41 +691,13 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, timeProcessor)
 	}
 
-	// 6. Content processor - handles messages from invocation.
-	// Honor runtime include_contents if provided, mapping legacy values to
-	// the new timeline/branch filter modes:
-	//   - none     -> timeline=current invocation (no prior history)
-	//   - filtered -> branch=prefix (default scoped history)
-	//   - all      -> branch=all (full history)
-	bm := options.messageBranchFilterMode
-	tm := options.messageTimelineFilterMode
-	if inv, ok := agent.InvocationFromContext(context.Background()); ok && inv != nil {
-		if inv.RunOptions.RuntimeState != nil {
-			if v, ok2 := inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok2 && v != "" {
-				switch strings.ToLower(v) {
-				case "none":
-					tm = processor.TimelineFilterCurrentInvocation
-				case "filtered":
-					bm = processor.BranchFilterModePrefix
-				case "all":
-					bm = processor.BranchFilterModeAll
-				}
-			}
-		}
-	}
-	// 6a. Skills processor (overview + loaded content/docs).
-	if options.SkillsRepository != nil {
-		sp := processor.NewSkillsRequestProcessor(options.SkillsRepository)
-		requestProcessors = append(requestProcessors, sp)
-	}
-
 	contentProcessor := processor.NewContentRequestProcessor(
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
-		processor.WithTimelineFilterMode(tm),
-		processor.WithBranchFilterMode(bm),
+		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
+		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
