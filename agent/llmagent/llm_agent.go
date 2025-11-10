@@ -691,6 +691,18 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, timeProcessor)
 	}
 
+	// 6. Skills processor - injects skill overview and loaded contents
+	// when a skills repository is configured. This ensures the model
+	// sees available skills (names/descriptions) and any loaded
+	// SKILL.md/doc texts before deciding on tool calls.
+	if options.SkillsRepository != nil {
+		skillsProcessor := processor.NewSkillsRequestProcessor(
+			options.SkillsRepository,
+		)
+		requestProcessors = append(requestProcessors, skillsProcessor)
+	}
+
+	// 7. Content processor - appends conversation/context history.
 	contentProcessor := processor.NewContentRequestProcessor(
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),

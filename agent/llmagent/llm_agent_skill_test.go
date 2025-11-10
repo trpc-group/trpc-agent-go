@@ -22,7 +22,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -172,4 +174,49 @@ func TestLLMAgent_SkillRun_UsesInjectedExecutor(t *testing.T) {
 	_, err = tl.(tool.CallableTool).Call(context.Background(), b)
 	require.NoError(t, err)
 	require.True(t, se.ran)
+}
+
+// captureModel records the last request passed to GenerateContent.
+type captureModel struct{ got *model.Request }
+
+func (m *captureModel) GenerateContent(
+	ctx context.Context, req *model.Request,
+) (<-chan *model.Response, error) {
+	m.got = req
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleAssistant, Content: "ok"},
+	}}}
+	close(ch)
+	return ch, nil
+}
+
+func (m *captureModel) Info() model.Info {
+	return model.Info{Name: "capture"}
+}
+
+func TestLLMAgent_WithSkills_InsertsOverview(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	m := &captureModel{}
+	agt := New("tester", WithModel(m), WithSkills(repo))
+	inv := &agent.Invocation{Message: model.NewUserMessage("hi")}
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	// Drain events to complete the run.
+	for range ch {
+		// no-op
+	}
+	require.NotNil(t, m.got)
+	var sys string
+	for _, msg := range m.got.Messages {
+		if msg.Role == model.RoleSystem {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "Available skills:")
+	require.Contains(t, sys, "echoer")
 }
