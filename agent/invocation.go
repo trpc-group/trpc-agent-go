@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -135,10 +136,17 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
-// WithKnowledgeFilter sets the knowledge filter for the RunOptions.
+// WithKnowledgeFilter sets the metadata filter for the RunOptions.
 func WithKnowledgeFilter(filter map[string]any) RunOption {
 	return func(opts *RunOptions) {
 		opts.KnowledgeFilter = filter
+	}
+}
+
+// WithKnowledgeConditionedFilter sets the complex condition filter for the RunOptions.
+func WithKnowledgeConditionedFilter(filter *searchfilter.UniversalFilterCondition) RunOption {
+	return func(opts *RunOptions) {
+		opts.KnowledgeConditionedFilter = filter
 	}
 }
 
@@ -302,8 +310,11 @@ type RunOptions struct {
 	// (e.g., room ID, user context) without modifying the agent's base initial state.
 	RuntimeState map[string]any
 
-	// KnowledgeFilter contains key-value pairs that will be merged into the knowledge filter
+	// KnowledgeFilter contains metadata key-value pairs for the knowledge filter
 	KnowledgeFilter map[string]any
+
+	// KnowledgeConditionedFilter contains complex condition filter for the knowledge search
+	KnowledgeConditionedFilter *searchfilter.UniversalFilterCondition
 
 	// Messages allows callers to provide a full conversation history to Runner.
 	// Runner will seed an empty Session with this history automatically and
