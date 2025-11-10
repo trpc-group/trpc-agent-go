@@ -273,7 +273,7 @@ type ChatStreamCompleteCallbackFunc func(
 	ctx context.Context,
 	chatRequest *openai.ChatCompletionNewParams,
 	accumulator *openai.ChatCompletionAccumulator, // nil if streamErr is not nil
-	streamErr error,                               // nil if streaming completed successfully
+	streamErr error, // nil if streaming completed successfully
 )
 
 // options contains configuration options for creating a Model.
