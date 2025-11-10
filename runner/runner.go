@@ -72,8 +72,7 @@ type Runner interface {
 
 	// Close closes the runner and releases owned resources.
 	// It's safe to call Close multiple times.
-	// Only resources created by the runner (not provided by user) will be
-	// closed.
+	// Only resources created by the runner (not provided by user) will be closed.
 	Close() error
 }
 
@@ -107,7 +106,7 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 	}
 
 	// Track if we created the session service.
-	ownedSessionService := false
+	var ownedSessionService bool
 	if options.sessionService == nil {
 		options.sessionService = inmemory.NewSessionService()
 		ownedSessionService = true
