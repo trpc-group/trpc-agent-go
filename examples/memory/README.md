@@ -30,6 +30,7 @@ This implementation showcases the essential features for building AI application
 - **⚙️ Configurable Tools**: Enable or disable specific memory tools as needed
 - **🔴 Redis Support**: Support for Redis-based memory service (ready to use)
 - **🗄️ MySQL Support**: Support for MySQL-based memory service with persistent storage
+- **🐘 PostgreSQL Support**: Support for PostgreSQL-based memory service with persistent storage
 
 ### Key Features
 
@@ -140,13 +141,15 @@ The following memory tools are manually registered via `memoryService.Tools()`:
 
 ## Command Line Arguments
 
-| Argument      | Description                                     | Default Value    |
-| ------------- | ----------------------------------------------- | ---------------- |
-| `-model`      | Name of the model to use                        | `deepseek-chat`  |
-| `-memory`     | Memory service: `inmemory`, `redis`, or `mysql` | `inmemory`       |
-| `-redis-addr` | Redis server address (when using redis memory)  | `localhost:6379` |
-| `-mysql-dsn`  | MySQL DSN (when using mysql memory, required)   | ``               |
-| `-streaming`  | Enable streaming mode for responses             | `true`           |
+| Argument        | Description                                                 | Default Value    |
+| --------------- | ----------------------------------------------------------- | ---------------- |
+| `-model`        | Name of the model to use                                    | `deepseek-chat`  |
+| `-memory`       | Memory service: `inmemory`, `redis`, `mysql`, or `postgres` | `inmemory`       |
+| `-redis-addr`   | Redis server address (when using redis memory)              | `localhost:6379` |
+| `-mysql-dsn`    | MySQL DSN (when using mysql memory, required)               | ``               |
+| `-postgres-dsn` | PostgreSQL DSN (when using postgres memory, required)       | ``               |
+| `-soft-delete`  | Enable soft delete for MySQL/PostgreSQL memory service      | `false`          |
+| `-streaming`    | Enable streaming mode for responses                         | `true`           |
 
 ## Usage
 
@@ -195,7 +198,7 @@ go run . -model gpt-4o -streaming=false
 
 ### Service Configuration
 
-The example supports three memory service backends: in-memory, Redis, and MySQL, while always using in-memory session service for simplicity:
+The example supports four memory service backends: in-memory, Redis, MySQL, and PostgreSQL, while always using in-memory session service for simplicity:
 
 ```bash
 # Default in-memory memory service
@@ -206,15 +209,19 @@ go run . -memory redis -redis-addr localhost:6379
 
 # MySQL memory service (DSN required via command line)
 go run . -memory mysql -mysql-dsn "user:password@tcp(localhost:3306)/dbname?parseTime=true"
+
+# PostgreSQL memory service (DSN required via command line)
+go run . -memory postgres -postgres-dsn "postgres://user:password@localhost:5432/dbname"
 ```
 
 **Available service combinations:**
 
-| Memory Service | Session Service | Status   | Description                                     |
-| -------------- | --------------- | -------- | ----------------------------------------------- |
-| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration                           |
-| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session                |
-| `mysql`        | `inmemory`      | ✅ Ready | MySQL memory + in-memory session (DSN required) |
+| Memory Service | Session Service | Status   | Description                                          |
+| -------------- | --------------- | -------- | ---------------------------------------------------- |
+| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration                                |
+| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session                     |
+| `mysql`        | `inmemory`      | ✅ Ready | MySQL memory + in-memory session (DSN required)      |
+| `postgres`     | `inmemory`      | ✅ Ready | PostgreSQL memory + in-memory session (DSN required) |
 
 ### Help and Available Options
 
@@ -229,13 +236,17 @@ Output:
 ```
 Usage of ./memory_example:
   -memory string
-        Name of the memory service to use inmemory / redis / mysql (default "inmemory")
+        Name of the memory service to use inmemory / redis / mysql / postgres (default "inmemory")
   -model string
         Name of the model to use (default "deepseek-chat")
   -mysql-dsn string
         MySQL DSN (e.g. user:password@tcp(localhost:3306)/dbname?parseTime=true)
+  -postgres-dsn string
+        PostgreSQL DSN (e.g. postgres://user:password@localhost:5432/dbname)
   -redis-addr string
         Redis address (default "localhost:6379")
+  -soft-delete
+        Enable soft delete for MySQL/PostgreSQL memory service (default false)
   -streaming
         Enable streaming mode for responses (default true)
 ```
@@ -506,10 +517,11 @@ Custom tools can provide enhanced functionality:
 
 ### Memory Service Integration
 
-- Supports multiple backends: in-memory, Redis, and MySQL
+- Supports multiple backends: in-memory, Redis, MySQL, and PostgreSQL
 - Uses `memoryinmemory.NewMemoryService()` for in-memory storage
 - Uses `memoryredis.NewService()` for Redis-based storage
 - Uses `memorymysql.NewService()` for MySQL-based storage
+- Uses `memorypostgres.NewService()` for PostgreSQL-based storage
 - Memory tools directly access the memory service
 - Two-step integration: Step 1 (manual tool registration) + Step 2 (runner service setup)
 - Explicit control over tool registration and service management
@@ -735,6 +747,109 @@ CREATE TABLE IF NOT EXISTS memories (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ```
 
+## PostgreSQL Memory Service
+
+### PostgreSQL Support
+
+The example supports PostgreSQL-based memory service for persistent relational storage:
+
+```go
+// PostgreSQL memory service
+memoryService, err := memorypostgres.NewService(
+    memorypostgres.WithPostgresConnString("postgres://user:password@localhost:5432/dbname"),
+    memorypostgres.WithSoftDelete(true),
+    memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
+    memorypostgres.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+)
+
+// Session service always uses in-memory for simplicity
+sessionService := sessioninmemory.NewSessionService()
+```
+
+**Benefits of PostgreSQL support:**
+
+- **Persistence**: Memories stored in relational database
+- **ACID Compliance**: Full transaction support and data integrity
+- **Scalability**: Support for PostgreSQL replication and clustering
+- **Query Flexibility**: Rich SQL query capabilities with JSONB support
+- **Monitoring**: Comprehensive PostgreSQL monitoring tools
+- **Auto Table Creation**: Automatically creates required tables
+- **Soft Delete**: Optional soft delete support with `deleted_at` field
+
+### PostgreSQL Configuration
+
+To use PostgreSQL memory service, you need a running PostgreSQL instance:
+
+```bash
+# Start PostgreSQL with Docker (recommended for testing)
+docker run -d --name postgres-memory \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=memory_db \
+  -p 5432:5432 \
+  postgres:15-alpine
+
+# Wait for PostgreSQL to be ready
+docker exec postgres-memory pg_isready -U postgres
+```
+
+**Usage examples:**
+
+```bash
+# Connect to PostgreSQL with DSN
+go run . -memory postgres -postgres-dsn "postgres://postgres:password@localhost:5432/memory_db"
+
+# Connect to custom PostgreSQL port
+go run . -memory postgres -postgres-dsn "postgres://postgres:password@localhost:5433/memory_db"
+
+# Connect with soft delete enabled
+go run . -memory postgres -postgres-dsn "postgres://postgres:password@localhost:5432/memory_db" -soft-delete
+
+# Connect with custom table name (via code configuration)
+# See memorypostgres.WithTableName() option in the code
+```
+
+**DSN Format:**
+
+```
+postgres://[user[:password]@][netloc][:port][/dbname][?param1=value1&...]
+```
+
+**Common DSN parameters:**
+
+- `sslmode=disable` - Disable SSL (for local development)
+- `sslmode=require` - Require SSL connection
+- `connect_timeout=10` - Connection timeout in seconds
+
+**Table Schema:**
+
+The PostgreSQL memory service automatically creates the following table structure:
+
+```sql
+CREATE TABLE IF NOT EXISTS memories (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    memory_id VARCHAR(64) NOT NULL,
+    memory_data JSONB NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    CONSTRAINT idx_app_user_memory UNIQUE (app_name, user_id, memory_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_user ON memories(app_name, user_id);
+CREATE INDEX IF NOT EXISTS idx_deleted_at ON memories(deleted_at);
+```
+
+**Soft Delete:**
+
+When soft delete is enabled:
+
+- Delete operations set `deleted_at` timestamp instead of physically removing rows
+- Queries automatically filter out deleted rows (`WHERE deleted_at IS NULL`)
+- Use `WithSoftDelete(true)` option to enable soft delete behavior
+
 ## Extensibility
 
 This example demonstrates how to:
@@ -759,6 +874,7 @@ Future enhancements could include:
 - Dynamic tool registration and unregistration
 - Redis cluster and sentinel support
 - MySQL replication and clustering support
+- PostgreSQL replication and clustering support
 - Memory replication and synchronization across services
 - Advanced memory analytics and insights
 - Cross-service memory migration tools

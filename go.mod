@@ -84,3 +84,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace trpc.group/trpc-go/trpc-agent-go/memory/postgres => ./memory/postgres
