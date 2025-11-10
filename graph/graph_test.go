@@ -98,24 +98,13 @@ func TestAddConditionalEdge_Exclusivity(t *testing.T) {
 		t.Fatal("expected error when no condition provided")
 	}
 
-	// Both set should error.
-	both := &ConditionalEdge{
-		From:      "A",
-		Condition: func(ctx context.Context, s State) (string, error) { return "B", nil },
-		MultiCondition: func(ctx context.Context, s State) ([]string, error) {
-			return []string{"B"}, nil
-		},
-		PathMap: map[string]string{"B": "B"},
-	}
-	if err := g.addConditionalEdge(both); err == nil {
-		t.Fatal("expected error when both conditions are set")
-	}
-
 	// Only MultiCondition set should succeed.
 	mc := &ConditionalEdge{
-		From:           "A",
-		MultiCondition: func(ctx context.Context, s State) ([]string, error) { return []string{"B"}, nil },
-		PathMap:        map[string]string{"B": "B"},
+		From: "A",
+		Condition: func(ctx context.Context, s State) (ConditionResult, error) {
+			return ConditionResult{NextNodes: []string{"B"}}, nil
+		},
+		PathMap: map[string]string{"B": "B"},
 	}
 	if err := g.addConditionalEdge(mc); err != nil {
 		t.Fatalf("unexpected error adding multi-conditional edge: %v", err)
@@ -130,9 +119,11 @@ func TestAddConditionalEdge_PathMapValidation(t *testing.T) {
 	_ = g.addNode(&Node{ID: "A", Name: "A", Function: func(ctx context.Context, s State) (any, error) { return s, nil }})
 	// PathMap refers to Z which does not exist.
 	ce := &ConditionalEdge{
-		From:      "A",
-		Condition: func(ctx context.Context, s State) (string, error) { return "Z", nil },
-		PathMap:   map[string]string{"Z": "Z"},
+		From: "A",
+		Condition: func(ctx context.Context, s State) (ConditionResult, error) {
+			return ConditionResult{NextNodes: []string{"Z"}}, nil
+		},
+		PathMap: map[string]string{"Z": "Z"},
 	}
 	if err := g.addConditionalEdge(ce); err == nil {
 		t.Fatalf("expected error when path map points to missing node")

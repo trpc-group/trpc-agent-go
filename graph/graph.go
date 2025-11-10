@@ -53,12 +53,39 @@ type NodeFunc func(ctx context.Context, state State) (any, error)
 // It can be either a State update or a Command for combined state update + routing.
 type NodeResult any
 
-// ConditionalFunc is a function that determines the next node(s) based on state.
+// SingleConditionalFunc is a function that determines the next node(s) based on state.
 // Conditional edge function signature.
-type ConditionalFunc func(ctx context.Context, state State) (string, error)
+type SingleConditionalFunc func(ctx context.Context, state State) (string, error)
 
 // MultiConditionalFunc returns multiple next nodes for parallel execution.
 type MultiConditionalFunc func(ctx context.Context, state State) ([]string, error)
+
+// ConditionalFunc is a function that determines the next node(s) based on state.
+type ConditionalFunc func(ctx context.Context, state State) (ConditionResult, error)
+
+// ConditionResult represents the result of executing a conditional edge function.
+type ConditionResult struct {
+	NextNodes []string
+	Commands  []*Command
+}
+
+func wrapperConditionalFunc[T SingleConditionalFunc | MultiConditionalFunc](condFunc T) ConditionalFunc {
+	if singleFunc, ok := any(condFunc).(SingleConditionalFunc); ok {
+		return func(ctx context.Context, state State) (ConditionResult, error) {
+			nextNode, err := singleFunc(ctx, state)
+			return ConditionResult{NextNodes: []string{nextNode}}, err
+		}
+	}
+
+	if multiFunc, ok := any(condFunc).(MultiConditionalFunc); ok {
+		return func(ctx context.Context, state State) (ConditionResult, error) {
+			nextNodes, err := multiFunc(ctx, state)
+			return ConditionResult{NextNodes: nextNodes}, err
+		}
+	}
+
+	return nil
+}
 
 // channelWriteEntry represents a write operation to a channel.
 type channelWriteEntry struct {
@@ -149,10 +176,7 @@ type Edge struct {
 type ConditionalEdge struct {
 	From      string
 	Condition ConditionalFunc
-	// MultiCondition allows returning multiple next nodes for fan-out.
-	// Exactly one of Condition or MultiCondition should be non-nil.
-	MultiCondition MultiConditionalFunc
-	PathMap        map[string]string // Maps condition result to target node.
+	PathMap   map[string]string // Maps condition result to target node.
 }
 
 // Graph represents a directed graph of nodes and edges.
@@ -414,9 +438,8 @@ func (g *Graph) addConditionalEdge(condEdge *ConditionalEdge) error {
 		return fmt.Errorf("conditional edge from cannot be empty")
 	}
 	// Validate condition presence and exclusivity.
-	if (condEdge.Condition == nil && condEdge.MultiCondition == nil) ||
-		(condEdge.Condition != nil && condEdge.MultiCondition != nil) {
-		return fmt.Errorf("exactly one of Condition or MultiCondition must be set")
+	if condEdge.Condition == nil {
+		return fmt.Errorf("exactly conditionFunc must be set")
 	}
 	if condEdge.From != Start {
 		if _, exists := g.nodes[condEdge.From]; !exists {
