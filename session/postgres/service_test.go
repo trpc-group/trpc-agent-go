@@ -1272,7 +1272,7 @@ func TestSoftDeleteExpiredTable_SessionScope(t *testing.T) {
 		UserID:  "test-user",
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WithArgs(now, "test-app", "test-user").
@@ -1290,7 +1290,7 @@ func TestSoftDeleteExpiredTable_GlobalScope(t *testing.T) {
 	})
 	defer db.Close()
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WithArgs(now).
@@ -1313,7 +1313,7 @@ func TestHardDeleteExpiredTable_SessionScope(t *testing.T) {
 		UserID:  "test-user",
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	mock.ExpectExec("DELETE FROM session_states").
 		WithArgs("test-app", "test-user", now).
@@ -1331,7 +1331,7 @@ func TestHardDeleteExpiredTable_GlobalScope(t *testing.T) {
 	})
 	defer db.Close()
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	mock.ExpectExec("DELETE FROM session_states").
 		WithArgs(now).
