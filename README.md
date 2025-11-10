@@ -472,6 +472,12 @@ Inspired by amazing frameworks like **ADK**, **Agno**, **CrewAI**, **AutoGen**, 
 
 ---
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=trpc-group/trpc-agent-go&type=Date)](https://star-history.com/#trpc-group/trpc-agent-go&Date)
+
+---
+
 ## 📜 License
 
 Licensed under the **Apache 2.0 License** - see [LICENSE](LICENSE) file for details.
