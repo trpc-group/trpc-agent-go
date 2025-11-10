@@ -102,6 +102,30 @@ func TestDOT_IncludesNodesEdgesAndStyles(t *testing.T) {
 	}
 }
 
+// Multi-conditional visualization fallback: when PathMap is empty but the
+// conditional edge is multi-conditional, we render dashed edges using the
+// node's Ends map as potential branches.
+func TestDOT_MultiConditional_UsesEndsWhenNoPathMap(t *testing.T) {
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddNode("A", func(ctx context.Context, s State) (any, error) { return s, nil }, WithEndsMap(map[string]string{"x": "B", "y": "C"}))
+	sg.AddNode("B", func(ctx context.Context, s State) (any, error) { return s, nil })
+	sg.AddNode("C", func(ctx context.Context, s State) (any, error) { return s, nil })
+	sg.SetEntryPoint("A")
+	sg.AddMultiConditionalEdges("A", func(ctx context.Context, s State) ([]string, error) { return []string{"x", "y"}, nil }, nil)
+	g, err := sg.Compile()
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	dot := g.DOT()
+	if !strings.Contains(dot, "\"A\" -> \"B\" [style=dashed") {
+		t.Fatalf("expected dashed A->B edge from ends, got: %s", dot)
+	}
+	if !strings.Contains(dot, "\"A\" -> \"C\" [style=dashed") {
+		t.Fatalf("expected dashed A->C edge from ends, got: %s", dot)
+	}
+}
+
 func TestDOT_HideStartEnd(t *testing.T) {
 	g := buildSampleGraph(t)
 	dot := g.DOT(WithIncludeStartEnd(false))

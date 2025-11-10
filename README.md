@@ -294,6 +294,31 @@ The `examples` directory contains runnable demos covering every major feature.
   how to construct a graph-based agent, manage state safely, implement
   conditional routing, and orchestrate execution with the Runner.
 
+- Multi-conditional fan-out routing:
+
+```go
+// Return multiple branch keys and run targets in parallel.
+sg := graph.NewStateGraph(schema)
+sg.AddNode("router", func(ctx context.Context, s graph.State) (any, error) {
+    return nil, nil
+})
+sg.AddNode("A", func(ctx context.Context, s graph.State) (any, error) {
+    return graph.State{"a": 1}, nil
+})
+sg.AddNode("B", func(ctx context.Context, s graph.State) (any, error) {
+    return graph.State{"b": 1}, nil
+})
+sg.SetEntryPoint("router")
+sg.AddMultiConditionalEdges(
+    "router",
+    func(ctx context.Context, s graph.State) ([]string, error) {
+        return []string{"goA", "goB"}, nil
+    },
+    map[string]string{"goA": "A", "goB": "B"}, // Path map or ends map
+)
+sg.SetFinishPoint("A").SetFinishPoint("B")
+```
+
 ### 5. Memory ([examples/memory](examples/memory))
 
 - In‑memory and Redis memory services with CRUD, search and tool integration.
@@ -444,6 +469,12 @@ Special thanks to Tencent's business units including **Tencent Yuanbao**, **Tenc
 ### 🌟 **Open Source Inspiration**
 
 Inspired by amazing frameworks like **ADK**, **Agno**, **CrewAI**, **AutoGen**, and many others. Standing on the shoulders of giants! 🙏
+
+---
+
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=trpc-group/trpc-agent-go&type=Date)](https://star-history.com/#trpc-group/trpc-agent-go&Date)
 
 ---
 

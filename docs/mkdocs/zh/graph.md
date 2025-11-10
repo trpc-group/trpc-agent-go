@@ -347,6 +347,22 @@ func main() {
     graphAgent, err := graphagent.New("simple-workflow", compiledGraph,
         graphagent.WithDescription("简单的工作流示例"),
         graphagent.WithInitialState(graph.State{}),
+        graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
+        // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+        // 时间维度过滤条件
+        // 默认值: graphagent.TimelineFilterAll
+        // 可选值: 
+        //  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
+        //  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
+        //  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
+        graphagent.WithMessageTimelineFilterMode(llmagent.BranchFilterModeAll),
+        // 分支维度过滤条件
+        // 默认值: graphagent.BranchFilterModePrefix
+        // 可选值: 
+        //  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
+        //  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
+        //  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
+        graphagent.WithMessageBranchFilterMode(llmagent.TimelineFilterAll),
     )
     if err != nil {
         panic(err)
@@ -575,6 +591,21 @@ graphAgent, err := graphagent.New(
     graphagent.WithChannelBufferSize(1024),           // 调整事件通道缓冲区
     graphagent.WithCheckpointSaver(memorySaver),      // 使用持久化检查点
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 时间维度过滤条件
+    // 默认值: graphagent.TimelineFilterAll
+    // 可选值: 
+    //  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
+    //  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
+    //  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
+    graphagent.WithMessageTimelineFilterMode(llmagent.BranchFilterModeAll),
+    // 分支维度过滤条件
+    // 默认值: graphagent.BranchFilterModePrefix
+    // 可选值: 
+    //  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
+    //  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
+    //  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
+    graphagent.WithMessageBranchFilterMode(llmagent.TimelineFilterAll),
     graphagent.WithAgentCallbacks(&agent.Callbacks{
         // Agent 级回调配置
     }),
@@ -676,6 +707,33 @@ func decideNode(ctx context.Context, s graph.State) (any, error) {
 - 当通过 `Command.GoTo` 进行路由时，无需额外添加 `AddEdge(from, to)`；只需保证目标节点存在，若为终点需设置 `SetFinishPoint(target)`。
 
 完整可运行示例：`examples/graph/multiends`。
+
+### 4.2 多条件扇出（并行）
+
+当一次决策需要“同时”走多个分支（例如同时做摘要与打标签），可使用
+`AddMultiConditionalEdges`：
+
+```go
+// 返回多个分支键，每个分支键解析为一个具体目标节点。
+sg.AddMultiConditionalEdges(
+    "router",
+    func(ctx context.Context, s graph.State) ([]string, error) {
+        // 一次决策，同时走两个分支
+        return []string{"toA", "toB"}, nil
+    },
+    map[string]string{
+        "toA": "A", // 分支键 -> 目标节点
+        "toB": "B",
+    },
+)
+```
+
+说明：
+- 返回结果会先去重，同一分支键在同一步内只触发一次；
+- 每个分支键的解析优先级与单条件路由一致：
+  1) 条件边 `pathMap`；2) 节点 Ends；3) 直接当作节点 ID；
+- 可视化：当未提供 `pathMap` 时，DOT 会回退使用该节点的 Ends 来渲染虚线
+  条件边（仅用于可视化，方便理解流程）。
 
 ### 5. 工具节点集成
 
@@ -1051,6 +1109,22 @@ ga, err := graphagent.New(
     graphagent.WithCheckpointSaver(saver),
     graphagent.WithSubAgents([]agent.Agent{subAgent}),
     graphagent.WithAgentCallbacks(agent.NewCallbacks()),
+    graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 时间维度过滤条件
+    // 默认值: graphagent.TimelineFilterAll
+    // 可选值: 
+    //  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
+    //  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
+    //  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
+    graphagent.WithMessageTimelineFilterMode(llmagent.BranchFilterModeAll),
+    // 分支维度过滤条件
+    // 默认值: graphagent.BranchFilterModePrefix
+    // 可选值: 
+    //  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
+    //  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
+    //  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
+    graphagent.WithMessageBranchFilterMode(llmagent.TimelineFilterAll),
 )
 ```
 

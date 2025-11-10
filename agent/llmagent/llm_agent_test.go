@@ -349,6 +349,12 @@ func (m *mockKnowledgeBase) Search(ctx context.Context, req *knowledge.SearchReq
 		Document: bestMatch,
 		Score:    bestScore,
 		Text:     content,
+		Documents: []*knowledge.Result{
+			{
+				Document: bestMatch,
+				Score:    bestScore,
+			},
+		},
 	}, nil
 }
 
@@ -1321,4 +1327,24 @@ func TestLLMAgent_RunWithModel_Priority(t *testing.T) {
 
 	llmAgent.setupInvocation(inv)
 	require.Equal(t, modelFromWithModel, inv.Model)
+}
+
+func TestLLMAgent_MessageFilterMode(t *testing.T) {
+	options := &Options{
+		messageBranchFilterMode: "prefix",
+	}
+	WithMessageTimelineFilterMode("all")(options)
+
+	require.Equal(t, options.messageTimelineFilterMode, "all")
+	require.Equal(t, options.messageBranchFilterMode, "prefix")
+
+	options = &Options{
+		messageBranchFilterMode:   "prefix",
+		messageTimelineFilterMode: "all",
+	}
+	WithMessageTimelineFilterMode("request")(options)
+	WithMessageBranchFilterMode("exact")(options)
+
+	require.Equal(t, options.messageTimelineFilterMode, "request")
+	require.Equal(t, options.messageBranchFilterMode, "exact")
 }

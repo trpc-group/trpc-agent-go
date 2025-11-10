@@ -20,10 +20,12 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -134,10 +136,17 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
-// WithKnowledgeFilter sets the knowledge filter for the RunOptions.
+// WithKnowledgeFilter sets the metadata filter for the RunOptions.
 func WithKnowledgeFilter(filter map[string]any) RunOption {
 	return func(opts *RunOptions) {
 		opts.KnowledgeFilter = filter
+	}
+}
+
+// WithKnowledgeConditionedFilter sets the complex condition filter for the RunOptions.
+func WithKnowledgeConditionedFilter(filter *searchfilter.UniversalFilterCondition) RunOption {
+	return func(opts *RunOptions) {
+		opts.KnowledgeConditionedFilter = filter
 	}
 }
 
@@ -187,6 +196,51 @@ func WithModel(m model.Model) RunOption {
 func WithModelName(name string) RunOption {
 	return func(opts *RunOptions) {
 		opts.ModelName = name
+	}
+}
+
+// WithToolFilter sets a custom tool filter function for this specific run.
+// The filter function receives a context and a tool, and returns true if the tool should be included.
+//
+// This is useful for:
+//   - Permission control: restrict tool access based on user roles or runtime conditions
+//   - Cost optimization: reduce token usage by limiting tool descriptions
+//   - Feature isolation: limit capabilities for specific use cases
+//   - Dynamic filtering: filter tools based on runtime state, session data, etc.
+//
+// Example - Simple name-based filtering:
+//
+//	runner.Run(ctx, userID, sessionID, message,
+//	    agent.WithToolFilter(tool.NewIncludeToolNamesFilter("calculator", "time_tool")),
+//	)
+//
+// Example - Custom logic with runtime state:
+//
+//	runner.Run(ctx, userID, sessionID, message,
+//	    agent.WithToolFilter(func(ctx context.Context, t tool.Tool) bool {
+//	        // Access invocation from context if needed
+//	        inv, _ := agent.InvocationFromContext(ctx)
+//	        userLevel, _ := inv.Session.Get("user_level").(string)
+//
+//	        // Premium users get all tools
+//	        if userLevel == "premium" {
+//	            return true
+//	        }
+//
+//	        // Free users only get basic tools
+//	        toolName := t.Declaration().Name
+//	        return toolName == "calculator" || toolName == "time_tool"
+//	    }),
+//	)
+//
+// Note: Framework tools (knowledge_search, transfer_to_agent) are never filtered
+// and will always be available regardless of the filter function.
+//
+// Note: This is a "soft" constraint. Tools should still implement their own
+// authorization logic for security.
+func WithToolFilter(filter tool.FilterFunc) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolFilter = filter
 	}
 }
 
@@ -256,8 +310,11 @@ type RunOptions struct {
 	// (e.g., room ID, user context) without modifying the agent's base initial state.
 	RuntimeState map[string]any
 
-	// KnowledgeFilter contains key-value pairs that will be merged into the knowledge filter
+	// KnowledgeFilter contains metadata key-value pairs for the knowledge filter
 	KnowledgeFilter map[string]any
+
+	// KnowledgeConditionedFilter contains complex condition filter for the knowledge search
+	KnowledgeConditionedFilter *searchfilter.UniversalFilterCondition
 
 	// Messages allows callers to provide a full conversation history to Runner.
 	// Runner will seed an empty Session with this history automatically and
@@ -291,6 +348,27 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+
+	// ToolFilter is a custom function to filter tools for this run.
+	// If set, only tools for which the filter returns true will be available to the model.
+	// If nil, all registered tools will be available (default behavior).
+	//
+	// The filter function receives:
+	//   - ctx: The context with invocation information (use agent.InvocationFromContext)
+	//   - tool: The tool being filtered
+	//
+	// This filtering happens at the request preparation stage, before sending to the model.
+	// The model will only see the tool descriptions for tools that pass the filter.
+	//
+	// Note: Framework tools (knowledge_search, transfer_to_agent) are never filtered
+	// and will always be included regardless of the filter function's return value.
+	//
+	// Example:
+	//   agent.WithToolFilter(tool.NewIncludeToolNamesFilter("calculator", "time_tool"))
+	//   agent.WithToolFilter(func(ctx context.Context, t tool.Tool) bool {
+	//       return t.Declaration().Name == "calculator"
+	//   })
+	ToolFilter tool.FilterFunc
 }
 
 // NewInvocation create a new invocation

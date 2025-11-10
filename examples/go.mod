@@ -9,9 +9,12 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../memory/mysql
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../memory/postgres
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
+	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../session/postgres
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../storage/postgres
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
 )
@@ -28,23 +31,18 @@ require (
 	trpc.group/trpc-go/trpc-agent-go v0.4.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.4.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.5
 )
 
 require (
-	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.4.14 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
-	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/docker v28.4.0+incompatible // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
@@ -55,7 +53,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.20.2 // indirect
 	github.com/go-openapi/swag v0.22.8 // indirect
-	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.3 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
@@ -85,7 +82,6 @@ require (
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/rs/cors v1.11.1 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
@@ -118,6 +114,4 @@ require (
 	google.golang.org/grpc v1.67.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.0.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
 )

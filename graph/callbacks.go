@@ -121,6 +121,10 @@ func (c *NodeCallbacks) RunBeforeNode(
 	state State,
 ) (any, error) {
 	for _, cb := range c.BeforeNode {
+		if cb == nil {
+			// Skip nil callback entries defensively.
+			continue
+		}
 		customResult, err := cb(ctx, callbackCtx, state)
 		if err != nil {
 			return nil, err
@@ -144,6 +148,10 @@ func (c *NodeCallbacks) RunAfterNode(
 ) (any, error) {
 	currentResult := result
 	for _, cb := range c.AfterNode {
+		if cb == nil {
+			// Skip nil callback entries defensively.
+			continue
+		}
 		customResult, err := cb(ctx, callbackCtx, state, currentResult, nodeErr)
 		if err != nil {
 			return nil, err
@@ -164,6 +172,10 @@ func (c *NodeCallbacks) RunOnNodeError(
 	err error,
 ) {
 	for _, cb := range c.OnNodeError {
+		if cb == nil {
+			// Skip nil callback entries defensively.
+			continue
+		}
 		cb(ctx, callbackCtx, state, err)
 	}
 }

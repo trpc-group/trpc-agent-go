@@ -509,6 +509,24 @@ func TestBuildRequestAttributes(t *testing.T) {
 				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
 			},
 		},
+		{
+			name: "request with stream enabled",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: true,
+				},
+			},
+		},
+		{
+			name: "request with stream disabled",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -779,4 +797,63 @@ func TestNewConn_InvalidEndpoint(t *testing.T) {
 		t.Fatalf("expected non-nil connection")
 	}
 	_ = conn.Close()
+}
+
+// TestBuildRequestAttributes_StreamAttribute verifies that gen_ai.request.is_stream
+// is only added when stream is true.
+func TestBuildRequestAttributes_StreamAttribute(t *testing.T) {
+	tests := []struct {
+		name          string
+		req           *model.Request
+		expectStream  bool
+		streamPresent bool
+	}{
+		{
+			name: "stream enabled",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: true,
+				},
+			},
+			expectStream:  true,
+			streamPresent: true,
+		},
+		{
+			name: "stream disabled",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: false,
+				},
+			},
+			expectStream:  false,
+			streamPresent: false,
+		},
+		{
+			name: "stream not set",
+			req: &model.Request{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+			},
+			expectStream:  false,
+			streamPresent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := buildRequestAttributes(tt.req)
+			require.NotNil(t, attrs)
+
+			found := false
+			for _, attr := range attrs {
+				if string(attr.Key) == KeyGenAIRequestIsStream {
+					found = true
+					require.Equal(t, tt.expectStream, attr.Value.AsBool())
+					break
+				}
+			}
+			require.Equal(t, tt.streamPresent, found, "stream attribute presence mismatch")
+		})
+	}
 }

@@ -1566,3 +1566,65 @@ m := openai.New("my-custom-model",
 #### Usage Example
 
 For a complete interactive example, see [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor).
+
+### 3. Provider
+
+With the emergence of multiple large model providers, some have defined their own API specifications. Currently, the framework has integrated the APIs of OpenAI and Anthropic, and exposes them as models. Users can access different provider models through `openai.New` and `anthropic.New`.
+
+However, there are differences in instantiation and configuration between providers, which often requires developers to modify a significant amount of code when switching between providers, increasing the cost of switching.
+
+To solve this problem, the Provider offers a unified model instantiation entry point. Developers only need to specify the provider and model name, and other configuration options are managed through the unified `Option`, simplifying the complexity of switching between providers.
+
+The Provider supports the following `Option`:
+
+| Option                                                                                            | Description                                                             |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `WithAPIKey` / `WithBaseURL`                                                                      | Set the API Key and Base URL for the model                              |
+| `WithHTTPClientName` / `WithHTTPClientTransport`                                                  | Configure HTTP client properties                                        |
+| `WithChannelBufferSize`                                                                           | Adjust the response channel buffer size                                 |
+| `WithCallbacks`                                                                                   | Configure OpenAI / Anthropic request, response, and streaming callbacks |
+| `WithExtraFields`                                                                                 | Configure custom fields in the request body                             |
+| `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token trimming related parameters                                       |
+| `WithOpenAI` / `WithAnthropic`                                                                    | Pass-through native options for the respective providers                |
+
+#### Usage Example
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
+)
+
+providerName := "openai"        // provider supports openai and anthropic.
+modelName := "deepseek-chat"
+
+modelInstance, err := provider.Model(
+    providerName,
+    modelName,
+    provider.WithAPIKey(c.apiKey),
+    provider.WithBaseURL(c.baseURL),
+    provider.WithChannelBufferSize(c.channelBufferSize),
+    provider.WithEnableTokenTailoring(c.tokenTailoring),
+    provider.WithMaxInputTokens(c.maxInputTokens),
+)
+
+agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))
+```
+
+Full code can be found in [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider).
+
+#### Registering a Custom Provider
+
+The framework supports registering custom providers to integrate other large model providers or custom model implementations.
+
+Using `provider.Register`, you can define a method to create custom model instances based on the options.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/provider"
+
+provider.Register("custom-provider", func(opts *provider.Options) (model.Model, error) {
+    return newCustomModel(opts.ModelName, WithAPIKey(opts.APIKey)), nil
+})
+
+customModel, err := provider.Model("custom-provider", "custom-model")
+```

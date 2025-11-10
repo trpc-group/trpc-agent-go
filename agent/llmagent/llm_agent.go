@@ -34,6 +34,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
@@ -56,6 +57,23 @@ const (
 	// defaultModelName is the model name used when only WithModel is set
 	// without WithModels.
 	defaultModelName = "__default__"
+
+	// BranchFilterModePrefix Prefix matching pattern
+	BranchFilterModePrefix = processor.BranchFilterModePrefix
+	// BranchFilterModeAll include all
+	BranchFilterModeAll = processor.BranchFilterModeAll
+	// BranchFilterModeExact exact match
+	BranchFilterModeExact = processor.BranchFilterModeExact
+
+	// TimelineFilterAll includes all historical message records
+	// Suitable for scenarios requiring full conversation context
+	TimelineFilterAll = processor.TimelineFilterAll
+	// TimelineFilterCurrentRequest only includes messages within the current request cycle
+	// Filters out previous historical records, keeping only messages related to this request
+	TimelineFilterCurrentRequest = processor.TimelineFilterCurrentRequest
+	// TimelineFilterCurrentInvocation only includes messages within the current invocation session
+	// Suitable for scenarios requiring isolation between different invocation cycles in long-running sessions
+	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
 )
 
 // Option is a function that configures an LLMAgent.
@@ -326,10 +344,17 @@ func WithPreserveSameBranch(preserve bool) Option {
 	}
 }
 
-// WithKnowledgeFilter sets the knowledge filter for the knowledge base.
+// WithKnowledgeFilter sets the metadata filter for the knowledge base.
 func WithKnowledgeFilter(filter map[string]any) Option {
 	return func(opts *Options) {
 		opts.KnowledgeFilter = filter
+	}
+}
+
+// WithKnowledgeConditionedFilter sets the complex condition filter for the knowledge base.
+func WithKnowledgeConditionedFilter(filter *searchfilter.UniversalFilterCondition) Option {
+	return func(opts *Options) {
+		opts.KnowledgeConditionedFilter = filter
 	}
 }
 
@@ -351,6 +376,20 @@ func WithEnableKnowledgeAgenticFilter(agenticFilter bool) Option {
 func WithEndInvocationAfterTransfer(end bool) Option {
 	return func(opts *Options) {
 		opts.EndInvocationAfterTransfer = end
+	}
+}
+
+// WithMessageTimelineFilterMode sets the message timeline filter mode.
+func WithMessageTimelineFilterMode(mode string) Option {
+	return func(opts *Options) {
+		opts.messageTimelineFilterMode = mode
+	}
+}
+
+// WithMessageBranchFilterMode sets the message branch filter mode.
+func WithMessageBranchFilterMode(mode string) Option {
+	return func(opts *Options) {
+		opts.messageBranchFilterMode = mode
 	}
 }
 
@@ -391,8 +430,10 @@ type Options struct {
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
-	// KnowledgeFilter is the filter for the knowledge search tool.
+	// KnowledgeFilter is the metadata filter for the knowledge search tool.
 	KnowledgeFilter map[string]any
+	// KnowledgeConditionedFilter is the complex condition filter for the knowledge search tool.
+	KnowledgeConditionedFilter *searchfilter.UniversalFilterCondition
 	// EnableKnowledgeAgenticFilter enables agentic filter mode for knowledge search.
 	// When true, allows the LLM to dynamically decide whether to pass filter parameters.
 	EnableKnowledgeAgenticFilter bool
@@ -455,7 +496,9 @@ type Options struct {
 	DefaultTransferMessage *string
 
 	// SkillsRepository enables Agent Skills if non-nil.
-	SkillsRepository skill.Repository
+	SkillsRepository          skill.Repository
+	messageTimelineFilterMode string
+	messageBranchFilterMode   string
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -469,7 +512,8 @@ type LLMAgent struct {
 	systemPrompt         string
 	genConfig            model.GenerationConfig
 	flow                 flow.Flow
-	tools                []tool.Tool // Tools supported by the agent
+	tools                []tool.Tool     // All tools (user tools + framework tools)
+	userToolNames        map[string]bool // Names of tools explicitly registered by user via WithTools and WithToolSets
 	codeExecutor         codeexecutor.CodeExecutor
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
@@ -510,7 +554,8 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
-	tools := registerTools(&options)
+	// Also track which tools are user-registered (via WithTools) for filtering purposes.
+	tools, userToolNames := registerTools(&options)
 
 	// Initialize models map and determine the initial model.
 	initialModel, models := initializeModels(&options)
@@ -526,6 +571,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		genConfig:            options.GenerationConfig,
 		codeExecutor:         options.codeExecutor,
 		tools:                tools,
+		userToolNames:        userToolNames,
 		planner:              options.Planner,
 		subAgents:            options.SubAgents,
 		agentCallbacks:       options.AgentCallbacks,
@@ -648,18 +694,23 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 
 	// 6. Content processor - handles messages from invocation.
-	// Align with GraphAgent: honor runtime include_contents if provided.
-	includeMode := processor.IncludeContentsFiltered
+	// Honor runtime include_contents if provided, mapping legacy values to
+	// the new timeline/branch filter modes:
+	//   - none     -> timeline=current invocation (no prior history)
+	//   - filtered -> branch=prefix (default scoped history)
+	//   - all      -> branch=all (full history)
+	bm := options.messageBranchFilterMode
+	tm := options.messageTimelineFilterMode
 	if inv, ok := agent.InvocationFromContext(context.Background()); ok && inv != nil {
 		if inv.RunOptions.RuntimeState != nil {
-			if mode, ok2 := inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok2 && mode != "" {
-				switch strings.ToLower(mode) {
-				case processor.IncludeContentsNone:
-					includeMode = processor.IncludeContentsNone
-				case processor.IncludeContentsFiltered:
-					includeMode = processor.IncludeContentsFiltered
-				case processor.IncludeContentsAll:
-					includeMode = processor.IncludeContentsAll
+			if v, ok2 := inv.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok2 && v != "" {
+				switch strings.ToLower(v) {
+				case "none":
+					tm = processor.TimelineFilterCurrentInvocation
+				case "filtered":
+					bm = processor.BranchFilterModePrefix
+				case "all":
+					bm = processor.BranchFilterModeAll
 				}
 			}
 		}
@@ -671,11 +722,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 
 	contentProcessor := processor.NewContentRequestProcessor(
-		processor.WithIncludeContents(includeMode),
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
+		processor.WithTimelineFilterMode(tm),
+		processor.WithBranchFilterMode(bm),
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
@@ -741,12 +793,22 @@ func initializeModels(options *Options) (model.Model, map[string]model.Model) {
 	return nil, models
 }
 
-func registerTools(options *Options) []tool.Tool {
+func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
+	// Track user-registered tool names from WithTools and WithToolSets.
+	// These are tools explicitly registered by the user and can be subject to filtering.
+	userToolNames := make(map[string]bool)
+
+	// Tools from WithTools are user tools.
+	for _, t := range options.Tools {
+		userToolNames[t.Declaration().Name] = true
+	}
+
 	// Start with direct tools.
 	allTools := make([]tool.Tool, 0, len(options.Tools))
 	allTools = append(allTools, options.Tools...)
 
 	// Add tools from each toolset with automatic namespacing.
+	// Tools from WithToolSets are also user tools (user explicitly added them).
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
 		// Create named toolset wrapper to avoid name conflicts.
@@ -754,20 +816,34 @@ func registerTools(options *Options) []tool.Tool {
 		setTools := namedToolSet.Tools(ctx)
 		for _, t := range setTools {
 			allTools = append(allTools, t)
+			// Mark toolset tools as user tools.
+			userToolNames[t.Declaration().Name] = true
 		}
 	}
 
 	// Add knowledge search tool if knowledge base is provided.
+	// This is a FRAMEWORK tool (auto-added by framework), NOT a user tool.
+	// It should never be filtered out by user tool filters.
 	if options.Knowledge != nil {
+		toolOpts := []knowledgetool.Option{
+			knowledgetool.WithFilter(options.KnowledgeFilter),
+		}
+		if options.KnowledgeConditionedFilter != nil {
+			toolOpts = append(toolOpts, knowledgetool.WithConditionedFilter(options.KnowledgeConditionedFilter))
+		}
+
 		if options.EnableKnowledgeAgenticFilter {
 			agenticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
-				options.Knowledge, options.AgenticFilterInfo, knowledgetool.WithFilter(options.KnowledgeFilter),
+				options.Knowledge, options.AgenticFilterInfo, toolOpts...,
 			)
 			allTools = append(allTools, agenticKnowledge)
+			// Do NOT add to userToolNames - this is a framework tool.
 		} else {
-			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(
-				options.Knowledge, knowledgetool.WithFilter(options.KnowledgeFilter),
-			))
+			knowledgeTool := knowledgetool.NewKnowledgeSearchTool(
+				options.Knowledge, toolOpts...,
+			)
+			allTools = append(allTools, knowledgeTool)
+			// Do NOT add to userToolNames - this is a framework tool.
 		}
 	}
 
@@ -789,7 +865,7 @@ func registerTools(options *Options) []tool.Tool {
 			toolskill.NewRunTool(options.SkillsRepository, exec))
 	}
 
-	return allTools
+	return allTools, userToolNames
 }
 
 // Run implements the agent.Agent interface.
@@ -996,6 +1072,29 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 		}
 	}
 	return nil
+}
+
+// UserTools returns the list of tools that were explicitly registered by the user
+// via WithTools and WithToolSets options.
+//
+// User tools (can be filtered):
+//   - Tools registered via WithTools
+//   - Tools registered via WithToolSets
+//
+// Framework tools (never filtered, not included in this list):
+//   - knowledge_search / agentic_knowledge_search (auto-added when WithKnowledge is set)
+//   - transfer_to_agent (auto-added when WithSubAgents is set)
+//
+// This method is used by the tool filtering logic to distinguish user tools from framework tools.
+func (a *LLMAgent) UserTools() []tool.Tool {
+	// Filter user tools from all tools
+	userTools := make([]tool.Tool, 0, len(a.userToolNames))
+	for _, t := range a.tools {
+		if a.userToolNames[t.Declaration().Name] {
+			userTools = append(userTools, t)
+		}
+	}
+	return userTools
 }
 
 // CodeExecutor returns the code executor used by this agent.

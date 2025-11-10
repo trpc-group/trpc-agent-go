@@ -1930,6 +1930,176 @@ func TestProcessConditionalEdgesConcurrency(t *testing.T) {
 	close(stopCh)
 }
 
+// TestProcessConditionalEdges_DedupMulti ensures duplicate branch keys in a
+// multi-conditional result do not trigger the same target twice.
+func TestProcessConditionalEdges_DedupMulti(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("start", minimalNoopNode)
+	sg.AddNode("B", minimalNoopNode)
+	sg.AddNode("C", minimalNoopNode)
+	sg.SetEntryPoint("start")
+	sg.AddMultiConditionalEdges("start", func(ctx context.Context, s State) ([]string, error) {
+		return []string{"b", "b", "c"}, nil // duplicate "b"
+	}, map[string]string{"b": "B", "c": "C"})
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+	execCtx := &ExecutionContext{Graph: g, State: State{}, EventChan: make(chan *event.Event, 16)}
+
+	// Process and verify only one update per target channel.
+	require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, "start", 0))
+	chB, _ := g.getChannel("branch:to:B")
+	chC, _ := g.getChannel("branch:to:C")
+	require.NotNil(t, chB)
+	require.NotNil(t, chC)
+	require.Equal(t, int64(1), chB.Version)
+	require.Equal(t, int64(1), chC.Version)
+}
+
+// TestProcessConditionalEdges_Multi_Error covers the error path when the
+// MultiCondition function returns an error and ensures the executor
+// returns a wrapped error with node information.
+func TestProcessConditionalEdges_Multi_Error(t *testing.T) {
+	const (
+		nodeStart = "start"
+		nodeB     = "B"
+		msgPrefix = "conditional edge evaluation failed for node "
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, minimalNoopNode)
+	sg.AddNode(nodeB, minimalNoopNode)
+	sg.SetEntryPoint(nodeStart)
+	// PathMap must reference existing nodes for validation.
+	sg.AddMultiConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) ([]string, error) {
+			return nil, fmt.Errorf("mc boom")
+		},
+		map[string]string{"b": nodeB},
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        State{},
+		EventChan:    make(chan *event.Event, 8),
+		InvocationID: "inv-multi-err",
+	}
+
+	err = exec.processConditionalEdges(
+		context.Background(), nil, execCtx, nodeStart, 0,
+	)
+	require.Error(t, err)
+	// Wrapped error should include the node id and original message.
+	require.Contains(t, err.Error(), msgPrefix+nodeStart)
+	require.Contains(t, err.Error(), "mc boom")
+}
+
+// TestProcessConditionalEdges_Condition_Error covers the error path when the
+// single Condition function returns an error.
+func TestProcessConditionalEdges_Condition_Error(t *testing.T) {
+	const (
+		nodeStart = "start"
+		nodeA     = "A"
+		msgPrefix = "conditional edge evaluation failed for node "
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, minimalNoopNode)
+	sg.AddNode(nodeA, minimalNoopNode)
+	sg.SetEntryPoint(nodeStart)
+	sg.AddConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) (string, error) {
+			return "", fmt.Errorf("sc boom")
+		},
+		map[string]string{"a": nodeA},
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        State{},
+		EventChan:    make(chan *event.Event, 8),
+		InvocationID: "inv-cond-err",
+	}
+
+	err = exec.processConditionalEdges(
+		context.Background(), nil, execCtx, nodeStart, 0,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), msgPrefix+nodeStart)
+	require.Contains(t, err.Error(), "sc boom")
+}
+
+// TestProcessConditionalEdges_Multi_SkipEmpty verifies that empty strings
+// in MultiCondition results are ignored and do not produce channels, and
+// duplicates still deduplicate to one trigger.
+func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
+	const (
+		nodeStart = "start"
+		nodeB     = "B"
+		nodeC     = "C"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, minimalNoopNode)
+	sg.AddNode(nodeB, minimalNoopNode)
+	sg.AddNode(nodeC, minimalNoopNode)
+	sg.SetEntryPoint(nodeStart)
+	sg.AddMultiConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) ([]string, error) {
+			// Includes duplicates and empty keys.
+			return []string{"b", "", "b", "c", "", "c"}, nil
+		},
+		map[string]string{"b": nodeB, "c": nodeC},
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        State{},
+		EventChan:    make(chan *event.Event, 8),
+		InvocationID: "inv-multi-skip",
+	}
+
+	require.NoError(t, exec.processConditionalEdges(
+		context.Background(), nil, execCtx, nodeStart, 0,
+	))
+
+	// Expect channels only for B and C, one update each.
+	chB, okB := g.getChannel(ChannelBranchPrefix + nodeB)
+	chC, okC := g.getChannel(ChannelBranchPrefix + nodeC)
+	require.True(t, okB)
+	require.True(t, okC)
+	require.Equal(t, int64(1), chB.Version)
+	require.Equal(t, int64(1), chC.Version)
+
+	// No channel should be created for empty branch key.
+	if _, ok := g.getChannel(ChannelBranchPrefix + ""); ok {
+		t.Fatalf("unexpected channel for empty branch key created")
+	}
+}
+
 // minimalNoopNode returns a trivial node function for building test graphs.
 func minimalNoopNode(_ context.Context, _ State) (any, error) { return nil, nil }
 
@@ -2069,4 +2239,248 @@ func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
 	require.Nil(t, res)
 	require.Contains(t, runErr.Error(), "kaboom")
 	require.Contains(t, runErr.Error(), "node boom panic")
+}
+
+// PlanStep should honor StateKeyNextNodes and remove the key after planning.
+func TestPlanStep_UsesNextNodesAndDeletesKey(t *testing.T) {
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("A", minimalNoopNode)
+	sg.AddNode("B", minimalNoopNode)
+	sg.SetEntryPoint("A")
+	sg.SetFinishPoint("B")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	evCh := make(chan *event.Event, 8)
+	ec := &ExecutionContext{
+		Graph:        g,
+		State:        State{StateKeyNextNodes: []string{"A", "B"}},
+		EventChan:    evCh,
+		InvocationID: "inv-plan",
+	}
+	tasks, perr := exec.planStep(context.Background(), nil, ec, 1)
+	require.NoError(t, perr)
+	require.Len(t, tasks, 2)
+	// Key should be removed after consumption.
+	require.NotContains(t, ec.State, StateKeyNextNodes)
+}
+
+// resolveTargetByEnds should map symbolic names via per-node ends.
+func TestResolveTargetByEnds(t *testing.T) {
+	g := New(NewStateSchema())
+	n := &Node{ID: "X"}
+	n.ends = map[string]string{"ok": "B"}
+	_ = g.addNode(n)
+	exec := &Executor{graph: g}
+
+	// Known mapping
+	got := exec.resolveTargetByEnds("X", "ok")
+	require.Equal(t, "B", got)
+	// Unknown key returns empty
+	require.Equal(t, "", exec.resolveTargetByEnds("X", "nope"))
+	// Unknown node returns empty
+	require.Equal(t, "", exec.resolveTargetByEnds("ZZ", "ok"))
+}
+
+func TestExecutor_isDisableDeepCopyKey(t *testing.T) {
+	type fields struct {
+		graph *Graph
+	}
+	type args struct {
+		key string
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   bool
+	}{
+		{
+			name: "schema is nil",
+			fields: fields{
+				graph: &Graph{schema: nil},
+			},
+			args: args{key: "anyKey"},
+			want: false,
+		},
+		{
+			name: "key not found in schema",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{},
+					},
+				},
+			},
+			args: args{key: "missingKey"},
+			want: false,
+		},
+		{
+			name: "key exists with DisableDeepCopy true",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{
+							"testKey": {DisableDeepCopy: true},
+						},
+					},
+				},
+			},
+			args: args{key: "testKey"},
+			want: true,
+		},
+		{
+			name: "key exists with DisableDeepCopy false",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{
+							"testKey": {DisableDeepCopy: false},
+						},
+					},
+				},
+			},
+			args: args{key: "testKey"},
+			want: false,
+		},
+		{
+			name: "empty key not found",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{},
+					},
+				},
+			},
+			args: args{key: ""},
+			want: false,
+		},
+		{
+			name: "empty key with DisableDeepCopy true",
+			fields: fields{
+				graph: &Graph{
+					schema: &StateSchema{
+						Fields: map[string]StateField{
+							"": {DisableDeepCopy: true},
+						},
+					},
+				},
+			},
+			args: args{key: ""},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &Executor{
+				graph: tt.fields.graph,
+
+				channelBufferSize:     0,
+				maxSteps:              0,
+				stepTimeout:           0,
+				nodeTimeout:           0,
+				checkpointSaveTimeout: 0,
+				checkpointSaver:       nil,
+				checkpointManager:     nil,
+				defaultRetry:          nil,
+			}
+			if got := e.isDisableDeepCopyKey(tt.args.key); got != tt.want {
+				t.Errorf("isDisableDeepCopyKey() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+type testCase struct {
+	Name    string
+	Content string
+}
+
+func deepCopyNode(_ context.Context, state State) (any, error) {
+	DisableDeepCopyMap := state["DisableDeepCopyMap"].(map[string]string)
+	DisableDeepCopyMap["a"] = "123"
+
+	deepCopyMap := state["deepCopyMap"].(map[string]string)
+	deepCopyMap["a"] = "123"
+
+	DisableDeepCopyPointer := state["DisableDeepCopyPointer"].(*testCase)
+	DisableDeepCopyPointer.Content = "content-123"
+
+	deepCopyPointer := state["deepCopyPointer"].(*testCase)
+	deepCopyPointer.Content = "content-123"
+	return state, nil
+}
+func TestDisableDeepCopy(t *testing.T) {
+	disableDeepCopyMap := map[string]string{
+		"a": "111",
+		"b": "222",
+	}
+	disableDeepCopyPointer := &testCase{
+		Name:    "test",
+		Content: "content",
+	}
+	deepCopyPointer := &testCase{
+		Name:    "test",
+		Content: "content",
+	}
+	deepCopyMap := map[string]string{
+		"a": "111",
+		"b": "222",
+	}
+	stateSchema := NewStateSchema().AddField(
+		"DisableDeepCopyPointer",
+		StateField{
+			DisableDeepCopy: true,
+			Type:            reflect.TypeOf(disableDeepCopyPointer),
+			Reducer:         CoverReducer,
+		},
+	).AddField(
+		"DisableDeepCopyMap",
+		StateField{
+			DisableDeepCopy: true,
+			Type:            reflect.TypeOf(disableDeepCopyMap),
+			Reducer:         CoverReducer,
+		},
+	)
+	sg := NewStateGraph(stateSchema)
+	sg.AddNode("A", deepCopyNode)
+	sg.AddNode("B", deepCopyNode)
+	sg.SetEntryPoint("A")
+	sg.SetFinishPoint("B")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+	invocation := &agent.Invocation{InvocationID: "test-complex-doc"}
+	state := State{
+		"DisableDeepCopyMap":     disableDeepCopyMap,
+		"DisableDeepCopyPointer": disableDeepCopyPointer,
+		"deepCopyMap":            deepCopyMap,
+		"deepCopyPointer":        deepCopyPointer,
+	}
+	eventChan, err := exec.Execute(context.Background(), state, invocation)
+
+	for evt := range eventChan {
+		require.NotNil(t, evt)
+		continue
+	}
+
+	require.Equal(t, "123", disableDeepCopyMap["a"])
+	require.Equal(t, "222", disableDeepCopyMap["b"])
+
+	require.Equal(t, "111", deepCopyMap["a"])
+	require.Equal(t, "222", deepCopyMap["b"])
+
+	require.Equal(t, "test", disableDeepCopyPointer.Name)
+	require.Equal(t, "content-123", disableDeepCopyPointer.Content)
+
+	require.Equal(t, "test", deepCopyPointer.Name)
+	require.Equal(t, "content", deepCopyPointer.Content)
+
+	require.NoError(t, err)
 }
