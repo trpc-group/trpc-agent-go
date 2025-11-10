@@ -14,13 +14,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
+
+const defaultMaxResults = 10
 
 // KnowledgeSearchRequest represents the input for the knowledge search tool.
 type KnowledgeSearchRequest struct {
@@ -29,18 +35,26 @@ type KnowledgeSearchRequest struct {
 
 // KnowledgeSearchResponse represents the response from the knowledge search tool.
 type KnowledgeSearchResponse struct {
-	Text    string  `json:"text,omitempty"`
-	Score   float64 `json:"score,omitempty"`
-	Message string  `json:"message,omitempty"`
+	Documents []*DocumentResult `json:"documents"`
+	Message   string            `json:"message,omitempty"`
+}
+
+// DocumentResult represents a single document result with metadata and score.
+type DocumentResult struct {
+	Text     string         `json:"text"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+	Score    float64        `json:"score"`
 }
 
 // Option is a function that configures the knowledge search tool.
 type Option func(*options)
 
 type options struct {
-	toolName        string
-	toolDescription string
-	filter          map[string]any
+	toolName          string
+	toolDescription   string
+	staticFilter      map[string]any
+	conditionedFilter *searchfilter.UniversalFilterCondition
+	maxResults        int
 }
 
 // WithToolName sets the name of the knowledge search tool.
@@ -57,10 +71,29 @@ func WithToolDescription(toolDescription string) Option {
 	}
 }
 
-// WithFilter sets the filter for the knowledge search tool.
+// WithFilter sets a static metadata filter (simple AND logic).
+// Multiple key-value pairs are combined with AND.
+// For OR/nested conditions, use WithConditionedFilter.
 func WithFilter(filter map[string]any) Option {
 	return func(opts *options) {
-		opts.filter = filter
+		opts.staticFilter = filter
+	}
+}
+
+// WithConditionedFilter sets a static complex filter with OR/AND/nested logic.
+// Supports operators: eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or.
+// For simple AND-only filters, use WithFilter instead.
+func WithConditionedFilter(filterCondition *searchfilter.UniversalFilterCondition) Option {
+	return func(opts *options) {
+		opts.conditionedFilter = filterCondition
+	}
+}
+
+// WithMaxResults sets the maximum number of documents to return.
+// Default is 10 if not specified.
+func WithMaxResults(maxResults int) Option {
+	return func(opts *options) {
+		opts.maxResults = maxResults
 	}
 }
 
@@ -68,7 +101,9 @@ func WithFilter(filter map[string]any) Option {
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
 func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
-	opt := &options{}
+	opt := &options{
+		maxResults: defaultMaxResults,
+	}
 	for _, o := range opts {
 		o(opt)
 	}
@@ -78,35 +113,35 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 		}
 		invocation, ok := agent.InvocationFromContext(ctx)
 		var runnerFilter map[string]any
+		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
 		if !ok {
 			log.Debugf("knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
+			runnerConditionedFilter = invocation.RunOptions.KnowledgeConditionedFilter
 		}
-		finalFilter := getFinalFilter(opt.filter, runnerFilter, nil)
-		log.Infof("knowledge search tool: final filter: %v", finalFilter)
+
+		agentFilterCondition := convertMetadataToFilterCondition(opt.staticFilter)
+		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
+		finalFilter := mergeFilterConditions(agentFilterCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter)
 
 		// Create search request - for tools, we don't have conversation history yet.
 		// This could be enhanced in the future to extract context from the agent's session.
 		searchReq := &knowledge.SearchRequest{
 			Query: req.Query,
 			SearchFilter: &knowledge.SearchFilter{
-				Metadata: finalFilter,
+				FilterCondition: finalFilter,
 			},
+			MaxResults: opt.maxResults,
 			// History, UserID, SessionID could be filled from agent context in the future.
 		}
+
 		result, err := kb.Search(ctx, searchReq)
 		if err != nil {
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
-		if result == nil {
-			return nil, errors.New("no relevant information found")
-		}
-		return &KnowledgeSearchResponse{
-			Text:    result.Text,
-			Score:   result.Score,
-			Message: fmt.Sprintf("Found relevant content (score: %.2f)", result.Score),
-		}, nil
+
+		return convertSearchResults(result)
 	}
 
 	toolName := opt.toolName
@@ -127,68 +162,68 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 
 // KnowledgeSearchRequestWithFilter represents the input with filter for the knowledge search tool.
 type KnowledgeSearchRequestWithFilter struct {
-	Query   string            `json:"query" jsonschema:"description=The search query to find relevant information in the knowledge base"`
-	Filters []KnowledgeFilter `json:"filters" jsonschema:"description=The filters to apply to the search query"`
+	Query  string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
+	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators: 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not in', 'like', 'not like', 'between', 'and', 'or'."`
 }
 
-// KnowledgeFilter represents the filter for the knowledge search tool.
-// The filter is a key-value pair.
-type KnowledgeFilter struct {
-	Key   string `json:"key" jsonschema:"description=The key of the filter"`
-	Value string `json:"value" jsonschema:"description=The value of the filter"`
-}
-
-// NewAgenticFilterSearchTool creates a function tool for knowledge search using
-// the Knowledge interface with filter.
-// This tool allows agents to search for relevant information in the knowledge base.
-// agentFilter is the filter for the agent/tool, it will be used to filter the knowledge base.
-// agenticFilterInfo is the filter info of the sources, it will be used to generate the filter prompt.
+// NewAgenticFilterSearchTool creates a knowledge search tool with dynamic agent-controlled filtering.
+// The agent can analyze user queries and construct filters dynamically.
+//
+// Parameters:
+//   - kb: The knowledge base to search
+//   - agenticFilterInfo: Available metadata fields and values, e.g., {"category": ["doc", "tutorial"]}
+//   - opts: Optional static filters (WithFilter/WithConditionedFilter) always applied
 func NewAgenticFilterSearchTool(
 	kb knowledge.Knowledge,
 	agenticFilterInfo map[string][]any,
 	opts ...Option,
 ) tool.Tool {
-	opt := &options{}
+	opt := &options{
+		maxResults: defaultMaxResults,
+	}
 	for _, o := range opts {
 		o(opt)
 	}
 	searchFunc := func(ctx context.Context, req *KnowledgeSearchRequestWithFilter) (*KnowledgeSearchResponse, error) {
-		if req.Query == "" {
-			return nil, errors.New("query cannot be empty")
+		// Query can be empty when using only filters for metadata-based retrieval
+		if req.Query == "" && req.Filter == nil {
+			return nil, errors.New("at least one of query or filter must be provided")
 		}
 
 		invocation, ok := agent.InvocationFromContext(ctx)
 		var runnerFilter map[string]any
+		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
 		if !ok {
 			log.Debugf("knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
+			runnerConditionedFilter = invocation.RunOptions.KnowledgeConditionedFilter
 		}
 
-		// Convert request filters to map[string]any
-		requestFilter := make(map[string]any)
-		for _, f := range req.Filters {
-			requestFilter[f.Key] = f.Value
-		}
-		finalFilter := getFinalFilter(opt.filter, runnerFilter, requestFilter)
+		agentMetadataCondition := convertMetadataToFilterCondition(opt.staticFilter)
+		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
+		finalFilter := mergeFilterConditions(agentMetadataCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter, req.Filter)
+
 		searchReq := &knowledge.SearchRequest{
 			Query: req.Query,
 			SearchFilter: &knowledge.SearchFilter{
-				Metadata: finalFilter,
+				FilterCondition: finalFilter,
 			},
+			MaxResults: opt.maxResults,
 		}
+
+		// Set search mode based on whether query is provided
+		// When query is empty, use filter-only search mode
+		if req.Query == "" {
+			searchReq.SearchMode = vectorstore.SearchModeFilter
+		}
+
 		result, err := kb.Search(ctx, searchReq)
 		if err != nil {
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
-		if result == nil {
-			return nil, errors.New("no relevant information found")
-		}
-		return &KnowledgeSearchResponse{
-			Text:    result.Text,
-			Score:   result.Score,
-			Message: fmt.Sprintf("Found relevant content (score: %.2f)", result.Score),
-		}, nil
+
+		return convertSearchResults(result)
 	}
 
 	toolName := opt.toolName
@@ -209,22 +244,94 @@ func NewAgenticFilterSearchTool(
 	)
 }
 
-func getFinalFilter(
-	agentFilter map[string]any,
-	runnerFilter map[string]any,
-	invocationFilter map[string]any,
-) map[string]any {
-	filter := make(map[string]any)
-	for k, v := range invocationFilter {
-		filter[k] = v
+// convertSearchResults converts knowledge.SearchResult to KnowledgeSearchResponse.
+func convertSearchResults(result *knowledge.SearchResult) (*KnowledgeSearchResponse, error) {
+	if result == nil || len(result.Documents) == 0 {
+		return nil, errors.New("no relevant information found")
 	}
-	for k, v := range runnerFilter {
-		filter[k] = v
+
+	documents := make([]*DocumentResult, 0, len(result.Documents))
+	for _, doc := range result.Documents {
+		documents = append(documents, &DocumentResult{
+			Text:     doc.Document.Content,
+			Metadata: filterMetadata(doc.Document.Metadata),
+			Score:    doc.Score,
+		})
 	}
-	for k, v := range agentFilter {
-		filter[k] = v
+
+	return &KnowledgeSearchResponse{
+		Documents: documents,
+		Message:   fmt.Sprintf("Found %d relevant document(s)", len(documents)),
+	}, nil
+}
+
+// convertMetadataToFilterCondition converts a metadata map to UniversalFilterCondition.
+func convertMetadataToFilterCondition(metadata map[string]any) *searchfilter.UniversalFilterCondition {
+	if len(metadata) == 0 {
+		return nil
 	}
-	return filter
+
+	var conditions []*searchfilter.UniversalFilterCondition
+	for k, v := range metadata {
+		conditions = append(conditions, &searchfilter.UniversalFilterCondition{
+			Field:    k,
+			Operator: searchfilter.OperatorEqual,
+			Value:    v,
+		})
+	}
+
+	if len(conditions) == 0 {
+		return nil
+	}
+	if len(conditions) == 1 {
+		return conditions[0]
+	}
+
+	return &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value:    conditions,
+	}
+}
+
+// mergeFilterConditions merges multiple filter conditions using AND logic.
+// All non-nil conditions are combined with AND operator.
+// Returns nil if all conditions are nil.
+func mergeFilterConditions(
+	conditions ...*searchfilter.UniversalFilterCondition,
+) *searchfilter.UniversalFilterCondition {
+	var nonNilConditions []*searchfilter.UniversalFilterCondition
+	for _, cond := range conditions {
+		if cond != nil {
+			nonNilConditions = append(nonNilConditions, cond)
+		}
+	}
+
+	if len(nonNilConditions) == 0 {
+		return nil
+	}
+	if len(nonNilConditions) == 1 {
+		return nonNilConditions[0]
+	}
+
+	return &searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value:    nonNilConditions,
+	}
+}
+
+// filterMetadata removes internal metadata keys with MetaPrefix from the metadata map.
+func filterMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	filtered := make(map[string]any)
+	for k, v := range metadata {
+		// Skip internal metadata keys with trpc_agent_go_ prefix
+		if !strings.HasPrefix(k, source.MetaPrefix) || k == source.MetaChunkIndex {
+			filtered[k] = v
+		}
+	}
+	return filtered
 }
 
 func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
@@ -239,30 +346,55 @@ func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
 	}
 	keysStr := fmt.Sprintf("%v", keys)
 
-	prompt := "You are a helpful assistant that can search for relevant information in the knowledge base. "
-	prompt += fmt.Sprintf("Available filters: %s. Always use filters when the user query indicates specific metadata.\n\n", keysStr)
+	var b strings.Builder
 
-	prompt += "Usage Rules:\n"
-	prompt += "- Explicit key=value pairs: Use directly (e.g., 'protocol=trpc-go' -> [{'key': 'protocol', 'value': 'trpc-go'}])\n"
-	prompt += "- Key only queries: Choose from available values if provided; generate appropriate value if empty\n"
-	prompt += "- Multiple filters: Combine in filters parameter array\n"
-	prompt += "- Fallback strategy: If filtered search returns no results, retry without filters\n"
-	prompt += "- Exception: For explicit key=value queries, do not use fallback (must respect user's specific requirement)\n\n"
+	fmt.Fprintf(&b, `You are a helpful assistant that can search for relevant information in the knowledge base. Available metadata filters: %s.
 
-	prompt += "Examples:\n"
-	prompt += "1. \"show me tRPC gateway documentation\" -> [{'key': 'service_type', 'value': 'gateway'}] + fallback if needed\n"
-	prompt += "2. \"find protocol=trpc-go docs\" -> [{'key': 'protocol', 'value': 'trpc-go'}] (no fallback, explicit requirement)\n"
-	prompt += "3. \"what are the protocol options?\" -> choose appropriate protocol value from available options + fallback\n"
-	prompt += "4. \"service_type=api and protocol=trpc-go\" -> [{'key': 'service_type', 'value': 'api'}, {'key': 'protocol', 'value': 'trpc-go'}]\n\n"
+Filter Usage:
+- Query: Can be empty when using only metadata filters
+- Filter: Use "filter" field with standard operators (lowercase): eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or
 
-	prompt += "Available filter values for each key:\n"
+Filter Examples (use double quotes for JSON):
+- Single: {"field": "category", "operator": "eq", "value": "documentation"}
+- OR: {"operator": "or", "value": [{"field": "type", "operator": "eq", "value": "golang"}, {"field": "type", "operator": "eq", "value": "llm"}]}
+- AND: {"operator": "and", "value": [{"field": "category", "operator": "eq", "value": "doc"}, {"field": "topic", "operator": "eq", "value": "programming"}]}
+- IN: {"field": "type", "operator": "in", "value": ["golang", "llm", "wiki"]}
+- NOT IN: {"field": "status", "operator": "not in", "value": ["archived", "deleted"]}
+- LIKE: {"field": "title", "operator": "like", "value": "%%tutorial%%"}
+- BETWEEN: {"field": "score", "operator": "between", "value": [0.5, 0.9]}
+- Nested: {"operator": "and", "value": [{"field": "category", "operator": "eq", "value": "doc"}, {"operator": "or", "value": [{"field": "topic", "operator": "eq", "value": "programming"}, {"field": "topic", "operator": "eq", "value": "ml"}]}]}
+
+Note: For logical operators (and/or), use "value" field to specify an array of sub-conditions.
+
+Available Filter Values:
+`, keysStr)
+
+	// Separate keys with and without predefined values
+	var keysWithValues []string
+	var keysWithoutValues []string
 	for k, v := range agenticFilterInfo {
 		if len(v) == 0 {
-			prompt += fmt.Sprintf("- %s: [] (generate appropriate value based on context)\n", k)
+			keysWithoutValues = append(keysWithoutValues, k)
 		} else {
-			prompt += fmt.Sprintf("- %s: %v (choose from these options)\n", k, v)
+			keysWithValues = append(keysWithValues, fmt.Sprintf("  - %s: %v", k, v))
 		}
 	}
 
-	return prompt
+	// Print keys with predefined values first
+	if len(keysWithValues) > 0 {
+		fmt.Fprintf(&b, "\nFields with predefined values (use exact values only):\n")
+		for _, line := range keysWithValues {
+			fmt.Fprintf(&b, "%s\n", line)
+		}
+	}
+
+	// Print keys without predefined values
+	if len(keysWithoutValues) > 0 {
+		fmt.Fprintf(&b, "\nFields accepting any value:\n")
+		for _, k := range keysWithoutValues {
+			fmt.Fprintf(&b, "  - %s\n", k)
+		}
+	}
+
+	return b.String()
 }
