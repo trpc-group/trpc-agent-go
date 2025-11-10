@@ -15,6 +15,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -47,6 +48,7 @@ func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, err
 	}
 	rsp := event.Response
 	if rsp.Error != nil {
+		log.Errorf("agui: threadID: %s, runID: %s, error in response: %v", t.threadID, t.runID, rsp.Error)
 		return []aguievents.Event{aguievents.NewRunErrorEvent(rsp.Error.Message, aguievents.WithRunID(t.runID))}, nil
 	}
 	events := []aguievents.Event{}
