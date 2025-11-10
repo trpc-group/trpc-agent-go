@@ -148,7 +148,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		}
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 	mem := &memory.Memory{
 		Memory:      memoryStr,
 		Topics:      topics,
@@ -212,7 +212,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		return fmt.Errorf("unmarshal memory entry failed: %w", err)
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 	entry.Memory.Memory = memoryStr
 	entry.Memory.Topics = topics
 	entry.Memory.LastUpdated = &now
@@ -253,7 +253,7 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 		args  []any
 	)
 	if s.opts.softDelete {
-		now := time.Now().UTC()
+		now := time.Now()
 		query = fmt.Sprintf(
 			"UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ? AND deleted_at IS NULL",
 			s.tableName,
@@ -284,7 +284,7 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 	// #nosec G201
 	var err error
 	if s.opts.softDelete {
-		now := time.Now().UTC()
+		now := time.Now()
 		query := fmt.Sprintf(
 			"UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND deleted_at IS NULL",
 			s.tableName,
