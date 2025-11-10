@@ -11,6 +11,7 @@ package inmemory
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -675,3 +676,129 @@ func TestMemoryService_GetOrCreateAppSessions_Concurrent(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, app)
 }
+
+func TestProcessSummaryJob(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, service *SessionService) *summaryJob
+		expectError bool
+	}{
+		{
+			name: "successful summary processing",
+			setup: func(t *testing.T, service *SessionService) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Add an event to make delta non-empty
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				err = service.AppendEvent(context.Background(), sess, e)
+				require.NoError(t, err)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summary job with branch filter",
+			setup: func(t *testing.T, service *SessionService) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid2"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Add an event
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				err = service.AppendEvent(context.Background(), sess, e)
+				require.NoError(t, err)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "branch1",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns false",
+			setup: func(t *testing.T, service *SessionService) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Enable summarizer that returns false
+				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns error",
+			setup: func(t *testing.T, service *SessionService) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid4"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Enable summarizer that returns error
+				service.opts.summarizer = &fakeErrorSummarizer{}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false, // Should not panic or error, just log
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			service := NewSessionService()
+			defer service.Close()
+
+			job := tt.setup(t, service)
+
+			// This should not panic
+			require.NotPanics(t, func() {
+				service.processSummaryJob(job)
+			})
+		})
+	}
+}
+
+type fakeErrorSummarizer struct{}
+
+func (f *fakeErrorSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	return "", fmt.Errorf("summarizer error")
+}
+func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }

@@ -207,20 +207,8 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 		defer cancel()
 	}
 
-	// Perform the actual summary generation for the requested filterKey.
-	updated, err := isession.SummarizeSession(ctx, s.opts.summarizer, job.session, job.filterKey, job.force)
-	if err != nil {
-		log.Errorf("summary worker failed to generate summary: %v", err)
-		return
-	}
-	if !updated {
-		return
-	}
-
-	// Persist to in-memory store under lock.
-	app := s.getOrCreateAppSessions(job.sessionKey.AppName)
-	if err := s.writeSummaryUnderLock(app, job.sessionKey, job.filterKey, job.session.Summaries[job.filterKey].Summary); err != nil {
-		log.Errorf("summary worker failed to write summary: %v", err)
+	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
+		log.Warnf("summary worker failed to create session summary: %v", err)
 	}
 }
 
