@@ -733,6 +733,10 @@ func (f *fakeRunner) Run(ctx context.Context,
 	return nil, nil
 }
 
+func (f *fakeRunner) Close() error {
+	return nil
+}
+
 func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event {
 	t.Helper()
 	var out []aguievents.Event
