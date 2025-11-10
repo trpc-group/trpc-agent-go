@@ -348,6 +348,12 @@ func (m *mockKnowledgeBase) Search(ctx context.Context, req *knowledge.SearchReq
 		Document: bestMatch,
 		Score:    bestScore,
 		Text:     content,
+		Documents: []*knowledge.Result{
+			{
+				Document: bestMatch,
+				Score:    bestScore,
+			},
+		},
 	}, nil
 }
 

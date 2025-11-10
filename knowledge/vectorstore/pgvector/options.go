@@ -22,6 +22,7 @@ import (
 // defaultMaxResults is the default maximum number of search results.
 const defaultMaxResults = 10
 
+// DocBuilderFunc is the document builder function.
 type DocBuilderFunc func(row pgx.Row) (*vectorstore.ScoredDocument, []float64, error)
 
 func defaultDocBuilder(row pgx.Row) (*vectorstore.ScoredDocument, []float64, error) {

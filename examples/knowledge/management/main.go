@@ -501,8 +501,6 @@ func (chat *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithUsername(tcvectorUsername),
 			vectortcvector.WithPassword(tcvectorPassword),
 			vectortcvector.WithCollection("tcvector-agent-go"),
-			// tcvector need build index for the filter fields
-			vectortcvector.WithFilterIndexFields(source.GetAllMetadataKeys(chat.source)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
