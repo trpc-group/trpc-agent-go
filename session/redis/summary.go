@@ -240,35 +240,7 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 		defer cancel()
 	}
 
-	// Perform the actual summary generation for the requested filterKey.
-	updated, err := isession.SummarizeSession(ctx, s.opts.summarizer, job.session, job.filterKey, job.force)
-	if err != nil {
-		log.Errorf("summary worker failed to generate summary: %v", err)
-		return
-	}
-	if !updated {
-		return
-	}
-
-	// Persist to Redis.
-	job.session.SummariesMu.RLock()
-	sum := job.session.Summaries[job.filterKey]
-	job.session.SummariesMu.RUnlock()
-	payload, err := json.Marshal(sum)
-	if err != nil {
-		log.Errorf("summary worker failed to marshal summary: %v", err)
-		return
-	}
-	sumKey := getSessionSummaryKey(job.sessionKey)
-	if _, err := luaSummariesSetIfNewer.Run(
-		ctx, s.redisClient, []string{sumKey}, job.sessionKey.SessionID, job.filterKey, string(payload),
-	).Result(); err != nil {
-		log.Errorf("summary worker failed to store summary: %v", err)
-		return
-	}
-	if s.sessionTTL > 0 {
-		if err := s.redisClient.Expire(ctx, sumKey, s.sessionTTL).Err(); err != nil {
-			log.Errorf("summary worker failed to set summary TTL: %v", err)
-		}
+	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
+		log.Warnf("summary worker failed to create session summary: %v", err)
 	}
 }

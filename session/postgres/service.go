@@ -38,7 +38,7 @@ const (
 	defaultTimeout               = 5 * time.Second
 
 	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 256
+	defaultSummaryQueueSize = 100
 
 	defaultHost     = "localhost"
 	defaultPort     = 5432
@@ -1140,34 +1140,6 @@ func (s *Service) startAsyncPersistWorker() {
 				cancel()
 			}
 		}(eventPairChan)
-	}
-}
-
-func (s *Service) startAsyncSummaryWorker() {
-	if s.opts.summarizer == nil {
-		return
-	}
-
-	summaryNum := s.opts.asyncSummaryNum
-	queueSize := s.opts.summaryQueueSize
-
-	// init summary job chan
-	s.summaryJobChans = make([]chan *summaryJob, summaryNum)
-	for i := 0; i < summaryNum; i++ {
-		s.summaryJobChans[i] = make(chan *summaryJob, queueSize)
-	}
-
-	for _, summaryJobChan := range s.summaryJobChans {
-		go func(jobChan chan *summaryJob) {
-			for job := range jobChan {
-				ctx, cancel := context.WithTimeout(context.Background(), s.opts.summaryJobTimeout)
-				err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force)
-				if err != nil {
-					log.Errorf("postgres session service async summary failed: %v", err)
-				}
-				cancel()
-			}
-		}(summaryJobChan)
 	}
 }
 
