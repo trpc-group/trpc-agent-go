@@ -648,6 +648,41 @@ func (s *getSessionErrorService) GetSession(ctx context.Context, key session.Key
 	return nil, errors.New("get session error")
 }
 
+// closeErrorSessionService returns error on Close to test error handling.
+type closeErrorSessionService struct {
+	session.Service
+	closeErr    error
+	closeCalled int
+}
+
+func (s *closeErrorSessionService) Close() error {
+	s.closeCalled++
+	return s.closeErr
+}
+
+func (s *closeErrorSessionService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, options ...session.Option) (*session.Session, error) {
+	return &session.Session{
+		ID:        key.SessionID,
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		Events:    []event.Event{},
+		Summaries: map[string]*session.Summary{},
+	}, nil
+}
+
+func (s *closeErrorSessionService) GetSession(ctx context.Context, key session.Key, options ...session.Option) (*session.Session, error) {
+	return nil, nil
+}
+
+func (s *closeErrorSessionService) AppendEvent(ctx context.Context, sess *session.Session, e *event.Event, options ...session.Option) error {
+	return nil
+}
+
+func (s *closeErrorSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	return nil
+}
+
+
 // noOpAgent emits one qualifying assistant message then closes.
 type noOpAgent struct{ name string }
 
@@ -951,4 +986,40 @@ func TestRunner_Close_Idempotent(t *testing.T) {
 		err := r.Close()
 		require.NoError(t, err, "Close call %d should succeed", i+1)
 	}
+}
+
+func TestRunner_Close_SessionServiceError(t *testing.T) {
+	const closeErrMsg = "session service close error"
+
+	// Create a mock session service that fails on Close.
+	errorSessionService := &closeErrorSessionService{
+		closeErr: errors.New(closeErrMsg),
+	}
+
+	// Create a mock agent.
+	mockAgent := &mockAgent{name: "test-agent"}
+
+	// Create runner directly and manually set it to own the error session service.
+	// This simulates the case where the runner created a session service that
+	// fails on Close.
+	r := &runner{
+		appName:             "test-app",
+		agent:               mockAgent,
+		sessionService:      errorSessionService,
+		ownedSessionService: true, // Mark as owned to trigger Close in runner.Close().
+	}
+
+	// Close should return the error from session service.
+	err := r.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), closeErrMsg)
+
+	// Verify Close was called.
+	assert.Equal(t, 1, errorSessionService.closeCalled)
+
+	// Close should still be idempotent, even on error.
+	// Second call should not return error because closeOnce protects it.
+	err = r.Close()
+	require.NoError(t, err)
+	assert.Equal(t, 1, errorSessionService.closeCalled, "Close should only be called once")
 }
