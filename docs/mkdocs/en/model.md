@@ -878,18 +878,21 @@ The Variant mechanism is an important optimization in the Model module, used to 
 The framework currently supports the following Variants:
 
 **1. VariantOpenAI（default）**
+
 - Standard OpenAI API-compatible behavior
 - File upload path：`/openapi/v1/files`
 - File purpose:`user_data`
 - File deletion Http method:：`DELETE`
 
 **2. VariantHunyuan（hunyuan）**
+
 - Tencent Hunyuan platform-specific adaptation
 - File upload path:：`/openapi/v1/files/uploads`
 - File purpose：`file-extract`
 - File deletion Http Method：`POST`
 
 **3. VariantDeepSeek**
+
 - DeepSeek platform adaptation
 - Default BaseURL：`https://api.deepseek.com`
 - API Key environment variable name：`DEEPSEEK_API_KEY`
@@ -921,6 +924,8 @@ model := openai.New("deepseek-chat",
 **Message content handling differences**：
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
 // For the Hunyuan platform, the file ID is placed in extraFields instead of content parts
 message := model.Message{
     Role: model.RoleUser,
@@ -945,6 +950,8 @@ export DEEPSEEK_API_KEY="your-api-key"
 ```
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
 // DeepSeek
 model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY

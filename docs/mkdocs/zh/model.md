@@ -876,18 +876,21 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 框架目前支持以下 Variant：
 
 **1. VariantOpenAI（默认）**
+
 - 标准 OpenAI API 兼容行为
 - 文件上传路径：`/openapi/v1/files`
 - 文件用途：`user_data`
 - 删除文件的Http请求方法：`DELETE`
 
 **2. VariantHunyuan（混元）**
+
 - 腾讯混元平台特有适配
 - 文件上传路径：`/openapi/v1/files/uploads`
 - 文件用途：`file-extract`
 - 删除文件的Http请求方法：`POST`
 
 **3. VariantDeepSeek**
+
 - DeepSeek 平台适配
 - 默认 BaseURL：`https://api.deepseek.com`
 - API Key 环境变量名：`DEEPSEEK_API_KEY`
@@ -919,6 +922,8 @@ model := openai.New("deepseek-chat",
 **消息内容处理差异**：
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
 // 对于混元平台，文件 ID 会放在 extraFields 中而非 content parts
 message := model.Message{
     Role: model.RoleUser,
@@ -944,6 +949,8 @@ export DEEPSEEK_API_KEY="your-api-key"
 ```
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
 // DeepSeek 自动配置示例
 model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
