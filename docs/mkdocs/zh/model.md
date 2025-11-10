@@ -776,7 +776,7 @@ llm := openai.New("gpt-4o-mini",
 
 在网关、专有平台或代理环境中，请求模型 API 往往需要额外的
 HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块
-提供两种可靠方式为"所有模型请求"添加 Header，适用于普通请求、流式、
+提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、
 文件上传、批处理等全链路。
 
 推荐顺序：
@@ -789,7 +789,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 ##### 1. 使用 OpenAI RequestOption 设置全局 Header
 
 通过 `WithOpenAIOptions` 配合 `openaiopt.WithHeader` 或
-`openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的"每个请求"
+`openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的“每个请求”
 注入 Header。
 
 ```go
@@ -816,7 +816,7 @@ llm := openai.New("deepseek-chat",
     openai.WithOpenAIOptions(
         openaiopt.WithMiddleware(
             func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
-                // 例：按上下文值设置"每次请求"的头部
+                // 例：按上下文值设置“每次请求”的头部
                 if v := r.Context().Value("x-request-id"); v != nil {
                     if s, ok := v.(string); ok && s != "" {
                         r.Header.Set("X-Request-ID", s)
@@ -863,7 +863,7 @@ llm := openai.New("deepseek-chat",
 )
 ```
 
-关于"每次请求"的头部：
+关于“每次请求”的头部：
 
 - Agent/Runner 会把 `ctx` 透传至模型调用；中间件可从
   `req.Context()` 读取值，从而为“本次调用”注入头部。
