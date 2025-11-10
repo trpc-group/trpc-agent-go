@@ -67,6 +67,8 @@ type TestServiceOpts struct {
 	softDelete         *bool // Use pointer to distinguish unset from false
 	cleanupInterval    time.Duration
 	summarizer         mockSummarizer
+	asyncSummaryNum    int
+	summaryQueueSize   int
 }
 
 // mockPostgresClient is a mock implementation of storage.Client for testing
@@ -136,7 +138,16 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 
 	// Apply default options
 	if opts == nil {
-		opts = &TestServiceOpts{}
+		opts = &TestServiceOpts{
+			asyncSummaryNum:  defaultAsyncSummaryNum,
+			summaryQueueSize: defaultSummaryQueueSize,
+		}
+	}
+	if opts.asyncSummaryNum == 0 {
+		opts.asyncSummaryNum = defaultAsyncSummaryNum
+	}
+	if opts.summaryQueueSize == 0 {
+		opts.summaryQueueSize = defaultSummaryQueueSize
 	}
 
 	// Default soft delete to true if not explicitly set
@@ -160,6 +171,8 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 			cleanupInterval:    opts.cleanupInterval,
 			summarizer:         opts.summarizer,
 			tablePrefix:        prefix,
+			summaryQueueSize:   opts.summaryQueueSize,
+			asyncSummaryNum:    opts.asyncSummaryNum,
 		},
 		cleanupDone: make(chan struct{}),
 
@@ -180,9 +193,9 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 	}
 
 	// Initialize summary job channels
-	s.summaryJobChans = make([]chan *summaryJob, defaultAsyncSummaryNum)
+	s.summaryJobChans = make([]chan *summaryJob, opts.asyncSummaryNum)
 	for i := range s.summaryJobChans {
-		s.summaryJobChans[i] = make(chan *summaryJob, defaultSummaryQueueSize)
+		s.summaryJobChans[i] = make(chan *summaryJob, opts.summaryQueueSize)
 	}
 
 	return s, mock, db

@@ -19,6 +19,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -545,3 +547,219 @@ func TestEnqueueSummaryJob_HashDistribution(t *testing.T) {
 	}
 	assert.Equal(t, 3, totalJobs)
 }
+
+func TestProcessSummaryJob(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, service *Service) *summaryJob
+		expectError bool
+	}{
+		{
+			name: "successful summary processing",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+				// sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+				// require.NoError(t, err)
+
+				// Add an event to make delta non-empty
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				sess.Events = append(sess.Events, *e)
+				// err := service.AppendEvent(context.Background(), sess, e)
+				// require.NoError(t, err)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summary job with branch filter",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid2"}
+				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+				// sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				// require.NoError(t, err)
+
+				// Add an event
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				sess.Events = append(sess.Events, *e)
+				// err := service.AppendEvent(context.Background(), sess, e)
+				// require.NoError(t, err)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "branch1",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns false",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
+				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+				// sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				// require.NoError(t, err)
+
+				// Enable summarizer that returns false
+				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns error",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid4"}
+				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+				// sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				// require.NoError(t, err)
+
+				// Enable summarizer that returns error
+				service.opts.summarizer = &fakeErrorSummarizer{}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false, // Should not panic or error, just log
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+			s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
+			job := tt.setup(t, s)
+
+			mock.ExpectExec(fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
+		 DO UPDATE SET
+		   summary = EXCLUDED.summary,
+		   updated_at = EXCLUDED.updated_at,
+		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries)).
+				WithArgs(job.session.AppName, job.session.UserID, job.session.ID, job.filterKey, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(1, 1))
+			defer db.Close()
+
+			// This should not panic
+			require.NotPanics(t, func() {
+				s.processSummaryJob(job)
+			})
+		})
+	}
+}
+
+func TestTryEnqueueJob(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, service *Service) (context.Context, *summaryJob, bool)
+		expectSend bool
+	}{
+		{
+			name: "successful enqueue",
+			setup: func(t *testing.T, service *Service) (context.Context, *summaryJob, bool) {
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+				job := &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+				}
+				return context.Background(), job, true
+			},
+			expectSend: true,
+		},
+		{
+			name: "queue full fallback",
+			setup: func(t *testing.T, service *Service) (context.Context, *summaryJob, bool) {
+				// Fill up the queue by creating a job that blocks
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
+				job := &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+				}
+
+				// Fill the channel to capacity
+			loop:
+				for i := 0; i < service.opts.summaryQueueSize; i++ {
+					select {
+					case service.summaryJobChans[0] <- job:
+						// Successfully sent
+					default:
+						// Channel is full
+						break loop
+					}
+				}
+
+				return context.Background(), job, false
+			},
+			expectSend: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+			s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer, summaryQueueSize: 1, asyncSummaryNum: 1})
+			defer db.Close()
+
+			ctx, job, expected := tt.setup(t, s)
+			result := s.tryEnqueueJob(ctx, job)
+
+			assert.Equal(t, expected, result)
+		})
+	}
+}
+
+type fakeSummarizer struct {
+	allow bool
+	out   string
+}
+
+func (f *fakeSummarizer) ShouldSummarize(sess *session.Session) bool { return f.allow }
+func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	return f.out, nil
+}
+func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+type fakeErrorSummarizer struct{}
+
+func (f *fakeErrorSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	return "", fmt.Errorf("summarizer error")
+}
+func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
