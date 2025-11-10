@@ -576,17 +576,13 @@ func TestProcessSummaryJob(t *testing.T) {
 			setup: func(t *testing.T, service *Service) *summaryJob {
 				// Create a session with events
 				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
-				// sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
 				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
-				// require.NoError(t, err)
 
 				// Add an event to make delta non-empty
 				e := event.New("inv", "author")
 				e.Timestamp = time.Now()
 				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 				sess.Events = append(sess.Events, *e)
-				// err := service.AppendEvent(context.Background(), sess, e)
-				// require.NoError(t, err)
 
 				// Enable summarizer
 				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
@@ -606,18 +602,12 @@ func TestProcessSummaryJob(t *testing.T) {
 				// Create a session with events
 				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid2"}
 				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
-				// sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
-				// require.NoError(t, err)
 
 				// Add an event
 				e := event.New("inv", "author")
 				e.Timestamp = time.Now()
 				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 				sess.Events = append(sess.Events, *e)
-				// err := service.AppendEvent(context.Background(), sess, e)
-				// require.NoError(t, err)
-
-				// Enable summarizer
 				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
 
 				return &summaryJob{
@@ -635,10 +625,6 @@ func TestProcessSummaryJob(t *testing.T) {
 				// Create a session
 				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
 				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
-				// sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
-				// require.NoError(t, err)
-
-				// Enable summarizer that returns false
 				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
 
 				return &summaryJob{
@@ -656,10 +642,6 @@ func TestProcessSummaryJob(t *testing.T) {
 				// Create a session
 				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid4"}
 				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
-				// sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
-				// require.NoError(t, err)
-
-				// Enable summarizer that returns error
 				service.opts.summarizer = &fakeErrorSummarizer{}
 
 				return &summaryJob{
