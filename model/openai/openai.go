@@ -56,6 +56,10 @@ const (
 	//nolint:gosec
 	deepSeekAPIKeyName     string = "DEEPSEEK_API_KEY"
 	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
+
+	//nolint:gosec
+	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
+	defaultQwenBaseURL string = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -68,6 +72,8 @@ const (
 	VariantHunyuan Variant = "hunyuan"
 	// VariantDeepSeek is the DeepSeek variant with specific base_url handling.
 	VariantDeepSeek Variant = "deepseek"
+	// VariantQwen is the Qwen variant with specific base_url handling.
+	VariantQwen Variant = "qwen"
 )
 
 // variantConfig holds configuration for different variants.
@@ -162,6 +168,15 @@ var variantConfigs = map[Variant]variantConfig{
 			r.ContentLength = int64(body.Len())
 			return r, nil
 		},
+	},
+	VariantQwen: {
+		fileUploadPath:            "/openapi/v1/files",
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                qwenAPIKeyName,
+		defaultBaseURL:            defaultQwenBaseURL,
 	},
 }
 
