@@ -69,6 +69,7 @@ func main() {
 
 	// 3. 创建 Runner
 	r := runner.NewRunner("my-app", a)
+	defer r.Close()  // 确保资源被清理
 
 	// 4. 运行对话
 	ctx := context.Background()
@@ -480,22 +481,81 @@ for event := range eventChan {
 
 ### 资源管理
 
+#### 🔒 关闭 Runner（重要）
+
+**Runner 在不使用时必须调用 `Close()` 方法，否则会导致 goroutine 泄漏。**
+
+当 Runner 创建时如果未提供 Session Service，会自动创建默认的 inmemory Session Service。该 Service 内部会启动后台 goroutines（用于异步处理 summary 等任务）。如果不调用 `Close()`，这些 goroutines 将永远运行，造成资源泄漏。
+
+**推荐做法**：
+
 ```go
-// 使用 context 控制生命周期
+// ✅ 推荐：使用 defer 确保资源被清理
+r := runner.NewRunner("my-app", agent)
+defer r.Close()  // 确保在函数退出时关闭
+
+// 使用 runner
+eventChan, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+	return err
+}
+
+for event := range eventChan {
+	// 处理事件
+	if event.IsRunnerCompletion() {
+		break
+	}
+}
+```
+
+**长期运行的服务**：
+
+```go
+type Service struct {
+	runner runner.Runner
+}
+
+func NewService() *Service {
+	r := runner.NewRunner("my-app", agent)
+	return &Service{runner: r}
+}
+
+func (s *Service) Start() error {
+	// 启动服务逻辑
+	return nil
+}
+
+// 在服务关闭时调用 Close
+func (s *Service) Stop() error {
+	return s.runner.Close()
+}
+```
+
+**注意事项**：
+
+- ✅ `Close()` 是幂等的，多次调用是安全的
+- ✅ 如果你通过 `WithSessionService()` 提供了自己的 Session Service，Runner 不会关闭它（你需要自己管理）
+- ✅ Runner 只关闭它自己创建的资源
+- ❌ 如果不调用 `Close()`，会导致 goroutine 泄漏
+
+#### Context 生命周期控制
+
+```go
+// 使用 context 控制单次运行的生命周期
 ctx, cancel := context.WithCancel(context.Background())
 defer cancel()
 
 // 确保消费完所有事件
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 if err != nil {
-    return err
+	return err
 }
 
 for event := range eventChan {
-    // 处理事件
-    if event.Done {
-        break
-    }
+	// 处理事件
+	if event.Done {
+		break
+	}
 }
 ```
 

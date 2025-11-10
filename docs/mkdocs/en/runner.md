@@ -69,6 +69,7 @@ func main() {
 
 	// 3. Create Runner.
 	r := runner.NewRunner("my-app", a)
+	defer r.Close()  // Ensure cleanup
 
 	// 4. Run conversation.
 	ctx := context.Background()
@@ -484,22 +485,81 @@ for event := range eventChan {
 
 ### Resource Management
 
-```go
-// Use context to control lifecycle.
-ctx, cancel := context.WithCancel(context.Background())
-defer cancel()
+#### 🔒 Closing Runner (Important)
 
-// Ensure all events are consumed.
+**You MUST call `Close()` when the Runner is no longer needed to prevent goroutine leaks.**
+
+When a Runner is created without providing a Session Service, it automatically creates a default inmemory Session Service. This service starts background goroutines internally (for asynchronous summary processing, etc.). If you don't call `Close()`, these goroutines will run forever, causing resource leaks.
+
+**Recommended Practice**:
+
+```go
+// ✅ Recommended: Use defer to ensure cleanup
+r := runner.NewRunner("my-app", agent)
+defer r.Close()  // Ensure cleanup on function exit
+
+// Use the runner
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 if err != nil {
-    return err
+	return err
 }
 
 for event := range eventChan {
-    // Process events.
-    if event.Done {
-        break
-    }
+	// Process events
+	if event.IsRunnerCompletion() {
+		break
+	}
+}
+```
+
+**Long-Running Services**:
+
+```go
+type Service struct {
+	runner runner.Runner
+}
+
+func NewService() *Service {
+	r := runner.NewRunner("my-app", agent)
+	return &Service{runner: r}
+}
+
+func (s *Service) Start() error {
+	// Service startup logic
+	return nil
+}
+
+// Call Close when shutting down the service
+func (s *Service) Stop() error {
+	return s.runner.Close()
+}
+```
+
+**Important Notes**:
+
+- ✅ `Close()` is idempotent; calling it multiple times is safe
+- ✅ If you provide your own Session Service via `WithSessionService()`, Runner won't close it (you manage it yourself)
+- ✅ Runner only closes resources it created
+- ❌ Not calling `Close()` will cause goroutine leaks
+
+#### Context Lifecycle Control
+
+```go
+// Use context to control the lifecycle of a single run
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+// Ensure all events are consumed
+eventChan, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+	return err
+}
+
+for event := range eventChan {
+	// Process events
+	if event.Done {
+		break
+	}
 }
 ```
 

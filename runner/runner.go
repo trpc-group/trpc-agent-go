@@ -133,7 +133,10 @@ func (r *runner) Close() error {
 	r.closeOnce.Do(func() {
 		// Only close resources that we own (created by this runner).
 		if r.ownedSessionService && r.sessionService != nil {
-			closeErr = r.sessionService.Close()
+			if err := r.sessionService.Close(); err != nil {
+				closeErr = err
+				log.Errorf("close session service failed: %v", err)
+			}
 		}
 	})
 	return closeErr
