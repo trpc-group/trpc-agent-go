@@ -346,6 +346,19 @@ func TestGetSessionSummaryText_Success(t *testing.T) {
 
 	// Verify expectations
 	require.NoError(t, mock.ExpectationsWereMet())
+
+	sess = &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		Summaries: map[string]*session.Summary{
+			"": {Summary: "summary text"},
+		},
+	}
+
+	text, ok = s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	assert.Equal(t, "summary text", text)
 }
 
 func TestGetSessionSummaryText_NoSummary(t *testing.T) {
@@ -370,6 +383,10 @@ func TestGetSessionSummaryText_NoSummary(t *testing.T) {
 
 	// Verify expectations
 	require.NoError(t, mock.ExpectationsWereMet())
+
+	text, ok = s.GetSessionSummaryText(context.Background(), nil)
+	require.False(t, ok)
+	assert.Empty(t, text)
 }
 
 func TestGetSessionSummaryText_InvalidKey(t *testing.T) {
