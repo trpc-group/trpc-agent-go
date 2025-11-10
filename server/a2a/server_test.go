@@ -650,6 +650,8 @@ func (m *mockRunner) Run(ctx context.Context, userID string, sessionID string, m
 	return ch, nil
 }
 
+func (m *mockRunner) Close() error { return nil }
+
 // errorA2AMessageConverter for testing conversion errors
 type errorA2AMessageConverter struct{}
 
