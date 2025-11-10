@@ -1130,14 +1130,3 @@ func (vs *VectorStore) docBuilder(tcDoc tcvectordb.Document) (*document.Document
 	}
 	return doc, embedding, nil
 }
-
-// getFilterFieldName returns the appropriate field name for filtering.
-// Fields in filterFields use dedicated index, others use JSON index path.
-func (vs *VectorStore) getFilterFieldName(field string) string {
-	for _, filterField := range vs.option.filterFields {
-		if filterField == field {
-			return field
-		}
-	}
-	return fmt.Sprintf("%s.%s", vs.option.metadataFieldName, field)
-}
