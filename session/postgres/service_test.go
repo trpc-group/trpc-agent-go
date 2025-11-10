@@ -68,6 +68,7 @@ type TestServiceOpts struct {
 	cleanupInterval    time.Duration
 	summarizer         mockSummarizer
 	asyncSummaryNum    int
+	summaryJobTimeout  time.Duration
 	summaryQueueSize   int
 }
 
@@ -173,6 +174,7 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 			tablePrefix:        prefix,
 			summaryQueueSize:   opts.summaryQueueSize,
 			asyncSummaryNum:    opts.asyncSummaryNum,
+			summaryJobTimeout:  opts.summaryJobTimeout,
 		},
 		cleanupDone: make(chan struct{}),
 

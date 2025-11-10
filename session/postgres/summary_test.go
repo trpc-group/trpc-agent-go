@@ -511,6 +511,15 @@ func TestCreateSessionSummary_UnmarshalError(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCreateSessionSummary_SessionIsNil(t *testing.T) {
+	summarizer := &mockSummarizerImpl{summaryText: "new summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
+	defer db.Close()
+
+	err := s.CreateSessionSummary(context.Background(), nil, "", false)
+	require.Error(t, err)
+}
+
 func TestGetSessionSummaryText_UnmarshalError(t *testing.T) {
 	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: &mockSummarizerImpl{shouldSummarize: false}})
 	defer db.Close()
@@ -535,6 +544,34 @@ func TestGetSessionSummaryText_UnmarshalError(t *testing.T) {
 
 	// Verify expectations
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T) {
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer, asyncSummaryNum: 1})
+	defer db.Close()
+
+	// Close the channel to simulate a closed channel
+	close(s.summaryJobChans[0])
+
+	// This should not panic
+	require.NotPanics(t, func() {
+		s.EnqueueSummaryJob(context.Background(), &session.Session{}, "", false)
+	})
+}
+
+func TestStartAsyncSummaryWorker_Initialization(t *testing.T) {
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
+	defer db.Close()
+	defer s.Close()
+
+	// Verify channels are properly initialized
+	assert.Len(t, s.summaryJobChans, 3)
+	for i, ch := range s.summaryJobChans {
+		assert.NotNil(t, ch, "Channel %d should not be nil", i)
+		assert.Equal(t, 100, cap(ch), "Channel %d should have capacity 100", i)
+	}
 }
 
 func TestEnqueueSummaryJob_HashDistribution(t *testing.T) {
@@ -563,6 +600,28 @@ func TestEnqueueSummaryJob_HashDistribution(t *testing.T) {
 		totalJobs += len(ch)
 	}
 	assert.Equal(t, 3, totalJobs)
+}
+
+func TestRedisService_ProcessSummaryJob_Panic(t *testing.T) {
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
+	defer db.Close()
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+
+	// Process a job with no stored session - should trigger error but not panic.
+	job := &summaryJob{
+		sessionKey: key,
+		filterKey:  "",
+		force:      false,
+		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+	}
+
+	// This should not panic, just log error.
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
 }
 
 func TestProcessSummaryJob(t *testing.T) {
@@ -658,7 +717,7 @@ func TestProcessSummaryJob(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
-			s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
+			s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer, summaryJobTimeout: time.Second})
 			job := tt.setup(t, s)
 
 			mock.ExpectExec(fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)

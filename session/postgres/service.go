@@ -37,7 +37,7 @@ const (
 	defaultCleanupIntervalSecond = 300 // 5 min
 
 	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 256
+	defaultSummaryQueueSize = 100
 
 	defaultHost     = "localhost"
 	defaultPort     = 5432
