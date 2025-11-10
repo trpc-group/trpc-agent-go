@@ -188,7 +188,6 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 
 	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
 		log.Warnf("summary worker failed to create session summary: %v", err)
-		return
 	}
 }
 
