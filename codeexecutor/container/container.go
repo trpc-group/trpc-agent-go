@@ -147,6 +147,19 @@ func WithContainerConfig(containerConfig container.Config) Option {
 	}
 }
 
+// WithBindMount appends a bind mount in the form source:dest:mode.
+// Example mode: "ro" or "rw". This option is generic and does not
+// imply any domain-specific semantics.
+func WithBindMount(src, dest, mode string) Option {
+	return func(c *CodeExecutor) {
+		spec := src + ":" + dest
+		if mode != "" {
+			spec += ":" + mode
+		}
+		c.hostConfig.Binds = append(c.hostConfig.Binds, spec)
+	}
+}
+
 // ExecuteCode implements the CodeExecutor interface
 func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
 	if c.container == nil {
@@ -243,7 +256,7 @@ func (c *CodeExecutor) ensureWS() (*workspaceRuntime, error) {
 	if c.ws != nil {
 		return c.ws, nil
 	}
-	rt, err := newWorkspaceRuntime()
+	rt, err := newWorkspaceRuntime(c)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +264,16 @@ func (c *CodeExecutor) ensureWS() (*workspaceRuntime, error) {
 	return rt, nil
 }
 
-// CreateWorkspace implements the CodeExecutor interface.
+// Engine exposes the container runtime as an Engine for skills.
+func (c *CodeExecutor) Engine() codeexecutor.Engine {
+	rt, err := c.ensureWS()
+	if err != nil {
+		return nil
+	}
+	return codeexecutor.NewEngine(rt, rt, rt)
+}
+
+// CreateWorkspace creates a workspace using the container runtime.
 func (c *CodeExecutor) CreateWorkspace(
 	ctx context.Context, execID string,
 	pol codeexecutor.WorkspacePolicy,
@@ -263,7 +285,7 @@ func (c *CodeExecutor) CreateWorkspace(
 	return rt.CreateWorkspace(ctx, execID, pol)
 }
 
-// Cleanup implements the CodeExecutor interface.
+// Cleanup removes a workspace via the container runtime.
 func (c *CodeExecutor) Cleanup(
 	ctx context.Context, ws codeexecutor.Workspace,
 ) error {
@@ -274,7 +296,7 @@ func (c *CodeExecutor) Cleanup(
 	return rt.Cleanup(ctx, ws)
 }
 
-// PutFiles implements the CodeExecutor interface.
+// PutFiles writes files into a workspace in the container.
 func (c *CodeExecutor) PutFiles(
 	ctx context.Context, ws codeexecutor.Workspace,
 	files []codeexecutor.PutFile,
@@ -286,7 +308,7 @@ func (c *CodeExecutor) PutFiles(
 	return rt.PutFiles(ctx, ws, files)
 }
 
-// PutDirectory implements the CodeExecutor interface.
+// PutDirectory stages a host directory into the workspace.
 func (c *CodeExecutor) PutDirectory(
 	ctx context.Context, ws codeexecutor.Workspace,
 	hostPath, to string,
@@ -298,19 +320,7 @@ func (c *CodeExecutor) PutDirectory(
 	return rt.PutDirectory(ctx, ws, hostPath, to)
 }
 
-// PutSkill implements the CodeExecutor interface.
-func (c *CodeExecutor) PutSkill(
-	ctx context.Context, ws codeexecutor.Workspace,
-	skillRoot, to string,
-) error {
-	rt, err := c.ensureWS()
-	if err != nil {
-		return err
-	}
-	return rt.PutSkill(ctx, ws, skillRoot, to)
-}
-
-// RunProgram implements the CodeExecutor interface.
+// RunProgram runs a command inside the workspace.
 func (c *CodeExecutor) RunProgram(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
@@ -322,7 +332,7 @@ func (c *CodeExecutor) RunProgram(
 	return rt.RunProgram(ctx, ws, spec)
 }
 
-// Collect implements the CodeExecutor interface.
+// Collect copies files out of the workspace.
 func (c *CodeExecutor) Collect(
 	ctx context.Context, ws codeexecutor.Workspace,
 	patterns []string,
@@ -334,7 +344,7 @@ func (c *CodeExecutor) Collect(
 	return rt.Collect(ctx, ws, patterns)
 }
 
-// ExecuteInline implements the CodeExecutor interface.
+// ExecuteInline writes code blocks and executes them in the container.
 func (c *CodeExecutor) ExecuteInline(
 	ctx context.Context, execID string,
 	blocks []codeexecutor.CodeBlock,

@@ -12,6 +12,7 @@
 package codeexecutor
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -28,7 +29,6 @@ const (
 	SpanWorkspaceCleanup    = "workspace.cleanup"
 	SpanWorkspaceStageFiles = "workspace.stage.files"
 	SpanWorkspaceStageDir   = "workspace.stage.dir"
-	SpanWorkspaceStageSkill = "workspace.stage.skill"
 	SpanWorkspaceRun        = "workspace.run"
 	SpanWorkspaceCollect    = "workspace.collect"
 	SpanWorkspaceInline     = "workspace.inline"
@@ -44,7 +44,6 @@ const (
 	AttrTimedOut  = "timed_out"
 	AttrHostPath  = "host_path"
 	AttrTo        = "to"
-	AttrRoot      = "root"
 	AttrMountUsed = "mount_used"
 )
 
@@ -103,12 +102,88 @@ type RunResult struct {
 	TimedOut bool
 }
 
-// Default file modes for generated code files.
+// StageOptions controls directory staging behavior.
+type StageOptions struct {
+	// ReadOnly makes the staged tree non-writable after copy/mount.
+	ReadOnly bool
+	// AllowMount lets implementations use read-only mounts when possible.
+	AllowMount bool
+}
+
+// WorkspaceManager handles workspace lifecycle.
+type WorkspaceManager interface {
+	CreateWorkspace(ctx context.Context, execID string,
+		pol WorkspacePolicy) (Workspace, error)
+	Cleanup(ctx context.Context, ws Workspace) error
+}
+
+// WorkspaceFS performs file operations within a workspace.
+type WorkspaceFS interface {
+	PutFiles(ctx context.Context, ws Workspace,
+		files []PutFile) error
+	StageDirectory(ctx context.Context, ws Workspace,
+		src, to string, opt StageOptions) error
+	Collect(ctx context.Context, ws Workspace,
+		patterns []string) ([]File, error)
+}
+
+// ProgramRunner executes programs within a workspace.
+type ProgramRunner interface {
+	RunProgram(ctx context.Context, ws Workspace,
+		spec RunProgramSpec) (RunResult, error)
+}
+
+// Capabilities describes engine capabilities for selection.
+type Capabilities struct {
+	Isolation      string
+	NetworkAllowed bool
+	ReadOnlyMount  bool
+	Streaming      bool
+	MaxDiskBytes   int64
+}
+
+// Engine is a backend that provides workspace and execution services.
+type Engine interface {
+	Manager() WorkspaceManager
+	FS() WorkspaceFS
+	Runner() ProgramRunner
+	// Describe returns optional capabilities.
+	Describe() Capabilities
+}
+
+// EngineProvider is an optional interface that a CodeExecutor may
+// implement to expose its underlying engine for skill tools.
+type EngineProvider interface {
+	Engine() Engine
+}
+
+type stdEngine struct {
+	m WorkspaceManager
+	f WorkspaceFS
+	r ProgramRunner
+	c Capabilities
+}
+
+func (e *stdEngine) Manager() WorkspaceManager { return e.m }
+func (e *stdEngine) FS() WorkspaceFS           { return e.f }
+func (e *stdEngine) Runner() ProgramRunner     { return e.r }
+func (e *stdEngine) Describe() Capabilities    { return e.c }
+
+// NewEngine constructs a simple Engine from its components.
+func NewEngine(m WorkspaceManager, f WorkspaceFS,
+	r ProgramRunner) Engine {
+	return &stdEngine{m: m, f: f, r: r}
+}
+
+// Default file modes and common subdirectories.
 const (
 	// DefaultScriptFileMode is the default POSIX mode for text scripts.
 	DefaultScriptFileMode = 0o644
 	// DefaultExecFileMode is the default POSIX mode for executables.
 	DefaultExecFileMode = 0o755
+	// InlineSourceDir is the subdirectory where inline code blocks
+	// are written and executed as the current working directory.
+	InlineSourceDir = "src"
 )
 
 // BuildBlockSpec maps a code block into a file name, mode, command,

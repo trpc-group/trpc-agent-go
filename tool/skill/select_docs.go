@@ -201,6 +201,10 @@ func (t *SelectDocsTool) StateDelta(
 	if out.IncludeAllDocs {
 		return map[string][]byte{dk: []byte("*")}
 	}
+	// Ensure empty slice encodes to [] rather than null.
+	if out.Selected == nil && !out.IncludeAllDocs {
+		return map[string][]byte{dk: []byte("[]")}
+	}
 	b, err := json.Marshal(out.Selected)
 	if err != nil {
 		return nil

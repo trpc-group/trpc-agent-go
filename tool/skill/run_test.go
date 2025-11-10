@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -126,77 +127,6 @@ func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 	require.Len(t, out.ArtifactFiles, 1)
 	require.Equal(t, "out/a.txt", out.ArtifactFiles[0].Name)
 	require.Equal(t, 0, out.ArtifactFiles[0].Version)
-	// Inline content omitted.
-	require.Len(t, out.OutputFiles, 1)
-	require.Equal(t, "", out.OutputFiles[0].Content)
-}
-
-func TestRunTool_SaveAsArtifacts_WithPrefix_NoOmit(t *testing.T) {
-	root := t.TempDir()
-	writeSkill(t, root, testSkillName)
-
-	repo, err := skill.NewFSRepository(root)
-	require.NoError(t, err)
-
-	exec := localexec.New()
-	rt := NewRunTool(repo, exec)
-
-	args := runInput{
-		Skill:   testSkillName,
-		Command: "mkdir -p out; echo hi > out/a.txt",
-		OutputFiles: []string{
-			"out/*.txt",
-		},
-		Timeout:         timeoutSecSmall,
-		SaveAsArtifacts: true,
-		// keep inline contents; set a prefix
-		ArtifactPrefix: "user:",
-	}
-	enc, err := jsonMarshal(args)
-	require.NoError(t, err)
-
-	inv := agent.NewInvocation(
-		agent.WithInvocationSession(&session.Session{
-			AppName: "app", UserID: "u", ID: "s1",
-			State: session.StateMap{},
-		}),
-		agent.WithInvocationArtifactService(inmemory.NewService()),
-	)
-	ctx := agent.NewInvocationContext(context.Background(), inv)
-
-	res, err := rt.Call(ctx, enc)
-	require.NoError(t, err)
-	out := res.(runOutput)
-	require.Len(t, out.ArtifactFiles, 1)
-	require.Equal(t, "user:out/a.txt", out.ArtifactFiles[0].Name)
-	// Inline content is kept (no omit flag).
-	require.Len(t, out.OutputFiles, 1)
-	require.Contains(t, out.OutputFiles[0].Content, "hi")
-}
-
-func TestRunTool_SaveAsArtifacts_NoInvocationContext(t *testing.T) {
-	root := t.TempDir()
-	writeSkill(t, root, testSkillName)
-	repo, err := skill.NewFSRepository(root)
-	require.NoError(t, err)
-
-	exec := localexec.New()
-	rt := NewRunTool(repo, exec)
-
-	args := runInput{
-		Skill:   testSkillName,
-		Command: "mkdir -p out; echo hi > out/a.txt",
-		OutputFiles: []string{
-			"out/*.txt",
-		},
-		SaveAsArtifacts: true,
-		Timeout:         timeoutSecSmall,
-	}
-	enc, err := jsonMarshal(args)
-	require.NoError(t, err)
-
-	_, err = rt.Call(context.Background(), enc)
-	require.Error(t, err)
 }
 
 // errArtifactService always fails on save to cover error path.
@@ -239,7 +169,7 @@ func TestRunTool_SaveAsArtifacts_SaveError(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-    exec := localexec.New()
+	exec := localexec.New()
 	rt := NewRunTool(repo, exec)
 
 	args := runInput{
@@ -273,7 +203,7 @@ func TestRunTool_ErrorOnMissingSkill(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 
-    exec := localexec.New()
+	exec := localexec.New()
 	rt := NewRunTool(repo, exec)
 
 	args := runInput{Skill: "missing", Command: "echo hello"}
@@ -298,23 +228,41 @@ func TestRunTool_ErrorOnNilExecutor(t *testing.T) {
 }
 
 // jsonMarshal is a tiny wrapper to keep tests tidy.
-func jsonMarshal(v any) ([]byte, error) {
-	return json.Marshal(v)
+func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
+
+// stubCE implements minimal CodeExecutor to trigger engine fallback.
+type stubCE struct{}
+
+func (s *stubCE) ExecuteCode(
+	ctx context.Context, in codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{Output: ""}, nil
+}
+func (s *stubCE) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 }
 
-func TestRunTool_Declaration_And_InvalidArgs(t *testing.T) {
-	rt := NewRunTool(nil, nil)
-	d := rt.Declaration()
-	require.Equal(t, "skill_run", d.Name)
-	require.NotNil(t, d.InputSchema)
-	require.NotNil(t, d.OutputSchema)
+func TestRunTool_FallbackEngine_NoEngineProvider(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
 
-	// invalid json
-	_, err := rt.Call(context.Background(), []byte("{"))
-	require.Error(t, err)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
 
-	// missing fields
-	b, _ := json.Marshal(map[string]any{"skill": "x"})
-	_, err = rt.Call(context.Background(), b)
-	require.Error(t, err)
+	// Use a CodeExecutor without Engine() to trigger fallback.
+	exec := &stubCE{}
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "echo ok",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
 }

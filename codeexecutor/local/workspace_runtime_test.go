@@ -135,7 +135,8 @@ func TestRuntime_PutSkill_ReadOnly(t *testing.T) {
 	// Stage skill under target path and make it read-only.
 	// On some hosts, staging may hit transient permission policies;
 	// if so, skip to avoid environment-specific flakiness.
-	if err := rt.PutSkill(ctx, ws, skillDir, "tool"); err != nil {
+	if err := rt.StageDirectory(ctx, ws, skillDir, "tool",
+		codeexecutor.StageOptions{ReadOnly: true}); err != nil {
 		if strings.Contains(err.Error(), permDenied) {
 			t.Skip("skip due to permission policy: " + err.Error())
 		}
@@ -260,7 +261,7 @@ func TestRuntime_RunProgram_NonexistentCommandExitCode(t *testing.T) {
 	require.Equal(t, -1, res.ExitCode)
 }
 
-func TestRuntime_PutSkill_ReadOnly_EmptyDir(t *testing.T) {
+func TestRuntime_StageDirectory_ReadOnly_EmptyDir(t *testing.T) {
 	// Exercise makeTreeReadOnly without file permission churn by
 	// staging an empty directory and enabling read-only flag.
 	rt := local.NewRuntimeWithOptions(
@@ -274,7 +275,8 @@ func TestRuntime_PutSkill_ReadOnly_EmptyDir(t *testing.T) {
 	defer rt.Cleanup(ctx, ws)
 
 	empty := t.TempDir()
-	err = rt.PutSkill(ctx, ws, empty, "tool")
+	err = rt.StageDirectory(ctx, ws, empty, "tool",
+		codeexecutor.StageOptions{ReadOnly: true})
 	if err != nil && strings.Contains(err.Error(), permDenied) {
 		t.Skip("skip due to permission policy: " + err.Error())
 	}

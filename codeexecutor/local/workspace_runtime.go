@@ -107,10 +107,11 @@ func (r *Runtime) CreateWorkspace(
 	}, execID)
 
 	wsPath := filepath.Join(base, "ws_"+safe)
-	if err := os.MkdirAll(wsPath, 0o755); err != nil {
+	if err := os.MkdirAll(wsPath, 0o777); err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return codeexecutor.Workspace{}, err
 	}
+	_ = os.Chmod(wsPath, 0o777)
 
 	// Persist is respected by callers deciding whether to call Cleanup.
 	_ = pol
@@ -183,34 +184,29 @@ func (r *Runtime) PutDirectory(
 	return err
 }
 
-// PutSkill copies a skill directory into workspace. Same as PutDirectory.
-func (r *Runtime) PutSkill(
+// StageDirectory stages a host directory into the workspace.
+// Behavior depends on options, e.g., making the tree read-only.
+func (r *Runtime) StageDirectory(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
-	skillRoot string,
+	src string,
 	to string,
+	opt codeexecutor.StageOptions,
 ) error {
-	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceStageSkill)
-	span.SetAttributes(
-		attribute.String(codeexecutor.AttrRoot, skillRoot),
-		attribute.String(codeexecutor.AttrTo, to),
-	)
-	defer span.End()
-	err := r.PutDirectory(ctx, ws, skillRoot, to)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+	if err := r.PutDirectory(ctx, ws, src, to); err != nil {
+		return err
 	}
-	if err == nil && r.ReadOnlyStagedSkill {
+	ro := opt.ReadOnly || r.ReadOnlyStagedSkill
+	if ro {
 		dest := ws.Path
 		if to != "" {
 			dest = filepath.Join(ws.Path, filepath.Clean(to))
 		}
-		if e2 := makeTreeReadOnly(dest); e2 != nil {
-			span.SetStatus(codes.Error, e2.Error())
-			return e2
+		if err := makeTreeReadOnly(dest); err != nil {
+			return err
 		}
 	}
-	return err
+	return nil
 }
 
 // RunProgram runs a command inside the workspace.
@@ -372,7 +368,7 @@ func (r *Runtime) ExecuteInline(
 			continue
 		}
 		pf := codeexecutor.PutFile{
-			Path:    fn,
+			Path:    filepath.Join(codeexecutor.InlineSourceDir, fn),
 			Content: []byte(b.Code),
 			Mode:    mode,
 		}
@@ -387,6 +383,7 @@ func (r *Runtime) ExecuteInline(
 		spec := codeexecutor.RunProgramSpec{
 			Cmd:     cmd,
 			Args:    argv,
+			Cwd:     codeexecutor.InlineSourceDir,
 			Timeout: timeout,
 		}
 		res, err := r.RunProgram(ctx, ws, spec)

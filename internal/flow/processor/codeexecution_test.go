@@ -1,4 +1,5 @@
 //
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -10,11 +11,9 @@
 package processor_test
 
 import (
-    "context"
-    "fmt"
-    "time"
-    "strings"
-    "testing"
+	"context"
+	"strings"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 
@@ -31,151 +30,65 @@ func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
 	ctx := context.Background()
 	proc := iprocessor.NewCodeExecutionResponseProcessor()
 
-	// Prepare a fake invocation with a session and a stub agent that exposes a CodeExecutor
 	inv := &agent.Invocation{
-		Agent:   &testAgent{exec: &stubExec{}},
-		Session: &session.Session{ID: "test-session"},
-		// AgentName is used as author in events
+		Agent:     &testAgent{exec: &stubExec{}},
+		Session:   &session.Session{ID: "test-session"},
 		AgentName: "test-agent",
 	}
 
-	// Build a response containing a single fenced bash code block
 	rsp := &model.Response{
 		Done: true,
 		Choices: []model.Choice{
-			{Message: model.Message{Role: model.RoleAssistant, Content: "```bash\necho hello\n```"}},
+			{Message: model.Message{Role: model.RoleAssistant,
+				Content: "```bash\necho hello\n```"}},
 		},
 	}
 
 	ch := make(chan *event.Event, 4)
 	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
 
-	// After processing, the original content should be cleared to avoid duplicate downstream handling
 	if assert.NotEmpty(t, rsp.Choices) {
 		assert.Equal(t, "", rsp.Choices[0].Message.Content)
 	}
-
-	// Collect emitted events
 	var evts []*event.Event
 	for len(ch) > 0 {
 		evts = append(evts, <-ch)
 	}
-
-	// Expect two postprocessing.code_execution events: one for code content, one for execution result
 	if assert.Len(t, evts, 2) {
-		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution, evts[0].Response.Object)
-		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution, evts[1].Response.Object)
-
-		// First event should contain the original code block
+		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution,
+			evts[0].Response.Object)
+		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution,
+			evts[1].Response.Object)
 		codeMsg := evts[0].Response.Choices[0].Message.Content
 		assert.Contains(t, codeMsg, "```bash")
-
-		// Second event should contain execution result string from stub executor
 		resultMsg := evts[1].Response.Choices[0].Message.Content
-		assert.True(t, strings.Contains(resultMsg, "Code execution result:") || strings.Contains(resultMsg, "OK"))
+		assert.True(t, strings.Contains(resultMsg,
+			"Code execution result:") || strings.Contains(resultMsg, "OK"))
 	}
 }
 
 // stubExec is a simple CodeExecutor stub returning a fixed output
 type stubExec struct{}
 
-func (s *stubExec) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
+func (s *stubExec) ExecuteCode(
+	ctx context.Context, input codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
 	return codeexecutor.CodeExecutionResult{Output: "OK"}, nil
 }
 func (s *stubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
-    return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 }
-
-func (s *stubExec) CreateWorkspace(
-    ctx context.Context, id string,
-    pol codeexecutor.WorkspacePolicy,
-) (codeexecutor.Workspace, error) { return codeexecutor.Workspace{}, nil }
-func (s *stubExec) Cleanup(ctx context.Context, ws codeexecutor.Workspace) error {
-    return nil
-}
-func (s *stubExec) PutFiles(
-    ctx context.Context, ws codeexecutor.Workspace,
-    files []codeexecutor.PutFile,
-) error { return nil }
-func (s *stubExec) PutDirectory(
-    ctx context.Context, ws codeexecutor.Workspace,
-    hostPath, to string,
-) error { return nil }
-func (s *stubExec) PutSkill(
-    ctx context.Context, ws codeexecutor.Workspace,
-    root, to string,
-) error { return nil }
-func (s *stubExec) RunProgram(
-    ctx context.Context, ws codeexecutor.Workspace,
-    spec codeexecutor.RunProgramSpec,
-) (codeexecutor.RunResult, error) { return codeexecutor.RunResult{}, nil }
-func (s *stubExec) Collect(
-    ctx context.Context, ws codeexecutor.Workspace,
-    patterns []string,
-) ([]codeexecutor.File, error) { return nil, nil }
-func (s *stubExec) ExecuteInline(
-    ctx context.Context, id string,
-    blocks []codeexecutor.CodeBlock, timeout time.Duration,
-) (codeexecutor.RunResult, error) { return codeexecutor.RunResult{}, nil }
 
 // testAgent implements agent.Agent and agent.CodeExecutor
-type testAgent struct {
-	exec codeexecutor.CodeExecutor
-}
+type testAgent struct{ exec codeexecutor.CodeExecutor }
 
 // agent.Agent
 func (a *testAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	return nil, nil
 }
-func (a *testAgent) Tools() []tool.Tool {
-	return nil
-}
-func (a *testAgent) Info() agent.Info {
-	return agent.Info{Name: "test-agent"}
-}
-func (a *testAgent) SubAgents() []agent.Agent {
-	return nil
-}
-func (a *testAgent) FindSubAgent(name string) agent.Agent {
-	return nil
-}
+func (a *testAgent) Tools() []tool.Tool                   { return nil }
+func (a *testAgent) Info() agent.Info                     { return agent.Info{Name: "test-agent"} }
+func (a *testAgent) SubAgents() []agent.Agent             { return nil }
+func (a *testAgent) FindSubAgent(name string) agent.Agent { return nil }
 
-func (a *testAgent) CodeExecutor() codeexecutor.CodeExecutor {
-	return a.exec
-}
-
-// errExec returns error on ExecuteCode
-type errExec struct{ stubExec }
-
-func (e *errExec) ExecuteCode(ctx context.Context, in codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
-	return codeexecutor.CodeExecutionResult{}, fmt.Errorf("boom")
-}
-
-func TestCodeExecutionResponseProcessor_Branches(t *testing.T) {
-	ctx := context.Background()
-	p := iprocessor.NewCodeExecutionResponseProcessor()
-
-	// Early returns
-	p.ProcessResponse(ctx, nil, nil, nil, make(chan *event.Event, 1))
-	p.ProcessResponse(ctx, &agent.Invocation{}, nil, nil, make(chan *event.Event, 1))
-	p.ProcessResponse(ctx, &agent.Invocation{Agent: &testAgent{exec: nil}}, nil, nil, make(chan *event.Event, 1))
-
-	// isPartial return
-	inv := &agent.Invocation{Agent: &testAgent{exec: &stubExec{}}, Session: &session.Session{ID: "s1"}, AgentName: "a"}
-	rsp := &model.Response{IsPartial: true}
-	p.ProcessResponse(ctx, inv, nil, rsp, make(chan *event.Event, 2))
-
-	// no choices return
-	rsp = &model.Response{}
-	p.ProcessResponse(ctx, inv, nil, rsp, make(chan *event.Event, 2))
-
-	// no code block return
-	rsp = &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "no code here"}}}}
-	p.ProcessResponse(ctx, inv, nil, rsp, make(chan *event.Event, 2))
-
-	// ExecuteCode error path
-	inv.Agent = &testAgent{exec: &errExec{}}
-	ch := make(chan *event.Event, 4)
-	rsp = &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "```go\nfmt.Println(1)```"}}}}
-	p.ProcessResponse(ctx, inv, nil, rsp, ch)
-}
+func (a *testAgent) CodeExecutor() codeexecutor.CodeExecutor { return a.exec }

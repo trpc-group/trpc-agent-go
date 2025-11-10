@@ -834,12 +834,7 @@ func (m *mockCodeExecutor) PutDirectory(
 	return nil
 }
 
-func (m *mockCodeExecutor) PutSkill(
-	ctx context.Context, ws codeexecutor.Workspace,
-	root, to string,
-) error {
-	return nil
-}
+// (removed) PutSkill: callers should use StageDirectory on engines.
 
 func (m *mockCodeExecutor) RunProgram(
 	ctx context.Context, ws codeexecutor.Workspace,

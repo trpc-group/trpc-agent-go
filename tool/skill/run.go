@@ -1,4 +1,5 @@
 //
+//
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
@@ -17,11 +18,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -41,38 +46,28 @@ func NewRunTool(repo skill.Repository,
 
 // runInput is the JSON schema for skill_run.
 type runInput struct {
-	Skill       string            `json:"skill"`
-	Command     string            `json:"command"`
-	Cwd         string            `json:"cwd,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	OutputFiles []string          `json:"output_files,omitempty"`
-	Timeout     int               `json:"timeout,omitempty"`
-	// SaveAsArtifacts saves output files into artifact service when
-	// available, returning artifact references instead of (or in
-	// addition to) inline content.
-	SaveAsArtifacts bool `json:"save_as_artifacts,omitempty"`
-	// OmitInlineContent drops file contents from OutputFiles when
-	// SaveAsArtifacts is true, reducing payload size.
-	OmitInlineContent bool `json:"omit_inline_content,omitempty"`
-	// ArtifactPrefix is an optional prefix for artifact filenames.
-	// For user-namespaced artifacts, set to "user:".
-	ArtifactPrefix string `json:"artifact_prefix,omitempty"`
+	Skill             string            `json:"skill"`
+	Command           string            `json:"command"`
+	Cwd               string            `json:"cwd,omitempty"`
+	Env               map[string]string `json:"env,omitempty"`
+	OutputFiles       []string          `json:"output_files,omitempty"`
+	Timeout           int               `json:"timeout,omitempty"`
+	SaveAsArtifacts   bool              `json:"save_as_artifacts,omitempty"`
+	OmitInlineContent bool              `json:"omit_inline_content,omitempty"`
+	ArtifactPrefix    string            `json:"artifact_prefix,omitempty"`
 }
 
 // runOutput is the structured result returned by skill_run.
 type runOutput struct {
-	Stdout      string              `json:"stdout"`
-	Stderr      string              `json:"stderr"`
-	ExitCode    int                 `json:"exit_code"`
-	TimedOut    bool                `json:"timed_out"`
-	Duration    int64               `json:"duration_ms"`
-	OutputFiles []codeexecutor.File `json:"output_files"`
-	// ArtifactFiles lists saved artifacts when SaveAsArtifacts is
-	// requested. Each entry contains the filename and version.
-	ArtifactFiles []artifactRef `json:"artifact_files,omitempty"`
+	Stdout        string              `json:"stdout"`
+	Stderr        string              `json:"stderr"`
+	ExitCode      int                 `json:"exit_code"`
+	TimedOut      bool                `json:"timed_out"`
+	Duration      int64               `json:"duration_ms"`
+	OutputFiles   []codeexecutor.File `json:"output_files"`
+	ArtifactFiles []artifactRef       `json:"artifact_files,omitempty"`
 }
 
-// artifactRef captures a saved artifact reference.
 type artifactRef struct {
 	Name    string `json:"name"`
 	Version int    `json:"version"`
@@ -88,50 +83,22 @@ func (t *RunTool) Declaration() *tool.Declaration {
 			Description: "Run command input",
 			Required:    []string{"skill", "command"},
 			Properties: map[string]*tool.Schema{
-				"skill": {
-					Type:        "string",
-					Description: "Skill name to run",
-				},
-				"command": {
-					Type:        "string",
-					Description: "Shell command to execute",
-				},
-				"cwd": {
-					Type:        "string",
-					Description: "Working dir under skill root",
-				},
-				"env": {
-					Type:                 "object",
-					Description:          "Environment variables",
-					AdditionalProperties: &tool.Schema{Type: "string"},
-				},
-				"output_files": {
-					Type:        "array",
+				"skill":   {Type: "string", Description: "Skill name"},
+				"command": {Type: "string", Description: "Shell command"},
+				"cwd":     {Type: "string", Description: "Working dir"},
+				"env": {Type: "object", Description: "Env vars",
+					AdditionalProperties: &tool.Schema{Type: "string"}},
+				"output_files": {Type: "array",
 					Items:       &tool.Schema{Type: "string"},
-					Description: "Glob patterns to collect",
-				},
-				"timeout": {
-					Type:        "integer",
-					Description: "Timeout in seconds",
-				},
-				"save_as_artifacts": {
-					Type:        "boolean",
-					Description: "Save files via artifact service",
-				},
-				"omit_inline_content": {
-					Type:        "boolean",
-					Description: "Do not inline file contents",
-				},
-				"artifact_prefix": {
-					Type:        "string",
-					Description: "Optional filename prefix (e.g., user:)",
-				},
+					Description: "Glob patterns to collect"},
+				"timeout":             {Type: "integer", Description: "Seconds"},
+				"save_as_artifacts":   {Type: "boolean"},
+				"omit_inline_content": {Type: "boolean"},
+				"artifact_prefix":     {Type: "string"},
 			},
 		},
-		OutputSchema: &tool.Schema{
-			Type:        "object",
-			Description: "Run result with output files",
-		},
+		OutputSchema: &tool.Schema{Type: "object",
+			Description: "Run result with output files"},
 	}
 }
 
@@ -144,46 +111,68 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 	if in.Skill == "" || in.Command == "" {
 		return nil, fmt.Errorf("skill and command are required")
 	}
-
 	root, err := t.repo.Path(in.Skill)
 	if err != nil {
 		return nil, err
 	}
-
 	if t.exec == nil {
 		return nil, fmt.Errorf("executor is not configured")
 	}
 
-	// Create workspace and stage the skill directory.
-	ws, err := t.exec.CreateWorkspace(
+	// Obtain engine from executor when available; fallback to local.
+	var eng codeexecutor.Engine
+	if ep, ok := t.exec.(codeexecutor.EngineProvider); ok && ep != nil {
+		eng = ep.Engine()
+	}
+	if eng == nil {
+		log.Warnf(
+			"skill_run: falling back to local engine; " +
+				"no EngineProvider on executor",
+		)
+		rt := localexec.NewRuntime("")
+		eng = codeexecutor.NewEngine(rt, rt, rt)
+	}
+
+	ws, err := eng.Manager().CreateWorkspace(
 		ctx, in.Skill, codeexecutor.WorkspacePolicy{},
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer t.exec.Cleanup(ctx, ws)
+	defer eng.Manager().Cleanup(ctx, ws)
 
-	if err := t.exec.PutSkill(ctx, ws, root, "."); err != nil {
+	const stagedSkillDir = "skill"
+	if err := eng.FS().StageDirectory(ctx, ws, root, stagedSkillDir,
+		codeexecutor.StageOptions{ReadOnly: false, AllowMount: true},
+	); err != nil {
 		return nil, err
 	}
 
-	// Run through bash -lc "<command>" for free-form command string.
+	// Default CWD to staged skill root when not provided. If a
+	// relative CWD is provided, resolve it under the staged skill
+	// directory to make commands skill-root-relative by default.
+	cwd := in.Cwd
+	if cwd == "" {
+		cwd = stagedSkillDir
+	} else if !strings.HasPrefix(cwd, "/") {
+		cwd = path.Join(stagedSkillDir, cwd)
+	}
+
 	timeout := time.Duration(in.Timeout) * time.Second
-	rr, err := t.exec.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+	rr, err := eng.Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
 		Cmd:     "bash",
 		Args:    []string{"-lc", in.Command},
 		Env:     in.Env,
-		Cwd:     in.Cwd,
+		Cwd:     cwd,
 		Timeout: timeout,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Collect output files if patterns provided.
 	var files []codeexecutor.File
 	if len(in.OutputFiles) > 0 {
-		files, err = t.exec.Collect(ctx, ws, in.OutputFiles)
+		files, err = eng.FS().Collect(ctx, ws, in.OutputFiles)
 		if err != nil {
 			return nil, err
 		}
@@ -198,9 +187,7 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 		OutputFiles: files,
 	}
 
-	// Optionally persist files as artifacts.
 	if in.SaveAsArtifacts && len(files) > 0 {
-		// Build callback context to access artifact service.
 		cb, err := agent.NewCallbackContext(ctx)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -214,9 +201,7 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 				name = in.ArtifactPrefix + name
 			}
 			ver, err := cb.SaveArtifact(name, &artifact.Artifact{
-				Data:     []byte(f.Content),
-				MimeType: f.MIMEType,
-				Name:     name,
+				Data: []byte(f.Content), MimeType: f.MIMEType, Name: name,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("save artifact %s: %w", name, err)
@@ -225,7 +210,6 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 		}
 		out.ArtifactFiles = refs
 		if in.OmitInlineContent {
-			// Keep metadata but drop inline contents.
 			for i := range out.OutputFiles {
 				out.OutputFiles[i].Content = ""
 			}

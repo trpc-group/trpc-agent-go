@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
+	tcontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/stdcopy"
 	archive "github.com/moby/go-archive"
 	"go.opentelemetry.io/otel/attribute"
@@ -32,7 +32,6 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
-	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 const (
@@ -40,8 +39,8 @@ const (
 	defaultCreateTimeoutSec = 5
 	defaultRmTimeoutSec     = 10
 	defaultStageTimeoutSec  = 10
-	defaultSkillsContainer  = "/mnt/skills"
 	defaultRunContainerBase = "/mnt/run"
+	defaultSkillsContainer  = "/mnt/skills"
 )
 
 // workspaceRuntime provides workspace execution on Docker.
@@ -57,48 +56,42 @@ type runtimeConfig struct {
 	runContainerBase    string
 }
 
-// newWorkspaceRuntime creates a new container workspace runtime.
-// Default behavior mounts a writable host temp directory at
-// /mnt/run and, when SKILLS_ROOT is set, mounts it read-only at
-// /mnt/skills.
-func newWorkspaceRuntime() (*workspaceRuntime, error) {
+// newWorkspaceRuntime builds a runtime bound to the provided executor.
+func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 	cfg := runtimeConfig{
 		runContainerBase:    defaultRunContainerBase,
 		skillsContainerBase: defaultSkillsContainer,
 	}
-	if root := os.Getenv(skill.EnvSkillsRoot); root != "" {
-		if abs, err := filepath.Abs(root); err == nil {
-			if st, err2 := os.Stat(abs); err2 == nil && st.IsDir() {
-				cfg.skillsHostBase = abs
-			}
+	// Infer a host base that is bind-mounted at /mnt/skills when present.
+	if c != nil {
+		cfg.skillsHostBase = findBindSource(
+			c.hostConfig.Binds, defaultSkillsContainer,
+		)
+	}
+	return &workspaceRuntime{ce: c, cfg: cfg}, nil
+}
+
+// findBindSource returns the host path whose bind dest equals dest.
+// Bind spec is source:dest[:mode]. We parse from right to handle ':'
+// that may appear in the source path (Windows not considered here).
+func findBindSource(binds []string, dest string) string {
+	for _, b := range binds {
+		parts := strings.Split(b, ":")
+		if len(parts) < 2 {
+			continue
+		}
+		// Last part may be mode; second last is dest.
+		d := parts[len(parts)-2]
+		if d != dest {
+			continue
+		}
+		// Join all but the last two parts as source.
+		src := strings.Join(parts[:len(parts)-2], ":")
+		if st, err := os.Stat(src); err == nil && st.IsDir() {
+			return src
 		}
 	}
-	// Create host workspace base under temp.
-	hostRun, err := os.MkdirTemp("", "trpc-agent-run-")
-	if err != nil {
-		return nil, fmt.Errorf("create host run base: %w", err)
-	}
-	cfg.runHostBase = hostRun
-
-	// Build hostConfig with binds.
-	binds := []string{fmt.Sprintf("%s:%s:rw",
-		cfg.runHostBase, cfg.runContainerBase)}
-	if cfg.skillsHostBase != "" {
-		binds = append(binds, fmt.Sprintf("%s:%s:ro",
-			cfg.skillsHostBase, cfg.skillsContainerBase))
-	}
-	hc := container.HostConfig{
-		AutoRemove:  true,
-		Privileged:  false,
-		NetworkMode: "none",
-		Binds:       binds,
-	}
-
-	ce, err := New(WithHostConfig(hc))
-	if err != nil {
-		return nil, err
-	}
-	return &workspaceRuntime{ce: ce, cfg: cfg}, nil
+	return ""
 }
 
 // CreateWorkspace ensures a per‑execution directory inside container.
@@ -115,17 +108,10 @@ func (r *workspaceRuntime) CreateWorkspace(
 		return codeexecutor.Workspace{},
 			fmt.Errorf("container executor not ready")
 	}
-
 	safe := sanitize(execID)
-	// Ensure host workspace dir exists under mounted base.
-	if r.cfg.runHostBase != "" {
-		_ = os.MkdirAll(filepath.Join(r.cfg.runHostBase,
-			"ws_"+safe), 0o755)
-	}
 	wsPath := path.Join(r.cfg.runContainerBase, "ws_"+safe)
-
-	// mkdir -p workspace path
-	cmd := []string{"/bin/bash", "-lc", "mkdir -p '" + wsPath + "'"}
+	cmd := []string{"/bin/bash", "-lc",
+		"mkdir -p '" + wsPath + "'"}
 	_, _, _, _, err := r.execCmd(
 		ctx, cmd, time.Duration(defaultCreateTimeoutSec)*time.Second,
 	)
@@ -144,7 +130,8 @@ func (r *workspaceRuntime) Cleanup(
 	if ws.Path == "" {
 		return nil
 	}
-	cmd := []string{"/bin/bash", "-lc", "rm -rf '" + ws.Path + "'"}
+	cmd := []string{"/bin/bash", "-lc",
+		"rm -rf '" + ws.Path + "'"}
 	_, _, _, _, err := r.execCmd(
 		ctx, cmd, time.Duration(defaultRmTimeoutSec)*time.Second,
 	)
@@ -157,8 +144,10 @@ func (r *workspaceRuntime) PutFiles(
 	ws codeexecutor.Workspace,
 	files []codeexecutor.PutFile,
 ) error {
-	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceStageFiles)
-	span.SetAttributes(attribute.Int(codeexecutor.AttrCount, len(files)))
+	_, span := atrace.Tracer.Start(ctx,
+		codeexecutor.SpanWorkspaceStageFiles)
+	span.SetAttributes(attribute.Int(
+		codeexecutor.AttrCount, len(files)))
 	defer span.End()
 	if len(files) == 0 {
 		return nil
@@ -170,7 +159,7 @@ func (r *workspaceRuntime) PutFiles(
 	defer tr.Close()
 	err = r.ce.client.CopyToContainer(
 		ctx, r.ce.container.ID, ws.Path, tr,
-		container.CopyToContainerOptions{},
+		tcontainer.CopyToContainerOptions{},
 	)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -185,7 +174,8 @@ func (r *workspaceRuntime) PutDirectory(
 	hostPath string,
 	to string,
 ) error {
-	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceStageDir)
+	_, span := atrace.Tracer.Start(ctx,
+		codeexecutor.SpanWorkspaceStageDir)
 	span.SetAttributes(
 		attribute.String(codeexecutor.AttrHostPath, hostPath),
 		attribute.String(codeexecutor.AttrTo, to),
@@ -198,11 +188,11 @@ func (r *workspaceRuntime) PutDirectory(
 	if err != nil {
 		return err
 	}
-	// Fast path: hostPath within skills mount; copy inside container.
+	// Fast path: within skills mount; copy inside container.
 	if r.cfg.skillsHostBase != "" {
-		if strings.HasPrefix(
-			abs, r.cfg.skillsHostBase+string(os.PathSeparator),
-		) || abs == r.cfg.skillsHostBase {
+		if strings.HasPrefix(abs,
+			r.cfg.skillsHostBase+string(os.PathSeparator)) ||
+			abs == r.cfg.skillsHostBase {
 			rel, _ := filepath.Rel(r.cfg.skillsHostBase, abs)
 			src := path.Join(r.cfg.skillsContainerBase,
 				filepath.ToSlash(rel))
@@ -210,19 +200,19 @@ func (r *workspaceRuntime) PutDirectory(
 			if to != "" {
 				dest = path.Join(ws.Path, to)
 			}
-			cmd := []string{
-				"/bin/bash", "-lc",
-				"mkdir -p '" + dest +
-					"' && cp -a '" + src + "/.' '" + dest + "'",
+			cmd := []string{"/bin/bash", "-lc",
+				"mkdir -p '" + dest + "' && cp -a '" + src +
+					"/.' '" + dest + "'"}
+			_, _, _, _, err := r.execCmd(
+				ctx, cmd,
+				time.Duration(defaultStageTimeoutSec)*time.Second,
+			)
+			if err == nil {
+				span.SetAttributes(attribute.Bool(
+					codeexecutor.AttrMountUsed, true))
+				return nil
 			}
-			_, _, _, _, err := r.execCmd(ctx, cmd,
-				time.Duration(defaultStageTimeoutSec)*time.Second)
-			if err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				return err
-			}
-			span.SetAttributes(attribute.Bool(codeexecutor.AttrMountUsed, true))
-			return nil
+			// fall through to tar copy on error
 		}
 	}
 	// Pack dir into tar stream.
@@ -231,13 +221,13 @@ func (r *workspaceRuntime) PutDirectory(
 		return err
 	}
 	defer rd.Close()
-
 	dest := ws.Path
 	if to != "" {
 		dest = path.Join(dest, to)
 	}
 	// Ensure destination exists in container.
-	mk := []string{"/bin/bash", "-lc", "mkdir -p '" + dest + "'"}
+	mk := []string{"/bin/bash", "-lc",
+		"mkdir -p '" + dest + "'"}
 	if _, _, _, _, err = r.execCmd(
 		ctx, mk, time.Duration(defaultStageTimeoutSec)*time.Second,
 	); err != nil {
@@ -246,46 +236,52 @@ func (r *workspaceRuntime) PutDirectory(
 	}
 	err = r.ce.client.CopyToContainer(
 		ctx, r.ce.container.ID, dest, rd,
-		container.CopyToContainerOptions{},
+		tcontainer.CopyToContainerOptions{},
 	)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 	}
-	span.SetAttributes(attribute.Bool(codeexecutor.AttrMountUsed, false))
+	span.SetAttributes(attribute.Bool(
+		codeexecutor.AttrMountUsed, false))
 	return err
 }
 
-// PutSkill is PutDirectory alias.
-func (r *workspaceRuntime) PutSkill(
+// StageDirectory stages a directory with options.
+func (r *workspaceRuntime) StageDirectory(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
-	skillRoot string,
+	src string,
 	to string,
+	opt codeexecutor.StageOptions,
 ) error {
-	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceStageSkill)
+	_, span := atrace.Tracer.Start(ctx,
+		codeexecutor.SpanWorkspaceStageDir)
 	span.SetAttributes(
-		attribute.String(codeexecutor.AttrRoot, skillRoot),
+		attribute.String(codeexecutor.AttrHostPath, src),
 		attribute.String(codeexecutor.AttrTo, to),
 	)
 	defer span.End()
-	// Prefer mount-first when skills root is bind-mounted.
-	if r.cfg.skillsHostBase != "" {
-		absHost, _ := filepath.Abs(skillRoot)
-		if strings.HasPrefix(
-			absHost, r.cfg.skillsHostBase+string(os.PathSeparator),
-		) || absHost == r.cfg.skillsHostBase {
-			rel, _ := filepath.Rel(r.cfg.skillsHostBase, absHost)
-			src := path.Join(r.cfg.skillsContainerBase,
+	abs, err := filepath.Abs(src)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+	if opt.AllowMount && r.cfg.skillsHostBase != "" {
+		if strings.HasPrefix(abs,
+			r.cfg.skillsHostBase+string(os.PathSeparator)) ||
+			abs == r.cfg.skillsHostBase {
+			rel, _ := filepath.Rel(r.cfg.skillsHostBase, abs)
+			csrc := path.Join(r.cfg.skillsContainerBase,
 				filepath.ToSlash(rel))
 			dest := ws.Path
 			if to != "" {
 				dest = path.Join(ws.Path, to)
 			}
-			cmd := []string{
-				"/bin/bash", "-lc",
-				"mkdir -p '" + dest +
-					"' && cp -a '" + src + "/.' '" + dest +
-					"' && chmod -R a-w '" + dest + "'",
+			cmd := []string{"/bin/bash", "-lc",
+				"mkdir -p '" + dest + "' && cp -a '" + csrc +
+					"/.' '" + dest + "'"}
+			if opt.ReadOnly {
+				cmd[2] += " && chmod -R a-w '" + dest + "'"
 			}
 			_, _, _, _, err := r.execCmd(ctx, cmd,
 				time.Duration(defaultStageTimeoutSec)*time.Second)
@@ -293,16 +289,32 @@ func (r *workspaceRuntime) PutSkill(
 				span.SetStatus(codes.Error, err.Error())
 				return err
 			}
-			span.SetAttributes(attribute.Bool(codeexecutor.AttrMountUsed, true))
+			span.SetAttributes(attribute.Bool(
+				codeexecutor.AttrMountUsed, true))
 			return nil
 		}
 	}
-	err := r.PutDirectory(ctx, ws, skillRoot, to)
-	if err != nil {
+	if err := r.PutDirectory(ctx, ws, abs, to); err != nil {
 		span.SetStatus(codes.Error, err.Error())
+		return err
 	}
-	span.SetAttributes(attribute.Bool(codeexecutor.AttrMountUsed, false))
-	return err
+	if opt.ReadOnly {
+		dest := ws.Path
+		if to != "" {
+			dest = path.Join(ws.Path, to)
+		}
+		cmd := []string{"/bin/bash", "-lc",
+			"chmod -R a-w '" + dest + "'"}
+		if _, _, _, _, err := r.execCmd(
+			ctx, cmd, time.Duration(defaultStageTimeoutSec)*time.Second,
+		); err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			return err
+		}
+	}
+	span.SetAttributes(attribute.Bool(
+		codeexecutor.AttrMountUsed, false))
+	return nil
 }
 
 // RunProgram runs a command in the workspace with timeout.
@@ -311,7 +323,8 @@ func (r *workspaceRuntime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
-	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceRun)
+	_, span := atrace.Tracer.Start(ctx,
+		codeexecutor.SpanWorkspaceRun)
 	span.SetAttributes(
 		attribute.String(codeexecutor.AttrCmd, spec.Cmd),
 		attribute.String(codeexecutor.AttrCwd, spec.Cwd),
@@ -321,11 +334,8 @@ func (r *workspaceRuntime) RunProgram(
 	if t <= 0 {
 		t = 10 * time.Second
 	}
-
-	// Build shell command: cd to workspace/cwd and run program.
 	cwd := ws.Path
 	if spec.Cwd != "" {
-		// Use POSIX path join.
 		cwd = path.Join(ws.Path, filepath.ToSlash(spec.Cwd))
 	}
 	var envParts []string
@@ -355,7 +365,6 @@ func (r *workspaceRuntime) RunProgram(
 		cmdline.WriteString(" ")
 		cmdline.WriteString(shellQuote(a))
 	}
-
 	argv := []string{"/bin/bash", "-lc", cmdline.String()}
 	out, errOut, code, timed, err := r.execCmd(ctx, argv, t)
 	res := codeexecutor.RunResult{
@@ -375,118 +384,114 @@ func (r *workspaceRuntime) RunProgram(
 	return res, err
 }
 
-// Collect finds files via shell glob expansion and copies content.
+// Collect copies out files by glob patterns (simple exact path here).
 func (r *workspaceRuntime) Collect(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	patterns []string,
 ) ([]codeexecutor.File, error) {
-	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceCollect)
-	span.SetAttributes(attribute.Int(codeexecutor.AttrPatterns, len(patterns)))
+	_, span := atrace.Tracer.Start(ctx,
+		codeexecutor.SpanWorkspaceCollect)
 	defer span.End()
-	if len(patterns) == 0 {
-		return nil, nil
-	}
-	// Expand patterns inside container using bash.
-	var sb strings.Builder
-	sb.WriteString("shopt -s globstar dotglob nullglob; ")
-	sb.WriteString("for p in ")
+	// List file matches inside container, then copy each.
+	var cmd strings.Builder
+	cmd.WriteString("cd ")
+	cmd.WriteString(shellQuote(ws.Path))
+	cmd.WriteString(" && for p in")
 	for _, p := range patterns {
-		sb.WriteString(shellQuote(path.Join(ws.Path, p)))
-		sb.WriteString(" ")
+		cmd.WriteString(" ")
+		cmd.WriteString(shellQuote(filepath.ToSlash(p)))
 	}
-	sb.WriteString("; do if [ -f \"$p\" ]; then echo \"$p\"; fi; done")
+	// Echo absolute paths so CopyFromContainer sees container-absolute
+	// locations, not paths relative to the workspace directory.
+	cmd.WriteString("; do if [ -f \"$p\" ]; then ")
+	cmd.WriteString("echo \"$(pwd)/$p\"; fi; done")
 
-	argv := []string{"/bin/bash", "-lc", sb.String()}
-	out, _, _, _, err := r.execCmd(ctx, argv, 10*time.Second)
+	argv := []string{"/bin/bash", "-lc", cmd.String()}
+	outS, _, _, _, err := r.execCmd(ctx, argv, time.Second*5)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	var files []codeexecutor.File
-	for _, line := range lines {
+	var out []codeexecutor.File
+	for _, line := range strings.Split(outS, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		rel := strings.TrimPrefix(line, ws.Path+"/")
-		content, mime, err := r.copyFileOut(ctx, line)
+		data, _, mime, err := r.copyFileOut(ctx, line)
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
 			return nil, err
 		}
-		files = append(files, codeexecutor.File{
+		rel := strings.TrimPrefix(line, ws.Path+"/")
+		if rel == line {
+			rel = filepath.ToSlash(line)
+		}
+		out = append(out, codeexecutor.File{
 			Name:     rel,
-			Content:  string(content),
+			Content:  string(data),
 			MIMEType: mime,
 		})
 	}
-	span.SetAttributes(attribute.Int(codeexecutor.AttrCount, len(files)))
-	return files, nil
+	return out, nil
 }
 
-// ExecuteInline writes blocks then runs them via RunProgram.
+// ExecuteInline writes code blocks and runs them.
 func (r *workspaceRuntime) ExecuteInline(
 	ctx context.Context,
 	execID string,
 	blocks []codeexecutor.CodeBlock,
 	timeout time.Duration,
 ) (codeexecutor.RunResult, error) {
-	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceInline)
-	span.SetAttributes(attribute.Int("blocks", len(blocks)))
-	defer span.End()
 	ws, err := r.CreateWorkspace(
 		ctx, execID, codeexecutor.WorkspacePolicy{},
 	)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
 		return codeexecutor.RunResult{}, err
 	}
 	defer r.Cleanup(ctx, ws)
-
-	var outB, errB strings.Builder
+	var allOut, allErr strings.Builder
 	start := time.Now()
 	for i, b := range blocks {
 		fn, mode, cmd, args, err := codeexecutor.BuildBlockSpec(i, b)
 		if err != nil {
-			errB.WriteString(err.Error())
-			errB.WriteString("\n")
+			allErr.WriteString(err.Error() + "\n")
 			continue
 		}
 		pf := codeexecutor.PutFile{
-			Path:    fn,
+			Path:    path.Join(codeexecutor.InlineSourceDir, fn),
 			Content: []byte(b.Code),
 			Mode:    mode,
 		}
 		if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{pf}); err != nil {
-			errB.WriteString(err.Error())
-			errB.WriteString("\n")
+			allErr.WriteString(err.Error() + "\n")
 			continue
 		}
-		argv := make([]string, 0, len(args)+1)
-		argv = append(argv, args...)
-		argv = append(argv, "./"+fn)
-		rr, err := r.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		argv := append([]string{}, args...)
+		argv = append(argv, path.Join(".", fn))
+		spec := codeexecutor.RunProgramSpec{
 			Cmd:     cmd,
 			Args:    argv,
+			Cwd:     codeexecutor.InlineSourceDir,
 			Timeout: timeout,
-		})
+		}
+		res, err := r.RunProgram(ctx, ws, spec)
 		if err != nil {
-			errB.WriteString(err.Error())
-			errB.WriteString("\n")
+			allErr.WriteString(err.Error() + "\n")
 		}
-		if rr.Stdout != "" {
-			outB.WriteString(rr.Stdout)
+		if res.Stdout != "" {
+			allOut.WriteString(res.Stdout)
 		}
-		if rr.Stderr != "" {
-			errB.WriteString(rr.Stderr)
+		if res.Stderr != "" {
+			allErr.WriteString(res.Stderr)
 		}
 	}
+	dur := time.Since(start)
 	return codeexecutor.RunResult{
-		Stdout:   outB.String(),
-		Stderr:   errB.String(),
+		Stdout:   allOut.String(),
+		Stderr:   allErr.String(),
 		ExitCode: 0,
-		Duration: time.Since(start),
+		Duration: dur,
 		TimedOut: false,
 	}, nil
 }
@@ -500,8 +505,7 @@ func (r *workspaceRuntime) execCmd(
 ) (string, string, int, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	ec := container.ExecOptions{
+	ec := tcontainer.ExecOptions{
 		Cmd:          argv,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -513,13 +517,12 @@ func (r *workspaceRuntime) execCmd(
 		return "", "", 0, false, err
 	}
 	hj, err := r.ce.client.ContainerExecAttach(
-		tctx, ex.ID, container.ExecStartOptions{},
+		tctx, ex.ID, tcontainer.ExecStartOptions{},
 	)
 	if err != nil {
 		return "", "", 0, false, err
 	}
 	defer hj.Close()
-
 	var stdout, stderr bytes.Buffer
 	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
 	if err != nil {
@@ -527,7 +530,6 @@ func (r *workspaceRuntime) execCmd(
 	}
 	insp, err := r.ce.client.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {
-		// If context timed out during inspect, surface TimedOut=true.
 		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
 		return stdout.String(), stderr.String(), 0, timed, err
 	}
@@ -552,7 +554,6 @@ func shellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	// Replace ' with '\'' pattern.
 	q := strings.ReplaceAll(s, "'", "'\\''")
 	return "'" + q + "'"
 }
@@ -587,33 +588,31 @@ func tarFromFiles(files []codeexecutor.PutFile) (io.ReadCloser, error) {
 func (r *workspaceRuntime) copyFileOut(
 	ctx context.Context,
 	fullPath string,
-) ([]byte, string, error) {
+) ([]byte, string, string, error) {
 	rc, _, err := r.ce.client.CopyFromContainer(
 		ctx, r.ce.container.ID, fullPath,
 	)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	defer rc.Close()
-
 	tr := tar.NewReader(rc)
-	// The first header is the file or a containing directory.
 	for {
 		hdr, err := tr.Next()
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 		if hdr.FileInfo().IsDir() {
 			continue
 		}
-		// Limit read size for safety.
 		var buf bytes.Buffer
-		if _, err := io.CopyN(&buf, tr, maxReadSizeBytes); err != nil &&
-			!errors.Is(err, io.EOF) {
-			return nil, "", err
+		_, err = io.CopyN(&buf, tr, maxReadSizeBytes)
+		if err != nil && !errors.Is(err, io.EOF) &&
+			!errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, "", "", err
 		}
 		data := buf.Bytes()
 		mime := http.DetectContentType(data)
-		return data, mime, nil
+		return data, hdr.Name, mime, nil
 	}
 }

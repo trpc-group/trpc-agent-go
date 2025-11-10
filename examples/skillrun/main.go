@@ -131,7 +131,13 @@ func (c *skillChat) setup(_ context.Context) error {
 	execUsed := "local"
 	switch strings.ToLower(strings.TrimSpace(*flagExec)) {
 	case "container":
-		if rt, e := containerexec.New(); e == nil {
+		// Bind the skills root read-only into the container to
+		// enable fast in-container copy when staging directories.
+		if rt, e := containerexec.New(
+			containerexec.WithBindMount(
+				c.skillsRoot, "/mnt/skills", "ro",
+			),
+		); e == nil {
 			we = rt
 			execUsed = "container"
 		} else {

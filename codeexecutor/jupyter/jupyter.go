@@ -228,7 +228,7 @@ func New(opts ...Option) (*CodeExecutor, error) {
 	}
 }
 
-// CodeBlockDelimiter implements the CodeExecutor interface
+// CodeBlockDelimiter returns the fenced code delimiter.
 func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{
 		Start: "```",
@@ -236,7 +236,7 @@ func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	}
 }
 
-// ExecuteCode implements the CodeExecutor interface
+// ExecuteCode executes code blocks via the Jupyter client.
 func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
 	if c.cli == nil {
 		return codeexecutor.CodeExecutionResult{}, fmt.Errorf("jupyter client not initialized")
@@ -254,7 +254,7 @@ func (c *CodeExecutor) ensureWS() *localexec.Runtime {
 	return c.ws
 }
 
-// CreateWorkspace implements the CodeExecutor interface.
+// CreateWorkspace creates a workspace using the local runtime.
 func (c *CodeExecutor) CreateWorkspace(
 	ctx context.Context, execID string,
 	pol codeexecutor.WorkspacePolicy,
@@ -262,14 +262,14 @@ func (c *CodeExecutor) CreateWorkspace(
 	return c.ensureWS().CreateWorkspace(ctx, execID, pol)
 }
 
-// Cleanup implements the CodeExecutor interface.
+// Cleanup deletes a workspace using the local runtime.
 func (c *CodeExecutor) Cleanup(
 	ctx context.Context, ws codeexecutor.Workspace,
 ) error {
 	return c.ensureWS().Cleanup(ctx, ws)
 }
 
-// PutFiles implements the CodeExecutor interface.
+// PutFiles writes files using the local runtime.
 func (c *CodeExecutor) PutFiles(
 	ctx context.Context, ws codeexecutor.Workspace,
 	files []codeexecutor.PutFile,
@@ -277,7 +277,7 @@ func (c *CodeExecutor) PutFiles(
 	return c.ensureWS().PutFiles(ctx, ws, files)
 }
 
-// PutDirectory implements the CodeExecutor interface.
+// PutDirectory stages a directory using the local runtime.
 func (c *CodeExecutor) PutDirectory(
 	ctx context.Context, ws codeexecutor.Workspace,
 	hostPath, to string,
@@ -285,15 +285,7 @@ func (c *CodeExecutor) PutDirectory(
 	return c.ensureWS().PutDirectory(ctx, ws, hostPath, to)
 }
 
-// PutSkill implements the CodeExecutor interface.
-func (c *CodeExecutor) PutSkill(
-	ctx context.Context, ws codeexecutor.Workspace,
-	skillRoot, to string,
-) error {
-	return c.ensureWS().PutSkill(ctx, ws, skillRoot, to)
-}
-
-// RunProgram implements the CodeExecutor interface.
+// RunProgram executes a command using the local runtime.
 func (c *CodeExecutor) RunProgram(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
@@ -301,7 +293,7 @@ func (c *CodeExecutor) RunProgram(
 	return c.ensureWS().RunProgram(ctx, ws, spec)
 }
 
-// Collect implements the CodeExecutor interface.
+// Collect copies files using the local runtime.
 func (c *CodeExecutor) Collect(
 	ctx context.Context, ws codeexecutor.Workspace,
 	patterns []string,
@@ -309,13 +301,19 @@ func (c *CodeExecutor) Collect(
 	return c.ensureWS().Collect(ctx, ws, patterns)
 }
 
-// ExecuteInline implements the CodeExecutor interface.
+// ExecuteInline writes code blocks and runs them via local runtime.
 func (c *CodeExecutor) ExecuteInline(
 	ctx context.Context, execID string,
 	blocks []codeexecutor.CodeBlock,
 	timeout time.Duration,
 ) (codeexecutor.RunResult, error) {
 	return c.ensureWS().ExecuteInline(ctx, execID, blocks, timeout)
+}
+
+// Engine exposes the local runtime as an Engine for skills.
+func (c *CodeExecutor) Engine() codeexecutor.Engine {
+	rt := c.ensureWS()
+	return codeexecutor.NewEngine(rt, rt, rt)
 }
 
 // silencePip silences pip install commands

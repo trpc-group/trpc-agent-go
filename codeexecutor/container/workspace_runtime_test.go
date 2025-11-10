@@ -375,9 +375,10 @@ func TestWorkspaceRuntime_MountOptimizations(t *testing.T) {
 		context.Background(), ws, dir, "dst",
 	))
 
-	// PutSkill uses mount-first path
-	require.NoError(t, rt.PutSkill(
+	// StageDirectory also uses mount-first path
+	require.NoError(t, rt.StageDirectory(
 		context.Background(), ws, dir, "dst2",
+		codeexecutor.StageOptions{ReadOnly: true, AllowMount: true},
 	))
 	require.GreaterOrEqual(t, execCalls, 2)
 }
@@ -432,7 +433,7 @@ func TestWorkspaceRuntime_CopyFileOut_SkipsDirHeader(t *testing.T) {
 		},
 		cfg: runtimeConfig{runContainerBase: testRunBase},
 	}
-	b, mime, err := rt.copyFileOut(
+	b, _, mime, err := rt.copyFileOut(
 		context.Background(), "/work/file.txt",
 	)
 	require.NoError(t, err)
@@ -739,7 +740,8 @@ func TestWorkspaceRuntime_PutSkill_TarFallback(t *testing.T) {
 		cfg: runtimeConfig{runContainerBase: testRunBase},
 	}
 	ws := codeexecutor.Workspace{ID: "w5", Path: path.Join(testRunBase, "w5")}
-	err := rt.PutSkill(context.Background(), ws, src, "tool")
+	err := rt.StageDirectory(context.Background(), ws, src, "tool",
+		codeexecutor.StageOptions{})
 	require.NoError(t, err)
 	require.True(t, mkdirCalled)
 	require.True(t, putCalled)
