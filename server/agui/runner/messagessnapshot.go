@@ -16,6 +16,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -56,13 +57,14 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *adapter.RunAgentIn
 	threadID := input.ThreadID
 	runID := input.RunID
 	// Emit a RUN_STARTED event to anchor the synthetic run.
-	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), runID) {
+	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), threadID, runID) {
 		return
 	}
 	userID, err := r.userIDResolver(ctx, input)
 	if err != nil {
+		log.Errorf("agui messages snapshot: threadID: %s, runID: %s, resolve user ID: %v", threadID, runID, err)
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("resolve user ID: %v", err),
-			aguievents.WithRunID(runID)), runID)
+			aguievents.WithRunID(runID)), threadID, runID)
 		return
 	}
 	sessionKey := session.Key{
@@ -72,16 +74,17 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *adapter.RunAgentIn
 	}
 	messagesSnapshotEvent, err := r.getMessagesSnapshotEvent(ctx, sessionKey)
 	if err != nil {
+		log.Errorf("agui messages snapshot: threadID: %s, runID: %s, load history: %v", threadID, runID, err)
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("load history: %v", err),
-			aguievents.WithRunID(runID)), runID)
+			aguievents.WithRunID(runID)), threadID, runID)
 		return
 	}
 	// Emit a MESSAGES_SNAPSHOT event to send the snapshot payload.
-	if !r.emitEvent(ctx, events, messagesSnapshotEvent, runID) {
+	if !r.emitEvent(ctx, events, messagesSnapshotEvent, threadID, runID) {
 		return
 	}
 	// Emit a RUN_FINISHED event to signal downstream consumers there is no more data.
-	if !r.emitEvent(ctx, events, aguievents.NewRunFinishedEvent(threadID, runID), runID) {
+	if !r.emitEvent(ctx, events, aguievents.NewRunFinishedEvent(threadID, runID), threadID, runID) {
 		return
 	}
 }
