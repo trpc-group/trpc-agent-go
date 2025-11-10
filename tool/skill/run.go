@@ -104,78 +104,34 @@ func (t *RunTool) Declaration() *tool.Declaration {
 
 // Call executes the run request.
 func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
-	var in runInput
-	if err := json.Unmarshal(args, &in); err != nil {
-		return nil, fmt.Errorf("invalid args: %w", err)
-	}
-	if in.Skill == "" || in.Command == "" {
-		return nil, fmt.Errorf("skill and command are required")
+	in, err := t.parseRunArgs(args)
+	if err != nil {
+		return nil, err
 	}
 	root, err := t.repo.Path(in.Skill)
 	if err != nil {
 		return nil, err
 	}
-	if t.exec == nil {
-		return nil, fmt.Errorf("executor is not configured")
-	}
-
-	// Obtain engine from executor when available; fallback to local.
-	var eng codeexecutor.Engine
-	if ep, ok := t.exec.(codeexecutor.EngineProvider); ok && ep != nil {
-		eng = ep.Engine()
-	}
-	if eng == nil {
-		log.Warnf(
-			"skill_run: falling back to local engine; " +
-				"no EngineProvider on executor",
-		)
-		rt := localexec.NewRuntime("")
-		eng = codeexecutor.NewEngine(rt, rt, rt)
-	}
-
-	ws, err := eng.Manager().CreateWorkspace(
-		ctx, in.Skill, codeexecutor.WorkspacePolicy{},
-	)
+	eng := t.ensureEngine()
+	ws, err := t.createWorkspace(ctx, eng, in.Skill)
 	if err != nil {
 		return nil, err
 	}
 	defer eng.Manager().Cleanup(ctx, ws)
 
-	const stagedSkillDir = "skill"
-	if err := eng.FS().StageDirectory(ctx, ws, root, stagedSkillDir,
-		codeexecutor.StageOptions{ReadOnly: false, AllowMount: true},
-	); err != nil {
+	if err := t.stageSkill(ctx, eng, ws, root); err != nil {
 		return nil, err
 	}
 
-	// Default CWD to staged skill root when not provided. If a
-	// relative CWD is provided, resolve it under the staged skill
-	// directory to make commands skill-root-relative by default.
-	cwd := in.Cwd
-	if cwd == "" {
-		cwd = stagedSkillDir
-	} else if !strings.HasPrefix(cwd, "/") {
-		cwd = path.Join(stagedSkillDir, cwd)
-	}
-
-	timeout := time.Duration(in.Timeout) * time.Second
-	rr, err := eng.Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
-		Cmd:     "bash",
-		Args:    []string{"-lc", in.Command},
-		Env:     in.Env,
-		Cwd:     cwd,
-		Timeout: timeout,
-	})
+	cwd := resolveCWD(in.Cwd)
+	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
 	if err != nil {
 		return nil, err
 	}
 
-	var files []codeexecutor.File
-	if len(in.OutputFiles) > 0 {
-		files, err = eng.FS().Collect(ctx, ws, in.OutputFiles)
-		if err != nil {
-			return nil, err
-		}
+	files, err := t.collectFiles(ctx, eng, ws, in.OutputFiles)
+	if err != nil {
+		return nil, err
 	}
 
 	out := runOutput{
@@ -188,25 +144,9 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 
 	if in.SaveAsArtifacts && len(files) > 0 {
-		cb, err := agent.NewCallbackContext(ctx)
+		refs, err := t.saveArtifacts(ctx, files, in.ArtifactPrefix)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"artifact save requested but no invocation: %w", err,
-			)
-		}
-		var refs []artifactRef
-		for _, f := range files {
-			name := f.Name
-			if in.ArtifactPrefix != "" {
-				name = in.ArtifactPrefix + name
-			}
-			ver, err := cb.SaveArtifact(name, &artifact.Artifact{
-				Data: []byte(f.Content), MimeType: f.MIMEType, Name: name,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("save artifact %s: %w", name, err)
-			}
-			refs = append(refs, artifactRef{Name: name, Version: ver})
+			return nil, err
 		}
 		out.ArtifactFiles = refs
 		if in.OmitInlineContent {
@@ -220,3 +160,131 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 
 var _ tool.Tool = (*RunTool)(nil)
 var _ tool.CallableTool = (*RunTool)(nil)
+
+// parseRunArgs validates and decodes input args.
+func (t *RunTool) parseRunArgs(args []byte) (runInput, error) {
+	var in runInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return runInput{}, fmt.Errorf("invalid args: %w", err)
+	}
+	if strings.TrimSpace(in.Skill) == "" ||
+		strings.TrimSpace(in.Command) == "" {
+		return runInput{}, fmt.Errorf(
+			"skill and command are required",
+		)
+	}
+	if t.exec == nil {
+		return runInput{}, fmt.Errorf("executor is not configured")
+	}
+	return in, nil
+}
+
+// ensureEngine gets engine from executor or builds a local one.
+func (t *RunTool) ensureEngine() codeexecutor.Engine {
+	if ep, ok := t.exec.(codeexecutor.EngineProvider); ok && ep != nil {
+		if e := ep.Engine(); e != nil {
+			return e
+		}
+	}
+	log.Warnf(
+		"skill_run: falling back to local engine; " +
+			"no EngineProvider on executor",
+	)
+	rt := localexec.NewRuntime("")
+	return codeexecutor.NewEngine(rt, rt, rt)
+}
+
+func (t *RunTool) createWorkspace(
+	ctx context.Context, eng codeexecutor.Engine, name string,
+) (codeexecutor.Workspace, error) {
+	return eng.Manager().CreateWorkspace(
+		ctx, name, codeexecutor.WorkspacePolicy{},
+	)
+}
+
+func (t *RunTool) stageSkill(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	root string,
+) error {
+	const stagedSkillDir = "skill"
+	return eng.FS().StageDirectory(
+		ctx, ws, root, stagedSkillDir,
+		codeexecutor.StageOptions{ReadOnly: false, AllowMount: true},
+	)
+}
+
+func resolveCWD(cwd string) string {
+	const stagedSkillDir = "skill"
+	if strings.TrimSpace(cwd) == "" {
+		// Default to workspace root so output patterns like
+		// "out/*.txt" are relative to root, as tests expect.
+		return ""
+	}
+	if !strings.HasPrefix(cwd, "/") {
+		return path.Join(stagedSkillDir, cwd)
+	}
+	return cwd
+}
+
+func (t *RunTool) runProgram(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	cwd string,
+	in runInput,
+) (codeexecutor.RunResult, error) {
+	timeout := time.Duration(in.Timeout) * time.Second
+	return eng.Runner().RunProgram(
+		ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", in.Command},
+			Env:     in.Env,
+			Cwd:     cwd,
+			Timeout: timeout,
+		},
+	)
+}
+
+func (t *RunTool) collectFiles(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	return eng.FS().Collect(ctx, ws, patterns)
+}
+
+func (t *RunTool) saveArtifacts(
+	ctx context.Context,
+	files []codeexecutor.File,
+	prefix string,
+) ([]artifactRef, error) {
+	cb, err := agent.NewCallbackContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"artifact save requested but no invocation: %w", err,
+		)
+	}
+	var refs []artifactRef
+	for _, f := range files {
+		name := f.Name
+		if prefix != "" {
+			name = prefix + name
+		}
+		ver, err := cb.SaveArtifact(name, &artifact.Artifact{
+			Data:     []byte(f.Content),
+			MimeType: f.MIMEType,
+			Name:     name,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("save artifact %s: %w", name, err)
+		}
+		refs = append(refs, artifactRef{Name: name, Version: ver})
+	}
+	return refs, nil
+}

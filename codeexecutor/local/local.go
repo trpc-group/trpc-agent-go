@@ -194,9 +194,10 @@ func (e *CodeExecutor) executeCommand(
 ) (string, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.Timeout)
 	defer cancel()
+	// #nosec G204 — interpreter and path are controlled by us
 	cmd := exec.CommandContext(
 		timeoutCtx, cmdArgs[0], cmdArgs[1:]...,
-	) //nolint:gosec
+	)
 	cmd.Dir = workDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {

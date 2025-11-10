@@ -105,84 +105,28 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 func (t *SelectDocsTool) Call(
 	ctx context.Context, args []byte,
 ) (any, error) {
-	var in selectDocsInput
-	if err := json.Unmarshal(args, &in); err != nil {
-		return nil, fmt.Errorf("invalid args: %w", err)
-	}
-	if in.Skill == "" {
-		return nil, fmt.Errorf("skill is required")
-	}
-	if t.repo != nil {
-		if _, err := t.repo.Get(in.Skill); err != nil {
-			return nil, fmt.Errorf("unknown skill: %s", in.Skill)
-		}
+	in, err := t.parseSelectArgs(args)
+	if err != nil {
+		return nil, err
 	}
 
-	mode := strings.ToLower(strings.TrimSpace(in.Mode))
-	if mode == "" {
-		mode = modeReplace
+	prev, hadAll := t.previousSelection(ctx, in.Skill)
+	if hadAll && in.Mode != modeClear {
+		return selectDocsOutput{
+			Skill:          in.Skill,
+			Selected:       nil,
+			IncludeAllDocs: true,
+			Mode:           in.Mode,
+		}, nil
 	}
 
-	// Read previous selection when needed.
-	prev := make([]string, 0)
-	if inv, ok := agent.InvocationFromContext(ctx); ok &&
-		inv != nil && inv.Session != nil {
-		key := skill.StateKeyDocsPrefix + in.Skill
-		if v, ok2 := inv.Session.State[key]; ok2 && len(v) > 0 {
-			if string(v) == "*" {
-				// Already all docs selected; keep it unless clear.
-				if mode == modeClear {
-					prev = nil
-				} else {
-					return selectDocsOutput{
-						Skill:          in.Skill,
-						Selected:       nil,
-						IncludeAllDocs: true,
-						Mode:           mode,
-					}, nil
-				}
-			} else {
-				var arr []string
-				if err := json.Unmarshal(v, &arr); err == nil {
-					prev = arr
-				}
-			}
-		}
-	}
-
-	out := selectDocsOutput{Skill: in.Skill, Mode: mode}
-
-	switch mode {
+	switch in.Mode {
 	case modeClear:
-		out.Selected = []string{}
-		out.IncludeAllDocs = false
-		return out, nil
+		return t.outClear(in), nil
 	case modeAdd:
-		set := map[string]struct{}{}
-		for _, n := range prev {
-			set[n] = struct{}{}
-		}
-		for _, n := range in.Docs {
-			set[n] = struct{}{}
-		}
-		res := make([]string, 0, len(set))
-		for n := range set {
-			res = append(res, n)
-		}
-		out.Selected = res
-		out.IncludeAllDocs = in.IncludeAllDocs
-		// If include_all_docs requested, prefer that over explicit list.
-		if in.IncludeAllDocs {
-			out.Selected = nil
-		}
-		return out, nil
-	default: // replace
-		out.Selected = in.Docs
-		out.IncludeAllDocs = in.IncludeAllDocs
-		if in.IncludeAllDocs {
-			out.Selected = nil
-		}
-		return out, nil
+		return t.outAdd(prev, in), nil
+	default:
+		return t.outReplace(in), nil
 	}
 }
 
@@ -214,3 +158,110 @@ func (t *SelectDocsTool) StateDelta(
 
 var _ tool.Tool = (*SelectDocsTool)(nil)
 var _ tool.CallableTool = (*SelectDocsTool)(nil)
+
+// parseSelectArgs validates and normalizes the input.
+func (t *SelectDocsTool) parseSelectArgs(
+	args []byte,
+) (selectDocsInput, error) {
+	var in selectDocsInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return selectDocsInput{}, fmt.Errorf(
+			"invalid args: %w", err,
+		)
+	}
+	if strings.TrimSpace(in.Skill) == "" {
+		return selectDocsInput{}, fmt.Errorf("skill is required")
+	}
+	if t.repo != nil {
+		if _, err := t.repo.Get(in.Skill); err != nil {
+			return selectDocsInput{}, fmt.Errorf(
+				"unknown skill: %s", in.Skill,
+			)
+		}
+	}
+
+	m := strings.ToLower(strings.TrimSpace(in.Mode))
+	if m == "" {
+		m = modeReplace
+	}
+	if m != modeAdd && m != modeReplace && m != modeClear {
+		m = modeReplace
+	}
+	in.Mode = m
+	return in, nil
+}
+
+// previousSelection reads any prior selection from session state.
+func (t *SelectDocsTool) previousSelection(
+	ctx context.Context, skillName string,
+) ([]string, bool) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return nil, false
+	}
+	key := skill.StateKeyDocsPrefix + skillName
+	v, found := inv.Session.State[key]
+	if !found || len(v) == 0 {
+		return nil, false
+	}
+	if string(v) == "*" {
+		return nil, true
+	}
+	var arr []string
+	if err := json.Unmarshal(v, &arr); err != nil {
+		return nil, false
+	}
+	return arr, false
+}
+
+func (t *SelectDocsTool) outClear(
+	in selectDocsInput,
+) selectDocsOutput {
+	return selectDocsOutput{
+		Skill:          in.Skill,
+		Selected:       []string{},
+		IncludeAllDocs: false,
+		Mode:           modeClear,
+	}
+}
+
+func (t *SelectDocsTool) outAdd(
+	prev []string, in selectDocsInput,
+) selectDocsOutput {
+	set := map[string]struct{}{}
+	for _, n := range prev {
+		set[n] = struct{}{}
+	}
+	for _, n := range in.Docs {
+		set[n] = struct{}{}
+	}
+	res := make([]string, 0, len(set))
+	for n := range set {
+		res = append(res, n)
+	}
+	out := selectDocsOutput{
+		Skill:          in.Skill,
+		Selected:       res,
+		IncludeAllDocs: in.IncludeAllDocs,
+		Mode:           modeAdd,
+	}
+	if in.IncludeAllDocs {
+		out.Selected = nil
+	}
+	return out
+}
+
+func (t *SelectDocsTool) outReplace(
+	in selectDocsInput,
+) selectDocsOutput {
+	out := selectDocsOutput{
+		Skill:          in.Skill,
+		Selected:       in.Docs,
+		IncludeAllDocs: in.IncludeAllDocs,
+		Mode:           modeReplace,
+	}
+	if in.IncludeAllDocs {
+		out.Selected = nil
+	}
+	return out
+}
