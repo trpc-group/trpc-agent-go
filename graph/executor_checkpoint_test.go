@@ -371,6 +371,45 @@ func TestExecutor_ProcessResumeCommand_And_ApplyExecutableNextNodes(t *testing.T
 	require.NotNil(t, restored[StateKeyNextNodes])
 }
 
+func TestExecutor_SyncResumeState_RemovesKeysWhenMissing(t *testing.T) {
+	exec := &Executor{graph: New(NewStateSchema())}
+	execCtx := &ExecutionContext{
+		State: State{
+			ResumeChannel:          "pending",
+			StateKeyResumeMap:      map[string]any{"node": "old"},
+			StateKeyUsedInterrupts: map[string]any{"node": "value"},
+		},
+	}
+	exec.syncResumeState(execCtx, State{})
+	if _, exists := execCtx.State[ResumeChannel]; exists {
+		t.Fatalf("resume channel should be cleared")
+	}
+	if _, exists := execCtx.State[StateKeyResumeMap]; exists {
+		t.Fatalf("resume map should be cleared")
+	}
+	if _, exists := execCtx.State[StateKeyUsedInterrupts]; exists {
+		t.Fatalf("used interrupts should be cleared")
+	}
+}
+
+func TestExecutor_SyncResumeState_CopiesMapMutations(t *testing.T) {
+	exec := &Executor{graph: New(NewStateSchema())}
+	execCtx := &ExecutionContext{State: make(State)}
+	nodeState := State{
+		ResumeChannel:     "answer",
+		StateKeyResumeMap: map[string]any{"node": "new"},
+		StateKeyUsedInterrupts: map[string]any{
+			"node": "new",
+		},
+	}
+	exec.syncResumeState(execCtx, nodeState)
+	// Mutate node state after sync to verify executor state holds a copy.
+	nodeState[StateKeyResumeMap].(map[string]any)["node"] = "mutated"
+	require.Equal(t, "answer", execCtx.State[ResumeChannel])
+	require.Equal(t, "new", execCtx.State[StateKeyResumeMap].(map[string]any)["node"])
+	require.Equal(t, "new", execCtx.State[StateKeyUsedInterrupts].(map[string]any)["node"])
+}
+
 func TestExecutor_BuildExecutionContext_ResumedVersionsSeen(t *testing.T) {
 	exec := &Executor{graph: New(NewStateSchema())}
 	last := &Checkpoint{VersionsSeen: map[string]map[string]int64{"n": {"ch": 2}}}
