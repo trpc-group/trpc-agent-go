@@ -145,7 +145,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 			postgres.WithUser(pgUser),
 			postgres.WithPassword(pgPassword),
 			postgres.WithDatabase(pgDatabase),
-			postgres.WithTablePrefix("tRPC"),
+			postgres.WithTablePrefix("trpc_"),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create postgres session service: %w", err)

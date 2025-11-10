@@ -74,7 +74,7 @@ func (s *Service) createSessionSummary(
 			WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
 			AND (expires_at IS NULL OR expires_at > $5)
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
-			key.AppName, key.UserID, key.SessionID, filterKey, time.Now().UTC())
+			key.AppName, key.UserID, key.SessionID, filterKey, time.Now())
 
 		if err != nil {
 			return nil, fmt.Errorf("check existing summary failed: %w", err)
@@ -95,7 +95,7 @@ func (s *Service) createSessionSummary(
 	}
 
 	// Create summary object
-	now := time.Now().UTC()
+	now := time.Now()
 	summary := &session.Summary{
 		Summary:   summaryText,
 		Topics:    []string{},
@@ -226,7 +226,7 @@ func (s *Service) GetSessionSummaryText(
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
 		AND (expires_at IS NULL OR expires_at > $5)
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, time.Now().UTC())
+		key.AppName, key.UserID, key.SessionID, filterKey, time.Now())
 
 	if err != nil {
 		return "", false
