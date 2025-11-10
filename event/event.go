@@ -12,6 +12,7 @@ package event
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -279,4 +280,65 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		return DefaultEmitTimeoutErr
 	}
 	return nil
+}
+
+// MarshalJSON implements json.Marshaler and produces a format that
+// preserves legacy flattened fields while also embedding minimal
+// response metadata (ID/timestamp) under the dedicated "response" key.
+func (e Event) MarshalJSON() ([]byte, error) {
+	payload := jsonEvent{
+		eventNoMethods: (*eventNoMethods)(&e),
+	}
+	if e.Response != nil {
+		payload.Response = &responseMeta{
+			ID:        e.Response.ID,
+			Timestamp: e.Response.Timestamp,
+		}
+	}
+	return json.Marshal(payload)
+}
+
+// UnmarshalJSON implements json.Unmarshaler by accepting both legacy flattened
+// payloads and the new nested-response representation, preferring the nested
+// response when present.
+func (e *Event) UnmarshalJSON(data []byte) error {
+	// First parse the flat structure.
+	var flat eventNoMethods
+	if err := json.Unmarshal(data, &flat); err != nil {
+		return err
+	}
+	*e = Event(flat)
+	// Then try to read nested metadata.
+	var nested struct {
+		Response *responseMeta `json:"response,omitempty"`
+	}
+	// Tolerate nested part failure, it does not affect the overall failure, preserve the flat fields.
+	if err := json.Unmarshal(data, &nested); err != nil {
+		log.Warnf("unmarshal response: %v", err)
+		return nil
+	}
+	if nested.Response != nil {
+		if e.Response == nil {
+			e.Response = &model.Response{}
+		}
+		e.Response.ID = nested.Response.ID
+		e.Response.Timestamp = nested.Response.Timestamp
+	}
+	return nil
+}
+
+// eventNoMethods is the alias of Event for avoiding recursive calls of custom MarshalJSON/UnmarshalJSON.
+type eventNoMethods Event
+
+// responseMeta is the minimal response metadata for JSON nested.
+type responseMeta struct {
+	ID        string    `json:"id,omitempty"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
+}
+
+// jsonEvent is the final JSON structure to be output/read,
+// including flat event fields and nested response metadata.
+type jsonEvent struct {
+	*eventNoMethods
+	Response *responseMeta `json:"response,omitempty"`
 }
