@@ -27,7 +27,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -82,7 +81,7 @@ func main() {
 	// Create and run the chat.
 	chat := &multiTurnChat{
 		modelName: *modelName,
-		variant:      *variant,
+		variant:   *variant,
 		streaming: *streaming,
 	}
 
@@ -94,7 +93,7 @@ func main() {
 // multiTurnChat manages the conversation.
 type multiTurnChat struct {
 	modelName string
-	variant      string
+	variant   string
 	streaming bool
 	runner    runner.Runner
 	userID    string
@@ -117,7 +116,7 @@ func (c *multiTurnChat) run() error {
 // setup creates the runner with LLM agent and tools.
 func (c *multiTurnChat) setup(_ context.Context) error {
 	// Create model with specified model name.
-	modelInstance := openai.New(c.modelName)
+	modelInstance := openai.New(c.modelName, openai.WithVariant(openai.Variant(c.variant)))
 
 	// Create session service based on configuration.
 	var (
