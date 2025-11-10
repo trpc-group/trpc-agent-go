@@ -1595,21 +1595,23 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/provider"
 )
 
-gpt, err := provider.Model("openai", "gpt-4.1-mini", provider.WithChannelBufferSize(512))
-if err != nil {
-    log.Fatalf("create openai model: %v", err)
-}
+providerName := "openai"        // provider supports openai and anthropic.
+modelName := "deepseek-chat"
 
-claude, err := provider.Model("anthropic", "claude-sonnet-4.0", provider.WithChannelBufferSize(512))
-if err != nil {
-    log.Fatalf("create anthropic model: %v", err)
-}
+modelInstance, err := provider.Model(
+    providerName,
+    modelName,
+    provider.WithAPIKey(c.apiKey),
+    provider.WithBaseURL(c.baseURL),
+    provider.WithChannelBufferSize(c.channelBufferSize),
+    provider.WithEnableTokenTailoring(c.tokenTailoring),
+    provider.WithMaxInputTokens(c.maxInputTokens),
+)
 
-// Choose the model instance based on business needs.
-agent := llmagent.New("chat-assistant", llmagent.WithModel(gpt))
+agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))
 ```
 
-Full code can be found in [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner).
+Full code can be found in [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider).
 
 #### Registering a Custom Provider
 
