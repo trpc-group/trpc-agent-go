@@ -804,3 +804,46 @@ func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Sessi
 	return "", fmt.Errorf("summarizer error")
 }
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestMemoryService_StopAsyncSummaryWorker_AlreadyStopped(t *testing.T) {
+	service := NewSessionService(
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(10),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+	)
+
+	// First close
+	service.Close()
+
+	// Second close should not panic (channels already set to nil)
+	require.NotPanics(t, func() {
+		service.stopAsyncSummaryWorker()
+	})
+}
+
+func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
+	service := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+	)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Close the service to simulate shutdown and set channels to nil
+	service.Close()
+
+	job := &summaryJob{
+		sessionKey: key,
+		filterKey:  "",
+		force:      false,
+		session:    sess,
+	}
+
+	// Should return false when channels are nil (after close)
+	result := service.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+}
