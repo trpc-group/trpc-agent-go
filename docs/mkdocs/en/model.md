@@ -908,7 +908,7 @@ The framework automatically calculates "maxInputTokens" based on the model's con
 ```
 safetyMargin = contextWindow × 10%
 calculatedMax = contextWindow - 2048 (output reserve) - 512 (protocol overhead) - safetyMargin
-ratioLimit = contextWindow × 65% (max input ratio)
+ratioLimit = contextWindow × 100% (max input ratio)
 maxInputTokens = max(min(calculatedMax, ratioLimit), 1024 (minimum))
 ```
 
@@ -917,9 +917,20 @@ For example, "gpt-4o" (contextWindow = 128000):
 ```
 safetyMargin = 128000 × 0.10 = 12800 tokens
 calculatedMax = 128000 - 2048 - 512 - 12800 = 112640 tokens
-ratioLimit = 128000 × 0.65 = 83200 tokens
-maxInputTokens = 83200 tokens (approximately 65% of context window)
+ratioLimit = 128000 × 1.0 = 128000 tokens
+maxInputTokens = 112640 tokens (approximately 88% of context window)
 ```
+
+**Default Budget Parameters**:
+
+The framework uses the following default values for token allocation (**it is recommended to keep the defaults**):
+
+- **Protocol Overhead (ProtocolOverheadTokens)**: 512 tokens - reserved for request/response formatting
+- **Output Reserve (ReserveOutputTokens)**: 2048 tokens - reserved for output generation
+- **Input Floor (InputTokensFloor)**: 1024 tokens - ensures proper model processing
+- **Output Floor (OutputTokensFloor)**: 256 tokens - ensures meaningful responses
+- **Safety Margin Ratio (SafetyMarginRatio)**: 10% - buffer for token counting inaccuracies
+- **Max Input Ratio (MaxInputTokensRatio)**: 100% - maximum input ratio of context window
 
 **Tailoring Strategy**:
 
@@ -951,6 +962,35 @@ func (s *CustomStrategy) Tailor(
 model := openai.New("deepseek-chat",
     openai.WithEnableTokenTailoring(true),
     openai.WithTailoringStrategy(&CustomStrategy{}),
+)
+```
+
+**Advanced Configuration (Custom Budget Parameters)**:
+
+If the default token allocation strategy does not meet your needs, you can customize the budget parameters using `WithTokenTailoringConfig`. **Note: It is recommended to keep the default values unless you have specific requirements.**
+
+```go
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+        ProtocolOverheadTokens: 1024,   // Custom protocol overhead
+        ReserveOutputTokens:    4096,   // Custom output reserve
+        InputTokensFloor:       2048,   // Custom input floor
+        OutputTokensFloor:      512,    // Custom output floor
+        SafetyMarginRatio:      0.15,   // Custom safety margin (15%)
+        MaxInputTokensRatio:    0.90,   // Custom max input ratio (90%)
+    }),
+)
+```
+
+For Anthropic models, you can use the same configuration:
+
+```go
+model := anthropic.New("claude-sonnet-4-0",
+    anthropic.WithEnableTokenTailoring(true),
+    anthropic.WithTokenTailoringConfig(&anthropic.TokenTailoringConfig{
+        SafetyMarginRatio: 0.15,  // Increase safety margin to 15%
+    }),
 )
 ```
 

@@ -906,7 +906,7 @@ model := openai.New("deepseek-chat",
 ```
 safetyMargin = contextWindow × 10%
 calculatedMax = contextWindow - 2048（输出预留）- 512（协议开销）- safetyMargin
-ratioLimit = contextWindow × 65%（最大输入比例）
+ratioLimit = contextWindow × 100%（最大输入比例）
 maxInputTokens = max(min(calculatedMax, ratioLimit), 1024（最小值）)
 ```
 
@@ -915,9 +915,20 @@ maxInputTokens = max(min(calculatedMax, ratioLimit), 1024（最小值）)
 ```
 safetyMargin = 128000 × 0.10 = 12800 tokens
 calculatedMax = 128000 - 2048 - 512 - 12800 = 112640 tokens
-ratioLimit = 128000 × 0.65 = 83200 tokens
-maxInputTokens = 83200 tokens（约占 context window 的 65%）
+ratioLimit = 128000 × 1.0 = 128000 tokens
+maxInputTokens = 112640 tokens（约占 context window 的 88%）
 ```
+
+**默认预算参数**：
+
+框架使用以下默认值进行 token 分配（**建议保留默认值**）：
+
+- **协议开销（ProtocolOverheadTokens）**: 512 tokens - 用于请求/响应格式化
+- **输出预留（ReserveOutputTokens）**: 2048 tokens - 为输出生成预留
+- **输入最小值（InputTokensFloor）**: 1024 tokens - 确保模型正常处理
+- **输出最小值（OutputTokensFloor）**: 256 tokens - 确保有意义的响应
+- **安全边际比例（SafetyMarginRatio）**: 10% - token 计数不准确的缓冲
+- **最大输入比例（MaxInputTokensRatio）**: 100% - 上下文窗口的最大输入比例
 
 **裁剪策略**：
 
@@ -949,6 +960,35 @@ func (s *CustomStrategy) Tailor(
 model := openai.New("deepseek-chat",
     openai.WithEnableTokenTailoring(true),
     openai.WithTailoringStrategy(&CustomStrategy{}),
+)
+```
+
+**进阶配置（自定义预算参数）**：
+
+如果默认的 token 分配策略不满足您的需求，可以通过 `WithTokenTailoringConfig` 自定义预算参数。**注意：除非有特殊需求，否则建议保留默认值。**
+
+```go
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+        ProtocolOverheadTokens: 1024,   // 自定义协议开销
+        ReserveOutputTokens:    4096,   // 自定义输出预留
+        InputTokensFloor:       2048,   // 自定义输入最小值
+        OutputTokensFloor:      512,    // 自定义输出最小值
+        SafetyMarginRatio:      0.15,   // 自定义安全边际（15%）
+        MaxInputTokensRatio:    0.90,   // 自定义最大输入比例（90%）
+    }),
+)
+```
+
+对于 Anthropic 模型，可以使用相同的配置：
+
+```go
+model := anthropic.New("claude-sonnet-4-0",
+    anthropic.WithEnableTokenTailoring(true),
+    anthropic.WithTokenTailoringConfig(&anthropic.TokenTailoringConfig{
+        SafetyMarginRatio: 0.15,  // 提高安全边际到 15%
+    }),
 )
 ```
 

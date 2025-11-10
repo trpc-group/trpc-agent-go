@@ -3720,3 +3720,30 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 		assert.True(t, hasReasoning, "expected at least one response to contain reasoning content")
 	})
 }
+
+// TestWithTokenTailoringConfig tests the WithTokenTailoringConfig option.
+func TestWithTokenTailoringConfig(t *testing.T) {
+	config := &TokenTailoringConfig{
+		ProtocolOverheadTokens: 1024,
+		ReserveOutputTokens:    4096,
+		InputTokensFloor:       2048,
+		OutputTokensFloor:      512,
+		SafetyMarginRatio:      0.15,
+		MaxInputTokensRatio:    0.90,
+	}
+
+	m := New("deepseek-chat",
+		WithEnableTokenTailoring(true),
+		WithTokenTailoringConfig(config),
+	)
+
+	require.NotNil(t, m)
+
+	// Verify that the instance-level config was set.
+	assert.Equal(t, 1024, m.protocolOverheadTokens)
+	assert.Equal(t, 4096, m.reserveOutputTokens)
+	assert.Equal(t, 2048, m.inputTokensFloor)
+	assert.Equal(t, 512, m.outputTokensFloor)
+	assert.Equal(t, 0.15, m.safetyMarginRatio)
+	assert.Equal(t, 0.90, m.maxInputTokensRatio)
+}

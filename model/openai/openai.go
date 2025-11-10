@@ -50,6 +50,15 @@ const (
 	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
 )
 
+var (
+	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
+	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
+	inputTokensFloor       = imodel.DefaultInputTokensFloor
+	outputTokensFloor      = imodel.DefaultOutputTokensFloor
+	safetyMarginRatio      = imodel.DefaultSafetyMarginRatio
+	maxInputTokensRatio    = imodel.DefaultMaxInputTokensRatio
+)
+
 // Variant represents different model variants with specific behaviors.
 type Variant string
 
@@ -222,6 +231,13 @@ type Model struct {
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
+	// Token tailoring budget parameters (instance-level overrides).
+	protocolOverheadTokens int
+	reserveOutputTokens    int
+	inputTokensFloor       int
+	outputTokensFloor      int
+	safetyMarginRatio      float64
+	maxInputTokensRatio    float64
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -291,6 +307,28 @@ type options struct {
 	TailoringStrategy model.TailoringStrategy
 	// MaxInputTokens is the max input tokens for token tailoring.
 	MaxInputTokens int
+	// TokenTailoringConfig allows customization of token tailoring parameters.
+	TokenTailoringConfig *TokenTailoringConfig
+}
+
+// TokenTailoringConfig holds custom token tailoring budget parameters.
+type TokenTailoringConfig struct {
+	// ProtocolOverheadTokens is the number of tokens reserved for protocol
+	// overhead.
+	ProtocolOverheadTokens int
+	// ReserveOutputTokens is the number of tokens reserved for output
+	// generation.
+	ReserveOutputTokens int
+	// InputTokensFloor is the minimum number of input tokens.
+	InputTokensFloor int
+	// OutputTokensFloor is the minimum number of output tokens.
+	OutputTokensFloor int
+	// SafetyMarginRatio is the safety margin ratio for token counting
+	// inaccuracies.
+	SafetyMarginRatio float64
+	// MaxInputTokensRatio is the maximum input tokens ratio of the context
+	// window.
+	MaxInputTokensRatio float64
 }
 
 // Option is a function that configures an OpenAI model.
@@ -466,6 +504,25 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 	}
 }
 
+// WithTokenTailoringConfig sets custom token tailoring budget parameters.
+// This allows advanced users to fine-tune the token allocation strategy.
+//
+// Example:
+//
+//	openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+//	    ProtocolOverheadTokens: 1024,
+//	    ReserveOutputTokens:    4096,
+//	    SafetyMarginRatio:      0.15,
+//	})
+//
+// Note: It is recommended to use the default values unless you have specific
+// requirements.
+func WithTokenTailoringConfig(config *TokenTailoringConfig) Option {
+	return func(opts *options) {
+		opts.TokenTailoringConfig = config
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -474,6 +531,36 @@ func New(name string, opts ...Option) *Model {
 	}
 	for _, opt := range opts {
 		opt(o)
+	}
+
+	// Initialize token tailoring budget parameters with defaults.
+	protocolOverhead := protocolOverheadTokens
+	reserveOutput := reserveOutputTokens
+	inputFloor := inputTokensFloor
+	outputFloor := outputTokensFloor
+	safetyMargin := safetyMarginRatio
+	maxInputRatio := maxInputTokensRatio
+
+	// Apply custom token tailoring config if provided.
+	if o.TokenTailoringConfig != nil {
+		if o.TokenTailoringConfig.ProtocolOverheadTokens > 0 {
+			protocolOverhead = o.TokenTailoringConfig.ProtocolOverheadTokens
+		}
+		if o.TokenTailoringConfig.ReserveOutputTokens > 0 {
+			reserveOutput = o.TokenTailoringConfig.ReserveOutputTokens
+		}
+		if o.TokenTailoringConfig.InputTokensFloor > 0 {
+			inputFloor = o.TokenTailoringConfig.InputTokensFloor
+		}
+		if o.TokenTailoringConfig.OutputTokensFloor > 0 {
+			outputFloor = o.TokenTailoringConfig.OutputTokensFloor
+		}
+		if o.TokenTailoringConfig.SafetyMarginRatio > 0 {
+			safetyMargin = o.TokenTailoringConfig.SafetyMarginRatio
+		}
+		if o.TokenTailoringConfig.MaxInputTokensRatio > 0 {
+			maxInputRatio = o.TokenTailoringConfig.MaxInputTokensRatio
+		}
 	}
 
 	// Set default API key and base URL if not specified.
@@ -538,6 +625,12 @@ func New(name string, opts ...Option) *Model {
 		tokenCounter:               o.TokenCounter,
 		tailoringStrategy:          o.TailoringStrategy,
 		maxInputTokens:             o.MaxInputTokens,
+		protocolOverheadTokens:     protocolOverhead,
+		reserveOutputTokens:        reserveOutput,
+		inputTokensFloor:           inputFloor,
+		outputTokensFloor:          outputFloor,
+		safetyMarginRatio:          safetyMargin,
+		maxInputTokensRatio:        maxInputRatio,
 	}
 }
 
@@ -592,9 +685,22 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Determine max input tokens using priority: user config > auto calculation > default.
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
-		// Auto-calculate based on model context window with safety margin and ratio limit.
+		// Auto-calculate based on model context window with custom or default parameters.
 		contextWindow := imodel.ResolveContextWindow(m.name)
-		maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
+		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
+			// Use custom parameters if any are set.
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				m.protocolOverheadTokens,
+				m.reserveOutputTokens,
+				m.inputTokensFloor,
+				m.safetyMarginRatio,
+				m.maxInputTokensRatio,
+			)
+		} else {
+			// Use default parameters.
+			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
+		}
 		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
 			m.name, contextWindow, maxInputTokens)
 	}
@@ -641,7 +747,20 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// This respects user's explicit configuration while providing a safe default.
 	if request.GenerationConfig.MaxTokens == nil {
 		contextWindow := imodel.ResolveContextWindow(m.name)
-		maxOutputTokens := imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
+		var maxOutputTokens int
+		if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {
+			// Use custom parameters if any are set.
+			maxOutputTokens = imodel.CalculateMaxOutputTokensWithParams(
+				contextWindow,
+				usedTokens,
+				m.protocolOverheadTokens,
+				m.outputTokensFloor,
+				m.safetyMarginRatio,
+			)
+		} else {
+			// Use default parameters.
+			maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
+		}
 		if maxOutputTokens > 0 {
 			request.GenerationConfig.MaxTokens = &maxOutputTokens
 			log.Debugf("token tailoring: contextWindow=%d, usedTokens=%d, maxOutputTokens=%d",

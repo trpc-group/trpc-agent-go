@@ -69,6 +69,23 @@ func CalculateMaxInputTokens(contextWindow int) int {
 	return max(min(calculatedMax, ratioLimit), DefaultInputTokensFloor)
 }
 
+// CalculateMaxInputTokensWithParams calculates the maximum input tokens
+// with custom budget parameters.
+func CalculateMaxInputTokensWithParams(
+	contextWindow int,
+	protocolOverheadTokens int,
+	reserveOutputTokens int,
+	inputTokensFloor int,
+	safetyMarginRatio float64,
+	maxInputTokensRatio float64,
+) int {
+	safetyMargin := int(float64(contextWindow) * safetyMarginRatio)
+	calculatedMax := max(contextWindow-reserveOutputTokens-
+		protocolOverheadTokens-safetyMargin, 0)
+	ratioLimit := int(float64(contextWindow) * maxInputTokensRatio)
+	return max(min(calculatedMax, ratioLimit), inputTokensFloor)
+}
+
 // CalculateMaxOutputTokens calculates the maximum output tokens based on the
 // context window and actual used input tokens.
 //
@@ -98,4 +115,21 @@ func CalculateMaxOutputTokens(contextWindow int, usedInputTokens int) int {
 		return 0
 	}
 	return max(remainingTokens, DefaultOutputTokensFloor)
+}
+
+// CalculateMaxOutputTokensWithParams calculates the maximum output tokens
+// with custom budget parameters.
+func CalculateMaxOutputTokensWithParams(
+	contextWindow int,
+	usedInputTokens int,
+	protocolOverheadTokens int,
+	outputTokensFloor int,
+	safetyMarginRatio float64,
+) int {
+	safetyMargin := int(float64(contextWindow) * safetyMarginRatio)
+	remainingTokens := contextWindow - usedInputTokens - protocolOverheadTokens - safetyMargin
+	if remainingTokens <= 0 {
+		return 0
+	}
+	return max(remainingTokens, outputTokensFloor)
 }
