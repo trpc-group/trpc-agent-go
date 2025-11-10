@@ -874,7 +874,7 @@ Per-request headers
 
 #### 5. Variant Optimization: Adapting to Platform-Specific Behaviors
 The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, especially for file upload, deletion, and processing logic.
-##### 5.1. 5.1. Supported Variant Types
+##### 5.1. Supported Variant Types
 The framework currently supports the following Variants:
 
 **1. VariantOpenAI（default）**
