@@ -892,7 +892,7 @@ The framework currently supports the following Variants:
 **3. VariantDeepSeek**
 - DeepSeek platform adaptation
 - Default BaseURL：`https://api.deepseek.com`
-- API Key nvironment variable name：`DEEPSEEK_API_KEY`
+- API Key environment variable name：`DEEPSEEK_API_KEY`
 - Other behaviors are consistent with standard OpenAI
 
 ##### 5.2. Usage
