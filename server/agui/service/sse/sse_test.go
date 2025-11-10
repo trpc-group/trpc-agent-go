@@ -110,6 +110,31 @@ func TestHandleSuccess(t *testing.T) {
 	assert.Equal(t, 1, runner.calls)
 }
 
+func TestHandleWriteEventError(t *testing.T) {
+	eventsCh := make(chan aguievents.Event, 1)
+	eventsCh <- aguievents.NewRunStartedEvent("thread", "run")
+	close(eventsCh)
+
+	runner := &stubRunner{
+		runFn: func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+			return eventsCh, nil
+		},
+	}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	payload := `{"threadId":"thread","runId":"run","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/agui", strings.NewReader(payload))
+	errWriter := newErrorResponseWriter(errors.New("write failure"))
+
+	srv.handle(errWriter, req)
+
+	res := errWriter.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	assert.Contains(t, errWriter.Body.String(), "SSE write failed")
+	assert.Equal(t, 1, runner.calls)
+}
+
 func TestHandleMethodNotAllowed(t *testing.T) {
 	runner := &stubRunner{}
 	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
@@ -330,6 +355,30 @@ func TestHandleMessagesSnapshotSuccess(t *testing.T) {
 	assert.Equal(t, 1, runner.snapshotCalls)
 }
 
+func TestHandleMessagesSnapshotWriteEventError(t *testing.T) {
+	eventsCh := make(chan aguievents.Event, 1)
+	eventsCh <- aguievents.NewMessagesSnapshotEvent([]aguievents.Message{{ID: "msg-1", Role: "assistant"}})
+	close(eventsCh)
+
+	runner := &snapshotRunner{
+		snapshotFn: func(context.Context, *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+			return eventsCh, nil
+		},
+	}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	req := httptest.NewRequest(http.MethodPost, "/history", strings.NewReader(`{"threadId":"thread","runId":"run"}`))
+	errWriter := newErrorResponseWriter(errors.New("write failure"))
+
+	srv.handleMessagesSnapshot(errWriter, req)
+
+	res := errWriter.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	assert.Contains(t, errWriter.Body.String(), "SSE write failed")
+	assert.Equal(t, 1, runner.snapshotCalls)
+}
+
 type stubRunner struct {
 	runFn     func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error)
 	calls     int
@@ -360,4 +409,32 @@ func (s *snapshotRunner) MessagesSnapshot(ctx context.Context,
 	ch := make(chan aguievents.Event)
 	close(ch)
 	return ch, nil
+}
+
+type errorResponseWriter struct {
+	*httptest.ResponseRecorder
+	failCount int
+	writeErr  error
+}
+
+func newErrorResponseWriter(writeErr error) *errorResponseWriter {
+	return &errorResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		failCount:        1,
+		writeErr:         writeErr,
+	}
+}
+
+func (w *errorResponseWriter) Write(p []byte) (int, error) {
+	if w.failCount > 0 {
+		w.failCount--
+		return 0, w.writeErr
+	}
+	return w.ResponseRecorder.Write(p)
+}
+
+func (w *errorResponseWriter) Flush() {
+	if flusher, ok := interface{}(w.ResponseRecorder).(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
