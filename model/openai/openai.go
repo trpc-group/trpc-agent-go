@@ -281,7 +281,7 @@ type ChatStreamCompleteCallbackFunc func(
 	ctx context.Context,
 	chatRequest *openai.ChatCompletionNewParams,
 	accumulator *openai.ChatCompletionAccumulator, // nil if streamErr is not nil
-	streamErr error, // nil if streaming completed successfully
+	streamErr error,                               // nil if streaming completed successfully
 )
 
 // options contains configuration options for creating a Model.
@@ -855,6 +855,7 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 }
 
 // buildThinkingOption converts our Request to OpenAI request RequestOption
+// Qwen refer:https://help.aliyun.com/zh/model-studio/deep-thinking
 func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
 	var opts []openaiopt.RequestOption
 	if request.ThinkingEnabled == nil {
