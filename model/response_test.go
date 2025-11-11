@@ -988,7 +988,7 @@ func TestResponse_IsUserMessage(t *testing.T) {
 			rsp: &Response{
 				Choices: []Choice{
 					{
-						Message: Message{Role: RoleUser},
+						Message: Message{Content: "content", Role: RoleUser},
 					},
 				},
 			},
