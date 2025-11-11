@@ -287,7 +287,7 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 			if !evt.IsUserMessage() {
 				return false
 			}
-			// User messages are usually sent from the runner apeend to the session, so in most cases, the invocationID is not equal.
+			// User messages are usually sent from the runner append to the session, so in most cases, the invocationID is not equal.
 			// Therefore, to prevent the loss of user messages, we need to make further judgments
 			if inv.RunOptions.RequestID != evt.RequestID || evt.Choices[0].Message.Content != inv.Message.Content {
 				return false
