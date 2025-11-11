@@ -585,6 +585,55 @@ func TestRunTool_StageInputs_FromSkill(t *testing.T) {
 	require.Contains(t, out.OutputFiles[0].Content, contentMsg)
 }
 
+func TestRunTool_Call_InvalidInputSpec_Error(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Inputs: []codeexecutor.InputSpec{{
+			From: "unknown://abc",
+			To:   "work/inputs/x",
+			Mode: "copy",
+		}},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+}
+
+func TestRunTool_stageSkill_EnsureLayoutError(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+	eng := localexec.New().Engine()
+
+	// Workspace path points to a file; EnsureLayout should fail.
+	tmpf := filepath.Join(t.TempDir(), "asfile")
+	require.NoError(t, os.WriteFile(tmpf, []byte("x"), 0o644))
+	ws := codeexecutor.Workspace{ID: "bad", Path: tmpf}
+
+	err = rt.stageSkill(context.Background(), eng, ws, dir,
+		testSkillName,
+	)
+	require.Error(t, err)
+}
+
+func TestResolveCWD_AbsolutePath(t *testing.T) {
+	// Absolute cwd should be returned unchanged.
+	abs := "/"
+	got := resolveCWD(abs, testSkillName)
+	require.Equal(t, abs, got)
+}
+
 // Test that workspace persists across calls within the same session,
 // so files written earlier can be collected later.
 func TestRunTool_WorkspacePersistsAcrossCalls(t *testing.T) {

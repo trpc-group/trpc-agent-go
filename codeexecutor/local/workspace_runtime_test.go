@@ -786,3 +786,126 @@ func TestRuntime_PutDirectory_PreservesMode(t *testing.T) {
 	// Executable bit should be preserved.
 	require.NotZero(t, st.Mode()&0o111)
 }
+
+func TestRuntime_PutDirectory_NonexistentSrc_Error(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-miss-src", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Source does not exist; copy should fail.
+	miss := filepath.Join(t.TempDir(), "no-such")
+	err = rt.PutDirectory(ctx, ws, miss, "dst")
+	require.Error(t, err)
+}
+
+func TestRuntime_ExecuteInline_NoBlocks(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	// No code blocks should still return a valid result.
+	res, err := rt.ExecuteInline(ctx, "rt-inline-empty", nil,
+		1*time.Second,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 0, res.ExitCode)
+	require.Equal(t, "", res.Stdout)
+	require.Equal(t, "", res.Stderr)
+}
+
+func TestRuntime_Collect_ReadLimitedLargeFile(t *testing.T) {
+	// Create a file larger than the per-file read limit to ensure
+	// Collect truncates to the internal cap.
+	const readLimitBytes = 4 * 1024 * 1024
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-big", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Write a large file under work/.
+	big := bytes.Repeat([]byte{'x'}, readLimitBytes+123)
+	p := filepath.Join(ws.Path, codeexecutor.DirWork, "big.bin")
+	require.NoError(t, os.MkdirAll(
+		filepath.Dir(p), 0o755,
+	))
+	require.NoError(t, os.WriteFile(p, big, 0o644))
+
+	files, err := rt.Collect(
+		ctx, ws, []string{filepath.Join(codeexecutor.DirWork, "*.bin")},
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	// Content should be capped to readLimitBytes.
+	require.Equal(t, readLimitBytes, len(files[0].Content))
+}
+
+func TestRuntime_CollectOutputs_PerFileCapApplied(t *testing.T) {
+	// When MaxFileBytes exceeds the internal cap, content should be
+	// truncated to the cap size.
+	const capBytes = 4 * 1024 * 1024
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-out-cap", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Prepare a large file under out/ bigger than cap.
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(ws.Path, codeexecutor.DirOut), 0o755,
+	))
+	big := bytes.Repeat([]byte{'x'}, capBytes+111)
+	f := filepath.Join(ws.Path, codeexecutor.DirOut, "b.bin")
+	require.NoError(t, os.WriteFile(f, big, 0o644))
+
+	mf, err := rt.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{
+		Globs:         []string{filepath.Join(codeexecutor.DirOut, "*")},
+		Inline:        true,
+		Save:          false,
+		MaxFileBytes:  capBytes * 10,
+		MaxTotalBytes: int64(capBytes * 10),
+	})
+	require.NoError(t, err)
+	require.Len(t, mf.Files, 1)
+	require.Equal(t, capBytes, len(mf.Files[0].Content))
+}
+
+func TestRuntime_StageInputs_HostLink_ReplacesExisting(t *testing.T) {
+	// Ensure makeSymlink removes an existing regular file at dest.
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-link-repl", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Pre-create a regular file at destination path.
+	dst := filepath.Join(
+		codeexecutor.DirWork, "inputs", "lf.txt",
+	)
+	absDst := filepath.Join(ws.Path, dst)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absDst), 0o755))
+	require.NoError(t, os.WriteFile(absDst, []byte("x"), 0o644))
+
+	// Create a host source file to link to.
+	src := filepath.Join(t.TempDir(), "s.txt")
+	require.NoError(t, os.WriteFile(src, []byte("y"), 0o644))
+
+	// Link mode should replace the existing file with a symlink.
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "host://" + src,
+		To:   dst,
+		Mode: "link",
+	}})
+	require.NoError(t, err)
+	st, lerr := os.Lstat(absDst)
+	require.NoError(t, lerr)
+	require.NotZero(t, st.Mode()&os.ModeSymlink)
+}
