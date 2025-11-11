@@ -38,7 +38,7 @@ const (
 	testCID        = "cid"
 	testExec1      = "e1"
 	testExec2      = "e2"
-	testRunBase    = "/mnt/run"
+	testRunBase    = "/tmp/run"
 	contentHello   = "hello world"
 	contentCollect = "filedata"
 	waitShortSec   = 5
@@ -365,7 +365,7 @@ func TestWorkspaceRuntime_MountOptimizations(t *testing.T) {
 		cfg: runtimeConfig{
 			runContainerBase:    testRunBase,
 			skillsHostBase:      skillsRoot,
-			skillsContainerBase: "/mnt/skills",
+			skillsContainerBase: "/opt/trpc-agent/skills",
 		},
 	}
 	ws := codeexecutor.Workspace{ID: "w3", Path: path.Join(testRunBase, "w3")}

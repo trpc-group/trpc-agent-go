@@ -36,25 +36,33 @@ import (
 type RunTool struct {
 	repo skill.Repository
 	exec codeexecutor.CodeExecutor
+	reg  *codeexecutor.WorkspaceRegistry
 }
 
 // NewRunTool creates a new RunTool.
 func NewRunTool(repo skill.Repository,
 	exec codeexecutor.CodeExecutor) *RunTool {
-	return &RunTool{repo: repo, exec: exec}
+	return &RunTool{
+		repo: repo,
+		exec: exec,
+		reg:  codeexecutor.NewWorkspaceRegistry(),
+	}
 }
 
 // runInput is the JSON schema for skill_run.
 type runInput struct {
-	Skill             string            `json:"skill"`
-	Command           string            `json:"command"`
-	Cwd               string            `json:"cwd,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	OutputFiles       []string          `json:"output_files,omitempty"`
-	Timeout           int               `json:"timeout,omitempty"`
-	SaveAsArtifacts   bool              `json:"save_as_artifacts,omitempty"`
-	OmitInlineContent bool              `json:"omit_inline_content,omitempty"`
-	ArtifactPrefix    string            `json:"artifact_prefix,omitempty"`
+	Skill          string            `json:"skill"`
+	Command        string            `json:"command"`
+	Cwd            string            `json:"cwd,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	OutputFiles    []string          `json:"output_files,omitempty"`
+	Timeout        int               `json:"timeout,omitempty"`
+	SaveArtifacts  bool              `json:"save_as_artifacts,omitempty"`
+	OmitInline     bool              `json:"omit_inline_content,omitempty"`
+	ArtifactPrefix string            `json:"artifact_prefix,omitempty"`
+
+	Inputs  []codeexecutor.InputSpec `json:"inputs,omitempty"`
+	Outputs *codeexecutor.OutputSpec `json:"outputs,omitempty"`
 }
 
 // runOutput is the structured result returned by skill_run.
@@ -117,21 +125,68 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer eng.Manager().Cleanup(ctx, ws)
 
-	if err := t.stageSkill(ctx, eng, ws, root); err != nil {
+	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
 		return nil, err
 	}
 
-	cwd := resolveCWD(in.Cwd)
+	// Prepare context with artifact service/session when available.
+	ctxIO := ctx
+	if inv, ok := agent.InvocationFromContext(ctx); ok &&
+		inv != nil && inv.ArtifactService != nil &&
+		inv.Session != nil {
+		ctxIO = codeexecutor.WithArtifactService(
+			ctxIO, inv.ArtifactService,
+		)
+		ctxIO = codeexecutor.WithArtifactSession(
+			ctxIO, artifact.SessionInfo{
+				AppName:   inv.Session.AppName,
+				UserID:    inv.Session.UserID,
+				SessionID: inv.Session.ID,
+			},
+		)
+	}
+
+	// Stage declared inputs if any.
+	if len(in.Inputs) > 0 {
+		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Default working directory is the skill root so commands like
+	// "python3 scripts/x.py" work without additional prefixes.
+	// Commands should still prefer $OUTPUT_DIR for writes.
+	cwd := resolveCWD(in.Cwd, in.Skill)
 	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
 	if err != nil {
 		return nil, err
 	}
 
-	files, err := t.collectFiles(ctx, eng, ws, in.OutputFiles)
-	if err != nil {
-		return nil, err
+	var files []codeexecutor.File
+	var manifest *codeexecutor.OutputManifest
+	if in.Outputs != nil && len(in.OutputFiles) == 0 {
+		m, err := eng.FS().CollectOutputs(ctxIO, ws, *in.Outputs)
+		if err != nil {
+			return nil, err
+		}
+		manifest = &m
+		// Map to legacy files for output shape when Inline=true.
+		if in.Outputs.Inline {
+			for _, fr := range m.Files {
+				files = append(files, codeexecutor.File{
+					Name:     fr.Name,
+					Content:  fr.Content,
+					MIMEType: fr.MIMEType,
+				})
+			}
+		}
+	} else {
+		var err error
+		files, err = t.collectFiles(ctx, eng, ws, in.OutputFiles)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	out := runOutput{
@@ -143,15 +198,27 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 		OutputFiles: files,
 	}
 
-	if in.SaveAsArtifacts && len(files) > 0 {
+	if in.SaveArtifacts && len(files) > 0 {
 		refs, err := t.saveArtifacts(ctx, files, in.ArtifactPrefix)
 		if err != nil {
 			return nil, err
 		}
 		out.ArtifactFiles = refs
-		if in.OmitInlineContent {
+		if in.OmitInline {
 			for i := range out.OutputFiles {
 				out.OutputFiles[i].Content = ""
+			}
+		}
+	}
+	// If using outputs spec and files were not inlined, attach
+	// artifact refs from manifest.
+	if manifest != nil && len(out.ArtifactFiles) == 0 {
+		for _, fr := range manifest.Files {
+			if fr.SavedAs != "" {
+				out.ArtifactFiles = append(out.ArtifactFiles, artifactRef{
+					Name:    fr.SavedAs,
+					Version: fr.Version,
+				})
 			}
 		}
 	}
@@ -197,9 +264,21 @@ func (t *RunTool) ensureEngine() codeexecutor.Engine {
 func (t *RunTool) createWorkspace(
 	ctx context.Context, eng codeexecutor.Engine, name string,
 ) (codeexecutor.Workspace, error) {
-	return eng.Manager().CreateWorkspace(
-		ctx, name, codeexecutor.WorkspacePolicy{},
-	)
+	// Acquire a session-scoped workspace using a persistent registry.
+	reg := t.reg
+	if reg == nil {
+		reg = codeexecutor.NewWorkspaceRegistry()
+		t.reg = reg
+	}
+	// Prefer session ID from invocation context; otherwise fallback
+	// to skill name.
+	sid := name
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if inv.Session != nil && inv.Session.ID != "" {
+			sid = inv.Session.ID
+		}
+	}
+	return reg.Acquire(ctx, eng.Manager(), sid)
 }
 
 func (t *RunTool) stageSkill(
@@ -207,25 +286,154 @@ func (t *RunTool) stageSkill(
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	root string,
+	name string,
 ) error {
-	const stagedSkillDir = "skill"
-	return eng.FS().StageDirectory(
-		ctx, ws, root, stagedSkillDir,
-		codeexecutor.StageOptions{ReadOnly: false, AllowMount: true},
-	)
+	// Compute digest of the skill directory on host.
+	dg, err := codeexecutor.DirDigest(root)
+	if err != nil {
+		return err
+	}
+	// Ensure layout + load metadata to decide if staging is needed.
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		return err
+	}
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	if err != nil {
+		return err
+	}
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	// Stage into /skills/<name> inside workspace.
+	dest := path.Join(codeexecutor.DirSkills, name)
+	// If metadata has same digest, skip staging.
+	if s, ok := md.Skills[name]; ok && s.Digest == dg {
+		return nil
+	}
+	// Stage as a regular directory first (no read-only mount). We will
+	// add convenience links and then make files read-only except those
+	// links. This enables relative paths like "scripts/..." and
+	// "out/..." to work from the skill root.
+	if err := eng.FS().StageDirectory(
+		ctx, ws, root, dest,
+		codeexecutor.StageOptions{ReadOnly: false, AllowMount: false},
+	); err != nil {
+		return err
+	}
+
+	// Link workspace-level dirs under the skill root: out, work, inputs.
+	if err := t.linkWorkspaceDirs(ctx, eng, ws, name); err != nil {
+		return err
+	}
+	// Make everything under skill root read-only while keeping symlinks
+	// untouched so writes land in workspace-level targets.
+	if err := t.readOnlyExceptSymlinks(ctx, eng, ws, dest); err != nil {
+		return err
+	}
+	md.Skills[name] = codeexecutor.SkillMeta{
+		Name:     name,
+		RelPath:  dest,
+		Digest:   dg,
+		Mounted:  true,
+		StagedAt: time.Now(),
+	}
+	return codeexecutor.SaveMetadata(ws.Path, md)
 }
 
-func resolveCWD(cwd string) string {
-	const stagedSkillDir = "skill"
-	if strings.TrimSpace(cwd) == "" {
-		// Default to workspace root so output patterns like
-		// "out/*.txt" are relative to root, as tests expect.
-		return ""
+// linkWorkspaceDirs creates convenience symlinks under the staged
+// skill root so commands that write to "out/" (relative to the skill
+// CWD) resolve to the workspace output directory. It also links work
+// and inputs for consistency.
+func (t *RunTool) linkWorkspaceDirs(
+	ctx context.Context, eng codeexecutor.Engine,
+	ws codeexecutor.Workspace, name string,
+) error {
+	skillRoot := path.Join(codeexecutor.DirSkills, name)
+	// Relative links from skills/<name> to workspace dirs.
+	toOut := path.Join("..", "..", codeexecutor.DirOut)
+	toWork := path.Join("..", "..", codeexecutor.DirWork)
+	toInputs := path.Join(
+		"..", "..", codeexecutor.DirWork, "inputs",
+	)
+	var sb strings.Builder
+	sb.WriteString("set -e; cd ")
+	sb.WriteString(shellQuote(skillRoot))
+	sb.WriteString("; ln -sfn ")
+	sb.WriteString(shellQuote(toOut))
+	sb.WriteString(" out; ln -sfn ")
+	sb.WriteString(shellQuote(toWork))
+	sb.WriteString(" work; ln -sfn ")
+	sb.WriteString(shellQuote(toInputs))
+	sb.WriteString(" inputs")
+	_, err := eng.Runner().RunProgram(
+		ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", sb.String()},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: 5 * time.Second,
+		},
+	)
+	return err
+}
+
+// readOnlyExceptSymlinks removes write bits on all regular files and
+// directories under the staged skill root while skipping symlinks to
+// avoid changing workspace-level targets like out/.
+func (t *RunTool) readOnlyExceptSymlinks(
+	ctx context.Context, eng codeexecutor.Engine,
+	ws codeexecutor.Workspace, dest string,
+) error {
+	var sb strings.Builder
+	// Use find to skip symlinks and chmod others.
+	sb.WriteString("set -e; find ")
+	sb.WriteString(shellQuote(dest))
+	sb.WriteString(" -type l -prune -o -exec chmod a-w {} +")
+	_, err := eng.Runner().RunProgram(
+		ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", sb.String()},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: 5 * time.Second,
+		},
+	)
+	return err
+}
+
+// shellQuote wraps a string for safe single-quoted usage in a
+// POSIX shell. It escapes embedded single quotes by closing,
+// inserting an escaped quote, and reopening.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
 	}
-	if !strings.HasPrefix(cwd, "/") {
-		return path.Join(stagedSkillDir, cwd)
+	q := strings.ReplaceAll(s, "'", "'\\''")
+	return "'" + q + "'"
+}
+
+func resolveCWD(cwd string, name string) string {
+	// Default: run at the skill root. Relative cwd resolves under the
+	// skill root. Absolute cwd is respected as-is.
+	base := path.Join(codeexecutor.DirSkills, name)
+	s := strings.TrimSpace(cwd)
+	if s == "" {
+		return base
 	}
-	return cwd
+	if strings.HasPrefix(s, "/") {
+		return s
+	}
+	return path.Join(base, s)
+}
+
+// filepathBase returns the last element of a path, trimming trailing
+// separators. It avoids importing path/filepath at top-level.
+func filepathBase(p string) string {
+	p = strings.TrimRight(p, "/")
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }
 
 func (t *RunTool) runProgram(
@@ -236,11 +444,18 @@ func (t *RunTool) runProgram(
 	in runInput,
 ) (codeexecutor.RunResult, error) {
 	timeout := time.Duration(in.Timeout) * time.Second
+	env := in.Env
+	if env == nil {
+		env = map[string]string{}
+	}
+	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
+		env[codeexecutor.EnvSkillName] = in.Skill
+	}
 	return eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
 			Args:    []string{"-lc", in.Command},
-			Env:     in.Env,
+			Env:     env,
 			Cwd:     cwd,
 			Timeout: timeout,
 		},

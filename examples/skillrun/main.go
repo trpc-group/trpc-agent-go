@@ -49,12 +49,17 @@ var (
 		"executor", "local",
 		"workspace executor: local|container",
 	)
-	flagArtifacts = flag.Bool("artifacts", false,
+	flagArtifacts = flag.Bool("artifacts", true,
 		"save output files via artifact service")
 	flagOmitInline = flag.Bool("omit-inline", false,
 		"omit inline file contents when saving artifacts")
 	flagArtifactPref = flag.String("artifact-prefix", "",
 		"artifact filename prefix (e.g., user:)")
+	flagInputsHost = flag.String(
+		"inputs-host", "",
+		"host dir to bind as /opt/trpc-agent/inputs "+
+			"(container exec)",
+	)
 )
 
 const defaultSkillsDir = "skills"
@@ -133,11 +138,18 @@ func (c *skillChat) setup(_ context.Context) error {
 	case "container":
 		// Bind the skills root read-only into the container to
 		// enable fast in-container copy when staging directories.
-		if rt, e := containerexec.New(
+		opts := []containerexec.Option{
 			containerexec.WithBindMount(
-				c.skillsRoot, "/mnt/skills", "ro",
+				c.skillsRoot, "/opt/trpc-agent/skills", "ro",
 			),
-		); e == nil {
+		}
+		// Optional: bind a host directory for zero-copy inputs.
+		if *flagInputsHost != "" {
+			opts = append(opts, containerexec.WithBindMount(
+				*flagInputsHost, "/opt/trpc-agent/inputs", "ro",
+			))
+		}
+		if rt, e := containerexec.New(opts...); e == nil {
 			we = rt
 			execUsed = "container"
 		} else {
@@ -194,6 +206,20 @@ func (c *skillChat) setup(_ context.Context) error {
 	fmt.Println(
 		" - Ask to run a command exactly as in the docs.",
 	)
+	fmt.Println(
+		" - Prefer writing files to $OUTPUT_DIR (collector reads out/).",
+	)
+	fmt.Println(
+		" - Use $WORK_DIR/inputs for inputs and $OUTPUT_DIR for outputs.",
+	)
+	fmt.Println(
+		" - Reference skill files via $SKILLS_DIR/<name>/...",
+	)
+	fmt.Println(
+		" - Optional: add inputs/outputs fields to skill_run.",
+	)
+	fmt.Println(" - /artifacts lists saved artifact keys.")
+	fmt.Println(" - /pull <name> [version] downloads an artifact.")
 	fmt.Println(" - Type /exit to quit.")
 	fmt.Println()
 	return nil
@@ -256,6 +282,13 @@ func (c *skillChat) startChat(ctx context.Context) error {
 		if strings.HasPrefix(text, "/pull ") {
 			if err := c.handlePull(text); err != nil {
 				fmt.Printf("❌ Pull error: %v\n", err)
+			}
+			fmt.Println()
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(text), "/artifacts") {
+			if err := c.handleListArtifacts(); err != nil {
+				fmt.Printf("❌ List error: %v\n", err)
 			}
 			fmt.Println()
 			continue
@@ -340,6 +373,29 @@ func (c *skillChat) handlePull(text string) error {
 		"📥 Saved %s (%d bytes, %s)\n",
 		out, len(art.Data), art.MimeType,
 	)
+	return nil
+}
+
+// handleListArtifacts lists artifact keys for the current session.
+func (c *skillChat) handleListArtifacts() error {
+	if c.artSvc == nil {
+		return fmt.Errorf("artifact service not available")
+	}
+	si := artifact.SessionInfo{
+		AppName: appName, UserID: c.userID, SessionID: c.sessionID,
+	}
+	keys, err := c.artSvc.ListArtifactKeys(context.Background(), si)
+	if err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		fmt.Println("(no artifacts)")
+		return nil
+	}
+	fmt.Println("Artifacts:")
+	for _, k := range keys {
+		fmt.Printf("- %s\n", k)
+	}
 	return nil
 }
 

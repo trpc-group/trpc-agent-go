@@ -125,6 +125,15 @@ type WorkspaceFS interface {
 		src, to string, opt StageOptions) error
 	Collect(ctx context.Context, ws Workspace,
 		patterns []string) ([]File, error)
+	// StageInputs maps external inputs into workspace according to
+	// the provided specs. Implementations should prefer link
+	// strategies when Mode=="link" and environment allows it.
+	StageInputs(ctx context.Context, ws Workspace,
+		specs []InputSpec) error
+	// CollectOutputs applies the declarative output spec to collect
+	// files and optionally persist artifacts.
+	CollectOutputs(ctx context.Context, ws Workspace,
+		spec OutputSpec) (OutputManifest, error)
 }
 
 // ProgramRunner executes programs within a workspace.

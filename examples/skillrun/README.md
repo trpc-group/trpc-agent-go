@@ -36,6 +36,7 @@ tool calls and tool responses, and executes skill scripts via the
 | `-stream`       | Stream responses                   | `true`           |
 | `-skills-root`  | Skills repository root directory   | `env or ./skills` |
 | `-executor`     | Workspace executor: local|container | `local`          |
+| `-inputs-host`  | Host dir bind-mounted to `/opt/trpc-agent/inputs` (container) | `` |
 | `-artifacts`    | Save files via artifact service     | `false`          |
 | `-omit-inline`  | Omit inline file contents           | `false`          |
 | `-artifact-prefix` | Artifact filename prefix (e.g., `user:`) | ``     |
@@ -48,6 +49,25 @@ export OPENAI_API_KEY="your-api-key"
 # Optional: export SKILLS_ROOT to point at your skills repo
 go run .
 ```
+
+Workspace paths and env vars:
+- `$SKILLS_DIR/<name>`: read-only staged skill
+- `$WORK_DIR`: writable shared workspace (use `$WORK_DIR/inputs` for inputs)
+- `$RUN_DIR`: per-run working directory
+- `$OUTPUT_DIR`: unified outputs (collector/artifact saves read from here)
+
+Optional inputs/outputs spec with `skill_run`:
+- Inputs example (map external files into workspace):
+  `{ "inputs": [ {"from": "artifact://datasets/raw.csv@3",
+     "to": "work/inputs/raw.csv"} ] }`
+- Outputs example (collect and save artifacts):
+  `{ "outputs": {"globs": ["out/**/*.csv"], "save": true,
+     "name_template": "user:", "inline": false } }`
+
+Container zero-copy hint:
+- Bind a host folder as the inputs base so `host://` inputs under that
+  folder become symlinks inside the container (no copy):
+  `-executor container -inputs-host /path/to/datasets`
 
 ### Use with anthropics/skills
 
@@ -83,11 +103,11 @@ In chat:
   hand-crafting JSON arguments in chat:
   `-artifacts -omit-inline -artifact-prefix user:`
 
-Download saved artifacts locally:
+List and download saved artifacts:
 
-- Use the built-in command:
-  `/pull <artifact_files.name> [version]`
-  It writes files under the `downloads/` directory.
+- `/artifacts` lists all artifact keys saved in this session.
+- `/pull <artifact_files.name> [version]` downloads a file to the
+  `downloads/` directory.
 
 ### Examples
 

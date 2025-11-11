@@ -34,8 +34,10 @@ import (
 
 const (
 	// defaultImageTag is the default Docker image tag for code execution
-	defaultImageTag            = "python:3.9-slim"
-	defaultContainerWorkingDir = "/workspace"
+	defaultImageTag = "python:3.9-slim"
+	// Use root as default working dir to avoid Docker trying to
+	// mkdir a custom path (e.g., /workspace) on read-only roots.
+	defaultContainerWorkingDir = "/"
 )
 
 // CodeExecutor executes code using a Docker container

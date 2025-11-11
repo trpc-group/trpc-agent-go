@@ -39,8 +39,14 @@ const (
 	defaultCreateTimeoutSec = 5
 	defaultRmTimeoutSec     = 10
 	defaultStageTimeoutSec  = 10
-	defaultRunContainerBase = "/mnt/run"
-	defaultSkillsContainer  = "/mnt/skills"
+	// Use a neutral, writable base inside the container for workspaces.
+	// Avoid /mnt and /workspace which may be read-only in some setups.
+	// /tmp is typically a writable tmpfs inside containers.
+	defaultRunContainerBase = "/tmp/run"
+	// Bind-mounted skills default inside container.
+	defaultSkillsContainer = "/opt/trpc-agent/skills"
+	// Bind-mounted inputs default inside container.
+	defaultInputsContainer = "/opt/trpc-agent/inputs"
 )
 
 // workspaceRuntime provides workspace execution on Docker.
@@ -54,6 +60,8 @@ type runtimeConfig struct {
 	skillsContainerBase string
 	runHostBase         string
 	runContainerBase    string
+	inputsHostBase      string
+	inputsContainerBase string
 }
 
 // newWorkspaceRuntime builds a runtime bound to the provided executor.
@@ -61,11 +69,17 @@ func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 	cfg := runtimeConfig{
 		runContainerBase:    defaultRunContainerBase,
 		skillsContainerBase: defaultSkillsContainer,
+		// Default inputs mount location inside container.
+		inputsContainerBase: defaultInputsContainer,
 	}
-	// Infer a host base that is bind-mounted at /mnt/skills when present.
+	// Infer a host base that is bind-mounted at
+	// /opt/trpc-agent/skills when present.
 	if c != nil {
 		cfg.skillsHostBase = findBindSource(
 			c.hostConfig.Binds, defaultSkillsContainer,
+		)
+		cfg.inputsHostBase = findBindSource(
+			c.hostConfig.Binds, cfg.inputsContainerBase,
 		)
 	}
 	return &workspaceRuntime{ce: c, cfg: cfg}, nil
@@ -109,9 +123,31 @@ func (r *workspaceRuntime) CreateWorkspace(
 			fmt.Errorf("container executor not ready")
 	}
 	safe := sanitize(execID)
-	wsPath := path.Join(r.cfg.runContainerBase, "ws_"+safe)
-	cmd := []string{"/bin/bash", "-lc",
-		"mkdir -p '" + wsPath + "'"}
+	// Make workspace path unique to avoid collisions.
+	suf := time.Now().UnixNano()
+	wsPath := path.Join(
+		r.cfg.runContainerBase, fmt.Sprintf("ws_%s_%d", safe, suf),
+	)
+	// Create standard layout and metadata.json inside container.
+	var sb strings.Builder
+	sb.WriteString("set -e; ")
+	sb.WriteString("mkdir -p '")
+	sb.WriteString(wsPath)
+	sb.WriteString("' '")
+	sb.WriteString(path.Join(wsPath, codeexecutor.DirSkills))
+	sb.WriteString("' '")
+	sb.WriteString(path.Join(wsPath, codeexecutor.DirWork))
+	sb.WriteString("' '")
+	sb.WriteString(path.Join(wsPath, codeexecutor.DirRuns))
+	sb.WriteString("' '")
+	sb.WriteString(path.Join(wsPath, codeexecutor.DirOut))
+	sb.WriteString("'; ")
+	sb.WriteString("[ -f '")
+	sb.WriteString(path.Join(wsPath, codeexecutor.MetaFileName))
+	sb.WriteString("' ] || echo '{}' > '")
+	sb.WriteString(path.Join(wsPath, codeexecutor.MetaFileName))
+	sb.WriteString("'")
+	cmd := []string{"/bin/bash", "-lc", sb.String()}
 	_, _, _, _, err := r.execCmd(
 		ctx, cmd, time.Duration(defaultCreateTimeoutSec)*time.Second,
 	)
@@ -338,21 +374,40 @@ func (r *workspaceRuntime) RunProgram(
 	if spec.Cwd != "" {
 		cwd = path.Join(ws.Path, filepath.ToSlash(spec.Cwd))
 	}
+	// Prepare standard dirs and env injection.
+	skillsDir := path.Join(ws.Path, codeexecutor.DirSkills)
+	workDir := path.Join(ws.Path, codeexecutor.DirWork)
+	outDir := path.Join(ws.Path, codeexecutor.DirOut)
+	runDir := path.Join(
+		ws.Path, codeexecutor.DirRuns,
+		"run_"+time.Now().Format("20060102T150405.000"),
+	)
+	// Build env parts with defaults first, then overlay user env.
 	var envParts []string
-	hasWorkspace := false
-	for k, v := range spec.Env {
-		if k == codeexecutor.WorkspaceEnvDirKey {
-			hasWorkspace = true
+	baseEnv := map[string]string{
+		codeexecutor.WorkspaceEnvDirKey: ws.Path,
+		codeexecutor.EnvSkillsDir:       skillsDir,
+		codeexecutor.EnvWorkDir:         workDir,
+		codeexecutor.EnvOutputDir:       outDir,
+		codeexecutor.EnvRunDir:          runDir,
+	}
+	for k, v := range baseEnv {
+		if _, ok := spec.Env[k]; ok {
+			continue
 		}
 		envParts = append(envParts, k+"="+shellQuote(v))
 	}
-	if !hasWorkspace {
-		envParts = append(envParts,
-			codeexecutor.WorkspaceEnvDirKey+"="+shellQuote(ws.Path))
+	for k, v := range spec.Env {
+		envParts = append(envParts, k+"="+shellQuote(v))
 	}
 	envStr := strings.Join(envParts, " ")
 	var cmdline strings.Builder
-	cmdline.WriteString("cd ")
+	// Ensure run/output dirs exist before cd/exec.
+	cmdline.WriteString("mkdir -p ")
+	cmdline.WriteString(shellQuote(runDir))
+	cmdline.WriteString(" ")
+	cmdline.WriteString(shellQuote(outDir))
+	cmdline.WriteString(" && cd ")
 	cmdline.WriteString(shellQuote(cwd))
 	cmdline.WriteString(" && ")
 	if envStr != "" {
@@ -393,19 +448,25 @@ func (r *workspaceRuntime) Collect(
 	_, span := atrace.Tracer.Start(ctx,
 		codeexecutor.SpanWorkspaceCollect)
 	defer span.End()
-	// List file matches inside container, then copy each.
+	// Use bash globstar to approximate doublestar semantics.
 	var cmd strings.Builder
 	cmd.WriteString("cd ")
 	cmd.WriteString(shellQuote(ws.Path))
-	cmd.WriteString(" && for p in")
+	cmd.WriteString(" && shopt -s globstar nullglob dotglob; ")
+	cmd.WriteString("for p in")
 	for _, p := range patterns {
 		cmd.WriteString(" ")
 		cmd.WriteString(shellQuote(filepath.ToSlash(p)))
 	}
-	// Echo absolute paths so CopyFromContainer sees container-absolute
-	// locations, not paths relative to the workspace directory.
-	cmd.WriteString("; do if [ -f \"$p\" ]; then ")
-	cmd.WriteString("echo \"$(pwd)/$p\"; fi; done")
+	cmd.WriteString("; do for f in $p; do ")
+	// Canonicalize path via readlink/realpath to collapse symlinks.
+	cmd.WriteString(
+		"if [ -f \"$f\" ]; then " +
+			"(readlink -f \"$f\" 2>/dev/null || " +
+			"realpath \"$f\" 2>/dev/null || " +
+			"echo \"$(pwd)/$f\")" +
+			"; fi; ")
+	cmd.WriteString("done; done")
 
 	argv := []string{"/bin/bash", "-lc", cmd.String()}
 	outS, _, _, _, err := r.execCmd(ctx, argv, time.Second*5)
@@ -414,18 +475,24 @@ func (r *workspaceRuntime) Collect(
 		return nil, err
 	}
 	var out []codeexecutor.File
+	seen := map[string]bool{}
 	for _, line := range strings.Split(outS, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		data, _, mime, err := r.copyFileOut(ctx, line)
-		if err != nil {
-			return nil, err
-		}
+		// Convert to workspace-relative canonical path and dedupe.
 		rel := strings.TrimPrefix(line, ws.Path+"/")
 		if rel == line {
 			rel = filepath.ToSlash(line)
+		}
+		if seen[rel] {
+			continue
+		}
+		seen[rel] = true
+		data, _, mime, err := r.copyFileOut(ctx, line)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, codeexecutor.File{
 			Name:     rel,
@@ -434,6 +501,252 @@ func (r *workspaceRuntime) Collect(
 		})
 	}
 	return out, nil
+}
+
+// StageInputs maps external inputs using container semantics.
+func (r *workspaceRuntime) StageInputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	specs []codeexecutor.InputSpec,
+) error {
+	if r.ce == nil || r.ce.client == nil || r.ce.container == nil {
+		return fmt.Errorf("container executor not ready")
+	}
+	for _, sp := range specs {
+		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
+		if mode == "" {
+			mode = "copy"
+		}
+		to := sp.To
+		if strings.TrimSpace(to) == "" {
+			base := inputBase(sp.From)
+			to = path.Join(codeexecutor.DirWork, "inputs", base)
+		}
+		dest := path.Join(ws.Path, to)
+		var err error
+		switch {
+		case strings.HasPrefix(sp.From, "artifact://"):
+			name := strings.TrimPrefix(sp.From, "artifact://")
+			aname, aver, perr := codeexecutor.ParseArtifactRef(name)
+			if perr != nil {
+				return perr
+			}
+			data, _, _, lerr := codeexecutor.LoadArtifactHelper(
+				ctx, aname, aver,
+			)
+			if lerr != nil {
+				return lerr
+			}
+			// Copy single file into container at dest.
+			err = r.copyBytesTo(ctx, dest, data, 0o644)
+		case strings.HasPrefix(sp.From, "host://"):
+			host := strings.TrimPrefix(sp.From, "host://")
+			// If under inputsHostBase, prefer symlink (zero-copy).
+			if r.cfg.inputsHostBase != "" {
+				if strings.HasPrefix(host,
+					r.cfg.inputsHostBase+string(os.PathSeparator)) ||
+					host == r.cfg.inputsHostBase {
+					rel, _ := filepath.Rel(r.cfg.inputsHostBase, host)
+					csrc := path.Join(r.cfg.inputsContainerBase,
+						filepath.ToSlash(rel))
+					if mode == "link" {
+						cmd := []string{"/bin/bash", "-lc",
+							"mkdir -p '" + path.Dir(dest) + "' && " +
+								"ln -sfn '" + csrc + "' '" + dest +
+								"'"}
+						_, _, _, _, err = r.execCmd(ctx, cmd,
+							time.Duration(defaultStageTimeoutSec)*
+								time.Second)
+					} else {
+						cmd := []string{"/bin/bash", "-lc",
+							"mkdir -p '" + path.Dir(dest) + "' && " +
+								"cp -a '" + csrc + "' '" + dest +
+								"'"}
+						_, _, _, _, err = r.execCmd(ctx, cmd,
+							time.Duration(defaultStageTimeoutSec)*
+								time.Second)
+					}
+					if err != nil {
+						return err
+					}
+					continue
+				}
+			}
+			// Fallback: tar copy host path to dest dir.
+			err = r.PutDirectory(ctx, ws, host, path.Dir(to))
+		case strings.HasPrefix(sp.From, "workspace://"):
+			rel := strings.TrimPrefix(sp.From, "workspace://")
+			src := path.Join(ws.Path, filepath.ToSlash(rel))
+			var cmd []string
+			if mode == "link" {
+				cmd = []string{"/bin/bash", "-lc",
+					"mkdir -p '" + path.Dir(dest) + "' && ln -sfn '" +
+						src + "' '" + dest + "'"}
+			} else {
+				cmd = []string{"/bin/bash", "-lc",
+					"mkdir -p '" + path.Dir(dest) + "' && cp -a '" +
+						src + "' '" + dest + "'"}
+			}
+			_, _, _, _, err = r.execCmd(ctx, cmd,
+				time.Duration(defaultStageTimeoutSec)*time.Second)
+		case strings.HasPrefix(sp.From, "skill://"):
+			rest := strings.TrimPrefix(sp.From, "skill://")
+			src := path.Join(ws.Path, codeexecutor.DirSkills,
+				filepath.ToSlash(rest))
+			var cmd []string
+			if mode == "link" {
+				cmd = []string{"/bin/bash", "-lc",
+					"mkdir -p '" + path.Dir(dest) + "' && ln -sfn '" +
+						src + "' '" + dest + "'"}
+			} else {
+				cmd = []string{"/bin/bash", "-lc",
+					"mkdir -p '" + path.Dir(dest) + "' && cp -a '" +
+						src + "' '" + dest + "'"}
+			}
+			_, _, _, _, err = r.execCmd(ctx, cmd,
+				time.Duration(defaultStageTimeoutSec)*time.Second)
+		default:
+			return fmt.Errorf("unsupported input: %s", sp.From)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CollectOutputs applies container-side glob and optional save.
+func (r *workspaceRuntime) CollectOutputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	// Build bash to expand globstar and echo absolute file paths.
+	var cmd strings.Builder
+	cmd.WriteString("cd ")
+	cmd.WriteString(shellQuote(ws.Path))
+	cmd.WriteString(" && shopt -s globstar nullglob dotglob; ")
+	cmd.WriteString("for p in")
+	for _, g := range spec.Globs {
+		cmd.WriteString(" ")
+		cmd.WriteString(shellQuote(filepath.ToSlash(g)))
+	}
+	cmd.WriteString("; do for f in $p; do if [ -f \"$f\" ]; then ")
+	cmd.WriteString("echo \"$(pwd)/$f\"; fi; done; done")
+	argv := []string{"/bin/bash", "-lc", cmd.String()}
+	outS, _, _, _, err := r.execCmd(ctx, argv, time.Second*5)
+	if err != nil {
+		return codeexecutor.OutputManifest{}, err
+	}
+	maxFiles := spec.MaxFiles
+	if maxFiles <= 0 {
+		maxFiles = 100
+	}
+	maxFileBytes := spec.MaxFileBytes
+	if maxFileBytes <= 0 {
+		maxFileBytes = maxReadSizeBytes
+	}
+	maxTotal := spec.MaxTotalBytes
+	if maxTotal <= 0 {
+		maxTotal = 64 * 1024 * 1024
+	}
+	left := maxTotal
+	mf := codeexecutor.OutputManifest{}
+	var savedN []string
+	var savedV []int
+	count := 0
+	for _, line := range strings.Split(outS, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if count >= maxFiles || left <= 0 {
+			mf.LimitsHit = true
+			break
+		}
+		data, _, mime, err := r.copyFileOut(ctx, line)
+		if err != nil {
+			return codeexecutor.OutputManifest{}, err
+		}
+		if int64(len(data)) > maxFileBytes {
+			data = data[:maxFileBytes]
+			mf.LimitsHit = true
+		}
+		left -= int64(len(data))
+		rel := strings.TrimPrefix(line, ws.Path+"/")
+		ref := codeexecutor.FileRef{
+			Name:     rel,
+			MIMEType: mime,
+		}
+		if spec.Inline {
+			ref.Content = string(data)
+		}
+		if spec.Save {
+			saveName := rel
+			if spec.NameTemplate != "" {
+				saveName = spec.NameTemplate + rel
+			}
+			ver, err := codeexecutor.SaveArtifactHelper(
+				ctx, saveName, data, mime,
+			)
+			if err != nil {
+				return codeexecutor.OutputManifest{}, err
+			}
+			ref.SavedAs = saveName
+			ref.Version = ver
+			savedN = append(savedN, saveName)
+			savedV = append(savedV, ver)
+		}
+		mf.Files = append(mf.Files, ref)
+		count++
+	}
+	return mf, nil
+}
+
+func (r *workspaceRuntime) copyBytesTo(
+	ctx context.Context, dest string, data []byte, mode uint32,
+) error {
+	// Create a tar with single file named as dest's base.
+	base := path.Base(dest)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{
+		Name:    base,
+		Mode:    int64(mode),
+		Size:    int64(len(data)),
+		ModTime: time.Now(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if _, err := tw.Write(data); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	// Ensure parent exists.
+	mk := []string{"/bin/bash", "-lc",
+		"mkdir -p '" + path.Dir(dest) + "'"}
+	if _, _, _, _, err := r.execCmd(ctx, mk,
+		time.Duration(defaultStageTimeoutSec)*time.Second); err != nil {
+		return err
+	}
+	// Copy to parent dir.
+	parent := path.Dir(dest)
+	return r.ce.client.CopyToContainer(
+		ctx, r.ce.container.ID, parent,
+		io.NopCloser(bytes.NewReader(buf.Bytes())),
+		tcontainer.CopyToContainerOptions{},
+	)
+}
+
+func inputBase(from string) string {
+	i := strings.LastIndex(from, "/")
+	if i >= 0 && i+1 < len(from) {
+		return from[i+1:]
+	}
+	return from
 }
 
 // ExecuteInline writes code blocks and runs them.

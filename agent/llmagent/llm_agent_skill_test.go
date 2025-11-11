@@ -141,9 +141,23 @@ func (f *stubFS) StageDirectory(ctx context.Context,
 	return nil
 }
 func (f *stubFS) Collect(ctx context.Context,
-	ws codeexecutor.Workspace,
-	patterns []string) ([]codeexecutor.File, error) {
-	return nil, nil
+    ws codeexecutor.Workspace,
+    patterns []string) ([]codeexecutor.File, error) {
+    return nil, nil
+}
+
+func (f *stubFS) StageInputs(
+    ctx context.Context,
+    ws codeexecutor.Workspace,
+    specs []codeexecutor.InputSpec,
+) error { return nil }
+
+func (f *stubFS) CollectOutputs(
+    ctx context.Context,
+    ws codeexecutor.Workspace,
+    spec codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+    return codeexecutor.OutputManifest{}, nil
 }
 
 type stubRunner struct{ s *stubExec }

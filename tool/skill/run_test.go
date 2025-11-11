@@ -102,9 +102,9 @@ func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 		OutputFiles: []string{
 			"out/*.txt",
 		},
-		Timeout:           timeoutSecSmall,
-		SaveAsArtifacts:   true,
-		OmitInlineContent: true,
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
+		OmitInline:    true,
 	}
 	enc, err := jsonMarshal(args)
 	require.NoError(t, err)
@@ -178,8 +178,8 @@ func TestRunTool_SaveAsArtifacts_SaveError(t *testing.T) {
 		OutputFiles: []string{
 			"out/*.txt",
 		},
-		Timeout:         timeoutSecSmall,
-		SaveAsArtifacts: true,
+		Timeout:       timeoutSecSmall,
+		SaveArtifacts: true,
 	}
 	enc, err := jsonMarshal(args)
 	require.NoError(t, err)
@@ -265,4 +265,138 @@ func TestRunTool_FallbackEngine_NoEngineProvider(t *testing.T) {
 	require.NoError(t, err)
 	out := res.(runOutput)
 	require.Equal(t, 0, out.ExitCode)
+}
+
+// Test that when no cwd is provided, the working directory defaults to
+// the staged skill root so relative paths in skill docs work.
+func TestRunTool_DefaultCWD_UsesSkillRoot(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	// Place a file under scripts/ inside the skill.
+	scripts := filepath.Join(dir, "scripts")
+	require.NoError(t, os.MkdirAll(scripts, 0o755))
+	data := []byte("hello\n")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(scripts, "file.txt"), data, 0o644,
+	))
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "cat scripts/file.txt > out/a.txt",
+		OutputFiles: []string{
+			"out/a.txt",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "out/a.txt", out.OutputFiles[0].Name)
+	require.Contains(t, out.OutputFiles[0].Content, "hello")
+}
+
+// Test that a relative cwd is resolved under the skill root, not under
+// the workspace root.
+func TestRunTool_RelativeCWD_SubpathUnderSkillRoot(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	scripts := filepath.Join(dir, "scripts")
+	require.NoError(t, os.MkdirAll(scripts, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(scripts, "msg.txt"), []byte("msg\n"), 0o644,
+	))
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Cwd:     "scripts",
+		Command: "cat msg.txt > ../out/b.txt",
+		OutputFiles: []string{
+			"out/b.txt",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "out/b.txt", out.OutputFiles[0].Name)
+	require.Contains(t, out.OutputFiles[0].Content, "msg")
+}
+
+// Test that workspace persists across calls within the same session,
+// so files written earlier can be collected later.
+func TestRunTool_WorkspacePersistsAcrossCalls(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "sess-1",
+			State: session.StateMap{},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	// First call: create a file under out/.
+	a1 := runInput{
+		Skill:   testSkillName,
+		Command: "mkdir -p out; echo hi > out/p.txt",
+		OutputFiles: []string{
+			"out/p.txt",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	b1, err := jsonMarshal(a1)
+	require.NoError(t, err)
+	r1, err := rt.Call(ctx, b1)
+	require.NoError(t, err)
+	o1 := r1.(runOutput)
+	require.Equal(t, 0, o1.ExitCode)
+	require.Len(t, o1.OutputFiles, 1)
+	require.Contains(t, o1.OutputFiles[0].Content, "hi")
+
+	// Second call: do not write; just collect the same file.
+	a2 := runInput{
+		Skill:   testSkillName,
+		Command: "echo ok",
+		OutputFiles: []string{
+			"out/p.txt",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	b2, err := jsonMarshal(a2)
+	require.NoError(t, err)
+	r2, err := rt.Call(ctx, b2)
+	require.NoError(t, err)
+	o2 := r2.(runOutput)
+	require.Equal(t, 0, o2.ExitCode)
+	require.Len(t, o2.OutputFiles, 1)
+	require.Contains(t, o2.OutputFiles[0].Content, "hi")
 }

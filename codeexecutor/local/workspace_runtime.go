@@ -106,7 +106,9 @@ func (r *Runtime) CreateWorkspace(
 		}
 	}, execID)
 
-	wsPath := filepath.Join(base, "ws_"+safe)
+	// Make workspace path unique to avoid collisions between runs.
+	suf := time.Now().UnixNano()
+	wsPath := filepath.Join(base, fmt.Sprintf("ws_%s_%d", safe, suf))
 	if err := os.MkdirAll(wsPath, 0o777); err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return codeexecutor.Workspace{}, err
@@ -115,6 +117,12 @@ func (r *Runtime) CreateWorkspace(
 
 	// Persist is respected by callers deciding whether to call Cleanup.
 	_ = pol
+
+	// Ensure standard layout and metadata.json.
+	if _, err := codeexecutor.EnsureLayout(wsPath); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return codeexecutor.Workspace{}, err
+	}
 
 	return codeexecutor.Workspace{ID: execID, Path: wsPath}, nil
 }
@@ -239,8 +247,43 @@ func (r *Runtime) RunProgram(
 	cmd := exec.CommandContext(tctx, spec.Cmd, spec.Args...) //nolint:gosec
 	cmd.Dir = cwd
 
-	// Build environment. Start with current env, then overlay.
+	// Build environment. Start with current env, then inject
+	// workspace vars, then overlay user-provided.
 	env := os.Environ()
+
+	// Ensure layout exists and compute run dir.
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	runDir := filepath.Join(
+		ws.Path, codeexecutor.DirRuns,
+		"run_"+time.Now().Format("20060102T150405.000"),
+	)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+
+	// Inject well-known variables if not set.
+	baseEnv := map[string]string{
+		codeexecutor.WorkspaceEnvDirKey: ws.Path,
+		codeexecutor.EnvSkillsDir: filepath.Join(
+			ws.Path, codeexecutor.DirSkills,
+		),
+		codeexecutor.EnvWorkDir: filepath.Join(
+			ws.Path, codeexecutor.DirWork,
+		),
+		codeexecutor.EnvOutputDir: filepath.Join(
+			ws.Path, codeexecutor.DirOut,
+		),
+		codeexecutor.EnvRunDir: runDir,
+	}
+	for k, v := range baseEnv {
+		// If user already set, respect it.
+		if _, ok := spec.Env[k]; ok {
+			continue
+		}
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
 	for k, v := range spec.Env {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
@@ -300,6 +343,13 @@ func (r *Runtime) Collect(
 	defer span.End()
 	var out []codeexecutor.File
 	root := ws.Path
+	// Canonicalize root to make prefix checks robust on platforms
+	// where different paths may refer to the same location.
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil || realRoot == "" {
+		realRoot = root
+	}
+	seen := map[string]bool{}
 
 	for _, p := range patterns {
 		// Use doublestar to support ** patterns.
@@ -319,11 +369,25 @@ func (r *Runtime) Collect(
 			) && mAbs != root {
 				continue
 			}
-			// Trim root prefix for Name.
+			// Collapse symlinks to canonical path and dedupe.
+			realp, err := filepath.EvalSymlinks(mAbs)
+			if err != nil {
+				realp = mAbs
+			}
+			// Re-check containment against canonical root.
+			if !strings.HasPrefix(
+				realp, realRoot+string(os.PathSeparator),
+			) && realp != realRoot {
+				continue
+			}
 			name := strings.TrimPrefix(
-				mAbs, root+string(os.PathSeparator),
+				realp, realRoot+string(os.PathSeparator),
 			)
-			content, mime, err := readLimited(mAbs)
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			content, mime, err := readLimited(realp)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				return nil, err
@@ -336,6 +400,202 @@ func (r *Runtime) Collect(
 		}
 	}
 	span.SetAttributes(attribute.Int(codeexecutor.AttrCount, len(out)))
+	return out, nil
+}
+
+// StageInputs maps external inputs into the workspace.
+func (r *Runtime) StageInputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	specs []codeexecutor.InputSpec,
+) error {
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		return err
+	}
+	md, _ := codeexecutor.LoadMetadata(ws.Path)
+	for _, sp := range specs {
+		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
+		if mode == "" {
+			mode = "copy"
+		}
+		to := sp.To
+		if strings.TrimSpace(to) == "" {
+			base := inputDefaultName(sp.From)
+			to = filepath.Join(
+				codeexecutor.DirWork, "inputs", base,
+			)
+		}
+		var err error
+		var resolved string
+		var ver *int
+		switch {
+		case strings.HasPrefix(sp.From, "artifact://"):
+			name := strings.TrimPrefix(sp.From, "artifact://")
+			aname, aver, perr := codeexecutor.ParseArtifactRef(name)
+			if perr != nil {
+				return perr
+			}
+			data, _, actual, lerr := codeexecutor.LoadArtifactHelper(
+				ctx, aname, aver,
+			)
+			if lerr != nil {
+				return lerr
+			}
+			resolved = aname
+			if aver != nil {
+				v := *aver
+				ver = &v
+			} else {
+				v := actual
+				ver = &v
+			}
+			err = r.writeFileSafe(ws.Path, codeexecutor.PutFile{
+				Path:    to,
+				Content: data,
+				Mode:    defaultFileMode,
+			})
+		case strings.HasPrefix(sp.From, "host://"):
+			host := strings.TrimPrefix(sp.From, "host://")
+			resolved = host
+			if mode == "link" {
+				err = makeSymlink(ws.Path, to, host)
+			} else {
+				err = r.PutDirectory(ctx, ws, host,
+					filepath.Dir(to))
+			}
+		case strings.HasPrefix(sp.From, "workspace://"):
+			rel := strings.TrimPrefix(sp.From, "workspace://")
+			src := filepath.Join(ws.Path, filepath.Clean(rel))
+			resolved = rel
+			if mode == "link" {
+				err = makeSymlink(ws.Path, to, src)
+			} else {
+				err = copyPath(src,
+					filepath.Join(ws.Path, filepath.Clean(to)))
+			}
+		case strings.HasPrefix(sp.From, "skill://"):
+			rest := strings.TrimPrefix(sp.From, "skill://")
+			src := filepath.Join(
+				ws.Path, codeexecutor.DirSkills, filepath.Clean(rest),
+			)
+			resolved = src
+			if mode == "link" {
+				err = makeSymlink(ws.Path, to, src)
+			} else {
+				err = copyPath(src,
+					filepath.Join(ws.Path, filepath.Clean(to)))
+			}
+		default:
+			return fmt.Errorf("unsupported input: %s", sp.From)
+		}
+		if err != nil {
+			return err
+		}
+		md.Inputs = append(md.Inputs, codeexecutor.InputRecord{
+			From:      sp.From,
+			To:        to,
+			Resolved:  resolved,
+			Version:   ver,
+			Mode:      mode,
+			Timestamp: time.Now(),
+		})
+	}
+	return codeexecutor.SaveMetadata(ws.Path, md)
+}
+
+// CollectOutputs implements the declarative collector with limits.
+func (r *Runtime) CollectOutputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
+		return codeexecutor.OutputManifest{}, err
+	}
+	maxFiles := spec.MaxFiles
+	if maxFiles <= 0 {
+		maxFiles = 100
+	}
+	maxFileBytes := spec.MaxFileBytes
+	if maxFileBytes <= 0 {
+		maxFileBytes = maxReadSizeBytes
+	}
+	maxTotal := spec.MaxTotalBytes
+	if maxTotal <= 0 {
+		maxTotal = 64 * 1024 * 1024
+	}
+	leftTotal := maxTotal
+	out := codeexecutor.OutputManifest{}
+	var savedNames []string
+	var savedVers []int
+	count := 0
+	for _, g := range spec.Globs {
+		abs := filepath.Join(ws.Path, g)
+		pattern := strings.TrimPrefix(abs, "/")
+		matches, err := ds.Glob(os.DirFS("/"), pattern)
+		if err != nil {
+			return codeexecutor.OutputManifest{}, err
+		}
+		for _, m := range matches {
+			if count >= maxFiles {
+				out.LimitsHit = true
+				break
+			}
+			mAbs := "/" + strings.TrimPrefix(m, "/")
+			if !strings.HasPrefix(
+				mAbs, ws.Path+string(os.PathSeparator),
+			) && mAbs != ws.Path {
+				continue
+			}
+			name := strings.TrimPrefix(
+				mAbs, ws.Path+string(os.PathSeparator),
+			)
+			data, mime, err := readLimitedWithCap(mAbs, int(leftTotal))
+			if err != nil {
+				return codeexecutor.OutputManifest{}, err
+			}
+			leftTotal -= int64(len(data))
+			count++
+			ref := codeexecutor.FileRef{
+				Name:     name,
+				MIMEType: mime,
+			}
+			if spec.Inline {
+				ref.Content = string(data)
+			}
+			if spec.Save {
+				saveName := name
+				if spec.NameTemplate != "" {
+					// Minimal template: support prefix only.
+					saveName = spec.NameTemplate + name
+				}
+				ver, err := codeexecutor.SaveArtifactHelper(
+					ctx, saveName, data, mime,
+				)
+				if err != nil {
+					return codeexecutor.OutputManifest{}, err
+				}
+				ref.SavedAs = saveName
+				ref.Version = ver
+				savedNames = append(savedNames, saveName)
+				savedVers = append(savedVers, ver)
+			}
+			out.Files = append(out.Files, ref)
+			if leftTotal <= 0 {
+				out.LimitsHit = true
+				break
+			}
+		}
+	}
+	md, _ := codeexecutor.LoadMetadata(ws.Path)
+	md.Outputs = append(md.Outputs, codeexecutor.OutputRecord{
+		Globs:     spec.Globs,
+		SavedAs:   savedNames,
+		Versions:  savedVers,
+		LimitsHit: out.LimitsHit,
+		Timestamp: time.Now(),
+	})
+	_ = codeexecutor.SaveMetadata(ws.Path, md)
 	return out, nil
 }
 
@@ -480,6 +740,66 @@ func readLimited(path string) ([]byte, string, error) {
 	data := buf[:n]
 	mime := http.DetectContentType(data)
 	return data, mime, nil
+}
+
+func readLimitedWithCap(path string, capBytes int) ([]byte, string, error) {
+	if capBytes <= 0 {
+		return []byte{}, "", nil
+	}
+	if capBytes > maxReadSizeBytes {
+		capBytes = maxReadSizeBytes
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, "", err
+	}
+	defer f.Close()
+	buf := make([]byte, capBytes)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) &&
+		!errors.Is(err, io.EOF) {
+		return nil, "", err
+	}
+	data := buf[:n]
+	mime := http.DetectContentType(data)
+	return data, mime, nil
+}
+
+func makeSymlink(root, toRel, target string) error {
+	dst := filepath.Join(root, filepath.Clean(toRel))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	// Remove existing path if present.
+	_ = os.RemoveAll(dst)
+	return os.Symlink(target, dst)
+}
+
+func copyPath(src, dst string) error {
+	st, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		return copyDir(src, dst)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, st.Mode())
+}
+
+func inputDefaultName(from string) string {
+	// Strip scheme and keep tail element as default name.
+	i := strings.LastIndex(from, "/")
+	if i >= 0 && i+1 < len(from) {
+		return from[i+1:]
+	}
+	return from
 }
 
 // makeTreeReadOnly removes write bits from the entire tree.
