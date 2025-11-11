@@ -201,7 +201,7 @@ appRunner := runner.NewRunner(
 
 ### 记忆服务 (Memory Service)
 
-记忆服务可在代码中通过选项配置，支持内存、Redis 和 MySQL 三种后端：
+记忆服务可在代码中通过选项配置，支持内存、Redis、MySQL 和 PostgreSQL 四种后端：
 
 #### 记忆服务配置示例
 
@@ -210,6 +210,7 @@ import (
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
     memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+    memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 )
 
 // 内存实现，可用于测试和开发
@@ -234,17 +235,28 @@ if err != nil {
     // 处理错误
 }
 
+// PostgreSQL 实现，用于生产环境（关系型数据库）
+// 服务初始化时会自动创建表。如果创建失败会 panic。
+postgresService, err := memorypostgres.NewService(
+    memorypostgres.WithPostgresConnString("postgres://user:password@localhost:5432/dbname"),
+    memorypostgres.WithSoftDelete(true), // 启用软删除
+    memorypostgres.WithToolEnabled(memory.DeleteToolName, true), // 启用删除工具
+)
+if err != nil {
+    // 处理错误
+}
+
 // 向 Agent 注册记忆工具
 llmAgent := llmagent.New(
     "memory-assistant",
-    llmagent.WithTools(memService.Tools()), // 或 redisService.Tools() 或 mysqlService.Tools()
+    llmagent.WithTools(memService.Tools()), // 或 redisService.Tools()、mysqlService.Tools() 或 postgresService.Tools()
 )
 
 // 在 Runner 中设置记忆服务
 runner := runner.NewRunner(
     "app",
     llmAgent,
-    runner.WithMemoryService(memService), // 或 redisService 或 mysqlService
+    runner.WithMemoryService(memService), // 或 redisService、mysqlService 或 postgresService
 )
 ```
 
@@ -443,9 +455,11 @@ go run main.go -memory redis -redis-addr localhost:6379
 go run main.go -memory mysql -mysql-dsn "user:password@tcp(localhost:3306)/dbname?parseTime=true"
 
 # 参数说明：
-# -memory: 选择记忆服务类型 (inmemory, redis, mysql)，默认为 inmemory
+# -memory: 选择记忆服务类型 (inmemory, redis, mysql, postgres)，默认为 inmemory
 # -redis-addr: Redis 服务器地址，默认为 localhost:6379
 # -mysql-dsn: MySQL 数据源名称（DSN），使用 MySQL 时必需
+# -postgres-dsn: PostgreSQL 连接字符串，使用 PostgreSQL 时必需
+# -soft-delete: 为 MySQL/PostgreSQL 记忆服务启用软删除（默认 false）
 # -model: 选择模型名称，默认为 deepseek-chat
 ```
 
@@ -614,22 +628,137 @@ mysqlService, err := memorymysql.NewService(
 )
 ```
 
+### PostgreSQL 存储
+
+PostgreSQL 存储适用于需要关系型数据库和 JSONB 支持的生产环境：
+
+```go
+import memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+
+// 创建 PostgreSQL 记忆服务
+postgresService, err := memorypostgres.NewService(
+    memorypostgres.WithPostgresConnString("postgres://user:password@localhost:5432/dbname"),
+    memorypostgres.WithMemoryLimit(1000), // 设置记忆数量限制
+    memorypostgres.WithTableName("memories"), // 自定义表名（可选）
+    memorypostgres.WithSoftDelete(true), // 启用软删除
+    memorypostgres.WithToolEnabled(memory.DeleteToolName, true), // 启用删除工具
+)
+if err != nil {
+    log.Fatalf("Failed to create postgres memory service: %v", err)
+}
+```
+
+**特点：**
+
+- ✅ 数据持久化，ACID 事务保证
+- ✅ 关系型数据库，支持复杂查询
+- ✅ JSONB 支持，高效的 JSON 操作
+- ✅ 支持主从复制和集群
+- ✅ 自动创建表结构
+- ✅ 完善的监控和管理工具
+- ✅ 可选的软删除支持
+- ⚙️ 需要 PostgreSQL 服务器（12+）
+
+**PostgreSQL 配置选项：**
+
+- `WithPostgresConnString(connString string)`: 设置 PostgreSQL 连接字符串
+- `WithPostgresInstance(name string)`: 使用预注册的 PostgreSQL 实例
+- `WithTableName(name string)`: 自定义表名（默认 "memories"）。如果表名无效会 panic。
+- `WithMemoryLimit(limit int)`: 设置每个用户的最大记忆数量
+- `WithSoftDelete(enabled bool)`: 启用软删除（默认 false）。启用后，删除操作设置 `deleted_at`，查询会过滤已软删除的记录。
+- `WithToolEnabled(toolName string, enabled bool)`: 启用或禁用特定工具
+- `WithCustomTool(toolName string, creator ToolCreator)`: 使用自定义工具实现
+
+**注意：** 服务初始化时会自动创建表。如果表创建失败，服务会 panic。
+
+**连接字符串格式：**
+
+```
+postgres://[user[:password]@][netloc][:port][/dbname][?param1=value1&...]
+```
+
+**常用连接字符串参数：**
+
+- `sslmode=disable`: 禁用 SSL（用于本地开发）
+- `sslmode=require`: 要求 SSL 连接
+- `connect_timeout=10`: 连接超时时间（秒）
+
+**表结构：**
+
+PostgreSQL 记忆服务在初始化时会自动创建以下表结构：
+
+```sql
+CREATE TABLE IF NOT EXISTS memories (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    memory_id VARCHAR(64) NOT NULL,
+    memory_data JSONB NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    CONSTRAINT idx_app_user_memory UNIQUE (app_name, user_id, memory_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_user ON memories(app_name, user_id);
+CREATE INDEX IF NOT EXISTS idx_deleted_at ON memories(deleted_at);
+```
+
+**使用 Docker 启动 PostgreSQL：**
+
+```bash
+# 启动 PostgreSQL 容器
+docker run -d --name postgres-memory \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=memory_db \
+  -p 5432:5432 \
+  postgres:15-alpine
+
+# 等待 PostgreSQL 就绪
+docker exec postgres-memory pg_isready -U postgres
+
+# 使用 PostgreSQL 记忆服务
+go run main.go -memory postgres -postgres-dsn "postgres://postgres:password@localhost:5432/memory_db"
+```
+
+**注册 PostgreSQL 实例（可选）：**
+
+```go
+import (
+    storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
+    memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+)
+
+// 注册 PostgreSQL 实例
+storage.RegisterPostgresInstance("my-postgres",
+    storage.WithClientConnString("postgres://user:password@localhost:5432/dbname"),
+)
+
+// 使用注册的实例
+postgresService, err := memorypostgres.NewService(
+    memorypostgres.WithPostgresInstance("my-postgres"),
+)
+```
+
 ### 存储后端对比
 
-| 特性       | 内存存储  | Redis 存储 | MySQL 存储 |
-| ---------- | --------- | ---------- | ---------- |
-| 数据持久化 | ❌        | ✅         | ✅         |
-| 分布式支持 | ❌        | ✅         | ✅         |
-| 事务支持   | ❌        | 部分       | ✅ (ACID)  |
-| 查询能力   | 简单      | 中等       | 强大 (SQL) |
-| 性能       | 极高      | 高         | 中高       |
-| 配置复杂度 | 低        | 中         | 中         |
-| 适用场景   | 开发/测试 | 生产环境   | 生产环境   |
-| 监控工具   | 无        | 丰富       | 非常丰富   |
+| 特性       | 内存存储  | Redis 存储 | MySQL 存储 | PostgreSQL 存储 |
+| ---------- | --------- | ---------- | ---------- | --------------- |
+| 数据持久化 | ❌        | ✅         | ✅         | ✅              |
+| 分布式支持 | ❌        | ✅         | ✅         | ✅              |
+| 事务支持   | ❌        | 部分       | ✅ (ACID)  | ✅ (ACID)       |
+| 查询能力   | 简单      | 中等       | 强大 (SQL) | 强大 (SQL)      |
+| JSON 支持  | ❌        | 部分       | ✅ (JSON)  | ✅ (JSONB)      |
+| 性能       | 极高      | 高         | 中高       | 中高            |
+| 配置复杂度 | 低        | 中         | 中         | 中              |
+| 适用场景   | 开发/测试 | 生产环境   | 生产环境   | 生产环境        |
+| 监控工具   | 无        | 丰富       | 非常丰富   | 非常丰富        |
 
 **选择建议：**
 
 - **开发/测试**：使用内存存储，快速迭代
 - **生产环境（高性能）**：使用 Redis 存储，适合高并发场景
 - **生产环境（数据完整性）**：使用 MySQL 存储，需要 ACID 保证和复杂查询
+- **生产环境（PostgreSQL）**：使用 PostgreSQL 存储，需要 JSONB 支持和高级 PostgreSQL 特性
 - **混合部署**：可以根据不同应用场景选择不同的存储后端

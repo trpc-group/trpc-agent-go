@@ -733,6 +733,10 @@ func (f *fakeRunner) Run(ctx context.Context,
 	return nil, nil
 }
 
+func (f *fakeRunner) Close() error {
+	return nil
+}
+
 func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event {
 	t.Helper()
 	var out []aguievents.Event
@@ -747,4 +751,71 @@ func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event 
 			t.Fatalf("timeout collecting events")
 		}
 	}
+}
+
+func TestTranslateCallbackError(t *testing.T) {
+	t.Run("before translate callback error", func(t *testing.T) {
+		callbacks := translator.NewCallbacks().
+			RegisterBeforeTranslate(func(ctx context.Context, evt *agentevent.Event) (*agentevent.Event, error) {
+				return nil, errors.New("fail")
+			})
+		r := &runner{
+			runner: &fakeRunner{
+				run: func(ctx context.Context, userID, sessionID string, message model.Message,
+					opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+					ch := make(chan *agentevent.Event, 1)
+					ch <- agentevent.New("inv", "assistant")
+					close(ch)
+					return ch, nil
+				},
+			},
+			translateCallbacks: callbacks,
+			translatorFactory:  defaultTranslatorFactory,
+			userIDResolver:     defaultUserIDResolver,
+			runOptionResolver:  defaultRunOptionResolver,
+		}
+		input := &adapter.RunAgentInput{
+			ThreadID: "thread",
+			RunID:    "run",
+			Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		}
+		ch, err := r.Run(context.Background(), input)
+		assert.NoError(t, err)
+		evts := collectEvents(t, ch)
+		assert.Len(t, evts, 2)
+		_, ok := evts[1].(*aguievents.RunErrorEvent)
+		assert.True(t, ok)
+	})
+	t.Run("after translate callback error", func(t *testing.T) {
+		callbacks := translator.NewCallbacks().
+			RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+				return nil, errors.New("fail")
+			})
+		r := &runner{
+			runner: &fakeRunner{
+				run: func(ctx context.Context, userID, sessionID string, message model.Message,
+					opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+					ch := make(chan *agentevent.Event, 1)
+					ch <- agentevent.New("inv", "assistant")
+					close(ch)
+					return ch, nil
+				},
+			},
+			translateCallbacks: callbacks,
+			translatorFactory:  defaultTranslatorFactory,
+			userIDResolver:     defaultUserIDResolver,
+			runOptionResolver:  defaultRunOptionResolver,
+		}
+		input := &adapter.RunAgentInput{
+			ThreadID: "thread",
+			RunID:    "run",
+			Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		}
+		ch, err := r.Run(context.Background(), input)
+		assert.NoError(t, err)
+		evts := collectEvents(t, ch)
+		assert.Len(t, evts, 1)
+		_, ok := evts[0].(*aguievents.RunErrorEvent)
+		assert.True(t, ok)
+	})
 }

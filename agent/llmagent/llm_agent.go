@@ -31,6 +31,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
@@ -323,10 +324,17 @@ func WithPreserveSameBranch(preserve bool) Option {
 	}
 }
 
-// WithKnowledgeFilter sets the knowledge filter for the knowledge base.
+// WithKnowledgeFilter sets the metadata filter for the knowledge base.
 func WithKnowledgeFilter(filter map[string]any) Option {
 	return func(opts *Options) {
 		opts.KnowledgeFilter = filter
+	}
+}
+
+// WithKnowledgeConditionedFilter sets the complex condition filter for the knowledge base.
+func WithKnowledgeConditionedFilter(filter *searchfilter.UniversalFilterCondition) Option {
+	return func(opts *Options) {
+		opts.KnowledgeConditionedFilter = filter
 	}
 }
 
@@ -402,8 +410,10 @@ type Options struct {
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
-	// KnowledgeFilter is the filter for the knowledge search tool.
+	// KnowledgeFilter is the metadata filter for the knowledge search tool.
 	KnowledgeFilter map[string]any
+	// KnowledgeConditionedFilter is the complex condition filter for the knowledge search tool.
+	KnowledgeConditionedFilter *searchfilter.UniversalFilterCondition
 	// EnableKnowledgeAgenticFilter enables agentic filter mode for knowledge search.
 	// When true, allows the LLM to dynamically decide whether to pass filter parameters.
 	EnableKnowledgeAgenticFilter bool
@@ -765,15 +775,22 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 	// This is a FRAMEWORK tool (auto-added by framework), NOT a user tool.
 	// It should never be filtered out by user tool filters.
 	if options.Knowledge != nil {
+		toolOpts := []knowledgetool.Option{
+			knowledgetool.WithFilter(options.KnowledgeFilter),
+		}
+		if options.KnowledgeConditionedFilter != nil {
+			toolOpts = append(toolOpts, knowledgetool.WithConditionedFilter(options.KnowledgeConditionedFilter))
+		}
+
 		if options.EnableKnowledgeAgenticFilter {
 			agenticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
-				options.Knowledge, options.AgenticFilterInfo, knowledgetool.WithFilter(options.KnowledgeFilter),
+				options.Knowledge, options.AgenticFilterInfo, toolOpts...,
 			)
 			allTools = append(allTools, agenticKnowledge)
 			// Do NOT add to userToolNames - this is a framework tool.
 		} else {
 			knowledgeTool := knowledgetool.NewKnowledgeSearchTool(
-				options.Knowledge, knowledgetool.WithFilter(options.KnowledgeFilter),
+				options.Knowledge, toolOpts...,
 			)
 			allTools = append(allTools, knowledgeTool)
 			// Do NOT add to userToolNames - this is a framework tool.

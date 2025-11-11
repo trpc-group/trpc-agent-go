@@ -462,6 +462,12 @@ go vet ./...
 
 ---
 
+## ⭐ Star 历史
+
+[![Star History Chart](https://api.star-history.com/svg?repos=trpc-group/trpc-agent-go&type=Date)](https://star-history.com/#trpc-group/trpc-agent-go&Date)
+
+---
+
 ## 📜 许可证
 
 遵循 **Apache 2.0 许可证** - 详见 [LICENSE](LICENSE) 文件。

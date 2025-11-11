@@ -43,6 +43,10 @@ func (c *capturingRunner) Run(ctx context.Context, userID, sessionID string, mes
 	return ch, nil
 }
 
+func (c *capturingRunner) Close() error {
+	return nil
+}
+
 func TestRunWithMessages_PassesHistoryAndLatestUser(t *testing.T) {
 	r := &capturingRunner{}
 	msgs := []model.Message{

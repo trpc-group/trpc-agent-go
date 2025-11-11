@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,6 +69,11 @@ type Runner interface {
 		message model.Message,
 		runOpts ...agent.RunOption,
 	) (<-chan *event.Event, error)
+
+	// Close closes the runner and releases owned resources.
+	// It's safe to call Close multiple times.
+	// Only resources created by the runner (not provided by user) will be closed.
+	Close() error
 }
 
 // runner runs agents.
@@ -77,6 +83,10 @@ type runner struct {
 	sessionService  session.Service
 	memoryService   memory.Service
 	artifactService artifact.Service
+
+	// Resource management fields.
+	ownedSessionService bool      // Indicates if sessionService was created by this runner.
+	closeOnce           sync.Once // Ensures Close is called only once.
 }
 
 // Options is the options for the Runner.
@@ -95,19 +105,40 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 		opt(&options)
 	}
 
+	// Track if we created the session service.
+	var ownedSessionService bool
 	if options.sessionService == nil {
 		options.sessionService = inmemory.NewSessionService()
+		ownedSessionService = true
 	}
 	// Register this runner's identity for observability fallback.
 	appid.RegisterRunner(appName, agent.Info().Name)
 
 	return &runner{
-		appName:         appName,
-		agent:           agent,
-		sessionService:  options.sessionService,
-		memoryService:   options.memoryService,
-		artifactService: options.artifactService,
+		appName:             appName,
+		agent:               agent,
+		sessionService:      options.sessionService,
+		memoryService:       options.memoryService,
+		artifactService:     options.artifactService,
+		ownedSessionService: ownedSessionService,
 	}
+}
+
+// Close closes the runner and cleans up owned resources.
+// It's safe to call Close multiple times.
+// Only resources created by this runner will be closed.
+func (r *runner) Close() error {
+	var closeErr error
+	r.closeOnce.Do(func() {
+		// Only close resources that we own (created by this runner).
+		if r.ownedSessionService && r.sessionService != nil {
+			if err := r.sessionService.Close(); err != nil {
+				closeErr = err
+				log.Errorf("close session service failed: %v", err)
+			}
+		}
+	})
+	return closeErr
 }
 
 // Run runs the agent.

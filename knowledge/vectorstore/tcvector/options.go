@@ -202,8 +202,11 @@ func WithTCVectorInstance(name string) Option {
 	}
 }
 
-// WithFilterIndexFields sets the filter fields for the vector database.
-// It will build index for the filter fields.
+// WithFilterIndexFields creates dedicated indexes for specified metadata fields.
+// This is optional and provides better query performance for frequently queried fields.
+// Other metadata fields can still be queried via the default JSON index.
+//
+// It will build additional indexes for the specified filter fields.
 func WithFilterIndexFields(fields []string) Option {
 	return func(o *options) {
 		o.filterFields = append(o.filterFields, fields...)

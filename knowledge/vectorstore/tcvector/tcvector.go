@@ -858,6 +858,17 @@ func covertToVector32(embedding []float64) []float32 {
 	return vector32
 }
 
+// getFilterFieldName returns the appropriate field name for filtering.
+// Fields in filterFields use dedicated index, others use JSON index path.
+func (vs *VectorStore) getFilterFieldName(field string) string {
+	for _, filterField := range vs.option.filterFields {
+		if filterField == field {
+			return field
+		}
+	}
+	return fmt.Sprintf("%s.%s", vs.option.metadataFieldName, field)
+}
+
 // getCondFromQuery converts filter to tcvectordb filter.
 func (vs *VectorStore) getCondFromQuery(searchFilter *vectorstore.SearchFilter) (*tcvectordb.Filter, error) {
 	if searchFilter == nil {
@@ -867,7 +878,7 @@ func (vs *VectorStore) getCondFromQuery(searchFilter *vectorstore.SearchFilter) 
 	for k, v := range searchFilter.Metadata {
 		filters = append(filters, &searchfilter.UniversalFilterCondition{
 			Operator: searchfilter.OperatorEqual,
-			Field:    fmt.Sprintf("%s.%s", vs.option.metadataFieldName, k),
+			Field:    vs.getFilterFieldName(k),
 			Value:    v,
 		})
 	}

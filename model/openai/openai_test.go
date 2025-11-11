@@ -874,10 +874,12 @@ func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
 	)
 
 	// Create many messages to trigger tailoring.
-	// With gpt-4o-mini (contextWindow=200000), maxInputTokens=130000 (65% ratio).
-	// Need ~500 messages * 300 tokens each = ~150000 tokens to exceed limit.
+	// With gpt-4o-mini (contextWindow=200000), maxInputTokens calculated as:
+	// safetyMargin = 200000 * 0.10 = 20000
+	// maxInputTokens = 200000 - 2048 - 512 - 20000 = 177440 (~88.7% of context)
+	// Need ~600 messages * 300 tokens each = ~180000 tokens to exceed limit.
 	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
-	for i := 0; i < 500; i++ {
+	for i := 0; i < 600; i++ {
 		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 100))))
 	}
 
@@ -3132,11 +3134,13 @@ func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// After tailoring with safety margin and ratio limit, messages should be significantly reduced.
+	// After tailoring with safety margin, messages should be significantly reduced.
 	require.Less(t, len(captured.Messages), len(messages), "expected messages to be tailored, got %d (original: %d)", len(captured.Messages), len(messages))
-	// With 65% ratio limit (safetyMargin=10%, protocolOverhead=512, reserveOutput=2048),
-	// we expect roughly 55-65% of the original messages depending on token distribution.
-	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.70), "expected messages to be reduced to at most 70%% due to ratio limit, got %d (original: %d)", len(captured.Messages), len(messages))
+	// With 100% ratio limit and safety margin (10%), protocol overhead (512), reserve output (2048),
+	// we expect roughly 88-90% of the original messages to be kept, depending on token distribution.
+	// For 1201 messages, we expect ~940-1080 messages after tailoring.
+	require.GreaterOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.70), "expected at least 70%% messages to be kept, got %d (original: %d)", len(captured.Messages), len(messages))
+	require.LessOrEqual(t, len(captured.Messages), int(float64(len(messages))*0.95), "expected at most 95%% messages to be kept due to safety margin, got %d (original: %d)", len(captured.Messages), len(messages))
 }
 
 // TestHasReasoningContent tests the hasReasoningContent method.
@@ -3715,4 +3719,95 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 		}
 		assert.True(t, hasReasoning, "expected at least one response to contain reasoning content")
 	})
+}
+
+// TestWithTokenTailoringConfig tests the WithTokenTailoringConfig option.
+func TestWithTokenTailoringConfig(t *testing.T) {
+	config := &TokenTailoringConfig{
+		ProtocolOverheadTokens: 1024,
+		ReserveOutputTokens:    4096,
+		InputTokensFloor:       2048,
+		OutputTokensFloor:      512,
+		SafetyMarginRatio:      0.15,
+		MaxInputTokensRatio:    0.90,
+	}
+
+	m := New("deepseek-chat",
+		WithEnableTokenTailoring(true),
+		WithTokenTailoringConfig(config),
+	)
+
+	require.NotNil(t, m)
+
+	// Verify that the instance-level config was set.
+	assert.Equal(t, 1024, m.protocolOverheadTokens)
+	assert.Equal(t, 4096, m.reserveOutputTokens)
+	assert.Equal(t, 2048, m.inputTokensFloor)
+	assert.Equal(t, 512, m.outputTokensFloor)
+	assert.Equal(t, 0.15, m.safetyMarginRatio)
+	assert.Equal(t, 0.90, m.maxInputTokensRatio)
+}
+
+func TestQwen(t *testing.T) {
+	var testKey = "qwen-key"
+	t.Setenv(qwenAPIKeyName, testKey)
+	tests := []struct {
+		name       string
+		modelName  string
+		opts       []Option
+		expectOpts []Option
+	}{
+		{
+			name:      "valid qwen model",
+			modelName: "qwen-plus",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+		},
+		{
+			name:      "valid model with base url",
+			modelName: "qwen-plus",
+			opts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultQwenBaseURL),
+			},
+		},
+		{
+			name:      "empty api key",
+			modelName: "qwen-plus",
+			opts: []Option{
+				WithAPIKey(""),
+			},
+		},
+		{
+			name:      "variant qwen",
+			modelName: "qwen-plus",
+			opts: []Option{
+				WithVariant(VariantQwen),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultQwenBaseURL),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(tt.modelName, tt.opts...)
+			require.NotNil(t, m, "expected model to be created, got nil")
+
+			o := options{}
+			for _, opt := range tt.opts {
+				opt(&o)
+			}
+			for _, opt := range tt.expectOpts {
+				opt(&o)
+			}
+
+			assert.Equal(t, tt.modelName, m.name, "expected model name %s, got %s", tt.modelName, m.name)
+			assert.Equal(t, o.APIKey, m.apiKey, "expected api key %s, got %s", o.APIKey, m.apiKey)
+			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
+		})
+	}
 }

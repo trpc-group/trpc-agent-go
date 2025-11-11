@@ -51,10 +51,13 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		enabledTools: make(map[string]bool),
 		tableName:    "memories",
 	}
-	// Enable default tools.
-	for name, creator := range imemory.DefaultEnabledTools {
+	// Copy all tool creators.
+	for name, creator := range imemory.AllToolCreators {
 		opts.toolCreators[name] = creator
-		opts.enabledTools[name] = true
+	}
+	// Enable default tools.
+	for name, enabled := range imemory.DefaultEnabledTools {
+		opts.enabledTools[name] = enabled
 	}
 	for _, option := range options {
 		option(&opts)
@@ -148,7 +151,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		}
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 	mem := &memory.Memory{
 		Memory:      memoryStr,
 		Topics:      topics,
@@ -212,7 +215,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		return fmt.Errorf("unmarshal memory entry failed: %w", err)
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 	entry.Memory.Memory = memoryStr
 	entry.Memory.Topics = topics
 	entry.Memory.LastUpdated = &now
@@ -253,7 +256,7 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 		args  []any
 	)
 	if s.opts.softDelete {
-		now := time.Now().UTC()
+		now := time.Now()
 		query = fmt.Sprintf(
 			"UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ? AND deleted_at IS NULL",
 			s.tableName,
@@ -284,7 +287,7 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 	// #nosec G201
 	var err error
 	if s.opts.softDelete {
-		now := time.Now().UTC()
+		now := time.Now()
 		query := fmt.Sprintf(
 			"UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND deleted_at IS NULL",
 			s.tableName,
@@ -399,9 +402,9 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 // Tools returns the list of available memory tools.
 func (s *Service) Tools() []tool.Tool {
 	// Concurrency-safe and stable order by name.
-	// Protect tool creators/enabled flags and cache with a single lock at call-site
-	// by converting to a local snapshot first (no struct-level mutex exists).
-	// We assume opts are immutable after construction.
+	// Protect tool creators/enabled flags and cache with a single lock at
+	// call-site by converting to a local snapshot first (no struct-level
+	// mutex exists). We assume opts are immutable after construction.
 	names := make([]string, 0, len(s.opts.toolCreators))
 	for name := range s.opts.toolCreators {
 		if s.opts.enabledTools[name] {

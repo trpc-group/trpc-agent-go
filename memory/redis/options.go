@@ -54,10 +54,10 @@ func WithMemoryLimit(limit int) ServiceOpt {
 
 // WithCustomTool sets a custom memory tool implementation.
 // The tool will be enabled by default.
-// If the tool name is invalid, this option will do nothing.
+// If the tool name is invalid or creator is nil, this option will do nothing.
 func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 	return func(opts *ServiceOpts) {
-		if !imemory.IsValidToolName(toolName) {
+		if !imemory.IsValidToolName(toolName) || creator == nil {
 			return
 		}
 		opts.toolCreators[toolName] = creator
