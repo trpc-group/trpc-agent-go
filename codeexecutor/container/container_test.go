@@ -349,9 +349,9 @@ func TestWorkspaceWrappers_MinimalPaths(t *testing.T) {
 }
 
 func TestWrappers_RunProgram_And_Collect(t *testing.T) {
-    const execID = "exec-wrap"
-    var startCalls int
-    handler := func(w http.ResponseWriter, r *http.Request) {
+	const execID = "exec-wrap"
+	var startCalls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
 			strings.Contains(r.URL.Path, "/containers/cid/exec"):
@@ -359,18 +359,18 @@ func TestWrappers_RunProgram_And_Collect(t *testing.T) {
 			_, _ = w.Write([]byte(
 				fmt.Sprintf(`{"Id":"%s"}`, execID),
 			))
-        case r.Method == http.MethodPost &&
-            strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
-            hj, ok := w.(http.Hijacker)
-            assert.True(t, ok)
-            conn, buf, err := hj.Hijack()
-            assert.NoError(t, err)
-            if startCalls == 0 {
-                writeHijackStream(t, conn, buf, "ok\n", "")
-            } else {
-                writeHijackStream(t, conn, buf, "", "")
-            }
-            startCalls++
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			hj, ok := w.(http.Hijacker)
+			assert.True(t, ok)
+			conn, buf, err := hj.Hijack()
+			assert.NoError(t, err)
+			if startCalls == 0 {
+				writeHijackStream(t, conn, buf, "ok\n", "")
+			} else {
+				writeHijackStream(t, conn, buf, "", "")
+			}
+			startCalls++
 		case r.Method == http.MethodGet &&
 			strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
 			w.Header().Set("Content-Type", "application/json")
