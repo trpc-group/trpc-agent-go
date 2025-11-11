@@ -90,9 +90,12 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 	var events []aguievents.Event
 	// Different message ID means a new message.
 	if t.lastMessageID != rsp.ID {
-		t.lastMessageID = rsp.ID
 		switch rsp.Object {
 		case model.ObjectTypeChatCompletionChunk:
+			if rsp.Choices[0].Delta.Content == "" {
+				return nil, nil
+			}
+			t.lastMessageID = rsp.ID
 			t.receivingMessage = true
 			role := rsp.Choices[0].Delta.Role.String()
 			events = append(events, aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)))
@@ -100,6 +103,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 			if rsp.Choices[0].Message.Content == "" {
 				return nil, nil
 			}
+			t.lastMessageID = rsp.ID
 			role := rsp.Choices[0].Message.Role.String()
 			events = append(events,
 				aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)),
