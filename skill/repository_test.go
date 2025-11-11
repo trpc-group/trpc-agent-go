@@ -276,3 +276,9 @@ func TestFSRepository_Get_ReadSkillFileError(t *testing.T) {
 	_, err = repo.Get("beta")
 	require.Error(t, err)
 }
+
+func TestIsDocFile_CaseInsensitive(t *testing.T) {
+	require.True(t, isDocFile("README.TXT"))
+	require.True(t, isDocFile("manual.MD"))
+	require.False(t, isDocFile("image.BIN"))
+}

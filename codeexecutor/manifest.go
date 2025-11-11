@@ -22,37 +22,36 @@ package codeexecutor
 // Mode hints the strategy: "link" (symlink/hardlink where possible) or
 // "copy" (default fallback when link is not possible).
 type InputSpec struct {
-    From string
-    To   string
-    Mode string
-    Pin  bool
+	From string
+	To   string
+	Mode string
+	Pin  bool
 }
 
 // OutputSpec declares outputs to collect and optionally persist.
 // Globs are workspace-relative patterns; implementations should
 // support ** semantics.
 type OutputSpec struct {
-    Globs         []string
-    MaxFiles      int
-    MaxFileBytes  int64
-    MaxTotalBytes int64
-    Save          bool
-    NameTemplate  string
-    Inline        bool
+	Globs         []string
+	MaxFiles      int
+	MaxFileBytes  int64
+	MaxTotalBytes int64
+	Save          bool
+	NameTemplate  string
+	Inline        bool
 }
 
 // FileRef references a file collected from workspace.
 type FileRef struct {
-    Name     string
-    MIMEType string
-    Content  string
-    SavedAs  string
-    Version  int
+	Name     string
+	MIMEType string
+	Content  string
+	SavedAs  string
+	Version  int
 }
 
 // OutputManifest is the structured result of CollectOutputs.
 type OutputManifest struct {
-    Files     []FileRef
-    LimitsHit bool
+	Files     []FileRef
+	LimitsHit bool
 }
-

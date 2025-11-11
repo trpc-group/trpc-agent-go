@@ -11,6 +11,7 @@ package local_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -384,6 +385,72 @@ func TestLocalCodeExecutor_WithTimeout(t *testing.T) {
 
 	assert.NoError(t, err) // ExecuteCode itself doesn't return error for block execution failures
 	assert.Contains(t, result.Output, "Error executing code block")
+}
+
+// Cover wrapper methods on CodeExecutor to raise file coverage.
+func TestLocalCodeExecutor_WrapperMethods(t *testing.T) {
+	exec := local.New(
+		local.WithTimeout(2 * time.Second),
+	)
+	ctx := context.Background()
+	ws, err := exec.CreateWorkspace(
+		ctx, "wrap", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer exec.Cleanup(ctx, ws)
+
+	// PutFiles via wrapper and collect them back.
+	err = exec.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    filepath.Join(codeexecutor.DirWork, "w.txt"),
+		Content: []byte("w"),
+		Mode:    0o644,
+	}})
+	require.NoError(t, err)
+
+	// PutDirectory wrapper copies a temp dir.
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(src, "a.txt"), []byte("a"), 0o644,
+	))
+	err = exec.PutDirectory(ctx, ws, src, "dst")
+	require.NoError(t, err)
+
+	// RunProgram wrapper echoes a value.
+	res, err := exec.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash", Args: []string{"-lc", "echo ok"},
+		Timeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Contains(t, res.Stdout, "ok")
+
+	// Collect via wrapper.
+	files, err := exec.Collect(ctx, ws, []string{
+		filepath.Join(codeexecutor.DirWork, "*.txt"),
+		filepath.Join("dst", "*.txt"),
+	})
+	require.NoError(t, err)
+	if len(files) > 0 {
+		// Ensure names are workspace-relative.
+		for _, f := range files {
+			require.False(t, strings.HasPrefix(f.Name, ws.Path))
+		}
+	}
+
+	// ExecuteInline via wrapper.
+	out, err := exec.ExecuteInline(ctx, "inline",
+		[]codeexecutor.CodeBlock{{
+			Language: "bash", Code: "echo inline",
+		}}, 2*time.Second,
+	)
+	require.NoError(t, err)
+	require.Contains(t, out.Stdout, "inline")
+
+	// Engine should be non-nil and usable.
+	eng := exec.Engine()
+	require.NotNil(t, eng)
+	// Describe returns something.
+	require.NotEqual(t, "", eng.Describe())
+	_ = fmt.Sprintf("%T", eng)
 }
 
 func TestLocalCodeExecutor_IntegrationTest(t *testing.T) {

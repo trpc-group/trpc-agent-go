@@ -11,6 +11,7 @@
 package codeexecutor_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,6 +41,9 @@ func TestEnsureLayoutAndMetadata(t *testing.T) {
 	_, err = os.Stat(filepath.Join(
 		root, codeexecutor.MetaFileName,
 	))
+	require.NoError(t, err)
+	// Call EnsureLayout again to exercise the already-present path.
+	_, err = codeexecutor.EnsureLayout(root)
 	require.NoError(t, err)
 }
 
@@ -80,4 +84,55 @@ func TestDirDigestStableAndChanges(t *testing.T) {
 	d3, err := codeexecutor.DirDigest(dir)
 	require.NoError(t, err)
 	require.NotEqual(t, d1, d3)
+}
+
+func TestLoadMetadata_InvalidJSON(t *testing.T) {
+	root := t.TempDir()
+	// Create layout and then corrupt metadata.json with invalid JSON.
+	_, err := codeexecutor.EnsureLayout(root)
+	require.NoError(t, err)
+	mf := filepath.Join(root, codeexecutor.MetaFileName)
+	// Write malformed JSON so LoadMetadata fails to unmarshal.
+	require.NoError(t, os.WriteFile(mf, []byte("{"), 0o644))
+	_, err = codeexecutor.LoadMetadata(root)
+	require.Error(t, err)
+
+	// Also verify SaveMetadata writes valid JSON again.
+	md := codeexecutor.WorkspaceMetadata{Version: 1,
+		Skills: map[string]codeexecutor.SkillMeta{},
+	}
+	require.NoError(t, codeexecutor.SaveMetadata(root, md))
+	// Confirm it is valid JSON.
+	b, err := os.ReadFile(mf)
+	require.NoError(t, err)
+	var tmp any
+	require.NoError(t, json.Unmarshal(b, &tmp))
+}
+
+func TestLoadMetadata_NotExist_Defaults(t *testing.T) {
+	root := t.TempDir()
+	md, err := codeexecutor.LoadMetadata(root)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.NotNil(t, md.Skills)
+}
+
+func TestSaveMetadata_WriteError(t *testing.T) {
+	root := t.TempDir()
+	// Make directory read-only to trigger write error.
+	require.NoError(t, os.Chmod(root, 0o555))
+	defer os.Chmod(root, 0o755)
+	err := codeexecutor.SaveMetadata(root,
+		codeexecutor.WorkspaceMetadata{Version: 1})
+	require.Error(t, err)
+}
+
+func TestEnsureLayout_ErrorOnFileRoot(t *testing.T) {
+	// Use a file path as the root so MkdirAll fails.
+	f, err := os.CreateTemp("", "notadir-*.tmp")
+	require.NoError(t, err)
+	defer os.Remove(f.Name())
+	_ = f.Close()
+	_, err = codeexecutor.EnsureLayout(f.Name())
+	require.Error(t, err)
 }
