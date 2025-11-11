@@ -56,8 +56,11 @@ const (
 			%s BIGINT                       -- Update timestamp (Unix timestamp)
 		)`
 
-	sqlCreateIndex = `
-		CREATE INDEX IF NOT EXISTS %s_embedding_idx ON %s USING hnsw (%s vector_cosine_ops) WITH (m = 32, ef_construction = 400)`
+	sqlCreateIndexHNSW = `
+		CREATE INDEX IF NOT EXISTS %s_embedding_idx ON %s USING hnsw (%s vector_cosine_ops) WITH (m = %d, ef_construction = %d)`
+
+	sqlCreateIndexIVFFlat = `
+		CREATE INDEX IF NOT EXISTS %s_embedding_idx ON %s USING ivfflat (%s vector_cosine_ops) WITH (lists = %d)`
 
 	sqlCreateTextIndex = `
 		CREATE INDEX IF NOT EXISTS %s_content_fts_idx ON %s USING gin (to_tsvector('%s', %s))`
@@ -167,12 +170,9 @@ func (vs *VectorStore) initDB(ctx context.Context) error {
 		return fmt.Errorf("pgvector create table: %w", err)
 	}
 
-	// Create HNSW vector index for faster similarity search.
-	// Using cosine distance operator for semantic similarity.
-	indexSQL := fmt.Sprintf(sqlCreateIndex, vs.option.table, vs.option.table, vs.option.embeddingFieldName)
-	_, err = vs.client.ExecContext(ctx, indexSQL)
-	if err != nil {
-		return fmt.Errorf("pgvector create vector index: %w", err)
+	// Create vector index based on configured type
+	if err := vs.createVectorIndex(ctx); err != nil {
+		return err
 	}
 
 	// If tsvector is enabled, create GIN index for full-text search on content.
@@ -182,6 +182,56 @@ func (vs *VectorStore) initDB(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("pgvector create text search index: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// createVectorIndex creates the appropriate vector index based on configuration.
+func (vs *VectorStore) createVectorIndex(ctx context.Context) error {
+	var indexSQL string
+
+	switch vs.option.vectorIndexType {
+	case VectorIndexHNSW:
+		// Create HNSW index for fast approximate nearest neighbor search
+		// Using cosine distance operator for semantic similarity
+		m := defaultHNSWM
+		efConstruction := defaultHNSWEfConstruction
+		if vs.option.hnswParams != nil {
+			if vs.option.hnswParams.M > 0 {
+				m = vs.option.hnswParams.M
+			}
+			if vs.option.hnswParams.EfConstruction > 0 {
+				efConstruction = vs.option.hnswParams.EfConstruction
+			}
+		}
+		indexSQL = fmt.Sprintf(sqlCreateIndexHNSW,
+			vs.option.table,
+			vs.option.table,
+			vs.option.embeddingFieldName,
+			m,
+			efConstruction,
+		)
+	case VectorIndexIVFFlat:
+		// Create IVFFlat index for memory-efficient approximate search
+		// Using cosine distance operator for semantic similarity
+		lists := defaultIVFFlatLists
+		if vs.option.ivfflatParams != nil && vs.option.ivfflatParams.Lists > 0 {
+			lists = vs.option.ivfflatParams.Lists
+		}
+		indexSQL = fmt.Sprintf(sqlCreateIndexIVFFlat,
+			vs.option.table,
+			vs.option.table,
+			vs.option.embeddingFieldName,
+			lists,
+		)
+	default:
+		return fmt.Errorf("pgvector unsupported vector index type: %s", vs.option.vectorIndexType)
+	}
+
+	_, err := vs.client.ExecContext(ctx, indexSQL)
+	if err != nil {
+		return fmt.Errorf("pgvector create vector index (%s): %w", vs.option.vectorIndexType, err)
 	}
 
 	return nil

@@ -22,6 +22,41 @@ import (
 // defaultMaxResults is the default maximum number of search results.
 const defaultMaxResults = 10
 
+const (
+	// Default HNSW index parameters.
+	defaultHNSWM              = 16 // Default: 16 connections per layer
+	defaultHNSWEfConstruction = 64 // Default: 64 for construction
+
+	// Default IVFFlat index parameters.
+	defaultIVFFlatLists = 100 // Default: 100 lists
+)
+
+// VectorIndexType represents the type of vector index to use.
+type VectorIndexType string
+
+const (
+	// VectorIndexHNSW uses Hierarchical Navigable Small World (HNSW) index.
+	VectorIndexHNSW VectorIndexType = "hnsw"
+
+	// VectorIndexIVFFlat uses Inverted File with Flat compression.
+	VectorIndexIVFFlat VectorIndexType = "ivfflat"
+)
+
+// HNSWIndexParams contains parameters for HNSW index.
+type HNSWIndexParams struct {
+	// M is the maximum number of connections per layer (default: 16, range: 2-100).
+	M int
+
+	// EfConstruction is the size of dynamic candidate list for construction (default: 64, range: 4-1000).
+	EfConstruction int
+}
+
+// IVFFlatIndexParams contains parameters for IVFFlat index.
+type IVFFlatIndexParams struct {
+	// Lists is the number of inverted lists (default: 100).
+	Lists int
+}
+
 // DocBuilderFunc is the document builder function.
 type DocBuilderFunc func(row pgx.Row) (*vectorstore.ScoredDocument, []float64, error)
 
@@ -66,6 +101,11 @@ type options struct {
 	instanceName   string // Registered postgres instance name from storage/postgres
 	extraOptions   []any  // Extra options for storage/postgres
 
+	// Vector index configuration
+	vectorIndexType VectorIndexType     // Type of vector index (hnsw or ivfflat)
+	hnswParams      *HNSWIndexParams    // HNSW index parameters
+	ivfflatParams   *IVFFlatIndexParams // IVFFlat index parameters
+
 	// Hybrid search scoring weights
 	vectorWeight float64 // Weight for vector similarity (0.0-1.0)
 	textWeight   float64 // Weight for text relevance (0.0-1.0)
@@ -106,6 +146,16 @@ var defaultOptions = options{
 	language:       "english",
 	maxResults:     defaultMaxResults,
 	docBuilder:     defaultDocBuilder,
+
+	// Vector index defaults (HNSW)
+	vectorIndexType: VectorIndexHNSW,
+	hnswParams: &HNSWIndexParams{
+		M:              defaultHNSWM,
+		EfConstruction: defaultHNSWEfConstruction,
+	},
+	ivfflatParams: &IVFFlatIndexParams{
+		Lists: defaultIVFFlatLists,
+	},
 
 	idFieldName:        "id",
 	nameFieldName:      "name",
@@ -288,5 +338,31 @@ func WithPostgresInstance(instanceName string) Option {
 func WithExtraOptions(extraOptions ...any) Option {
 	return func(o *options) {
 		o.extraOptions = append(o.extraOptions, extraOptions...)
+	}
+}
+
+// WithVectorIndexType sets the type of vector index to use.
+// Supported types: VectorIndexHNSW (default), VectorIndexIVFFlat.
+func WithVectorIndexType(indexType VectorIndexType) Option {
+	return func(o *options) {
+		o.vectorIndexType = indexType
+	}
+}
+
+// WithHNSWIndexParams sets HNSW index parameters.
+func WithHNSWIndexParams(params *HNSWIndexParams) Option {
+	return func(o *options) {
+		if params != nil {
+			o.hnswParams = params
+		}
+	}
+}
+
+// WithIVFFlatIndexParams sets IVFFlat index parameters.
+func WithIVFFlatIndexParams(params *IVFFlatIndexParams) Option {
+	return func(o *options) {
+		if params != nil {
+			o.ivfflatParams = params
+		}
 	}
 }
