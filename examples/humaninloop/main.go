@@ -46,6 +46,9 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	printHelp()
 
 	scanner := bufio.NewScanner(os.Stdin)

@@ -68,12 +68,16 @@ func (c *debugChat) run() error {
 	if err := c.setup(ctx); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer c.runner.Close()
+
 	// Start interactive chat.
 	return c.startChat(ctx)
 }
 
 // setup creates the runner with LLM agent and file operation tools.
-func (c *debugChat) setup(ctx context.Context) error {
+func (c *debugChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 	// Create file operation tools.

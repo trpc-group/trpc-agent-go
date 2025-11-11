@@ -61,6 +61,10 @@ func main() {
 		fmt.Printf("❌ Setup failed: %v\n", err)
 		return
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer app.runner.Close()
+
 	if err := app.startChat(ctx); err != nil {
 		fmt.Printf("❌ Chat failed: %v\n", err)
 	}

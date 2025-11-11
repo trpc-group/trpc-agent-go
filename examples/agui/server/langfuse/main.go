@@ -63,6 +63,8 @@ func main() {
 	// Build agent and runner.
 	agent := newAgent()
 	runner := runner.NewRunner(agent.Info().Name, agent)
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer runner.Close()
 	// Build AG-UI server.
 	callbacks := translator.NewCallbacks().RegisterAfterTranslate(langfuseCallback())
 	server, err := agui.New(runner,

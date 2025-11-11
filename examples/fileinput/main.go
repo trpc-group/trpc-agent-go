@@ -123,9 +123,12 @@ func (p *fileProcessor) run() error {
 	ctx := context.Background()
 
 	// Setup the model and runner.
-	if err := p.setup(); err != nil {
+	if err := p.setup(ctx); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer p.runner.Close()
 
 	// Process the file inputs.
 	if err := p.processInputs(ctx); err != nil {
@@ -137,7 +140,7 @@ func (p *fileProcessor) run() error {
 }
 
 // setup creates the runner with LLM agent for file processing.
-func (p *fileProcessor) setup() error {
+func (p *fileProcessor) setup(_ context.Context) error {
 	// Create OpenAI model with the specified variant.
 	p.modelInstance = openaimodel.New(p.modelName, openaimodel.WithVariant(p.variant))
 
