@@ -89,9 +89,9 @@ go run . -executor container
 ```
 
 In chat:
-- Ask to "list skills" and pick one you see.
-- Say "load <name>" when you want to use it.
-- Ask to run a command exactly as shown in the skill docs.
+- You can ask to "list skills" and pick one (optional).
+- Use natural language to run a command from the skill docs.
+- Example: "Use demo-skill to run the sample build command."
 - If you expect files, mention patterns to collect (for example,
   `output_files: ["out/**"]`).
 - For production, prefer `save_as_artifacts: true` and
@@ -127,9 +127,9 @@ go run . -executor container
 
 ## Tips
 
-- Ask the assistant to list available skills and choose one.
-- Use natural language to request loading docs or running a command.
-- Example: "Load <name> and run the sample build command."
+- You can ask the assistant to list available skills (optional).
+- No need to type "load"; the assistant loads skills when needed.
+- Ask to run a command exactly as shown in the skill docs.
 
 ## What You’ll See
 
@@ -142,9 +142,9 @@ Executor: local
 Session: chat-1703123456
 ==================================================
 Tips:
- - Ask to list skills and pick one.
- - Ask the assistant to run a command from the skill docs.
- - Example: 'Load <name> and run the sample build'.
+ - You can ask to list skills (optional).
+ - No need to type 'load'; the assistant loads skills when needed.
+ - Ask to run a command from the skill docs.
 
 👤 You: list skills
 🔧 CallableTool calls initiated:
@@ -155,7 +155,7 @@ Tips:
 
 🤖 Assistant: Here are the available skills: ...
 
-👤 You: load demo-skill and run its build example
+👤 You: run the demo-skill build example
 🔧 CallableTool calls initiated:
    • skill_run (ID: call_def456)
      Args: {"skill":"demo-skill","command":"bash scripts/build.sh"}

@@ -201,8 +201,11 @@ func (c *skillChat) setup(_ context.Context) error {
 	fmt.Printf("Session: %s\n", c.sessionID)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Println("Tips:")
-	fmt.Println(" - Ask to list skills and choose one.")
-	fmt.Println(" - Say 'load <name>' before you ask to run.")
+	fmt.Println(" - You can ask to list skills (optional).")
+	fmt.Println(
+		" - No need to type 'load'; the assistant loads skills when " +
+			"needed.",
+	)
 	fmt.Println(
 		" - Ask to run a command exactly as in the docs.",
 	)
