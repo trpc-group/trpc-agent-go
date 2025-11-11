@@ -126,6 +126,9 @@ func run(ctx context.Context, modelName string) error {
 	}
 	r := runner.NewRunner(appName, ga, runner.WithSessionService(svc))
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	fmt.Printf("✅ Session ready: %s\n", sessionID)
 
 	// Interactive loop

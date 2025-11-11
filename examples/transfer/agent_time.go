@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -75,7 +74,7 @@ func (c *transferChat) calculateTimeDiff(_ context.Context, args timeDiffArgs) (
 		return timeDiffResult{
 			StartTime: args.StartTime,
 			EndTime:   args.EndTime,
-			Error:     fmt.Sprintf("Invalid start time format. Supported formats: RFC3339 (2023-01-01T00:00:00Z), DateTime (2023-01-01 00:00:00), or 2006-01-02T15:04:05"),
+			Error:     "Invalid start time format. Supported formats: RFC3339 (2023-01-01T00:00:00Z), DateTime (2023-01-01 00:00:00), or 2006-01-02T15:04:05",
 		}, nil
 	}
 
@@ -95,7 +94,7 @@ func (c *transferChat) calculateTimeDiff(_ context.Context, args timeDiffArgs) (
 		return timeDiffResult{
 			StartTime: args.StartTime,
 			EndTime:   args.EndTime,
-			Error:     fmt.Sprintf("Invalid end time format. Supported formats: RFC3339 (2023-01-01T00:00:00Z), DateTime (2023-01-01 00:00:00), or 2006-01-02T15:04:05"),
+			Error:     "Invalid end time format. Supported formats: RFC3339 (2023-01-01T00:00:00Z), DateTime (2023-01-01 00:00:00), or 2006-01-02T15:04:05",
 		}, nil
 	}
 

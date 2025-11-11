@@ -186,6 +186,11 @@ func TestWithCustomTool(t *testing.T) {
 	// Test with invalid tool name (should do nothing).
 	WithCustomTool("invalid_tool_name", customCreator)(&opts)
 	assert.NotContains(t, opts.toolCreators, "invalid_tool_name")
+
+	// Test with nil creator (should do nothing).
+	WithCustomTool(memory.SearchToolName, nil)(&opts)
+	assert.NotContains(t, opts.toolCreators, memory.SearchToolName)
+	assert.False(t, opts.enabledTools[memory.SearchToolName])
 }
 
 // TestWithToolEnabled tests enabling and disabling tools.

@@ -79,6 +79,10 @@ func (w *fanoutWorkflow) run() error {
 	if err := w.setup(); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer w.runner.Close()
+
 	return w.startInteractiveMode(ctx)
 }
 

@@ -91,6 +91,9 @@ func run() error {
 	sessionSvc := inmemory.NewSessionService()
 	r := runner.NewRunner("subagent-runtime-state", ga, runner.WithSessionService(sessionSvc))
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	// Interactive loop
 	userID := "user"
 	sessionID := fmt.Sprintf("subagent-%d", time.Now().Unix())

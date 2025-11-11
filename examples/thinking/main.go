@@ -67,6 +67,10 @@ func (c *thinkingChat) run(ctx context.Context) error {
 	if err := c.setup(ctx); err != nil {
 		return err
 	}
+	
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer c.runner.Close()
+	
 	return c.startChat(ctx)
 }
 
