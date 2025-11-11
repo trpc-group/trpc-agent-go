@@ -821,3 +821,116 @@ func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Sessi
 	return "", fmt.Errorf("summarizer error")
 }
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
+	// Create service without async workers initialized
+	summarizer := &mockSummarizerImpl{
+		summaryText:     "sync summary",
+		shouldSummarize: true,
+	}
+	s, mock, db := setupMockService(t, &TestServiceOpts{
+		summarizer:      summarizer,
+		asyncSummaryNum: 0, // No async workers
+	})
+	defer db.Close()
+
+	sess := &session.Session{
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock the database query/insert for sync processing
+	mock.ExpectExec(fmt.Sprintf(
+		`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+	 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
+	 DO UPDATE SET
+	   summary = EXCLUDED.summary,
+	   updated_at = EXCLUDED.updated_at,
+	   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries)).
+		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Should fall back to sync processing when no async workers
+	err := s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	assert.NoError(t, err)
+}
+
+func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
+	summarizer := &mockSummarizerImpl{summaryText: "test", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{
+		summarizer:      summarizer,
+		asyncSummaryNum: 1,
+		summaryQueueSize: 1,
+	})
+	defer db.Close()
+
+	// Initialize async workers
+	s.startAsyncSummaryWorker()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+
+	// Fill the queue first with a blocking job
+	blockingJob := &summaryJob{
+		sessionKey: key,
+		filterKey:  "",
+		force:      false,
+		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+	}
+
+	select {
+	case s.summaryJobChans[0] <- blockingJob:
+		// Queue is now full
+	default:
+		// Already full
+	}
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	job := &summaryJob{
+		sessionKey: session.Key{AppName: "app2", UserID: "user2", SessionID: "sid2"},
+		filterKey:  "",
+		force:      false,
+		session:    &session.Session{ID: "sid2", AppName: "app2", UserID: "user2"},
+	}
+
+	// Should return false when context is cancelled
+	result := s.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+
+	// Clean up
+	s.Close()
+}
+
+func TestTryEnqueueJob_SendSuccess(t *testing.T) {
+	summarizer := &mockSummarizerImpl{summaryText: "test", shouldSummarize: true}
+	s, _, db := setupMockService(t, &TestServiceOpts{
+		summarizer:      summarizer,
+		asyncSummaryNum: 1,
+		summaryQueueSize: 10,
+	})
+	defer db.Close()
+
+	// Initialize async workers
+	s.startAsyncSummaryWorker()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	job := &summaryJob{
+		sessionKey: key,
+		filterKey:  "",
+		force:      false,
+		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+	}
+
+	// Should successfully send the job
+	result := s.tryEnqueueJob(ctx, job)
+	assert.True(t, result)
+
+	// Clean up
+	s.Close()
+}
