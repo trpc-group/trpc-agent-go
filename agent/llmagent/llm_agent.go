@@ -908,6 +908,7 @@ func (a *LLMAgent) wrapEventChannel(
 
 	go func() {
 		var fullRespEvent *event.Event
+		var agentErr error
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
 			if fullRespEvent != nil {
@@ -929,6 +930,11 @@ func (a *LLMAgent) wrapEventChannel(
 					fullRespEvent = evt
 				}
 
+				// Collect error from response.
+				// Only record the last error.
+				if evt.Response.Error != nil {
+					agentErr = fmt.Errorf("%s: %s", evt.Response.Error.Type, evt.Response.Error.Message)
+				}
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
@@ -937,7 +943,7 @@ func (a *LLMAgent) wrapEventChannel(
 
 		// After all events are processed, run after agent callbacks
 		if a.agentCallbacks != nil {
-			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, agentErr)
 			var evt *event.Event
 			if err != nil {
 				// Send error event.
