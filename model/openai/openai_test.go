@@ -3836,7 +3836,6 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet(model.ThinkingEnabledKey, true),
 				openaiopt.WithJSONSet(model.EnabledThinkingKey, true),
 			},
 		},
