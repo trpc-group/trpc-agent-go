@@ -835,13 +835,7 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
-	var opts []openaiopt.RequestOption
-	if request.ThinkingEnabled != nil {
-		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
-		if m.variant == VariantQwen {
-			opts = append(opts, openaiopt.WithJSONSet(model.EnabledThinkingKey, *request.ThinkingEnabled))
-		}
-	}
+	opts := m.buildThinkingOption(request)
 	if request.ThinkingTokens != nil {
 		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
 	}
@@ -858,6 +852,21 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 		}
 	}
 	return chatRequest, opts
+}
+
+// buildThinkingOption converts our Request to OpenAI request RequestOption
+func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
+	var opts []openaiopt.RequestOption
+	if request.ThinkingEnabled == nil {
+		return opts
+	}
+	switch m.variant {
+	case VariantQwen:
+		opts = append(opts, openaiopt.WithJSONSet(model.EnabledThinkingKey, *request.ThinkingEnabled))
+	default:
+		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
+	}
+	return opts
 }
 
 // convertMessages converts our Message format to OpenAI's format.
