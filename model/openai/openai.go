@@ -1535,10 +1535,6 @@ func (m *Model) handleNonStreamingResponse(
 		}
 		return
 	}
-	if m.chatResponseCallback != nil {
-		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
-	}
-
 	// Call response callback on successful completion.
 	if m.chatResponseCallback != nil {
 		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
