@@ -12,6 +12,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -25,6 +26,31 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
+
+// stringSliceValuer wraps []string to implement driver.Valuer for sqlmock.
+// Note: This matcher can verify the argument type in mock expectations,
+// but cannot prevent the actual sql.DB driver from rejecting []string parameters.
+// The issue is that sql.DB.QueryContext() validates argument types before
+// the mock interceptor can handle them.
+//
+// Possible solutions for future consideration:
+// 1. Use lib/pq driver and pq.Array() wrapper for PostgreSQL arrays
+// 2. Create a custom driver that supports array types
+// 3. Keep these tests as integration tests (current approach)
+// 4. Refactor code to make getEventsList/getSummariesList injectable
+type stringSliceValuer []string
+
+func (s stringSliceValuer) Match(v driver.Value) bool {
+	_, ok := v.([]string)
+	return ok
+}
+
+// AnyStringSlice returns a custom matcher for []string arguments.
+// WARNING: Due to database/sql driver limitations, this matcher cannot
+// prevent runtime type validation errors when actual queries execute.
+func AnyStringSlice() sqlmock.Argument {
+	return stringSliceValuer{}
+}
 
 // mockSummarizer is a mock summarizer for testing
 type mockSummarizer interface {
@@ -67,6 +93,9 @@ type TestServiceOpts struct {
 	softDelete         *bool // Use pointer to distinguish unset from false
 	cleanupInterval    time.Duration
 	summarizer         mockSummarizer
+	asyncSummaryNum    int
+	summaryJobTimeout  time.Duration
+	summaryQueueSize   int
 }
 
 // mockPostgresClient is a mock implementation of storage.Client for testing
@@ -136,7 +165,16 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 
 	// Apply default options
 	if opts == nil {
-		opts = &TestServiceOpts{}
+		opts = &TestServiceOpts{
+			asyncSummaryNum:  defaultAsyncSummaryNum,
+			summaryQueueSize: defaultSummaryQueueSize,
+		}
+	}
+	if opts.asyncSummaryNum == 0 {
+		opts.asyncSummaryNum = defaultAsyncSummaryNum
+	}
+	if opts.summaryQueueSize == 0 {
+		opts.summaryQueueSize = defaultSummaryQueueSize
 	}
 
 	// Default soft delete to true if not explicitly set
@@ -160,6 +198,9 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 			cleanupInterval:    opts.cleanupInterval,
 			summarizer:         opts.summarizer,
 			tablePrefix:        prefix,
+			summaryQueueSize:   opts.summaryQueueSize,
+			asyncSummaryNum:    opts.asyncSummaryNum,
+			summaryJobTimeout:  opts.summaryJobTimeout,
 		},
 		cleanupDone: make(chan struct{}),
 
@@ -180,9 +221,9 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 	}
 
 	// Initialize summary job channels
-	s.summaryJobChans = make([]chan *summaryJob, defaultAsyncSummaryNum)
+	s.summaryJobChans = make([]chan *summaryJob, opts.asyncSummaryNum)
 	for i := range s.summaryJobChans {
-		s.summaryJobChans[i] = make(chan *summaryJob, defaultSummaryQueueSize)
+		s.summaryJobChans[i] = make(chan *summaryJob, opts.summaryQueueSize)
 	}
 
 	return s, mock, db
@@ -495,12 +536,6 @@ func TestGetSession_InvalidKey(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestListSessions_Success(t *testing.T) {
-	// Skip this test due to PostgreSQL array parameter complexity in sqlmock
-	// This functionality is better tested with integration tests
-	t.Skip("Skipping due to PostgreSQL array parameter complexity in sqlmock")
-}
-
 func TestListSessions_InvalidKey(t *testing.T) {
 	s, _, db := setupMockService(t, nil)
 	defer db.Close()
@@ -513,6 +548,99 @@ func TestListSessions_InvalidKey(t *testing.T) {
 
 	_, err := s.ListSessions(context.Background(), userKey)
 	require.Error(t, err)
+}
+
+func TestListSessions_EmptyResult(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	// Mock app states query (empty)
+	appStateRows := sqlmock.NewRows([]string{"key", "value"})
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("test-app", sqlmock.AnyArg()).
+		WillReturnRows(appStateRows)
+
+	// Mock user states query (empty)
+	userStateRows := sqlmock.NewRows([]string{"key", "value"})
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
+		WillReturnRows(userStateRows)
+
+	// Mock session states query (empty - no sessions found)
+	sessionRows := sqlmock.NewRows([]string{"session_id", "state", "created_at", "updated_at"})
+	mock.ExpectQuery("SELECT session_id, state, created_at, updated_at FROM session_states").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
+		WillReturnRows(sessionRows)
+
+	sessions, err := s.ListSessions(context.Background(), userKey)
+	require.NoError(t, err)
+	require.Empty(t, sessions)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListSessions_QueryError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	// Mock app states query error
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("test-app", sqlmock.AnyArg()).
+		WillReturnError(fmt.Errorf("database error"))
+
+	_, err := s.ListSessions(context.Background(), userKey)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "database error")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListSessions_SessionStateUnmarshalError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	now := time.Now()
+
+	// Mock app states query (empty)
+	appStateRows := sqlmock.NewRows([]string{"key", "value"})
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("test-app", sqlmock.AnyArg()).
+		WillReturnRows(appStateRows)
+
+	// Mock user states query (empty)
+	userStateRows := sqlmock.NewRows([]string{"key", "value"})
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
+		WillReturnRows(userStateRows)
+
+	// Mock session states query with invalid JSON
+	sessionRows := sqlmock.NewRows([]string{"session_id", "state", "created_at", "updated_at"}).
+		AddRow("session-1", []byte("invalid json"), now, now)
+
+	mock.ExpectQuery("SELECT session_id, state, created_at, updated_at FROM session_states").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
+		WillReturnRows(sessionRows)
+
+	_, err := s.ListSessions(context.Background(), userKey)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal session state failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestDeleteSession_Success(t *testing.T) {
@@ -1272,7 +1400,7 @@ func TestSoftDeleteExpiredTable_SessionScope(t *testing.T) {
 		UserID:  "test-user",
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WithArgs(now, "test-app", "test-user").
@@ -1290,7 +1418,7 @@ func TestSoftDeleteExpiredTable_GlobalScope(t *testing.T) {
 	})
 	defer db.Close()
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WithArgs(now).
@@ -1313,7 +1441,7 @@ func TestHardDeleteExpiredTable_SessionScope(t *testing.T) {
 		UserID:  "test-user",
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	mock.ExpectExec("DELETE FROM session_states").
 		WithArgs("test-app", "test-user", now).
@@ -1331,7 +1459,7 @@ func TestHardDeleteExpiredTable_GlobalScope(t *testing.T) {
 	})
 	defer db.Close()
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	mock.ExpectExec("DELETE FROM session_states").
 		WithArgs(now).
