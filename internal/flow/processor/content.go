@@ -276,20 +276,37 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 		return false
 	}
 
-	if p.TimelineFilterMode == TimelineFilterCurrentRequest && inv.RunOptions.RequestID != evt.RequestID {
-		return false
+	// Check timeline filter
+	switch p.TimelineFilterMode {
+	case TimelineFilterCurrentRequest:
+		if inv.RunOptions.RequestID != evt.RequestID {
+			return false
+		}
+	case TimelineFilterCurrentInvocation:
+		if evt.InvocationID != inv.InvocationID {
+			if !evt.IsUserMessage() {
+				return false
+			}
+			// User messages are usually sent from the runner apeend to the session, so in most cases, the invocationID is not equal.
+			// Therefore, to prevent the loss of user messages, we need to make further judgments
+			if inv.RunOptions.RequestID != evt.RequestID || evt.Choices[0].Message.Content != inv.Message.Content {
+				return false
+			}
+		}
+	default:
 	}
 
-	if p.TimelineFilterMode == TimelineFilterCurrentInvocation && inv.InvocationID != evt.InvocationID {
-		return false
-	}
-
-	if p.BranchFilterMode == BranchFilterModeExact && evt.FilterKey != filter {
-		return false
-	}
-
-	if p.BranchFilterMode == BranchFilterModePrefix && !evt.Filter(filter) {
-		return false
+	// Check branch filter
+	switch p.BranchFilterMode {
+	case BranchFilterModeExact:
+		if evt.FilterKey != filter {
+			return false
+		}
+	case BranchFilterModePrefix:
+		if !evt.Filter(filter) {
+			return false
+		}
+	default:
 	}
 
 	return true
