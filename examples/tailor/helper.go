@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 
+	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	openaisdk "github.com/openai/openai-go"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -217,6 +218,48 @@ func extractToolContent(content openaisdk.ChatCompletionToolMessageParamContentU
 	return ""
 }
 
+// convertFromAnthropicMessages converts Anthropic SDK messages back to model.Message format.
+// This is a simplified conversion that extracts the basic content for token counting.
+func convertFromAnthropicMessages(
+	anthropicMsgs []anthropicsdk.MessageParam,
+	systemPrompts []anthropicsdk.TextBlockParam,
+) []model.Message {
+	messages := make([]model.Message, 0, len(anthropicMsgs)+len(systemPrompts))
+
+	// Add system messages first if present.
+	for _, sysPrompt := range systemPrompts {
+		messages = append(messages, model.NewSystemMessage(sysPrompt.Text))
+	}
+
+	// Convert conversation messages.
+	for _, msg := range anthropicMsgs {
+		var m model.Message
+		role := string(msg.Role)
+
+		// Extract content from message.
+		var content string
+		for _, block := range msg.Content {
+			if block.OfText != nil {
+				content += block.OfText.Text
+			}
+			// Tool use blocks are not included in token count for simplification.
+		}
+
+		switch role {
+		case "user":
+			m = model.NewUserMessage(content)
+		case "assistant":
+			m = model.NewAssistantMessage(content)
+		default:
+			continue
+		}
+
+		messages = append(messages, m)
+	}
+
+	return messages
+}
+
 // loadMessagesFromJSON loads messages from a JSON file in the format of input.json.
 func loadMessagesFromJSON(filename string) ([]model.Message, error) {
 	data, err := os.ReadFile(filename)
@@ -226,11 +269,11 @@ func loadMessagesFromJSON(filename string) ([]model.Message, error) {
 
 	var jsonData struct {
 		Messages []struct {
-			Role      string        `json:"role"`
-			Content   string        `json:"content"`
-			ToolCalls []interface{} `json:"tool_calls"`
-			ToolID    string        `json:"tool_id"`
-			ToolName  string        `json:"tool_name"`
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			ToolCalls []any  `json:"tool_calls"`
+			ToolID    string `json:"tool_id"`
+			ToolName  string `json:"tool_name"`
 		} `json:"messages"`
 	}
 

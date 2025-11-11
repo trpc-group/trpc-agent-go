@@ -667,4 +667,63 @@ func TestCycleAgent_MaxIterations(t *testing.T) {
 	require.Equal(t, max, cnt)
 }
 
+func TestCycleAgent_AfterCallbackError(t *testing.T) {
+	cb := agent.NewCallbacks()
+	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+		return nil, errors.New("after failed")
+	})
+
+	one := 1
+	ca := newFromLegacy(legacyOptions{
+		Name:           "loop",
+		SubAgents:      []agent.Agent{&noopAgent{"a"}},
+		AgentCallbacks: cb,
+		MaxIterations:  &one,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := ca.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.NotNil(t, last.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
+}
+
+func TestCycleAgent_SubAgentsAndInfo(t *testing.T) {
+	sub1 := &noopAgent{name: "sub1"}
+	sub2 := &noopAgent{name: "sub2"}
+
+	ca := newFromLegacy(legacyOptions{
+		Name:      "loop",
+		SubAgents: []agent.Agent{sub1, sub2},
+	})
+
+	// Test SubAgents.
+	subs := ca.SubAgents()
+	require.Len(t, subs, 2)
+
+	// Test FindSubAgent.
+	found := ca.FindSubAgent("sub1")
+	require.NotNil(t, found)
+	require.Equal(t, "sub1", found.Info().Name)
+
+	notFound := ca.FindSubAgent("missing")
+	require.Nil(t, notFound)
+
+	// Test Info.
+	info := ca.Info()
+	require.Equal(t, "loop", info.Name)
+
+	// Test Tools.
+	tools := ca.Tools()
+	require.Empty(t, tools)
+}
+
 func ptrInt(i int) *int { return &i }

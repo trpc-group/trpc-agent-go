@@ -749,3 +749,207 @@ func TestGraphAgent_MessageFilterMode(t *testing.T) {
 	require.Equal(t, options.messageTimelineFilterMode, "request")
 	require.Equal(t, options.messageBranchFilterMode, "exact")
 }
+
+func TestGraphAgent_BeforeCallbackReturnsResponse(t *testing.T) {
+	// Create a minimal graph.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("noop", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "should not run"}, nil
+		}).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+
+	// Create callbacks that return early.
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		return &model.Response{
+			Object: "before.custom",
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "early return",
+				},
+			}},
+		}, nil
+	})
+
+	// Create graph agent with callbacks.
+	ga, err := New("test-before", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-before",
+		AgentName:    "test-before",
+	}
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Collect events.
+	var collected []*event.Event
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	require.Len(t, collected, 1)
+	require.Equal(t, "before.custom", collected[0].Object)
+	require.Equal(t, "early return", collected[0].Response.Choices[0].Message.Content)
+}
+
+func TestGraphAgent_BeforeCallbackReturnsError(t *testing.T) {
+	// Create a minimal graph.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("noop", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "should not run"}, nil
+		}).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+
+	// Create callbacks that return error.
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		return nil, errors.New("before callback failed")
+	})
+
+	// Create graph agent with callbacks.
+	ga, err := New("test-before-err", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-before-err",
+		AgentName:    "test-before-err",
+	}
+
+	_, err = ga.Run(context.Background(), inv)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "before callback failed")
+}
+
+func TestGraphAgent_AfterCallbackReturnsResponse(t *testing.T) {
+	// Create a simple graph.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "processed"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	// Create callbacks with after agent.
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+		return &model.Response{
+			Object: "after.custom",
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "after callback",
+				},
+			}},
+		}, nil
+	})
+
+	// Create graph agent with callbacks.
+	ga, err := New("test-after", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-after",
+		AgentName:    "test-after",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Collect events.
+	var collected []*event.Event
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	// Should have graph execution event(s) plus after callback event.
+	require.Greater(t, len(collected), 0)
+
+	// Last event should be from after callback.
+	last := collected[len(collected)-1]
+	require.Equal(t, "after.custom", last.Object)
+	require.Equal(t, "after callback", last.Response.Choices[0].Message.Content)
+}
+
+func TestGraphAgent_AfterCallbackReturnsError(t *testing.T) {
+	// Create a simple graph.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "processed"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	// Create callbacks with after agent error.
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+		return nil, errors.New("after callback failed")
+	})
+
+	// Create graph agent with callbacks.
+	ga, err := New("test-after-err", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-after-err",
+		AgentName:    "test-after-err",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Collect events.
+	var collected []*event.Event
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	// Should have graph execution event(s) plus after callback error event.
+	require.Greater(t, len(collected), 0)
+
+	// Last event should be error from after callback.
+	last := collected[len(collected)-1]
+	require.NotNil(t, last.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
+	require.Contains(t, last.Error.Message, "after callback failed")
+}

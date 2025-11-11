@@ -19,15 +19,18 @@ import (
 	"strconv"
 	"strings"
 
+	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	openaisdk "github.com/openai/openai-go"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
 )
 
 var (
-	flagModel                = flag.String("model", "deepseek-chat", "Model name, e.g., deepseek-chat or gpt-4o")
+	flagProvider             = flag.String("provider", "openai", "Provider: openai or anthropic")
+	flagModel                = flag.String("model", "", "Model name (auto-detected if empty)")
 	flagEnableTokenTailoring = flag.Bool("enable-token-tailoring", true, "Enable automatic token tailoring based on model context window")
 	flagMaxInputTokens       = flag.Int("max-input-tokens", 0, "Max input tokens for token tailoring (0 = auto-calculate from context window)")
 	flagCounter              = flag.String("counter", "simple", "Token counter: simple|tiktoken")
@@ -44,7 +47,78 @@ func main() {
 		log.SetLevel(log.LevelDebug)
 	}
 
-	// Build model with dual-mode token tailoring support.
+	// Auto-detect model name if not specified.
+	provider := strings.ToLower(*flagProvider)
+	modelName := *flagModel
+	if modelName == "" {
+		modelName = getDefaultModel(provider)
+	}
+
+	// Build model based on provider.
+	var modelInstance model.Model
+	switch provider {
+	case "openai":
+		modelInstance = buildOpenAIModel(modelName)
+	case "anthropic":
+		modelInstance = buildAnthropicModel(modelName)
+	default:
+		log.Fatalf("Invalid provider: %s (must be 'openai' or 'anthropic')", provider)
+	}
+
+	fmt.Printf("✂️  Token Tailoring Demo\n")
+	fmt.Printf("🔌 provider: %s\n", provider)
+	fmt.Printf("🧩 model: %s\n", modelName)
+	fmt.Printf("🔧 enable-token-tailoring: %t\n", *flagEnableTokenTailoring)
+	if *flagMaxInputTokens > 0 {
+		fmt.Printf("🔢 max-input-tokens: %d\n", *flagMaxInputTokens)
+	} else {
+		fmt.Printf("🔢 max-input-tokens: auto (from context window)\n")
+	}
+	fmt.Printf("🧮 counter: %s\n", strings.ToLower(*flagCounter))
+	fmt.Printf("🎛️ strategy: %s\n", strings.ToLower(*flagStrategy))
+	fmt.Printf("📡 streaming: %t\n", *flagStreaming)
+	fmt.Println("==================================================")
+	fmt.Println("💡 Commands:")
+	fmt.Println("  /bulk N     - append N synthetic user messages")
+	fmt.Println("  /load FILE  - load messages from JSON file (e.g., /load input.json)")
+	fmt.Println("  /history    - show current message count")
+	fmt.Println("  /show       - display current messages (head + tail)")
+	fmt.Println("  /exit       - quit")
+	fmt.Println()
+
+	counter := buildCounter(strings.ToLower(*flagCounter), modelName)
+	scanner := bufio.NewScanner(os.Stdin)
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for {
+		fmt.Print("👤 You: ")
+		if !scanner.Scan() {
+			break
+		}
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		handled := handleCommand(&messages, line)
+		if handled {
+			if line == "/exit" {
+				return
+			}
+			continue
+		}
+		processTurn(context.Background(), modelInstance, counter, &messages, line)
+	}
+}
+
+func getDefaultModel(provider string) string {
+	switch provider {
+	case "anthropic":
+		return "claude-3-5-sonnet"
+	default:
+		return "deepseek-chat"
+	}
+}
+
+func buildOpenAIModel(modelName string) model.Model {
 	var opts []openai.Option
 	opts = append(opts, openai.WithEnableTokenTailoring(*flagEnableTokenTailoring))
 
@@ -52,7 +126,7 @@ func main() {
 		opts = append(opts, openai.WithMaxInputTokens(*flagMaxInputTokens))
 	}
 
-	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel)
+	counter := buildCounter(strings.ToLower(*flagCounter), modelName)
 	opts = append(opts, openai.WithTokenCounter(counter))
 
 	// Always create strategy with the user-provided counter to ensure consistency.
@@ -81,48 +155,47 @@ func main() {
 		},
 	))
 
-	modelInstance := openai.New(*flagModel, opts...)
+	return openai.New(modelName, opts...)
+}
 
-	fmt.Printf("✂️  Token Tailoring Demo\n")
-	fmt.Printf("🧩 model: %s\n", *flagModel)
-	fmt.Printf("🔧 enable-token-tailoring: %t\n", *flagEnableTokenTailoring)
+func buildAnthropicModel(modelName string) model.Model {
+	var opts []anthropic.Option
+	opts = append(opts, anthropic.WithEnableTokenTailoring(*flagEnableTokenTailoring))
+
 	if *flagMaxInputTokens > 0 {
-		fmt.Printf("🔢 max-input-tokens: %d\n", *flagMaxInputTokens)
-	} else {
-		fmt.Printf("🔢 max-input-tokens: auto (from context window)\n")
+		opts = append(opts, anthropic.WithMaxInputTokens(*flagMaxInputTokens))
 	}
-	fmt.Printf("🧮 counter: %s\n", strings.ToLower(*flagCounter))
-	fmt.Printf("🎛️ strategy: %s\n", strings.ToLower(*flagStrategy))
-	fmt.Printf("📡 streaming: %t\n", *flagStreaming)
-	fmt.Println("==================================================")
-	fmt.Println("💡 Commands:")
-	fmt.Println("  /bulk N     - append N synthetic user messages")
-	fmt.Println("  /load FILE  - load messages from JSON file (e.g., /load input.json)")
-	fmt.Println("  /history    - show current message count")
-	fmt.Println("  /show       - display current messages (head + tail)")
-	fmt.Println("  /exit       - quit")
-	fmt.Println()
 
-	scanner := bufio.NewScanner(os.Stdin)
-	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
-	for {
-		fmt.Print("👤 You: ")
-		if !scanner.Scan() {
-			break
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		handled := handleCommand(&messages, line)
-		if handled {
-			if line == "/exit" {
-				return
+	counter := buildCounter(strings.ToLower(*flagCounter), modelName)
+	opts = append(opts, anthropic.WithTokenCounter(counter))
+
+	// Always create strategy with the user-provided counter to ensure consistency.
+	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
+	opts = append(opts, anthropic.WithTailoringStrategy(strategy))
+
+	// Add callback to print token statistics before sending request.
+	opts = append(opts, anthropic.WithChatRequestCallback(
+		func(ctx context.Context, req *anthropicsdk.MessageNewParams) {
+			// Convert Anthropic messages back to model.Message for token counting.
+			messages := convertFromAnthropicMessages(req.Messages, req.System)
+			tokensAfter, _ := counter.CountTokensRange(ctx, messages, 0, len(messages))
+
+			// Display tailoring statistics.
+			if *flagMaxInputTokens > 0 {
+				fmt.Printf("\n✂️  [Tailoring] maxInputTokens=%d 📨 messages=%d 🎯 tokens=%d\n",
+					*flagMaxInputTokens, len(messages), tokensAfter)
+			} else {
+				fmt.Printf("\n✂️  [Tailoring] maxInputTokens=auto 📨 messages=%d 🎯 tokens=%d\n",
+					len(messages), tokensAfter)
 			}
-			continue
-		}
-		processTurn(context.Background(), modelInstance, counter, &messages, line)
-	}
+
+			// Show head and tail messages to visualize what was kept/removed.
+			fmt.Printf("📝 Messages (after tailoring, showing head + tail):\n%s",
+				summarizeMessagesHeadTail(messages, 5, 5))
+		},
+	))
+
+	return anthropic.New(modelName, opts...)
 }
 
 func buildStrategy(counter model.TokenCounter, strategyName string) model.TailoringStrategy {
@@ -201,42 +274,25 @@ func handleCommand(messages *[]model.Message, line string) bool {
 	}
 }
 
-func processTurn(ctx context.Context, m *openai.Model, counter model.TokenCounter, messages *[]model.Message, userLine string) {
+func processTurn(ctx context.Context, m model.Model, counter model.TokenCounter, messages *[]model.Message, userLine string) {
 	*messages = append(*messages, model.NewUserMessage(userLine))
-	before := len(*messages)
 	req := &model.Request{
 		Messages:         *messages,
 		GenerationConfig: model.GenerationConfig{Stream: *flagStreaming},
 	}
 
-	// Print token count before tailoring.
-	tokensBefore, _ := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
-
 	ch, err := m.GenerateContent(ctx, req)
 	if err != nil {
 		log.Warn("generate content failed", err)
+		return
 	}
 
 	final := renderResponse(ch, *flagStreaming)
 
-	// Calculate token count after tailoring.
-	tokensAfter, _ := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
-
-	// Display tailoring statistics.
-	if *flagMaxInputTokens > 0 {
-		fmt.Printf("\n✂️  [Tailoring] maxInputTokens=%d 📨 messages=%d→%d 🎯 tokens=%d→%d\n",
-			*flagMaxInputTokens, before, len(req.Messages), tokensBefore, tokensAfter)
-	} else {
-		fmt.Printf("\n✂️  [Tailoring] maxInputTokens=auto 📨 messages=%d→%d 🎯 tokens=%d→%d\n",
-			before, len(req.Messages), tokensBefore, tokensAfter)
-	}
-
-	// Show head and tail messages to visualize what was kept/removed.
-	fmt.Printf("📝 Messages (after tailoring, showing head + tail):\n%s",
-		summarizeMessagesHeadTail(req.Messages, 5, 5))
-
 	if !*flagStreaming && final != "" {
 		fmt.Printf("🤖 Assistant: %s\n\n", strings.TrimSpace(final))
+	}
+	if final != "" {
 		*messages = append(*messages, model.NewAssistantMessage(final))
 	}
 }
