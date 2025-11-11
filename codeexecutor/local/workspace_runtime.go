@@ -550,9 +550,18 @@ func (r *Runtime) CollectOutputs(
 			name := strings.TrimPrefix(
 				mAbs, ws.Path+string(os.PathSeparator),
 			)
-			data, mime, err := readLimitedWithCap(mAbs, int(leftTotal))
+			// Respect both per-file and total byte limits.
+			limit := int(maxFileBytes)
+			if int64(limit) > leftTotal {
+				limit = int(leftTotal)
+			}
+			data, mime, err := readLimitedWithCap(mAbs, limit)
 			if err != nil {
 				return codeexecutor.OutputManifest{}, err
+			}
+			// Mark limits hit when a file reached per-file cap.
+			if int64(len(data)) >= maxFileBytes {
+				out.LimitsHit = true
 			}
 			leftTotal -= int64(len(data))
 			count++

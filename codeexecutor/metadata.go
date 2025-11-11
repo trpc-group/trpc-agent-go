@@ -48,41 +48,41 @@ const (
 
 // WorkspaceMetadata describes staged skills and recent activity.
 type WorkspaceMetadata struct {
-    Version    int                  `json:"version"`
-    CreatedAt  time.Time            `json:"created_at"`
-    UpdatedAt  time.Time            `json:"updated_at"`
-    LastAccess time.Time            `json:"last_access"`
-    Skills     map[string]SkillMeta `json:"skills"`
-    Inputs     []InputRecord        `json:"inputs,omitempty"`
-    Outputs    []OutputRecord       `json:"outputs,omitempty"`
+	Version    int                  `json:"version"`
+	CreatedAt  time.Time            `json:"created_at"`
+	UpdatedAt  time.Time            `json:"updated_at"`
+	LastAccess time.Time            `json:"last_access"`
+	Skills     map[string]SkillMeta `json:"skills"`
+	Inputs     []InputRecord        `json:"inputs,omitempty"`
+	Outputs    []OutputRecord       `json:"outputs,omitempty"`
 }
 
 // SkillMeta records a staged skill snapshot.
 type SkillMeta struct {
-    Name     string    `json:"name"`
-    RelPath  string    `json:"rel_path"`
-    Digest   string    `json:"digest"`
-    Mounted  bool      `json:"mounted"`
-    StagedAt time.Time `json:"staged_at"`
+	Name     string    `json:"name"`
+	RelPath  string    `json:"rel_path"`
+	Digest   string    `json:"digest"`
+	Mounted  bool      `json:"mounted"`
+	StagedAt time.Time `json:"staged_at"`
 }
 
 // InputRecord tracks a staged input resolution.
 type InputRecord struct {
-    From      string    `json:"from"`
-    To        string    `json:"to"`
-    Resolved  string    `json:"resolved,omitempty"`
-    Version   *int      `json:"version,omitempty"`
-    Mode      string    `json:"mode,omitempty"`
-    Timestamp time.Time `json:"ts"`
+	From      string    `json:"from"`
+	To        string    `json:"to"`
+	Resolved  string    `json:"resolved,omitempty"`
+	Version   *int      `json:"version,omitempty"`
+	Mode      string    `json:"mode,omitempty"`
+	Timestamp time.Time `json:"ts"`
 }
 
 // OutputRecord tracks an output collection run.
 type OutputRecord struct {
-    Globs     []string  `json:"globs"`
-    SavedAs   []string  `json:"saved_as,omitempty"`
-    Versions  []int     `json:"versions,omitempty"`
-    LimitsHit bool      `json:"limits_hit"`
-    Timestamp time.Time `json:"ts"`
+	Globs     []string  `json:"globs"`
+	SavedAs   []string  `json:"saved_as,omitempty"`
+	Versions  []int     `json:"versions,omitempty"`
+	LimitsHit bool      `json:"limits_hit"`
+	Timestamp time.Time `json:"ts"`
 }
 
 // EnsureLayout creates standard workspace subdirectories and a
@@ -152,7 +152,7 @@ func SaveMetadata(root string, md WorkspaceMetadata) error {
 		return err
 	}
 	tmp := filepath.Join(root, ".metadata.tmp")
-	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
+	if err := os.WriteFile(tmp, buf, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, filepath.Join(root, MetaFileName))

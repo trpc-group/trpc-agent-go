@@ -12,6 +12,7 @@ package local_test
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -242,6 +243,19 @@ func TestRuntime_RunProgram_DefaultTimeoutUsed(t *testing.T) {
 	require.False(t, res.TimedOut)
 }
 
+func TestRuntime_PutDirectory_EmptyHostPath_Error(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-empty-host", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	err = rt.PutDirectory(ctx, ws, "", "dst")
+	require.Error(t, err)
+}
+
 func TestRuntime_RunProgram_NonexistentCommandExitCode(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()
@@ -259,6 +273,34 @@ func TestRuntime_RunProgram_NonexistentCommandExitCode(t *testing.T) {
 	require.NoError(t, err)
 	// Non-ExitError maps to -1 per implementation.
 	require.Equal(t, -1, res.ExitCode)
+}
+
+func TestRuntime_StageDirectory_Writable_WhenNotReadOnly(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-stage-rw", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Prepare a temp dir with a file.
+	src := t.TempDir()
+	f := filepath.Join(src, "f.txt")
+	require.NoError(t, os.WriteFile(f, []byte("x"), 0o644))
+
+	require.NoError(t, rt.StageDirectory(
+		ctx, ws, src, "tool", codeexecutor.StageOptions{ReadOnly: false},
+	))
+
+	target := filepath.Join(ws.Path, "tool", "f.txt")
+	// Append should succeed when not read-only.
+	ff, err := os.OpenFile(
+		target, os.O_WRONLY|os.O_APPEND, 0,
+	)
+	require.NoError(t, err)
+	_, _ = ff.Write([]byte("y"))
+	_ = ff.Close()
 }
 
 func TestRuntime_StageDirectory_ReadOnly_EmptyDir(t *testing.T) {
@@ -349,6 +391,63 @@ func TestRuntime_Collect_PathTraversalFiltered(t *testing.T) {
 	}
 }
 
+func TestRuntime_Collect_SymlinkEscapeFiltered(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-symlink", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Outside file and a symlink inside workspace pointing to it.
+	outside := filepath.Join(filepath.Dir(ws.Path), "out.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("x"), 0o644))
+
+	link := filepath.Join(ws.Path, codeexecutor.DirWork, "link")
+	require.NoError(t, os.MkdirAll(
+		filepath.Dir(link), 0o755,
+	))
+	require.NoError(t, os.Symlink(outside, link))
+
+	files, err := rt.Collect(
+		ctx, ws, []string{filepath.Join(codeexecutor.DirWork, "*")},
+	)
+	require.NoError(t, err)
+	for _, f := range files {
+		require.NotEqual(t, "work/link", f.Name)
+	}
+}
+
+func TestRuntime_Collect_DedupOverlappingGlobs(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-dedup", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Create files under dst/ and dst/sub/.
+	require.NoError(t, rt.PutFiles(ctx, ws, []codeexecutor.PutFile{
+		{Path: "dst/a.txt", Content: []byte("a"), Mode: 0o644},
+		{Path: "dst/sub/b.txt", Content: []byte("b"), Mode: 0o644},
+	}))
+
+	files, err := rt.Collect(ctx, ws, []string{
+		"dst/*.txt", "dst/**/*.txt",
+	})
+	require.NoError(t, err)
+	// a.txt matched by both; ensure dedup keeps it once.
+	countA := 0
+	for _, f := range files {
+		if f.Name == "dst/a.txt" {
+			countA++
+		}
+	}
+	require.Equal(t, 1, countA)
+}
+
 func TestRuntime_PutFiles_EmptyPathError(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()
@@ -364,6 +463,79 @@ func TestRuntime_PutFiles_EmptyPathError(t *testing.T) {
 		Mode:    0,
 	}})
 	require.Error(t, err)
+}
+
+func TestRuntime_PutFiles_DefaultMode(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-defmode", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Mode 0 should fall back to default (0644).
+	const p = "a/b/c.txt"
+	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    p,
+		Content: []byte("hi"),
+		Mode:    0,
+	}})
+	require.NoError(t, err)
+	st, err := os.Stat(filepath.Join(ws.Path, p))
+	require.NoError(t, err)
+	require.Equal(t, fs.FileMode(0o644), st.Mode().Perm())
+}
+
+func TestRuntime_RunProgram_InjectsWorkspaceEnvs(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-env-inject", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Echo the injected env variables.
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+		Args: []string{
+			"-lc",
+			"echo $WORKSPACE_DIR; echo $SKILLS_DIR; echo $WORK_DIR; " +
+				"echo $OUTPUT_DIR; echo $RUN_DIR",
+		},
+		Timeout: 3 * time.Second,
+	})
+	require.NoError(t, err)
+	// All must be set and point within workspace.
+	out := strings.Split(strings.TrimSpace(res.Stdout), "\n")
+	require.GreaterOrEqual(t, len(out), 5)
+	require.Equal(t, ws.Path, out[0])
+	require.Equal(t, filepath.Join(ws.Path, codeexecutor.DirSkills), out[1])
+	require.Equal(t, filepath.Join(ws.Path, codeexecutor.DirWork), out[2])
+	require.Equal(t, filepath.Join(ws.Path, codeexecutor.DirOut), out[3])
+	require.True(t, strings.HasPrefix(out[4], filepath.Join(ws.Path,
+		codeexecutor.DirRuns)))
+}
+
+func TestRuntime_CreateWorkspace_WithWorkRoot(t *testing.T) {
+	rt := local.NewRuntime(t.TempDir())
+	ctx := context.Background()
+	// Exec id with characters to sanitize.
+	ws, err := rt.CreateWorkspace(
+		ctx, "id with spaces/and*chars", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+	// Ensure standard subdirs exist.
+	_, err = os.Stat(filepath.Join(ws.Path, codeexecutor.DirSkills))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(ws.Path, codeexecutor.DirWork))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(ws.Path, codeexecutor.DirRuns))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(ws.Path, codeexecutor.DirOut))
+	require.NoError(t, err)
 }
 
 func TestRuntime_PutDirectory_PreservesMode(t *testing.T) {

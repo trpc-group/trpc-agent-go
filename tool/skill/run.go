@@ -111,7 +111,9 @@ func (t *RunTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the run request.
-func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
+func (t *RunTool) Call(
+	ctx context.Context, args []byte,
+) (any, error) {
 	in, err := t.parseRunArgs(args)
 	if err != nil {
 		return nil, err
@@ -125,103 +127,37 @@ func (t *RunTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
 		return nil, err
 	}
-
-	// Prepare context with artifact service/session when available.
-	ctxIO := ctx
-	if inv, ok := agent.InvocationFromContext(ctx); ok &&
-		inv != nil && inv.ArtifactService != nil &&
-		inv.Session != nil {
-		ctxIO = codeexecutor.WithArtifactService(
-			ctxIO, inv.ArtifactService,
-		)
-		ctxIO = codeexecutor.WithArtifactSession(
-			ctxIO, artifact.SessionInfo{
-				AppName:   inv.Session.AppName,
-				UserID:    inv.Session.UserID,
-				SessionID: inv.Session.ID,
-			},
-		)
-	}
-
-	// Stage declared inputs if any.
+	// Prepare IO context and stage declared inputs.
+	ctxIO := withArtifactContext(ctx)
 	if len(in.Inputs) > 0 {
 		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
 			return nil, err
 		}
 	}
-
-	// Default working directory is the skill root so commands like
-	// "python3 scripts/x.py" work without additional prefixes.
-	// Commands should still prefer $OUTPUT_DIR for writes.
+	// Compute CWD and execute program.
 	cwd := resolveCWD(in.Cwd, in.Skill)
 	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
 	if err != nil {
 		return nil, err
 	}
-
-	var files []codeexecutor.File
-	var manifest *codeexecutor.OutputManifest
-	if in.Outputs != nil && len(in.OutputFiles) == 0 {
-		m, err := eng.FS().CollectOutputs(ctxIO, ws, *in.Outputs)
-		if err != nil {
-			return nil, err
-		}
-		manifest = &m
-		// Map to legacy files for output shape when Inline=true.
-		if in.Outputs.Inline {
-			for _, fr := range m.Files {
-				files = append(files, codeexecutor.File{
-					Name:     fr.Name,
-					Content:  fr.Content,
-					MIMEType: fr.MIMEType,
-				})
-			}
-		}
-	} else {
-		var err error
-		files, err = t.collectFiles(ctx, eng, ws, in.OutputFiles)
-		if err != nil {
-			return nil, err
-		}
+	// Collect outputs via spec or legacy globs.
+	files, manifest, err := t.prepareOutputs(
+		ctxIO, eng, ws, in,
+	)
+	if err != nil {
+		return nil, err
 	}
-
-	out := runOutput{
-		Stdout:      rr.Stdout,
-		Stderr:      rr.Stderr,
-		ExitCode:    rr.ExitCode,
-		TimedOut:    rr.TimedOut,
-		Duration:    rr.Duration.Milliseconds(),
-		OutputFiles: files,
+	out := buildRunOutput(rr, files)
+	if err := t.attachArtifactsIfRequested(
+		ctx, &out, files, in.ArtifactPrefix, in.SaveArtifacts,
+		in.OmitInline,
+	); err != nil {
+		return nil, err
 	}
-
-	if in.SaveArtifacts && len(files) > 0 {
-		refs, err := t.saveArtifacts(ctx, files, in.ArtifactPrefix)
-		if err != nil {
-			return nil, err
-		}
-		out.ArtifactFiles = refs
-		if in.OmitInline {
-			for i := range out.OutputFiles {
-				out.OutputFiles[i].Content = ""
-			}
-		}
-	}
-	// If using outputs spec and files were not inlined, attach
-	// artifact refs from manifest.
-	if manifest != nil && len(out.ArtifactFiles) == 0 {
-		for _, fr := range manifest.Files {
-			if fr.SavedAs != "" {
-				out.ArtifactFiles = append(out.ArtifactFiles, artifactRef{
-					Name:    fr.SavedAs,
-					Version: fr.Version,
-				})
-			}
-		}
-	}
+	mergeManifestArtifactRefs(manifest, &out)
 	return out, nil
 }
 
@@ -460,6 +396,123 @@ func (t *RunTool) runProgram(
 			Timeout: timeout,
 		},
 	)
+}
+
+// withArtifactContext returns a context augmented with artifact
+// service and session info when available from the invocation.
+func withArtifactContext(ctx context.Context) context.Context {
+	ctxIO := ctx
+	if inv, ok := agent.InvocationFromContext(ctx); ok &&
+		inv != nil && inv.ArtifactService != nil &&
+		inv.Session != nil {
+		ctxIO = codeexecutor.WithArtifactService(
+			ctxIO, inv.ArtifactService,
+		)
+		ctxIO = codeexecutor.WithArtifactSession(
+			ctxIO, artifact.SessionInfo{
+				AppName:   inv.Session.AppName,
+				UserID:    inv.Session.UserID,
+				SessionID: inv.Session.ID,
+			},
+		)
+	}
+	return ctxIO
+}
+
+// prepareOutputs collects files either through OutputSpec or legacy
+// output_files patterns. It returns collected files and optional
+// manifest.
+func (t *RunTool) prepareOutputs(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	in runInput,
+) ([]codeexecutor.File, *codeexecutor.OutputManifest, error) {
+	var files []codeexecutor.File
+	var manifest *codeexecutor.OutputManifest
+	if in.Outputs != nil && len(in.OutputFiles) == 0 {
+		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
+		if err != nil {
+			return nil, nil, err
+		}
+		manifest = &m
+		if in.Outputs.Inline {
+			for _, fr := range m.Files {
+				files = append(files, codeexecutor.File{
+					Name:     fr.Name,
+					Content:  fr.Content,
+					MIMEType: fr.MIMEType,
+				})
+			}
+		}
+		return files, manifest, nil
+	}
+	fs, err := t.collectFiles(ctx, eng, ws, in.OutputFiles)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fs, nil, nil
+}
+
+// buildRunOutput converts a RunResult and files into runOutput.
+func buildRunOutput(
+	rr codeexecutor.RunResult, files []codeexecutor.File,
+) runOutput {
+	return runOutput{
+		Stdout:      rr.Stdout,
+		Stderr:      rr.Stderr,
+		ExitCode:    rr.ExitCode,
+		TimedOut:    rr.TimedOut,
+		Duration:    rr.Duration.Milliseconds(),
+		OutputFiles: files,
+	}
+}
+
+// attachArtifactsIfRequested saves files as artifacts when requested
+// and optionally omits inline content in the returned files.
+func (t *RunTool) attachArtifactsIfRequested(
+	ctx context.Context,
+	out *runOutput,
+	files []codeexecutor.File,
+	prefix string,
+	save bool,
+	omitInline bool,
+) error {
+	if len(files) == 0 {
+		return nil
+	}
+	// Only act when caller requests artifact persistence.
+	if save {
+		refs, err := t.saveArtifacts(ctx, files, prefix)
+		if err != nil {
+			return err
+		}
+		out.ArtifactFiles = refs
+		if omitInline {
+			for i := range out.OutputFiles {
+				out.OutputFiles[i].Content = ""
+			}
+		}
+	}
+	return nil
+}
+
+// mergeManifestArtifactRefs appends artifact refs derived from a
+// manifest when inline files were not already saved.
+func mergeManifestArtifactRefs(
+	manifest *codeexecutor.OutputManifest, out *runOutput,
+) {
+	if manifest == nil || len(out.ArtifactFiles) > 0 {
+		return
+	}
+	for _, fr := range manifest.Files {
+		if fr.SavedAs != "" {
+			out.ArtifactFiles = append(
+				out.ArtifactFiles,
+				artifactRef{Name: fr.SavedAs, Version: fr.Version},
+			)
+		}
+	}
 }
 
 func (t *RunTool) collectFiles(

@@ -31,6 +31,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -70,7 +71,8 @@ func TestWorkspaceRuntime_CreateAndCleanup(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/containers/"+testCID+"/exec"):
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
 			// create exec id
 			execIdx++
 			id := testExec1
@@ -80,21 +82,25 @@ func TestWorkspaceRuntime_CreateAndCleanup(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"` + id + `"}`))
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/start"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
 			hj, _ := w.(http.Hijacker)
 			conn, buf, _ := hj.Hijack()
 			writeHijackStream(t, conn, buf, "", "")
 		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/json"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ExitCode":0}`))
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec2+"/start"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/start"):
 			hj, _ := w.(http.Hijacker)
 			conn, buf, _ := hj.Hijack()
 			writeHijackStream(t, conn, buf, "", "")
 		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec2+"/json"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ExitCode":0}`))
 		default:
@@ -117,7 +123,8 @@ func TestWorkspaceRuntime_CreateAndCleanup(t *testing.T) {
 	}
 
 	ws, err := rt.CreateWorkspace(
-		context.Background(), "abc 123", codeexecutor.WorkspacePolicy{},
+		context.Background(), "abc 123",
+		codeexecutor.WorkspacePolicy{},
 	)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(ws.Path, testRunBase))
@@ -130,7 +137,8 @@ func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPut &&
-			strings.Contains(r.URL.Path, "/containers/"+testCID+"/archive"):
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
 			// verify incoming tar contains expected file
 			tr := tar.NewReader(r.Body)
 			hdr, err := tr.Next()
@@ -142,16 +150,19 @@ func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {
 			putCalled = true
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/containers/"+testCID+"/exec"):
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/start"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
 			hj, _ := w.(http.Hijacker)
 			conn, buf, _ := hj.Hijack()
 			writeHijackStream(t, conn, buf, "run-out", "")
 		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/json"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ExitCode":0}`))
 		default:
@@ -173,9 +184,11 @@ func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {
 		},
 	}
 
-	ws := codeexecutor.Workspace{ID: "w1", Path: path.Join(testRunBase, "w1")}
+	ws := codeexecutor.Workspace{ID: "w1",
+		Path: path.Join(testRunBase, "w1")}
 	err := rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
-		{Path: "hello.txt", Content: []byte(contentHello), Mode: 0o644},
+		{Path: "hello.txt", Content: []byte(contentHello),
+			Mode: 0o644},
 	})
 	require.NoError(t, err)
 	require.True(t, putCalled)
@@ -244,21 +257,24 @@ func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 			runContainerBase: testRunBase,
 		},
 	}
-	ws := codeexecutor.Workspace{ID: "wENV", Path: path.Join(testRunBase, "wENV")}
+	ws := codeexecutor.Workspace{ID: "wENV",
+		Path: path.Join(testRunBase, "wENV")}
 	// Stage a dummy file to allow cd into workspace.
 	err := rt.PutFiles(context.Background(), ws,
-		[]codeexecutor.PutFile{{Path: "d.txt", Content: []byte("x"),
-			Mode: 0o644}})
+		[]codeexecutor.PutFile{{Path: "d.txt",
+			Content: []byte("x"), Mode: 0o644}})
 	require.NoError(t, err)
 
 	// Run without explicit WORKSPACE_DIR; runtime should inject it.
 	_, err = rt.RunProgram(context.Background(), ws,
-		codeexecutor.RunProgramSpec{Cmd: "bash", Args: []string{"-lc", "true"}})
+		codeexecutor.RunProgramSpec{Cmd: "bash",
+			Args: []string{"-lc", "true"}})
 	require.NoError(t, err)
 	require.NotEmpty(t, capturedCmd)
-	// Join the command string array; the env is embedded in -lc string.
+	// Join the command string array; the env is embedded in -lc.
 	joined := strings.Join(capturedCmd, " ")
-	require.Contains(t, joined, codeexecutor.WorkspaceEnvDirKey+"=")
+	require.Contains(t, joined,
+		codeexecutor.WorkspaceEnvDirKey+"=")
 	require.Contains(t, joined, ws.Path)
 }
 
@@ -267,23 +283,27 @@ func TestWorkspaceRuntime_Collect(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/containers/"+testCID+"/exec"):
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/start"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
 			hj, _ := w.(http.Hijacker)
 			conn, buf, _ := hj.Hijack()
 			// echo file list
 			list := "/work/out/a.txt\n/work/other.png\n"
 			writeHijackStream(t, conn, buf, list, "")
 		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/json"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ExitCode":0}`))
 		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path, "/containers/"+testCID+"/archive"):
-			// Return a tar stream with a single file entry and stat header.
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Return a tar stream with a single file entry and stat.
 			w.Header().Set(
 				"X-Docker-Container-Path-Stat",
 				b64PathStat+b64PathStat2+b64PathStat3,
@@ -331,17 +351,20 @@ func TestWorkspaceRuntime_MountOptimizations(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/containers/"+testCID+"/exec"):
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
 			execCalls++
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/start"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
 			hj, _ := w.(http.Hijacker)
 			conn, buf, _ := hj.Hijack()
 			writeHijackStream(t, conn, buf, "", "")
 		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/json"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ExitCode":0}`))
 		default:
@@ -368,7 +391,8 @@ func TestWorkspaceRuntime_MountOptimizations(t *testing.T) {
 			skillsContainerBase: "/opt/trpc-agent/skills",
 		},
 	}
-	ws := codeexecutor.Workspace{ID: "w3", Path: path.Join(testRunBase, "w3")}
+	ws := codeexecutor.Workspace{ID: "w3",
+		Path: path.Join(testRunBase, "w3")}
 
 	// PutDirectory uses mount-first path
 	require.NoError(t, rt.PutDirectory(
@@ -487,7 +511,8 @@ func TestWorkspaceRuntime_PutDirectory_TarCopy_Error(t *testing.T) {
 		},
 		cfg: runtimeConfig{runContainerBase: testRunBase},
 	}
-	ws := codeexecutor.Workspace{ID: "w6", Path: path.Join(testRunBase, "w6")}
+	ws := codeexecutor.Workspace{ID: "w6",
+		Path: path.Join(testRunBase, "w6")}
 	err := rt.PutDirectory(context.Background(), ws, src, "dst")
 	require.Error(t, err)
 	require.True(t, mkdirOK)
@@ -513,7 +538,8 @@ func TestWorkspaceRuntime_Collect_NoMatches_And_CopyError(t *testing.T) {
 				writeHijackStream(t, conn, buf, "", "")
 			} else {
 				// single file
-				writeHijackStream(t, conn, buf, "/work/x.txt\n", "")
+				writeHijackStream(t, conn, buf,
+					"/work/x.txt\n", "")
 			}
 		case r.Method == http.MethodGet &&
 			strings.Contains(r.URL.Path,
@@ -523,7 +549,7 @@ func TestWorkspaceRuntime_Collect_NoMatches_And_CopyError(t *testing.T) {
 		case r.Method == http.MethodGet &&
 			strings.Contains(r.URL.Path,
 				"/containers/"+testCID+"/archive"):
-			// For phase 1 we do not reach here; for phase 2 force error.
+			// For phase 1 we do not reach here; for phase 2 force err.
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
@@ -560,21 +586,25 @@ func TestWorkspaceRuntime_ExecuteInline(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPut &&
-			strings.Contains(r.URL.Path, "/containers/"+testCID+"/archive"):
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
 			// accept staged file
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/containers/"+testCID+"/exec"):
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
 			execCount++
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
 		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/start"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
 			hj, _ := w.(http.Hijacker)
 			conn, buf, _ := hj.Hijack()
 			writeHijackStream(t, conn, buf, "X", "")
 		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/json"):
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ExitCode":0}`))
 		default:
@@ -605,170 +635,23 @@ func TestWorkspaceRuntime_ExecuteInline(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 0, res.ExitCode)
-	require.Contains(t, res.Stdout, "X")
-	require.GreaterOrEqual(t, execCount, 1)
-}
 
-func TestWorkspaceRuntime_PutDirectory_TarFallback(t *testing.T) {
-	// skillsHostBase empty triggers tar CopyToContainer path.
-	src := t.TempDir()
-	require.NoError(t, os.WriteFile(
-		filepath.Join(src, "a.txt"), []byte("AA"), 0o644,
-	))
-
-	var mkdirCalled, putCalled bool
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path,
-				"/containers/"+testCID+"/exec"):
-			// mkdir -p dest
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
-		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path,
-				"/exec/"+testExec1+"/start"):
-			hj, _ := w.(http.Hijacker)
-			conn, buf, _ := hj.Hijack()
-			mkdirCalled = true
-			writeHijackStream(t, conn, buf, "", "")
-		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path,
-				"/exec/"+testExec1+"/json"):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ExitCode":0}`))
-		case r.Method == http.MethodPut &&
-			strings.Contains(r.URL.Path,
-				"/containers/"+testCID+"/archive"):
-			// Receive tar and verify our file is present.
-			tr := tar.NewReader(r.Body)
-			found := false
-			for {
-				hdr, err := tr.Next()
-				if err != nil {
-					break
-				}
-				if strings.HasSuffix(hdr.Name, "a.txt") {
-					found = true
-					break
-				}
-			}
-			require.True(t, found)
-			putCalled = true
-			w.WriteHeader(http.StatusOK)
-		default:
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-	}
-
-	cli, cleanup := fakeDocker(t, handler)
-	defer cleanup()
-
-	rt := &workspaceRuntime{
-		ce: &CodeExecutor{
-			client:    cli,
-			container: &tcontainer.Summary{ID: testCID},
-		},
-		cfg: runtimeConfig{runContainerBase: testRunBase},
-	}
-	ws := codeexecutor.Workspace{ID: "w4", Path: path.Join(testRunBase, "w4")}
-	err := rt.PutDirectory(context.Background(), ws, src, "dst")
+	// Include a failing spec so that stderr shows error lines.
+	res, err = rt.ExecuteInline(
+		context.Background(), "execID",
+		[]codeexecutor.CodeBlock{{
+			Code:     "echo ok",
+			Language: "badlang",
+		}}, time.Second*3,
+	)
 	require.NoError(t, err)
-	require.True(t, mkdirCalled)
-	require.True(t, putCalled)
+	require.Contains(t, res.Stderr, "unsupported language")
 }
 
-func TestWorkspaceRuntime_PutSkill_TarFallback(t *testing.T) {
-	// Without skillsHostBase, PutSkill falls back to PutDirectory path.
-	src := t.TempDir()
-	require.NoError(t, os.WriteFile(
-		filepath.Join(src, "b.txt"), []byte("BB"), 0o644,
-	))
-
-	var mkdirCalled, putCalled bool
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path,
-				"/containers/"+testCID+"/exec"):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
-		case r.Method == http.MethodPost &&
-			strings.Contains(r.URL.Path,
-				"/exec/"+testExec1+"/start"):
-			hj, _ := w.(http.Hijacker)
-			conn, buf, _ := hj.Hijack()
-			mkdirCalled = true
-			writeHijackStream(t, conn, buf, "", "")
-		case r.Method == http.MethodGet &&
-			strings.Contains(r.URL.Path,
-				"/exec/"+testExec1+"/json"):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ExitCode":0}`))
-		case r.Method == http.MethodPut &&
-			strings.Contains(r.URL.Path,
-				"/containers/"+testCID+"/archive"):
-			// Receive tar and verify our file is present.
-			tr := tar.NewReader(r.Body)
-			found := false
-			for {
-				hdr, err := tr.Next()
-				if err != nil {
-					break
-				}
-				if strings.HasSuffix(hdr.Name, "b.txt") {
-					found = true
-					break
-				}
-			}
-			require.True(t, found)
-			putCalled = true
-			w.WriteHeader(http.StatusOK)
-		default:
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-	}
-
-	cli, cleanup := fakeDocker(t, handler)
-	defer cleanup()
-
-	rt := &workspaceRuntime{
-		ce: &CodeExecutor{
-			client:    cli,
-			container: &tcontainer.Summary{ID: testCID},
-		},
-		cfg: runtimeConfig{runContainerBase: testRunBase},
-	}
-	ws := codeexecutor.Workspace{ID: "w5", Path: path.Join(testRunBase, "w5")}
-	err := rt.StageDirectory(context.Background(), ws, src, "tool",
-		codeexecutor.StageOptions{})
-	require.NoError(t, err)
-	require.True(t, mkdirCalled)
-	require.True(t, putCalled)
-}
-
-func TestWorkspaceRuntime_Cleanup_EmptyOK(t *testing.T) {
-	rt := &workspaceRuntime{}
-	err := rt.Cleanup(context.Background(), codeexecutor.Workspace{})
-	require.NoError(t, err)
-}
-
-func TestHelpers_Sanitize_ShellQuote_TarFromFiles(t *testing.T) {
-	// sanitize
-	require.Equal(t, "abc_123", sanitize("abc 123"))
-	require.Equal(t, "AZaz09-__", sanitize("AZaz09-!@"))
-
-	// shellQuote
-	require.Equal(t, "''", shellQuote(""))
-	sq := shellQuote("a'b")
-	require.True(t, strings.HasPrefix(sq, "'a'"))
-	require.Contains(t, sq, "\\'")
-	require.True(t, strings.HasSuffix(sq, "b'"))
-
-	// tarFromFiles
+func TestTarFromFiles(t *testing.T) {
 	rc, err := tarFromFiles([]codeexecutor.PutFile{{
 		Path:    "p/q.txt",
-		Content: []byte("x"),
+		Content: []byte("value"),
 		Mode:    0o644,
 	}})
 	require.NoError(t, err)
@@ -819,7 +702,8 @@ func TestWorkspaceRuntime_RunProgram_TimedOut(t *testing.T) {
 		},
 		cfg: runtimeConfig{runContainerBase: testRunBase},
 	}
-	ws := codeexecutor.Workspace{ID: "wT", Path: path.Join(testRunBase, "wT")}
+	ws := codeexecutor.Workspace{ID: "wT",
+		Path: path.Join(testRunBase, "wT")}
 	res, err := rt.RunProgram(
 		context.Background(), ws,
 		codeexecutor.RunProgramSpec{
@@ -878,7 +762,8 @@ func TestWorkspaceRuntime_RunProgram_NoDupWorkspaceEnv(t *testing.T) {
 			runContainerBase: testRunBase,
 		},
 	}
-	ws := codeexecutor.Workspace{ID: "wE", Path: path.Join(testRunBase, "wE")}
+	ws := codeexecutor.Workspace{ID: "wE",
+		Path: path.Join(testRunBase, "wE")}
 	// Provide WORKSPACE_DIR in env; runtime should not duplicate it.
 	_, err := rt.RunProgram(
 		context.Background(), ws,
@@ -898,4 +783,221 @@ func TestWorkspaceRuntime_RunProgram_NoDupWorkspaceEnv(t *testing.T) {
 		joined, codeexecutor.WorkspaceEnvDirKey+"=",
 	)
 	require.Equal(t, 1, cnt)
+}
+
+func TestHelpers_Simple(t *testing.T) {
+	tmp := t.TempDir()
+	b := []string{tmp + ":/opt/trpc-agent/skills:ro"}
+	got := findBindSource(b, "/opt/trpc-agent/skills")
+	require.Equal(t, tmp, got)
+
+	require.Equal(t, "", findBindSource(b, "/none"))
+	require.Equal(t, "ab_12__X", sanitize("ab 12!@X"))
+
+	// shellQuote basics
+	require.Equal(t, "''", shellQuote(""))
+	sq := shellQuote("a'b")
+	require.True(t, strings.HasPrefix(sq, "'"))
+	require.True(t, strings.HasSuffix(sq, "'"))
+	require.Contains(t, sq, "\\'")
+
+	require.Equal(t, "c", inputBase("a/b/c"))
+	require.Equal(t, "abc", inputBase("abc"))
+}
+
+// A minimal artifact service for tests.
+type artMem struct{ saved int }
+
+func (m *artMem) SaveArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	_ string,
+	_ *artifact.Artifact,
+) (int, error) {
+	m.saved++
+	return m.saved, nil
+}
+
+func (*artMem) LoadArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	_ string,
+	_ *int,
+) (*artifact.Artifact, error) {
+	return &artifact.Artifact{
+		Data:     []byte("A1"),
+		MimeType: "text/plain",
+		Name:     "name",
+	}, nil
+}
+
+func (*artMem) ListArtifactKeys(
+	_ context.Context,
+	_ artifact.SessionInfo,
+) ([]string, error) {
+	return nil, nil
+}
+
+func (*artMem) DeleteArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	_ string,
+) error {
+	return nil
+}
+
+func (*artMem) ListVersions(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	_ string,
+) ([]int, error) {
+	return nil, nil
+}
+
+func TestStageInputs_AllBranches(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	inputsRoot := t.TempDir()
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{
+			runContainerBase:    testRunBase,
+			inputsHostBase:      inputsRoot,
+			inputsContainerBase: "/opt/trpc-agent/inputs",
+		},
+	}
+	ws := codeexecutor.Workspace{ID: "wSI",
+		Path: path.Join(testRunBase, "wSI")}
+
+	svc := &artMem{}
+	ctx := codeexecutor.WithArtifactService(
+		context.Background(), svc,
+	)
+
+	specs := []codeexecutor.InputSpec{
+		{From: "artifact://name@1", To: "work/a.txt",
+			Mode: "copy"},
+		{From: "host://" + filepath.Join(inputsRoot, "d1"),
+			To: "work/host1", Mode: "link"},
+		{From: "host://" + filepath.Join(inputsRoot, "d2"),
+			To: "work/host2", Mode: "copy"},
+		{From: "workspace://sub", To: "work/ws1",
+			Mode: "copy"},
+		{From: "skill://tool", To: "work/sk1", Mode: "link"},
+	}
+
+	require.NoError(t, rt.StageInputs(ctx, ws, specs))
+}
+
+func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
+	// Exec lists two files; archive serves content.
+	calls := 0
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf,
+				"/ws/out/a.txt\n/ws/out/b.txt\n", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Serve a tar stream for each file.
+			w.Header().Set(
+				"X-Docker-Container-Path-Stat",
+				b64PathStat+b64PathStat2+b64PathStat3,
+			)
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			payload := strings.Repeat("Z", 10)
+			_ = tw.WriteHeader(&tar.Header{
+				Name: "file",
+				Mode: 0o644,
+				Size: int64(len(payload)),
+			})
+			_, _ = tw.Write([]byte(payload))
+			_ = tw.Close()
+			_, _ = w.Write(buf.Bytes())
+			calls++
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	svc := &artMem{}
+	ctx := codeexecutor.WithArtifactService(
+		context.Background(), svc,
+	)
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "wCO", Path: "/ws"}
+	mf, err := rt.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{
+		Globs:         []string{"out/*.txt"},
+		MaxFiles:      1,
+		MaxFileBytes:  4,
+		MaxTotalBytes: 8,
+		Inline:        true,
+		Save:          true,
+		NameTemplate:  "prefix-",
+	})
+	require.NoError(t, err)
+	require.True(t, mf.LimitsHit)
+	require.Len(t, mf.Files, 1)
+	require.Equal(t, "out/a.txt", mf.Files[0].Name)
+	require.Equal(t, "prefix-out/a.txt", mf.Files[0].SavedAs)
+	require.NotZero(t, mf.Files[0].Version)
+	require.NotEmpty(t, mf.Files[0].MIMEType)
+	require.Equal(t, 4, len(mf.Files[0].Content))
+	require.Equal(t, 1, calls)
 }

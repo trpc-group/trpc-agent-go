@@ -204,3 +204,75 @@ func TestFSRepository_Summaries_IgnoresBrokenAfterScan(t *testing.T) {
 		}
 	}
 }
+
+func TestFSRepository_Get_MissingSkillError(t *testing.T) {
+	root := t.TempDir()
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	_, err = repo.Get("nope")
+	require.Error(t, err)
+}
+
+func TestParseFull_ErrorOnMissingFile(t *testing.T) {
+	_, _, err := parseFull(filepath.Join(t.TempDir(),
+		"does-not-exist.md"))
+	require.Error(t, err)
+}
+
+func TestReadFrontMatter_UnclosedReturnsError(t *testing.T) {
+	rd := bufio.NewReader(strings.NewReader(
+		"---\nkey: v\n"))
+	_, _, err := readFrontMatter(rd)
+	require.Error(t, err)
+}
+
+// closedAfterReader yields one line then os.ErrClosed.
+type closedAfterReader struct{ gave bool }
+
+func (c *closedAfterReader) Read(p []byte) (int, error) {
+	if !c.gave {
+		c.gave = true
+		copy(p, []byte("X\n"))
+		return 2, nil
+	}
+	return 0, os.ErrClosed
+}
+
+func TestIOReadAll_ClosedReturnsAccumulated(t *testing.T) {
+	rd := bufio.NewReader(&closedAfterReader{})
+	s, err := ioReadAll(rd)
+	require.NoError(t, err)
+	require.Equal(t, "X\n", s)
+}
+
+func TestFSRepository_Summaries_NameFallback(t *testing.T) {
+	root := t.TempDir()
+	sdir := writeSkill(t, root, "alpha")
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	// Remove name from SKILL.md after scan; keep valid front matter.
+	err = os.WriteFile(filepath.Join(sdir, skillFile), []byte(
+		"---\n# no name now\n"+
+			"description: something\n---\nbody\n"), 0o644)
+	require.NoError(t, err)
+
+	sums := repo.Summaries()
+	require.Len(t, sums, 1)
+	require.Equal(t, "alpha", sums[0].Name)
+}
+
+func TestFSRepository_Get_ReadSkillFileError(t *testing.T) {
+	root := t.TempDir()
+	sdir := writeSkill(t, root, "beta")
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	// Remove SKILL.md to force parseFull read error in Get.
+	require.NoError(t, os.Remove(
+		filepath.Join(sdir, skillFile)))
+
+	_, err = repo.Get("beta")
+	require.Error(t, err)
+}
