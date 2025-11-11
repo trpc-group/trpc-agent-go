@@ -53,24 +53,23 @@ type NodeFunc func(ctx context.Context, state State) (any, error)
 // It can be either a State update or a Command for combined state update + routing.
 type NodeResult any
 
-// SingleConditionalFunc is a function that determines the next node(s) based on state.
+// ConditionalFunc is a function that determines the next node(s) based on state.
 // Conditional edge function signature.
-type SingleConditionalFunc func(ctx context.Context, state State) (string, error)
+type ConditionalFunc func(ctx context.Context, state State) (string, error)
 
 // MultiConditionalFunc returns multiple next nodes for parallel execution.
 type MultiConditionalFunc func(ctx context.Context, state State) ([]string, error)
 
-// ConditionalFunc is a function that determines the next node(s) based on state.
-type ConditionalFunc func(ctx context.Context, state State) (ConditionResult, error)
+// UniversalCondFunc is a function that determines the next node(s) based on state.
+type UniversalCondFunc func(ctx context.Context, state State) (ConditionResult, error)
 
 // ConditionResult represents the result of executing a conditional edge function.
 type ConditionResult struct {
 	NextNodes []string
-	Commands  []*Command
 }
 
-func wrapperConditionalFunc[T SingleConditionalFunc | MultiConditionalFunc](condFunc T) ConditionalFunc {
-	if singleFunc, ok := any(condFunc).(SingleConditionalFunc); ok {
+func wrapperConditionalFunc[T ConditionalFunc | MultiConditionalFunc](condFunc T) UniversalCondFunc {
+	if singleFunc, ok := any(condFunc).(ConditionalFunc); ok {
 		return func(ctx context.Context, state State) (ConditionResult, error) {
 			nextNode, err := singleFunc(ctx, state)
 			return ConditionResult{NextNodes: []string{nextNode}}, err
@@ -175,7 +174,7 @@ type Edge struct {
 // ConditionalEdge represents a conditional edge with routing logic.
 type ConditionalEdge struct {
 	From      string
-	Condition ConditionalFunc
+	Condition UniversalCondFunc
 	PathMap   map[string]string // Maps condition result to target node.
 }
 

@@ -2407,7 +2407,7 @@ func (e *Executor) processConditionalEdges(
 	// Deduplicate results to avoid double triggers.
 	seen := make(map[string]bool)
 	for _, r := range result.NextNodes {
-		if r == "" || seen[r] {
+		if seen[r] {
 			continue
 		}
 		seen[r] = true

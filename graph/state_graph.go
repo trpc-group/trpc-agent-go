@@ -468,7 +468,7 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 // AddConditionalEdges adds conditional routing from a node.
 func (sg *StateGraph) AddConditionalEdges(
 	from string,
-	condition SingleConditionalFunc,
+	condition ConditionalFunc,
 	pathMap map[string]string,
 ) *StateGraph {
 	condEdge := &ConditionalEdge{
