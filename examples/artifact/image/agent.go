@@ -7,6 +7,7 @@
 //
 //
 
+// Package agent is the agent for the image generation.
 package main
 
 import (
@@ -26,7 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// imageGenerateAgent manages the multi-tool conversation system
+// imageGenerateAgent manages the image generation conversation system
 type imageGenerateAgent struct {
 	modelName       string
 	runner          runner.Runner
@@ -36,6 +37,7 @@ type imageGenerateAgent struct {
 	artifactService artifact.Service
 }
 
+// newImageGenerateAgent creates a new image generation agent
 func newImageGenerateAgent(appName, agentName, modelName string) *imageGenerateAgent {
 	a := &imageGenerateAgent{
 		appName:         appName,
@@ -79,7 +81,7 @@ finally call display-image tool to display it.`),
 	a.userID = "user"
 	a.sessionID = fmt.Sprintf("multi-tool-session-%d", time.Now().Unix())
 
-	fmt.Printf("✅ Multi-tool intelligent assistant is ready! Session ID: %s\n\n", a.sessionID)
+	fmt.Printf("✅ Image generation agent is ready! Session ID: %s\n\n", a.sessionID)
 	return a
 }
 

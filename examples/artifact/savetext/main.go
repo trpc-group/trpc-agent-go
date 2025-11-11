@@ -23,6 +23,8 @@ func main() {
 	modelName := flag.String("model", "deepseek-chat", "Model name to use")
 	flag.Parse()
 	a := newLogQueryAgent("log_app", "log_agent", *modelName)
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer a.runner.Close()
 	userMessage := []string{
 		"Calculate 123 + 456 * 789",
 		//"What day of the week is today?",

@@ -66,6 +66,8 @@ func main() {
 	sessionService := inmemory.NewSessionService()
 	// New Runner.
 	runner := runner.NewRunner(appName, agent, runner.WithSessionService(sessionService))
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer runner.Close()
 	// New AG-UI server.
 	server, err := agui.New(
 		runner,

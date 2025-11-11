@@ -89,11 +89,14 @@ func (e *toolTimerExample) run() error {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer e.runner.Close()
+
 	// Run the example.
 	return e.runExample(ctx)
 }
 
-// setup creates the runner with LLM agent and tools.
+// setup creates the runner with LLM agent, tools and telemetry metrics.
 func (e *toolTimerExample) setup(_ context.Context) error {
 	// Create OpenAI model using flag.
 	modelInstance := openai.New(*modelName)
@@ -149,7 +152,7 @@ func (e *toolTimerExample) createTools() []tool.Tool {
 	return []tool.Tool{calculatorTool}
 }
 
-// runExample executes the interactive chat session.
+// runExample executes the interactive chat session for tool timer example.
 func (e *toolTimerExample) runExample(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 

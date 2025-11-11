@@ -73,10 +73,15 @@ type documentWorkflow struct {
 // run starts the document processing workflow.
 func (w *documentWorkflow) run() error {
 	ctx := context.Background()
+
 	// Setup the workflow.
 	if err := w.setup(); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer w.runner.Close()
+
 	return w.startInteractiveMode(ctx)
 }
 

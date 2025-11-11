@@ -105,6 +105,8 @@ After getting the tool result, explain the result succinctly in natural language
 	}
 
 	r := runner.NewRunner("graph-multiturn", ga)
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
 
 	// Interactive loop using same session for history.
 	userID := "user"

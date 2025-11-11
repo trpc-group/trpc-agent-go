@@ -81,6 +81,8 @@ func run() error {
 
 	sessSvc := inmemory.NewSessionService()
 	r := runner.NewRunner("io-tools-app", ga, runner.WithSessionService(sessSvc))
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
 
 	user := "user"
 	session := fmt.Sprintf("sess-%d", time.Now().Unix())

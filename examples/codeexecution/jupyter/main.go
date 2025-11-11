@@ -29,7 +29,7 @@ func main() {
 	flag.Parse()
 
 	fmt.Printf("Creating LLMAgent with Jupyter code executor:\n")
-	fmt.Printf("- Model Name: %s\n", modelName)
+	fmt.Printf("- Model Name: %s\n", *modelName)
 	fmt.Printf("- Code Executor: Jupyter\n")
 	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
 	fmt.Println()
@@ -97,6 +97,9 @@ You have access to Jupyter kernel with Python 3.x and standard data science libr
 		"jupyter_data_agent",
 		llmAgent,
 	)
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
 
 	// Example query for data analysis
 	//query := "analyze the following dataset and provide descriptive statistics: 5, 12, 8, 15, 7, 9, 11"

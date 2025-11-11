@@ -69,7 +69,7 @@ func main() {
 
 	// 3. 创建 Runner
 	r := runner.NewRunner("my-app", a)
-	defer r.Close()  // 确保资源被清理
+	defer r.Close()  // 确保资源被清理 (trpc-agent-go >= v0.5.0)
 
 	// 4. 运行对话
 	ctx := context.Background()
@@ -483,7 +483,7 @@ for event := range eventChan {
 
 #### 🔒 关闭 Runner（重要）
 
-**Runner 在不使用时必须调用 `Close()` 方法，否则会导致 goroutine 泄漏（要求 trpc-agent-go >= v0.5.0）。**
+**Runner 在不使用时必须调用 `Close()` 方法，否则会导致 goroutine 泄漏（要求 `trpc-agent-go >= v0.5.0`）。**
 
 **Runner 只关闭它自己创建的资源** 
 
@@ -496,7 +496,7 @@ for event := range eventChan {
 ```go
 // ✅ 推荐：使用 defer 确保资源被清理
 r := runner.NewRunner("my-app", agent)
-defer r.Close()  // 确保在函数退出时关闭
+defer r.Close()  // 确保在函数退出时关闭 (trpc-agent-go >= v0.5.0)
 
 // 使用 runner
 eventChan, err := r.Run(ctx, userID, sessionID, message)
@@ -522,7 +522,7 @@ defer sessionService.Close()  // 你负责关闭它
 // Runner 使用但不拥有这个 session service
 r := runner.NewRunner("my-app", agent, 
 	runner.WithSessionService(sessionService))
-defer r.Close()  // 这不会关闭 sessionService（因为是你提供的）
+defer r.Close()  // 这不会关闭 sessionService（因为是你提供的） (trpc-agent-go >= v0.5.0)
 
 // ... 使用 runner
 ```
@@ -548,6 +548,7 @@ func (s *Service) Start() error {
 // 在服务关闭时调用 Close
 func (s *Service) Stop() error {
 	// 关闭 runner（它会关闭自己拥有的 inmemory session service）
+    // 要求 trpc-agent-go >= v0.5.0
 	if err := s.runner.Close(); err != nil {
 		return err
 	}

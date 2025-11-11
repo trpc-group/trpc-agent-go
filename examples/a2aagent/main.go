@@ -74,6 +74,10 @@ func startChat(localAgent agent.Agent, a2aAgent *a2aagent.A2AAgent) {
 	remoteRunner := runner.NewRunner("test", a2aAgent, runner.WithSessionService(remoteSessionService))
 	localRunner := runner.NewRunner("test", localAgent, runner.WithSessionService(localSessionService))
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer remoteRunner.Close()
+	defer localRunner.Close()
+
 	// Use different userIDs and sessionIDs for remote and local agents
 	remoteUserID := "remote_user"
 	remoteSessionID := "remote_session1"

@@ -66,6 +66,10 @@ func (d *demo) run(ctx context.Context) error {
 	if err := d.initialize(ctx); err != nil {
 		return err
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer d.runner.Close()
+
 	return d.loop(ctx)
 }
 

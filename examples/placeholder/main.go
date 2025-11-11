@@ -54,6 +54,9 @@ func (d *placeholderDemo) run() error {
 	if err := d.initialize(ctx); err != nil {
 		return fmt.Errorf("initialization failed: %w", err)
 	}
+	
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer d.runner.Close()
 
 	// Start interactive command-line session.
 	return d.startInteractiveSession(ctx)

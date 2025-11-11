@@ -94,6 +94,8 @@ func startChat(coordinatorAgent agent.Agent) {
 
 	// Create runner for coordinator agent
 	coordinatorRunner := runner.NewRunner("test", coordinatorAgent)
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer coordinatorRunner.Close()
 
 	userID := "user1"
 	sessionID := "session1"

@@ -57,40 +57,6 @@ func main() {
 	// Build an LLM agent with a simple instruction.
 	genConfig := model.GenerationConfig{Stream: *streaming}
 
-	// Add a simple calculator function tool to exercise tool-call path.
-	type calcInput struct {
-		Operation string  `json:"operation"` // add, subtract, multiply, divide, power
-		A         float64 `json:"a"`
-		B         float64 `json:"b"`
-	}
-	type calcOutput struct {
-		Result float64 `json:"result"`
-		Error  string  `json:"error,omitempty"`
-	}
-	calcFn := func(ctx context.Context, in calcInput) (calcOutput, error) {
-		switch strings.ToLower(strings.TrimSpace(in.Operation)) {
-		case "add":
-			return calcOutput{Result: in.A + in.B}, nil
-		case "subtract":
-			return calcOutput{Result: in.A - in.B}, nil
-		case "multiply":
-			return calcOutput{Result: in.A * in.B}, nil
-		case "divide":
-			if in.B == 0 {
-				return calcOutput{Error: "division by zero"}, nil
-			}
-			return calcOutput{Result: in.A / in.B}, nil
-		case "power":
-			res := 1.0
-			for i := 0; i < int(in.B); i++ {
-				res *= in.A
-			}
-			return calcOutput{Result: res}, nil
-		default:
-			return calcOutput{Error: "unknown operation"}, nil
-		}
-	}
-
 	var tools []tool.Tool
 	tools = append(tools, function.NewFunctionTool(
 		calcFn,
@@ -107,6 +73,9 @@ func main() {
 	)
 
 	r := runner.NewRunner("runwithmessages-demo", agent)
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
 
 	// Maintain local conversation history. Only on the first user turn we pass
 	// the full multi-turn history; on subsequent turns we pass only the latest
@@ -213,5 +182,43 @@ func main() {
 		if strings.TrimSpace(full) != "" {
 			history = append(history, model.NewAssistantMessage(full))
 		}
+	}
+}
+
+// calcInput is the input of the calculator function.
+type calcInput struct {
+	Operation string  `json:"operation"` // add, subtract, multiply, divide, power
+	A         float64 `json:"a"`
+	B         float64 `json:"b"`
+}
+
+// calcOutput is the output of the calculator function.
+type calcOutput struct {
+	Result float64 `json:"result"`
+	Error  string  `json:"error,omitempty"`
+}
+
+// calcFn is the calculator function.
+func calcFn(ctx context.Context, in calcInput) (calcOutput, error) {
+	switch strings.ToLower(strings.TrimSpace(in.Operation)) {
+	case "add":
+		return calcOutput{Result: in.A + in.B}, nil
+	case "subtract":
+		return calcOutput{Result: in.A - in.B}, nil
+	case "multiply":
+		return calcOutput{Result: in.A * in.B}, nil
+	case "divide":
+		if in.B == 0 {
+			return calcOutput{Error: "division by zero"}, nil
+		}
+		return calcOutput{Result: in.A / in.B}, nil
+	case "power":
+		res := 1.0
+		for i := 0; i < int(in.B); i++ {
+			res *= in.A
+		}
+		return calcOutput{Result: res}, nil
+	default:
+		return calcOutput{Error: "unknown operation"}, nil
 	}
 }

@@ -118,6 +118,9 @@ func runOnce(content string) error {
 		runner.WithSessionService(sessionService),
 	)
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	userID := "user"
 	sessionID := fmt.Sprintf("once-%d", time.Now().Unix())
 

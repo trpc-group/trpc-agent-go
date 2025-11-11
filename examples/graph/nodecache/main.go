@@ -74,6 +74,9 @@ func run() error {
 		runner.WithSessionService(inmemory.NewSessionService()),
 	)
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	// Interactive loop: user enters a number; we run the graph with that input.
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("💡 Enter an integer (type 'exit' to quit). Repeated inputs should hit the cache and skip compute.")

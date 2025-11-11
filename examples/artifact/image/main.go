@@ -22,6 +22,8 @@ func main() {
 	modelName := flag.String("model", "deepseek-chat", "Model name to use")
 	flag.Parse()
 	imageGenerateAgent := newImageGenerateAgent("image_app", "image_generate_agent", *modelName)
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer imageGenerateAgent.runner.Close()
 	userMessage := []string{
 		"generate imageGenerateAgent black-white logo for trpc-agent-go",
 	}

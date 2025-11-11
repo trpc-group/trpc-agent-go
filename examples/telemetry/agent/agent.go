@@ -38,6 +38,7 @@ type MultiToolChatAgent struct {
 	sessionID string
 }
 
+// NewMultiToolChatAgent creates a new multi-tool chat agent.
 func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 	a := &MultiToolChatAgent{modelName: modelName}
 	// Create OpenAI model
@@ -87,6 +88,11 @@ func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 
 	fmt.Printf("✅ Multi-tool intelligent assistant is ready! Session ID: %s\n\n", a.sessionID)
 	return a
+}
+
+// Close closes the agent and releases owned resources.
+func (c *MultiToolChatAgent) Close() error {
+	return c.runner.Close()
 }
 
 // ProcessMessage processes a single message exchange

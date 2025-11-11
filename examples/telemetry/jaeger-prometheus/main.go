@@ -62,6 +62,8 @@ func main() {
 	flag.Parse()
 	printGuideMessage(*modelName)
 	a := agent.NewMultiToolChatAgent("multi-tool-assistant", *modelName)
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer a.Close()
 	userMessage := []string{
 		"Calculate 123 + 456 * 789",
 		"What day of the week is today?",
