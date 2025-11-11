@@ -15,11 +15,11 @@ import (
 
 func TestCalculateMaxOutputTokens(t *testing.T) {
 	tests := []struct {
-		name             string
-		contextWindow    int
-		usedInputTokens  int
-		expectedOutput   int
-		expectZero       bool
+		name            string
+		contextWindow   int
+		usedInputTokens int
+		expectedOutput  int
+		expectZero      bool
 	}{
 		{
 			name:            "Normal case - deepseek-chat with heavy input",
@@ -63,7 +63,7 @@ func TestCalculateMaxOutputTokens(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := CalculateMaxOutputTokens(tt.contextWindow, tt.usedInputTokens)
-			
+
 			if tt.expectZero {
 				if result != 0 {
 					t.Errorf("Expected 0 tokens, got %d", result)

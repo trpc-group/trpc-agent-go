@@ -35,18 +35,18 @@ func TestAllToolCreators(t *testing.T) {
 		creator, exists := AllToolCreators[toolName]
 		assert.True(t, exists, "Tool %s should exist in AllToolCreators", toolName)
 		assert.NotNil(t, creator, "Tool creator for %s should not be nil", toolName)
-		
+
 		// Verify that creators can actually create tools.
 		tool := creator()
 		assert.NotNil(t, tool, "Tool creator for %s should return a non-nil tool", toolName)
-		
+
 		// Verify that the tool has a valid declaration.
 		decl := tool.Declaration()
 		assert.NotNil(t, decl, "Tool declaration for %s should not be nil", toolName)
 		assert.Equal(t, toolName, decl.Name, "Tool declaration name should match %s", toolName)
 		assert.NotEmpty(t, decl.Description, "Tool description for %s should not be empty", toolName)
 	}
-	
+
 	// Verify no extra tools are in the map.
 	assert.Len(t, AllToolCreators, len(expectedTools), "AllToolCreators should contain exactly the expected tools")
 }
@@ -69,7 +69,7 @@ func TestDefaultEnabledTools(t *testing.T) {
 	// Verify that delete and clear tools are not included.
 	assert.NotContains(t, DefaultEnabledTools, memory.DeleteToolName)
 	assert.NotContains(t, DefaultEnabledTools, memory.ClearToolName)
-	
+
 	// Verify no extra tools are in the map.
 	assert.Len(t, DefaultEnabledTools, len(expectedTools), "DefaultEnabledTools should contain exactly the expected tools")
 }
