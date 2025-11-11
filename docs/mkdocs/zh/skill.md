@@ -22,6 +22,8 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 - 🏃 `skill_run` 在工作区执行命令，返回 stdout/stderr 与输出文件
 - 🗂️ 按通配符收集输出文件并回传内容与 MIME 类型
 - 🧩 可选择本地或容器工作区执行器（默认本地）
+- 🧱 支持声明式 `inputs`/`outputs`：映射输入、
+  以清单方式收集/内联/保存输出
 
 ### 核心概念：三层信息模型
 
@@ -93,7 +95,8 @@ agent := llmagent.New(
 - 请求处理器注入概览与按需内容：
   [internal/flow/processor/skills.go]
   (internal/flow/processor/skills.go)
-- 工具自动注册：开启 `WithSkills` 后，`skill_load` 与 `skill_run`
+- 工具自动注册：开启 `WithSkills` 后，`skill_load`、
+  `skill_select_docs`、`skill_list_docs` 与 `skill_run`
   会自动出现在工具列表中，无需手动添加。
 - 自动提示注入：框架会在系统消息中加入简洁的“工具使用指引”，
   引导模型在合适时机先 `skill_load`，需要时用 `skill_select_docs`
@@ -213,28 +216,60 @@ https://github.com/anthropics/skills
 - `command`（必填）：Shell 命令（通过 `bash -lc` 执行）
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
-- `output_files`（可选）：通配符列表（如 `out/*.txt`）
+- `output_files`（可选，传统收集方式）：通配符列表
+  （如 `out/*.txt`）。
+- `inputs`（可选，声明式输入）：把外部资源映射进工作区，
+  结构为对象数组，每项支持：
+  
+  - `from`：来源，支持四类方案（scheme）：
+    - `artifact://name[@version]` 从制品服务拉取文件
+    - `host://abs/path` 从宿主机绝对路径复制/链接
+    - `workspace://rel/path` 从当前工作区相对路径复制/链接
+    - `skill://<name>/rel/path` 从已缓存的技能目录复制/链接
+  - `to`：目的路径（相对工作区）。未指定时默认写到
+    `WORK_DIR/inputs/<basename>`。
+  - `mode`：`copy`（默认）或 `link`（在可行时建立符号链接）。
+
+- `outputs`（可选，声明式输出）：使用清单（manifest）收集输出。
+  字段：
+  - `globs`：通配符数组（相对工作区，支持 `**`）。
+  - `inline`：是否把文件内容内联返回。
+  - `save`：是否保存为制品（与制品服务协作）。
+  - `name_template`：保存为制品时的文件名前缀（如 `pref/`）。
+  - `max_files`（默认 100）、`max_file_bytes`（默认 4 MiB/文件）、
+    `max_total_bytes`（默认 64 MiB）：上限控制。
+
 - `timeout`（可选）：超时秒数（执行器有默认值）
-- `save_as_artifacts`（可选，推荐生产）：将收集的输出文件
-  保存到 Artifact（制品）服务，并在结果中返回制品引用；
-  需要上下文里存在 Invocation 和已注入的 ArtifactService。
-- `omit_inline_content`（可选）：与 `save_as_artifacts` 配合使用，
-  为 true 时不内联返回文件内容，仅保留文件名/MIME 信息，
-  同时提供 `artifact_files` 引用，降低负载。
-- `artifact_prefix`（可选）：保存到制品时的文件名前缀；
-  用户域名空间请设置为 `user:`（参见内部路径规则）。
+- `save_as_artifacts`（可选，传统收集路径）：把通过
+  `output_files` 收集到的文件保存为制品，并在结果中返回
+  `artifact_files`。
+- `omit_inline_content`（可选）：与 `save_as_artifacts` 配合，
+  为 true 时不返回文件内容，仅保留文件名/MIME 信息。
+- `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
 - `output_files`：文件列表（`name`、`content`、`mime_type`）
-- `artifact_files`：保存到制品服务后的引用列表
-  （`name`、`version`）。
+- `artifact_files`：制品引用（`name`、`version`）。两种途径：
+  - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回
+  - 清单路径：`outputs.save=true` 时由执行器保存并附加到结果
 
 典型流程：
 1) 模型先调用 `skill_load` 注入正文/文档
-2) 随后调用 `skill_run` 执行命令并收集输出文件
-   - 若使用 `save_as_artifacts`，结果里还会给出
-     `artifact_files`；可在上层服务里渲染“下载”。
+2) 随后调用 `skill_run` 执行命令并收集输出文件：
+   - 传统：用 `output_files` 指定通配符
+   - 声明式：用 `outputs` 统一控制收集/内联/保存
+   - 如需把上游文件带入，可用 `inputs` 先行映射
+
+运行环境与工作目录：
+- 未提供 `cwd` 时，默认在技能根目录运行：`/skills/<name>`
+- 相对 `cwd` 会被解析为技能根目录下的子路径
+- 运行时注入环境变量：
+  - `WORKSPACE_DIR`、`SKILLS_DIR`、`WORK_DIR`、`OUTPUT_DIR`、
+    `RUN_DIR`（由执行器注入）
+  - `SKILL_NAME`（由工具注入）
+- 便捷符号链接：在技能根目录下自动创建 `out/`、`work/`、
+  `inputs/` 链接到工作区对应目录，方便按文档中的相对路径使用。
 
 ## 执行器
 

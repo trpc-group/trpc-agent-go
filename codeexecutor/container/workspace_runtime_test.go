@@ -898,6 +898,16 @@ func TestHelpers_Simple(t *testing.T) {
 	require.Equal(t, "abc", inputBase("abc"))
 }
 
+func TestTarFromFiles_InvalidPath(t *testing.T) {
+	// Paths like "." are rejected by tarFromFiles.
+	_, err := tarFromFiles([]codeexecutor.PutFile{{
+		Path:    ".",
+		Content: []byte("x"),
+		Mode:    0o644,
+	}})
+	require.Error(t, err)
+}
+
 // A minimal artifact service for tests.
 type artMem struct{ saved int }
 

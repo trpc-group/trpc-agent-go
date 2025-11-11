@@ -23,6 +23,8 @@ Background references:
   output files
 - 🗂️ Output file collection via glob patterns with MIME detection
 - 🧩 Pluggable local or container workspace executors (local by default)
+- 🧱 Declarative `inputs`/`outputs`: map inputs and collect/inline/
+  save outputs via a manifest
 
 ### Three‑Layer Information Model
 
@@ -93,8 +95,9 @@ Key points:
 - Request processor injects overview and on‑demand content:
   [internal/flow/processor/skills.go]
   (internal/flow/processor/skills.go)
-- Tools are auto‑registered with `WithSkills`: `skill_load` and
-  `skill_run` show up automatically; no manual wiring required.
+- Tools are auto‑registered with `WithSkills`: `skill_load`,
+  `skill_select_docs`, `skill_list_docs`, and `skill_run` show up
+  automatically; no manual wiring required.
 - Auto prompt guidance is injected in the system message so the model
   learns to `skill_load` first, select docs with `skill_select_docs`
   as needed, and then `skill_run` at the right time.
@@ -207,27 +210,56 @@ Input:
 - `skill` (required)
 - `command` (required, runs via `bash -lc`)
 - `cwd`, `env` (optional)
-- `output_files` (optional glob patterns)
+- `output_files` (optional, legacy collection): glob patterns (e.g.,
+  `out/*.txt`).
+- `inputs` (optional, declarative inputs): map external sources into
+  the workspace. Each item supports:
+  - `from` with schemes:
+    - `artifact://name[@version]` to load from the Artifact service
+    - `host://abs/path` to copy/link from a host absolute path
+    - `workspace://rel/path` to copy/link from current workspace
+    - `skill://<name>/rel/path` to copy/link from a staged skill
+  - `to` workspace‑relative destination; defaults to
+    `WORK_DIR/inputs/<basename>`
+  - `mode`: `copy` (default) or `link` when feasible
+
+- `outputs` (optional, declarative outputs): a manifest to collect
+  results with limits and persistence:
+  - `globs` workspace‑relative patterns (supports `**`)
+  - `inline` to inline file contents into the result
+  - `save` to persist via the Artifact service
+  - `name_template` prefix for artifact names (e.g., `pref/`)
+  - Limits: `max_files` (default 100), `max_file_bytes` (default
+    4 MiB/file), `max_total_bytes` (default 64 MiB)
+
 - `timeout` (optional seconds)
-- `save_as_artifacts` (optional, production‑ready): save collected
-   files into the Artifact service and return artifact references; this
-   requires an Invocation context with an injected ArtifactService.
-- `omit_inline_content` (optional): when used with
-   `save_as_artifacts`, omit `output_files[*].content` and only return
-   metadata plus `artifact_files`, reducing payload size.
-- `artifact_prefix` (optional): filename prefix when saving artifacts;
-   for a user namespace, set `user:`.
+- `save_as_artifacts` (optional, legacy path): persist files collected
+  via `output_files` and return `artifact_files` in the result
+- `omit_inline_content` (optional): with `save_as_artifacts`, omit
+  `output_files[*].content` and return metadata only
+- `artifact_prefix` (optional): prefix for the legacy artifact path
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
 - `output_files` with `name`, `content`, `mime_type`
-- `artifact_files` with `name`, `version` when artifacts are saved
+- `artifact_files` with `name`, `version` appears in two cases:
+  - Legacy path: when `save_as_artifacts` is set
+  - Manifest path: when `outputs.save=true` (executor persists files)
 
 Typical flow:
 1) Call `skill_load` to inject body/docs
-2) Call `skill_run` to execute and collect output files
-  - With `save_as_artifacts`, you’ll also get `artifact_files` in the
-     result that your UI can render as downloadable items.
+2) Call `skill_run` and collect outputs:
+   - Legacy: use `output_files` globs
+   - Declarative: use `outputs` to drive collect/inline/save
+   - Use `inputs` to stage upstream files when needed
+
+Environment and CWD:
+- When `cwd` is omitted, runs at the skill root: `/skills/<name>`
+- A relative `cwd` is resolved under the skill root
+- Runtime injects env vars: `WORKSPACE_DIR`, `SKILLS_DIR`, `WORK_DIR`,
+  `OUTPUT_DIR`, `RUN_DIR`; the tool injects `SKILL_NAME`
+- Convenience symlinks are created under the skill root: `out/`,
+  `work/`, and `inputs/` point to workspace‑level dirs
 
 ## Executor
 

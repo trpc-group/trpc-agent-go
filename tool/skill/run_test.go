@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 
@@ -632,6 +633,72 @@ func TestResolveCWD_AbsolutePath(t *testing.T) {
 	abs := "/"
 	got := resolveCWD(abs, testSkillName)
 	require.Equal(t, abs, got)
+}
+
+func TestResolveCWD_DefaultAndRelative(t *testing.T) {
+	// Default: when cwd is empty, base is skills/<name>.
+	base := path.Join(codeexecutor.DirSkills, testSkillName)
+	got := resolveCWD("", testSkillName)
+	require.Equal(t, base, got)
+
+	// Relative: appended under the skill root.
+	got = resolveCWD("sub/dir", testSkillName)
+	require.Equal(t, path.Join(base, "sub/dir"), got)
+}
+
+// dummyExec implements CodeExecutor but not EngineProvider to cover
+// ensureEngine fallback path.
+type dummyExec struct{}
+
+func (*dummyExec) ExecuteCode(
+	_ context.Context, _ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (*dummyExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func TestRunTool_EnsureEngine_Fallback(t *testing.T) {
+	// Repo is not used by ensureEngine.
+	rt := NewRunTool(&mockRepo{}, &dummyExec{})
+	eng := rt.ensureEngine()
+	require.NotNil(t, eng)
+	// Create a workspace to ensure the engine is usable.
+	ws, err := eng.Manager().CreateWorkspace(
+		context.Background(), "eng-fallback", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, ws.Path)
+}
+
+func TestFilepathBase_Variants(t *testing.T) {
+	require.Equal(t, "c", filepathBase("a/b/c"))
+	require.Equal(t, "b", filepathBase("a/b/"))
+	require.Equal(t, "root", filepathBase("root"))
+}
+
+func TestParseRunArgs_InvalidJSON(t *testing.T) {
+	rt := NewRunTool(&mockRepo{}, nil)
+	_, err := rt.parseRunArgs([]byte("{bad}"))
+	require.Error(t, err)
+}
+
+func TestMergeManifestArtifactRefs_Appends(t *testing.T) {
+	mf := &codeexecutor.OutputManifest{
+		Files: []codeexecutor.FileRef{{
+			Name:     "out/a.txt",
+			SavedAs:  "prefix-out/a.txt",
+			Version:  2,
+			MIMEType: "text/plain",
+		}},
+	}
+	out := &runOutput{}
+	mergeManifestArtifactRefs(mf, out)
+	require.Len(t, out.ArtifactFiles, 1)
+	require.Equal(t, "prefix-out/a.txt", out.ArtifactFiles[0].Name)
+	require.Equal(t, 2, out.ArtifactFiles[0].Version)
 }
 
 // Test that workspace persists across calls within the same session,
