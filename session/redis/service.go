@@ -22,7 +22,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
@@ -423,7 +422,7 @@ func (s *Service) AppendEvent(
 		return err
 	}
 	// update user session with the given event
-	isession.UpdateUserSession(sess, event, opts...)
+	sess.UpdateUserSession(event, opts...)
 
 	// persist event to redis asynchronously
 	if s.opts.enableAsyncPersist {
@@ -585,7 +584,7 @@ func (s *Service) getSession(
 	}
 
 	// filter events to ensure they start with RoleUser
-	isession.EnsureEventStartWithUser(sess)
+	sess.EnsureEventStartWithUser()
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -655,7 +654,7 @@ func (s *Service) listSessions(
 		}
 
 		// filter events to ensure they start with RoleUser
-		isession.EnsureEventStartWithUser(sess)
+		sess.EnsureEventStartWithUser()
 		sessList = append(sessList, mergeState(appState, userState, sess))
 	}
 	return sessList, nil
@@ -793,7 +792,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	if sessState.State == nil {
 		sessState.State = make(session.StateMap)
 	}
-	isession.ApplyEventStateDeltaMap(sessState.State, event)
+	session.ApplyEventStateDeltaMap(sessState.State, event)
 	updatedStateBytes, err := json.Marshal(sessState)
 	if err != nil {
 		return fmt.Errorf("marshal session state failed: %w", err)

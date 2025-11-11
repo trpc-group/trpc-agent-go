@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // StateMap is a map of state key-value pairs.
@@ -66,6 +68,125 @@ func (sess *Session) GetEventCount() int {
 	defer sess.EventMu.RUnlock()
 
 	return len(sess.Events)
+}
+
+// EnsureEventStartWithUser filters events to ensure they start with RoleUser.
+// It removes events from the beginning until it finds the first event from RoleUser.
+func (sess *Session) EnsureEventStartWithUser() {
+	if sess == nil || len(sess.Events) == 0 {
+		log.Info("session is nil or has no events")
+		return
+	}
+	// Find the first event that starts with RoleUser
+	startIndex := -1
+	for i, event := range sess.Events {
+		if event.Response != nil && len(event.Response.Choices) > 0 {
+			if event.Response.Choices[0].Message.Role == model.RoleUser {
+				startIndex = i
+				break
+			}
+		}
+		// If event has no response or choices, continue to next event
+	}
+
+	// If no user event found, clear all events
+	if startIndex == -1 {
+		sess.Events = []event.Event{}
+		return
+	}
+
+	// Keep events starting from the first user event
+	if startIndex > 0 {
+		sess.Events = sess.Events[startIndex:]
+	}
+}
+
+// UpdateUserSession updates the user session with the given event and options.
+func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
+	if sess == nil || event == nil {
+		log.Info("session or event is nil")
+		return
+	}
+	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
+		sess.EventMu.Lock()
+		sess.Events = append(sess.Events, *event)
+
+		// Apply filtering options
+		sess.ApplyEventFiltering(opts...)
+		// Ensure events start with RoleUser after filtering
+		sess.EnsureEventStartWithUser()
+		sess.EventMu.Unlock()
+	}
+
+	sess.UpdatedAt = time.Now()
+	if sess.State == nil {
+		sess.State = make(StateMap)
+	}
+	sess.ApplyEventStateDelta(event)
+}
+
+// ApplyEventFiltering applies event number and time filtering to session events
+func (sess *Session) ApplyEventFiltering(opts ...Option) {
+	if sess == nil {
+		log.Info("session is nil")
+		return
+	}
+	opt := applyOptions(opts...)
+	// Apply event number limit
+	if opt.EventNum > 0 && len(sess.Events) > opt.EventNum {
+		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
+	}
+
+	// Apply event time filter - keep events after the specified time
+	if !opt.EventTime.IsZero() {
+		startIndex := -1
+		for i, e := range sess.Events {
+			if e.Timestamp.After(opt.EventTime) || e.Timestamp.Equal(opt.EventTime) {
+				startIndex = i
+				break
+			}
+		}
+		if startIndex >= 0 {
+			sess.Events = sess.Events[startIndex:]
+		} else {
+			// No events after the specified time, clear all events
+			sess.Events = []event.Event{}
+		}
+	}
+}
+
+// ApplyEventStateDelta merges the state delta of the event into the session state.
+func (sess *Session) ApplyEventStateDelta(e *event.Event) {
+	if sess == nil || e == nil {
+		log.Info("session or event is nil")
+		return
+	}
+	if sess.State == nil {
+		sess.State = make(StateMap)
+	}
+	for key, value := range e.StateDelta {
+		sess.State[key] = value
+	}
+}
+
+// ApplyEventStateDeltaMap merges the state delta of the event into the session state.
+func ApplyEventStateDeltaMap(state StateMap, e *event.Event) {
+	if state == nil || e == nil {
+		log.Info("state or event is nil")
+		return
+	}
+
+	for key, value := range e.StateDelta {
+		state[key] = value
+	}
+}
+
+func applyOptions(opts ...Option) *Options {
+	opt := &Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	return opt
 }
 
 // Summary represents a concise, structured summary of a conversation branch.
