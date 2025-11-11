@@ -35,15 +35,21 @@ ToolSet 是一组相关工具的集合，实现 `tool.ToolSet` 接口。ToolSet 
 
 ```go
 type ToolSet interface {
-    Tools(context.Context) []CallableTool  // 返回工具列表
-    Close() error                          // 资源清理
+    // 返回当前工具集内的工具
+    Tools(context.Context) []tool.Tool
+
+    // 释放工具集持有的资源
+    Close() error
+
+    // 返回该工具集的名称，用于标识与冲突处理
+    Name() string
 }
 ```
 
 **Tool 与 ToolSet 的关系：**
 
-- 一个 **Tool** = 一个具体功能（如计算器）
-- 一个 **ToolSet** = 一组相关的 Tool（如MCP服务器提供的所有工具）
+- 一个 "Tool" = 一个具体功能（如计算器）
+- 一个 "ToolSet" = 一组相关的 Tool（如 MCP 服务器提供的所有工具）
 - Agent 可以同时使用多个 Tool 和多个 ToolSet
 
 #### 🌊 流式工具支持
