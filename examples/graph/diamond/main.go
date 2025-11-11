@@ -79,6 +79,9 @@ func main() {
 		log.Fatalf("Failed to initialize workflow: %v", err)
 	}
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer workflow.runner.Close()
+
 	// Run interactive mode.
 	if err := workflow.runInteractive(); err != nil {
 		log.Fatalf("Interactive mode failed: %v", err)

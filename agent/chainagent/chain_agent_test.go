@@ -432,6 +432,55 @@ func TestChainAgent_AfterCallback(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestChainAgent_AfterCallbackError(t *testing.T) {
+	// Prepare mock agents.
+	minimal := &mockMinimalAgent{name: "child"}
+
+	// Prepare callbacks with after agent returning error.
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, _ error) (*model.Response, error) {
+		return nil, errors.New("after callback failed")
+	})
+
+	chain := New(
+		"root",
+		WithSubAgents([]agent.Agent{minimal}),
+		WithAgentCallbacks(callbacks),
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-after-error",
+		AgentName:    "root",
+	}
+
+	ctx := context.Background()
+	events, err := chain.Run(ctx, inv)
+	require.NoError(t, err)
+
+	// Expect exactly one error event from after-agent callback.
+	count := 0
+	for e := range events {
+		count++
+		require.NotNil(t, e.Error)
+		require.Equal(t, agent.ErrorTypeAgentCallbackError, e.Error.Type)
+		require.Contains(t, e.Error.Message, "after callback failed")
+	}
+	require.Equal(t, 1, count)
+}
+
+func TestChainAgent_SubAgents(t *testing.T) {
+	sub1 := &mockMinimalAgent{name: "sub1"}
+	sub2 := &mockMinimalAgent{name: "sub2"}
+
+	chain := New("root", WithSubAgents([]agent.Agent{sub1, sub2}))
+
+	// Test SubAgents.
+	subs := chain.SubAgents()
+	require.Len(t, subs, 2)
+	require.Equal(t, "sub1", subs[0].Info().Name)
+	require.Equal(t, "sub2", subs[1].Info().Name)
+}
+
 // mockNoEventAgent is a sub-agent that never produces events (used to
 // verify short-circuit behaviour when a before-callback returns).
 type mockNoEventAgent struct{ name string }

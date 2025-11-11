@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -146,6 +145,7 @@ func TestCreateSession(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := NewSessionService()
+			defer service.Close()
 			key, state := tt.setup()
 			sess, err := service.CreateSession(context.Background(), key, state)
 			tt.validate(t, sess, err, key, state)
@@ -319,6 +319,7 @@ func TestGetSession(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := NewSessionService()
+			defer service.Close()
 			baseTime := setup(t, service)
 
 			sess, err := tt.setup(service, baseTime)
@@ -481,6 +482,7 @@ func TestListSessions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Fresh service for each test
 			service := NewSessionService()
+			defer service.Close()
 
 			sessions, err := tt.setup(service)
 			tt.validate(t, sessions, err)
@@ -548,6 +550,7 @@ func TestDeleteSession(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := NewSessionService()
+			defer service.Close()
 			originalKey := setup(t, service)
 
 			err := tt.setup(service, originalKey)
@@ -683,6 +686,7 @@ func TestConcurrentAccess(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := NewSessionService()
+			defer service.Close()
 			var expectedCount int
 			if tt.name == "concurrent session creation" {
 				expectedCount = 10
@@ -770,6 +774,7 @@ func TestGetOrCreateApp(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := NewSessionService()
+			defer service.Close()
 
 			app := tt.setup(service)
 			tt.validate(t, app)
@@ -780,6 +785,7 @@ func TestGetOrCreateApp(t *testing.T) {
 // Additional tests for edge cases and State functionality
 func TestStateMerging(t *testing.T) {
 	service := NewSessionService()
+	defer service.Close()
 	ctx := context.Background()
 	appName := "test-app"
 	userID := "test-user"
@@ -971,7 +977,7 @@ func TestEnsureEventStartWithUser(t *testing.T) {
 				Events:  tt.setupEvents(),
 			}
 
-			isession.EnsureEventStartWithUser(sess)
+			sess.EnsureEventStartWithUser()
 
 			assert.Equal(t, tt.expectedLength, len(sess.Events), "Event length should match expected")
 

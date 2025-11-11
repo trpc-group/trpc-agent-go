@@ -11,6 +11,7 @@ package inmemory
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -457,6 +458,7 @@ func TestMemoryService_CreateSessionSummary_NilSession(t *testing.T) {
 
 func TestMemoryService_CreateSessionSummary_InvalidKey(t *testing.T) {
 	s := NewSessionService(WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+	defer s.Close()
 	sess := &session.Session{ID: "", AppName: "app", UserID: "user"}
 	err := s.CreateSessionSummary(context.Background(), sess, "", false)
 	require.Error(t, err)
@@ -465,6 +467,7 @@ func TestMemoryService_CreateSessionSummary_InvalidKey(t *testing.T) {
 
 func TestMemoryService_CreateSessionSummary_SessionNotFound(t *testing.T) {
 	s := NewSessionService(WithSummarizer(&fakeSummarizer{allow: true, out: "sum"}))
+	defer s.Close()
 
 	// Create a session in memory to trigger the branch summary logic.
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
@@ -674,4 +677,173 @@ func TestMemoryService_GetOrCreateAppSessions_Concurrent(t *testing.T) {
 	app, ok := service.getAppSessions("concurrent-app")
 	assert.True(t, ok)
 	assert.NotNil(t, app)
+}
+
+func TestProcessSummaryJob(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, service *SessionService) *summaryJob
+		expectError bool
+	}{
+		{
+			name: "successful summary processing",
+			setup: func(t *testing.T, service *SessionService) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Add an event to make delta non-empty
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				err = service.AppendEvent(context.Background(), sess, e)
+				require.NoError(t, err)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summary job with branch filter",
+			setup: func(t *testing.T, service *SessionService) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid2"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Add an event
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				err = service.AppendEvent(context.Background(), sess, e)
+				require.NoError(t, err)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "branch1",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns false",
+			setup: func(t *testing.T, service *SessionService) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Enable summarizer that returns false
+				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns error",
+			setup: func(t *testing.T, service *SessionService) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid4"}
+				sess, err := service.CreateSession(context.Background(), key, session.StateMap{})
+				require.NoError(t, err)
+
+				// Enable summarizer that returns error
+				service.opts.summarizer = &fakeErrorSummarizer{}
+
+				return &summaryJob{
+					sessionKey: key,
+					filterKey:  "",
+					force:      false,
+					session:    sess,
+				}
+			},
+			expectError: false, // Should not panic or error, just log
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			service := NewSessionService()
+			defer service.Close()
+
+			job := tt.setup(t, service)
+
+			// This should not panic
+			require.NotPanics(t, func() {
+				service.processSummaryJob(job)
+			})
+		})
+	}
+}
+
+type fakeErrorSummarizer struct{}
+
+func (f *fakeErrorSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	return "", fmt.Errorf("summarizer error")
+}
+func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestMemoryService_StopAsyncSummaryWorker_AlreadyStopped(t *testing.T) {
+	service := NewSessionService(
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(10),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+	)
+
+	// First close
+	service.Close()
+
+	// Second close should not panic (channels already set to nil)
+	require.NotPanics(t, func() {
+		service.stopAsyncSummaryWorker()
+	})
+}
+
+func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
+	service := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+	)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Close the service to simulate shutdown and set channels to nil
+	service.Close()
+
+	job := &summaryJob{
+		sessionKey: key,
+		filterKey:  "",
+		force:      false,
+		session:    sess,
+	}
+
+	// Should return false when channels are nil (after close)
+	result := service.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
 }

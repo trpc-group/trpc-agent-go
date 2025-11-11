@@ -41,6 +41,7 @@ var (
 	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / pgsql")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	enableParallel  = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
+	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan/ deepseek /qwen")
 )
 
 // Environment variables for session services.
@@ -81,6 +82,7 @@ func main() {
 	chat := &multiTurnChat{
 		modelName: *modelName,
 		streaming: *streaming,
+		variant:   *variant,
 	}
 
 	if err := chat.run(); err != nil {
@@ -95,6 +97,7 @@ type multiTurnChat struct {
 	runner    runner.Runner
 	userID    string
 	sessionID string
+	variant   string
 }
 
 // run starts the interactive chat session.
@@ -106,6 +109,9 @@ func (c *multiTurnChat) run() error {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer c.runner.Close()
+
 	// Start interactive chat.
 	return c.startChat(ctx)
 }
@@ -113,7 +119,7 @@ func (c *multiTurnChat) run() error {
 // setup creates the runner with LLM agent and tools.
 func (c *multiTurnChat) setup(_ context.Context) error {
 	// Create model with specified model name.
-	modelInstance := openai.New(c.modelName)
+	modelInstance := openai.New(c.modelName, openai.WithVariant(openai.Variant(c.variant)))
 
 	// Create session service based on configuration.
 	var (

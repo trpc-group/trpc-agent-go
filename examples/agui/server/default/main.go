@@ -7,6 +7,7 @@
 //
 //
 
+// Package main is the main package for the AG-UI server.
 package main
 
 import (
@@ -56,6 +57,8 @@ func main() {
 		llmagent.WithInstruction("You are a helpful assistant."),
 	)
 	runner := runner.NewRunner(agent.Info().Name, agent)
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer runner.Close()
 	server, err := agui.New(runner, agui.WithPath(*path))
 	if err != nil {
 		log.Fatalf("failed to create AG-UI server: %v", err)

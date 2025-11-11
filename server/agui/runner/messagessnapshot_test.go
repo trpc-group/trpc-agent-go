@@ -258,6 +258,8 @@ func (noopBaseRunner) Run(ctx context.Context, userID string, sessionID string, 
 	return ch, nil
 }
 
+func (noopBaseRunner) Close() error { return nil }
+
 // TestGetSessionEventsNilSession verifies nil session is handled gracefully.
 func TestGetSessionEventsNilSession(t *testing.T) {
 	r := &runner{

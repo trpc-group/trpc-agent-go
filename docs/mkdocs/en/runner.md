@@ -69,6 +69,7 @@ func main() {
 
 	// 3. Create Runner.
 	r := runner.NewRunner("my-app", a)
+	defer r.Close()  // Ensure cleanup (trpc-agent-go >= v0.5.0)
 
 	// 4. Run conversation.
 	ctx := context.Background()
@@ -484,22 +485,112 @@ for event := range eventChan {
 
 ### Resource Management
 
-```go
-// Use context to control lifecycle.
-ctx, cancel := context.WithCancel(context.Background())
-defer cancel()
+#### 🔒 Closing Runner (Important)
 
-// Ensure all events are consumed.
+**You MUST call `Close()` when the Runner is no longer needed to prevent goroutine leaks(`trpc-agent-go >= v0.5.0`).**
+
+**Runner Only Closes Resources It Created**
+
+When a Runner is created without providing a Session Service, it automatically creates a default inmemory Session Service. This service starts background goroutines internally (for asynchronous summary processing, TTL-based session cleanup, etc.). **Runner only manages the lifecycle of this self-created inmemory Session Service.** If you provide your own Session Service via `WithSessionService()`, you are responsible for managing its lifecycle—Runner won't close it.
+
+If you don't call `Close()` on a Runner that owns an inmemory Session Service, the background goroutines will run forever, causing resource leaks.
+
+**Recommended Practice**:
+
+```go
+// ✅ Recommended: Use defer to ensure cleanup
+r := runner.NewRunner("my-app", agent)
+defer r.Close()  // Ensure cleanup on function exit (trpc-agent-go >= v0.5.0)
+
+// Use the runner
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 if err != nil {
-    return err
+	return err
 }
 
 for event := range eventChan {
-    // Process events.
-    if event.Done {
-        break
-    }
+	// Process events
+	if event.IsRunnerCompletion() {
+		break
+	}
+}
+```
+
+**When You Provide Your Own Session Service**:
+
+```go
+// You create and manage the session service lifecycle
+sessionService := redis.NewService(redis.WithRedisClientURL("redis://localhost:6379"))
+defer sessionService.Close()  // YOU are responsible for closing it
+
+// Runner uses but doesn't own this session service
+r := runner.NewRunner("my-app", agent, 
+	runner.WithSessionService(sessionService))
+defer r.Close()  // This will NOT close sessionService (you provided it) (trpc-agent-go >= v0.5.0)
+
+// ... use the runner
+```
+
+**Long-Running Services**:
+
+```go
+type Service struct {
+	runner runner.Runner
+	sessionService session.Service  // If you manage it yourself
+}
+
+func NewService() *Service {
+	r := runner.NewRunner("my-app", agent)
+	return &Service{runner: r}
+}
+
+func (s *Service) Start() error {
+	// Service startup logic
+	return nil
+}
+
+// Call Close when shutting down the service
+func (s *Service) Stop() error {
+	// Close runner (which closes its owned inmemory session service)
+    // trpc-agent-go >= v0.5.0
+	if err := s.runner.Close(); err != nil {
+		return err
+	}
+	
+	// If you provided your own session service, close it here
+	if s.sessionService != nil {
+		return s.sessionService.Close()
+	}
+	
+	return nil
+}
+```
+
+**Important Notes**:
+
+- ✅ `Close()` is idempotent; calling it multiple times is safe
+- ✅ **Runner only closes the inmemory Session Service it creates by default**
+- ✅ If you provide your own Session Service via `WithSessionService()`, Runner won't close it (you manage it yourself)
+- ❌ Not calling `Close()` when Runner owns an inmemory Session Service will cause goroutine leaks
+
+#### Context Lifecycle Control
+
+```go
+// Use context to control the lifecycle of a single run
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+// Ensure all events are consumed
+eventChan, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+	return err
+}
+
+for event := range eventChan {
+	// Process events
+	if event.Done {
+		break
+	}
 }
 ```
 

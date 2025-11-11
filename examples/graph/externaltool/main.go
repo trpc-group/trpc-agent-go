@@ -76,6 +76,10 @@ func main() {
 		fmt.Printf("failed to set up workflow: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer workflow.runner.Close()
+
 	if err := workflow.interactive(ctx); err != nil {
 		fmt.Printf("workflow ended with error: %v\n", err)
 		os.Exit(1)
