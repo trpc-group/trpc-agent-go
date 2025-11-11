@@ -968,7 +968,6 @@ func TestObjectTypeConstants(t *testing.T) {
 }
 
 func TestResponse_IsUserMessage(t *testing.T) {
-	// 定义测试用例
 	tests := []struct {
 		name     string
 		rsp      *Response
@@ -1058,7 +1057,6 @@ func TestResponse_IsUserMessage(t *testing.T) {
 		},
 	}
 
-	// 运行测试用例
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.rsp.IsUserMessage()

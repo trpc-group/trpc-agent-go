@@ -1908,11 +1908,9 @@ func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
 }
 
 func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
-	// 创建基础时间
 	baseTime := time.Now()
 	sinceTime := baseTime.Add(-time.Hour)
 
-	// 定义测试用例
 	tests := []struct {
 		name     string
 		setup    func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time)
@@ -2296,7 +2294,6 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 		},
 	}
 
-	// 运行测试用例
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, evt, inv, filter, isZeroTime, since := tt.setup()
