@@ -100,6 +100,8 @@ type SessionService struct {
 	cleanupDone     chan struct{}
 	cleanupOnce     sync.Once
 	summaryJobChans []chan *summaryJob // channel for summary jobs to processing
+	summaryWg       sync.WaitGroup     // wait group for summary workers
+	once            sync.Once          // ensure Close is called only once
 }
 
 // summaryJob represents a summary job to be processed asynchronously
@@ -664,8 +666,10 @@ func (s *SessionService) stopCleanupRoutine() {
 
 // Close closes the service.
 func (s *SessionService) Close() error {
-	s.stopCleanupRoutine()
-	s.stopAsyncSummaryWorker()
+	s.once.Do(func() {
+		s.stopCleanupRoutine()
+		s.stopAsyncSummaryWorker()
+	})
 	return nil
 }
 

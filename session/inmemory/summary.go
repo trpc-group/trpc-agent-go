@@ -142,6 +142,11 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 // tryEnqueueJob attempts to enqueue a summary job to the appropriate channel.
 // Returns true if successful, false if the job should be processed synchronously.
 func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
+	// Check if channels are initialized
+	if len(s.summaryJobChans) == 0 {
+		return false // Channels not initialized or closed, fall back to sync processing
+	}
+
 	// Select a channel using hash distribution.
 	keyStr := fmt.Sprintf("%s:%s:%s", job.sessionKey.AppName, job.sessionKey.UserID, job.sessionKey.SessionID)
 	index := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
@@ -174,8 +179,10 @@ func (s *SessionService) startAsyncSummaryWorker() {
 		s.summaryJobChans[i] = make(chan *summaryJob, s.opts.summaryQueueSize)
 	}
 
+	s.summaryWg.Add(summaryNum)
 	for _, summaryJobChan := range s.summaryJobChans {
 		go func(summaryJobChan chan *summaryJob) {
+			defer s.summaryWg.Done()
 			for job := range summaryJobChan {
 				s.processSummaryJob(job)
 				// After branch summary, cascade a full-session summary by
@@ -214,8 +221,12 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 
 // stopAsyncSummaryWorker stops all async summary workers and closes their channels.
 func (s *SessionService) stopAsyncSummaryWorker() {
+	if len(s.summaryJobChans) == 0 {
+		return
+	}
 	for _, ch := range s.summaryJobChans {
 		close(ch)
 	}
+	s.summaryWg.Wait()
 	s.summaryJobChans = nil
 }
