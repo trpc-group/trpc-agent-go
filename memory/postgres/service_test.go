@@ -134,6 +134,12 @@ func TestServiceOpts_WithCustomTool(t *testing.T) {
 
 	assert.NotNil(t, opts.toolCreators[toolName], "Expected tool creator to be set")
 	assert.True(t, opts.enabledTools[toolName], "Expected tool to be enabled")
+
+	// Test with nil creator (should do nothing).
+	WithCustomTool(memory.SearchToolName, nil)(&opts)
+
+	assert.Nil(t, opts.toolCreators[memory.SearchToolName], "Expected nil creator not to be set")
+	assert.False(t, opts.enabledTools[memory.SearchToolName], "Expected tool with nil creator not to be enabled")
 }
 
 func TestServiceOpts_WithToolEnabled(t *testing.T) {

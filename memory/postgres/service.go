@@ -51,10 +51,13 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		toolCreators: make(map[string]memory.ToolCreator),
 		enabledTools: make(map[string]bool),
 	}
-	// Enable default tools.
-	for name, creator := range imemory.DefaultEnabledTools {
+	// Copy all tool creators.
+	for name, creator := range imemory.AllToolCreators {
 		opts.toolCreators[name] = creator
-		opts.enabledTools[name] = true
+	}
+	// Enable default tools.
+	for name, enabled := range imemory.DefaultEnabledTools {
+		opts.enabledTools[name] = enabled
 	}
 	for _, option := range options {
 		option(&opts)
@@ -415,9 +418,9 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 // Tools returns the list of available memory tools.
 func (s *Service) Tools() []tool.Tool {
 	// Concurrency-safe and stable order by name.
-	// Protect tool creators/enabled flags and cache with a single lock at call-site
-	// by converting to a local snapshot first (no struct-level mutex exists).
-	// We assume opts are immutable after construction.
+	// Protect tool creators/enabled flags and cache with a single lock at
+	// call-site by converting to a local snapshot first (no struct-level
+	// mutex exists). We assume opts are immutable after construction.
 	names := make([]string, 0, len(s.opts.toolCreators))
 	for name := range s.opts.toolCreators {
 		if s.opts.enabledTools[name] {
