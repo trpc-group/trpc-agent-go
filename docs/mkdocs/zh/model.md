@@ -624,7 +624,7 @@ batch, err := llm.CreateBatch(ctx, requests,
 
 Batch API 的执行流程：
 
-```
+```text
 1. 准备批处理请求（BatchRequestInput 列表）
 2. 验证请求格式和 CustomID 唯一性
 3. 生成 JSONL 格式的输入文件
@@ -738,7 +738,7 @@ llm := openai.New("gpt-4o-mini",
 
 重试机制的执行流程：
 
-```
+```text
 1. 发送请求到 LLM API
 2. 如果请求失败且错误可重试：
    a. 检查是否达到最大重试次数
@@ -989,6 +989,93 @@ model := anthropic.New("claude-sonnet-4-0",
     anthropic.WithTokenTailoringConfig(&anthropic.TokenTailoringConfig{
         SafetyMarginRatio: 0.15,  // 提高安全边际到 15%
     }),
+)
+```
+
+#### 6. Variant 优化：平台特有行为适配
+Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，特别是文件上传、删除和处理逻辑。
+##### 6.1. 支持的 Variant 类型
+框架目前支持以下 Variant：
+
+**1. VariantOpenAI（默认）**
+
+- 标准 OpenAI API 兼容行为
+- 文件上传路径：`/openapi/v1/files`
+- 文件用途：`user_data`
+- 删除文件的Http请求方法：`DELETE`
+
+**2. VariantHunyuan（混元）**
+
+- 腾讯混元平台特有适配
+- 文件上传路径：`/openapi/v1/files/uploads`
+- 文件用途：`file-extract`
+- 删除文件的Http请求方法：`POST`
+
+**3. VariantDeepSeek**
+
+- DeepSeek 平台适配
+- 默认 BaseURL：`https://api.deepseek.com`
+- API Key 环境变量名：`DEEPSEEK_API_KEY`
+- 其他行为与标准 OpenAI 一致
+
+##### 6.2. 使用方式
+
+**使用示例**：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai"
+
+// 使用混元平台
+model := openai.New("hunyuan-model",
+    openai.WithBaseURL("https://your-hunyuan-api.com"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantHunyuan), // 关键：指定混元
+)
+
+// 使用 DeepSeek 平台
+model := openai.New("deepseek-chat",
+    openai.WithBaseURL("https://api.deepseek.com/v1"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantDeepSeek), // 指定 DeepSeek
+)
+```
+##### 6.3. Variant 的行为差异示例
+
+**消息内容处理差异**：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// 对于混元平台，文件 ID 会放在 extraFields 中而非 content parts
+message := model.Message{
+    Role: model.RoleUser,
+    ContentParts: []model.ContentPart{
+        {
+            Type: model.ContentTypeFile,
+            File: &model.File{
+                FileID: "file_123",
+            },
+        },
+    },
+}
+```
+
+**环境变量自动配置**：
+
+对于某些 Variant，框架支持自动从环境变量读取配置：
+
+```bash
+# DeepSeek 自动配置
+export DEEPSEEK_API_KEY="your-api-key"
+# 无需显式调用 WithAPIKey，框架会自动读取
+```
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// DeepSeek 自动配置示例
+model := openai.New("deepseek-chat",
+    openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
 )
 ```
 

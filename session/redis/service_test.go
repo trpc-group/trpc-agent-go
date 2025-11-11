@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -1293,7 +1292,7 @@ func TestEnsureEventStartWithUser(t *testing.T) {
 				Events:  tt.setupEvents(),
 			}
 
-			isession.EnsureEventStartWithUser(sess)
+			sess.EnsureEventStartWithUser()
 
 			assert.Equal(t, tt.expectedLength, len(sess.Events), "Event length should match expected")
 
