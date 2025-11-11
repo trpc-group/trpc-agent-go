@@ -184,6 +184,19 @@ func TestServiceOpts_InvalidToolName(t *testing.T) {
 	assert.False(t, opts.enabledTools[invalidToolName], "Expected invalid tool not to be enabled")
 }
 
+func TestServiceOpts_WithCustomTool_NilCreator(t *testing.T) {
+	opts := ServiceOpts{
+		toolCreators: make(map[string]memory.ToolCreator),
+		enabledTools: make(map[string]bool),
+	}
+
+	// Test WithCustomTool with nil creator.
+	WithCustomTool(memory.AddToolName, nil)(&opts)
+
+	assert.Nil(t, opts.toolCreators[memory.AddToolName], "Expected nil creator not to be set")
+	assert.False(t, opts.enabledTools[memory.AddToolName], "Expected tool with nil creator not to be enabled")
+}
+
 func TestServiceOpts_CombinedOptions(t *testing.T) {
 	opts := ServiceOpts{}
 
@@ -734,4 +747,126 @@ func TestService_SearchMemories_UnmarshalError(t *testing.T) {
 	_, err = svc.SearchMemories(ctx, userKey, "query")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal")
+}
+
+func TestService_Tools_PanicWithNilCreator(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Test that DeleteToolName and ClearToolName can be enabled.
+	// They should have creators now, so no panic should occur.
+	svc, err := NewService(
+		WithRedisClientURL(url),
+		WithToolEnabled(memory.DeleteToolName, true),
+		WithToolEnabled(memory.ClearToolName, true),
+	)
+	require.NoError(t, err)
+
+	tools := svc.Tools()
+
+	// DeleteToolName and ClearToolName should be in the tools list.
+	foundDelete := false
+	foundClear := false
+	for _, tl := range tools {
+		if decl := tl.Declaration(); decl != nil {
+			if decl.Name == memory.DeleteToolName {
+				foundDelete = true
+			}
+			if decl.Name == memory.ClearToolName {
+				foundClear = true
+			}
+		}
+	}
+	assert.True(t, foundDelete, "DeleteToolName should be in tools")
+	assert.True(t, foundClear, "ClearToolName should be in tools")
+}
+
+func TestService_Tools_DefaultToolsOnly(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with default settings.
+	svc, err := NewService(WithRedisClientURL(url))
+	require.NoError(t, err)
+
+	tools := svc.Tools()
+
+	// Collect tool names.
+	names := make(map[string]bool)
+	for _, tl := range tools {
+		if decl := tl.Declaration(); decl != nil {
+			names[decl.Name] = true
+		}
+	}
+
+	// Default enabled tools: add, update, search, load.
+	assert.True(t, names[memory.AddToolName], "AddToolName should be enabled by default")
+	assert.True(t, names[memory.UpdateToolName], "UpdateToolName should be enabled by default")
+	assert.True(t, names[memory.SearchToolName], "SearchToolName should be enabled by default")
+	assert.True(t, names[memory.LoadToolName], "LoadToolName should be enabled by default")
+
+	// Delete and Clear should NOT be enabled by default.
+	assert.False(t, names[memory.DeleteToolName], "DeleteToolName should NOT be enabled by default")
+	assert.False(t, names[memory.ClearToolName], "ClearToolName should NOT be enabled by default")
+}
+
+func TestUserScenario(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// User's exact code from the screenshot that was causing panic.
+	memoryService, err := NewService(
+		WithRedisClientURL(url),
+		WithToolEnabled(memory.LoadToolName, true),
+		WithToolEnabled(memory.UpdateToolName, true),
+		WithToolEnabled(memory.SearchToolName, true),
+		WithToolEnabled(memory.AddToolName, true),
+		WithToolEnabled(memory.DeleteToolName, true),
+		WithToolEnabled(memory.ClearToolName, true),
+	)
+	require.NoError(t, err)
+
+	// This should NOT panic - this was the original issue.
+	tools := memoryService.Tools()
+	require.NotEmpty(t, tools)
+
+	// Verify all enabled tools are present.
+	names := make(map[string]bool)
+	for _, tool := range tools {
+		if decl := tool.Declaration(); decl != nil {
+			names[decl.Name] = true
+		}
+	}
+
+	assert.True(t, names[memory.LoadToolName], "LoadToolName should be enabled")
+	assert.True(t, names[memory.UpdateToolName], "UpdateToolName should be enabled")
+	assert.True(t, names[memory.SearchToolName], "SearchToolName should be enabled")
+	assert.True(t, names[memory.AddToolName], "AddToolName should be enabled")
+	assert.True(t, names[memory.DeleteToolName], "DeleteToolName should be enabled")
+	assert.True(t, names[memory.ClearToolName], "ClearToolName should be enabled")
+
+	// Verify tools work correctly.
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+
+	// Test add.
+	err = memoryService.AddMemory(ctx, userKey, "test memory", []string{"test"})
+	require.NoError(t, err)
+
+	// Test read.
+	entries, err := memoryService.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// Test delete.
+	err = memoryService.DeleteMemory(ctx, memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: entries[0].ID,
+	})
+	require.NoError(t, err)
+
+	// Test clear.
+	err = memoryService.ClearMemories(ctx, userKey)
+	require.NoError(t, err)
 }
