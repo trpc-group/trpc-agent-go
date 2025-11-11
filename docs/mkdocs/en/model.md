@@ -994,6 +994,91 @@ model := anthropic.New("claude-sonnet-4-0",
 )
 ```
 
+#### 6. Variant Optimization: Adapting to Platform-Specific Behaviors
+The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, especially for file upload, deletion, and processing logic.
+##### 6.1. Supported Variant Types
+The framework currently supports the following Variants:
+
+**1. VariantOpenAI（default）**
+
+- Standard OpenAI API-compatible behavior
+- File upload path：`/openapi/v1/files`
+- File purpose:`user_data`
+- File deletion Http method:：`DELETE`
+
+**2. VariantHunyuan（hunyuan）**
+
+- Tencent Hunyuan platform-specific adaptation
+- File upload path:：`/openapi/v1/files/uploads`
+- File purpose：`file-extract`
+- File deletion Http Method：`POST`
+
+**3. VariantDeepSeek**
+
+- DeepSeek platform adaptation
+- Default BaseURL：`https://api.deepseek.com`
+- API Key environment variable name：`DEEPSEEK_API_KEY`
+- Other behaviors are consistent with standard OpenAI
+
+##### 6.2. Usage
+
+**Usage Example**：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai"
+
+// Use the Hunyuan platform
+model := openai.New("hunyuan-model",
+    openai.WithBaseURL("https://your-hunyuan-api.com"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantHunyuan), // Specify the Hunyuan variant
+)
+
+// Use the DeepSeek platform
+model := openai.New("deepseek-chat",
+    openai.WithBaseURL("https://api.deepseek.com/v1"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
+)
+```
+##### 6.3. Behavioral Differences of Variants Examples
+
+**Message content handling differences**：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// For the Hunyuan platform, the file ID is placed in extraFields instead of content parts
+message := model.Message{
+    Role: model.RoleUser,
+    ContentParts: []model.ContentPart{
+        {
+            Type: model.ContentTypeFile,
+            File: &model.File{
+                FileID: "file_123",
+            },
+        },
+    },
+}
+```
+**Environment variable auto-configuration**
+
+For certain Variants, the framework supports reading configuration from environment variables automatically:
+
+```bash
+# DeepSeek
+export DEEPSEEK_API_KEY="your-api-key"
+# No need to call WithAPIKey explicitly; the framework reads it automatically
+```
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// DeepSeek
+model := openai.New("deepseek-chat",
+    openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY
+)
+```
 ## Anthropic Model
 
 Anthropic Model is used to interface with Claude models and compatible platforms, supporting streaming output, thought modes and tool calls, and providing a rich callback mechanism, while also allowing for flexible configuration of custom HTTP headers.

@@ -1397,4 +1397,3 @@ func TestWithTokenTailoringConfig(t *testing.T) {
 	assert.Equal(t, 0.15, m.safetyMarginRatio)
 	assert.Equal(t, 0.90, m.maxInputTokensRatio)
 }
-

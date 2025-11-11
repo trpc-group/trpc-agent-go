@@ -682,7 +682,6 @@ func (s *closeErrorSessionService) EnqueueSummaryJob(ctx context.Context, sess *
 	return nil
 }
 
-
 // noOpAgent emits one qualifying assistant message then closes.
 type noOpAgent struct{ name string }
 

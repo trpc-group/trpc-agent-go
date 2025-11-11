@@ -861,8 +861,8 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 	summarizer := &mockSummarizerImpl{summaryText: "test", shouldSummarize: true}
 	s, _, db := setupMockService(t, &TestServiceOpts{
-		summarizer:      summarizer,
-		asyncSummaryNum: 1,
+		summarizer:       summarizer,
+		asyncSummaryNum:  1,
 		summaryQueueSize: 1,
 	})
 	defer db.Close()
@@ -909,8 +909,8 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 func TestTryEnqueueJob_SendSuccess(t *testing.T) {
 	summarizer := &mockSummarizerImpl{summaryText: "test", shouldSummarize: true}
 	s, _, db := setupMockService(t, &TestServiceOpts{
-		summarizer:      summarizer,
-		asyncSummaryNum: 1,
+		summarizer:       summarizer,
+		asyncSummaryNum:  1,
 		summaryQueueSize: 10,
 	})
 	defer db.Close()
