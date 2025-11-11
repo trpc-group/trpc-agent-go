@@ -69,6 +69,9 @@ func main() {
 	sess := inmemory.NewSessionService()
 	r := runner.NewRunner("multiends-app", ga, runner.WithSessionService(sess))
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	// Run a single turn using the provided choice as user input
 	if err := runOnce(r, *choice); err != nil {
 		log.Fatalf("run failed: %v", err)

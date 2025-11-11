@@ -7,6 +7,7 @@
 //
 //
 
+// Package agent is the agent for the text saving.
 package main
 
 import (
@@ -28,12 +29,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+// logQueryInput is the input for the log query
 type logQueryInput struct {
 	Query string `json:"query"`
 }
 
+// logQueryOutput is the output for the log query
 type logQueryOutput struct{}
 
+// logQuery is the function to log the query
 func logQuery(ctx context.Context, query logQueryInput) (logQueryOutput, error) {
 	a := &artifact.Artifact{
 		Data:     []byte(query.Query),
@@ -58,7 +62,7 @@ var logQueryTool = function.NewFunctionTool(
 	function.WithDescription("Logs user queries"),
 )
 
-// logQueryAgent manages the multi-tool conversation system
+// logQueryAgent manages the text saving conversation system
 type logQueryAgent struct {
 	modelName       string
 	runner          runner.Runner
@@ -68,6 +72,7 @@ type logQueryAgent struct {
 	artifactService artifact.Service
 }
 
+// newLogQueryAgent creates a new text saving agent
 func newLogQueryAgent(appName, agentName, modelName string) *logQueryAgent {
 	a := &logQueryAgent{
 		appName:         appName,
@@ -107,11 +112,11 @@ func newLogQueryAgent(appName, agentName, modelName string) *logQueryAgent {
 	a.userID = "user"
 	a.sessionID = fmt.Sprintf("multi-tool-session-%d", time.Now().Unix())
 
-	fmt.Printf("✅ Multi-tool intelligent assistant is ready! Session ID: %s\n\n", a.sessionID)
+	fmt.Printf("✅ Text saving agent is ready! Session ID: %s\n\n", a.sessionID)
 	return a
 }
 
-// processMessage processes a single message exchange
+// processMessage processes a single message exchange for text saving
 func (a *logQueryAgent) processMessage(ctx context.Context, userMessage string) error {
 	fmt.Printf("👤 User message: %s\n", userMessage)
 	message := model.NewUserMessage(userMessage)
