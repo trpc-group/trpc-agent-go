@@ -1,21 +1,26 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/tailor
 
-go 1.23
+go 1.23.0
+
+toolchain go1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..
+	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
 	trpc.group/trpc-go/trpc-agent-go/model/tiktoken => ../../model/tiktoken
 )
 
 require (
+	github.com/anthropics/anthropic-sdk-go v1.17.0
 	github.com/openai/openai-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go v0.4.0
+	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251106024251-166c01e406a4
 	trpc.group/trpc-go/trpc-agent-go/model/tiktoken v0.0.0
 )
 
 require (
 	github.com/dlclark/regexp2 v1.11.5 // indirect
-	github.com/tidwall/gjson v1.14.4 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
