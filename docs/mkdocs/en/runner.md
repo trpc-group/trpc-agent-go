@@ -69,7 +69,7 @@ func main() {
 
 	// 3. Create Runner.
 	r := runner.NewRunner("my-app", a)
-	defer r.Close()  // Ensure cleanup
+	defer r.Close()  // Ensure cleanup (trpc-agent-go >= v0.5.0)
 
 	// 4. Run conversation.
 	ctx := context.Background()
@@ -487,7 +487,7 @@ for event := range eventChan {
 
 #### 🔒 Closing Runner (Important)
 
-**You MUST call `Close()` when the Runner is no longer needed to prevent goroutine leaks(trpc-agent-go >= v0.5.0).**
+**You MUST call `Close()` when the Runner is no longer needed to prevent goroutine leaks(`trpc-agent-go >= v0.5.0`).**
 
 **Runner Only Closes Resources It Created**
 
@@ -500,7 +500,7 @@ If you don't call `Close()` on a Runner that owns an inmemory Session Service, t
 ```go
 // ✅ Recommended: Use defer to ensure cleanup
 r := runner.NewRunner("my-app", agent)
-defer r.Close()  // Ensure cleanup on function exit
+defer r.Close()  // Ensure cleanup on function exit (trpc-agent-go >= v0.5.0)
 
 // Use the runner
 eventChan, err := r.Run(ctx, userID, sessionID, message)
@@ -526,7 +526,7 @@ defer sessionService.Close()  // YOU are responsible for closing it
 // Runner uses but doesn't own this session service
 r := runner.NewRunner("my-app", agent, 
 	runner.WithSessionService(sessionService))
-defer r.Close()  // This will NOT close sessionService (you provided it)
+defer r.Close()  // This will NOT close sessionService (you provided it) (trpc-agent-go >= v0.5.0)
 
 // ... use the runner
 ```
@@ -552,6 +552,7 @@ func (s *Service) Start() error {
 // Call Close when shutting down the service
 func (s *Service) Stop() error {
 	// Close runner (which closes its owned inmemory session service)
+    // trpc-agent-go >= v0.5.0
 	if err := s.runner.Close(); err != nil {
 		return err
 	}

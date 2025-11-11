@@ -33,6 +33,10 @@ func main() {
 	ctx := context.Background()
 	// New runner.
 	runner := runner.NewRunner(appName, newCalculatorAgent(*modelName, *streaming))
+	
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer runner.Close()
+	
 	// New manager and registry for evaluation.
 	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(*dataDir))
 	metricManager := metriclocal.New(metric.WithBaseDir(*dataDir))
