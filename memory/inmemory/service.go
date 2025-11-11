@@ -69,10 +69,13 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 		enabledTools: make(map[string]bool),
 	}
 
-	// Enable default tools first.
-	for toolName, creator := range imemory.DefaultEnabledTools {
-		opts.enabledTools[toolName] = true
-		opts.toolCreators[toolName] = creator
+	// Copy all tool creators.
+	for name, creator := range imemory.AllToolCreators {
+		opts.toolCreators[name] = creator
+	}
+	// Enable default tools.
+	for name, enabled := range imemory.DefaultEnabledTools {
+		opts.enabledTools[name] = enabled
 	}
 
 	// Apply user options.
@@ -99,11 +102,11 @@ func WithMemoryLimit(limit int) ServiceOpt {
 
 // WithCustomTool sets a custom memory tool implementation.
 // The tool will be enabled by default.
-// If the tool name is invalid, this option will do nothing.
+// If the tool name is invalid or creator is nil, this option will do nothing.
 func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 	return func(opts *serviceOpts) {
-		// If the tool name is invalid, do nothing.
-		if !imemory.IsValidToolName(toolName) {
+		// If the tool name is invalid or creator is nil, do nothing.
+		if !imemory.IsValidToolName(toolName) || creator == nil {
 			return
 		}
 		opts.toolCreators[toolName] = creator

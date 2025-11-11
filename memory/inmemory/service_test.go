@@ -377,6 +377,18 @@ func TestMemoryService_ToolNameValidation(t *testing.T) {
 	assert.True(t, toolNames[memory.AddToolName], "Expected valid tool name %s to be registered", memory.AddToolName)
 	assert.False(t, toolNames["invalid_tool"], "Expected invalid tool name to be ignored")
 	assert.False(t, toolNames["invalid_enable"], "Expected invalid tool name in WithToolEnabled to be ignored")
+
+	// Test that nil creator is ignored.
+	service = NewMemoryService(
+		WithCustomTool(memory.UpdateToolName, nil),
+	)
+	tools = service.Tools()
+	toolNames = map[string]bool{}
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	// UpdateToolName should still be present from defaults, not from nil creator.
+	assert.True(t, toolNames[memory.UpdateToolName], "Expected default tool to still be available")
 }
 
 func TestWithMemoryLimit(t *testing.T) {

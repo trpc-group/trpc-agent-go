@@ -25,13 +25,24 @@ const (
 	DefaultMemoryLimit = 1000
 )
 
-// DefaultEnabledTools are the creators of default memory tools to enable.
+// AllToolCreators contains creators for all valid memory tools.
 // This is shared between different memory service implementations.
-var DefaultEnabledTools = map[string]memory.ToolCreator{
+var AllToolCreators = map[string]memory.ToolCreator{
 	memory.AddToolName:    func() tool.Tool { return memorytool.NewAddTool() },
 	memory.UpdateToolName: func() tool.Tool { return memorytool.NewUpdateTool() },
 	memory.SearchToolName: func() tool.Tool { return memorytool.NewSearchTool() },
 	memory.LoadToolName:   func() tool.Tool { return memorytool.NewLoadTool() },
+	memory.DeleteToolName: func() tool.Tool { return memorytool.NewDeleteTool() },
+	memory.ClearToolName:  func() tool.Tool { return memorytool.NewClearTool() },
+}
+
+// DefaultEnabledTools are the tool names that are enabled by default.
+// This is shared between different memory service implementations.
+var DefaultEnabledTools = map[string]bool{
+	memory.AddToolName:    true,
+	memory.UpdateToolName: true,
+	memory.SearchToolName: true,
+	memory.LoadToolName:   true,
 }
 
 // validToolNames contains all valid memory tool names.
