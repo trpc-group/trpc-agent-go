@@ -1122,6 +1122,48 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#6-variant-optimization-adapting-to-platform-specific-behaviors" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Variant Optimization: Adapting to Platform-Specific Behaviors
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Variant Optimization: Adapting to Platform-Specific Behaviors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-supported-variant-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1. Supported Variant Types
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2. Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-behavioral-differences-of-variants-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3. Behavioral Differences of Variants Examples
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2135,6 +2177,48 @@
       5. Token Tailoring
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-variant-optimization-adapting-to-platform-specific-behaviors" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Variant Optimization: Adapting to Platform-Specific Behaviors
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Variant Optimization: Adapting to Platform-Specific Behaviors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-supported-variant-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1. Supported Variant Types
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2. Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-behavioral-differences-of-variants-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3. Behavioral Differences of Variants Examples
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3743,314 +3827,137 @@ metrics logic.</p>
 </span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5"></a><span class="w">    </span><span class="p">}),</span>
 </span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<h4 id="6-variant-optimization-adapting-to-platform-specific-behaviors">6. Variant Optimization: Adapting to Platform-Specific Behaviors</h4>
+<p>The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, especially for file upload, deletion, and processing logic.</p>
+<h5 id="61-supported-variant-types">6.1. Supported Variant Types</h5>
+<p>The framework currently supports the following Variants:</p>
+<p><strong>1. VariantOpenAI（default）</strong></p>
+<ul>
+<li>Standard OpenAI API-compatible behavior</li>
+<li>File upload path：<code>/openapi/v1/files</code></li>
+<li>File purpose:<code>user_data</code></li>
+<li>File deletion Http method:：<code>DELETE</code></li>
+</ul>
+<p><strong>2. VariantHunyuan（hunyuan）</strong></p>
+<ul>
+<li>Tencent Hunyuan platform-specific adaptation</li>
+<li>File upload path:：<code>/openapi/v1/files/uploads</code></li>
+<li>File purpose：<code>file-extract</code></li>
+<li>File deletion Http Method：<code>POST</code></li>
+</ul>
+<p><strong>3. VariantDeepSeek</strong></p>
+<ul>
+<li>DeepSeek platform adaptation</li>
+<li>Default BaseURL：<code>https://api.deepseek.com</code></li>
+<li>API Key environment variable name：<code>DEEPSEEK_API_KEY</code></li>
+<li>Other behaviors are consistent with standard OpenAI</li>
+</ul>
+<h5 id="62-usage">6.2. Usage</h5>
+<p><strong>Usage Example</strong>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-39-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-39-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-39-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-39-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-39-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-39-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-39-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-39-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-39-10">10</a></span>
+<span class="normal"><a href="#__codelineno-39-11">11</a></span>
+<span class="normal"><a href="#__codelineno-39-12">12</a></span>
+<span class="normal"><a href="#__codelineno-39-13">13</a></span>
+<span class="normal"><a href="#__codelineno-39-14">14</a></span>
+<span class="normal"><a href="#__codelineno-39-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a>
+</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="c1">// Use the Hunyuan platform</span>
+</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;hunyuan-model&quot;</span><span class="p">,</span>
+</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://your-hunyuan-api.com&quot;</span><span class="p">),</span>
+</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="s">&quot;your-api-key&quot;</span><span class="p">),</span>
+</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithVariant</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">VariantHunyuan</span><span class="p">),</span><span class="w"> </span><span class="c1">// Specify the Hunyuan variant</span>
+</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a><span class="p">)</span>
+</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9"></a>
+</span><span id="__span-39-10"><a id="__codelineno-39-10" name="__codelineno-39-10"></a><span class="c1">// Use the DeepSeek platform</span>
+</span><span id="__span-39-11"><a id="__codelineno-39-11" name="__codelineno-39-11"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-39-12"><a id="__codelineno-39-12" name="__codelineno-39-12"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.deepseek.com/v1&quot;</span><span class="p">),</span>
+</span><span id="__span-39-13"><a id="__codelineno-39-13" name="__codelineno-39-13"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="s">&quot;your-api-key&quot;</span><span class="p">),</span>
+</span><span id="__span-39-14"><a id="__codelineno-39-14" name="__codelineno-39-14"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithVariant</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">VariantDeepSeek</span><span class="p">),</span><span class="w"> </span><span class="c1">// Specify the DeepSeek variant</span>
+</span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h5 id="63-behavioral-differences-of-variants-examples">6.3. Behavioral Differences of Variants Examples</h5>
+<p><strong>Message content handling differences</strong>：</p>
+<p><div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-40-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-40-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-40-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-40-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-40-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-40-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-40-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-40-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-40-10">10</a></span>
+<span class="normal"><a href="#__codelineno-40-11">11</a></span>
+<span class="normal"><a href="#__codelineno-40-12">12</a></span>
+<span class="normal"><a href="#__codelineno-40-13">13</a></span>
+<span class="normal"><a href="#__codelineno-40-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a>
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="c1">// For the Hunyuan platform, the file ID is placed in extraFields instead of content parts</span>
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a><span class="nx">message</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="w">    </span><span class="nx">Role</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleUser</span><span class="p">,</span>
+</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a><span class="w">    </span><span class="nx">ContentParts</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">ContentPart</span><span class="p">{</span>
+</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-40-8"><a id="__codelineno-40-8" name="__codelineno-40-8"></a><span class="w">            </span><span class="nx">Type</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ContentTypeFile</span><span class="p">,</span>
+</span><span id="__span-40-9"><a id="__codelineno-40-9" name="__codelineno-40-9"></a><span class="w">            </span><span class="nx">File</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">File</span><span class="p">{</span>
+</span><span id="__span-40-10"><a id="__codelineno-40-10" name="__codelineno-40-10"></a><span class="w">                </span><span class="nx">FileID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;file_123&quot;</span><span class="p">,</span>
+</span><span id="__span-40-11"><a id="__codelineno-40-11" name="__codelineno-40-11"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-40-12"><a id="__codelineno-40-12" name="__codelineno-40-12"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-40-13"><a id="__codelineno-40-13" name="__codelineno-40-13"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-40-14"><a id="__codelineno-40-14" name="__codelineno-40-14"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<strong>Environment variable auto-configuration</strong></p>
+<p>For certain Variants, the framework supports reading configuration from environment variables automatically:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1">1</a></span>
+<span class="normal"><a href="#__codelineno-41-2">2</a></span>
+<span class="normal"><a href="#__codelineno-41-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="c1"># DeepSeek</span>
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">DEEPSEEK_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="c1"># No need to call WithAPIKey explicitly; the framework reads it automatically</span>
+</span></code></pre></div></td></tr></table></div>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1">1</a></span>
+<span class="normal"><a href="#__codelineno-42-2">2</a></span>
+<span class="normal"><a href="#__codelineno-42-3">3</a></span>
+<span class="normal"><a href="#__codelineno-42-4">4</a></span>
+<span class="normal"><a href="#__codelineno-42-5">5</a></span>
+<span class="normal"><a href="#__codelineno-42-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2"></a>
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3"></a><span class="c1">// DeepSeek</span>
+</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithVariant</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">VariantDeepSeek</span><span class="p">),</span><span class="w"> </span><span class="c1">// Automatically reads DEEPSEEK_API_KEY</span>
+</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <h2 id="anthropic-model">Anthropic Model</h2>
 <p>Anthropic Model is used to interface with Claude models and compatible platforms, supporting streaming output, thought modes and tool calls, and providing a rich callback mechanism, while also allowing for flexible configuration of custom HTTP headers.</p>
 <h3 id="configuration-method_1">Configuration Method</h3>
 <h4 id="environment-variable-method_1">Environment Variable Method</h4>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1">1</a></span>
-<span class="normal"><a href="#__codelineno-39-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ANTHROPIC_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ANTHROPIC_BASE_URL</span><span class="o">=</span><span class="s2">&quot;https://api.anthropic.com&quot;</span><span class="w"> </span><span class="c1"># Optional configuration, default is this BASE URL</span>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1">1</a></span>
+<span class="normal"><a href="#__codelineno-43-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ANTHROPIC_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
+</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ANTHROPIC_BASE_URL</span><span class="o">=</span><span class="s2">&quot;https://api.anthropic.com&quot;</span><span class="w"> </span><span class="c1"># Optional configuration, default is this BASE URL</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="code-method_1">Code Method</h4>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1">1</a></span>
-<span class="normal"><a href="#__codelineno-40-2">2</a></span>
-<span class="normal"><a href="#__codelineno-40-3">3</a></span>
-<span class="normal"><a href="#__codelineno-40-4">4</a></span>
-<span class="normal"><a href="#__codelineno-40-5">5</a></span>
-<span class="normal"><a href="#__codelineno-40-6">6</a></span>
-<span class="normal"><a href="#__codelineno-40-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
-</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a>
-</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="nx">m</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a><span class="w">    </span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
-</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="s">&quot;your-api-key&quot;</span><span class="p">),</span>
-</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.anthropic.com&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// Optional configuration, default is this BASE URL</span>
-</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-44-1">1</a></span>
+<span class="normal"><a href="#__codelineno-44-2">2</a></span>
+<span class="normal"><a href="#__codelineno-44-3">3</a></span>
+<span class="normal"><a href="#__codelineno-44-4">4</a></span>
+<span class="normal"><a href="#__codelineno-44-5">5</a></span>
+<span class="normal"><a href="#__codelineno-44-6">6</a></span>
+<span class="normal"><a href="#__codelineno-44-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a>
+</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="nx">m</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a><span class="w">    </span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
+</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="s">&quot;your-api-key&quot;</span><span class="p">),</span>
+</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">&quot;https://api.anthropic.com&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// Optional configuration, default is this BASE URL</span>
+</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="using-the-model-directly">Using the Model Directly</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-41-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-41-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-41-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-41-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-41-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-41-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-41-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-41-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-41-10">10</a></span>
-<span class="normal"><a href="#__codelineno-41-11">11</a></span>
-<span class="normal"><a href="#__codelineno-41-12">12</a></span>
-<span class="normal"><a href="#__codelineno-41-13">13</a></span>
-<span class="normal"><a href="#__codelineno-41-14">14</a></span>
-<span class="normal"><a href="#__codelineno-41-15">15</a></span>
-<span class="normal"><a href="#__codelineno-41-16">16</a></span>
-<span class="normal"><a href="#__codelineno-41-17">17</a></span>
-<span class="normal"><a href="#__codelineno-41-18">18</a></span>
-<span class="normal"><a href="#__codelineno-41-19">19</a></span>
-<span class="normal"><a href="#__codelineno-41-20">20</a></span>
-<span class="normal"><a href="#__codelineno-41-21">21</a></span>
-<span class="normal"><a href="#__codelineno-41-22">22</a></span>
-<span class="normal"><a href="#__codelineno-41-23">23</a></span>
-<span class="normal"><a href="#__codelineno-41-24">24</a></span>
-<span class="normal"><a href="#__codelineno-41-25">25</a></span>
-<span class="normal"><a href="#__codelineno-41-26">26</a></span>
-<span class="normal"><a href="#__codelineno-41-27">27</a></span>
-<span class="normal"><a href="#__codelineno-41-28">28</a></span>
-<span class="normal"><a href="#__codelineno-41-29">29</a></span>
-<span class="normal"><a href="#__codelineno-41-30">30</a></span>
-<span class="normal"><a href="#__codelineno-41-31">31</a></span>
-<span class="normal"><a href="#__codelineno-41-32">32</a></span>
-<span class="normal"><a href="#__codelineno-41-33">33</a></span>
-<span class="normal"><a href="#__codelineno-41-34">34</a></span>
-<span class="normal"><a href="#__codelineno-41-35">35</a></span>
-<span class="normal"><a href="#__codelineno-41-36">36</a></span>
-<span class="normal"><a href="#__codelineno-41-37">37</a></span>
-<span class="normal"><a href="#__codelineno-41-38">38</a></span>
-<span class="normal"><a href="#__codelineno-41-39">39</a></span>
-<span class="normal"><a href="#__codelineno-41-40">40</a></span>
-<span class="normal"><a href="#__codelineno-41-41">41</a></span>
-<span class="normal"><a href="#__codelineno-41-42">42</a></span>
-<span class="normal"><a href="#__codelineno-41-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
-</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="p">)</span>
-</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a>
-</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">    </span><span class="c1">// Create model instance</span>
-</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">)</span>
-</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="w">    </span><span class="c1">// Build request</span>
-</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a><span class="w">    </span><span class="nx">temperature</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.7</span>
-</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11"></a><span class="w">    </span><span class="nx">maxTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">1000</span>
-</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12"></a><span class="w">    </span><span class="nx">request</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
-</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13"></a><span class="w">        </span><span class="nx">Messages</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
-</span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSystemMessage</span><span class="p">(</span><span class="s">&quot;You are a professional AI assistant.&quot;</span><span class="p">),</span>
-</span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Introduce the concurrency features of Go language.&quot;</span><span class="p">),</span>
-</span><span id="__span-41-16"><a id="__codelineno-41-16" name="__codelineno-41-16"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-41-17"><a id="__codelineno-41-17" name="__codelineno-41-17"></a><span class="w">        </span><span class="nx">GenerationConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
-</span><span id="__span-41-18"><a id="__codelineno-41-18" name="__codelineno-41-18"></a><span class="w">            </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">temperature</span><span class="p">,</span>
-</span><span id="__span-41-19"><a id="__codelineno-41-19" name="__codelineno-41-19"></a><span class="w">            </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="o">&amp;</span><span class="nx">maxTokens</span><span class="p">,</span>
-</span><span id="__span-41-20"><a id="__codelineno-41-20" name="__codelineno-41-20"></a><span class="w">            </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">false</span><span class="p">,</span>
-</span><span id="__span-41-21"><a id="__codelineno-41-21" name="__codelineno-41-21"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-41-22"><a id="__codelineno-41-22" name="__codelineno-41-22"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-41-23"><a id="__codelineno-41-23" name="__codelineno-41-23"></a><span class="w">    </span><span class="c1">// Call the model</span>
-</span><span id="__span-41-24"><a id="__codelineno-41-24" name="__codelineno-41-24"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-41-25"><a id="__codelineno-41-25" name="__codelineno-41-25"></a><span class="w">    </span><span class="nx">responseChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llm</span><span class="p">.</span><span class="nx">GenerateContent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="p">)</span>
-</span><span id="__span-41-26"><a id="__codelineno-41-26" name="__codelineno-41-26"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-27"><a id="__codelineno-41-27" name="__codelineno-41-27"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;System error: %v\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-41-28"><a id="__codelineno-41-28" name="__codelineno-41-28"></a><span class="w">        </span><span class="k">return</span>
-</span><span id="__span-41-29"><a id="__codelineno-41-29" name="__codelineno-41-29"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-41-30"><a id="__codelineno-41-30" name="__codelineno-41-30"></a><span class="w">    </span><span class="c1">// Handle response</span>
-</span><span id="__span-41-31"><a id="__codelineno-41-31" name="__codelineno-41-31"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">responseChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-32"><a id="__codelineno-41-32" name="__codelineno-41-32"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-33"><a id="__codelineno-41-33" name="__codelineno-41-33"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;API error: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-41-34"><a id="__codelineno-41-34" name="__codelineno-41-34"></a><span class="w">            </span><span class="k">return</span>
-</span><span id="__span-41-35"><a id="__codelineno-41-35" name="__codelineno-41-35"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-41-36"><a id="__codelineno-41-36" name="__codelineno-41-36"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-37"><a id="__codelineno-41-37" name="__codelineno-41-37"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Reply: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
-</span><span id="__span-41-38"><a id="__codelineno-41-38" name="__codelineno-41-38"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-41-39"><a id="__codelineno-41-39" name="__codelineno-41-39"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-40"><a id="__codelineno-41-40" name="__codelineno-41-40"></a><span class="w">            </span><span class="k">break</span>
-</span><span id="__span-41-41"><a id="__codelineno-41-41" name="__codelineno-41-41"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-41-42"><a id="__codelineno-41-42" name="__codelineno-41-42"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-41-43"><a id="__codelineno-41-43" name="__codelineno-41-43"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<h3 id="streaming-output_1">Streaming Output</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-42-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-42-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-42-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-42-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-42-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-42-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-42-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-42-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-42-10">10</a></span>
-<span class="normal"><a href="#__codelineno-42-11">11</a></span>
-<span class="normal"><a href="#__codelineno-42-12">12</a></span>
-<span class="normal"><a href="#__codelineno-42-13">13</a></span>
-<span class="normal"><a href="#__codelineno-42-14">14</a></span>
-<span class="normal"><a href="#__codelineno-42-15">15</a></span>
-<span class="normal"><a href="#__codelineno-42-16">16</a></span>
-<span class="normal"><a href="#__codelineno-42-17">17</a></span>
-<span class="normal"><a href="#__codelineno-42-18">18</a></span>
-<span class="normal"><a href="#__codelineno-42-19">19</a></span>
-<span class="normal"><a href="#__codelineno-42-20">20</a></span>
-<span class="normal"><a href="#__codelineno-42-21">21</a></span>
-<span class="normal"><a href="#__codelineno-42-22">22</a></span>
-<span class="normal"><a href="#__codelineno-42-23">23</a></span>
-<span class="normal"><a href="#__codelineno-42-24">24</a></span>
-<span class="normal"><a href="#__codelineno-42-25">25</a></span>
-<span class="normal"><a href="#__codelineno-42-26">26</a></span>
-<span class="normal"><a href="#__codelineno-42-27">27</a></span>
-<span class="normal"><a href="#__codelineno-42-28">28</a></span>
-<span class="normal"><a href="#__codelineno-42-29">29</a></span>
-<span class="normal"><a href="#__codelineno-42-30">30</a></span>
-<span class="normal"><a href="#__codelineno-42-31">31</a></span>
-<span class="normal"><a href="#__codelineno-42-32">32</a></span>
-<span class="normal"><a href="#__codelineno-42-33">33</a></span>
-<span class="normal"><a href="#__codelineno-42-34">34</a></span>
-<span class="normal"><a href="#__codelineno-42-35">35</a></span>
-<span class="normal"><a href="#__codelineno-42-36">36</a></span>
-<span class="normal"><a href="#__codelineno-42-37">37</a></span>
-<span class="normal"><a href="#__codelineno-42-38">38</a></span>
-<span class="normal"><a href="#__codelineno-42-39">39</a></span>
-<span class="normal"><a href="#__codelineno-42-40">40</a></span>
-<span class="normal"><a href="#__codelineno-42-41">41</a></span>
-<span class="normal"><a href="#__codelineno-42-42">42</a></span>
-<span class="normal"><a href="#__codelineno-42-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
-</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4"></a><span class="p">)</span>
-</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5"></a>
-</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-42-7"><a id="__codelineno-42-7" name="__codelineno-42-7"></a><span class="w">    </span><span class="c1">// Create model instance</span>
-</span><span id="__span-42-8"><a id="__codelineno-42-8" name="__codelineno-42-8"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">)</span>
-</span><span id="__span-42-9"><a id="__codelineno-42-9" name="__codelineno-42-9"></a><span class="w">    </span><span class="c1">// Streaming request configuration</span>
-</span><span id="__span-42-10"><a id="__codelineno-42-10" name="__codelineno-42-10"></a><span class="w">    </span><span class="nx">temperature</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.7</span>
-</span><span id="__span-42-11"><a id="__codelineno-42-11" name="__codelineno-42-11"></a><span class="w">    </span><span class="nx">maxTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">1000</span>
-</span><span id="__span-42-12"><a id="__codelineno-42-12" name="__codelineno-42-12"></a><span class="w">    </span><span class="nx">request</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
-</span><span id="__span-42-13"><a id="__codelineno-42-13" name="__codelineno-42-13"></a><span class="w">        </span><span class="nx">Messages</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
-</span><span id="__span-42-14"><a id="__codelineno-42-14" name="__codelineno-42-14"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSystemMessage</span><span class="p">(</span><span class="s">&quot;You are a creative story storyteller.&quot;</span><span class="p">),</span>
-</span><span id="__span-42-15"><a id="__codelineno-42-15" name="__codelineno-42-15"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Write a short story about a robot learning to paint.&quot;</span><span class="p">),</span>
-</span><span id="__span-42-16"><a id="__codelineno-42-16" name="__codelineno-42-16"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-42-17"><a id="__codelineno-42-17" name="__codelineno-42-17"></a><span class="w">        </span><span class="nx">GenerationConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
-</span><span id="__span-42-18"><a id="__codelineno-42-18" name="__codelineno-42-18"></a><span class="w">            </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">temperature</span><span class="p">,</span>
-</span><span id="__span-42-19"><a id="__codelineno-42-19" name="__codelineno-42-19"></a><span class="w">            </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="o">&amp;</span><span class="nx">maxTokens</span><span class="p">,</span>
-</span><span id="__span-42-20"><a id="__codelineno-42-20" name="__codelineno-42-20"></a><span class="w">            </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-42-21"><a id="__codelineno-42-21" name="__codelineno-42-21"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-42-22"><a id="__codelineno-42-22" name="__codelineno-42-22"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-42-23"><a id="__codelineno-42-23" name="__codelineno-42-23"></a><span class="w">    </span><span class="c1">// Call the model</span>
-</span><span id="__span-42-24"><a id="__codelineno-42-24" name="__codelineno-42-24"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-42-25"><a id="__codelineno-42-25" name="__codelineno-42-25"></a><span class="w">    </span><span class="c1">// Handle streaming response</span>
-</span><span id="__span-42-26"><a id="__codelineno-42-26" name="__codelineno-42-26"></a><span class="w">    </span><span class="nx">responseChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llm</span><span class="p">.</span><span class="nx">GenerateContent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="p">)</span>
-</span><span id="__span-42-27"><a id="__codelineno-42-27" name="__codelineno-42-27"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-42-28"><a id="__codelineno-42-28" name="__codelineno-42-28"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;System error: %v\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-42-29"><a id="__codelineno-42-29" name="__codelineno-42-29"></a><span class="w">        </span><span class="k">return</span>
-</span><span id="__span-42-30"><a id="__codelineno-42-30" name="__codelineno-42-30"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-42-31"><a id="__codelineno-42-31" name="__codelineno-42-31"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">responseChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-42-32"><a id="__codelineno-42-32" name="__codelineno-42-32"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-42-33"><a id="__codelineno-42-33" name="__codelineno-42-33"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Error: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-42-34"><a id="__codelineno-42-34" name="__codelineno-42-34"></a><span class="w">            </span><span class="k">return</span>
-</span><span id="__span-42-35"><a id="__codelineno-42-35" name="__codelineno-42-35"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-42-36"><a id="__codelineno-42-36" name="__codelineno-42-36"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-42-37"><a id="__codelineno-42-37" name="__codelineno-42-37"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
-</span><span id="__span-42-38"><a id="__codelineno-42-38" name="__codelineno-42-38"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-42-39"><a id="__codelineno-42-39" name="__codelineno-42-39"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-42-40"><a id="__codelineno-42-40" name="__codelineno-42-40"></a><span class="w">            </span><span class="k">break</span>
-</span><span id="__span-42-41"><a id="__codelineno-42-41" name="__codelineno-42-41"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-42-42"><a id="__codelineno-42-42" name="__codelineno-42-42"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-42-43"><a id="__codelineno-42-43" name="__codelineno-42-43"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<h3 id="advanced-parameter-configuration_1">Advanced Parameter Configuration</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-43-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-43-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-43-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-43-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-43-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-43-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-43-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-43-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-43-10">10</a></span>
-<span class="normal"><a href="#__codelineno-43-11">11</a></span>
-<span class="normal"><a href="#__codelineno-43-12">12</a></span>
-<span class="normal"><a href="#__codelineno-43-13">13</a></span>
-<span class="normal"><a href="#__codelineno-43-14">14</a></span>
-<span class="normal"><a href="#__codelineno-43-15">15</a></span>
-<span class="normal"><a href="#__codelineno-43-16">16</a></span>
-<span class="normal"><a href="#__codelineno-43-17">17</a></span>
-<span class="normal"><a href="#__codelineno-43-18">18</a></span>
-<span class="normal"><a href="#__codelineno-43-19">19</a></span>
-<span class="normal"><a href="#__codelineno-43-20">20</a></span>
-<span class="normal"><a href="#__codelineno-43-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="c1">// Using advanced generation parameters</span>
-</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2"></a><span class="nx">temperature</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.3</span>
-</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3"></a><span class="nx">maxTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">2000</span>
-</span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4"></a><span class="nx">topP</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.9</span>
-</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5"></a><span class="nx">thinking</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6"></a><span class="nx">thinkingTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">2048</span>
-</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7"></a>
-</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8"></a><span class="nx">request</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
-</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9"></a><span class="w">    </span><span class="nx">Messages</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
-</span><span id="__span-43-10"><a id="__codelineno-43-10" name="__codelineno-43-10"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSystemMessage</span><span class="p">(</span><span class="s">&quot;You are a professional technical documentation writer.&quot;</span><span class="p">),</span>
-</span><span id="__span-43-11"><a id="__codelineno-43-11" name="__codelineno-43-11"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Explain the pros and cons of microservices architecture.&quot;</span><span class="p">),</span>
-</span><span id="__span-43-12"><a id="__codelineno-43-12" name="__codelineno-43-12"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-43-13"><a id="__codelineno-43-13" name="__codelineno-43-13"></a><span class="w">    </span><span class="nx">GenerationConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
-</span><span id="__span-43-14"><a id="__codelineno-43-14" name="__codelineno-43-14"></a><span class="w">        </span><span class="nx">Temperature</span><span class="p">:</span><span class="w">     </span><span class="o">&amp;</span><span class="nx">temperature</span><span class="p">,</span>
-</span><span id="__span-43-15"><a id="__codelineno-43-15" name="__codelineno-43-15"></a><span class="w">        </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">       </span><span class="o">&amp;</span><span class="nx">maxTokens</span><span class="p">,</span>
-</span><span id="__span-43-16"><a id="__codelineno-43-16" name="__codelineno-43-16"></a><span class="w">        </span><span class="nx">TopP</span><span class="p">:</span><span class="w">            </span><span class="o">&amp;</span><span class="nx">topP</span><span class="p">,</span>
-</span><span id="__span-43-17"><a id="__codelineno-43-17" name="__codelineno-43-17"></a><span class="w">        </span><span class="nx">ThinkingEnabled</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">thinking</span><span class="p">,</span>
-</span><span id="__span-43-18"><a id="__codelineno-43-18" name="__codelineno-43-18"></a><span class="w">        </span><span class="nx">ThinkingTokens</span><span class="p">:</span><span class="w">  </span><span class="o">&amp;</span><span class="nx">thinkingTokens</span><span class="p">,</span>
-</span><span id="__span-43-19"><a id="__codelineno-43-19" name="__codelineno-43-19"></a><span class="w">        </span><span class="nx">Stream</span><span class="p">:</span><span class="w">          </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-43-20"><a id="__codelineno-43-20" name="__codelineno-43-20"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-43-21"><a id="__codelineno-43-21" name="__codelineno-43-21"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<h3 id="advanced-features_1">Advanced features</h3>
-<h4 id="1-callback-functions_1">1. Callback Functions</h4>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-44-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-44-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-44-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-44-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-44-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-44-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-44-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-44-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-44-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-44-10">10</a></span>
-<span class="normal"><a href="#__codelineno-44-11">11</a></span>
-<span class="normal"><a href="#__codelineno-44-12">12</a></span>
-<span class="normal"><a href="#__codelineno-44-13">13</a></span>
-<span class="normal"><a href="#__codelineno-44-14">14</a></span>
-<span class="normal"><a href="#__codelineno-44-15">15</a></span>
-<span class="normal"><a href="#__codelineno-44-16">16</a></span>
-<span class="normal"><a href="#__codelineno-44-17">17</a></span>
-<span class="normal"><a href="#__codelineno-44-18">18</a></span>
-<span class="normal"><a href="#__codelineno-44-19">19</a></span>
-<span class="normal"><a href="#__codelineno-44-20">20</a></span>
-<span class="normal"><a href="#__codelineno-44-21">21</a></span>
-<span class="normal"><a href="#__codelineno-44-22">22</a></span>
-<span class="normal"><a href="#__codelineno-44-23">23</a></span>
-<span class="normal"><a href="#__codelineno-44-24">24</a></span>
-<span class="normal"><a href="#__codelineno-44-25">25</a></span>
-<span class="normal"><a href="#__codelineno-44-26">26</a></span>
-<span class="normal"><a href="#__codelineno-44-27">27</a></span>
-<span class="normal"><a href="#__codelineno-44-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a><span class="w">    </span><span class="nx">anthropicsdk</span><span class="w"> </span><span class="s">&quot;github.com/anthropics/anthropic-sdk-go&quot;</span>
-</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
-</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a><span class="p">)</span>
-</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a>
-</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7"></a><span class="w">    </span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
-</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithChatRequestCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageNewParams</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9"></a><span class="w">        </span><span class="c1">// Log the request before sending.</span>
-</span><span id="__span-44-10"><a id="__codelineno-44-10" name="__codelineno-44-10"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;sending request: model=%s, messages=%d.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">req</span><span class="p">.</span><span class="nx">Messages</span><span class="p">))</span>
-</span><span id="__span-44-11"><a id="__codelineno-44-11" name="__codelineno-44-11"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-44-12"><a id="__codelineno-44-12" name="__codelineno-44-12"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithChatResponseCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageNewParams</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-13"><a id="__codelineno-44-13" name="__codelineno-44-13"></a><span class="w">        </span><span class="c1">// Log details of the non-streaming response.</span>
-</span><span id="__span-44-14"><a id="__codelineno-44-14" name="__codelineno-44-14"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;received response: id=%s, input_tokens=%d, output_tokens=%d.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">ID</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">Usage</span><span class="p">.</span><span class="nx">InputTokens</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">Usage</span><span class="p">.</span><span class="nx">OutputTokens</span><span class="p">)</span>
-</span><span id="__span-44-15"><a id="__codelineno-44-15" name="__codelineno-44-15"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-44-16"><a id="__codelineno-44-16" name="__codelineno-44-16"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithChatChunkCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageNewParams</span><span class="p">,</span><span class="w"> </span><span class="nx">chunk</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageStreamEventUnion</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-17"><a id="__codelineno-44-17" name="__codelineno-44-17"></a><span class="w">        </span><span class="c1">// Log the type of the streaming event.</span>
-</span><span id="__span-44-18"><a id="__codelineno-44-18" name="__codelineno-44-18"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;stream event: %T.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">chunk</span><span class="p">.</span><span class="nx">AsAny</span><span class="p">())</span>
-</span><span id="__span-44-19"><a id="__codelineno-44-19" name="__codelineno-44-19"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-44-20"><a id="__codelineno-44-20" name="__codelineno-44-20"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithChatStreamCompleteCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageNewParams</span><span class="p">,</span><span class="w"> </span><span class="nx">acc</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span><span class="w"> </span><span class="nx">streamErr</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-21"><a id="__codelineno-44-21" name="__codelineno-44-21"></a><span class="w">        </span><span class="c1">// Log stream completion or error.</span>
-</span><span id="__span-44-22"><a id="__codelineno-44-22" name="__codelineno-44-22"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">streamErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-23"><a id="__codelineno-44-23" name="__codelineno-44-23"></a><span class="w">            </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;stream failed: %v.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">streamErr</span><span class="p">)</span>
-</span><span id="__span-44-24"><a id="__codelineno-44-24" name="__codelineno-44-24"></a><span class="w">            </span><span class="k">return</span>
-</span><span id="__span-44-25"><a id="__codelineno-44-25" name="__codelineno-44-25"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-44-26"><a id="__codelineno-44-26" name="__codelineno-44-26"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;stream completed: finish_reason=%s, input_tokens=%d, output_tokens=%d.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">acc</span><span class="p">.</span><span class="nx">StopReason</span><span class="p">,</span><span class="w"> </span><span class="nx">acc</span><span class="p">.</span><span class="nx">Usage</span><span class="p">.</span><span class="nx">InputTokens</span><span class="p">,</span><span class="w"> </span><span class="nx">acc</span><span class="p">.</span><span class="nx">Usage</span><span class="p">.</span><span class="nx">OutputTokens</span><span class="p">)</span>
-</span><span id="__span-44-27"><a id="__codelineno-44-27" name="__codelineno-44-27"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-44-28"><a id="__codelineno-44-28" name="__codelineno-44-28"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div>
-<h4 id="2-custom-http-headers">2. Custom HTTP Headers</h4>
-<p>In environments like gateways, proprietary platforms, or proxy setups, model API requests often require additional HTTP headers (e.g., organization/tenant identifiers, grayscale routing, custom authentication, etc.). The Model module provides two reliable ways to add headers for "all model requests," including standard requests, streaming, file uploads, batch processing, etc.</p>
-<p>Recommended order:</p>
-<ul>
-<li>Use <strong>Anthropic RequestOption</strong> to set global headers (simple and intuitive)</li>
-<li>Use a custom <code>http.RoundTripper</code> injection (advanced, more cross-cutting capabilities)</li>
-</ul>
-<p>Both methods affect streaming requests, as they use the same underlying client.</p>
-<h5 id="1-using-anthropic-requestoption-to-set-global-headers">1. Using Anthropic RequestOption to Set Global Headers</h5>
-<p>By using <code>WithAnthropicClientOptions</code> combined with <code>anthropicopt.WithHeader</code> or <code>anthropicopt.WithMiddleware</code>, you can inject headers into every request made by the underlying Anthropic client.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-45-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-45-3"> 3</a></span>
@@ -4064,22 +3971,80 @@ metrics logic.</p>
 <span class="normal"><a href="#__codelineno-45-11">11</a></span>
 <span class="normal"><a href="#__codelineno-45-12">12</a></span>
 <span class="normal"><a href="#__codelineno-45-13">13</a></span>
-<span class="normal"><a href="#__codelineno-45-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="w">    </span><span class="nx">anthropicopt</span><span class="w"> </span><span class="s">&quot;github.com/anthropics/anthropic-sdk-go/option&quot;</span>
+<span class="normal"><a href="#__codelineno-45-14">14</a></span>
+<span class="normal"><a href="#__codelineno-45-15">15</a></span>
+<span class="normal"><a href="#__codelineno-45-16">16</a></span>
+<span class="normal"><a href="#__codelineno-45-17">17</a></span>
+<span class="normal"><a href="#__codelineno-45-18">18</a></span>
+<span class="normal"><a href="#__codelineno-45-19">19</a></span>
+<span class="normal"><a href="#__codelineno-45-20">20</a></span>
+<span class="normal"><a href="#__codelineno-45-21">21</a></span>
+<span class="normal"><a href="#__codelineno-45-22">22</a></span>
+<span class="normal"><a href="#__codelineno-45-23">23</a></span>
+<span class="normal"><a href="#__codelineno-45-24">24</a></span>
+<span class="normal"><a href="#__codelineno-45-25">25</a></span>
+<span class="normal"><a href="#__codelineno-45-26">26</a></span>
+<span class="normal"><a href="#__codelineno-45-27">27</a></span>
+<span class="normal"><a href="#__codelineno-45-28">28</a></span>
+<span class="normal"><a href="#__codelineno-45-29">29</a></span>
+<span class="normal"><a href="#__codelineno-45-30">30</a></span>
+<span class="normal"><a href="#__codelineno-45-31">31</a></span>
+<span class="normal"><a href="#__codelineno-45-32">32</a></span>
+<span class="normal"><a href="#__codelineno-45-33">33</a></span>
+<span class="normal"><a href="#__codelineno-45-34">34</a></span>
+<span class="normal"><a href="#__codelineno-45-35">35</a></span>
+<span class="normal"><a href="#__codelineno-45-36">36</a></span>
+<span class="normal"><a href="#__codelineno-45-37">37</a></span>
+<span class="normal"><a href="#__codelineno-45-38">38</a></span>
+<span class="normal"><a href="#__codelineno-45-39">39</a></span>
+<span class="normal"><a href="#__codelineno-45-40">40</a></span>
+<span class="normal"><a href="#__codelineno-45-41">41</a></span>
+<span class="normal"><a href="#__codelineno-45-42">42</a></span>
+<span class="normal"><a href="#__codelineno-45-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
 </span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="p">)</span>
 </span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a>
-</span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
-</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7"></a><span class="w">    </span><span class="c1">// If your platform requires additional headers</span>
-</span><span id="__span-45-8"><a id="__codelineno-45-8" name="__codelineno-45-8"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithAnthropicClientOptions</span><span class="p">(</span>
-</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9"></a><span class="w">        </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">WithHeader</span><span class="p">(</span><span class="s">&quot;X-Custom-Header&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-value&quot;</span><span class="p">),</span>
-</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10"></a><span class="w">        </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">WithHeader</span><span class="p">(</span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;req-123&quot;</span><span class="p">),</span>
-</span><span id="__span-45-11"><a id="__codelineno-45-11" name="__codelineno-45-11"></a><span class="w">        </span><span class="c1">// You can also set User-Agent or vendor-specific headers</span>
-</span><span id="__span-45-12"><a id="__codelineno-45-12" name="__codelineno-45-12"></a><span class="w">        </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">WithHeader</span><span class="p">(</span><span class="s">&quot;User-Agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;trpc-agent-go/1.0&quot;</span><span class="p">),</span>
-</span><span id="__span-45-13"><a id="__codelineno-45-13" name="__codelineno-45-13"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-45-14"><a id="__codelineno-45-14" name="__codelineno-45-14"></a><span class="p">)</span>
+</span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7"></a><span class="w">    </span><span class="c1">// Create model instance</span>
+</span><span id="__span-45-8"><a id="__codelineno-45-8" name="__codelineno-45-8"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">)</span>
+</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9"></a><span class="w">    </span><span class="c1">// Build request</span>
+</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10"></a><span class="w">    </span><span class="nx">temperature</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.7</span>
+</span><span id="__span-45-11"><a id="__codelineno-45-11" name="__codelineno-45-11"></a><span class="w">    </span><span class="nx">maxTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">1000</span>
+</span><span id="__span-45-12"><a id="__codelineno-45-12" name="__codelineno-45-12"></a><span class="w">    </span><span class="nx">request</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
+</span><span id="__span-45-13"><a id="__codelineno-45-13" name="__codelineno-45-13"></a><span class="w">        </span><span class="nx">Messages</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-45-14"><a id="__codelineno-45-14" name="__codelineno-45-14"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSystemMessage</span><span class="p">(</span><span class="s">&quot;You are a professional AI assistant.&quot;</span><span class="p">),</span>
+</span><span id="__span-45-15"><a id="__codelineno-45-15" name="__codelineno-45-15"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Introduce the concurrency features of Go language.&quot;</span><span class="p">),</span>
+</span><span id="__span-45-16"><a id="__codelineno-45-16" name="__codelineno-45-16"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-45-17"><a id="__codelineno-45-17" name="__codelineno-45-17"></a><span class="w">        </span><span class="nx">GenerationConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-45-18"><a id="__codelineno-45-18" name="__codelineno-45-18"></a><span class="w">            </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">temperature</span><span class="p">,</span>
+</span><span id="__span-45-19"><a id="__codelineno-45-19" name="__codelineno-45-19"></a><span class="w">            </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="o">&amp;</span><span class="nx">maxTokens</span><span class="p">,</span>
+</span><span id="__span-45-20"><a id="__codelineno-45-20" name="__codelineno-45-20"></a><span class="w">            </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-45-21"><a id="__codelineno-45-21" name="__codelineno-45-21"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-45-22"><a id="__codelineno-45-22" name="__codelineno-45-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-45-23"><a id="__codelineno-45-23" name="__codelineno-45-23"></a><span class="w">    </span><span class="c1">// Call the model</span>
+</span><span id="__span-45-24"><a id="__codelineno-45-24" name="__codelineno-45-24"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-45-25"><a id="__codelineno-45-25" name="__codelineno-45-25"></a><span class="w">    </span><span class="nx">responseChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llm</span><span class="p">.</span><span class="nx">GenerateContent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="p">)</span>
+</span><span id="__span-45-26"><a id="__codelineno-45-26" name="__codelineno-45-26"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-27"><a id="__codelineno-45-27" name="__codelineno-45-27"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;System error: %v\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-45-28"><a id="__codelineno-45-28" name="__codelineno-45-28"></a><span class="w">        </span><span class="k">return</span>
+</span><span id="__span-45-29"><a id="__codelineno-45-29" name="__codelineno-45-29"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-45-30"><a id="__codelineno-45-30" name="__codelineno-45-30"></a><span class="w">    </span><span class="c1">// Handle response</span>
+</span><span id="__span-45-31"><a id="__codelineno-45-31" name="__codelineno-45-31"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">responseChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-32"><a id="__codelineno-45-32" name="__codelineno-45-32"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-33"><a id="__codelineno-45-33" name="__codelineno-45-33"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;API error: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-45-34"><a id="__codelineno-45-34" name="__codelineno-45-34"></a><span class="w">            </span><span class="k">return</span>
+</span><span id="__span-45-35"><a id="__codelineno-45-35" name="__codelineno-45-35"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-45-36"><a id="__codelineno-45-36" name="__codelineno-45-36"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-37"><a id="__codelineno-45-37" name="__codelineno-45-37"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Reply: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-45-38"><a id="__codelineno-45-38" name="__codelineno-45-38"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-45-39"><a id="__codelineno-45-39" name="__codelineno-45-39"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-40"><a id="__codelineno-45-40" name="__codelineno-45-40"></a><span class="w">            </span><span class="k">break</span>
+</span><span id="__span-45-41"><a id="__codelineno-45-41" name="__codelineno-45-41"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-45-42"><a id="__codelineno-45-42" name="__codelineno-45-42"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-45-43"><a id="__codelineno-45-43" name="__codelineno-45-43"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>If you need to set headers conditionally (e.g., only for certain paths or depending on context values), you can use middleware:</p>
+<h3 id="streaming-output_1">Streaming Output</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-46-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-46-3"> 3</a></span>
@@ -4103,33 +4068,70 @@ metrics logic.</p>
 <span class="normal"><a href="#__codelineno-46-21">21</a></span>
 <span class="normal"><a href="#__codelineno-46-22">22</a></span>
 <span class="normal"><a href="#__codelineno-46-23">23</a></span>
-<span class="normal"><a href="#__codelineno-46-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2"></a><span class="w">    </span><span class="nx">anthropicopt</span><span class="w"> </span><span class="s">&quot;github.com/anthropics/anthropic-sdk-go/option&quot;</span>
+<span class="normal"><a href="#__codelineno-46-24">24</a></span>
+<span class="normal"><a href="#__codelineno-46-25">25</a></span>
+<span class="normal"><a href="#__codelineno-46-26">26</a></span>
+<span class="normal"><a href="#__codelineno-46-27">27</a></span>
+<span class="normal"><a href="#__codelineno-46-28">28</a></span>
+<span class="normal"><a href="#__codelineno-46-29">29</a></span>
+<span class="normal"><a href="#__codelineno-46-30">30</a></span>
+<span class="normal"><a href="#__codelineno-46-31">31</a></span>
+<span class="normal"><a href="#__codelineno-46-32">32</a></span>
+<span class="normal"><a href="#__codelineno-46-33">33</a></span>
+<span class="normal"><a href="#__codelineno-46-34">34</a></span>
+<span class="normal"><a href="#__codelineno-46-35">35</a></span>
+<span class="normal"><a href="#__codelineno-46-36">36</a></span>
+<span class="normal"><a href="#__codelineno-46-37">37</a></span>
+<span class="normal"><a href="#__codelineno-46-38">38</a></span>
+<span class="normal"><a href="#__codelineno-46-39">39</a></span>
+<span class="normal"><a href="#__codelineno-46-40">40</a></span>
+<span class="normal"><a href="#__codelineno-46-41">41</a></span>
+<span class="normal"><a href="#__codelineno-46-42">42</a></span>
+<span class="normal"><a href="#__codelineno-46-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
 </span><span id="__span-46-4"><a id="__codelineno-46-4" name="__codelineno-46-4"></a><span class="p">)</span>
 </span><span id="__span-46-5"><a id="__codelineno-46-5" name="__codelineno-46-5"></a>
-</span><span id="__span-46-6"><a id="__codelineno-46-6" name="__codelineno-46-6"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
-</span><span id="__span-46-7"><a id="__codelineno-46-7" name="__codelineno-46-7"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithAnthropicClientOptions</span><span class="p">(</span>
-</span><span id="__span-46-8"><a id="__codelineno-46-8" name="__codelineno-46-8"></a><span class="w">        </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">WithMiddleware</span><span class="p">(</span>
-</span><span id="__span-46-9"><a id="__codelineno-46-9" name="__codelineno-46-9"></a><span class="w">            </span><span class="kd">func</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">,</span><span class="w"> </span><span class="nx">next</span><span class="w"> </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">MiddlewareNext</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-46-10"><a id="__codelineno-46-10" name="__codelineno-46-10"></a><span class="w">                </span><span class="c1">// Example: Set &quot;per-request&quot; headers based on context value</span>
-</span><span id="__span-46-11"><a id="__codelineno-46-11" name="__codelineno-46-11"></a><span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Context</span><span class="p">().</span><span class="nx">Value</span><span class="p">(</span><span class="s">&quot;x-request-id&quot;</span><span class="p">);</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-46-12"><a id="__codelineno-46-12" name="__codelineno-46-12"></a><span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">v</span><span class="p">.(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-46-13"><a id="__codelineno-46-13" name="__codelineno-46-13"></a><span class="w">                        </span><span class="nx">r</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Set</span><span class="p">(</span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">)</span>
-</span><span id="__span-46-14"><a id="__codelineno-46-14" name="__codelineno-46-14"></a><span class="w">                    </span><span class="p">}</span>
-</span><span id="__span-46-15"><a id="__codelineno-46-15" name="__codelineno-46-15"></a><span class="w">                </span><span class="p">}</span>
-</span><span id="__span-46-16"><a id="__codelineno-46-16" name="__codelineno-46-16"></a><span class="w">                </span><span class="c1">// Or only for the &quot;message completion&quot; endpoint</span>
-</span><span id="__span-46-17"><a id="__codelineno-46-17" name="__codelineno-46-17"></a><span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">r</span><span class="p">.</span><span class="nx">URL</span><span class="p">.</span><span class="nx">Path</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;v1/messages&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-46-18"><a id="__codelineno-46-18" name="__codelineno-46-18"></a><span class="w">                    </span><span class="nx">r</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Set</span><span class="p">(</span><span class="s">&quot;X-Feature-Flag&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;on&quot;</span><span class="p">)</span>
-</span><span id="__span-46-19"><a id="__codelineno-46-19" name="__codelineno-46-19"></a><span class="w">                </span><span class="p">}</span>
-</span><span id="__span-46-20"><a id="__codelineno-46-20" name="__codelineno-46-20"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">next</span><span class="p">(</span><span class="nx">r</span><span class="p">)</span>
-</span><span id="__span-46-21"><a id="__codelineno-46-21" name="__codelineno-46-21"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-46-22"><a id="__codelineno-46-22" name="__codelineno-46-22"></a><span class="w">        </span><span class="p">),</span>
-</span><span id="__span-46-23"><a id="__codelineno-46-23" name="__codelineno-46-23"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-46-24"><a id="__codelineno-46-24" name="__codelineno-46-24"></a><span class="p">)</span>
+</span><span id="__span-46-6"><a id="__codelineno-46-6" name="__codelineno-46-6"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-46-7"><a id="__codelineno-46-7" name="__codelineno-46-7"></a><span class="w">    </span><span class="c1">// Create model instance</span>
+</span><span id="__span-46-8"><a id="__codelineno-46-8" name="__codelineno-46-8"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">)</span>
+</span><span id="__span-46-9"><a id="__codelineno-46-9" name="__codelineno-46-9"></a><span class="w">    </span><span class="c1">// Streaming request configuration</span>
+</span><span id="__span-46-10"><a id="__codelineno-46-10" name="__codelineno-46-10"></a><span class="w">    </span><span class="nx">temperature</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.7</span>
+</span><span id="__span-46-11"><a id="__codelineno-46-11" name="__codelineno-46-11"></a><span class="w">    </span><span class="nx">maxTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">1000</span>
+</span><span id="__span-46-12"><a id="__codelineno-46-12" name="__codelineno-46-12"></a><span class="w">    </span><span class="nx">request</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
+</span><span id="__span-46-13"><a id="__codelineno-46-13" name="__codelineno-46-13"></a><span class="w">        </span><span class="nx">Messages</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-46-14"><a id="__codelineno-46-14" name="__codelineno-46-14"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSystemMessage</span><span class="p">(</span><span class="s">&quot;You are a creative story storyteller.&quot;</span><span class="p">),</span>
+</span><span id="__span-46-15"><a id="__codelineno-46-15" name="__codelineno-46-15"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Write a short story about a robot learning to paint.&quot;</span><span class="p">),</span>
+</span><span id="__span-46-16"><a id="__codelineno-46-16" name="__codelineno-46-16"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-46-17"><a id="__codelineno-46-17" name="__codelineno-46-17"></a><span class="w">        </span><span class="nx">GenerationConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-46-18"><a id="__codelineno-46-18" name="__codelineno-46-18"></a><span class="w">            </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">temperature</span><span class="p">,</span>
+</span><span id="__span-46-19"><a id="__codelineno-46-19" name="__codelineno-46-19"></a><span class="w">            </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="o">&amp;</span><span class="nx">maxTokens</span><span class="p">,</span>
+</span><span id="__span-46-20"><a id="__codelineno-46-20" name="__codelineno-46-20"></a><span class="w">            </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-46-21"><a id="__codelineno-46-21" name="__codelineno-46-21"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-46-22"><a id="__codelineno-46-22" name="__codelineno-46-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-46-23"><a id="__codelineno-46-23" name="__codelineno-46-23"></a><span class="w">    </span><span class="c1">// Call the model</span>
+</span><span id="__span-46-24"><a id="__codelineno-46-24" name="__codelineno-46-24"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-46-25"><a id="__codelineno-46-25" name="__codelineno-46-25"></a><span class="w">    </span><span class="c1">// Handle streaming response</span>
+</span><span id="__span-46-26"><a id="__codelineno-46-26" name="__codelineno-46-26"></a><span class="w">    </span><span class="nx">responseChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llm</span><span class="p">.</span><span class="nx">GenerateContent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="p">)</span>
+</span><span id="__span-46-27"><a id="__codelineno-46-27" name="__codelineno-46-27"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-46-28"><a id="__codelineno-46-28" name="__codelineno-46-28"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;System error: %v\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-46-29"><a id="__codelineno-46-29" name="__codelineno-46-29"></a><span class="w">        </span><span class="k">return</span>
+</span><span id="__span-46-30"><a id="__codelineno-46-30" name="__codelineno-46-30"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-46-31"><a id="__codelineno-46-31" name="__codelineno-46-31"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">responseChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-46-32"><a id="__codelineno-46-32" name="__codelineno-46-32"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-46-33"><a id="__codelineno-46-33" name="__codelineno-46-33"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Error: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-46-34"><a id="__codelineno-46-34" name="__codelineno-46-34"></a><span class="w">            </span><span class="k">return</span>
+</span><span id="__span-46-35"><a id="__codelineno-46-35" name="__codelineno-46-35"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-46-36"><a id="__codelineno-46-36" name="__codelineno-46-36"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-46-37"><a id="__codelineno-46-37" name="__codelineno-46-37"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-46-38"><a id="__codelineno-46-38" name="__codelineno-46-38"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-46-39"><a id="__codelineno-46-39" name="__codelineno-46-39"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-46-40"><a id="__codelineno-46-40" name="__codelineno-46-40"></a><span class="w">            </span><span class="k">break</span>
+</span><span id="__span-46-41"><a id="__codelineno-46-41" name="__codelineno-46-41"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-46-42"><a id="__codelineno-46-42" name="__codelineno-46-42"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-46-43"><a id="__codelineno-46-43" name="__codelineno-46-43"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h5 id="2-using-custom-httproundtripper">2. Using Custom <code>http.RoundTripper</code></h5>
-<p>For injecting headers at the HTTP transport layer, ideal for scenarios requiring proxying, TLS, custom monitoring, and other capabilities.</p>
+<h3 id="advanced-parameter-configuration_1">Advanced Parameter Configuration</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-47-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-47-3"> 3</a></span>
@@ -4148,25 +4150,214 @@ metrics logic.</p>
 <span class="normal"><a href="#__codelineno-47-16">16</a></span>
 <span class="normal"><a href="#__codelineno-47-17">17</a></span>
 <span class="normal"><a href="#__codelineno-47-18">18</a></span>
-<span class="normal"><a href="#__codelineno-47-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a><span class="w">    </span><span class="nx">anthropicopt</span><span class="w"> </span><span class="s">&quot;github.com/anthropics/anthropic-sdk-go/option&quot;</span>
-</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
-</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a><span class="p">)</span>
-</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5"></a>
-</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">headerRoundTripper</span><span class="w"> </span><span class="kd">struct</span><span class="p">{</span><span class="w"> </span><span class="nx">base</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">RoundTripper</span><span class="w"> </span><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-47-19">19</a></span>
+<span class="normal"><a href="#__codelineno-47-20">20</a></span>
+<span class="normal"><a href="#__codelineno-47-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="c1">// Using advanced generation parameters</span>
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a><span class="nx">temperature</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.3</span>
+</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="nx">maxTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">2000</span>
+</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a><span class="nx">topP</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.9</span>
+</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5"></a><span class="nx">thinking</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6"></a><span class="nx">thinkingTokens</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">2048</span>
 </span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7"></a>
-</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">rt</span><span class="w"> </span><span class="nx">headerRoundTripper</span><span class="p">)</span><span class="w"> </span><span class="nx">RoundTrip</span><span class="p">(</span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9"></a><span class="w">    </span><span class="c1">// Add or override headers</span>
-</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="w">    </span><span class="nx">req</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Set</span><span class="p">(</span><span class="s">&quot;X-Custom-Header&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-value&quot;</span><span class="p">)</span>
-</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="w">    </span><span class="nx">req</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Set</span><span class="p">(</span><span class="s">&quot;X-Trace-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;trace-xyz&quot;</span><span class="p">)</span>
-</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">rt</span><span class="p">.</span><span class="nx">base</span><span class="p">.</span><span class="nx">RoundTrip</span><span class="p">(</span><span class="nx">req</span><span class="p">)</span>
-</span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a><span class="p">}</span>
-</span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14"></a>
-</span><span id="__span-47-15"><a id="__codelineno-47-15" name="__codelineno-47-15"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
-</span><span id="__span-47-16"><a id="__codelineno-47-16" name="__codelineno-47-16"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithHTTPClientOptions</span><span class="p">(</span>
-</span><span id="__span-47-17"><a id="__codelineno-47-17" name="__codelineno-47-17"></a><span class="w">        </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithHTTPClientTransport</span><span class="p">(</span><span class="nx">headerRoundTripper</span><span class="p">{</span><span class="nx">base</span><span class="p">:</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">DefaultTransport</span><span class="p">}),</span>
-</span><span id="__span-47-18"><a id="__codelineno-47-18" name="__codelineno-47-18"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-47-19"><a id="__codelineno-47-19" name="__codelineno-47-19"></a><span class="p">)</span>
+</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8"></a><span class="nx">request</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
+</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9"></a><span class="w">    </span><span class="nx">Messages</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSystemMessage</span><span class="p">(</span><span class="s">&quot;You are a professional technical documentation writer.&quot;</span><span class="p">),</span>
+</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Explain the pros and cons of microservices architecture.&quot;</span><span class="p">),</span>
+</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a><span class="w">    </span><span class="nx">GenerationConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14"></a><span class="w">        </span><span class="nx">Temperature</span><span class="p">:</span><span class="w">     </span><span class="o">&amp;</span><span class="nx">temperature</span><span class="p">,</span>
+</span><span id="__span-47-15"><a id="__codelineno-47-15" name="__codelineno-47-15"></a><span class="w">        </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">       </span><span class="o">&amp;</span><span class="nx">maxTokens</span><span class="p">,</span>
+</span><span id="__span-47-16"><a id="__codelineno-47-16" name="__codelineno-47-16"></a><span class="w">        </span><span class="nx">TopP</span><span class="p">:</span><span class="w">            </span><span class="o">&amp;</span><span class="nx">topP</span><span class="p">,</span>
+</span><span id="__span-47-17"><a id="__codelineno-47-17" name="__codelineno-47-17"></a><span class="w">        </span><span class="nx">ThinkingEnabled</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">thinking</span><span class="p">,</span>
+</span><span id="__span-47-18"><a id="__codelineno-47-18" name="__codelineno-47-18"></a><span class="w">        </span><span class="nx">ThinkingTokens</span><span class="p">:</span><span class="w">  </span><span class="o">&amp;</span><span class="nx">thinkingTokens</span><span class="p">,</span>
+</span><span id="__span-47-19"><a id="__codelineno-47-19" name="__codelineno-47-19"></a><span class="w">        </span><span class="nx">Stream</span><span class="p">:</span><span class="w">          </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-47-20"><a id="__codelineno-47-20" name="__codelineno-47-20"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-47-21"><a id="__codelineno-47-21" name="__codelineno-47-21"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="advanced-features_1">Advanced features</h3>
+<h4 id="1-callback-functions_1">1. Callback Functions</h4>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-48-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-48-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-48-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-48-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-48-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-48-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-48-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-48-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-48-10">10</a></span>
+<span class="normal"><a href="#__codelineno-48-11">11</a></span>
+<span class="normal"><a href="#__codelineno-48-12">12</a></span>
+<span class="normal"><a href="#__codelineno-48-13">13</a></span>
+<span class="normal"><a href="#__codelineno-48-14">14</a></span>
+<span class="normal"><a href="#__codelineno-48-15">15</a></span>
+<span class="normal"><a href="#__codelineno-48-16">16</a></span>
+<span class="normal"><a href="#__codelineno-48-17">17</a></span>
+<span class="normal"><a href="#__codelineno-48-18">18</a></span>
+<span class="normal"><a href="#__codelineno-48-19">19</a></span>
+<span class="normal"><a href="#__codelineno-48-20">20</a></span>
+<span class="normal"><a href="#__codelineno-48-21">21</a></span>
+<span class="normal"><a href="#__codelineno-48-22">22</a></span>
+<span class="normal"><a href="#__codelineno-48-23">23</a></span>
+<span class="normal"><a href="#__codelineno-48-24">24</a></span>
+<span class="normal"><a href="#__codelineno-48-25">25</a></span>
+<span class="normal"><a href="#__codelineno-48-26">26</a></span>
+<span class="normal"><a href="#__codelineno-48-27">27</a></span>
+<span class="normal"><a href="#__codelineno-48-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="w">    </span><span class="nx">anthropicsdk</span><span class="w"> </span><span class="s">&quot;github.com/anthropics/anthropic-sdk-go&quot;</span>
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="p">)</span>
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a>
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="w">    </span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
+</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithChatRequestCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageNewParams</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="w">        </span><span class="c1">// Log the request before sending.</span>
+</span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;sending request: model=%s, messages=%d.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">req</span><span class="p">.</span><span class="nx">Messages</span><span class="p">))</span>
+</span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-48-12"><a id="__codelineno-48-12" name="__codelineno-48-12"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithChatResponseCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageNewParams</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-13"><a id="__codelineno-48-13" name="__codelineno-48-13"></a><span class="w">        </span><span class="c1">// Log details of the non-streaming response.</span>
+</span><span id="__span-48-14"><a id="__codelineno-48-14" name="__codelineno-48-14"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;received response: id=%s, input_tokens=%d, output_tokens=%d.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">ID</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">Usage</span><span class="p">.</span><span class="nx">InputTokens</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">Usage</span><span class="p">.</span><span class="nx">OutputTokens</span><span class="p">)</span>
+</span><span id="__span-48-15"><a id="__codelineno-48-15" name="__codelineno-48-15"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-48-16"><a id="__codelineno-48-16" name="__codelineno-48-16"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithChatChunkCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageNewParams</span><span class="p">,</span><span class="w"> </span><span class="nx">chunk</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageStreamEventUnion</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-17"><a id="__codelineno-48-17" name="__codelineno-48-17"></a><span class="w">        </span><span class="c1">// Log the type of the streaming event.</span>
+</span><span id="__span-48-18"><a id="__codelineno-48-18" name="__codelineno-48-18"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;stream event: %T.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">chunk</span><span class="p">.</span><span class="nx">AsAny</span><span class="p">())</span>
+</span><span id="__span-48-19"><a id="__codelineno-48-19" name="__codelineno-48-19"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-48-20"><a id="__codelineno-48-20" name="__codelineno-48-20"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithChatStreamCompleteCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">MessageNewParams</span><span class="p">,</span><span class="w"> </span><span class="nx">acc</span><span class="w"> </span><span class="o">*</span><span class="nx">anthropicsdk</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span><span class="w"> </span><span class="nx">streamErr</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-21"><a id="__codelineno-48-21" name="__codelineno-48-21"></a><span class="w">        </span><span class="c1">// Log stream completion or error.</span>
+</span><span id="__span-48-22"><a id="__codelineno-48-22" name="__codelineno-48-22"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">streamErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-23"><a id="__codelineno-48-23" name="__codelineno-48-23"></a><span class="w">            </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;stream failed: %v.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">streamErr</span><span class="p">)</span>
+</span><span id="__span-48-24"><a id="__codelineno-48-24" name="__codelineno-48-24"></a><span class="w">            </span><span class="k">return</span>
+</span><span id="__span-48-25"><a id="__codelineno-48-25" name="__codelineno-48-25"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-48-26"><a id="__codelineno-48-26" name="__codelineno-48-26"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;stream completed: finish_reason=%s, input_tokens=%d, output_tokens=%d.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">acc</span><span class="p">.</span><span class="nx">StopReason</span><span class="p">,</span><span class="w"> </span><span class="nx">acc</span><span class="p">.</span><span class="nx">Usage</span><span class="p">.</span><span class="nx">InputTokens</span><span class="p">,</span><span class="w"> </span><span class="nx">acc</span><span class="p">.</span><span class="nx">Usage</span><span class="p">.</span><span class="nx">OutputTokens</span><span class="p">)</span>
+</span><span id="__span-48-27"><a id="__codelineno-48-27" name="__codelineno-48-27"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-48-28"><a id="__codelineno-48-28" name="__codelineno-48-28"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h4 id="2-custom-http-headers">2. Custom HTTP Headers</h4>
+<p>In environments like gateways, proprietary platforms, or proxy setups, model API requests often require additional HTTP headers (e.g., organization/tenant identifiers, grayscale routing, custom authentication, etc.). The Model module provides two reliable ways to add headers for "all model requests," including standard requests, streaming, file uploads, batch processing, etc.</p>
+<p>Recommended order:</p>
+<ul>
+<li>Use <strong>Anthropic RequestOption</strong> to set global headers (simple and intuitive)</li>
+<li>Use a custom <code>http.RoundTripper</code> injection (advanced, more cross-cutting capabilities)</li>
+</ul>
+<p>Both methods affect streaming requests, as they use the same underlying client.</p>
+<h5 id="1-using-anthropic-requestoption-to-set-global-headers">1. Using Anthropic RequestOption to Set Global Headers</h5>
+<p>By using <code>WithAnthropicClientOptions</code> combined with <code>anthropicopt.WithHeader</code> or <code>anthropicopt.WithMiddleware</code>, you can inject headers into every request made by the underlying Anthropic client.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-49-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-49-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-49-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-49-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-49-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-49-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-49-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-49-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-49-10">10</a></span>
+<span class="normal"><a href="#__codelineno-49-11">11</a></span>
+<span class="normal"><a href="#__codelineno-49-12">12</a></span>
+<span class="normal"><a href="#__codelineno-49-13">13</a></span>
+<span class="normal"><a href="#__codelineno-49-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a><span class="w">    </span><span class="nx">anthropicopt</span><span class="w"> </span><span class="s">&quot;github.com/anthropics/anthropic-sdk-go/option&quot;</span>
+</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a><span class="p">)</span>
+</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a>
+</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
+</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7"></a><span class="w">    </span><span class="c1">// If your platform requires additional headers</span>
+</span><span id="__span-49-8"><a id="__codelineno-49-8" name="__codelineno-49-8"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithAnthropicClientOptions</span><span class="p">(</span>
+</span><span id="__span-49-9"><a id="__codelineno-49-9" name="__codelineno-49-9"></a><span class="w">        </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">WithHeader</span><span class="p">(</span><span class="s">&quot;X-Custom-Header&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-value&quot;</span><span class="p">),</span>
+</span><span id="__span-49-10"><a id="__codelineno-49-10" name="__codelineno-49-10"></a><span class="w">        </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">WithHeader</span><span class="p">(</span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;req-123&quot;</span><span class="p">),</span>
+</span><span id="__span-49-11"><a id="__codelineno-49-11" name="__codelineno-49-11"></a><span class="w">        </span><span class="c1">// You can also set User-Agent or vendor-specific headers</span>
+</span><span id="__span-49-12"><a id="__codelineno-49-12" name="__codelineno-49-12"></a><span class="w">        </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">WithHeader</span><span class="p">(</span><span class="s">&quot;User-Agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;trpc-agent-go/1.0&quot;</span><span class="p">),</span>
+</span><span id="__span-49-13"><a id="__codelineno-49-13" name="__codelineno-49-13"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-49-14"><a id="__codelineno-49-14" name="__codelineno-49-14"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>If you need to set headers conditionally (e.g., only for certain paths or depending on context values), you can use middleware:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-50-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-50-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-50-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-50-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-50-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-50-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-50-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-50-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-50-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-50-10">10</a></span>
+<span class="normal"><a href="#__codelineno-50-11">11</a></span>
+<span class="normal"><a href="#__codelineno-50-12">12</a></span>
+<span class="normal"><a href="#__codelineno-50-13">13</a></span>
+<span class="normal"><a href="#__codelineno-50-14">14</a></span>
+<span class="normal"><a href="#__codelineno-50-15">15</a></span>
+<span class="normal"><a href="#__codelineno-50-16">16</a></span>
+<span class="normal"><a href="#__codelineno-50-17">17</a></span>
+<span class="normal"><a href="#__codelineno-50-18">18</a></span>
+<span class="normal"><a href="#__codelineno-50-19">19</a></span>
+<span class="normal"><a href="#__codelineno-50-20">20</a></span>
+<span class="normal"><a href="#__codelineno-50-21">21</a></span>
+<span class="normal"><a href="#__codelineno-50-22">22</a></span>
+<span class="normal"><a href="#__codelineno-50-23">23</a></span>
+<span class="normal"><a href="#__codelineno-50-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2"></a><span class="w">    </span><span class="nx">anthropicopt</span><span class="w"> </span><span class="s">&quot;github.com/anthropics/anthropic-sdk-go/option&quot;</span>
+</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4"></a><span class="p">)</span>
+</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5"></a>
+</span><span id="__span-50-6"><a id="__codelineno-50-6" name="__codelineno-50-6"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
+</span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithAnthropicClientOptions</span><span class="p">(</span>
+</span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8"></a><span class="w">        </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">WithMiddleware</span><span class="p">(</span>
+</span><span id="__span-50-9"><a id="__codelineno-50-9" name="__codelineno-50-9"></a><span class="w">            </span><span class="kd">func</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">,</span><span class="w"> </span><span class="nx">next</span><span class="w"> </span><span class="nx">anthropicopt</span><span class="p">.</span><span class="nx">MiddlewareNext</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-50-10"><a id="__codelineno-50-10" name="__codelineno-50-10"></a><span class="w">                </span><span class="c1">// Example: Set &quot;per-request&quot; headers based on context value</span>
+</span><span id="__span-50-11"><a id="__codelineno-50-11" name="__codelineno-50-11"></a><span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Context</span><span class="p">().</span><span class="nx">Value</span><span class="p">(</span><span class="s">&quot;x-request-id&quot;</span><span class="p">);</span><span class="w"> </span><span class="nx">v</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-50-12"><a id="__codelineno-50-12" name="__codelineno-50-12"></a><span class="w">                    </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">v</span><span class="p">.(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-50-13"><a id="__codelineno-50-13" name="__codelineno-50-13"></a><span class="w">                        </span><span class="nx">r</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Set</span><span class="p">(</span><span class="s">&quot;X-Request-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">)</span>
+</span><span id="__span-50-14"><a id="__codelineno-50-14" name="__codelineno-50-14"></a><span class="w">                    </span><span class="p">}</span>
+</span><span id="__span-50-15"><a id="__codelineno-50-15" name="__codelineno-50-15"></a><span class="w">                </span><span class="p">}</span>
+</span><span id="__span-50-16"><a id="__codelineno-50-16" name="__codelineno-50-16"></a><span class="w">                </span><span class="c1">// Or only for the &quot;message completion&quot; endpoint</span>
+</span><span id="__span-50-17"><a id="__codelineno-50-17" name="__codelineno-50-17"></a><span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">r</span><span class="p">.</span><span class="nx">URL</span><span class="p">.</span><span class="nx">Path</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;v1/messages&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-50-18"><a id="__codelineno-50-18" name="__codelineno-50-18"></a><span class="w">                    </span><span class="nx">r</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Set</span><span class="p">(</span><span class="s">&quot;X-Feature-Flag&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;on&quot;</span><span class="p">)</span>
+</span><span id="__span-50-19"><a id="__codelineno-50-19" name="__codelineno-50-19"></a><span class="w">                </span><span class="p">}</span>
+</span><span id="__span-50-20"><a id="__codelineno-50-20" name="__codelineno-50-20"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">next</span><span class="p">(</span><span class="nx">r</span><span class="p">)</span>
+</span><span id="__span-50-21"><a id="__codelineno-50-21" name="__codelineno-50-21"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-50-22"><a id="__codelineno-50-22" name="__codelineno-50-22"></a><span class="w">        </span><span class="p">),</span>
+</span><span id="__span-50-23"><a id="__codelineno-50-23" name="__codelineno-50-23"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-50-24"><a id="__codelineno-50-24" name="__codelineno-50-24"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h5 id="2-using-custom-httproundtripper">2. Using Custom <code>http.RoundTripper</code></h5>
+<p>For injecting headers at the HTTP transport layer, ideal for scenarios requiring proxying, TLS, custom monitoring, and other capabilities.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-51-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-51-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-51-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-51-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-51-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-51-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-51-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-51-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-51-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-51-10">10</a></span>
+<span class="normal"><a href="#__codelineno-51-11">11</a></span>
+<span class="normal"><a href="#__codelineno-51-12">12</a></span>
+<span class="normal"><a href="#__codelineno-51-13">13</a></span>
+<span class="normal"><a href="#__codelineno-51-14">14</a></span>
+<span class="normal"><a href="#__codelineno-51-15">15</a></span>
+<span class="normal"><a href="#__codelineno-51-16">16</a></span>
+<span class="normal"><a href="#__codelineno-51-17">17</a></span>
+<span class="normal"><a href="#__codelineno-51-18">18</a></span>
+<span class="normal"><a href="#__codelineno-51-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2"></a><span class="w">    </span><span class="nx">anthropicopt</span><span class="w"> </span><span class="s">&quot;github.com/anthropics/anthropic-sdk-go/option&quot;</span>
+</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4"></a><span class="p">)</span>
+</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5"></a>
+</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">headerRoundTripper</span><span class="w"> </span><span class="kd">struct</span><span class="p">{</span><span class="w"> </span><span class="nx">base</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">RoundTripper</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-51-7"><a id="__codelineno-51-7" name="__codelineno-51-7"></a>
+</span><span id="__span-51-8"><a id="__codelineno-51-8" name="__codelineno-51-8"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">rt</span><span class="w"> </span><span class="nx">headerRoundTripper</span><span class="p">)</span><span class="w"> </span><span class="nx">RoundTrip</span><span class="p">(</span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-51-9"><a id="__codelineno-51-9" name="__codelineno-51-9"></a><span class="w">    </span><span class="c1">// Add or override headers</span>
+</span><span id="__span-51-10"><a id="__codelineno-51-10" name="__codelineno-51-10"></a><span class="w">    </span><span class="nx">req</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Set</span><span class="p">(</span><span class="s">&quot;X-Custom-Header&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-value&quot;</span><span class="p">)</span>
+</span><span id="__span-51-11"><a id="__codelineno-51-11" name="__codelineno-51-11"></a><span class="w">    </span><span class="nx">req</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Set</span><span class="p">(</span><span class="s">&quot;X-Trace-ID&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;trace-xyz&quot;</span><span class="p">)</span>
+</span><span id="__span-51-12"><a id="__codelineno-51-12" name="__codelineno-51-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">rt</span><span class="p">.</span><span class="nx">base</span><span class="p">.</span><span class="nx">RoundTrip</span><span class="p">(</span><span class="nx">req</span><span class="p">)</span>
+</span><span id="__span-51-13"><a id="__codelineno-51-13" name="__codelineno-51-13"></a><span class="p">}</span>
+</span><span id="__span-51-14"><a id="__codelineno-51-14" name="__codelineno-51-14"></a>
+</span><span id="__span-51-15"><a id="__codelineno-51-15" name="__codelineno-51-15"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
+</span><span id="__span-51-16"><a id="__codelineno-51-16" name="__codelineno-51-16"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithHTTPClientOptions</span><span class="p">(</span>
+</span><span id="__span-51-17"><a id="__codelineno-51-17" name="__codelineno-51-17"></a><span class="w">        </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithHTTPClientTransport</span><span class="p">(</span><span class="nx">headerRoundTripper</span><span class="p">{</span><span class="nx">base</span><span class="p">:</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">DefaultTransport</span><span class="p">}),</span>
+</span><span id="__span-51-18"><a id="__codelineno-51-18" name="__codelineno-51-18"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-51-19"><a id="__codelineno-51-19" name="__codelineno-51-19"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Regarding <strong>"per-request" headers</strong>:</p>
 <ul>
@@ -4176,36 +4367,36 @@ metrics logic.</p>
 <h4 id="3-token-tailoring">3. Token Tailoring</h4>
 <p>Anthropic models also support Token Tailoring functionality, designed to automatically trim messages when they exceed the model's context window limits, ensuring requests can be successfully sent to the LLM API.</p>
 <p><strong>Automatic Mode (Recommended)</strong>:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1">1</a></span>
-<span class="normal"><a href="#__codelineno-48-2">2</a></span>
-<span class="normal"><a href="#__codelineno-48-3">3</a></span>
-<span class="normal"><a href="#__codelineno-48-4">4</a></span>
-<span class="normal"><a href="#__codelineno-48-5">5</a></span>
-<span class="normal"><a href="#__codelineno-48-6">6</a></span>
-<span class="normal"><a href="#__codelineno-48-7">7</a></span>
-<span class="normal"><a href="#__codelineno-48-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
-</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="p">)</span>
-</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a>
-</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="c1">// Enable token tailoring with automatic configuration</span>
-</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet&quot;</span><span class="p">,</span>
-</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-52-1">1</a></span>
+<span class="normal"><a href="#__codelineno-52-2">2</a></span>
+<span class="normal"><a href="#__codelineno-52-3">3</a></span>
+<span class="normal"><a href="#__codelineno-52-4">4</a></span>
+<span class="normal"><a href="#__codelineno-52-5">5</a></span>
+<span class="normal"><a href="#__codelineno-52-6">6</a></span>
+<span class="normal"><a href="#__codelineno-52-7">7</a></span>
+<span class="normal"><a href="#__codelineno-52-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/anthropic&quot;</span>
+</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3"></a><span class="p">)</span>
+</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4"></a>
+</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5"></a><span class="c1">// Enable token tailoring with automatic configuration</span>
+</span><span id="__span-52-6"><a id="__codelineno-52-6" name="__codelineno-52-6"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet&quot;</span><span class="p">,</span>
+</span><span id="__span-52-7"><a id="__codelineno-52-7" name="__codelineno-52-7"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-52-8"><a id="__codelineno-52-8" name="__codelineno-52-8"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Advanced Mode</strong>:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1">1</a></span>
-<span class="normal"><a href="#__codelineno-49-2">2</a></span>
-<span class="normal"><a href="#__codelineno-49-3">3</a></span>
-<span class="normal"><a href="#__codelineno-49-4">4</a></span>
-<span class="normal"><a href="#__codelineno-49-5">5</a></span>
-<span class="normal"><a href="#__codelineno-49-6">6</a></span>
-<span class="normal"><a href="#__codelineno-49-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a><span class="c1">// Custom token limit and strategy</span>
-</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet&quot;</span><span class="p">,</span>
-</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">               </span><span class="c1">// Required: enable token tailoring</span>
-</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithMaxInputTokens</span><span class="p">(</span><span class="mi">10000</span><span class="p">),</span><span class="w">                    </span><span class="c1">// Custom token limit</span>
-</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTokenCounter</span><span class="p">(</span><span class="nx">customCounter</span><span class="p">),</span><span class="w">              </span><span class="c1">// Optional: custom counter</span>
-</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTailoringStrategy</span><span class="p">(</span><span class="nx">customStrategy</span><span class="p">),</span><span class="w">        </span><span class="c1">// Optional: custom strategy</span>
-</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-53-1">1</a></span>
+<span class="normal"><a href="#__codelineno-53-2">2</a></span>
+<span class="normal"><a href="#__codelineno-53-3">3</a></span>
+<span class="normal"><a href="#__codelineno-53-4">4</a></span>
+<span class="normal"><a href="#__codelineno-53-5">5</a></span>
+<span class="normal"><a href="#__codelineno-53-6">6</a></span>
+<span class="normal"><a href="#__codelineno-53-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1"></a><span class="c1">// Custom token limit and strategy</span>
+</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-3-5-sonnet&quot;</span><span class="p">,</span>
+</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">               </span><span class="c1">// Required: enable token tailoring</span>
+</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithMaxInputTokens</span><span class="p">(</span><span class="mi">10000</span><span class="p">),</span><span class="w">                    </span><span class="c1">// Custom token limit</span>
+</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTokenCounter</span><span class="p">(</span><span class="nx">customCounter</span><span class="p">),</span><span class="w">              </span><span class="c1">// Optional: custom counter</span>
+</span><span id="__span-53-6"><a id="__codelineno-53-6" name="__codelineno-53-6"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTailoringStrategy</span><span class="p">(</span><span class="nx">customStrategy</span><span class="p">),</span><span class="w">        </span><span class="c1">// Optional: custom strategy</span>
+</span><span id="__span-53-7"><a id="__codelineno-53-7" name="__codelineno-53-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to <a href="#5-token-tailoring">Token Tailoring under OpenAI Model</a>.</p>
 <h3 id="3-provider">3. Provider</h3>
@@ -4252,61 +4443,61 @@ metrics logic.</p>
 </tbody>
 </table>
 <h4 id="usage-example_2">Usage Example</h4>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-50-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-50-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-50-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-50-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-50-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-50-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-50-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-50-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-50-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-50-10">10</a></span>
-<span class="normal"><a href="#__codelineno-50-11">11</a></span>
-<span class="normal"><a href="#__codelineno-50-12">12</a></span>
-<span class="normal"><a href="#__codelineno-50-13">13</a></span>
-<span class="normal"><a href="#__codelineno-50-14">14</a></span>
-<span class="normal"><a href="#__codelineno-50-15">15</a></span>
-<span class="normal"><a href="#__codelineno-50-16">16</a></span>
-<span class="normal"><a href="#__codelineno-50-17">17</a></span>
-<span class="normal"><a href="#__codelineno-50-18">18</a></span>
-<span class="normal"><a href="#__codelineno-50-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
-</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4"></a><span class="p">)</span>
-</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5"></a>
-</span><span id="__span-50-6"><a id="__codelineno-50-6" name="__codelineno-50-6"></a><span class="nx">providerName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;openai&quot;</span><span class="w">        </span><span class="c1">// provider supports openai and anthropic.</span>
-</span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7"></a><span class="nx">modelName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;deepseek-chat&quot;</span>
-</span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8"></a>
-</span><span id="__span-50-9"><a id="__codelineno-50-9" name="__codelineno-50-9"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
-</span><span id="__span-50-10"><a id="__codelineno-50-10" name="__codelineno-50-10"></a><span class="w">    </span><span class="nx">providerName</span><span class="p">,</span>
-</span><span id="__span-50-11"><a id="__codelineno-50-11" name="__codelineno-50-11"></a><span class="w">    </span><span class="nx">modelName</span><span class="p">,</span>
-</span><span id="__span-50-12"><a id="__codelineno-50-12" name="__codelineno-50-12"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
-</span><span id="__span-50-13"><a id="__codelineno-50-13" name="__codelineno-50-13"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">baseURL</span><span class="p">),</span>
-</span><span id="__span-50-14"><a id="__codelineno-50-14" name="__codelineno-50-14"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">channelBufferSize</span><span class="p">),</span>
-</span><span id="__span-50-15"><a id="__codelineno-50-15" name="__codelineno-50-15"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">tokenTailoring</span><span class="p">),</span>
-</span><span id="__span-50-16"><a id="__codelineno-50-16" name="__codelineno-50-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithMaxInputTokens</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">maxInputTokens</span><span class="p">),</span>
-</span><span id="__span-50-17"><a id="__codelineno-50-17" name="__codelineno-50-17"></a><span class="p">)</span>
-</span><span id="__span-50-18"><a id="__codelineno-50-18" name="__codelineno-50-18"></a>
-</span><span id="__span-50-19"><a id="__codelineno-50-19" name="__codelineno-50-19"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">))</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-54-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-54-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-54-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-54-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-54-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-54-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-54-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-54-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-54-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-54-10">10</a></span>
+<span class="normal"><a href="#__codelineno-54-11">11</a></span>
+<span class="normal"><a href="#__codelineno-54-12">12</a></span>
+<span class="normal"><a href="#__codelineno-54-13">13</a></span>
+<span class="normal"><a href="#__codelineno-54-14">14</a></span>
+<span class="normal"><a href="#__codelineno-54-15">15</a></span>
+<span class="normal"><a href="#__codelineno-54-16">16</a></span>
+<span class="normal"><a href="#__codelineno-54-17">17</a></span>
+<span class="normal"><a href="#__codelineno-54-18">18</a></span>
+<span class="normal"><a href="#__codelineno-54-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4"></a><span class="p">)</span>
+</span><span id="__span-54-5"><a id="__codelineno-54-5" name="__codelineno-54-5"></a>
+</span><span id="__span-54-6"><a id="__codelineno-54-6" name="__codelineno-54-6"></a><span class="nx">providerName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;openai&quot;</span><span class="w">        </span><span class="c1">// provider supports openai and anthropic.</span>
+</span><span id="__span-54-7"><a id="__codelineno-54-7" name="__codelineno-54-7"></a><span class="nx">modelName</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;deepseek-chat&quot;</span>
+</span><span id="__span-54-8"><a id="__codelineno-54-8" name="__codelineno-54-8"></a>
+</span><span id="__span-54-9"><a id="__codelineno-54-9" name="__codelineno-54-9"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
+</span><span id="__span-54-10"><a id="__codelineno-54-10" name="__codelineno-54-10"></a><span class="w">    </span><span class="nx">providerName</span><span class="p">,</span>
+</span><span id="__span-54-11"><a id="__codelineno-54-11" name="__codelineno-54-11"></a><span class="w">    </span><span class="nx">modelName</span><span class="p">,</span>
+</span><span id="__span-54-12"><a id="__codelineno-54-12" name="__codelineno-54-12"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
+</span><span id="__span-54-13"><a id="__codelineno-54-13" name="__codelineno-54-13"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">baseURL</span><span class="p">),</span>
+</span><span id="__span-54-14"><a id="__codelineno-54-14" name="__codelineno-54-14"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">channelBufferSize</span><span class="p">),</span>
+</span><span id="__span-54-15"><a id="__codelineno-54-15" name="__codelineno-54-15"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">tokenTailoring</span><span class="p">),</span>
+</span><span id="__span-54-16"><a id="__codelineno-54-16" name="__codelineno-54-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithMaxInputTokens</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">maxInputTokens</span><span class="p">),</span>
+</span><span id="__span-54-17"><a id="__codelineno-54-17" name="__codelineno-54-17"></a><span class="p">)</span>
+</span><span id="__span-54-18"><a id="__codelineno-54-18" name="__codelineno-54-18"></a>
+</span><span id="__span-54-19"><a id="__codelineno-54-19" name="__codelineno-54-19"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Full code can be found in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider">examples/provider</a>.</p>
 <h4 id="registering-a-custom-provider">Registering a Custom Provider</h4>
 <p>The framework supports registering custom providers to integrate other large model providers or custom model implementations.</p>
 <p>Using <code>provider.Register</code>, you can define a method to create custom model instances based on the options.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-51-1">1</a></span>
-<span class="normal"><a href="#__codelineno-51-2">2</a></span>
-<span class="normal"><a href="#__codelineno-51-3">3</a></span>
-<span class="normal"><a href="#__codelineno-51-4">4</a></span>
-<span class="normal"><a href="#__codelineno-51-5">5</a></span>
-<span class="normal"><a href="#__codelineno-51-6">6</a></span>
-<span class="normal"><a href="#__codelineno-51-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
-</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2"></a>
-</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5"></a><span class="p">})</span>
-</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6"></a>
-</span><span id="__span-51-7"><a id="__codelineno-51-7" name="__codelineno-51-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-55-1">1</a></span>
+<span class="normal"><a href="#__codelineno-55-2">2</a></span>
+<span class="normal"><a href="#__codelineno-55-3">3</a></span>
+<span class="normal"><a href="#__codelineno-55-4">4</a></span>
+<span class="normal"><a href="#__codelineno-55-5">5</a></span>
+<span class="normal"><a href="#__codelineno-55-6">6</a></span>
+<span class="normal"><a href="#__codelineno-55-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2"></a>
+</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-55-5"><a id="__codelineno-55-5" name="__codelineno-55-5"></a><span class="p">})</span>
+</span><span id="__span-55-6"><a id="__codelineno-55-6" name="__codelineno-55-6"></a>
+</span><span id="__span-55-7"><a id="__codelineno-55-7" name="__codelineno-55-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 
 
@@ -4330,7 +4521,7 @@ metrics logic.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 11, 2025 06:27:03 UTC">2025-11-11 06:27:03</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 11, 2025 07:02:15 UTC">2025-11-11 07:02:15</span>
   </span>
 
     
