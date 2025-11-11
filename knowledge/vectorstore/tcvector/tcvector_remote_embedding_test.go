@@ -18,6 +18,30 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
+// setupRemoteEmbeddingVectorStore creates a VectorStore with remote embedding enabled for testing.
+func setupRemoteEmbeddingVectorStore(t *testing.T, extraOpts ...Option) (*VectorStore, *mockClient) {
+	t.Helper()
+	mockClient := newMockClient()
+	defaultOpts := []Option{
+		WithDatabase("test_db"),
+		WithCollection("test_collection"),
+		WithIndexDimension(3),
+		WithRemoteEmbeddingModel("bge-base-zh"),
+	}
+	opts := append(defaultOpts, extraOpts...)
+	vs := newVectorStoreWithMockClient(mockClient, opts...)
+	return vs, mockClient
+}
+
+// setupHybridSearchVectorStore creates a VectorStore with hybrid search enabled for testing.
+func setupHybridSearchVectorStore(t *testing.T, extraOpts ...Option) (*VectorStore, *mockClient) {
+	t.Helper()
+	vs, mockClient := setupRemoteEmbeddingVectorStore(t, extraOpts...)
+	vs.sparseEncoder = newMockSparseEncoder()
+	vs.option.enableTSVector = true
+	return vs, mockClient
+}
+
 // TestVectorStore_RemoteEmbedding_VectorSearch tests vector search with remote embedding
 func TestVectorStore_RemoteEmbedding_VectorSearch(t *testing.T) {
 	tests := []struct {
@@ -25,7 +49,7 @@ func TestVectorStore_RemoteEmbedding_VectorSearch(t *testing.T) {
 		query    *vectorstore.SearchQuery
 		wantErr  bool
 		errMsg   string
-		validate func(t *testing.T, result *vectorstore.SearchResult)
+		validate func(t *testing.T, result *vectorstore.SearchResult, client *mockClient)
 	}{
 		{
 			name: "search_with_text_only",
@@ -34,9 +58,10 @@ func TestVectorStore_RemoteEmbedding_VectorSearch(t *testing.T) {
 				SearchMode: vectorstore.SearchModeVector,
 				Limit:      10,
 			},
-			wantErr: false,
-			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+			validate: func(t *testing.T, result *vectorstore.SearchResult, client *mockClient) {
 				assert.NotNil(t, result)
+				assert.NotNil(t, result.Results)
+				assert.Greater(t, client.GetSearchCalls(), 0, "Search should be called")
 			},
 		},
 		{
@@ -61,8 +86,38 @@ func TestVectorStore_RemoteEmbedding_VectorSearch(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
-			validate: func(t *testing.T, result *vectorstore.SearchResult) {
+			validate: func(t *testing.T, result *vectorstore.SearchResult, client *mockClient) {
+				assert.NotNil(t, result)
+				assert.NotNil(t, result.Results)
+			},
+		},
+		{
+			name: "search_with_min_score",
+			query: &vectorstore.SearchQuery{
+				Query:      "test query with score threshold",
+				SearchMode: vectorstore.SearchModeVector,
+				Limit:      10,
+				MinScore:   0.8,
+			},
+			validate: func(t *testing.T, result *vectorstore.SearchResult, client *mockClient) {
+				assert.NotNil(t, result)
+			},
+		},
+		{
+			name: "search_with_complex_filter",
+			query: &vectorstore.SearchQuery{
+				Query:      "complex filter test",
+				SearchMode: vectorstore.SearchModeVector,
+				Limit:      10,
+				Filter: &vectorstore.SearchFilter{
+					IDs: []string{"doc1", "doc2"},
+					Metadata: map[string]any{
+						"category": "test",
+						"priority": 1,
+					},
+				},
+			},
+			validate: func(t *testing.T, result *vectorstore.SearchResult, client *mockClient) {
 				assert.NotNil(t, result)
 			},
 		},
@@ -70,14 +125,7 @@ func TestVectorStore_RemoteEmbedding_VectorSearch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockClient := newMockClient()
-			vs := newVectorStoreWithMockClient(mockClient,
-				WithDatabase("test_db"),
-				WithCollection("test_collection"),
-				WithIndexDimension(3),
-				WithRemoteEmbeddingModel("bge-base-zh"),
-			)
-
+			vs, mockClient := setupRemoteEmbeddingVectorStore(t)
 			result, err := vs.Search(context.Background(), tt.query)
 
 			if tt.wantErr {
@@ -88,7 +136,7 @@ func TestVectorStore_RemoteEmbedding_VectorSearch(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				if tt.validate != nil {
-					tt.validate(t, result)
+					tt.validate(t, result, mockClient)
 				}
 			}
 		})
@@ -111,9 +159,9 @@ func TestVectorStore_RemoteEmbedding_HybridSearch(t *testing.T) {
 				SearchMode: vectorstore.SearchModeHybrid,
 				Limit:      10,
 			},
-			wantErr: false,
 			validate: func(t *testing.T, result *vectorstore.SearchResult) {
 				assert.NotNil(t, result)
+				assert.NotNil(t, result.Results)
 			},
 		},
 		{
@@ -138,7 +186,6 @@ func TestVectorStore_RemoteEmbedding_HybridSearch(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
 			validate: func(t *testing.T, result *vectorstore.SearchResult) {
 				assert.NotNil(t, result)
 			},
@@ -147,18 +194,7 @@ func TestVectorStore_RemoteEmbedding_HybridSearch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockClient := newMockClient()
-			vs := newVectorStoreWithMockClient(mockClient,
-				WithDatabase("test_db"),
-				WithCollection("test_collection"),
-				WithIndexDimension(3),
-				WithRemoteEmbeddingModel("bge-base-zh"),
-			)
-			// Inject mock sparse encoder
-			vs.sparseEncoder = newMockSparseEncoder()
-			// Enable TSVector option
-			vs.option.enableTSVector = true
-
+			vs, _ := setupHybridSearchVectorStore(t)
 			result, err := vs.Search(context.Background(), tt.query)
 
 			if tt.wantErr {
@@ -178,13 +214,7 @@ func TestVectorStore_RemoteEmbedding_HybridSearch(t *testing.T) {
 
 // TestVectorStore_RemoteEmbedding_FallbackToLocal tests fallback to local embedding
 func TestVectorStore_RemoteEmbedding_FallbackToLocal(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel("bge-base-zh"),
-	)
+	vs, mockClient := setupRemoteEmbeddingVectorStore(t)
 
 	// When vector is provided, should use local mode even with remote embedding enabled
 	query := &vectorstore.SearchQuery{
@@ -202,13 +232,14 @@ func TestVectorStore_RemoteEmbedding_FallbackToLocal(t *testing.T) {
 	assert.Greater(t, mockClient.GetSearchCalls(), 0)
 }
 
-// TestVectorStore_RemoteEmbedding_Options tests remote embedding options
+// TestVectorStore_RemoteEmbedding_Options tests remote embedding configuration options
 func TestVectorStore_RemoteEmbedding_Options(t *testing.T) {
 	tests := []struct {
 		name            string
 		opts            []Option
 		expectedEnabled bool
 		expectedModel   string
+		expectedFilter  bool
 	}{
 		{
 			name: "default_options",
@@ -239,6 +270,36 @@ func TestVectorStore_RemoteEmbedding_Options(t *testing.T) {
 			expectedEnabled: true,
 			expectedModel:   "text-embedding-ada-002",
 		},
+		{
+			name: "empty_model_disables_remote_embedding",
+			opts: []Option{
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithRemoteEmbeddingModel(""),
+			},
+			expectedEnabled: false,
+			expectedModel:   "",
+		},
+		{
+			name: "with_filter_all_enabled",
+			opts: []Option{
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithFilterAll(true),
+			},
+			expectedEnabled: false,
+			expectedFilter:  true,
+		},
+		{
+			name: "with_filter_all_disabled",
+			opts: []Option{
+				WithDatabase("test_db"),
+				WithCollection("test_collection"),
+				WithFilterAll(false),
+			},
+			expectedEnabled: false,
+			expectedFilter:  false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -248,197 +309,153 @@ func TestVectorStore_RemoteEmbedding_Options(t *testing.T) {
 
 			assert.Equal(t, tt.expectedEnabled, vs.isRemoteEmbeddingEnabled())
 			assert.Equal(t, tt.expectedModel, vs.option.embeddingModel)
+			if tt.name == "with_filter_all_enabled" || tt.name == "with_filter_all_disabled" {
+				assert.Equal(t, tt.expectedFilter, vs.option.filterAll)
+			}
 		})
 	}
 }
 
-// TestVectorStore_RemoteEmbedding_KeywordSearch tests keyword search with remote embedding
-func TestVectorStore_RemoteEmbedding_KeywordSearch(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel("bge-base-zh"),
-	)
-
-	// Test keyword search mode
-	query := &vectorstore.SearchQuery{
-		Query:      "keyword search test",
-		SearchMode: vectorstore.SearchModeKeyword,
-		Limit:      10,
-	}
-
-	result, err := vs.Search(context.Background(), query)
-	require.NoError(t, err)
-	assert.NotNil(t, result)
-}
-
-// TestVectorStore_RemoteEmbedding_WithMinScore tests remote embedding search with minimum score
-func TestVectorStore_RemoteEmbedding_WithMinScore(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel("bge-base-zh"),
-	)
-
-	query := &vectorstore.SearchQuery{
-		Query:      "test query with score threshold",
-		SearchMode: vectorstore.SearchModeVector,
-		Limit:      10,
-		MinScore:   0.8,
-	}
-
-	result, err := vs.Search(context.Background(), query)
-	require.NoError(t, err)
-	assert.NotNil(t, result)
-}
-
-// TestVectorStore_RemoteEmbedding_DisableRemoteEmbedding tests disabling remote embedding
-func TestVectorStore_RemoteEmbedding_DisableRemoteEmbedding(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel(""), // Disable remote embedding
-	)
-
-	assert.False(t, vs.isRemoteEmbeddingEnabled())
-
-	// Should fail without local vector
-	query := &vectorstore.SearchQuery{
-		Query:      "test without remote embedding",
-		SearchMode: vectorstore.SearchModeVector,
-		Limit:      10,
-	}
-
-	_, err := vs.Search(context.Background(), query)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "searching with a nil or empty vector is not supported")
-}
-
-// TestVectorStore_RemoteEmbedding_HybridSearchError tests hybrid search error handling
-func TestVectorStore_RemoteEmbedding_HybridSearchError(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel("bge-base-zh"),
-	)
-	vs.sparseEncoder = newMockSparseEncoder()
-	vs.option.enableTSVector = true
-
-	// Simulate hybrid search error
-	mockClient.SetHybridError(assert.AnError)
-
-	query := &vectorstore.SearchQuery{
-		Query:      "hybrid search error test",
-		SearchMode: vectorstore.SearchModeHybrid,
-		Limit:      10,
-	}
-
-	_, err := vs.Search(context.Background(), query)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tcvectordb")
-}
-
-// TestVectorStore_RemoteEmbedding_VectorSearchError tests vector search error handling
-func TestVectorStore_RemoteEmbedding_VectorSearchError(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel("bge-base-zh"),
-	)
-
-	// Simulate search error
-	mockClient.SetSearchError(assert.AnError)
-
-	query := &vectorstore.SearchQuery{
-		Query:      "search error test",
-		SearchMode: vectorstore.SearchModeVector,
-		Limit:      10,
-	}
-
-	_, err := vs.Search(context.Background(), query)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tcvectordb")
-}
-
-// TestVectorStore_RemoteEmbedding_ComplexFilter tests remote embedding with complex filters
-func TestVectorStore_RemoteEmbedding_ComplexFilter(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel("bge-base-zh"),
-	)
-
-	query := &vectorstore.SearchQuery{
-		Query:      "complex filter test",
-		SearchMode: vectorstore.SearchModeVector,
-		Limit:      10,
-		Filter: &vectorstore.SearchFilter{
-			IDs: []string{"doc1", "doc2"},
-			Metadata: map[string]any{
-				"category": "test",
-				"priority": 1,
+// TestVectorStore_RemoteEmbedding_SearchModes tests different search modes with remote embedding
+func TestVectorStore_RemoteEmbedding_SearchModes(t *testing.T) {
+	tests := []struct {
+		name       string
+		searchMode vectorstore.SearchMode
+		query      string
+		setupVS    func(t *testing.T) *VectorStore
+	}{
+		{
+			name:       "keyword_search_mode",
+			searchMode: vectorstore.SearchModeKeyword,
+			query:      "keyword search test",
+			setupVS: func(t *testing.T) *VectorStore {
+				vs, _ := setupRemoteEmbeddingVectorStore(t)
+				return vs
+			},
+		},
+		{
+			name:       "vector_search_mode",
+			searchMode: vectorstore.SearchModeVector,
+			query:      "vector search test",
+			setupVS: func(t *testing.T) *VectorStore {
+				vs, _ := setupRemoteEmbeddingVectorStore(t)
+				return vs
+			},
+		},
+		{
+			name:       "hybrid_search_mode",
+			searchMode: vectorstore.SearchModeHybrid,
+			query:      "hybrid search test",
+			setupVS: func(t *testing.T) *VectorStore {
+				vs, _ := setupHybridSearchVectorStore(t)
+				return vs
 			},
 		},
 	}
 
-	result, err := vs.Search(context.Background(), query)
-	require.NoError(t, err)
-	assert.NotNil(t, result)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vs := tt.setupVS(t)
+			query := &vectorstore.SearchQuery{
+				Query:      tt.query,
+				SearchMode: tt.searchMode,
+				Limit:      10,
+			}
 
-// TestVectorStore_RemoteEmbedding_MultipleQueries tests remote embedding with multiple queries
-func TestVectorStore_RemoteEmbedding_MultipleQueries(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel("bge-base-zh"),
-	)
-
-	queries := []string{
-		"first query",
-		"second query",
-		"third query",
-	}
-
-	for _, queryText := range queries {
-		query := &vectorstore.SearchQuery{
-			Query:      queryText,
-			SearchMode: vectorstore.SearchModeVector,
-			Limit:      5,
-		}
-
-		result, err := vs.Search(context.Background(), query)
-		require.NoError(t, err, "failed for query: %s", queryText)
-		assert.NotNil(t, result)
+			result, err := vs.Search(context.Background(), query)
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+		})
 	}
 }
 
-// TestVectorStore_RemoteEmbedding_EmptyModelName tests behavior with empty model name
-func TestVectorStore_RemoteEmbedding_EmptyModelName(t *testing.T) {
-	mockClient := newMockClient()
-	vs := newVectorStoreWithMockClient(mockClient,
-		WithDatabase("test_db"),
-		WithCollection("test_collection"),
-		WithIndexDimension(3),
-		WithRemoteEmbeddingModel(""),
-	)
+// TestVectorStore_RemoteEmbedding_ErrorHandling tests error handling with remote embedding
+func TestVectorStore_RemoteEmbedding_ErrorHandling(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(*mockClient)
+		query     *vectorstore.SearchQuery
+		setupVS   func(t *testing.T, mockClient *mockClient) *VectorStore
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name: "vector_search_error",
+			setupMock: func(mc *mockClient) {
+				mc.SetSearchError(assert.AnError)
+			},
+			query: &vectorstore.SearchQuery{
+				Query:      "search error test",
+				SearchMode: vectorstore.SearchModeVector,
+				Limit:      10,
+			},
+			setupVS: func(t *testing.T, mc *mockClient) *VectorStore {
+				return newVectorStoreWithMockClient(mc,
+					WithDatabase("test_db"),
+					WithCollection("test_collection"),
+					WithIndexDimension(3),
+					WithRemoteEmbeddingModel("bge-base-zh"),
+				)
+			},
+			wantErr: true,
+			errMsg:  "tcvectordb",
+		},
+		{
+			name: "hybrid_search_error",
+			setupMock: func(mc *mockClient) {
+				mc.SetHybridError(assert.AnError)
+			},
+			query: &vectorstore.SearchQuery{
+				Query:      "hybrid search error test",
+				SearchMode: vectorstore.SearchModeHybrid,
+				Limit:      10,
+			},
+			setupVS: func(t *testing.T, mc *mockClient) *VectorStore {
+				vs := newVectorStoreWithMockClient(mc,
+					WithDatabase("test_db"),
+					WithCollection("test_collection"),
+					WithIndexDimension(3),
+					WithRemoteEmbeddingModel("bge-base-zh"),
+				)
+				vs.sparseEncoder = newMockSparseEncoder()
+				vs.option.enableTSVector = true
+				return vs
+			},
+			wantErr: true,
+			errMsg:  "tcvectordb",
+		},
+		{
+			name:      "search_without_remote_embedding",
+			setupMock: func(mc *mockClient) {},
+			query: &vectorstore.SearchQuery{
+				Query:      "test without remote embedding",
+				SearchMode: vectorstore.SearchModeVector,
+				Limit:      10,
+			},
+			setupVS: func(t *testing.T, mc *mockClient) *VectorStore {
+				return newVectorStoreWithMockClient(mc,
+					WithDatabase("test_db"),
+					WithCollection("test_collection"),
+					WithIndexDimension(3),
+					WithRemoteEmbeddingModel(""), // Disable remote embedding
+				)
+			},
+			wantErr: true,
+			errMsg:  "searching with a nil or empty vector is not supported",
+		},
+	}
 
-	assert.False(t, vs.isRemoteEmbeddingEnabled())
-	assert.Equal(t, "", vs.option.embeddingModel)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockClient()
+			tt.setupMock(mockClient)
+			vs := tt.setupVS(t, mockClient)
+
+			_, err := vs.Search(context.Background(), tt.query)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errMsg)
+		})
+	}
 }
 
 // TestVectorStore_RemoteEmbedding_ModelNameValidation tests model name validation
