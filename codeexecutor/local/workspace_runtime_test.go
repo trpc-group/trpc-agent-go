@@ -11,6 +11,7 @@
 package local_test
 
 import (
+	"bytes"
 	"context"
 	"io/fs"
 	"os"
@@ -22,6 +23,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 )
@@ -516,6 +519,231 @@ func TestRuntime_RunProgram_InjectsWorkspaceEnvs(t *testing.T) {
 	require.Equal(t, filepath.Join(ws.Path, codeexecutor.DirOut), out[3])
 	require.True(t, strings.HasPrefix(out[4], filepath.Join(ws.Path,
 		codeexecutor.DirRuns)))
+}
+
+func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-stage-inputs", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Prepare artifact service in context and save an artifact.
+	svc := inmemory.NewService()
+	actx := codeexecutor.WithArtifactService(ctx, svc)
+	actx = codeexecutor.WithArtifactSession(
+		actx, artifact.SessionInfo{AppName: "a", UserID: "u", SessionID: "s"},
+	)
+	_, err = codeexecutor.SaveArtifactHelper(
+		actx, "a.txt", []byte("AX"), "text/plain",
+	)
+	require.NoError(t, err)
+
+	// Stage artifact without explicit to; uses default path.
+	err = rt.StageInputs(actx, ws, []codeexecutor.InputSpec{{
+		From: "artifact://a.txt",
+		Mode: "copy",
+	}})
+	require.NoError(t, err)
+	// Default target is work/inputs/<name>.
+	target := filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "a.txt",
+	)
+	b, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, "AX", string(b))
+
+	// host:// path with link mode creates a symlink.
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(src, "f.txt"), []byte("Z"), 0o644,
+	))
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "host://" + src,
+		To:   filepath.Join(codeexecutor.DirWork, "inputs", "linkdir"),
+		Mode: "link",
+	}})
+	require.NoError(t, err)
+	lpath := filepath.Join(ws.Path, codeexecutor.DirWork, "inputs",
+		"linkdir")
+	st, err := os.Lstat(lpath)
+	require.NoError(t, err)
+	require.True(t, st.Mode()&os.ModeSymlink != 0)
+
+	// workspace:// copy mode from within the workspace.
+	srcFile := filepath.Join(ws.Path, "src.txt")
+	require.NoError(t, os.WriteFile(srcFile, []byte("W"), 0o644))
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "workspace://src.txt",
+		To:   filepath.Join(codeexecutor.DirWork, "inputs", "dst.txt"),
+		Mode: "copy",
+	}})
+	require.NoError(t, err)
+	b, err = os.ReadFile(filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "dst.txt",
+	))
+	require.NoError(t, err)
+	require.Equal(t, "W", string(b))
+}
+
+func TestRuntime_StageInputs_InvalidScheme_Error(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-stage-invalid", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "unknown://path",
+		Mode: "copy",
+	}})
+	require.Error(t, err)
+}
+
+func TestRuntime_CollectOutputs_SaveAndInline(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-out", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Create some files under out/.
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(ws.Path, codeexecutor.DirOut), 0o755,
+	))
+	small := filepath.Join(ws.Path, codeexecutor.DirOut, "a.txt")
+	large := filepath.Join(ws.Path, codeexecutor.DirOut, "b.bin")
+	require.NoError(t, os.WriteFile(small, []byte("ok"), 0o644))
+	// Large file to exercise per-file cap.
+	big := bytes.Repeat([]byte{'x'}, 1024)
+	require.NoError(t, os.WriteFile(large, big, 0o644))
+
+	// Attach artifact service to save outputs.
+	svc := inmemory.NewService()
+	actx := codeexecutor.WithArtifactService(ctx, svc)
+	actx = codeexecutor.WithArtifactSession(
+		actx, artifact.SessionInfo{AppName: "a", UserID: "u", SessionID: "s"},
+	)
+	mf, err := rt.CollectOutputs(actx, ws, codeexecutor.OutputSpec{
+		Globs:         []string{filepath.Join(codeexecutor.DirOut, "*")},
+		Inline:        true,
+		Save:          true,
+		NameTemplate:  "prefix-",
+		MaxFiles:      2,
+		MaxFileBytes:  16,
+		MaxTotalBytes: 64,
+	})
+	require.NoError(t, err)
+	require.Len(t, mf.Files, 2)
+	// Should set names and inline content for small file.
+	var sawSmall bool
+	for _, f := range mf.Files {
+		if f.Name == "out/a.txt" {
+			sawSmall = true
+			require.NotEmpty(t, f.Content)
+			require.Equal(t, "prefix-"+f.Name, f.SavedAs)
+		}
+	}
+	require.True(t, sawSmall)
+	require.True(t, mf.LimitsHit)
+}
+
+func TestRuntime_StageInputs_HostCopy(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-stage-hostcopy", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	src := t.TempDir()
+	sub := filepath.Join(src, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sub, "x.txt"), []byte("hi"), 0o644,
+	))
+
+	// Copy entire dir under work/inputs/d.
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "host://" + src,
+		To:   filepath.Join(codeexecutor.DirWork, "inputs", "d"),
+		Mode: "copy",
+	}})
+	require.NoError(t, err)
+	// Verify presence of the file in destination.
+	b, err := os.ReadFile(filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "sub", "x.txt",
+	))
+	require.NoError(t, err)
+	require.Equal(t, "hi", string(b))
+}
+
+func TestRuntime_StageInputs_SkillCopyAndLink(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-stage-skill", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Create a staged skill file under skills/.
+	skillDir := filepath.Join(ws.Path, codeexecutor.DirSkills, "tool")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "k.txt"), []byte("ok"), 0o644,
+	))
+
+	// Copy from skill:// to workspace path.
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "skill://tool/k.txt",
+		To:   filepath.Join(codeexecutor.DirWork, "inputs", "kk.txt"),
+		Mode: "copy",
+	}})
+	require.NoError(t, err)
+	b, err := os.ReadFile(filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "kk.txt",
+	))
+	require.NoError(t, err)
+	require.Equal(t, "ok", string(b))
+
+	// Link mode produces a symlink at destination.
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "skill://tool/k.txt",
+		To:   filepath.Join(codeexecutor.DirWork, "inputs", "lk.txt"),
+		Mode: "link",
+	}})
+	require.NoError(t, err)
+	st, err := os.Lstat(filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "lk.txt",
+	))
+	require.NoError(t, err)
+	require.True(t, st.Mode()&os.ModeSymlink != 0)
+}
+
+func TestRuntime_StageInputs_WorkspaceMissing_Error(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-stage-miss", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	// Missing workspace path should error in copy mode.
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "workspace://no/such/file.txt",
+		To:   filepath.Join(codeexecutor.DirWork, "inputs", "nf.txt"),
+		Mode: "copy",
+	}})
+	require.Error(t, err)
 }
 
 func TestRuntime_CreateWorkspace_WithWorkRoot(t *testing.T) {

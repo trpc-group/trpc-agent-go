@@ -33,6 +33,7 @@ import (
 	tcontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -216,6 +217,52 @@ func TestNew_FilepathAbsError(t *testing.T) {
 
 	_, err = New(WithDockerFilePath("Dockerfile"))
 	assert.Error(t, err)
+}
+
+// Fake runtime validation via wrapper methods.
+func TestCodeExecutor_WrapperMethods_Basic(t *testing.T) {
+	c := &CodeExecutor{}
+
+	// Engine returns a non-nil engine even when runtime init fails.
+	eng := c.Engine()
+	require.NotNil(t, eng)
+
+	// ensureWS caches instance.
+	rt1, err := c.ensureWS()
+	require.NoError(t, err)
+	rt2, err := c.ensureWS()
+	require.NoError(t, err)
+	require.Equal(t, rt1, rt2)
+
+	// Workspace wrappers should propagate errors when executor not ready.
+	ws, err := c.CreateWorkspace(
+		context.Background(), "id", codeexecutor.WorkspacePolicy{},
+	)
+	require.Error(t, err)
+	require.Empty(t, ws.Path)
+
+	// Cleanup on empty path is a no-op.
+	err = c.Cleanup(context.Background(), codeexecutor.Workspace{})
+	require.NoError(t, err)
+
+	// PutFiles with empty slice is a no-op.
+	err = c.PutFiles(context.Background(), codeexecutor.Workspace{}, nil)
+	require.NoError(t, err)
+
+	// Avoid calling Collect/RunProgram with nil executor to prevent
+	// lower-level panics in exec paths.
+}
+
+func TestCodeBlockDelimiter_Value(t *testing.T) {
+	c := &CodeExecutor{}
+	d := c.CodeBlockDelimiter()
+	require.Equal(t, "```", d.Start)
+	require.Equal(t, "```", d.End)
+}
+
+func TestCodeExecutor_Close_NoClient(t *testing.T) {
+	c := &CodeExecutor{}
+	require.NoError(t, c.Close())
 }
 
 func TestNew_Success(t *testing.T) {

@@ -2,137 +2,117 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2025 Tencent.  All rights
+// reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
-package codeexecutor_test
+package codeexecutor
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-func TestEnsureLayoutAndMetadata(t *testing.T) {
+func TestEnsureLayout_LoadSaveMetadata(t *testing.T) {
 	root := t.TempDir()
-	paths, err := codeexecutor.EnsureLayout(root)
+
+	// Ensure layout creates dirs and metadata.json.
+	paths, err := EnsureLayout(root)
 	require.NoError(t, err)
-	// All standard dirs should exist.
-	for _, k := range []string{
-		codeexecutor.DirSkills,
-		codeexecutor.DirWork,
-		codeexecutor.DirRuns,
-		codeexecutor.DirOut,
-	} {
-		p := paths[k]
-		st, err := os.Stat(p)
-		require.NoError(t, err)
-		require.True(t, st.IsDir())
-	}
-	// Metadata file should exist.
-	_, err = os.Stat(filepath.Join(
-		root, codeexecutor.MetaFileName,
+	require.Equal(t, filepath.Join(root, DirSkills), paths[DirSkills])
+	require.Equal(t, filepath.Join(root, DirWork), paths[DirWork])
+	require.Equal(t, filepath.Join(root, DirRuns), paths[DirRuns])
+	require.Equal(t, filepath.Join(root, DirOut), paths[DirOut])
+
+	// Loading existing metadata should succeed.
+	md, err := LoadMetadata(root)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.NotZero(t, md.CreatedAt.Unix())
+
+	// Modify and save metadata, then reload to verify roundtrip.
+	md.Inputs = append(md.Inputs, InputRecord{
+		From:      "host://x",
+		To:        "work/y",
+		Mode:      "copy",
+		Timestamp: time.Now(),
+	})
+	require.NoError(t, SaveMetadata(root, md))
+	md2, err := LoadMetadata(root)
+	require.NoError(t, err)
+	require.Equal(t, md.Version, md2.Version)
+	require.Equal(t, len(md.Inputs), len(md2.Inputs))
+}
+
+func TestLoadMetadata_MissingFileReturnsDefault(t *testing.T) {
+	root := t.TempDir()
+	// No metadata.json yet.
+	md, err := LoadMetadata(root)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.Empty(t, md.Inputs)
+}
+
+func TestDirDigest_DeterministicAndSensitive(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(root, "a", "b"), 0o755,
 	))
-	require.NoError(t, err)
-	// Call EnsureLayout again to exercise the already-present path.
-	_, err = codeexecutor.EnsureLayout(root)
-	require.NoError(t, err)
-}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "a", "b", "x.txt"), []byte("one"), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "a", "c.txt"), []byte("two"), 0o644,
+	))
 
-func TestLoadSaveMetadataRoundtrip(t *testing.T) {
-	root := t.TempDir()
-	_, err := codeexecutor.EnsureLayout(root)
+	d1, err := DirDigest(root)
 	require.NoError(t, err)
-	md, err := codeexecutor.LoadMetadata(root)
-	require.NoError(t, err)
-	require.NotNil(t, md.Skills)
-	// Add a skill and save; then reload and verify.
-	md.Skills["demo"] = codeexecutor.SkillMeta{
-		Name:    "demo",
-		RelPath: filepath.Join(codeexecutor.DirSkills, "demo"),
-		Digest:  "d0",
-		Mounted: true,
-	}
-	require.NoError(t, codeexecutor.SaveMetadata(root, md))
-	md2, err := codeexecutor.LoadMetadata(root)
-	require.NoError(t, err)
-	s, ok := md2.Skills["demo"]
-	require.True(t, ok)
-	require.Equal(t, "d0", s.Digest)
-}
-
-func TestDirDigestStableAndChanges(t *testing.T) {
-	dir := t.TempDir()
-	// Create a file and compute digest twice.
-	a := filepath.Join(dir, "a.txt")
-	require.NoError(t, os.WriteFile(a, []byte("alpha"), 0o644))
-	d1, err := codeexecutor.DirDigest(dir)
-	require.NoError(t, err)
-	d2, err := codeexecutor.DirDigest(dir)
+	// Recompute should match.
+	d2, err := DirDigest(root)
 	require.NoError(t, err)
 	require.Equal(t, d1, d2)
-	// Change contents and expect digest to differ.
-	require.NoError(t, os.WriteFile(a, []byte("beta"), 0o644))
-	d3, err := codeexecutor.DirDigest(dir)
+
+	// Changing a file should change digest.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "a", "c.txt"), []byte("changed"), 0o644,
+	))
+	d3, err := DirDigest(root)
 	require.NoError(t, err)
 	require.NotEqual(t, d1, d3)
 }
 
-func TestLoadMetadata_InvalidJSON(t *testing.T) {
+func TestEnsureLayout_PathConflict_Error(t *testing.T) {
 	root := t.TempDir()
-	// Create layout and then corrupt metadata.json with invalid JSON.
-	_, err := codeexecutor.EnsureLayout(root)
-	require.NoError(t, err)
-	mf := filepath.Join(root, codeexecutor.MetaFileName)
-	// Write malformed JSON so LoadMetadata fails to unmarshal.
-	require.NoError(t, os.WriteFile(mf, []byte("{"), 0o644))
-	_, err = codeexecutor.LoadMetadata(root)
-	require.Error(t, err)
-
-	// Also verify SaveMetadata writes valid JSON again.
-	md := codeexecutor.WorkspaceMetadata{Version: 1,
-		Skills: map[string]codeexecutor.SkillMeta{},
-	}
-	require.NoError(t, codeexecutor.SaveMetadata(root, md))
-	// Confirm it is valid JSON.
-	b, err := os.ReadFile(mf)
-	require.NoError(t, err)
-	var tmp any
-	require.NoError(t, json.Unmarshal(b, &tmp))
-}
-
-func TestLoadMetadata_NotExist_Defaults(t *testing.T) {
-	root := t.TempDir()
-	md, err := codeexecutor.LoadMetadata(root)
-	require.NoError(t, err)
-	require.Equal(t, 1, md.Version)
-	require.NotNil(t, md.Skills)
-}
-
-func TestSaveMetadata_WriteError(t *testing.T) {
-	root := t.TempDir()
-	// Make directory read-only to trigger write error.
-	require.NoError(t, os.Chmod(root, 0o555))
-	defer os.Chmod(root, 0o755)
-	err := codeexecutor.SaveMetadata(root,
-		codeexecutor.WorkspaceMetadata{Version: 1})
+	// Create a file that conflicts with a required directory name.
+	// MkdirAll should fail when hitting a file path.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, DirSkills), []byte("x"), 0o644,
+	))
+	_, err := EnsureLayout(root)
 	require.Error(t, err)
 }
 
-func TestEnsureLayout_ErrorOnFileRoot(t *testing.T) {
-	// Use a file path as the root so MkdirAll fails.
-	f, err := os.CreateTemp("", "notadir-*.tmp")
-	require.NoError(t, err)
-	defer os.Remove(f.Name())
-	_ = f.Close()
-	_, err = codeexecutor.EnsureLayout(f.Name())
+func TestLoadMetadata_InvalidJSON_Error(t *testing.T) {
+	root := t.TempDir()
+	// Write a bogus metadata.json.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, MetaFileName), []byte("not-json"), 0o644,
+	))
+	_, err := LoadMetadata(root)
+	require.Error(t, err)
+}
+
+func TestSaveMetadata_PathIsFile_Error(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "asfile")
+	require.NoError(t, os.WriteFile(root, []byte("x"), 0o644))
+	err := SaveMetadata(root, WorkspaceMetadata{Version: 1})
 	require.Error(t, err)
 }

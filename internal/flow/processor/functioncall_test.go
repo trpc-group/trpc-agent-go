@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -989,6 +990,78 @@ func TestExecuteStreamableTool_EmitsPartialEvents(t *testing.T) {
 		require.Len(t, e.Choices, 1)
 		require.Equal(t, "call-xyz", e.Choices[0].Message.ToolID)
 	}
+}
+
+func TestExecuteCallableTool_ErrorWrap(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, errors.New("e")
+		},
+	}
+	_, err := p.executeCallableTool(context.Background(),
+		model.ToolCall{Function: model.FunctionDefinitionParam{
+			Name: "t",
+		}}, tl,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorCallableToolExecution)
+}
+
+func TestConvertToolArguments_InvalidJSON(t *testing.T) {
+	b := convertToolArguments("child", []byte("{"),
+		transfer.TransferToolName)
+	require.Nil(t, b)
+}
+
+func TestProcessStreamChunk_ForwardsEvent(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{Model: &mockModel{},
+		InvocationID: "i", AgentName: "a"}
+	ev := event.New("i", "a")
+	ch := make(chan *event.Event, 1)
+	var contents []any
+	err := f.processStreamChunk(ctx, inv,
+		model.ToolCall{ID: "x"},
+		tool.StreamChunk{Content: ev}, ch, &contents,
+	)
+	require.NoError(t, err)
+	select {
+	case got := <-ch:
+		require.NotNil(t, got)
+	default:
+		t.Fatal("expected an event forwarded")
+	}
+}
+
+func TestExecuteToolCall_MarshalErrorIgnored(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "t", Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"t": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "t"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return math.NaN(), nil
+			},
+		},
+	}
+	tc := model.ToolCall{
+		ID: "id",
+		Function: model.FunctionDefinitionParam{
+			Name:      "t",
+			Arguments: []byte(`{}`),
+		},
+	}
+	choice, _, ign, err := p.executeToolCall(
+		ctx, inv, tc, tools, 0, nil,
+	)
+	require.True(t, ign)
+	require.Error(t, err)
+	require.Nil(t, choice)
+	require.Contains(t, err.Error(), ErrorMarshalResult)
 }
 
 // Tool that requests skipping summarization.

@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -516,6 +517,98 @@ func TestWorkspaceRuntime_PutDirectory_TarCopy_Error(t *testing.T) {
 	err := rt.PutDirectory(context.Background(), ws, src, "dst")
 	require.Error(t, err)
 	require.True(t, mkdirOK)
+}
+
+func TestWorkspaceRuntime_StageInputs_ArtifactAndWorkspace(t *testing.T) {
+	// Sequence exec IDs for mkdir and cp/ln inside container.
+	var execIdx int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			execIdx++
+			id := testExec1
+			if execIdx > 1 {
+				id = testExec2
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + id + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Accept tar uploads for artifact copy.
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+
+	ws := codeexecutor.Workspace{ID: "wsi",
+		Path: path.Join(testRunBase, "wsi")}
+
+	// Prepare artifact service and save one artifact.
+	svc := inmemory.NewService()
+	ctx := codeexecutor.WithArtifactService(
+		context.Background(), svc,
+	)
+	ctx = codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{
+		AppName: "a", UserID: "u", SessionID: "s",
+	})
+	_, err := codeexecutor.SaveArtifactHelper(
+		ctx, "z.txt", []byte("Z"), "text/plain",
+	)
+	require.NoError(t, err)
+
+	// Stage artifact file to work/inputs/z.txt
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "artifact://z.txt",
+		To:   path.Join(codeexecutor.DirWork, "inputs", "z.txt"),
+		Mode: "copy",
+	}})
+	require.NoError(t, err)
+
+	// Stage workspace path with link mode; results in an exec cp/ln.
+	err = rt.StageInputs(context.Background(), ws,
+		[]codeexecutor.InputSpec{{
+			From: "workspace://foo.txt",
+			To:   path.Join(codeexecutor.DirWork, "inputs", "foo.txt"),
+			Mode: "link",
+		}})
+	require.NoError(t, err)
 }
 
 func TestWorkspaceRuntime_Collect_NoMatches_And_CopyError(t *testing.T) {
