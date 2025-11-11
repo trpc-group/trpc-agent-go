@@ -750,6 +750,9 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 	var opts []openaiopt.RequestOption
 	if request.ThinkingEnabled != nil {
 		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
+		if m.variant == VariantQwen {
+			opts = append(opts, openaiopt.WithJSONSet(model.EnabledThinkingKey, *request.ThinkingEnabled))
+		}
 	}
 	if request.ThinkingTokens != nil {
 		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))

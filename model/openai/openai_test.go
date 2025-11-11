@@ -3780,3 +3780,40 @@ func TestQwen(t *testing.T) {
 		})
 	}
 }
+
+func TestModel_buildChatRequest(t *testing.T) {
+	type args struct {
+		request *model.Request
+	}
+	tests := []struct {
+		name  string
+		model *Model
+		args  args
+		want  openaigo.ChatCompletionNewParams
+		want1 []openaiopt.RequestOption
+	}{
+		{
+			name:  "qwen thinking",
+			model: New("qwen-plus", WithVariant(VariantQwen)),
+			args: args{
+				request: &model.Request{
+					Messages: []model.Message{},
+					GenerationConfig: model.GenerationConfig{
+						Stream:          true,
+						ThinkingEnabled: openai.BoolPtr(true),
+					},
+				},
+			},
+			want1: []openaiopt.RequestOption{
+				openaiopt.WithJSONSet(model.ThinkingEnabledKey, true),
+				openaiopt.WithJSONSet(model.EnabledThinkingKey, true),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got1 := tt.model.buildChatRequest(tt.args.request)
+			assert.Equalf(t, len(tt.want1), len(got1), "buildChatRequest(%v)", tt.args.request)
+		})
+	}
+}
