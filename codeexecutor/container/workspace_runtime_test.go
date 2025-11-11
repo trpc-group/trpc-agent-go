@@ -1094,3 +1094,153 @@ func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
 	require.Equal(t, 4, len(mf.Files[0].Content))
 	require.Equal(t, 1, calls)
 }
+
+func TestWorkspaceRuntime_StageDirectory_FallbackTarCopy_ReadOnly(t *testing.T) {
+	// When AllowMount is false, StageDirectory should fall back to
+	// PutDirectory (tar copy) and then apply chmod when ReadOnly is set.
+	var execCreates int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			execCreates++
+			id := testExec1
+			if execCreates > 1 {
+				id = testExec2
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + id + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			// Accept tar upload for PutDirectory fallback.
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{
+			runContainerBase: testRunBase,
+		},
+	}
+	ws := codeexecutor.Workspace{ID: "wSD1",
+		Path: path.Join(testRunBase, "wSD1")}
+
+	// Prepare a host directory to copy.
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(src, "f.txt"), []byte("v"), 0o644,
+	))
+
+	err := rt.StageDirectory(
+		context.Background(), ws, src, "dst",
+		codeexecutor.StageOptions{ReadOnly: true, AllowMount: false},
+	)
+	require.NoError(t, err)
+	// Two exec create calls: mkdir (from PutDirectory) and chmod.
+	require.Equal(t, 2, execCreates)
+}
+
+func TestWorkspaceRuntime_StageDirectory_Fallback_ReadOnly_ChmodError(
+	t *testing.T,
+) {
+	// Simulate an error on the chmod exec (inspect failure).
+	var execCreates int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			execCreates++
+			id := testExec1
+			if execCreates > 1 {
+				id = testExec2
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + id + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/json"):
+			// Return non-OK to force inspect error.
+			w.WriteHeader(http.StatusInternalServerError)
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "wSD2",
+		Path: path.Join(testRunBase, "wSD2")}
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(src, "f.txt"), []byte("v"), 0o644,
+	))
+
+	err := rt.StageDirectory(
+		context.Background(), ws, src, "dst",
+		codeexecutor.StageOptions{ReadOnly: true, AllowMount: false},
+	)
+	require.Error(t, err)
+}
