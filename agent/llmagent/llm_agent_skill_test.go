@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -184,9 +185,16 @@ func (m *captureModel) GenerateContent(
 ) (<-chan *model.Response, error) {
 	m.got = req
 	ch := make(chan *model.Response, 1)
-	ch <- &model.Response{Choices: []model.Choice{{
-		Message: model.Message{Role: model.RoleAssistant, Content: "ok"},
-	}}}
+	ch <- &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "ok",
+			},
+		}},
+		Done:      true,
+		IsPartial: false,
+	}
 	close(ch)
 	return ch, nil
 }
@@ -201,12 +209,20 @@ func TestLLMAgent_WithSkills_InsertsOverview(t *testing.T) {
 	require.NoError(t, err)
 	m := &captureModel{}
 	agt := New("tester", WithModel(m), WithSkills(repo))
-	inv := &agent.Invocation{Message: model.NewUserMessage("hi")}
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+	)
 	ch, err := agt.Run(context.Background(), inv)
 	require.NoError(t, err)
-	// Drain events to complete the run.
-	for range ch {
-		// no-op
+	// Drain events and notify completion when required.
+	ctx := context.Background()
+	for evt := range ch {
+		if evt != nil && evt.RequiresCompletion {
+			key := agent.GetAppendEventNoticeKey(evt.ID)
+			_ = inv.AddNoticeChannel(ctx, key)
+			_ = inv.NotifyCompletion(ctx, key)
+		}
 	}
 	require.NotNil(t, m.got)
 	var sys string
