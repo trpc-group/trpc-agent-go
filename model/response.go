@@ -197,6 +197,19 @@ func (rsp *Response) IsValidContent() bool {
 	return false
 }
 
+// IsUserMessage checks if the response is a user message.
+func (rsp *Response) IsUserMessage() bool {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return false
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.Role == RoleUser {
+			return true
+		}
+	}
+	return false
+}
+
 // IsToolResultResponse  checks if the response is a tool call result response.
 func (rsp *Response) IsToolResultResponse() bool {
 	return rsp != nil && len(rsp.Choices) > 0 && rsp.Choices[0].Message.ToolID != ""
