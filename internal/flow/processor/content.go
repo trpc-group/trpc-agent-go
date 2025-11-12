@@ -192,7 +192,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
-		event.WithObject(model.ObjectTypePreprocessingPlanning),
+		event.WithObject(model.ObjectTypePreprocessingContent),
 	))
 }
 
