@@ -295,7 +295,18 @@ func (f *Flow) runAfterModelCallbacks(
 	if f.modelCallbacks == nil {
 		return response, nil
 	}
-	return f.modelCallbacks.RunAfterModel(ctx, req, response, nil)
+	result, err := f.modelCallbacks.RunAfterModel(ctx, &model.AfterModelArgs{
+		Request:  req,
+		Response: response,
+		Error:    nil,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result != nil && result.CustomResponse != nil {
+		return result.CustomResponse, nil
+	}
+	return response, nil
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
@@ -402,15 +413,17 @@ func (f *Flow) callLLM(
 
 	// Run before model callbacks if they exist.
 	if f.modelCallbacks != nil {
-		customResponse, err := f.modelCallbacks.RunBeforeModel(ctx, llmRequest)
+		result, err := f.modelCallbacks.RunBeforeModel(ctx, &model.BeforeModelArgs{
+			Request: llmRequest,
+		})
 		if err != nil {
 			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
 			return nil, err
 		}
-		if customResponse != nil {
+		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			responseChan := make(chan *model.Response, 1)
-			responseChan <- customResponse
+			responseChan <- result.CustomResponse
 			close(responseChan)
 			return responseChan, nil
 		}

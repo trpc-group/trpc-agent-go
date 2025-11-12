@@ -647,19 +647,22 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	toolDeclaration := tl.Declaration()
 	// Run before tool callbacks if they exist.
 	if p.toolCallbacks != nil {
-		customResult, callbackErr := p.toolCallbacks.RunBeforeTool(
-			ctx,
-			toolCall.Function.Name,
-			toolDeclaration,
-			&toolCall.Function.Arguments,
-		)
+		result, callbackErr := p.toolCallbacks.RunBeforeTool(ctx, &tool.BeforeToolArgs{
+			ToolName:    toolCall.Function.Name,
+			Declaration: toolDeclaration,
+			Arguments:   toolCall.Function.Arguments,
+		})
 		if callbackErr != nil {
 			log.Errorf("Before tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
 			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
-		if customResult != nil {
+		if result != nil && result.CustomResult != nil {
 			// Use custom result from callback.
-			return customResult, toolCall.Function.Arguments, nil
+			return result.CustomResult, toolCall.Function.Arguments, nil
+		}
+		if result != nil && result.ModifiedArguments != nil {
+			// Use modified arguments from callback.
+			toolCall.Function.Arguments = result.ModifiedArguments
 		}
 	}
 
@@ -673,21 +676,19 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// Run after tool callbacks if they exist.
 	// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
 	if p.toolCallbacks != nil {
-		var customResult any
-		customResult, err = p.toolCallbacks.RunAfterTool(
-			ctx,
-			toolCall.Function.Name,
-			toolDeclaration,
-			toolCall.Function.Arguments,
-			result,
-			err,
-		)
-		if customResult != nil {
-			result = customResult
+		afterResult, callbackErr := p.toolCallbacks.RunAfterTool(ctx, &tool.AfterToolArgs{
+			ToolName:    toolCall.Function.Name,
+			Declaration: toolDeclaration,
+			Arguments:   toolCall.Function.Arguments,
+			Result:      result,
+			Error:       err,
+		})
+		if callbackErr != nil {
+			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
+			return result, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
-		if err != nil {
-			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, err)
-			return result, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", err)
+		if afterResult != nil && afterResult.CustomResult != nil {
+			result = afterResult.CustomResult
 		}
 	}
 	return result, toolCall.Function.Arguments, err

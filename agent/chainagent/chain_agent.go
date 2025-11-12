@@ -165,7 +165,9 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 		return false
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+		Invocation: invocation,
+	})
 	if err != nil {
 		// Send error event.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
@@ -176,12 +178,12 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 		))
 		return true // Indicates early return
 	}
-	if customResponse != nil {
+	if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		))
 		return true // Indicates early return
 	}
@@ -256,7 +258,10 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	eventChan chan<- *event.Event,
 ) *event.Event {
 
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation: invocation,
+		Error:      nil,
+	})
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -266,12 +271,12 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response.
 		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		)
 	}
 	agent.EmitEvent(ctx, invocation, eventChan, evt)

@@ -130,7 +130,9 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 		return false
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+		Invocation: invocation,
+	})
 	var evt *event.Event
 
 	if err != nil {
@@ -141,9 +143,9 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
-		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 	}
 
 	if evt == nil {
@@ -224,7 +226,10 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 		return
 	}
 
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation: invocation,
+		Error:      nil,
+	})
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -234,9 +239,9 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response.
-		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 	}
 
 	agent.EmitEvent(ctx, invocation, eventChan, evt)

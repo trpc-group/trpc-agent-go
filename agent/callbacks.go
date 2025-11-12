@@ -23,20 +23,77 @@ const ErrorTypeAgentCallbackError = "agent_callback_error"
 // Returns (customResponse, error).
 // - customResponse: if not nil, this response will be returned to user and agent execution will be skipped.
 // - error: if not nil, agent execution will be stopped with this error.
-type BeforeAgentCallback func(ctx context.Context, invocation *Invocation) (*model.Response, error)
+// Deprecated: Use BeforeAgentCallbackStructured instead for better type safety and context passing.
+type BeforeAgentCallback = func(ctx context.Context, invocation *Invocation) (*model.Response, error)
 
 // AfterAgentCallback is called after the agent runs.
 // Returns (customResponse, error).
 // - customResponse: if not nil, this response will be used instead of the actual agent response.
 // - error: if not nil, this error will be returned.
-type AfterAgentCallback func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error)
+// Deprecated: Use AfterAgentCallbackStructured instead for better type safety and context passing.
+type AfterAgentCallback = func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error)
+
+// BeforeAgentArgs contains all parameters for before agent callback.
+type BeforeAgentArgs struct {
+	// Invocation is the invocation context.
+	Invocation *Invocation
+}
+
+// BeforeAgentResult contains the return value for before agent callback.
+type BeforeAgentResult struct {
+	// Context if not nil, will be used by the framework for subsequent operations.
+	Context context.Context
+	// CustomResponse if not nil, will skip agent execution and return this response.
+	CustomResponse *model.Response
+}
+
+// BeforeAgentCallbackStructured is called before the agent runs.
+// Returns (result, error).
+// - result: contains optional custom response and context for subsequent operations.
+//   - CustomResponse: if not nil, this response will be returned to user and agent execution will be skipped.
+//   - Context: if not nil, will be used by the framework for subsequent operations.
+//
+// - error: if not nil, agent execution will be stopped with this error.
+type BeforeAgentCallbackStructured = func(
+	ctx context.Context,
+	args *BeforeAgentArgs,
+) (*BeforeAgentResult, error)
+
+// AfterAgentArgs contains all parameters for after agent callback.
+type AfterAgentArgs struct {
+	// Invocation is the invocation context.
+	Invocation *Invocation
+	// Error is the error occurred during agent execution (may be nil).
+	Error error
+}
+
+// AfterAgentResult contains the return value for after agent callback.
+type AfterAgentResult struct {
+	// Context if not nil, will be used by the framework for subsequent operations.
+	Context context.Context
+	// CustomResponse if not nil, will replace the original response.
+	CustomResponse *model.Response
+}
+
+// AfterAgentCallbackStructured is called after the agent runs.
+// Returns (result, error).
+// - result: contains optional custom response and context for subsequent operations.
+//   - CustomResponse: if not nil, this response will be used instead of the actual agent response.
+//   - Context: if not nil, will be used by the framework for subsequent operations.
+//
+// - error: if not nil, this error will be returned.
+type AfterAgentCallbackStructured = func(
+	ctx context.Context,
+	args *AfterAgentArgs,
+) (*AfterAgentResult, error)
 
 // Callbacks holds callbacks for agent operations.
+// Internally stores the new structured callback types.
 type Callbacks struct {
-	// BeforeAgent is a list of callbacks that are called before the agent runs.
-	BeforeAgent []BeforeAgentCallback
-	// AfterAgent is a list of callbacks that are called after the agent runs.
-	AfterAgent []AfterAgentCallback
+	// BeforeAgent is a list of callbacks called before the agent runs.
+	BeforeAgent []BeforeAgentCallbackStructured
+	// AfterAgent is a list of callbacks called after the agent runs.
+	AfterAgent []AfterAgentCallbackStructured
 }
 
 // NewCallbacks creates a new Callbacks instance for agent.
@@ -45,51 +102,88 @@ func NewCallbacks() *Callbacks {
 }
 
 // RegisterBeforeAgent registers a before agent callback.
-func (c *Callbacks) RegisterBeforeAgent(cb BeforeAgentCallback) *Callbacks {
-	c.BeforeAgent = append(c.BeforeAgent, cb)
+// Supports both old and new callback function signatures.
+// Old signatures are automatically wrapped into new signatures.
+func (c *Callbacks) RegisterBeforeAgent(cb any) *Callbacks {
+	switch callback := cb.(type) {
+	case BeforeAgentCallbackStructured:
+		c.BeforeAgent = append(c.BeforeAgent, callback)
+	case BeforeAgentCallback:
+		wrapped := func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+			// Call old signature
+			resp, err := callback(ctx, args.Invocation)
+			if err != nil {
+				return nil, err
+			}
+			if resp != nil {
+				return &BeforeAgentResult{CustomResponse: resp}, nil
+			}
+			return &BeforeAgentResult{}, nil // Return empty result to indicate callback was executed.
+		}
+		c.BeforeAgent = append(c.BeforeAgent, wrapped)
+	default:
+		panic("unsupported callback type")
+	}
 	return c
 }
 
 // RegisterAfterAgent registers an after agent callback.
-func (c *Callbacks) RegisterAfterAgent(cb AfterAgentCallback) *Callbacks {
-	c.AfterAgent = append(c.AfterAgent, cb)
+// Supports both old and new callback function signatures.
+// Old signatures are automatically wrapped into new signatures.
+func (c *Callbacks) RegisterAfterAgent(cb any) *Callbacks {
+	switch callback := cb.(type) {
+	case AfterAgentCallbackStructured:
+		c.AfterAgent = append(c.AfterAgent, callback)
+	case AfterAgentCallback:
+		wrapped := func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+			// Call old signature
+			resp, err := callback(ctx, args.Invocation, args.Error)
+			if err != nil {
+				return nil, err
+			}
+			if resp != nil {
+				return &AfterAgentResult{CustomResponse: resp}, nil
+			}
+			return &AfterAgentResult{}, nil // Return empty result to indicate callback was executed.
+		}
+		c.AfterAgent = append(c.AfterAgent, wrapped)
+	default:
+		panic("unsupported callback type")
+	}
 	return c
 }
 
 // RunBeforeAgent runs all before agent callbacks in order.
-// Returns (customResponse, error).
-// If any callback returns a custom response, stop and return.
+// This method uses the new structured callback interface.
 func (c *Callbacks) RunBeforeAgent(
 	ctx context.Context,
-	invocation *Invocation,
-) (*model.Response, error) {
+	args *BeforeAgentArgs,
+) (*BeforeAgentResult, error) {
 	for _, cb := range c.BeforeAgent {
-		customResponse, err := cb(ctx, invocation)
+		result, err := cb(ctx, args)
 		if err != nil {
 			return nil, err
 		}
-		if customResponse != nil {
-			return customResponse, nil
+		if result != nil && result.CustomResponse != nil {
+			return result, nil
 		}
 	}
 	return nil, nil
 }
 
 // RunAfterAgent runs all after agent callbacks in order.
-// Returns (customResponse, error).
-// If any callback returns a custom response, stop and return.
+// This method uses the new structured callback interface.
 func (c *Callbacks) RunAfterAgent(
 	ctx context.Context,
-	invocation *Invocation,
-	runErr error,
-) (*model.Response, error) {
+	args *AfterAgentArgs,
+) (*AfterAgentResult, error) {
 	for _, cb := range c.AfterAgent {
-		customResponse, err := cb(ctx, invocation, runErr)
+		result, err := cb(ctx, args)
 		if err != nil {
 			return nil, err
 		}
-		if customResponse != nil {
-			return customResponse, nil
+		if result != nil && result.CustomResponse != nil {
+			return result, nil
 		}
 	}
 	return nil, nil

@@ -924,13 +924,18 @@ type modelResponseConfig struct {
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (*event.Event, error) {
 	if config.ModelCallbacks != nil {
-		customResponse, err := config.ModelCallbacks.RunAfterModel(ctx, config.Request, config.Response, nil)
+		args := &model.AfterModelArgs{
+			Request:  config.Request,
+			Response: config.Response,
+			Error:    nil,
+		}
+		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
 		if err != nil {
 			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("callback after model error: %w", err)
 		}
-		if customResponse != nil {
-			config.Response = customResponse
+		if result != nil && result.CustomResponse != nil {
+			config.Response = result.CustomResponse
 		}
 	}
 	var llmEvent *event.Event
@@ -975,14 +980,15 @@ func runModel(
 	)
 
 	if modelCallbacks != nil {
-		customResponse, err := modelCallbacks.RunBeforeModel(ctx, request)
+		args := &model.BeforeModelArgs{Request: request}
+		result, err := modelCallbacks.RunBeforeModel(ctx, args)
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("callback before model error: %w", err)
 		}
-		if customResponse != nil {
+		if result != nil && result.CustomResponse != nil {
 			responseChan := make(chan *model.Response, 1)
-			responseChan <- customResponse
+			responseChan <- result.CustomResponse
 			close(responseChan)
 			return responseChan, nil
 		}
@@ -1319,13 +1325,20 @@ func runTool(
 	t tool.Tool,
 ) (any, []byte, error) {
 	if toolCallbacks != nil {
-		customResult, err := toolCallbacks.RunBeforeTool(
-			ctx, toolCall.Function.Name, t.Declaration(), &toolCall.Function.Arguments)
+		args := &tool.BeforeToolArgs{
+			ToolName:     toolCall.Function.Name,
+			Declaration:  t.Declaration(),
+			Arguments:    toolCall.Function.Arguments,
+		}
+		result, err := toolCallbacks.RunBeforeTool(ctx, args)
 		if err != nil {
 			return nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
 		}
-		if customResult != nil {
-			return customResult, toolCall.Function.Arguments, nil
+		if result != nil && result.CustomResult != nil {
+			return result.CustomResult, toolCall.Function.Arguments, nil
+		}
+		if result != nil && result.ModifiedArguments != nil {
+			toolCall.Function.Arguments = result.ModifiedArguments
 		}
 	}
 	if callableTool, ok := t.(tool.CallableTool); ok {
@@ -1334,13 +1347,19 @@ func runTool(
 			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
 		}
 		if toolCallbacks != nil {
-			customResult, err := toolCallbacks.RunAfterTool(
-				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
-			if err != nil {
-				return nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", err)
+			args := &tool.AfterToolArgs{
+				ToolName:    toolCall.Function.Name,
+				Declaration: t.Declaration(),
+				Arguments:   toolCall.Function.Arguments,
+				Result:      result,
+				Error:       err,
 			}
-			if customResult != nil {
-				return customResult, toolCall.Function.Arguments, nil
+			afterResult, afterErr := toolCallbacks.RunAfterTool(ctx, args)
+			if afterErr != nil {
+				return nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", afterErr)
+			}
+			if afterResult != nil && afterResult.CustomResult != nil {
+				return afterResult.CustomResult, toolCall.Function.Arguments, nil
 			}
 		}
 		return result, toolCall.Function.Arguments, nil

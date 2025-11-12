@@ -830,15 +830,17 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 // Returns the event channel and any error that occurred.
 func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if a.agentCallbacks != nil {
-		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+			Invocation: invocation,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
-		if customResponse != nil {
+		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
-			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
 			return nil, &haveCustomResponseError{EventChan: eventChan}
@@ -937,7 +939,10 @@ func (a *LLMAgent) wrapEventChannel(
 
 		// After all events are processed, run after agent callbacks
 		if a.agentCallbacks != nil {
-			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+				Invocation: invocation,
+				Error:      nil,
+			})
 			var evt *event.Event
 			if err != nil {
 				// Send error event.
@@ -947,9 +952,9 @@ func (a *LLMAgent) wrapEventChannel(
 					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
-			} else if customResponse != nil {
+			} else if result != nil && result.CustomResponse != nil {
 				// Create an event from the custom response.
-				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			}
 			if evt != nil {
 				fullRespEvent = evt
