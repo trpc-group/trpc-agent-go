@@ -667,7 +667,11 @@ func buildEventParts(e *event.Event) []map[string]any {
 }
 
 // filterEventParts filters parts based on streaming mode and event type.
-func filterEventParts(e *event.Event, parts []map[string]any, isStreaming bool) []map[string]any {
+func filterEventParts(
+	e *event.Event,
+	parts []map[string]any,
+	isStreaming bool,
+) []map[string]any {
 	// Early separation: Handle Graph events completely separately
 	if isGraphEvent(e) {
 		return filterGraphEventParts(e, parts, isStreaming)
@@ -679,7 +683,9 @@ func filterEventParts(e *event.Event, parts []map[string]any, isStreaming bool) 
 	}
 
 	if isStreaming {
-		// Drop duplicate aggregated message at end of streaming sequence.
+		// Drop aggregated final messages to avoid duplication with
+		// the already streamed deltas. Graph final text is handled in
+		// filterGraphEventParts.
 		if !e.Response.IsPartial && e.Response.Done {
 			return nil
 		}
@@ -688,12 +694,18 @@ func filterEventParts(e *event.Event, parts []map[string]any, isStreaming bool) 
 		//   1. Final assistant messages (Done == true)
 		//   2. Tool response events (object == tool.response)
 		//   3. Function call events which contain ToolCalls.
+		//   4. User messages so sessions replay from the first turn.
 		toolResp := isToolResponse(e)
 		hasToolCall := false
 		if len(e.Response.Choices) > 0 && len(e.Response.Choices[0].Message.ToolCalls) > 0 {
 			hasToolCall = true
 		}
-		if !e.Response.Done && !toolResp && !hasToolCall {
+		isUser := false
+		if len(e.Response.Choices) > 0 &&
+			e.Response.Choices[0].Message.Role == model.RoleUser {
+			isUser = true
+		}
+		if !e.Response.Done && !toolResp && !hasToolCall && !isUser {
 			return nil
 		}
 	}
@@ -975,14 +987,19 @@ func isGraphEvent(e *event.Event) bool {
 }
 
 // filterGraphEventParts handles filtering for Graph events only.
-func filterGraphEventParts(e *event.Event, parts []map[string]any, isStreaming bool) []map[string]any {
+func filterGraphEventParts(
+	e *event.Event,
+	parts []map[string]any,
+	isStreaming bool,
+) []map[string]any {
 	// For Graph tool execution events, always include them (they have functionCall/functionResponse)
 	if isGraphToolEvent(e) && len(parts) > 0 {
 		return parts
 	}
 
-	// For Graph execution completion events (final result), include in non-streaming mode
-	if !isStreaming && e.Object == graph.ObjectTypeGraphExecution && len(parts) > 0 {
+	// For Graph execution completion events (final result), always include
+	// so that streaming UIs receive the terminal text as well.
+	if e.Object == graph.ObjectTypeGraphExecution && len(parts) > 0 {
 		return parts
 	}
 
