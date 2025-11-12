@@ -10,6 +10,10 @@
 // Package dir provides directory-based knowledge source implementation.
 package dir
 
+import (
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+)
+
 // Option represents a functional option for configuring directory sources.
 type Option func(*Source)
 
@@ -64,5 +68,12 @@ func WithChunkSize(size int) Option {
 func WithChunkOverlap(overlap int) Option {
 	return func(s *Source) {
 		s.chunkOverlap = overlap
+	}
+}
+
+// WithOCRExtractor sets an OCR extractor for processing images in documents (e.g., PDFs).
+func WithOCRExtractor(extractor ocr.Extractor) Option {
+	return func(s *Source) {
+		s.ocrExtractor = extractor
 	}
 }
