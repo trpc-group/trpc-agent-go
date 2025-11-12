@@ -32,9 +32,7 @@ var (
 
 // init registers the text reader with the global registry.
 func init() {
-	reader.RegisterReader(supportedExtensions, func() reader.Reader {
-		return New()
-	})
+	reader.RegisterReader(supportedExtensions, New)
 }
 
 // Reader reads text documents and applies chunking strategies.
@@ -43,36 +41,38 @@ type Reader struct {
 	chunkingStrategy chunking.Strategy
 }
 
-// Option represents a functional option for configuring the text reader.
-type Option func(*Reader)
-
-// WithChunking enables or disables document chunking.
-func WithChunking(chunk bool) Option {
-	return func(r *Reader) {
-		r.chunk = chunk
-	}
-}
-
-// WithChunkingStrategy sets the chunking strategy to use.
-func WithChunkingStrategy(strategy chunking.Strategy) Option {
-	return func(r *Reader) {
-		r.chunkingStrategy = strategy
-	}
-}
-
 // New creates a new text reader with the given options.
-func New(opts ...Option) *Reader {
-	r := &Reader{
-		chunk:            true,
-		chunkingStrategy: chunking.NewFixedSizeChunking(),
+// Text reader uses FixedSizeChunking by default.
+func New(opts ...reader.Option) reader.Reader {
+	// Build config from options
+	config := &reader.Config{
+		Chunk: true,
 	}
-
-	// Apply options.
 	for _, opt := range opts {
-		opt(r)
+		opt(config)
 	}
 
-	return r
+	// Build chunking strategy using the default builder for text
+	strategy := reader.BuildChunkingStrategy(config, buildDefaultChunkingStrategy)
+
+	// Create reader from config
+	return &Reader{
+		chunk:            config.Chunk,
+		chunkingStrategy: strategy,
+	}
+}
+
+// buildDefaultChunkingStrategy builds the default chunking strategy for text reader.
+// Text uses FixedSizeChunking with configurable size and overlap.
+func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
+	var opts []chunking.Option
+	if chunkSize > 0 {
+		opts = append(opts, chunking.WithChunkSize(chunkSize))
+	}
+	if overlap > 0 {
+		opts = append(opts, chunking.WithOverlap(overlap))
+	}
+	return chunking.NewFixedSizeChunking(opts...)
 }
 
 // ReadFromReader reads text content from an io.Reader and returns a list of documents.

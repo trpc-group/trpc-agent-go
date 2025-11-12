@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
@@ -27,20 +28,20 @@ import (
 
 const (
 	defaultDirSourceName = "Directory Source"
-	dirSourceType        = "dir"
 )
 
 // Source represents a knowledge source for directory-based content.
 type Source struct {
-	dirPaths       []string
-	name           string
-	metadata       map[string]any
-	readers        map[string]reader.Reader
-	fileExtensions []string // Optional: filter by file extensions
-	recursive      bool     // Whether to process subdirectories
-	chunkSize      int
-	chunkOverlap   int
-	ocrExtractor   ocr.Extractor
+	dirPaths               []string
+	name                   string
+	metadata               map[string]any
+	readers                map[string]reader.Reader
+	fileExtensions         []string // Optional: filter by file extensions
+	recursive              bool     // Whether to process subdirectories
+	chunkSize              int
+	chunkOverlap           int
+	customChunkingStrategy chunking.Strategy
+	ocrExtractor           ocr.Extractor
 }
 
 // New creates a new directory knowledge source.
@@ -67,13 +68,16 @@ func New(dirPaths []string, opts ...Option) *Source {
 
 // initializeReaders sets up readers for different file types.
 func (s *Source) initializeReaders() {
-	// Build reader options
+	// Build reader options - pass all configurations to internal source layer
 	var readerOpts []isource.ReaderOption
 	if s.chunkSize > 0 {
 		readerOpts = append(readerOpts, isource.WithChunkSize(s.chunkSize))
 	}
 	if s.chunkOverlap > 0 {
 		readerOpts = append(readerOpts, isource.WithChunkOverlap(s.chunkOverlap))
+	}
+	if s.customChunkingStrategy != nil {
+		readerOpts = append(readerOpts, isource.WithCustomChunkingStrategy(s.customChunkingStrategy))
 	}
 	if s.ocrExtractor != nil {
 		readerOpts = append(readerOpts, isource.WithOCRExtractor(s.ocrExtractor))

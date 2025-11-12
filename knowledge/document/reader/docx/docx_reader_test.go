@@ -22,6 +22,7 @@ import (
 	godocx "github.com/gomutex/godocx"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 )
 
 // createDocx creates a simple DOCX file with given text and returns its bytes.
@@ -42,7 +43,7 @@ func createDocx(t *testing.T, text string) []byte {
 
 func TestReader_ReadFromReader_NoChunk(t *testing.T) {
 	data := createDocx(t, "Hello Docx")
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 
 	docs, err := rdr.ReadFromReader("example", bytes.NewReader(data))
 	require.NoError(t, err)
@@ -63,13 +64,13 @@ func TestReader_ReadFile_ChunkError(t *testing.T) {
 	tmp.Close()
 
 	// No chunking.
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 	docs, err := rdr.ReadFromFile(tmp.Name())
 	require.NoError(t, err)
 	require.Len(t, docs, 1)
 
 	// Trigger chunk error path.
-	rdrErr := New(WithChunkingStrategy(errChunker{}))
+	rdrErr := New(reader.WithCustomChunkingStrategy(errChunker{}))
 	_, err = rdrErr.ReadFromFile(tmp.Name())
 	if err == nil {
 		t.Fatalf("expected chunk error")
@@ -84,7 +85,7 @@ func TestReader_ReadFromURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 	docs, err := rdr.ReadFromURL(srv.URL + "/my.docx")
 	require.NoError(t, err)
 	require.Len(t, docs, 1)
@@ -151,7 +152,7 @@ func TestDOCXReader_ReadFromURLErrors(t *testing.T) {
 
 // TestDOCXReader_ChunkDocumentDefaultStrategy verifies default chunking strategy initialization.
 func TestDOCXReader_ChunkDocumentDefaultStrategy(t *testing.T) {
-	rdr := New(WithChunking(true))
+	rdr := New(reader.WithChunk(true))
 
 	// Create a temporary DOCX file
 	tmpFile := filepath.Join(t.TempDir(), "test.docx")
@@ -171,7 +172,7 @@ func TestDOCXReader_ChunkDocumentDefaultStrategy(t *testing.T) {
 
 // TestDOCXReader_ExtractFileNameFromURL tests URL filename extraction.
 func TestDOCXReader_ExtractFileNameFromURL(t *testing.T) {
-	rdr := New()
+	rdr := New().(*Reader)
 
 	tests := []struct {
 		name     string
