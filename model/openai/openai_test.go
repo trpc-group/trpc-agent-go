@@ -3868,6 +3868,21 @@ func TestModel_buildChatRequest(t *testing.T) {
 				openaiopt.WithJSONSet(model.ThinkingEnabledKey, true),
 			},
 		},
+		{
+			name:  "unknown variant",
+			model: New("qwen-plus", WithVariant(Variant("unknown"))),
+			args: args{
+				request: &model.Request{
+					Messages: []model.Message{},
+					GenerationConfig: model.GenerationConfig{
+						Stream: true, ThinkingEnabled: openai.BoolPtr(true),
+					},
+				},
+			},
+			want1: []openaiopt.RequestOption{
+				openaiopt.WithJSONSet(model.ThinkingEnabledKey, true),
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
