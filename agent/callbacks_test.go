@@ -395,3 +395,99 @@ func TestAgentCallbacks_ContextPropagation(t *testing.T) {
 	// Verify that the value was captured in after callback.
 	require.Equal(t, testValue, capturedValue)
 }
+
+// TestAgentCallbacks_Before_EmptyResult tests that when a callback returns
+// an empty result (no Context and no CustomResponse), RunBeforeAgent returns nil.
+func TestAgentCallbacks_Before_EmptyResult(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		// Return empty result (no Context, no CustomResponse).
+		return &BeforeAgentResult{}, nil
+	})
+	args := &BeforeAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+	}
+	result, err := callbacks.RunBeforeAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+// TestAgentCallbacks_Before_NilResult tests that when a callback returns
+// nil result, RunBeforeAgent continues to the next callback.
+func TestAgentCallbacks_Before_NilResult(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		// Return nil result.
+		return nil, nil
+	})
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		// Second callback returns a custom response.
+		return &BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "second"},
+		}, nil
+	})
+	args := &BeforeAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+	}
+	result, err := callbacks.RunBeforeAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "second", result.CustomResponse.ID)
+}
+
+// TestAgentCallbacks_After_EmptyResult tests that when a callback returns
+// an empty result (no Context and no CustomResponse), RunAfterAgent returns nil.
+func TestAgentCallbacks_After_EmptyResult(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		// Return empty result (no Context, no CustomResponse).
+		return &AfterAgentResult{}, nil
+	})
+	args := &AfterAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+		Error: nil,
+	}
+	result, err := callbacks.RunAfterAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+// TestAgentCallbacks_After_NilResult tests that when a callback returns
+// nil result, RunAfterAgent continues to the next callback.
+func TestAgentCallbacks_After_NilResult(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		// Return nil result.
+		return nil, nil
+	})
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		// Second callback returns a custom response.
+		return &AfterAgentResult{
+			CustomResponse: &model.Response{ID: "second"},
+		}, nil
+	})
+	args := &AfterAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+		Error: nil,
+	}
+	result, err := callbacks.RunAfterAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "second", result.CustomResponse.ID)
+}

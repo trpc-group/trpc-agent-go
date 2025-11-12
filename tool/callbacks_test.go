@@ -722,3 +722,65 @@ func TestToolCallbacks_ContextPropagation(t *testing.T) {
 	// Verify that the value was captured in after callback.
 	require.Equal(t, testValue, capturedValue)
 }
+
+// TestToolCallbacks_After_NoCallbacks_WithResult tests that when no callbacks
+// are registered and args.Result is not nil, RunAfterTool returns the original result.
+func TestToolCallbacks_After_NoCallbacks_WithResult(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	originalResult := map[string]string{"key": "value"}
+	args := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      originalResult,
+		Error:       nil,
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, originalResult, result.CustomResult)
+}
+
+// TestToolCallbacks_After_NoCallbacks_WithoutResult tests that when no callbacks
+// are registered and args.Result is nil, RunAfterTool returns an empty result.
+func TestToolCallbacks_After_NoCallbacks_WithoutResult(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	args := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      nil,
+		Error:       nil,
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Nil(t, result.CustomResult)
+}
+
+// TestToolCallbacks_After_NilResult tests that when a callback returns
+// nil result, RunAfterTool continues to the next callback.
+func TestToolCallbacks_After_NilResult(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		// Return nil result.
+		return nil, nil
+	})
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		// Second callback returns a custom result.
+		return &tool.AfterToolResult{
+			CustomResult: map[string]string{"second": "result"},
+		}, nil
+	})
+	args := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      map[string]string{"original": "result"},
+		Error:       nil,
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, map[string]string{"second": "result"}, result.CustomResult)
+}

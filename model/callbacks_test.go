@@ -405,3 +405,133 @@ func TestModelCallbacks_ContextPropagation(t *testing.T) {
 	// Verify that the value was captured in after callback.
 	require.Equal(t, testValue, capturedValue)
 }
+
+// TestModelCallbacks_Before_EmptyResult tests that when a callback returns
+// an empty result (no Context and no CustomResponse), RunBeforeModel returns nil.
+func TestModelCallbacks_Before_EmptyResult(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		// Return empty result (no Context, no CustomResponse).
+		return &BeforeModelResult{}, nil
+	})
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{
+				{
+					Role:    RoleUser,
+					Content: "Hello",
+				},
+			},
+		},
+	}
+	result, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+// TestModelCallbacks_Before_NilResult tests that when a callback returns
+// nil result, RunBeforeModel continues to the next callback.
+func TestModelCallbacks_Before_NilResult(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		// Return nil result.
+		return nil, nil
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		// Second callback returns a custom response.
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "second"},
+		}, nil
+	})
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{
+				{
+					Role:    RoleUser,
+					Content: "Hello",
+				},
+			},
+		},
+	}
+	result, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "second", result.CustomResponse.ID)
+}
+
+// TestModelCallbacks_After_EmptyResult tests that when a callback returns
+// an empty result (no Context and no CustomResponse), RunAfterModel returns nil.
+func TestModelCallbacks_After_EmptyResult(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterAfterModel(func(ctx context.Context, args *AfterModelArgs) (*AfterModelResult, error) {
+		// Return empty result (no Context, no CustomResponse).
+		return &AfterModelResult{}, nil
+	})
+	args := &AfterModelArgs{
+		Request: &Request{
+			Messages: []Message{
+				{
+					Role:    RoleUser,
+					Content: "Hello",
+				},
+			},
+		},
+		Response: &Response{
+			Choices: []Choice{
+				{
+					Index: 0,
+					Message: Message{
+						Role:    RoleAssistant,
+						Content: "Hi",
+					},
+				},
+			},
+		},
+		Error: nil,
+	}
+	result, err := callbacks.RunAfterModel(context.Background(), args)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+// TestModelCallbacks_After_NilResult tests that when a callback returns
+// nil result, RunAfterModel continues to the next callback.
+func TestModelCallbacks_After_NilResult(t *testing.T) {
+	callbacks := NewCallbacks()
+	callbacks.RegisterAfterModel(func(ctx context.Context, args *AfterModelArgs) (*AfterModelResult, error) {
+		// Return nil result.
+		return nil, nil
+	})
+	callbacks.RegisterAfterModel(func(ctx context.Context, args *AfterModelArgs) (*AfterModelResult, error) {
+		// Second callback returns a custom response.
+		return &AfterModelResult{
+			CustomResponse: &Response{ID: "second"},
+		}, nil
+	})
+	args := &AfterModelArgs{
+		Request: &Request{
+			Messages: []Message{
+				{
+					Role:    RoleUser,
+					Content: "Hello",
+				},
+			},
+		},
+		Response: &Response{
+			Choices: []Choice{
+				{
+					Index: 0,
+					Message: Message{
+						Role:    RoleAssistant,
+						Content: "Hi",
+					},
+				},
+			},
+		},
+		Error: nil,
+	}
+	result, err := callbacks.RunAfterModel(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "second", result.CustomResponse.ID)
+}
