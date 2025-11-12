@@ -1372,13 +1372,13 @@ func TestSimpleTokenCounter_CountTokensRange_InvalidRange(t *testing.T) {
 func TestHeadOutStrategy_BinarySearchAccuracy(t *testing.T) {
 	// Create messages with varying token sizes.
 	msgs := []Message{
-		NewSystemMessage("System prompt"),                    // ~3 tokens
-		NewUserMessage(repeat("a", 100)),                    // ~25 tokens
-		NewUserMessage(repeat("b", 100)),                    // ~25 tokens
-		NewUserMessage(repeat("c", 100)),                    // ~25 tokens
-		NewUserMessage(repeat("d", 100)),                    // ~25 tokens
-		NewUserMessage("Last user message"),                 // ~4 tokens
-		NewAssistantMessage("Last assistant response"),      // ~4 tokens
+		NewSystemMessage("System prompt"),              // ~3 tokens
+		NewUserMessage(repeat("a", 100)),               // ~25 tokens
+		NewUserMessage(repeat("b", 100)),               // ~25 tokens
+		NewUserMessage(repeat("c", 100)),               // ~25 tokens
+		NewUserMessage(repeat("d", 100)),               // ~25 tokens
+		NewUserMessage("Last user message"),            // ~4 tokens
+		NewAssistantMessage("Last assistant response"), // ~4 tokens
 	}
 
 	counter := NewSimpleTokenCounter()
@@ -1412,13 +1412,13 @@ func TestHeadOutStrategy_BinarySearchAccuracy(t *testing.T) {
 func TestTailOutStrategy_BinarySearchAccuracy(t *testing.T) {
 	// Create messages with varying token sizes.
 	msgs := []Message{
-		NewSystemMessage("System prompt"),                    // ~3 tokens
-		NewUserMessage(repeat("a", 100)),                    // ~25 tokens
-		NewUserMessage(repeat("b", 100)),                    // ~25 tokens
-		NewUserMessage(repeat("c", 100)),                    // ~25 tokens
-		NewUserMessage(repeat("d", 100)),                    // ~25 tokens
-		NewUserMessage("Last user message"),                 // ~4 tokens
-		NewAssistantMessage("Last assistant response"),      // ~4 tokens
+		NewSystemMessage("System prompt"),              // ~3 tokens
+		NewUserMessage(repeat("a", 100)),               // ~25 tokens
+		NewUserMessage(repeat("b", 100)),               // ~25 tokens
+		NewUserMessage(repeat("c", 100)),               // ~25 tokens
+		NewUserMessage(repeat("d", 100)),               // ~25 tokens
+		NewUserMessage("Last user message"),            // ~4 tokens
+		NewAssistantMessage("Last assistant response"), // ~4 tokens
 	}
 
 	counter := NewSimpleTokenCounter()

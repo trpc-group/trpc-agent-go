@@ -238,6 +238,10 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		modelName string
 		agentName string
 	)
+	// Attach state delta if the tool provides it.
+	if tl, ok := tools[toolCall.Function.Name]; ok {
+		p.attachStateDelta(tl, modifiedArgs, choice, toolEvent)
+	}
 
 	if invocation != nil {
 		if invocation.Session != nil {
@@ -402,6 +406,10 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
+	// Attach state delta if the tool provides it.
+	if tl, ok := tools[tc.Function.Name]; ok {
+		p.attachStateDelta(tl, modifiedArgs, choice, toolCallResponseEvent)
+	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: modelName,
@@ -416,6 +424,37 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	p.sendToolResult(
 		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},
 	)
+}
+
+// attachStateDelta copies tool-provided state delta to the event.
+func (p *FunctionCallResponseProcessor) attachStateDelta(
+	tl tool.Tool, args []byte, choice *model.Choice, ev *event.Event,
+) {
+	if tl == nil || choice == nil || ev == nil {
+		return
+	}
+	original := tl
+	if nameTool, ok := tl.(*itool.NamedTool); ok {
+		original = nameTool.Original()
+	}
+	type stateDeltaProvider interface {
+		StateDelta([]byte, []byte) map[string][]byte
+	}
+	sdp, ok := original.(stateDeltaProvider)
+	if !ok {
+		return
+	}
+	b := []byte(choice.Message.Content)
+	delta := sdp.StateDelta(args, b)
+	if len(delta) == 0 {
+		return
+	}
+	if ev.StateDelta == nil {
+		ev.StateDelta = map[string][]byte{}
+	}
+	for k, v := range delta {
+		ev.StateDelta[k] = v
+	}
 }
 
 // annotateSkipSummarization marks an event to skip outer summarization.
@@ -906,10 +945,16 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 	}
 
 	mergedChoices := make([]model.Choice, 0, totalChoices)
+	mergedDelta := map[string][]byte{}
 	for _, e := range es {
 		// Add nil checks to prevent panic
 		if e != nil && e.Response != nil {
 			mergedChoices = append(mergedChoices, e.Response.Choices...)
+		}
+		if e != nil && e.StateDelta != nil {
+			for k, v := range e.StateDelta {
+				mergedDelta[k] = v
+			}
 		}
 	}
 	eventID := uuid.New().String()
@@ -949,6 +994,9 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 	} else {
 		// Fallback: construct without base metadata.
 		merged = event.New("", "", event.WithResponse(resp))
+	}
+	if len(mergedDelta) > 0 {
+		merged.StateDelta = mergedDelta
 	}
 	// If any child event prefers skipping summarization, propagate it.
 	for _, e := range es {

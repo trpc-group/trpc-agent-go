@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -104,6 +105,7 @@ type CodeExecutor struct {
 	cli              *Client
 	ctx              context.Context
 	cancel           context.CancelFunc
+	ws               *localexec.Runtime
 }
 
 // New creates a new CodeExecutor instance
@@ -219,13 +221,14 @@ func New(opts ...Option) (*CodeExecutor, error) {
 				if err != nil {
 					return nil, err
 				}
+				c.ws = localexec.NewRuntime("")
 				return c, nil
 			}
 		}
 	}
 }
 
-// CodeBlockDelimiter implements the CodeExecutor interface
+// CodeBlockDelimiter returns the fenced code delimiter.
 func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{
 		Start: "```",
@@ -233,13 +236,84 @@ func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	}
 }
 
-// ExecuteCode implements the CodeExecutor interface
+// ExecuteCode executes code blocks via the Jupyter client.
 func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
 	if c.cli == nil {
 		return codeexecutor.CodeExecutionResult{}, fmt.Errorf("jupyter client not initialized")
 	}
 
 	return c.cli.ExecuteCode(ctx, input)
+}
+
+// Workspace methods delegate to local runtime by default.
+
+func (c *CodeExecutor) ensureWS() *localexec.Runtime {
+	if c.ws == nil {
+		c.ws = localexec.NewRuntime("")
+	}
+	return c.ws
+}
+
+// CreateWorkspace creates a workspace using the local runtime.
+func (c *CodeExecutor) CreateWorkspace(
+	ctx context.Context, execID string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	return c.ensureWS().CreateWorkspace(ctx, execID, pol)
+}
+
+// Cleanup deletes a workspace using the local runtime.
+func (c *CodeExecutor) Cleanup(
+	ctx context.Context, ws codeexecutor.Workspace,
+) error {
+	return c.ensureWS().Cleanup(ctx, ws)
+}
+
+// PutFiles writes files using the local runtime.
+func (c *CodeExecutor) PutFiles(
+	ctx context.Context, ws codeexecutor.Workspace,
+	files []codeexecutor.PutFile,
+) error {
+	return c.ensureWS().PutFiles(ctx, ws, files)
+}
+
+// PutDirectory stages a directory using the local runtime.
+func (c *CodeExecutor) PutDirectory(
+	ctx context.Context, ws codeexecutor.Workspace,
+	hostPath, to string,
+) error {
+	return c.ensureWS().PutDirectory(ctx, ws, hostPath, to)
+}
+
+// RunProgram executes a command using the local runtime.
+func (c *CodeExecutor) RunProgram(
+	ctx context.Context, ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return c.ensureWS().RunProgram(ctx, ws, spec)
+}
+
+// Collect copies files using the local runtime.
+func (c *CodeExecutor) Collect(
+	ctx context.Context, ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	return c.ensureWS().Collect(ctx, ws, patterns)
+}
+
+// ExecuteInline writes code blocks and runs them via local runtime.
+func (c *CodeExecutor) ExecuteInline(
+	ctx context.Context, execID string,
+	blocks []codeexecutor.CodeBlock,
+	timeout time.Duration,
+) (codeexecutor.RunResult, error) {
+	return c.ensureWS().ExecuteInline(ctx, execID, blocks, timeout)
+}
+
+// Engine exposes the local runtime as an Engine for skills.
+func (c *CodeExecutor) Engine() codeexecutor.Engine {
+	rt := c.ensureWS()
+	return codeexecutor.NewEngine(rt, rt, rt)
 }
 
 // silencePip silences pip install commands

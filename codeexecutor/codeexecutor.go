@@ -1,4 +1,5 @@
 //
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -7,7 +8,8 @@
 //
 //
 
-// Package codeexecutor provides an interface and utilities for executing code blocks in different environments.
+// Package codeexecutor provides an interface and utilities for executing
+// code blocks and running programs in workspaces.
 package codeexecutor
 
 import (
@@ -17,27 +19,28 @@ import (
 	"strings"
 )
 
-// CodeExecutor is an interface for executing code blocks in different environments.
+// CodeExecutor executes code blocks via a friendly front-door API.
 type CodeExecutor interface {
-	// ExecuteCode executes the code blocks provided in the input and returns the result.
+	// ExecuteCode executes the code blocks provided in the input and
+	// returns the result.
 	ExecuteCode(context.Context, CodeExecutionInput) (CodeExecutionResult, error)
 	// CodeBlockDelimiter returns the delimiters used for code blocks.
 	CodeBlockDelimiter() CodeBlockDelimiter
 }
 
-// CodeExecutionInput represents the input for code execution, containing code blocks and an execution ID.
+// CodeExecutionInput is the input for code execution.
 type CodeExecutionInput struct {
 	CodeBlocks  []CodeBlock
 	ExecutionID string
 }
 
-// CodeExecutionResult represents the result of code execution, including output and any generated files.
+// CodeExecutionResult is the result of code execution including files.
 type CodeExecutionResult struct {
 	Output      string
 	OutputFiles []File
 }
 
-// String implements the Stringer interface, formatting the code execution result into a human-readable string.
+// String formats a human-readable result.
 func (r CodeExecutionResult) String() string {
 	if r.Output != "" && len(r.OutputFiles) == 0 {
 		return fmt.Sprintf("Code execution result:\n%s\n", r.Output)
@@ -47,10 +50,9 @@ func (r CodeExecutionResult) String() string {
 		for _, file := range r.OutputFiles {
 			filesNames = append(filesNames, file.Name)
 		}
-
-		return "Code execution result:\n Saved artifacts:\n" + strings.Join(filesNames, "\n")
+		return "Code execution result:\n Saved output files:\n" +
+			strings.Join(filesNames, "\n")
 	}
-
 	return "Code execution result: No output or errors."
 }
 
@@ -73,35 +75,19 @@ type CodeBlockDelimiter struct {
 	End   string
 }
 
-// ExtractCodeBlock extracts code blocks from the input string using regex.
-// It returns a slice of CodeBlock containing the extracted code and language
-// example:
-// input: "```python\nprint('Hello, World!')```", delimiter: CodeBlockDelimiter{Start: "```", End: "```"}
-// output: []CodeBlock{{Code: "print('Hello, World!')", Language: "python"}}
+// ExtractCodeBlock extracts fenced code blocks using the given delimiter.
 func ExtractCodeBlock(input string, delimiter CodeBlockDelimiter) []CodeBlock {
 	var blocks []CodeBlock
-
-	// Escape special regex characters in delimiters
 	startDelim := regexp.QuoteMeta(delimiter.Start)
 	endDelim := regexp.QuoteMeta(delimiter.End)
-
-	// Pattern to match code blocks with optional language specification
-	// More explicit pattern to handle the newline after language correctly
 	pattern := regexp.MustCompile(`(?s)` + startDelim + `([^\n]*)\n(.*?)` + endDelim)
-
 	matches := pattern.FindAllStringSubmatch(input, -1)
-
 	for _, match := range matches {
 		if len(match) >= 3 {
-			// Extract language from the first line (everything after the start delimiter)
 			language := strings.TrimSpace(match[1])
 			code := match[2]
-			blocks = append(blocks, CodeBlock{
-				Code:     code,
-				Language: language,
-			})
+			blocks = append(blocks, CodeBlock{Code: code, Language: language})
 		}
 	}
-
 	return blocks
 }

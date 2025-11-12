@@ -33,6 +33,7 @@ import (
 	tcontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -218,6 +219,52 @@ func TestNew_FilepathAbsError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// Fake runtime validation via wrapper methods.
+func TestCodeExecutor_WrapperMethods_Basic(t *testing.T) {
+	c := &CodeExecutor{}
+
+	// Engine returns a non-nil engine even when runtime init fails.
+	eng := c.Engine()
+	require.NotNil(t, eng)
+
+	// ensureWS caches instance.
+	rt1, err := c.ensureWS()
+	require.NoError(t, err)
+	rt2, err := c.ensureWS()
+	require.NoError(t, err)
+	require.Equal(t, rt1, rt2)
+
+	// Workspace wrappers should propagate errors when executor not ready.
+	ws, err := c.CreateWorkspace(
+		context.Background(), "id", codeexecutor.WorkspacePolicy{},
+	)
+	require.Error(t, err)
+	require.Empty(t, ws.Path)
+
+	// Cleanup on empty path is a no-op.
+	err = c.Cleanup(context.Background(), codeexecutor.Workspace{})
+	require.NoError(t, err)
+
+	// PutFiles with empty slice is a no-op.
+	err = c.PutFiles(context.Background(), codeexecutor.Workspace{}, nil)
+	require.NoError(t, err)
+
+	// Avoid calling Collect/RunProgram with nil executor to prevent
+	// lower-level panics in exec paths.
+}
+
+func TestCodeBlockDelimiter_Value(t *testing.T) {
+	c := &CodeExecutor{}
+	d := c.CodeBlockDelimiter()
+	require.Equal(t, "```", d.Start)
+	require.Equal(t, "```", d.End)
+}
+
+func TestCodeExecutor_Close_NoClient(t *testing.T) {
+	c := &CodeExecutor{}
+	require.NoError(t, c.Close())
+}
+
 func TestNew_Success(t *testing.T) {
 	const execID = "exec-new"
 	var inspectCalls int
@@ -294,6 +341,114 @@ func TestWithHostConfigOption(t *testing.T) {
 	WithHostConfig(optionCfg)(exec)
 	assert.Equal(t, optionCfg.AutoRemove, exec.hostConfig.AutoRemove)
 	assert.Equal(t, optionCfg.NetworkMode, exec.hostConfig.NetworkMode)
+}
+
+func TestWithBindMountOption(t *testing.T) {
+	exec := &CodeExecutor{}
+	WithBindMount("/host/src", "/ctr/dst", "ro")(exec)
+	assert.Len(t, exec.hostConfig.Binds, 1)
+	assert.Equal(t, "/host/src:/ctr/dst:ro", exec.hostConfig.Binds[0])
+
+	// No mode provided should omit the trailing colon.
+	WithBindMount("/a", "/b", "")(exec)
+	assert.Equal(t, "/a:/b", exec.hostConfig.Binds[1])
+}
+
+func TestEnsureWS_CachesRuntime(t *testing.T) {
+	c := &CodeExecutor{}
+	rt1, err := c.ensureWS()
+	assert.NoError(t, err)
+	assert.NotNil(t, rt1)
+	rt2, err := c.ensureWS()
+	assert.NoError(t, err)
+	assert.Same(t, rt1, rt2)
+}
+
+func TestEngine_NonNil(t *testing.T) {
+	c := &CodeExecutor{}
+	eng := c.Engine()
+	assert.NotNil(t, eng)
+}
+
+func TestWorkspaceWrappers_MinimalPaths(t *testing.T) {
+	c := &CodeExecutor{}
+	ctx := context.Background()
+
+	// CreateWorkspace should fail when executor is not ready.
+	_, err := c.CreateWorkspace(ctx, "id", codeexecutor.WorkspacePolicy{})
+	assert.Error(t, err)
+
+	// Cleanup with empty path should be a no-op.
+	err = c.Cleanup(ctx, codeexecutor.Workspace{})
+	assert.NoError(t, err)
+
+	// PutFiles with no files should be a no-op.
+	err = c.PutFiles(ctx, codeexecutor.Workspace{}, nil)
+	assert.NoError(t, err)
+
+	// PutDirectory with empty hostPath should error out.
+	err = c.PutDirectory(ctx, codeexecutor.Workspace{}, "", "to")
+	assert.Error(t, err)
+
+	// ExecuteInline should fail when executor is not ready.
+	_, err = c.ExecuteInline(ctx, "id", nil, time.Second)
+	assert.Error(t, err)
+}
+
+func TestWrappers_RunProgram_And_Collect(t *testing.T) {
+	const execID = "exec-wrap"
+	var startCalls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(
+				fmt.Sprintf(`{"Id":"%s"}`, execID),
+			))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path, "/exec/"+execID+"/start"):
+			hj, ok := w.(http.Hijacker)
+			assert.True(t, ok)
+			conn, buf, err := hj.Hijack()
+			assert.NoError(t, err)
+			if startCalls == 0 {
+				writeHijackStream(t, conn, buf, "ok\n", "")
+			} else {
+				writeHijackStream(t, conn, buf, "", "")
+			}
+			startCalls++
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	c := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: "cid"},
+	}
+	ws := codeexecutor.Workspace{ID: "id", Path: "/work"}
+	ctx := context.Background()
+
+	// RunProgram wrapper
+	res, err := c.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:     "bash",
+		Args:    []string{"-lc", "echo ok"},
+		Timeout: time.Second,
+	})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Stdout, "ok")
+
+	// Collect with no patterns should return empty without copy out.
+	files, err := c.Collect(ctx, ws, nil)
+	assert.NoError(t, err)
+	assert.Empty(t, files)
 }
 
 func TestWithContainerNameOption(t *testing.T) {

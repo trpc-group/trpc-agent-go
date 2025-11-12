@@ -1,8 +1,20 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package jupyter
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -482,4 +494,213 @@ func TestNew(t *testing.T) {
 	codeExecutor, err := New()
 	defer codeExecutor.Close()
 	assert.NoError(t, err)
+}
+
+// Test the workspace delegate methods to cover ensureWS and wrappers.
+func TestWorkspaceDelegates(t *testing.T) {
+	const (
+		execID     = "ws_exec_id"
+		relWork    = "work/hello.txt"
+		fileText   = "hello"
+		copyTarget = "out/copied.txt"
+		globOut    = "out/*.txt"
+		bashCmd    = "bash"
+	)
+
+	ce := &CodeExecutor{}
+
+	// Create a workspace
+	ws, err := ce.CreateWorkspace(
+		context.Background(), execID,
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatalf("CreateWorkspace failed: %v", err)
+	}
+	defer ce.Cleanup(context.Background(), ws)
+
+	// Put a file into workspace
+	err = ce.PutFiles(
+		context.Background(), ws,
+		[]codeexecutor.PutFile{{
+			Path:    relWork,
+			Content: []byte(fileText),
+			Mode:    0o644,
+		}},
+	)
+	if err != nil {
+		t.Fatalf("PutFiles failed: %v", err)
+	}
+
+	// Also test PutDirectory by staging a temp dir with one file.
+	tmpDir := t.TempDir()
+	hostFile := filepath.Join(tmpDir, "host.txt")
+	if writeErr := os.WriteFile(hostFile, []byte(fileText), 0o644); writeErr != nil {
+		t.Fatalf("write host file: %v", writeErr)
+	}
+	if err = ce.PutDirectory(
+		context.Background(), ws, tmpDir, "staged",
+	); err != nil {
+		t.Fatalf("PutDirectory failed: %v", err)
+	}
+
+	// Run a program to copy the staged file to out/copied.txt
+	spec := codeexecutor.RunProgramSpec{
+		Cmd:  bashCmd,
+		Args: []string{"-c", "cat staged/host.txt > " + copyTarget},
+		Cwd:  "",
+	}
+	if _, err = ce.RunProgram(context.Background(), ws, spec); err != nil {
+		t.Fatalf("RunProgram failed: %v", err)
+	}
+
+	// Collect output files
+	files, err := ce.Collect(
+		context.Background(), ws, []string{globOut},
+	)
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+	// Ensure that our copied file exists among collected results.
+	found := false
+	for _, f := range files {
+		if f.Name == copyTarget {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected collected file %q not found", copyTarget)
+	}
+
+	// ExecuteInline with a simple bash block
+	runRes, err := ce.ExecuteInline(
+		context.Background(), "inline_exec",
+		[]codeexecutor.CodeBlock{{
+			Code: "echo inline", Language: "bash",
+		}},
+		2*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteInline failed: %v", err)
+	}
+	// Output may or may not include newline; check prefix.
+	if !strings.HasPrefix(runRes.Stdout, "inline") &&
+		!strings.Contains(runRes.Stdout, "inline\n") {
+		t.Fatalf("unexpected inline output: %q", runRes.Stdout)
+	}
+
+	// Engine should be non-nil and usable
+	eng := ce.Engine()
+	if eng == nil {
+		t.Fatalf("Engine() returned nil")
+	}
+}
+
+func TestCodeExecutorClose(t *testing.T) {
+	// Provide a valid cancel func to avoid nil panic.
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = ctx
+	ce := CodeExecutor{cancel: cancel}
+	if err := ce.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+// Use a fake python on PATH to drive New() error branch and cleanup.
+func TestNewWithFakePythonError(t *testing.T) {
+	const (
+		fakeEcho = "Jupyter Kernel Gateway is unavailable"
+		errLine  = "ERROR: boot failure"
+	)
+	tmp := t.TempDir()
+	fake := filepath.Join(tmp, "python")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"done\n" +
+		"echo \"" + errLine + "\" 1>&2\n" +
+		"echo \"" + fakeEcho + "\" 1>&2\n" +
+		"sleep 1\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake python: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err := New(
+		WithStartTimeout(2*time.Second),
+		WithWaitReadyTimeout(100*time.Millisecond),
+		WithLogFile(filepath.Join(tmp, "k.log")),
+	)
+	assert.Error(t, err)
+}
+
+// Timeout path: child stays alive, but we hit startup timeout first.
+func TestNewWithFakePythonTimeout(t *testing.T) {
+	tmp := t.TempDir()
+	fake := filepath.Join(tmp, "python")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"done\n" +
+		"sleep 2\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake python: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err := New(
+		WithStartTimeout(10*time.Millisecond),
+		WithWaitReadyTimeout(10*time.Millisecond),
+	)
+	assert.Error(t, err)
+}
+
+// Process exited path: child exits quickly; ticker sees exited state.
+func TestNewWithFakePythonExited(t *testing.T) {
+	tmp := t.TempDir()
+	fake := filepath.Join(tmp, "python")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"done\n" +
+		"exit 3\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake python: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err := New(
+		WithStartTimeout(500*time.Millisecond),
+		WithWaitReadyTimeout(10*time.Millisecond),
+	)
+	assert.Error(t, err)
+}
+
+// Error path for ExecuteCode when client is not initialized.
+func TestExecuteCodeClientNotInit(t *testing.T) {
+	ce := &CodeExecutor{}
+	_, err := ce.ExecuteCode(
+		context.Background(),
+		codeexecutor.CodeExecutionInput{ExecutionID: "x"},
+	)
+	assert.Error(t, err)
+}
+
+// Cover cleanup kill-branch by signaling an already-exited process.
+func TestCleanupKillBranch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, "bash", "-c", "true")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start cmd: %v", err)
+	}
+	_ = cmd.Wait()
+	ce := &CodeExecutor{cancel: cancel, subprocess: cmd}
+	ce.cleanup()
 }

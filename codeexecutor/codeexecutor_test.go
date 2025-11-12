@@ -120,7 +120,7 @@ func TestCodeExecutionResultString(t *testing.T) {
 					{Name: "bar.log"},
 				},
 			},
-			expected: "Code execution result:\n Saved artifacts:\nfoo.txt\nbar.log",
+			expected: "Code execution result:\n Saved output files:\nfoo.txt\nbar.log",
 		},
 		{
 			name:     "empty result",
