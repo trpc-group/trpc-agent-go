@@ -34,10 +34,17 @@ type options struct {
 	enableTSVector bool
 	instanceName   string
 
+	// Remote embedding configuration.
+	// When embeddingModel is set, remote embedding is automatically enabled.
+	embeddingModel string // Embedding model name for remote computation
+
 	// Hybrid search scoring weights.
 	vectorWeight float64 // Default: Vector similarity weight 70%
 	textWeight   float64 // Default: Text relevance weight 30%
 	language     string  // Default: zh, options: zh, en
+
+	// Filter index configuration.
+	filterAll bool // Enable filterAll to skip scalar field index creation and validation
 
 	//field
 	// idFieldName is the tcvectordb field name for ID.
@@ -74,6 +81,7 @@ var defaultOptions = options{
 	replicas:              0,
 	sharding:              1,
 	enableTSVector:        true,
+	embeddingModel:        "",
 	vectorWeight:          0.7,
 	textWeight:            0.3,
 	language:              "en",
@@ -293,5 +301,26 @@ func WithUpdatedAtField(field string) Option {
 func WithSparseVectorField(field string) Option {
 	return func(o *options) {
 		o.sparseVectorFieldName = field
+	}
+}
+
+// WithRemoteEmbeddingModel sets the embedding model name for remote computation.
+// When set, remote embedding is automatically enabled, and text queries will be sent
+// directly to tcvectordb for embedding computation.
+// Common models: bge-base-zh, bge-large-zh, m3e-base, text2vec-large-chinese, etc.
+// Set to empty string to disable remote embedding.
+func WithRemoteEmbeddingModel(model string) Option {
+	return func(o *options) {
+		o.embeddingModel = model
+	}
+}
+
+// WithFilterAll enables filterAll mode for filter index configuration.
+// When enabled, all scalar fields can be used for filtering without creating indexes,
+// which skips index creation and validation for scalar fields.
+// This is useful when you want to filter on many fields without the overhead of maintaining indexes.
+func WithFilterAll(enable bool) Option {
+	return func(o *options) {
+		o.filterAll = enable
 	}
 }
