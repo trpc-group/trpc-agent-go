@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
@@ -42,6 +43,7 @@ type Source struct {
 	textReader   reader.Reader
 	chunkSize    int
 	chunkOverlap int
+	ocrExtractor ocr.Extractor
 }
 
 // New creates a new auto knowledge source.
@@ -162,11 +164,14 @@ func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Do
 
 // processAsDirectory processes the input as a directory.
 func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*document.Document, error) {
-	dirSource := dirsource.New(
-		[]string{input},
+	opts := []dirsource.Option{
 		dirsource.WithChunkSize(s.chunkSize),
 		dirsource.WithChunkOverlap(s.chunkOverlap),
-	)
+	}
+	if s.ocrExtractor != nil {
+		opts = append(opts, dirsource.WithOCRExtractor(s.ocrExtractor))
+	}
+	dirSource := dirsource.New([]string{input}, opts...)
 	// Copy metadata.
 	for k, v := range s.metadata {
 		dirSource.SetMetadata(k, v)
@@ -176,11 +181,14 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 
 // processAsFile processes the input as a file.
 func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.Document, error) {
-	fileSource := filesource.New(
-		[]string{input},
+	opts := []filesource.Option{
 		filesource.WithChunkSize(s.chunkSize),
 		filesource.WithChunkOverlap(s.chunkOverlap),
-	)
+	}
+	if s.ocrExtractor != nil {
+		opts = append(opts, filesource.WithOCRExtractor(s.ocrExtractor))
+	}
+	fileSource := filesource.New([]string{input}, opts...)
 
 	// Copy metadata.
 	for k, v := range s.metadata {

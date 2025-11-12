@@ -10,6 +10,10 @@
 // Package auto provides auto-detection knowledge source implementation.
 package auto
 
+import (
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+)
+
 // Option represents a functional option for configuring auto sources.
 type Option func(*Source)
 
@@ -50,5 +54,13 @@ func WithChunkSize(size int) Option {
 func WithChunkOverlap(overlap int) Option {
 	return func(s *Source) {
 		s.chunkOverlap = overlap
+	}
+}
+
+// WithOCRExtractor sets an OCR extractor for processing images in documents (e.g., PDFs).
+// This option will be passed to directory and file sources when auto-detecting the source type.
+func WithOCRExtractor(extractor ocr.Extractor) Option {
+	return func(s *Source) {
+		s.ocrExtractor = extractor
 	}
 }
