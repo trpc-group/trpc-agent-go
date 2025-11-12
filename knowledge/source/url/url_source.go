@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -27,21 +28,21 @@ import (
 
 const (
 	defaultURLSourceName = "URL Source"
-	urlSourceType        = "url"
 )
 
 var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
 // Source represents a knowledge source for URL-based content.
 type Source struct {
-	identifierURLs []string // url, used to generate document ID and check update of document.
-	fetchURLs      []string // fetching url , the actual used to fetch content.
-	name           string
-	metadata       map[string]any
-	readers        map[string]reader.Reader
-	httpClient     *http.Client
-	chunkSize      int
-	chunkOverlap   int
+	identifierURLs         []string // url, used to generate document ID and check update of document.
+	fetchURLs              []string // fetching url , the actual used to fetch content.
+	name                   string
+	metadata               map[string]any
+	readers                map[string]reader.Reader
+	httpClient             *http.Client
+	chunkSize              int
+	chunkOverlap           int
+	customChunkingStrategy chunking.Strategy
 }
 
 // New creates a new URL knowledge source.
@@ -55,16 +56,25 @@ func New(urls []string, opts ...Option) *Source {
 		chunkOverlap:   0,
 	}
 
-	// Apply options first (capture chunk config).
+	// Apply options first (capture configuration).
 	for _, opt := range opts {
 		opt(s)
 	}
-	// Initialize readers with potential custom chunk configuration.
-	if s.chunkSize > 0 || s.chunkOverlap > 0 {
-		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
-	} else {
-		s.readers = isource.GetReaders()
+
+	// Build reader options - pass all configurations to internal source layer
+	var readerOpts []isource.ReaderOption
+	if s.chunkSize > 0 {
+		readerOpts = append(readerOpts, isource.WithChunkSize(s.chunkSize))
 	}
+	if s.chunkOverlap > 0 {
+		readerOpts = append(readerOpts, isource.WithChunkOverlap(s.chunkOverlap))
+	}
+	if s.customChunkingStrategy != nil {
+		readerOpts = append(readerOpts, isource.WithCustomChunkingStrategy(s.customChunkingStrategy))
+	}
+
+	// Initialize readers with configuration
+	s.readers = isource.GetReaders(readerOpts...)
 	return s
 }
 
