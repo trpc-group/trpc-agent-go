@@ -11,6 +11,7 @@ package auto
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
@@ -403,4 +405,70 @@ func TestProcessAsTextMetadata(t *testing.T) {
 	if uri, ok := docs[0].Metadata[source.MetaURI].(string); !ok || !strings.HasPrefix(uri, "text://") {
 		t.Errorf("URI not set correctly, got %v", uri)
 	}
+}
+
+// mockOCRExtractor is a mock OCR extractor for testing.
+type mockOCRExtractor struct{}
+
+func (m *mockOCRExtractor) ExtractText(ctx context.Context, imageData []byte, opts ...ocr.Option) (string, error) {
+	return "mocked ocr text", nil
+}
+
+func (m *mockOCRExtractor) ExtractTextFromReader(ctx context.Context, reader io.Reader, opts ...ocr.Option) (string, error) {
+	return "mocked ocr text from reader", nil
+}
+
+func (m *mockOCRExtractor) Close() error {
+	return nil
+}
+
+// TestWithOCRExtractor verifies the WithOCRExtractor option.
+func TestWithOCRExtractor(t *testing.T) {
+	var mockExtractor ocr.Extractor = &mockOCRExtractor{}
+	src := New([]string{"test input"}, WithOCRExtractor(mockExtractor))
+
+	if src.ocrExtractor == nil {
+		t.Fatal("OCR extractor should be set")
+	}
+}
+
+// TestOCRExtractorPropagation verifies OCR extractor is passed to sub-sources.
+func TestOCRExtractorPropagation(t *testing.T) {
+	ctx := context.Background()
+	mockExtractor := &mockOCRExtractor{}
+
+	// Create a temporary directory with a file
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(tmpFile, []byte("test content"), 0600); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	// Test with directory input
+	t.Run("directory_source", func(t *testing.T) {
+		src := New([]string{tmpDir}, WithOCRExtractor(mockExtractor))
+		if src.ocrExtractor == nil {
+			t.Fatal("OCR extractor should be set")
+		}
+
+		// Process the directory - this should pass OCR extractor to dir source
+		_, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+	})
+
+	// Test with file input
+	t.Run("file_source", func(t *testing.T) {
+		src := New([]string{tmpFile}, WithOCRExtractor(mockExtractor))
+		if src.ocrExtractor == nil {
+			t.Fatal("OCR extractor should be set")
+		}
+
+		// Process the file - this should pass OCR extractor to file source
+		_, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+	})
 }
