@@ -77,6 +77,9 @@ func WithA2AClientExtraOptions(opts ...client.Option) Option {
 // WithStreamingChannelBufSize set the buf size of streaming protocol
 func WithStreamingChannelBufSize(size int) Option {
 	return func(a *A2AAgent) {
+		if size < 0 {
+			size = defaultStreamingChannelSize
+		}
 		a.streamingBufSize = size
 	}
 }
