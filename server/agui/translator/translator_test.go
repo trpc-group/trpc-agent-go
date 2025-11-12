@@ -82,7 +82,7 @@ func TestTextMessageEventStreamInterruptedByNewMessage(t *testing.T) {
 		ID:     "msg-1",
 		Object: model.ObjectTypeChatCompletionChunk,
 		Choices: []model.Choice{{
-			Delta: model.Message{Role: model.RoleAssistant, Content: "Hel"},
+			Delta: model.Message{Role: model.RoleAssistant, Content: "Hello"},
 		}},
 	}
 	initialEvents, err := translator.textMessageEvent(firstChunk)
@@ -115,6 +115,53 @@ func TestTextMessageEventStreamInterruptedByNewMessage(t *testing.T) {
 
 	assert.True(t, translator.receivingMessage)
 	assert.Equal(t, "msg-2", translator.lastMessageID)
+}
+
+func TestTextMessageEventStreamInterruptedByNewMessage_NonStream(t *testing.T) {
+	translator, ok := New("thread", "run").(*translator)
+	assert.True(t, ok)
+
+	firstChunk := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "Hello"},
+		}},
+	}
+	initialEvents, err := translator.textMessageEvent(firstChunk)
+	assert.NoError(t, err)
+	assert.Len(t, initialEvents, 2)
+
+	secondChunk := &model.Response{
+		ID:     "msg-2",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: "World"},
+		}},
+	}
+	interruptedEvents, err := translator.textMessageEvent(secondChunk)
+	assert.NoError(t, err)
+	assert.Len(t, interruptedEvents, 4)
+
+	endEvent, ok := interruptedEvents[0].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-1", endEvent.MessageID)
+
+	startEvent, ok := interruptedEvents[1].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-2", startEvent.MessageID)
+
+	contentEvent, ok := interruptedEvents[2].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-2", contentEvent.MessageID)
+	assert.Equal(t, "World", contentEvent.Delta)
+
+	assert.False(t, translator.receivingMessage)
+	assert.Equal(t, "msg-2", translator.lastMessageID)
+
+	endEvent, ok = interruptedEvents[3].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-2", endEvent.MessageID)
 }
 
 func TestTextMessageEventNonStream(t *testing.T) {
