@@ -29,8 +29,6 @@ require (
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a
 	trpc.group/trpc-go/trpc-agent-go v0.4.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.2.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
