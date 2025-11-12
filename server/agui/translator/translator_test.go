@@ -74,6 +74,49 @@ func TestTextMessageEventStreamingAndCompletion(t *testing.T) {
 	assert.Equal(t, "msg-1", end.MessageID)
 }
 
+func TestTextMessageEventStreamInterruptedByNewMessage(t *testing.T) {
+	translator, ok := New("thread", "run").(*translator)
+	assert.True(t, ok)
+
+	firstChunk := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "Hel"},
+		}},
+	}
+	initialEvents, err := translator.textMessageEvent(firstChunk)
+	assert.NoError(t, err)
+	assert.Len(t, initialEvents, 2)
+
+	secondChunk := &model.Response{
+		ID:     "msg-2",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "World"},
+		}},
+	}
+	interruptedEvents, err := translator.textMessageEvent(secondChunk)
+	assert.NoError(t, err)
+	assert.Len(t, interruptedEvents, 3)
+
+	endEvent, ok := interruptedEvents[0].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-1", endEvent.MessageID)
+
+	startEvent, ok := interruptedEvents[1].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-2", startEvent.MessageID)
+
+	contentEvent, ok := interruptedEvents[2].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-2", contentEvent.MessageID)
+	assert.Equal(t, "World", contentEvent.Delta)
+
+	assert.True(t, translator.receivingMessage)
+	assert.Equal(t, "msg-2", translator.lastMessageID)
+}
+
 func TestTextMessageEventNonStream(t *testing.T) {
 	translator, ok := New("thread", "run").(*translator)
 	assert.True(t, ok)

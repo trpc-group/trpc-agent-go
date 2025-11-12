@@ -95,6 +95,10 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 			if rsp.Choices[0].Delta.Content == "" {
 				return nil, nil
 			}
+			if t.receivingMessage {
+				events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+				t.receivingMessage = false
+			}
 			t.lastMessageID = rsp.ID
 			t.receivingMessage = true
 			role := rsp.Choices[0].Delta.Role.String()
@@ -102,6 +106,10 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 		case model.ObjectTypeChatCompletion:
 			if rsp.Choices[0].Message.Content == "" {
 				return nil, nil
+			}
+			if t.receivingMessage {
+				events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+				t.receivingMessage = false
 			}
 			t.lastMessageID = rsp.ID
 			role := rsp.Choices[0].Message.Role.String()
