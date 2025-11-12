@@ -95,6 +95,8 @@ type variantConfig struct {
 	defaultBaseURL string
 	// Default API key name for this variant.
 	apiKeyName string
+	// Default thinking key for this variant.
+	defaultThinkingKey string
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -113,6 +115,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionMethod:        http.MethodDelete,
 		skipFileTypeInContent:     false,
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		defaultThinkingKey:        model.ThinkingEnabledKey,
 	},
 	VariantDeepSeek: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -122,6 +125,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
+		defaultThinkingKey:        model.ThinkingEnabledKey,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -169,6 +173,7 @@ var variantConfigs = map[Variant]variantConfig{
 			r.ContentLength = int64(body.Len())
 			return r, nil
 		},
+		defaultThinkingKey: model.ThinkingEnabledKey,
 	},
 	VariantQwen: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -178,6 +183,8 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                qwenAPIKeyName,
 		defaultBaseURL:            defaultQwenBaseURL,
+		// refer:https://help.aliyun.com/zh/model-studio/deep-thinking
+		defaultThinkingKey: model.EnabledThinkingKey,
 	},
 }
 
@@ -281,7 +288,7 @@ type ChatStreamCompleteCallbackFunc func(
 	ctx context.Context,
 	chatRequest *openai.ChatCompletionNewParams,
 	accumulator *openai.ChatCompletionAccumulator, // nil if streamErr is not nil
-	streamErr error,                               // nil if streaming completed successfully
+	streamErr error, // nil if streaming completed successfully
 )
 
 // options contains configuration options for creating a Model.
@@ -855,18 +862,18 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 }
 
 // buildThinkingOption converts our Request to OpenAI request RequestOption
-// Qwen refer:https://help.aliyun.com/zh/model-studio/deep-thinking
 func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
 	var opts []openaiopt.RequestOption
 	if request.ThinkingEnabled == nil {
 		return opts
 	}
-	switch m.variant {
-	case VariantQwen:
-		opts = append(opts, openaiopt.WithJSONSet(model.EnabledThinkingKey, *request.ThinkingEnabled))
-	default:
+	// Set default API key and base URL if not specified.
+	cfg, ok := variantConfigs[m.variant]
+	if !ok || cfg.defaultThinkingKey == "" {
 		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
+		return opts
 	}
+	opts = append(opts, openaiopt.WithJSONSet(cfg.defaultThinkingKey, *request.ThinkingEnabled))
 	return opts
 }
 
