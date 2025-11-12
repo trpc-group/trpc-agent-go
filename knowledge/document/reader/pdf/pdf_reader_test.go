@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-pdf/fpdf"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 )
 
@@ -53,7 +54,7 @@ func TestReader_ReadFromReader(t *testing.T) {
 	data := newTestPDF(t)
 	r := bytes.NewReader(data)
 
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 	docs, err := rdr.ReadFromReader("sample", r)
 	if err != nil {
 		t.Fatalf("ReadFromReader failed: %v", err)
@@ -78,7 +79,7 @@ func TestReader_ReadFromFile(t *testing.T) {
 		t.Fatalf("write temp file: %v", err)
 	}
 
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 	docs, err := rdr.ReadFromFile(tmp.Name())
 	if err != nil {
 		t.Fatalf("ReadFromFile failed: %v", err)
@@ -113,7 +114,7 @@ func TestReader_ReadFromURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 	docs, err := rdr.ReadFromURL(server.URL + "/sample.pdf")
 	if err != nil {
 		t.Fatalf("ReadFromURL failed: %v", err)
@@ -126,8 +127,8 @@ func TestReader_ReadFromURL(t *testing.T) {
 func TestReader_CustomChunker(t *testing.T) {
 	data := newTestPDF(t)
 	rdr := New(
-		WithChunking(true),
-		WithChunkingStrategy(mockChunker{}),
+		reader.WithChunk(true),
+		reader.WithCustomChunkingStrategy(mockChunker{}),
 	)
 	docs, err := rdr.ReadFromReader("x", bytes.NewReader(data))
 	if err != nil || len(docs) != 1 {
@@ -137,7 +138,7 @@ func TestReader_CustomChunker(t *testing.T) {
 
 func TestReader_ChunkError(t *testing.T) {
 	data := newTestPDF(t)
-	rdr := New(WithChunkingStrategy(errChunker{}))
+	rdr := New(reader.WithCustomChunkingStrategy(errChunker{}))
 	_, err := rdr.ReadFromReader("x", bytes.NewReader(data))
 	if err == nil {
 		t.Fatalf("expected chunk error")
@@ -145,7 +146,7 @@ func TestReader_ChunkError(t *testing.T) {
 }
 
 func TestReader_Helpers(t *testing.T) {
-	rdr := New()
+	rdr := New().(*Reader)
 	if rdr.Name() != "PDFReader" {
 		t.Fatalf("Name() mismatch")
 	}
@@ -160,7 +161,7 @@ func TestReader_WithoutOCR(t *testing.T) {
 	data := newTestPDF(t)
 
 	// Create reader without OCR
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 
 	// Test ReadFromReader
 	docs, err := rdr.ReadFromReader("sample", bytes.NewReader(data))
@@ -224,7 +225,7 @@ func TestReader_WithOCR(t *testing.T) {
 	mockOCR := &mockOCRExtractor{}
 
 	// Create reader with OCR
-	rdr := New(WithChunking(false), WithOCRExtractor(mockOCR))
+	rdr := New(reader.WithChunk(false), reader.WithOCRExtractor(mockOCR)).(*Reader)
 	defer rdr.Close()
 
 	// Test ReadFromReader - should create temp file for OCR processing
@@ -264,7 +265,7 @@ func TestReader_WithOCR(t *testing.T) {
 // BenchmarkReader_WithoutOCR benchmarks PDF processing without OCR
 func BenchmarkReader_WithoutOCR(b *testing.B) {
 	data := newTestPDF(b)
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -279,7 +280,7 @@ func BenchmarkReader_WithoutOCR(b *testing.B) {
 func BenchmarkReader_WithOCR(b *testing.B) {
 	data := newTestPDF(b)
 	mockOCR := &mockOCRExtractor{}
-	rdr := New(WithChunking(false), WithOCRExtractor(mockOCR))
+	rdr := New(reader.WithChunk(false), reader.WithOCRExtractor(mockOCR)).(*Reader)
 	defer rdr.Close()
 
 	b.ResetTimer()
@@ -305,7 +306,7 @@ func BenchmarkReader_FileWithoutOCR(b *testing.B) {
 		b.Fatalf("write temp file: %v", err)
 	}
 
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -331,7 +332,7 @@ func BenchmarkReader_FileWithOCR(b *testing.B) {
 	}
 
 	mockOCR := &mockOCRExtractor{}
-	rdr := New(WithChunking(false), WithOCRExtractor(mockOCR))
+	rdr := New(reader.WithChunk(false), reader.WithOCRExtractor(mockOCR)).(*Reader)
 	defer rdr.Close()
 
 	b.ResetTimer()
@@ -345,7 +346,7 @@ func BenchmarkReader_FileWithOCR(b *testing.B) {
 
 // TestReader_ErrorHandling tests error handling in various scenarios
 func TestReader_ErrorHandling(t *testing.T) {
-	rdr := New(WithChunking(false))
+	rdr := New(reader.WithChunk(false))
 
 	// Test with invalid PDF data
 	invalidData := []byte("not a pdf")
@@ -376,7 +377,7 @@ func TestReader_ErrorHandling(t *testing.T) {
 // TestReader_ResourceCleanup tests that resources are properly cleaned up
 func TestReader_ResourceCleanup(t *testing.T) {
 	mockOCR := &mockOCRExtractor{}
-	rdr := New(WithOCRExtractor(mockOCR))
+	rdr := New(reader.WithOCRExtractor(mockOCR)).(*Reader)
 
 	// Test that Close() is called on OCR extractor
 	err := rdr.Close()
@@ -385,7 +386,7 @@ func TestReader_ResourceCleanup(t *testing.T) {
 	}
 
 	// Test Close() on reader without OCR
-	rdr2 := New()
+	rdr2 := New().(*Reader)
 	err = rdr2.Close()
 	if err != nil {
 		t.Fatalf("Close() failed for reader without OCR: %v", err)

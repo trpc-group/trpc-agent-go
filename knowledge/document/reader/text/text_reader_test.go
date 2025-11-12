@@ -18,13 +18,14 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 )
 
 func TestTextReader_Read_NoChunk(t *testing.T) {
 	data := "Hello world!"
 
 	rdr := New(
-		WithChunking(false),
+		reader.WithChunk(false),
 	)
 
 	docs, err := rdr.ReadFromReader("greeting", strings.NewReader(data))
@@ -75,7 +76,7 @@ func (failChunker) Chunk(doc *document.Document) ([]*document.Document, error) {
 }
 
 func TestTextReader_ChunkError(t *testing.T) {
-	rdr := New(WithChunkingStrategy(failChunker{}))
+	rdr := New(reader.WithCustomChunkingStrategy(failChunker{}))
 	_, err := rdr.ReadFromReader("x", strings.NewReader("abc"))
 	if err == nil {
 		t.Fatalf("want error")
@@ -145,7 +146,7 @@ func TestTextReader_ReadFromURLErrors(t *testing.T) {
 // TestTextReader_ChunkDocumentDefaultStrategy verifies default chunking strategy initialization.
 func TestTextReader_ChunkDocumentDefaultStrategy(t *testing.T) {
 	// Create reader with chunking enabled but no strategy provided
-	rdr := New(WithChunking(true))
+	rdr := New(reader.WithChunk(true))
 
 	// Read from reader should trigger chunkDocument with default strategy
 	docs, err := rdr.ReadFromReader("test", strings.NewReader("test content"))
@@ -159,7 +160,7 @@ func TestTextReader_ChunkDocumentDefaultStrategy(t *testing.T) {
 
 // TestTextReader_ExtractFileNameFromURL tests URL filename extraction.
 func TestTextReader_ExtractFileNameFromURL(t *testing.T) {
-	rdr := New()
+	rdr := New().(*Reader)
 
 	tests := []struct {
 		name     string

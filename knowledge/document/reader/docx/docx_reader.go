@@ -33,9 +33,7 @@ var (
 
 // init registers the DOCX reader with the global registry.
 func init() {
-	reader.RegisterReader(supportedExtensions, func() reader.Reader {
-		return New()
-	})
+	reader.RegisterReader(supportedExtensions, New)
 }
 
 // Reader reads DOCX documents and applies chunking strategies.
@@ -44,34 +42,38 @@ type Reader struct {
 	chunkingStrategy chunking.Strategy
 }
 
-// Option represents a functional option for configuring the DOCX reader.
-type Option func(*Reader)
-
-// WithChunking enables or disables document chunking.
-func WithChunking(chunk bool) Option {
-	return func(r *Reader) {
-		r.chunk = chunk
-	}
-}
-
-// WithChunkingStrategy sets the chunking strategy to use.
-func WithChunkingStrategy(strategy chunking.Strategy) Option {
-	return func(r *Reader) {
-		r.chunkingStrategy = strategy
-	}
-}
-
 // New creates a new DOCX reader with the given options.
-func New(opts ...Option) *Reader {
-	r := &Reader{
-		chunk:            true,
-		chunkingStrategy: chunking.NewFixedSizeChunking(),
+// DOCX reader uses FixedSizeChunking by default.
+func New(opts ...reader.Option) reader.Reader {
+	// Build config from options
+	config := &reader.Config{
+		Chunk: true,
 	}
-	// Apply options.
 	for _, opt := range opts {
-		opt(r)
+		opt(config)
 	}
-	return r
+
+	// Build chunking strategy using the default builder for DOCX
+	strategy := reader.BuildChunkingStrategy(config, buildDefaultChunkingStrategy)
+
+	// Create reader from config
+	return &Reader{
+		chunk:            config.Chunk,
+		chunkingStrategy: strategy,
+	}
+}
+
+// buildDefaultChunkingStrategy builds the default chunking strategy for DOCX reader.
+// DOCX uses FixedSizeChunking with configurable size and overlap.
+func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
+	var opts []chunking.Option
+	if chunkSize > 0 {
+		opts = append(opts, chunking.WithChunkSize(chunkSize))
+	}
+	if overlap > 0 {
+		opts = append(opts, chunking.WithOverlap(overlap))
+	}
+	return chunking.NewFixedSizeChunking(opts...)
 }
 
 // ReadFromReader reads DOCX content from an io.Reader and returns a list of documents.
