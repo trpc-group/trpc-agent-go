@@ -116,7 +116,26 @@ func TestTextMessageEventEmptyChatCompletionContent(t *testing.T) {
 	events, err := translator.textMessageEvent(rsp)
 	assert.NoError(t, err)
 	assert.Empty(t, events)
-	assert.Equal(t, "final-empty", translator.lastMessageID)
+	assert.Equal(t, "", translator.lastMessageID)
+	assert.False(t, translator.receivingMessage)
+}
+
+func TestTextMessageEventEmptyChunkDoesNotChangeState(t *testing.T) {
+	translator, ok := New("thread", "run").(*translator)
+	assert.True(t, ok)
+	rsp := &model.Response{
+		ID:     "chunk-empty",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant},
+		}},
+	}
+
+	events, err := translator.textMessageEvent(rsp)
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	assert.Equal(t, "", translator.lastMessageID)
+	assert.False(t, translator.receivingMessage)
 }
 
 func TestTextMessageEventInvalidObject(t *testing.T) {
