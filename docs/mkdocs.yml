@@ -61,7 +61,6 @@ plugins:
                 - Session: session.md
                 - Knowledge: knowledge.md
                 - Planner: planner.md
-                - Graph: graph.md
                 - Event: event.md
                 - Evaluation: evaluation.md
             - 服务:

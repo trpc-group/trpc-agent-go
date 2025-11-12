@@ -2160,7 +2160,7 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 节点可通过可选项注册回调或参数（见 `graph/state_graph.go`）：
 - `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
 - LLM 节点可用 `graph.WithGenerationConfig`、`graph.WithModelCallbacks`
-- 工具节点可用 `graph.WithToolCallbacks`
+- 工具相关：`graph.WithToolCallbacks`、`graph.WithToolSets`（除 `tools []tool.Tool` 外，再额外提供 ToolSet）
 - Agent 节点可用 `graph.WithAgentNodeEventCallback`
 
 此外，`graph.WithName`/`graph.WithDescription` 可为节点添加友好的名称与描述；`graph.WithDestinations` 可声明潜在动态路由目标（仅用于静态校验/可视化）。
@@ -2308,7 +2308,7 @@ stateGraph.
   - `graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
 
 - 节点级可选项
-  - `graph.WithGenerationConfig`、`graph.WithModelCallbacks`、`graph.WithToolCallbacks`
+  - `graph.WithGenerationConfig`、`graph.WithModelCallbacks`、`graph.WithToolCallbacks`、`graph.WithToolSets`
   - `graph.WithPreNodeCallback`、`graph.WithPostNodeCallback`、`graph.WithNodeErrorCallback`
 
 - 执行

@@ -271,36 +271,49 @@ if err != nil {
 - 调试和测试场景
 
 ```go
-// Invocation 是 Agent 执行流程的上下文对象，包含了单次调用所需的所有信息
+// Invocation 是 Agent 执行流程的上下文对象，包含单次调用所需的全部信息
 type Invocation struct {
-	// Agent 指定要调用的 Agent 实例
-	Agent Agent
-	// AgentName 标识要调用的 Agent 实例名称
-	AgentName string
-	// InvocationID 为每次调用提供唯一标识
-	InvocationID string
-	// Branch 用于分层事件过滤的分支标识符
-	Branch string
-	// EndInvocation 标识是否结束调用的标志
-	EndInvocation bool
-	// Session 维护对话的上下文状态
-	Session *session.Session
-	// Model 指定要使用的模型实例
-	Model model.Model
-	// Message 是用户发送给 Agent 的具体内容
-	Message model.Message
-	// RunOptions 是 Run 方法的选项配置
-	RunOptions RunOptions
-	// TransferInfo 支持 Agent 之间的控制权转移
-	TransferInfo *TransferInfo
-	// ModelCallbacks 允许在模型调用的不同阶段插入自定义逻辑
-	ModelCallbacks *model.ModelCallbacks
-	// ToolCallbacks 允许在工具调用的不同阶段插入自定义逻辑
-	ToolCallbacks *tool.ToolCallbacks
+    // Agent 指定要调用的 Agent 实例
+    Agent Agent
+    // AgentName 标识要调用的 Agent 实例名称
+    AgentName string
+    // InvocationID 为每次调用提供唯一标识
+    InvocationID string
+    // Branch 用于分层事件过滤的分支标识符
+    Branch string
+    // EndInvocation 标识是否结束调用
+    EndInvocation bool
 
-    // notice
-	noticeChanMap map[string]chan any
-	noticeMu      *sync.Mutex
+    // Session 维护对话上下文状态
+    Session *session.Session
+    // Model 指定要使用的模型实例
+    Model model.Model
+    // Message 是用户发送给 Agent 的具体内容
+    Message model.Message
+    // RunOptions 是 Run 方法的选项配置
+    RunOptions RunOptions
+    // TransferInfo 支持 Agent 间的控制权转移
+    TransferInfo *TransferInfo
+
+    // 结构化输出配置（可选）
+    StructuredOutput     *model.StructuredOutput
+    StructuredOutputType reflect.Type
+
+    // 为本次调用注入的服务
+    MemoryService   memory.Service
+    ArtifactService artifact.Service
+
+    // 内部通知：当事件写入会话时发出通知
+    noticeChanMap map[string]chan any
+    noticeMu      *sync.Mutex
+
+    // 内部：事件过滤键与父调用（用于嵌套流程）
+    eventFilterKey string
+    parent         *Invocation
+
+    // 调用级别的状态（延迟初始化，通过 stateMu 保护并发）
+    state   map[string]any
+    stateMu sync.RWMutex
 }
 ```
 

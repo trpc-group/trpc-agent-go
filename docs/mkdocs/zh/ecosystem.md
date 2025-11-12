@@ -321,20 +321,20 @@ import (
 )
 
 type APIToolSet struct {
-    tools map[string]tool.CallableTool
+    tools map[string]tool.Tool
     mu    sync.RWMutex
 }
 
 func New() *APIToolSet {
     return &APIToolSet{
-        tools: make(map[string]tool.CallableTool),
+        tools: make(map[string]tool.Tool),
     }
 }
 
-func (a *APIToolSet) AddTool(name string, tool tool.CallableTool) {
+func (a *APIToolSet) AddTool(name string, t tool.Tool) {
     a.mu.Lock()
     defer a.mu.Unlock()
-    a.tools[name] = tool
+    a.tools[name] = t
 }
 
 func (a *APIToolSet) RemoveTool(name string) {
@@ -343,11 +343,11 @@ func (a *APIToolSet) RemoveTool(name string) {
     delete(a.tools, name)
 }
 
-func (a *APIToolSet) Tools(ctx context.Context) []tool.CallableTool {
+func (a *APIToolSet) Tools(ctx context.Context) []tool.Tool {
     a.mu.RLock()
     defer a.mu.RUnlock()
     
-    var result []tool.CallableTool
+    var result []tool.Tool
     for _, t := range a.tools {
         result = append(result, t)
     }
@@ -359,9 +359,12 @@ func (a *APIToolSet) Close() error {
     defer a.mu.Unlock()
     
     // 清理资源
-    a.tools = make(map[string]tool.CallableTool)
+    a.tools = make(map[string]tool.Tool)
     return nil
 }
+
+// Name 返回该工具集的名称
+func (a *APIToolSet) Name() string { return "api-tools" }
 ```
 
 **可以集成的开源组件示例：**

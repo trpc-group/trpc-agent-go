@@ -35,15 +35,22 @@ A ToolSet is a collection of related tools that implements the `tool.ToolSet` in
 
 ```go
 type ToolSet interface {
-    Tools(context.Context) []CallableTool  // Return the list of tools.
-    Close() error                          // Resource cleanup.
+    // Tools returns the current tools in this set.
+    Tools(context.Context) []tool.Tool
+
+    // Close releases any resources held by the ToolSet.
+    Close() error
+
+    // Name returns the identifier of the ToolSet, used for
+    // identification and conflict resolution.
+    Name() string
 }
 ```
 
 **Relationship between Tool and ToolSet:**
 
-- One **Tool** = one concrete capability (e.g., calculator).
-- One **ToolSet** = a group of related Tools (e.g., all tools provided by an MCP server).
+- One "Tool" = one concrete capability (e.g., calculator).
+- One "ToolSet" = a group of related Tools (e.g., all tools provided by an MCP server).
 - An Agent can use multiple Tools and multiple ToolSets simultaneously.
 
 #### 🌊 Streaming Tool Support
