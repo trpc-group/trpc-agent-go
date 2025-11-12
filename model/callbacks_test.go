@@ -333,3 +333,75 @@ func TestModelCallbacks_Structured_After_Custom(t *testing.T) {
 	require.Equal(t, customResponse, result.CustomResponse)
 	require.Equal(t, ctxWithValue, result.Context)
 }
+
+// TestModelCallbacks_ContextPropagation tests that context values set in before
+// callbacks can be accessed in after callbacks.
+func TestModelCallbacks_ContextPropagation(t *testing.T) {
+	callbacks := NewCallbacks()
+
+	type contextKey string
+	const testKey contextKey = "test-key"
+	const testValue = "test-value"
+
+	// Register before callback that sets a context value.
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		// Set a value in context.
+		ctxWithValue := context.WithValue(ctx, testKey, testValue)
+		return &BeforeModelResult{
+			Context: ctxWithValue,
+		}, nil
+	})
+
+	// Register after callback that reads the context value.
+	var capturedValue interface{}
+	callbacks.RegisterAfterModel(func(ctx context.Context, args *AfterModelArgs) (*AfterModelResult, error) {
+		// Read the value from context.
+		capturedValue = ctx.Value(testKey)
+		return nil, nil
+	})
+
+	// Execute before callback.
+	beforeArgs := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{
+				{
+					Role:    RoleUser,
+					Content: "Hello",
+				},
+			},
+		},
+	}
+	beforeResult, err := callbacks.RunBeforeModel(context.Background(), beforeArgs)
+	require.NoError(t, err)
+	require.NotNil(t, beforeResult)
+	require.NotNil(t, beforeResult.Context)
+
+	// Use the context from before callback to run after callback.
+	afterArgs := &AfterModelArgs{
+		Request: &Request{
+			Messages: []Message{
+				{
+					Role:    RoleUser,
+					Content: "Hello",
+				},
+			},
+		},
+		Response: &Response{
+			Choices: []Choice{
+				{
+					Index: 0,
+					Message: Message{
+						Role:    RoleAssistant,
+						Content: "Hi",
+					},
+				},
+			},
+		},
+		Error: nil,
+	}
+	_, err = callbacks.RunAfterModel(beforeResult.Context, afterArgs)
+	require.NoError(t, err)
+
+	// Verify that the value was captured in after callback.
+	require.Equal(t, testValue, capturedValue)
+}

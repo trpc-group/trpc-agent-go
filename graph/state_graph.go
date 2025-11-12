@@ -922,7 +922,7 @@ type modelResponseConfig struct {
 }
 
 // processModelResponse processes a single model response.
-func processModelResponse(ctx context.Context, config modelResponseConfig) (*event.Event, error) {
+func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
 	if config.ModelCallbacks != nil {
 		args := &model.AfterModelArgs{
 			Request:  config.Request,
@@ -932,9 +932,9 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (*eve
 		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
 		if err != nil {
 			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return nil, fmt.Errorf("callback after model error: %w", err)
+			return ctx, nil, fmt.Errorf("callback after model error: %w", err)
 		}
-		// Use the context from result if provided.
+		// Use the context from result if provided for subsequent operations.
 		if result != nil && result.Context != nil {
 			ctx = result.Context
 		}
@@ -959,14 +959,14 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (*eve
 		}
 
 		if err := agent.EmitEvent(ctx, invocation, config.EventChan, llmEvent); err != nil {
-			return nil, err
+			return ctx, nil, err
 		}
 	}
 	if config.Response.Error != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", config.Response.Error.Message))
-		return nil, fmt.Errorf("model API error: %s", config.Response.Error.Message)
+		return ctx, nil, fmt.Errorf("model API error: %s", config.Response.Error.Message)
 	}
-	return llmEvent, nil
+	return ctx, llmEvent, nil
 }
 
 func runModel(
@@ -1493,7 +1493,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	for response := range responseChan {
 		// Track response for telemetry
 		tracker.TrackResponse(response)
-		lastEvent, err = processModelResponse(ctx, modelResponseConfig{
+		ctx, lastEvent, err = processModelResponse(ctx, modelResponseConfig{
 			Response:       response,
 			ModelCallbacks: config.ModelCallbacks,
 			EventChan:      config.EventChan,

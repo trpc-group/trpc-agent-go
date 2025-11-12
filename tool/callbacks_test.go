@@ -665,3 +665,60 @@ func TestCallbacksChainRegistration(t *testing.T) {
 		t.Errorf("Expected 1 after tool callback, got %d", len(callbacks.AfterTool))
 	}
 }
+
+// TestToolCallbacks_ContextPropagation tests that context values set in before
+// callbacks can be accessed in after callbacks.
+func TestToolCallbacks_ContextPropagation(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	type contextKey string
+	const testKey contextKey = "test-key"
+	const testValue = "test-value"
+
+	// Register before callback that sets a context value.
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		// Set a value in context.
+		ctxWithValue := context.WithValue(ctx, testKey, testValue)
+		return &tool.BeforeToolResult{
+			Context: ctxWithValue,
+		}, nil
+	})
+
+	// Register after callback that reads the context value.
+	var capturedValue interface{}
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		// Read the value from context.
+		capturedValue = ctx.Value(testKey)
+		return nil, nil
+	})
+
+	// Execute before callback.
+	declaration := &tool.Declaration{
+		Name:        "test-tool",
+		Description: "A test tool",
+	}
+	args := []byte(`{"key": "value"}`)
+	beforeArgs := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: declaration,
+		Arguments:   args,
+	}
+	beforeResult, err := callbacks.RunBeforeTool(context.Background(), beforeArgs)
+	require.NoError(t, err)
+	require.NotNil(t, beforeResult)
+	require.NotNil(t, beforeResult.Context)
+
+	// Use the context from before callback to run after callback.
+	afterArgs := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: declaration,
+		Arguments:   args,
+		Result:      "test-result",
+		Error:       nil,
+	}
+	_, err = callbacks.RunAfterTool(beforeResult.Context, afterArgs)
+	require.NoError(t, err)
+
+	// Verify that the value was captured in after callback.
+	require.Equal(t, testValue, capturedValue)
+}

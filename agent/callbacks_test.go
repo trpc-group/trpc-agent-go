@@ -340,3 +340,58 @@ func TestAgentCallbacks_Mixed_Callbacks(t *testing.T) {
 	require.Equal(t, "new-after", afterResult.CustomResponse.ID)
 	require.Equal(t, true, afterResult.Context.Value("mixed"))
 }
+
+// TestAgentCallbacks_ContextPropagation tests that context values set in before
+// callbacks can be accessed in after callbacks.
+func TestAgentCallbacks_ContextPropagation(t *testing.T) {
+	callbacks := NewCallbacks()
+
+	type contextKey string
+	const testKey contextKey = "test-key"
+	const testValue = "test-value"
+
+	// Register before callback that sets a context value.
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		// Set a value in context.
+		ctxWithValue := context.WithValue(ctx, testKey, testValue)
+		return &BeforeAgentResult{
+			Context: ctxWithValue,
+		}, nil
+	})
+
+	// Register after callback that reads the context value.
+	var capturedValue interface{}
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		// Read the value from context.
+		capturedValue = ctx.Value(testKey)
+		return nil, nil
+	})
+
+	// Execute before callback.
+	beforeArgs := &BeforeAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+	}
+	beforeResult, err := callbacks.RunBeforeAgent(context.Background(), beforeArgs)
+	require.NoError(t, err)
+	require.NotNil(t, beforeResult)
+	require.NotNil(t, beforeResult.Context)
+
+	// Use the context from before callback to run after callback.
+	afterArgs := &AfterAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+		Error: nil,
+	}
+	_, err = callbacks.RunAfterAgent(beforeResult.Context, afterArgs)
+	require.NoError(t, err)
+
+	// Verify that the value was captured in after callback.
+	require.Equal(t, testValue, capturedValue)
+}

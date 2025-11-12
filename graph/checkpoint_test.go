@@ -1148,7 +1148,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 	// Event emission path
 	evch := make(chan *event.Event, 1)
 	rsp := &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
-	_, err := processModelResponse(context.Background(), modelResponseConfig{
+	_, _, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       rsp,
 		ModelCallbacks: nil,
 		EventChan:      evch,
@@ -1164,7 +1164,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 
 	// Model API error path
 	errRsp := &model.Response{Error: &model.ResponseError{Message: "boom"}}
-	_, err = processModelResponse(context.Background(), modelResponseConfig{
+	_, _, err = processModelResponse(context.Background(), modelResponseConfig{
 		Response:     errRsp,
 		EventChan:    make(chan *event.Event, 1),
 		InvocationID: "inv",
@@ -1179,7 +1179,7 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// unbuffered channel; since ctx already canceled, select should choose ctx.Done
-	_, err = processModelResponse(ctx, modelResponseConfig{
+	_, _, err = processModelResponse(ctx, modelResponseConfig{
 		Response:     rsp,
 		EventChan:    make(chan *event.Event),
 		InvocationID: "inv",
@@ -1196,7 +1196,7 @@ func TestProcessModelResponse_DoneSkipsEvent(t *testing.T) {
 	_, span := tracer.Start(context.Background(), "s")
 	evch := make(chan *event.Event, 1)
 	rsp := &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
-	_, err := processModelResponse(context.Background(), modelResponseConfig{
+	_, _, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:     rsp,
 		EventChan:    evch,
 		InvocationID: "inv",
@@ -1221,7 +1221,7 @@ func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {
 		return &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("after")}}}, nil
 	})
 	evch := make(chan *event.Event, 1)
-	_, err := processModelResponse(context.Background(), modelResponseConfig{
+	_, _, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
 		ModelCallbacks: cbs,
 		EventChan:      evch,
@@ -1421,7 +1421,7 @@ func TestProcessModelResponse_AfterModelError(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
 		return nil, assert.AnError
 	})
-	_, err := processModelResponse(context.Background(), modelResponseConfig{
+	_, _, err := processModelResponse(context.Background(), modelResponseConfig{
 		Response:       &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
 		ModelCallbacks: cbs,
 		EventChan:      make(chan *event.Event, 1),

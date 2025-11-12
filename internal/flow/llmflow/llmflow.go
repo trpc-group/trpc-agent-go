@@ -242,7 +242,7 @@ func (f *Flow) handleAfterModelCallbacks(
 	response *model.Response,
 	eventChan chan<- *event.Event,
 ) (*model.Response, error) {
-	customResp, err := f.runAfterModelCallbacks(ctx, llmRequest, response)
+	ctx, customResp, err := f.runAfterModelCallbacks(ctx, llmRequest, response)
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, err
@@ -291,9 +291,9 @@ func (f *Flow) runAfterModelCallbacks(
 	ctx context.Context,
 	req *model.Request,
 	response *model.Response,
-) (*model.Response, error) {
+) (context.Context, *model.Response, error) {
 	if f.modelCallbacks == nil {
-		return response, nil
+		return ctx, response, nil
 	}
 	result, err := f.modelCallbacks.RunAfterModel(ctx, &model.AfterModelArgs{
 		Request:  req,
@@ -301,16 +301,16 @@ func (f *Flow) runAfterModelCallbacks(
 		Error:    nil,
 	})
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
-	// Use the context from result if provided.
+	// Use the context from result if provided for subsequent operations.
 	if result != nil && result.Context != nil {
 		ctx = result.Context
 	}
 	if result != nil && result.CustomResponse != nil {
-		return result.CustomResponse, nil
+		return ctx, result.CustomResponse, nil
 	}
-	return response, nil
+	return ctx, response, nil
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
