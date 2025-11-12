@@ -1139,7 +1139,7 @@ func TestVectorStore_WithMaxResults(t *testing.T) {
 		queryLimit     int
 		expectedMaxLen int
 	}{
-		{"default_max_results", 0, 20, 0, 10},  // Default is 10
+		{"default_max_results", 0, 20, 0, 10}, // Default is 10
 		{"custom_max_results_5", 5, 20, 0, 5},
 		{"custom_max_results_20", 20, 15, 0, 15}, // Less than max available
 		{"query_limit_overrides", 10, 20, 3, 3},  // Query limit takes precedence
@@ -1353,4 +1353,3 @@ func TestVectorStore_Close_MultipleTimes(t *testing.T) {
 	require.NoError(t, store.Close())
 	require.NoError(t, store.Close())
 }
-

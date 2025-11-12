@@ -21,11 +21,11 @@ import (
 
 // Config holds configuration for readers.
 type Config struct {
-	Chunk                   bool
-	ChunkSize               int
-	ChunkOverlap            int
-	CustomChunkingStrategy  chunking.Strategy
-	OCRExtractor            ocr.Extractor
+	Chunk                  bool
+	ChunkSize              int
+	ChunkOverlap           int
+	CustomChunkingStrategy chunking.Strategy
+	OCRExtractor           ocr.Extractor
 }
 
 // Option is a functional option for configuring readers.
@@ -80,7 +80,7 @@ func BuildChunkingStrategy(config *Config, defaultBuilder func(chunkSize, overla
 	if config.CustomChunkingStrategy != nil {
 		return config.CustomChunkingStrategy
 	}
-	
+
 	// Otherwise, use the default builder with size/overlap parameters
 	return defaultBuilder(config.ChunkSize, config.ChunkOverlap)
 }
