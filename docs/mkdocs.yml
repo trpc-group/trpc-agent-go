@@ -18,6 +18,7 @@ nav:
       - Callbacks: callbacks.md
       - Memory: memory.md
       - Artifact: artifact.md
+      - Skill: skill.md
       - Tool: tool.md
       - Session: session.md
       - Knowledge: knowledge.md
@@ -57,6 +58,7 @@ plugins:
                 - Callbacks: callbacks.md
                 - Memory: memory.md
                 - Artifact: artifact.md
+                - Skill: skill.md
                 - Tool: tool.md
                 - Session: session.md
                 - Knowledge: knowledge.md
