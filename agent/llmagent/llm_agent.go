@@ -935,9 +935,15 @@ func (a *LLMAgent) wrapEventChannel(
 			}
 		}
 
+		// Collect error from the final response event.
+		var agentErr error
+		if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
+			agentErr = fmt.Errorf("%s: %s", fullRespEvent.Response.Error.Type, fullRespEvent.Response.Error.Message)
+		}
+
 		// After all events are processed, run after agent callbacks
 		if a.agentCallbacks != nil {
-			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, agentErr)
 			var evt *event.Event
 			if err != nil {
 				// Send error event.
