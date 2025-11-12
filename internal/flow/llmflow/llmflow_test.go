@@ -454,3 +454,74 @@ func TestRun_NoPanicWhenModelReturnsNoResponses(t *testing.T) {
 	}
 	require.Equal(t, 1, count)
 }
+
+// TestRunAfterModelCallbacks_ErrorPassing tests that modelErr is correctly passed to callbacks
+// when response.Error is not nil.
+func TestRunAfterModelCallbacks_ErrorPassing(t *testing.T) {
+	tests := []struct {
+		name       string
+		response   *model.Response
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name: "response with error",
+			response: &model.Response{
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeAPIError,
+					Message: "rate limit exceeded",
+				},
+			},
+			wantErr:    true,
+			wantErrMsg: "api_error: rate limit exceeded",
+		},
+		{
+			name: "response without error",
+			response: &model.Response{
+				Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}},
+			},
+			wantErr:    false,
+			wantErrMsg: "",
+		},
+		{
+			name:       "nil response",
+			response:   nil,
+			wantErr:    false,
+			wantErrMsg: "",
+		},
+		{
+			name: "response with nil error field",
+			response: &model.Response{
+				Error: nil,
+			},
+			wantErr:    false,
+			wantErrMsg: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var receivedErr error
+			callbacks := model.NewCallbacks().RegisterAfterModel(
+				func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+					receivedErr = modelErr
+					return nil, nil
+				},
+			)
+
+			flow := &Flow{
+				modelCallbacks: callbacks,
+			}
+
+			_, _, err := flow.runAfterModelCallbacks(context.Background(), &model.Request{}, tt.response)
+			require.NoError(t, err)
+
+			if tt.wantErr {
+				require.NotNil(t, receivedErr, "expected callback to receive error, but got nil")
+				require.Equal(t, tt.wantErrMsg, receivedErr.Error(), "error message mismatch")
+			} else {
+				require.Nil(t, receivedErr, "expected callback to receive nil error, but got: %v", receivedErr)
+			}
+		})
+	}
+}

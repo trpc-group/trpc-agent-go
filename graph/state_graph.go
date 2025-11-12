@@ -924,10 +924,16 @@ type modelResponseConfig struct {
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
 	if config.ModelCallbacks != nil {
+		// Convert response.Error to Go error for callback.
+		var modelErr error
+		if config.Response != nil && config.Response.Error != nil {
+			modelErr = fmt.Errorf("%s: %s", config.Response.Error.Type, config.Response.Error.Message)
+		}
+
 		args := &model.AfterModelArgs{
 			Request:  config.Request,
 			Response: config.Response,
-			Error:    nil,
+			Error:    modelErr,
 		}
 		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
 		if err != nil {
@@ -1351,9 +1357,8 @@ func runTool(
 	}
 	if callableTool, ok := t.(tool.CallableTool); ok {
 		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
-		if err != nil {
-			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
-		}
+		// Run after tool callbacks if they exist.
+		// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
 		if toolCallbacks != nil {
 			args := &tool.AfterToolArgs{
 				ToolName:    toolCall.Function.Name,
@@ -1369,6 +1374,9 @@ func runTool(
 			if afterResult != nil && afterResult.CustomResult != nil {
 				return afterResult.CustomResult, toolCall.Function.Arguments, nil
 			}
+		}
+		if err != nil {
+			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
 		}
 		return result, toolCall.Function.Arguments, nil
 	}

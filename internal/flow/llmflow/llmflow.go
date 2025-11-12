@@ -13,6 +13,7 @@ package llmflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -295,10 +296,17 @@ func (f *Flow) runAfterModelCallbacks(
 	if f.modelCallbacks == nil {
 		return ctx, response, nil
 	}
+
+	// Convert response.Error to Go error for callback.
+	var modelErr error
+	if response != nil && response.Error != nil {
+		modelErr = fmt.Errorf("%s: %s", response.Error.Type, response.Error.Message)
+	}
+
 	result, err := f.modelCallbacks.RunAfterModel(ctx, &model.AfterModelArgs{
 		Request:  req,
 		Response: response,
-		Error:    nil,
+		Error:    modelErr,
 	})
 	if err != nil {
 		return ctx, nil, err
