@@ -7,4 +7,4 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr v0.0.0
 )
 
-replace trpc.group/trpc-go/trpc-agent-go/knowledge/ocr => ../
+replace trpc.group/trpc-go/trpc-agent-go/ => ../../

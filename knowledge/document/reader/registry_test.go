@@ -134,51 +134,51 @@ func TestGetReader(t *testing.T) {
 			expectFound: false,
 		},
 		{
-		name: "get registered extension",
-		setupFn: func() {
-			ClearRegistry()
-			RegisterReader([]string{".test"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "test-reader", exts: []string{".test"}}
-			})
-		},
+			name: "get registered extension",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".test"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "test-reader", exts: []string{".test"}}
+				})
+			},
 			extension:     ".test",
 			expectFound:   true,
 			expectContent: "test-reader",
 		},
 		{
-		name: "get with case insensitive extension",
-		setupFn: func() {
-			ClearRegistry()
-			RegisterReader([]string{".TXT"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "txt-reader", exts: []string{".txt"}}
-			})
-		},
+			name: "get with case insensitive extension",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".TXT"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "txt-reader", exts: []string{".txt"}}
+				})
+			},
 			extension:     ".txt",
 			expectFound:   true,
 			expectContent: "txt-reader",
 		},
 		{
-		name: "get cached reader instance",
-		setupFn: func() {
-			ClearRegistry()
-			RegisterReader([]string{".cached"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "cached-reader", exts: []string{".cached"}}
-			})
-			// First call to cache the instance
-			_, _ = GetReader(".cached")
-		},
+			name: "get cached reader instance",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".cached"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "cached-reader", exts: []string{".cached"}}
+				})
+				// First call to cache the instance
+				_, _ = GetReader(".cached")
+			},
 			extension:     ".cached",
 			expectFound:   true,
 			expectContent: "cached-reader",
 		},
 		{
-		name: "get uppercase extension",
-		setupFn: func() {
-			ClearRegistry()
-			RegisterReader([]string{".md"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "md-reader", exts: []string{".md"}}
-			})
-		},
+			name: "get uppercase extension",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".md"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "md-reader", exts: []string{".md"}}
+				})
+			},
 			extension:     ".MD",
 			expectFound:   true,
 			expectContent: "md-reader",
@@ -233,57 +233,57 @@ func TestGetAllReaders(t *testing.T) {
 			expectedCount: 0,
 		},
 		{
-		name: "single reader",
-		setupFn: func() {
-			ClearRegistry()
-			RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "text-reader", exts: []string{".txt"}}
-			})
-		},
+			name: "single reader",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
+				})
+			},
 			expectedTypes: []string{"text"},
 			expectedCount: 1,
 		},
 		{
-		name: "multiple readers",
-		setupFn: func() {
-			ClearRegistry()
-			RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "text-reader", exts: []string{".txt"}}
-			})
-			RegisterReader([]string{".md"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "markdown-reader", exts: []string{".md"}}
-			})
-			RegisterReader([]string{".json"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "json-reader", exts: []string{".json"}}
-			})
-		},
+			name: "multiple readers",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
+				})
+				RegisterReader([]string{".md"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "markdown-reader", exts: []string{".md"}}
+				})
+				RegisterReader([]string{".json"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "json-reader", exts: []string{".json"}}
+				})
+			},
 			expectedTypes: []string{"text", "markdown", "json"},
 			expectedCount: 3,
 		},
 		{
-		name: "multiple extensions same type",
-		setupFn: func() {
-			ClearRegistry()
-			RegisterReader([]string{".txt", ".text"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "text-reader", exts: []string{".txt", ".text"}}
-			})
-		},
+			name: "multiple extensions same type",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".txt", ".text"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "text-reader", exts: []string{".txt", ".text"}}
+				})
+			},
 			expectedTypes: []string{"text"},
 			expectedCount: 1,
 		},
 		{
-		name: "with cached readers",
-		setupFn: func() {
-			ClearRegistry()
-			RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "text-reader", exts: []string{".txt"}}
-			})
-			RegisterReader([]string{".md"}, func(opts ...Option) Reader {
-				return &dummyReader{name: "markdown-reader", exts: []string{".md"}}
-			})
-			// Pre-cache one reader
-			_, _ = GetReader(".txt")
-		},
+			name: "with cached readers",
+			setupFn: func() {
+				ClearRegistry()
+				RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
+				})
+				RegisterReader([]string{".md"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "markdown-reader", exts: []string{".md"}}
+				})
+				// Pre-cache one reader
+				_, _ = GetReader(".txt")
+			},
 			expectedTypes: []string{"text", "markdown"},
 			expectedCount: 2,
 		},
