@@ -3816,6 +3816,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 	type args struct {
 		request *model.Request
 	}
+	tokens := 2048
 	tests := []struct {
 		name  string
 		model *Model
@@ -3832,11 +3833,13 @@ func TestModel_buildChatRequest(t *testing.T) {
 					GenerationConfig: model.GenerationConfig{
 						Stream:          true,
 						ThinkingEnabled: openai.BoolPtr(true),
+						ThinkingTokens:  &tokens,
 					},
 				},
 			},
 			want1: []openaiopt.RequestOption{
 				openaiopt.WithJSONSet(model.EnabledThinkingKey, true),
+				openaiopt.WithJSONSet(model.ThinkingTokensKey, tokens),
 			},
 		},
 		{

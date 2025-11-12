@@ -34,7 +34,7 @@ var (
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	thinkingEnabled = flag.Bool("thinking", true, "Enable reasoning/thinking mode if provider supports it")
 	thinkingTokens  = flag.Int("thinking-tokens", 2048, "Max reasoning tokens if provider supports it")
-	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan/ deepseek /qwen")
+	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan / deepseek / qwen")
 )
 
 func main() {
@@ -67,10 +67,10 @@ func (c *thinkingChat) run(ctx context.Context) error {
 	if err := c.setup(ctx); err != nil {
 		return err
 	}
-	
+
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer c.runner.Close()
-	
+
 	return c.startChat(ctx)
 }
 
