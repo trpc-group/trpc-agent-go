@@ -468,28 +468,12 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 // AddConditionalEdges adds conditional routing from a node.
 func (sg *StateGraph) AddConditionalEdges(
 	from string,
-	condition ConditionalFunc,
+	condition any,
 	pathMap map[string]string,
 ) *StateGraph {
 	condEdge := &ConditionalEdge{
 		From:      from,
-		Condition: wrapperConditionalFunc(condition),
-		PathMap:   pathMap,
-	}
-	sg.graph.addConditionalEdge(condEdge)
-	return sg
-}
-
-// AddMultiConditionalEdges adds multi-conditional routing from a node.
-// The condition returns multiple branch keys for parallel routing.
-func (sg *StateGraph) AddMultiConditionalEdges(
-	from string,
-	condition MultiConditionalFunc,
-	pathMap map[string]string,
-) *StateGraph {
-	condEdge := &ConditionalEdge{
-		From:      from,
-		Condition: wrapperConditionalFunc(condition),
+		Condition: wrapperCondFunc(condition),
 		PathMap:   pathMap,
 	}
 	sg.graph.addConditionalEdge(condEdge)

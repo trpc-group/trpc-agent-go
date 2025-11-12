@@ -655,7 +655,7 @@ func TestMultiConditionalEdges_FanOut(t *testing.T) {
 	})
 	sg.SetEntryPoint("router")
 	// Return two branch keys -> both A and B should run.
-	sg.AddMultiConditionalEdges("router",
+	sg.AddConditionalEdges("router",
 		func(ctx context.Context, s State) ([]string, error) {
 			return []string{"toA", "toB"}, nil
 		}, map[string]string{

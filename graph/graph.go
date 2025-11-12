@@ -55,35 +55,43 @@ type NodeResult any
 
 // ConditionalFunc is a function that determines the next node(s) based on state.
 // Conditional edge function signature.
-type ConditionalFunc func(ctx context.Context, state State) (string, error)
+type ConditionalFunc = func(ctx context.Context, state State) (string, error)
 
 // MultiConditionalFunc returns multiple next nodes for parallel execution.
-type MultiConditionalFunc func(ctx context.Context, state State) ([]string, error)
+type MultiConditionalFunc = func(ctx context.Context, state State) ([]string, error)
 
 // UniversalCondFunc is a function that determines the next node(s) based on state.
-type UniversalCondFunc func(ctx context.Context, state State) (ConditionResult, error)
+type UniversalCondFunc = func(ctx context.Context, state State) (ConditionResult, error)
 
 // ConditionResult represents the result of executing a conditional edge function.
 type ConditionResult struct {
 	NextNodes []string
 }
 
-func wrapperConditionalFunc[T ConditionalFunc | MultiConditionalFunc](condFunc T) UniversalCondFunc {
-	if singleFunc, ok := any(condFunc).(ConditionalFunc); ok {
-		return func(ctx context.Context, state State) (ConditionResult, error) {
-			nextNode, err := singleFunc(ctx, state)
+func wrapperCondFunc(condFunc any) UniversalCondFunc {
+	if condFunc == nil {
+		panic("conditional function is nil")
+	}
+
+	var uniFunc UniversalCondFunc
+	switch cdFunc := condFunc.(type) {
+	case ConditionalFunc:
+		uniFunc = func(ctx context.Context, state State) (ConditionResult, error) {
+			nextNode, err := cdFunc(ctx, state)
 			return ConditionResult{NextNodes: []string{nextNode}}, err
 		}
-	}
-
-	if multiFunc, ok := any(condFunc).(MultiConditionalFunc); ok {
-		return func(ctx context.Context, state State) (ConditionResult, error) {
-			nextNodes, err := multiFunc(ctx, state)
+	case MultiConditionalFunc:
+		uniFunc = func(ctx context.Context, state State) (ConditionResult, error) {
+			nextNodes, err := cdFunc(ctx, state)
 			return ConditionResult{NextNodes: nextNodes}, err
 		}
+	case UniversalCondFunc:
+		uniFunc = cdFunc
+	default:
+		panic(fmt.Sprintf("unsupported conditional function type: %T", condFunc))
 	}
 
-	return nil
+	return uniFunc
 }
 
 // channelWriteEntry represents a write operation to a channel.

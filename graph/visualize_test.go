@@ -112,7 +112,7 @@ func TestDOT_MultiConditional_UsesEndsWhenNoPathMap(t *testing.T) {
 	sg.AddNode("B", func(ctx context.Context, s State) (any, error) { return s, nil })
 	sg.AddNode("C", func(ctx context.Context, s State) (any, error) { return s, nil })
 	sg.SetEntryPoint("A")
-	sg.AddMultiConditionalEdges("A", func(ctx context.Context, s State) ([]string, error) { return []string{"x", "y"}, nil }, nil)
+	sg.AddConditionalEdges("A", func(ctx context.Context, s State) ([]string, error) { return []string{"x", "y"}, nil }, nil)
 	g, err := sg.Compile()
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)

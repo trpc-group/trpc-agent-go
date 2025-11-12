@@ -1938,7 +1938,7 @@ func TestProcessConditionalEdges_DedupMulti(t *testing.T) {
 	sg.AddNode("B", minimalNoopNode)
 	sg.AddNode("C", minimalNoopNode)
 	sg.SetEntryPoint("start")
-	sg.AddMultiConditionalEdges("start", func(ctx context.Context, s State) ([]string, error) {
+	sg.AddConditionalEdges("start", func(ctx context.Context, s State) ([]string, error) {
 		return []string{"b", "b", "c"}, nil // duplicate "b"
 	}, map[string]string{"b": "B", "c": "C"})
 	g, err := sg.Compile()
@@ -1973,7 +1973,7 @@ func TestProcessConditionalEdges_Multi_Error(t *testing.T) {
 	sg.AddNode(nodeB, minimalNoopNode)
 	sg.SetEntryPoint(nodeStart)
 	// PathMap must reference existing nodes for validation.
-	sg.AddMultiConditionalEdges(
+	sg.AddConditionalEdges(
 		nodeStart,
 		func(ctx context.Context, s State) ([]string, error) {
 			return nil, fmt.Errorf("mc boom")
@@ -2060,7 +2060,7 @@ func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
 	sg.AddNode(nodeB, minimalNoopNode)
 	sg.AddNode(nodeC, minimalNoopNode)
 	sg.SetEntryPoint(nodeStart)
-	sg.AddMultiConditionalEdges(
+	sg.AddConditionalEdges(
 		nodeStart,
 		func(ctx context.Context, s State) ([]string, error) {
 			// Includes duplicates and empty keys.
