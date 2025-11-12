@@ -91,22 +91,22 @@ The framework supports both traditional and chain registration patterns. Chain r
 ```go
 // Traditional registration
 modelCallbacks := model.NewCallbacks()
-modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-    // Your logic here
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+    // Your logic here - access request via args.Request
     return nil, nil
 })
-modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-    // Your logic here - now with access to original request
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+    // Your logic here - access request via args.Request, response via args.Response
     return nil, nil
 })
 
 // Chain registration (recommended)
 modelCallbacks := model.NewCallbacks().
-    RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
         // Your logic here
         return nil, nil
     }).
-    RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
         // Your logic here - now with access to original request
         return nil, nil
     })
@@ -117,22 +117,22 @@ modelCallbacks := model.NewCallbacks().
 ```go
 // Traditional registration
 toolCallbacks := tool.NewCallbacks()
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    // Your logic here
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    // Your logic here - access toolName via args.ToolName, arguments via args.Arguments
     return nil, nil
 })
-toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-    // Your logic here
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    // Your logic here - access toolName via args.ToolName, result via args.Result
     return nil, nil
 })
 
 // Chain registration (recommended)
 toolCallbacks := tool.NewCallbacks().
-    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
+    RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
         // Your logic here
         return nil, nil
     }).
-    RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+    RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
         // Your logic here
         return nil, nil
     })
@@ -143,22 +143,22 @@ toolCallbacks := tool.NewCallbacks().
 ```go
 // Traditional registration
 agentCallbacks := agent.NewCallbacks()
-agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-    // Your logic here
+agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    // Your logic here - access invocation via args.Invocation
     return nil, nil
 })
-agentCallbacks.RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-    // Your logic here
+agentCallbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    // Your logic here - access invocation via args.Invocation, error via args.Error
     return nil, nil
 })
 
 // Chain registration (recommended)
 agentCallbacks := agent.NewCallbacks().
-    RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+    RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
         // Your logic here
         return nil, nil
     }).
-    RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+    RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
         // Your logic here
         return nil, nil
     })

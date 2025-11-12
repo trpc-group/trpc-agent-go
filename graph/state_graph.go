@@ -1326,9 +1326,9 @@ func runTool(
 ) (any, []byte, error) {
 	if toolCallbacks != nil {
 		args := &tool.BeforeToolArgs{
-			ToolName:     toolCall.Function.Name,
-			Declaration:  t.Declaration(),
-			Arguments:    toolCall.Function.Arguments,
+			ToolName:    toolCall.Function.Name,
+			Declaration: t.Declaration(),
+			Arguments:   toolCall.Function.Arguments,
 		}
 		result, err := toolCallbacks.RunBeforeTool(ctx, args)
 		if err != nil {
