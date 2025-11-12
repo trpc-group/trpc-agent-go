@@ -917,31 +917,32 @@ func (a *LLMAgent) wrapEventChannel(
 			close(wrappedChan)
 		}()
 
-	// Forward all events from the original channel
-	for evt := range originalChan {
-		if evt != nil && evt.Response != nil {
-			if evt.Response.Usage != nil {
-				tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
-				tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
-				tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+		// Forward all events from the original channel
+		for evt := range originalChan {
+			if evt != nil && evt.Response != nil {
+				if evt.Response.Usage != nil {
+					tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+					tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+					tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+				}
+				if !evt.Response.IsPartial {
+					fullRespEvent = evt
+				}
+
 			}
-			if !evt.Response.IsPartial {
-				fullRespEvent = evt
+			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
+				return
 			}
 		}
-		if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
-			return
+
+		// Collect error from the final response event.
+		var agentErr error
+		if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
+			agentErr = fmt.Errorf("%s: %s", fullRespEvent.Response.Error.Type, fullRespEvent.Response.Error.Message)
 		}
-	}
 
-	// Collect error from the final response event.
-	var agentErr error
-	if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
-		agentErr = fmt.Errorf("%s: %s", fullRespEvent.Response.Error.Type, fullRespEvent.Response.Error.Message)
-	}
-
-	// After all events are processed, run after agent callbacks
-	if a.agentCallbacks != nil {
+		// After all events are processed, run after agent callbacks
+		if a.agentCallbacks != nil {
 			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, agentErr)
 			var evt *event.Event
 			if err != nil {
