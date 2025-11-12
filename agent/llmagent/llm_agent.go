@@ -908,7 +908,6 @@ func (a *LLMAgent) wrapEventChannel(
 
 	go func() {
 		var fullRespEvent *event.Event
-		var agentErr error
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
 			if fullRespEvent != nil {
@@ -918,31 +917,31 @@ func (a *LLMAgent) wrapEventChannel(
 			close(wrappedChan)
 		}()
 
-		// Forward all events from the original channel
-		for evt := range originalChan {
-			if evt != nil && evt.Response != nil {
-				if evt.Response.Usage != nil {
-					tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
-					tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
-					tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
-				}
-				if !evt.Response.IsPartial {
-					fullRespEvent = evt
-				}
-
-				// Collect error from response.
-				// Only record the last error.
-				if evt.Response.Error != nil {
-					agentErr = fmt.Errorf("%s: %s", evt.Response.Error.Type, evt.Response.Error.Message)
-				}
+	// Forward all events from the original channel
+	for evt := range originalChan {
+		if evt != nil && evt.Response != nil {
+			if evt.Response.Usage != nil {
+				tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+				tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+				tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
 			}
-			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
-				return
+			if !evt.Response.IsPartial {
+				fullRespEvent = evt
 			}
 		}
+		if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
+			return
+		}
+	}
 
-		// After all events are processed, run after agent callbacks
-		if a.agentCallbacks != nil {
+	// Collect error from the final response event.
+	var agentErr error
+	if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
+		agentErr = fmt.Errorf("%s: %s", fullRespEvent.Response.Error.Type, fullRespEvent.Response.Error.Message)
+	}
+
+	// After all events are processed, run after agent callbacks
+	if a.agentCallbacks != nil {
 			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, agentErr)
 			var evt *event.Event
 			if err != nil {
