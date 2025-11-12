@@ -38,6 +38,8 @@ const (
 	ThinkingTokensKey = "thinking_tokens"
 	// ReasoningContentKey is the key used for reasoning content in API responses.
 	ReasoningContentKey = "reasoning_content"
+	// EnabledThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
+	EnabledThinkingKey = "enabled_thinking"
 )
 
 // String returns the string representation of the role.

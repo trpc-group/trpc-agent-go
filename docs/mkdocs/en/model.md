@@ -1020,6 +1020,13 @@ The framework currently supports the following Variants:
 - API Key environment variable name：`DEEPSEEK_API_KEY`
 - Other behaviors are consistent with standard OpenAI
 
+**4. VariantQwen（Qwen）**
+
+- Qwen platform adaptation
+- Default BaseURL：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+- API Key environment variable name：`DASHSCOPE_API_KEY`
+- Other behaviors are consistent with standard OpenAI
+
 ##### 6.2. Usage
 
 **Usage Example**：
@@ -1079,6 +1086,7 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY
 )
 ```
+
 ## Anthropic Model
 
 Anthropic Model is used to interface with Claude models and compatible platforms, supporting streaming output, thought modes and tool calls, and providing a rich callback mechanism, while also allowing for flexible configuration of custom HTTP headers.

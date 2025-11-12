@@ -41,7 +41,7 @@ var (
 	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / pgsql")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	enableParallel  = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
-	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan/ deepseek /qwen")
+	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan/ deepseek / qwen")
 )
 
 // Environment variables for session services.
