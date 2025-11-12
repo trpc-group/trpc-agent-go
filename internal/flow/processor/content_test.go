@@ -1906,3 +1906,401 @@ func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
 		})
 	}
 }
+
+func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
+	baseTime := time.Now()
+	sinceTime := baseTime.Add(-time.Hour)
+
+	tests := []struct {
+		name     string
+		setup    func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time)
+		expected bool
+	}{
+		{
+			name: "nil response",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "is partial event",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "123",
+					InvocationID: "123",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						IsPartial: true,
+						Choices: []model.Choice{
+							{
+								Delta: model.Message{
+									Content: "test-content",
+								},
+							},
+						},
+					},
+				}
+				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "invalid content",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "123",
+					InvocationID: "123",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "",
+								},
+							},
+						},
+					},
+				}
+				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "timestamp before since when not zero time",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "123",
+					InvocationID: "123",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp: sinceTime.Add(-time.Hour),
+				}
+				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
+				return p, evt, inv, "", false, sinceTime
+			},
+			expected: false,
+		},
+		{
+			name: "TimelineFilterCurrentRequest with different request ID",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentRequest,
+				}
+				evt := event.Event{
+					RequestID: "req1",
+					Version:   event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{
+					RunOptions: agent.RunOptions{RequestID: "req2"},
+				}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "TimelineFilterCurrentRequest with same request ID",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentRequest,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp: baseTime,
+					RequestID: "req1",
+				}
+				inv := &agent.Invocation{
+					RunOptions: agent.RunOptions{RequestID: "req1"},
+				}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: true,
+		},
+		{
+			name: "TimelineFilterCurrentInvocation with same invocation ID",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentInvocation,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp:    baseTime,
+					InvocationID: "inv1",
+				}
+				inv := &agent.Invocation{
+					InvocationID: "inv1",
+				}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: true,
+		},
+		{
+			name: "TimelineFilterCurrentInvocation with different invocation ID and non-user message",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentInvocation,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp:    baseTime,
+					InvocationID: "inv1",
+				}
+				inv := &agent.Invocation{
+					InvocationID: "inv2",
+				}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "TimelineFilterCurrentInvocation with different invocation ID, user message, but different request ID",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentInvocation,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content", Role: model.RoleUser}},
+						},
+					},
+					Timestamp:    baseTime,
+					InvocationID: "inv1",
+					RequestID:    "req1",
+				}
+				inv := &agent.Invocation{
+					InvocationID: "inv2",
+					Message:      model.Message{Content: "test content"},
+					RunOptions:   agent.RunOptions{RequestID: "req2"},
+				}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "TimelineFilterCurrentInvocation with different invocation ID, user message, but different content",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentInvocation,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "content1", Role: model.RoleUser}},
+						},
+					},
+					Timestamp:    baseTime,
+					InvocationID: "inv1",
+					RequestID:    "req1",
+				}
+				inv := &agent.Invocation{
+					InvocationID: "inv2",
+					Message:      model.Message{Content: "content2"},
+					RunOptions:   agent.RunOptions{RequestID: "req1"},
+				}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "TimelineFilterCurrentInvocation with different invocation ID, user message, matching request ID and content",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentInvocation,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content", Role: model.RoleUser}},
+						},
+					},
+					Timestamp:    baseTime,
+					InvocationID: "inv1",
+					RequestID:    "req1",
+				}
+				inv := &agent.Invocation{
+					InvocationID: "inv2",
+					Message:      model.Message{Content: "test content"},
+					RunOptions:   agent.RunOptions{RequestID: "req1"},
+				}
+				return p, evt, inv, "", true, baseTime
+			},
+			expected: true,
+		},
+		{
+			name: "BranchFilterModeExact with different filter key",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeExact,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+					FilterKey: "filter1",
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter2", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "BranchFilterModeExact with same filter key",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeExact,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+					FilterKey: "filter1",
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter1", true, baseTime
+			},
+			expected: true,
+		},
+		{
+			name: "BranchFilterModePrefix with non-matching filter",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModePrefix,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter1",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "BranchFilterModePrefix with matching filter",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModePrefix,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter/a",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter", true, baseTime
+			},
+			expected: true,
+		},
+		{
+			name: "all conditions satisfied",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					TimelineFilterMode: TimelineFilterCurrentRequest,
+					BranchFilterMode:   BranchFilterModeExact,
+				}
+				evt := event.Event{
+					Version: event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+					RequestID: "req1",
+					FilterKey: "filter1",
+				}
+				inv := &agent.Invocation{
+					RunOptions: agent.RunOptions{RequestID: "req1"},
+				}
+				return p, evt, inv, "filter1", true, baseTime
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, evt, inv, filter, isZeroTime, since := tt.setup()
+			result := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
+			if result != tt.expected {
+				t.Errorf("shouldIncludeEvent() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
