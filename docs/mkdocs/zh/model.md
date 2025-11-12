@@ -1086,17 +1086,6 @@ model := openai.New("deepseek-chat",
 )
 ```
 
-**深度思考配置项差异**：
-```go
-// 框架已兼容
-const (
-    // ThinkingEnabledKey是用于在 API 请求中启用深度思考模式的键.
-    ThinkingEnabledKey = "thinking_enabled"
-    // EnabledThinkingKey是用于在 API 请求中启用深度思考模式的键，例如Qwen模型.
-    EnabledThinkingKey = "enabled_thinking"
-)
-```
-
 ## Anthropic Model
 
 Anthropic Model 用于对接 Claude 模型及其兼容平台，支持流式输出、思考模式与工具调用，并提供丰富的回调机制，同时可灵活设置自定义 HTTP Header.

@@ -1087,16 +1087,6 @@ model := openai.New("deepseek-chat",
 )
 ```
 
-**In-depth thinking about configuration item differences**：
-```go
-// The framework is compatible
-const (
-    // ThinkingEnabledKey is the key used for enabling thinking mode in API requests.
-    ThinkingEnabledKey = "thinking_enabled"
-    // EnabledThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
-    EnabledThinkingKey = "enabled_thinking"
-)
-```
 ## Anthropic Model
 
 Anthropic Model is used to interface with Claude models and compatible platforms, supporting streaming output, thought modes and tool calls, and providing a rich callback mechanism, while also allowing for flexible configuration of custom HTTP headers.
