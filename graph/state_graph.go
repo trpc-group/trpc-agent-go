@@ -924,7 +924,13 @@ type modelResponseConfig struct {
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (*event.Event, error) {
 	if config.ModelCallbacks != nil {
-		customResponse, err := config.ModelCallbacks.RunAfterModel(ctx, config.Request, config.Response, nil)
+		// Convert response.Error to Go error for callback.
+		var modelErr error
+		if config.Response != nil && config.Response.Error != nil {
+			modelErr = fmt.Errorf("%s: %s", config.Response.Error.Type, config.Response.Error.Message)
+		}
+
+		customResponse, err := config.ModelCallbacks.RunAfterModel(ctx, config.Request, config.Response, modelErr)
 		if err != nil {
 			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("callback after model error: %w", err)

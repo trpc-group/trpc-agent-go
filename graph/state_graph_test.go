@@ -1106,3 +1106,119 @@ func TestMustCompile_PanicsOnInvalid(t *testing.T) {
 	_ = sg.MustCompile() // no entry point triggers panic
 	t.Fatalf("expected panic")
 }
+
+// TestProcessModelResponse_ErrorPassing tests that modelErr is correctly passed to callbacks
+// when config.Response.Error is not nil.
+func TestProcessModelResponse_ErrorPassing(t *testing.T) {
+	tests := []struct {
+		name       string
+		response   *model.Response
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name: "response with API error",
+			response: &model.Response{
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeAPIError,
+					Message: "API key invalid",
+				},
+			},
+			wantErr:    true,
+			wantErrMsg: "api_error: API key invalid",
+		},
+		{
+			name: "response with stream error",
+			response: &model.Response{
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeStreamError,
+					Message: "stream interrupted",
+				},
+			},
+			wantErr:    true,
+			wantErrMsg: "stream_error: stream interrupted",
+		},
+		{
+			name: "response without error",
+			response: &model.Response{
+				Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}},
+			},
+			wantErr:    false,
+			wantErrMsg: "",
+		},
+		{
+			name: "response with nil error field",
+			response: &model.Response{
+				Error:   nil,
+				Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}},
+			},
+			wantErr:    false,
+			wantErrMsg: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var receivedErr error
+			cbs := model.NewCallbacks().RegisterAfterModel(
+				func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+					receivedErr = modelErr
+					return nil, nil
+				},
+			)
+
+			dummyModel := &mockModel{name: "test-model"}
+
+			_, err := processModelResponse(context.Background(), modelResponseConfig{
+				Response:       tt.response,
+				ModelCallbacks: cbs,
+				EventChan:      make(chan *event.Event, 1),
+				InvocationID:   "test-inv",
+				SessionID:      "test-session",
+				LLMModel:       dummyModel,
+				Request:        &model.Request{Messages: []model.Message{model.NewUserMessage("test")}},
+				Span:           oteltrace.SpanFromContext(context.Background()),
+			})
+
+			// processModelResponse returns error when response.Error is not nil.
+			if tt.response != nil && tt.response.Error != nil {
+				if err == nil {
+					t.Errorf("expected processModelResponse to return error, but got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected processModelResponse to return nil, but got: %v", err)
+				}
+			}
+
+			// Check callback received correct error.
+			if tt.wantErr {
+				if receivedErr == nil {
+					t.Errorf("expected callback to receive error, but got nil")
+				} else if receivedErr.Error() != tt.wantErrMsg {
+					t.Errorf("expected error message %q, got %q", tt.wantErrMsg, receivedErr.Error())
+				}
+			} else {
+				if receivedErr != nil {
+					t.Errorf("expected callback to receive nil error, but got: %v", receivedErr)
+				}
+			}
+		})
+	}
+}
+
+// mockModel is a simple mock implementation of model.Model for testing.
+type mockModel struct {
+	name string
+}
+
+func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("test")}}}
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
