@@ -152,30 +152,56 @@ func (c *Callbacks) RegisterAfterModel(cb any) *Callbacks {
 
 // RunBeforeModel runs all before model callbacks in order.
 // This method uses the new structured callback interface.
+// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
 func (c *Callbacks) RunBeforeModel(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+	var lastResult *BeforeModelResult
 	for _, cb := range c.BeforeModel {
 		result, err := cb(ctx, args)
 		if err != nil {
 			return nil, err
 		}
-		if result != nil && result.CustomResponse != nil {
-			return result, nil
+		if result != nil {
+			// Use the context from result if provided for subsequent callbacks.
+			if result.Context != nil {
+				ctx = result.Context
+			}
+			lastResult = result
+			if result.CustomResponse != nil {
+				return result, nil
+			}
 		}
 	}
-	return nil, nil
+	// Return nil if lastResult is empty (no Context and no CustomResponse).
+	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+		return nil, nil
+	}
+	return lastResult, nil
 }
 
 // RunAfterModel runs all after model callbacks in order.
 // This method uses the new structured callback interface.
+// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
 func (c *Callbacks) RunAfterModel(ctx context.Context, args *AfterModelArgs) (*AfterModelResult, error) {
+	var lastResult *AfterModelResult
 	for _, cb := range c.AfterModel {
 		result, err := cb(ctx, args)
 		if err != nil {
 			return nil, err
 		}
-		if result != nil && result.CustomResponse != nil {
-			return result, nil
+		if result != nil {
+			// Use the context from result if provided for subsequent callbacks.
+			if result.Context != nil {
+				ctx = result.Context
+			}
+			lastResult = result
+			if result.CustomResponse != nil {
+				return result, nil
+			}
 		}
 	}
-	return nil, nil
+	// Return nil if lastResult is empty (no Context and no CustomResponse).
+	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+		return nil, nil
+	}
+	return lastResult, nil
 }

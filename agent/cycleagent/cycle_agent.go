@@ -201,6 +201,10 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 		))
 		return true // Indicates early return
 	}
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
@@ -293,6 +297,10 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 		Invocation: invocation,
 		Error:      nil,
 	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -326,7 +334,9 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		defer close(eventChan)
 
 		// Handle before agent callbacks.
-		if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+		var shouldReturn bool
+		shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+		if shouldReturn {
 			return
 		}
 

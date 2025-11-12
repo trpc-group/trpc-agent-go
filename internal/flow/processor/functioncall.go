@@ -656,6 +656,10 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			log.Errorf("Before tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
 			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
 		if result != nil && result.CustomResult != nil {
 			// Use custom result from callback.
 			return result.CustomResult, toolCall.Function.Arguments, nil
@@ -683,6 +687,10 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			Result:      result,
 			Error:       err,
 		})
+		// Use the context from result if provided.
+		if afterResult != nil && afterResult.Context != nil {
+			ctx = afterResult.Context
+		}
 		if callbackErr != nil {
 			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
 			return result, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)

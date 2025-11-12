@@ -934,6 +934,10 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (*eve
 			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("callback after model error: %w", err)
 		}
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
 		if result != nil && result.CustomResponse != nil {
 			config.Response = result.CustomResponse
 		}
@@ -985,6 +989,10 @@ func runModel(
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("callback before model error: %w", err)
+		}
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
 		}
 		if result != nil && result.CustomResponse != nil {
 			responseChan := make(chan *model.Response, 1)

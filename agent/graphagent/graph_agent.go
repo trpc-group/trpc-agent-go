@@ -189,6 +189,10 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
 		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			eventChan := make(chan *event.Event, 1)
@@ -323,6 +327,10 @@ func (ga *GraphAgent) wrapEventChannel(
 			Invocation: invocation,
 			Error:      nil,
 		})
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
 		var evt *event.Event
 		if err != nil {
 			// Send error event.

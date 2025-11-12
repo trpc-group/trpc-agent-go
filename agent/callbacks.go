@@ -155,36 +155,62 @@ func (c *Callbacks) RegisterAfterAgent(cb any) *Callbacks {
 
 // RunBeforeAgent runs all before agent callbacks in order.
 // This method uses the new structured callback interface.
+// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
 func (c *Callbacks) RunBeforeAgent(
 	ctx context.Context,
 	args *BeforeAgentArgs,
 ) (*BeforeAgentResult, error) {
+	var lastResult *BeforeAgentResult
 	for _, cb := range c.BeforeAgent {
 		result, err := cb(ctx, args)
 		if err != nil {
 			return nil, err
 		}
-		if result != nil && result.CustomResponse != nil {
-			return result, nil
+		if result != nil {
+			// Use the context from result if provided for subsequent callbacks.
+			if result.Context != nil {
+				ctx = result.Context
+			}
+			lastResult = result
+			if result.CustomResponse != nil {
+				return result, nil
+			}
 		}
 	}
-	return nil, nil
+	// Return nil if lastResult is empty (no Context and no CustomResponse).
+	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+		return nil, nil
+	}
+	return lastResult, nil
 }
 
 // RunAfterAgent runs all after agent callbacks in order.
 // This method uses the new structured callback interface.
+// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
 func (c *Callbacks) RunAfterAgent(
 	ctx context.Context,
 	args *AfterAgentArgs,
 ) (*AfterAgentResult, error) {
+	var lastResult *AfterAgentResult
 	for _, cb := range c.AfterAgent {
 		result, err := cb(ctx, args)
 		if err != nil {
 			return nil, err
 		}
-		if result != nil && result.CustomResponse != nil {
-			return result, nil
+		if result != nil {
+			// Use the context from result if provided for subsequent callbacks.
+			if result.Context != nil {
+				ctx = result.Context
+			}
+			lastResult = result
+			if result.CustomResponse != nil {
+				return result, nil
+			}
 		}
 	}
-	return nil, nil
+	// Return nil if lastResult is empty (no Context and no CustomResponse).
+	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+		return nil, nil
+	}
+	return lastResult, nil
 }

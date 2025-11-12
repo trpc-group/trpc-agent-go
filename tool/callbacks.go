@@ -175,42 +175,71 @@ func (c *Callbacks) RegisterAfterTool(cb any) *Callbacks {
 
 // RunBeforeTool runs all before tool callbacks in order.
 // This method uses the new structured callback interface.
+// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
 func (c *Callbacks) RunBeforeTool(
 	ctx context.Context,
 	args *BeforeToolArgs,
 ) (*BeforeToolResult, error) {
+	var lastResult *BeforeToolResult
 	for _, cb := range c.BeforeTool {
 		result, err := cb(ctx, args)
 		if err != nil {
 			return nil, err
 		}
-		if result != nil && result.CustomResult != nil {
-			return result, nil
+		if result != nil {
+			// Use the context from result if provided for subsequent callbacks.
+			if result.Context != nil {
+				ctx = result.Context
+			}
+			// Check if arguments were modified.
+			if result.ModifiedArguments != nil {
+				args.Arguments = result.ModifiedArguments
+			}
+			lastResult = result
+			if result.CustomResult != nil {
+				return result, nil
+			}
 		}
 	}
-	return nil, nil
+	// Return nil if lastResult is empty (no Context and no CustomResult).
+	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResult == nil && lastResult.ModifiedArguments == nil {
+		return nil, nil
+	}
+	return lastResult, nil
 }
 
 // RunAfterTool runs all after tool callbacks in order.
 // This method uses the new structured callback interface.
+// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
 func (c *Callbacks) RunAfterTool(
 	ctx context.Context,
 	args *AfterToolArgs,
 ) (*AfterToolResult, error) {
+	var lastResult *AfterToolResult
 	for _, cb := range c.AfterTool {
 		result, err := cb(ctx, args)
 		if err != nil {
 			return nil, err
 		}
-		if result != nil && result.CustomResult != nil {
-			return result, nil
+		if result != nil {
+			// Use the context from result if provided for subsequent callbacks.
+			if result.Context != nil {
+				ctx = result.Context
+			}
+			lastResult = result
+			if result.CustomResult != nil {
+				return result, nil
+			}
 		}
 	}
 	// If no callbacks or no custom result, return the original result
-	if args.Result != nil {
-		return &AfterToolResult{
-			CustomResult: args.Result,
-		}, nil
+	if lastResult == nil {
+		if args.Result != nil {
+			return &AfterToolResult{
+				CustomResult: args.Result,
+			}, nil
+		}
+		return &AfterToolResult{}, nil
 	}
-	return &AfterToolResult{}, nil
+	return lastResult, nil
 }

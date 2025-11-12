@@ -133,6 +133,10 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
 		Invocation: invocation,
 	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 
 	if err != nil {
@@ -230,6 +234,10 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 		Invocation: invocation,
 		Error:      nil,
 	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -273,7 +281,9 @@ func (a *ParallelAgent) executeParallelRun(
 	a.setupInvocation(invocation)
 
 	// Handle before agent callbacks.
-	if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+	var shouldReturn bool
+	shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+	if shouldReturn {
 		return
 	}
 

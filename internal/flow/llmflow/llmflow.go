@@ -303,6 +303,10 @@ func (f *Flow) runAfterModelCallbacks(
 	if err != nil {
 		return nil, err
 	}
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	if result != nil && result.CustomResponse != nil {
 		return result.CustomResponse, nil
 	}
@@ -419,6 +423,10 @@ func (f *Flow) callLLM(
 		if err != nil {
 			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
 			return nil, err
+		}
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
 		}
 		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.

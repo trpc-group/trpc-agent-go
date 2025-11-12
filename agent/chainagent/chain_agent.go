@@ -134,7 +134,9 @@ func (a *ChainAgent) executeChainRun(
 	a.setupInvocation(invocation)
 
 	// Handle before agent callbacks.
-	if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+	var shouldReturn bool
+	shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+	if shouldReturn {
 		return
 	}
 
@@ -177,6 +179,10 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 			err.Error(),
 		))
 		return true // Indicates early return
+	}
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
 	}
 	if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
@@ -262,6 +268,10 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 		Invocation: invocation,
 		Error:      nil,
 	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
