@@ -1018,6 +1018,13 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - API Key 环境变量名：`DEEPSEEK_API_KEY`
 - 其他行为与标准 OpenAI 一致
 
+**4. VariantQwen（千问）**
+
+- 通义千问平台适配
+- 默认 BaseURL：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+- API Key 环境变量名：`DASHSCOPE_API_KEY`
+- 其他行为与标准 OpenAI 一致
+
 ##### 6.2. 使用方式
 
 **使用示例**：
@@ -1076,6 +1083,17 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 // DeepSeek 自动配置示例
 model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
+)
+```
+
+**深度思考配置项差异**：
+```go
+// 框架已兼容
+const (
+    // ThinkingEnabledKey是用于在 API 请求中启用深度思考模式的键.
+    ThinkingEnabledKey = "thinking_enabled"
+    // EnabledThinkingKey是用于在 API 请求中启用深度思考模式的键，例如Qwen模型.
+    EnabledThinkingKey = "enabled_thinking"
 )
 ```
 

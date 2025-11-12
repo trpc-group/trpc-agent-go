@@ -1020,6 +1020,13 @@ The framework currently supports the following Variants:
 - API Key environment variable name：`DEEPSEEK_API_KEY`
 - Other behaviors are consistent with standard OpenAI
 
+**4. VariantQwen（Qwen）**
+
+- Qwen platform adaptation
+- Default BaseURL：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+- API Key environment variable name：`DASHSCOPE_API_KEY`
+- Other behaviors are consistent with standard OpenAI
+
 ##### 6.2. Usage
 
 **Usage Example**：
@@ -1077,6 +1084,17 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 // DeepSeek
 model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY
+)
+```
+
+**In-depth thinking about configuration item differences**：
+```go
+// The framework is compatible
+const (
+    // ThinkingEnabledKey is the key used for enabling thinking mode in API requests.
+    ThinkingEnabledKey = "thinking_enabled"
+    // EnabledThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
+    EnabledThinkingKey = "enabled_thinking"
 )
 ```
 ## Anthropic Model
