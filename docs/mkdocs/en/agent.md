@@ -270,32 +270,50 @@ if err != nil {
 - Debugging and testing scenarios
 
 ```go
-// Invocation is the context object for Agent execution flow, containing all information needed for a single call.
+// Invocation is the context object for Agent execution flow, containing
+// all information needed for a single call.
 type Invocation struct {
-	// Agent specifies the Agent instance to call.
-	Agent Agent
-	// AgentName identifies the name of the Agent instance to call.
-	AgentName string
-	// InvocationID provides a unique identifier for each call.
-	InvocationID string
-	// Branch is a branch identifier for hierarchical event filtering.
-	Branch string
-	// EndInvocation is a flag indicating whether to end the invocation.
-	EndInvocation bool
-	// Session maintains the context state of the conversation.
-	Session *session.Session
-	// Model specifies the model instance to use.
-	Model model.Model
-	// Message is the specific content sent by the user to the Agent.
-	Message model.Message
-	// RunOptions are option configurations for the Run method.
-	RunOptions RunOptions
-	// TransferInfo supports control transfer between Agents.
-	TransferInfo *TransferInfo
+    // Agent specifies the Agent instance to call.
+    Agent Agent
+    // AgentName identifies the name of the Agent instance to call.
+    AgentName string
+    // InvocationID provides a unique identifier for each call.
+    InvocationID string
+    // Branch is a branch identifier for hierarchical event filtering.
+    Branch string
+    // EndInvocation indicates whether to end the invocation.
+    EndInvocation bool
 
-    // notice
-	noticeChanMap map[string]chan any
-	noticeMu      *sync.Mutex
+    // Session maintains the context state of the conversation.
+    Session *session.Session
+    // Model specifies the model instance to use.
+    Model model.Model
+    // Message is the specific content sent by the user to the Agent.
+    Message model.Message
+    // RunOptions are option configurations for the Run call.
+    RunOptions RunOptions
+    // TransferInfo supports control transfer between Agents.
+    TransferInfo *TransferInfo
+
+    // Structured output configuration (optional).
+    StructuredOutput     *model.StructuredOutput
+    StructuredOutputType reflect.Type
+
+    // Services injected for this invocation.
+    MemoryService   memory.Service
+    ArtifactService artifact.Service
+
+    // Internal signaling: notify when events are appended.
+    noticeChanMap map[string]chan any
+    noticeMu      *sync.Mutex
+
+    // Internal: event filter key and parent linkage for nested flows.
+    eventFilterKey string
+    parent         *Invocation
+
+    // Invocation-scoped state (lazy-init, thread-safe via stateMu).
+    state   map[string]any
+    stateMu sync.RWMutex
 }
 ```
 
