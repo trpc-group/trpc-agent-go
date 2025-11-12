@@ -39,9 +39,7 @@ var (
 
 // init registers the PDF reader with the global registry.
 func init() {
-	reader.RegisterReader(supportedExtensions, func() reader.Reader {
-		return New()
-	})
+	reader.RegisterReader(supportedExtensions, New)
 }
 
 // Reader reads PDF documents and applies chunking strategies.
@@ -51,43 +49,40 @@ type Reader struct {
 	ocrExtractor     ocr.Extractor
 }
 
-// Option represents a functional option for configuring the PDF reader.
-type Option func(*Reader)
-
-// WithChunking enables or disables document chunking.
-func WithChunking(chunk bool) Option {
-	return func(r *Reader) {
-		r.chunk = chunk
-	}
-}
-
-// WithChunkingStrategy sets the chunking strategy to use.
-func WithChunkingStrategy(strategy chunking.Strategy) Option {
-	return func(r *Reader) {
-		r.chunkingStrategy = strategy
-	}
-}
-
-// WithOCRExtractor sets a custom OCR engine for the PDF reader.
-// OCR will be automatically enabled when an extractor is provided.
-func WithOCRExtractor(engine ocr.Extractor) Option {
-	return func(r *Reader) {
-		r.ocrExtractor = engine
-	}
-}
-
 // New creates a new PDF reader with the given options.
-func New(opts ...Option) *Reader {
-	r := &Reader{
-		chunk:            true,
-		chunkingStrategy: chunking.NewFixedSizeChunking(),
-		ocrExtractor:     nil,
+// PDF reader uses FixedSizeChunking by default.
+func New(opts ...reader.Option) reader.Reader {
+	// Build config from options
+	config := &reader.Config{
+		Chunk:        true,
+		OCRExtractor: nil,
 	}
-	// Apply options.
 	for _, opt := range opts {
-		opt(r)
+		opt(config)
 	}
-	return r
+
+	// Build chunking strategy using the default builder for PDF
+	strategy := reader.BuildChunkingStrategy(config, buildDefaultChunkingStrategy)
+
+	// Create reader from config
+	return &Reader{
+		chunk:            config.Chunk,
+		chunkingStrategy: strategy,
+		ocrExtractor:     config.OCRExtractor,
+	}
+}
+
+// buildDefaultChunkingStrategy builds the default chunking strategy for PDF reader.
+// PDF uses FixedSizeChunking with configurable size and overlap.
+func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
+	var opts []chunking.Option
+	if chunkSize > 0 {
+		opts = append(opts, chunking.WithChunkSize(chunkSize))
+	}
+	if overlap > 0 {
+		opts = append(opts, chunking.WithOverlap(overlap))
+	}
+	return chunking.NewFixedSizeChunking(opts...)
 }
 
 // Close closes the reader and releases OCR resources.
