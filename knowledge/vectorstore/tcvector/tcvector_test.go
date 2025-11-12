@@ -16,10 +16,12 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/tcvector"
 )
 
 // mockClient is a mock implementation of storage.ClientInterface for testing.
@@ -56,6 +58,14 @@ type mockClient struct {
 	// Database and collection tracking
 	databases   map[string]bool
 	collections map[string]map[string]bool // db -> collection -> exists
+
+	// Additional error simulation for specific scenarios
+	existsCollectionError   error
+	createCollectionError   error
+	describeCollectionError error
+
+	// Track the collection interface for parameter validation
+	lastCollectionInterface *mockCollectionInterface
 }
 
 // newMockClient creates a new mock client for testing.
@@ -262,7 +272,40 @@ func (m *mockClient) Search(ctx context.Context, db, collection string, vectors 
 		return nil, m.searchError
 	}
 
-	// Calculate cosine similarity and sort by score
+	return m.searchByVectors(vectors, params...), nil
+}
+
+// SearchByText simulates text-based search with remote embedding
+// For testing purposes, we generate a simple vector from the text hash
+func (m *mockClient) SearchByText(ctx context.Context, db, collection string, textMap map[string][]string, params ...*tcvectordb.SearchDocumentParams) (*tcvectordb.SearchDocumentResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.searchCalls++
+
+	if m.searchError != nil {
+		return nil, m.searchError
+	}
+
+	// For testing, generate a simple vector from text
+	// In real implementation, this would be done by the server
+	var queryVectors [][]float32
+	for _, texts := range textMap {
+		for _, text := range texts {
+			// Simple hash-based vector generation for testing
+			vector := make([]float32, 3) // Assuming dimension 3 for tests
+			for i, c := range text {
+				vector[i%3] += float32(c) / 1000.0
+			}
+			queryVectors = append(queryVectors, vector)
+		}
+	}
+
+	return m.searchByVectors(queryVectors, params...), nil
+}
+
+// searchByVectors is a helper method to perform vector search with similarity calculation
+func (m *mockClient) searchByVectors(vectors [][]float32, params ...*tcvectordb.SearchDocumentParams) *tcvectordb.SearchDocumentResult {
 	var results [][]tcvectordb.Document
 	for _, queryVector := range vectors {
 		var batch []tcvectordb.Document
@@ -310,7 +353,7 @@ func (m *mockClient) Search(ctx context.Context, db, collection string, vectors 
 		results = append(results, batch)
 	}
 
-	return &tcvectordb.SearchDocumentResult{Documents: results}, nil
+	return &tcvectordb.SearchDocumentResult{Documents: results}
 }
 
 // cosineSimilarity calculates cosine similarity between two vectors
@@ -465,8 +508,152 @@ func (m *mockClient) ListDatabases(ctx context.Context) ([]*tcvectordb.Database,
 }
 
 func (m *mockClient) Database(dbName string) *tcvectordb.Database {
-	// Return a mock database that has the required methods
-	return &tcvectordb.Database{DatabaseName: dbName}
+	// Return a mock database with our custom collection interface
+	mockColInterface := &mockCollectionInterface{client: m}
+	m.lastCollectionInterface = mockColInterface
+	return &tcvectordb.Database{
+		DatabaseName:        dbName,
+		CollectionInterface: mockColInterface,
+	}
+}
+
+// mockCollectionInterface implements tcvectordb.CollectionInterface for error injection.
+type mockCollectionInterface struct {
+	client *mockClient
+
+	// Capture CreateCollectionParams for validation
+	lastCreateParams *tcvectordb.CreateCollectionParams
+
+	// Mock collection description for testing checkIndexes
+	describeCollectionResult *tcvectordb.DescribeCollectionResult
+}
+
+func (m *mockCollectionInterface) ExistsCollection(ctx context.Context, collectionName string) (bool, error) {
+	if m.client.existsCollectionError != nil {
+		return false, m.client.existsCollectionError
+	}
+
+	m.client.mu.RLock()
+	defer m.client.mu.RUnlock()
+
+	// Check if collection exists in our tracking map
+	if collections, ok := m.client.collections[""]; ok { // Using empty string as default db
+		return collections[collectionName], nil
+	}
+	return false, nil
+}
+
+func (m *mockCollectionInterface) CreateCollectionIfNotExists(
+	ctx context.Context,
+	collectionName string,
+	shardNum, replicaNum uint32,
+	description string,
+	index tcvectordb.Indexes,
+	params ...*tcvectordb.CreateCollectionParams,
+) (*tcvectordb.Collection, error) {
+	if m.client.createCollectionError != nil {
+		return nil, m.client.createCollectionError
+	}
+
+	m.client.mu.Lock()
+	defer m.client.mu.Unlock()
+
+	// Capture the params for validation
+	if len(params) > 0 && params[0] != nil {
+		m.lastCreateParams = params[0]
+	}
+
+	// Track the collection creation
+	if m.client.collections[""] == nil {
+		m.client.collections[""] = make(map[string]bool)
+	}
+	m.client.collections[""][collectionName] = true
+
+	return &tcvectordb.Collection{}, nil
+}
+
+func (m *mockCollectionInterface) DescribeCollection(ctx context.Context, collectionName string) (*tcvectordb.DescribeCollectionResult, error) {
+	if m.client.describeCollectionError != nil {
+		return nil, m.client.describeCollectionError
+	}
+	// Return the configured collection description, or a basic one
+	if m.describeCollectionResult != nil {
+		return m.describeCollectionResult, nil
+	}
+	// Return a basic collection description with vector index
+	return createMockCollectionDesc(true, false, []string{"id", "created_at", "metadata"}), nil
+}
+
+// Implement other required methods with no-op or basic implementations
+func (m *mockCollectionInterface) CreateCollection(ctx context.Context, name string, shardNum, replicaNum uint32, description string, index tcvectordb.Indexes, params ...*tcvectordb.CreateCollectionParams) (*tcvectordb.Collection, error) {
+	return m.CreateCollectionIfNotExists(ctx, name, shardNum, replicaNum, description, index, params...)
+}
+
+func (m *mockCollectionInterface) ListCollection(ctx context.Context) (*tcvectordb.ListCollectionResult, error) {
+	return &tcvectordb.ListCollectionResult{}, nil
+}
+
+func (m *mockCollectionInterface) DropCollection(ctx context.Context, collectionName string) (*tcvectordb.DropCollectionResult, error) {
+	return &tcvectordb.DropCollectionResult{}, nil
+}
+
+func (m *mockCollectionInterface) TruncateCollection(ctx context.Context, collectionName string) (*tcvectordb.TruncateCollectionResult, error) {
+	return &tcvectordb.TruncateCollectionResult{}, nil
+}
+
+func (m *mockCollectionInterface) Collection(name string) *tcvectordb.Collection {
+	return &tcvectordb.Collection{
+		CollectionName: name,
+		IndexInterface: &mockIndexInterface{},
+	}
+}
+
+// mockIndexInterface implements tcvectordb.IndexInterface for testing.
+type mockIndexInterface struct{}
+
+func (m *mockIndexInterface) AddIndex(ctx context.Context, params ...*tcvectordb.AddIndexParams) error {
+	// No-op for testing
+	return nil
+}
+
+func (m *mockIndexInterface) DropIndex(ctx context.Context, params tcvectordb.DropIndexParams) error {
+	return nil
+}
+
+func (m *mockIndexInterface) ModifyVectorIndex(ctx context.Context, param tcvectordb.ModifyVectorIndexParam) error {
+	return nil
+}
+
+func (m *mockIndexInterface) RebuildIndex(ctx context.Context, params ...*tcvectordb.RebuildIndexParams) (*tcvectordb.RebuildIndexResult, error) {
+	return &tcvectordb.RebuildIndexResult{}, nil
+}
+
+func (m *mockIndexInterface) Debug(v bool) {}
+
+func (m *mockIndexInterface) WithTimeout(t time.Duration) {}
+
+func (m *mockIndexInterface) Close() {}
+
+func (m *mockIndexInterface) Options() tcvectordb.ClientOption {
+	return tcvectordb.ClientOption{}
+}
+
+func (m *mockIndexInterface) Request(ctx context.Context, req, res interface{}) error {
+	return nil
+}
+
+func (m *mockCollectionInterface) Debug(v bool) {}
+
+func (m *mockCollectionInterface) WithTimeout(t time.Duration) {}
+
+func (m *mockCollectionInterface) Close() {}
+
+func (m *mockCollectionInterface) Options() tcvectordb.ClientOption {
+	return tcvectordb.ClientOption{}
+}
+
+func (m *mockCollectionInterface) Request(ctx context.Context, req, res interface{}) error {
+	return nil
 }
 
 // TruncateCollection truncates a collection (for DeleteAll support).
@@ -631,4 +818,444 @@ func TestVectorStore_GetFilterFieldName(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Test_initVectorDB tests the initVectorDB function error handling.
+func Test_initVectorDB(t *testing.T) {
+	baseOptions := options{
+		database:              "test_db",
+		collection:            "test_collection",
+		indexDimension:        128,
+		sharding:              1,
+		replicas:              0,
+		idFieldName:           "id",
+		contentFieldName:      "content",
+		embeddingFieldName:    "vector",
+		metadataFieldName:     "metadata",
+		createdAtFieldName:    "created_at",
+		sparseVectorFieldName: "sparse_vector",
+		filterIndexes:         []tcvectordb.FilterIndex{},
+	}
+
+	tests := []struct {
+		name        string
+		setupClient func() storage.ClientInterface
+		options     options
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "create_database_error",
+			setupClient: func() storage.ClientInterface {
+				return &mockClientWithDBError{
+					mockClient:          newMockClient(),
+					createDatabaseError: errors.New("database creation failed"),
+				}
+			},
+			options:     baseOptions,
+			wantErr:     true,
+			errContains: "database creation failed",
+		},
+		{
+			name: "database_not_found",
+			setupClient: func() storage.ClientInterface {
+				return &mockClientWithDBError{
+					mockClient:  newMockClient(),
+					returnNilDB: true,
+				}
+			},
+			options:     baseOptions,
+			wantErr:     true,
+			errContains: "not found",
+		},
+		{
+			name: "check_collection_exists_error",
+			setupClient: func() storage.ClientInterface {
+				return &mockClientWithCollectionError{
+					mockClient:            newMockClient(),
+					existsCollectionError: errors.New("check exists failed"),
+				}
+			},
+			options:     baseOptions,
+			wantErr:     true,
+			errContains: "check collection exists",
+		},
+		{
+			name: "collection_already_exists",
+			setupClient: func() storage.ClientInterface {
+				client := newMockClient()
+				client.databases["test_db"] = true
+				if client.collections["test_db"] == nil {
+					client.collections["test_db"] = make(map[string]bool)
+				}
+				client.collections["test_db"]["test_collection"] = true
+				return client
+			},
+			options: baseOptions,
+			wantErr: false,
+		},
+		{
+			name: "create_collection_with_enableTSVector",
+			setupClient: func() storage.ClientInterface {
+				return newMockClient()
+			},
+			options: options{
+				database:              "test_db",
+				collection:            "test_collection",
+				indexDimension:        128,
+				sharding:              1,
+				replicas:              0,
+				idFieldName:           "id",
+				contentFieldName:      "content",
+				embeddingFieldName:    "vector",
+				metadataFieldName:     "metadata",
+				createdAtFieldName:    "created_at",
+				sparseVectorFieldName: "sparse_vector",
+				filterIndexes:         []tcvectordb.FilterIndex{},
+				enableTSVector:        true,
+			},
+			wantErr: false,
+		},
+		{
+			name: "create_collection_error",
+			setupClient: func() storage.ClientInterface {
+				return &mockClientWithCollectionError{
+					mockClient:            newMockClient(),
+					createCollectionError: errors.New("create collection failed"),
+				}
+			},
+			options:     baseOptions,
+			wantErr:     true,
+			errContains: "create collection",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := tt.setupClient()
+			err := initVectorDB(client, tt.options)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				if !contains(err.Error(), tt.errContains) {
+					t.Errorf("error = %v, want error containing %q", err, tt.errContains)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+// mockClientWithDBError extends mockClient to simulate database-level errors.
+type mockClientWithDBError struct {
+	*mockClient
+	createDatabaseError error
+	returnNilDB         bool
+}
+
+// CreateDatabaseIfNotExists simulates database creation with potential errors.
+func (m *mockClientWithDBError) CreateDatabaseIfNotExists(ctx context.Context, dbName string) (*tcvectordb.CreateDatabaseResult, error) {
+	if m.createDatabaseError != nil {
+		return nil, m.createDatabaseError
+	}
+	return m.mockClient.CreateDatabaseIfNotExists(ctx, dbName)
+}
+
+// Database returns nil when configured to simulate database not found.
+func (m *mockClientWithDBError) Database(dbName string) *tcvectordb.Database {
+	if m.returnNilDB {
+		return nil
+	}
+	return m.mockClient.Database(dbName)
+}
+
+// mockClientWithCollectionError extends mockClient to simulate collection-level errors.
+type mockClientWithCollectionError struct {
+	*mockClient
+	existsCollectionError error
+	createCollectionError error
+}
+
+// CreateDatabaseIfNotExists for mockClientWithCollectionError.
+func (m *mockClientWithCollectionError) CreateDatabaseIfNotExists(ctx context.Context, dbName string) (*tcvectordb.CreateDatabaseResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.databases[dbName] = true
+	return &tcvectordb.CreateDatabaseResult{}, nil
+}
+
+// Database returns a mock database - we set errors on the mockClient level.
+func (m *mockClientWithCollectionError) Database(dbName string) *tcvectordb.Database {
+	// Set the error flags on the embedded mockClient so that collection operations will fail
+	m.mockClient.existsCollectionError = m.existsCollectionError
+	m.mockClient.createCollectionError = m.createCollectionError
+	return m.mockClient.Database(dbName)
+}
+
+// contains checks if a string contains a substring.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// Test_initVectorDB_CreateCollectionParams tests CreateCollectionParams configuration.
+func Test_initVectorDB_CreateCollectionParams(t *testing.T) {
+	tests := []struct {
+		name               string
+		embeddingModel     string
+		filterAll          bool
+		expectEmbedding    bool
+		expectFilterConfig bool
+		expectedModelName  string
+	}{
+		{
+			name:               "no_remote_embedding_no_filterAll",
+			embeddingModel:     "",
+			filterAll:          false,
+			expectEmbedding:    false,
+			expectFilterConfig: false,
+		},
+		{
+			name:               "with_remote_embedding_bge-base-zh",
+			embeddingModel:     "bge-base-zh",
+			filterAll:          false,
+			expectEmbedding:    true,
+			expectFilterConfig: false,
+			expectedModelName:  "bge-base-zh",
+		},
+		{
+			name:               "with_remote_embedding_m3e-base",
+			embeddingModel:     "m3e-base",
+			filterAll:          false,
+			expectEmbedding:    true,
+			expectFilterConfig: false,
+			expectedModelName:  "m3e-base",
+		},
+		{
+			name:               "with_filterAll_only",
+			embeddingModel:     "",
+			filterAll:          true,
+			expectEmbedding:    false,
+			expectFilterConfig: true,
+		},
+		{
+			name:               "with_both_remote_embedding_and_filterAll",
+			embeddingModel:     "text-embedding-ada-002",
+			filterAll:          true,
+			expectEmbedding:    true,
+			expectFilterConfig: true,
+			expectedModelName:  "text-embedding-ada-002",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create mock client
+			mockClient := newMockClient()
+
+			// Prepare options
+			opts := options{
+				database:           "test_db",
+				collection:         "test_collection",
+				indexDimension:     128,
+				embeddingModel:     tt.embeddingModel,
+				filterAll:          tt.filterAll,
+				contentFieldName:   "content",
+				embeddingFieldName: "vector",
+				metadataFieldName:  "metadata",
+				idFieldName:        "id",
+				createdAtFieldName: "created_at",
+				sharding:           1,
+				replicas:           0,
+				filterIndexes:      []tcvectordb.FilterIndex{},
+			}
+
+			// Call initVectorDB
+			err := initVectorDB(mockClient, opts)
+			if err != nil {
+				t.Fatalf("initVectorDB failed: %v", err)
+			}
+
+			// Get the captured CreateCollectionParams
+			if mockClient.lastCollectionInterface == nil {
+				t.Fatal("lastCollectionInterface is nil")
+			}
+
+			createParams := mockClient.lastCollectionInterface.lastCreateParams
+
+			// Verify embedding configuration
+			if tt.expectEmbedding {
+				if createParams == nil || createParams.Embedding == nil {
+					t.Error("Expected Embedding config but got nil")
+				} else {
+					if createParams.Embedding.ModelName != tt.expectedModelName {
+						t.Errorf("ModelName = %v, want %v", createParams.Embedding.ModelName, tt.expectedModelName)
+					}
+					if createParams.Embedding.Field != opts.contentFieldName {
+						t.Errorf("Embedding.Field = %v, want %v", createParams.Embedding.Field, opts.contentFieldName)
+					}
+					if createParams.Embedding.VectorField != opts.embeddingFieldName {
+						t.Errorf("Embedding.VectorField = %v, want %v", createParams.Embedding.VectorField, opts.embeddingFieldName)
+					}
+				}
+			} else {
+				if createParams != nil && createParams.Embedding != nil {
+					t.Error("Expected no Embedding config but got one")
+				}
+			}
+
+			// Verify filterAll configuration
+			if tt.expectFilterConfig {
+				if createParams == nil || createParams.FilterIndexConfig == nil {
+					t.Error("Expected FilterIndexConfig but got nil")
+				} else if !createParams.FilterIndexConfig.FilterAll {
+					t.Error("Expected FilterAll to be true")
+				}
+			} else {
+				if createParams != nil && createParams.FilterIndexConfig != nil && createParams.FilterIndexConfig.FilterAll {
+					t.Error("Expected no FilterIndexConfig or FilterAll=false")
+				}
+			}
+		})
+	}
+}
+
+// Test_checkIndexes_FilterAll tests the filterAll skip logic in checkIndexes.
+func Test_checkIndexes_FilterAll(t *testing.T) {
+	tests := []struct {
+		name            string
+		filterAll       bool
+		enableTSVector  bool
+		existingIndexes *tcvectordb.DescribeCollectionResult
+		expectError     bool
+	}{
+		{
+			name:            "filterAll_enabled_skips_filter_index_validation",
+			filterAll:       true,
+			enableTSVector:  false,
+			existingIndexes: createMockCollectionDesc(true, false, []string{}),
+			expectError:     false,
+		},
+		{
+			name:            "filterAll_disabled_validates_filter_indexes",
+			filterAll:       false,
+			enableTSVector:  false,
+			existingIndexes: createMockCollectionDesc(true, false, []string{"id", "created_at", "metadata"}),
+			expectError:     false,
+		},
+		{
+			name:            "filterAll_with_tsvector_enabled",
+			filterAll:       true,
+			enableTSVector:  true,
+			existingIndexes: createMockCollectionDesc(true, true, []string{}),
+			expectError:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create mock client
+			mockClient := newMockClient()
+
+			// Get database and set up the collection description
+			db := mockClient.Database("test_db")
+			if mockColInterface, ok := db.CollectionInterface.(*mockCollectionInterface); ok {
+				mockColInterface.describeCollectionResult = tt.existingIndexes
+			}
+
+			// Mark collection as existing
+			mockClient.collections[""] = make(map[string]bool)
+			mockClient.collections[""]["test_collection"] = true
+
+			// Prepare options
+			opts := options{
+				database:              "test_db",
+				collection:            "test_collection",
+				filterAll:             tt.filterAll,
+				enableTSVector:        tt.enableTSVector,
+				embeddingFieldName:    "vector",
+				sparseVectorFieldName: "sparse_vector",
+				idFieldName:           "id",
+				createdAtFieldName:    "created_at",
+				metadataFieldName:     "metadata",
+				filterIndexes: []tcvectordb.FilterIndex{
+					{FieldName: "new_field", FieldType: tcvectordb.String, IndexType: tcvectordb.FILTER},
+				},
+			}
+
+			// Call checkIndexes
+			err := checkIndexes(db, opts)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error but got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// createMockCollectionDesc creates a mock DescribeCollectionResult for testing.
+func createMockCollectionDesc(hasVectorIndex, hasSparseIndex bool, filterFieldNames []string) *tcvectordb.DescribeCollectionResult {
+	indexes := tcvectordb.Indexes{
+		VectorIndex:       []tcvectordb.VectorIndex{},
+		FilterIndex:       []tcvectordb.FilterIndex{},
+		SparseVectorIndex: []tcvectordb.SparseVectorIndex{},
+	}
+
+	if hasVectorIndex {
+		indexes.VectorIndex = append(indexes.VectorIndex, tcvectordb.VectorIndex{
+			FilterIndex: tcvectordb.FilterIndex{
+				FieldName: "vector",
+				FieldType: tcvectordb.Vector,
+				IndexType: tcvectordb.HNSW,
+			},
+			MetricType: tcvectordb.COSINE,
+			Dimension:  128,
+			Params: &tcvectordb.HNSWParam{
+				M:              32,
+				EfConstruction: 400,
+			},
+		})
+	}
+
+	if hasSparseIndex {
+		indexes.SparseVectorIndex = append(indexes.SparseVectorIndex, tcvectordb.SparseVectorIndex{
+			FieldName:  "sparse_vector",
+			FieldType:  tcvectordb.SparseVector,
+			IndexType:  tcvectordb.SPARSE_INVERTED,
+			MetricType: tcvectordb.IP,
+		})
+	}
+
+	for _, fieldName := range filterFieldNames {
+		indexes.FilterIndex = append(indexes.FilterIndex, tcvectordb.FilterIndex{
+			FieldName: fieldName,
+			FieldType: tcvectordb.String,
+			IndexType: tcvectordb.FILTER,
+		})
+	}
+
+	result := &tcvectordb.DescribeCollectionResult{}
+	result.Indexes = indexes
+	result.IndexInterface = &mockIndexInterface{}
+	return result
 }
