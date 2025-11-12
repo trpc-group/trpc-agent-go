@@ -966,3 +966,103 @@ func TestObjectTypeConstants(t *testing.T) {
 		})
 	}
 }
+
+func TestResponse_IsUserMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}{
+		{
+			name:     "nil response",
+			rsp:      nil,
+			expected: false,
+		},
+		{
+			name:     "empty choices",
+			rsp:      &Response{Choices: []Choice{}},
+			expected: false,
+		},
+		{
+			name: "user role",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{Content: "content", Role: RoleUser},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "assistant role",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{Role: RoleAssistant},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "system role",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{Role: RoleSystem},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "empty role",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{Role: ""},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "multiple choices with first as user",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{Role: RoleUser},
+					},
+					{
+						Message: Message{Role: RoleAssistant},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "multiple choices with first as assistant",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{Role: RoleAssistant},
+					},
+					{
+						Message: Message{Role: RoleUser},
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.rsp.IsUserMessage()
+			if result != tt.expected {
+				t.Errorf("IsUserMessage() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
