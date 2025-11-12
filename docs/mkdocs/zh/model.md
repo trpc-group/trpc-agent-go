@@ -1018,6 +1018,13 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - API Key 环境变量名：`DEEPSEEK_API_KEY`
 - 其他行为与标准 OpenAI 一致
 
+**4. VariantQwen（千问）**
+
+- 通义千问平台适配
+- 默认 BaseURL：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+- API Key 环境变量名：`DASHSCOPE_API_KEY`
+- 其他行为与标准 OpenAI 一致
+
 ##### 6.2. 使用方式
 
 **使用示例**：
