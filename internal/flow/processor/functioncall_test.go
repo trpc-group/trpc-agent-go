@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -797,6 +798,88 @@ func TestConvertToolArguments(t *testing.T) {
 	}
 }
 
+func TestSetDefaultTransferMessage(t *testing.T) {
+	// Change default, then verify conversion uses it when message empty.
+	SetDefaultTransferMessage("delegated")
+	defer func() { SetDefaultTransferMessage("Task delegated from coordinator") }()
+
+	res := convertToolArguments("agent-x", []byte("{}"),
+		transfer.TransferToolName)
+	require.NotNil(t, res)
+	var got transfer.Request
+	require.NoError(t, json.Unmarshal(res, &got))
+	require.Equal(t, "agent-x", got.AgentName)
+	require.Equal(t, "delegated", got.Message)
+}
+
+// Tool that returns an unmarshable result to trigger marshal error.
+type badResultTool struct{ dec *tool.Declaration }
+
+func (b *badResultTool) Declaration() *tool.Declaration { return b.dec }
+func (b *badResultTool) Call(_ context.Context, _ []byte) (any, error) {
+	ch := make(chan int)
+	close(ch)
+	return ch, nil
+}
+
+func TestExecuteToolCall_MarshalError_IsIgnorable(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	pc := model.ToolCall{
+		ID: "c1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "bad",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tools := map[string]tool.Tool{
+		"bad": &badResultTool{dec: &tool.Declaration{Name: "bad"}},
+	}
+	choice, _, ignorable, err := p.executeToolCall(
+		ctx, inv, pc, tools, 0, nil,
+	)
+	require.Error(t, err)
+	require.True(t, ignorable)
+	require.Nil(t, choice)
+	require.Contains(t, err.Error(), ErrorMarshalResult)
+}
+
+// tool that reports a state delta
+type deltaTool struct{}
+
+func (d *deltaTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "withdelta"}
+}
+func (d *deltaTool) Call(ctx context.Context, _ []byte) (any, error) {
+	return "ok", nil
+}
+func (d *deltaTool) StateDelta(_ []byte, _ []byte) map[string][]byte {
+	return map[string][]byte{"x": []byte("y")}
+}
+
+func TestExecuteSingleToolCallSequential_AttachesStateDelta(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	tc := model.ToolCall{
+		ID: "c1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "withdelta",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tools := map[string]tool.Tool{"withdelta": &deltaTool{}}
+	ch := make(chan *event.Event, 4)
+	ev, err := p.executeSingleToolCallSequential(
+		context.Background(), inv, rsp, tools, ch, 0, tc,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.NotNil(t, ev.StateDelta)
+	require.Equal(t, []byte("y"), ev.StateDelta["x"])
+}
+
 func TestSubAgentCall(t *testing.T) {
 	t.Run("should unmarshal message field correctly", func(t *testing.T) {
 		input := subAgentCall{}
@@ -907,6 +990,78 @@ func TestExecuteStreamableTool_EmitsPartialEvents(t *testing.T) {
 		require.Len(t, e.Choices, 1)
 		require.Equal(t, "call-xyz", e.Choices[0].Message.ToolID)
 	}
+}
+
+func TestExecuteCallableTool_ErrorWrap(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, errors.New("e")
+		},
+	}
+	_, err := p.executeCallableTool(context.Background(),
+		model.ToolCall{Function: model.FunctionDefinitionParam{
+			Name: "t",
+		}}, tl,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorCallableToolExecution)
+}
+
+func TestConvertToolArguments_InvalidJSON(t *testing.T) {
+	b := convertToolArguments("child", []byte("{"),
+		transfer.TransferToolName)
+	require.Nil(t, b)
+}
+
+func TestProcessStreamChunk_ForwardsEvent(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{Model: &mockModel{},
+		InvocationID: "i", AgentName: "a"}
+	ev := event.New("i", "a")
+	ch := make(chan *event.Event, 1)
+	var contents []any
+	err := f.processStreamChunk(ctx, inv,
+		model.ToolCall{ID: "x"},
+		tool.StreamChunk{Content: ev}, ch, &contents,
+	)
+	require.NoError(t, err)
+	select {
+	case got := <-ch:
+		require.NotNil(t, got)
+	default:
+		t.Fatal("expected an event forwarded")
+	}
+}
+
+func TestExecuteToolCall_MarshalErrorIgnored(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "t", Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"t": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "t"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return math.NaN(), nil
+			},
+		},
+	}
+	tc := model.ToolCall{
+		ID: "id",
+		Function: model.FunctionDefinitionParam{
+			Name:      "t",
+			Arguments: []byte(`{}`),
+		},
+	}
+	choice, _, ign, err := p.executeToolCall(
+		ctx, inv, tc, tools, 0, nil,
+	)
+	require.True(t, ign)
+	require.Error(t, err)
+	require.Nil(t, choice)
+	require.Contains(t, err.Error(), ErrorMarshalResult)
 }
 
 // Tool that requests skipping summarization.
@@ -1488,6 +1643,39 @@ func TestHandleFunctionCallsAndSendEvent_StopErrorEmitsErrorEvent(t *testing.T) 
 	}
 }
 
+func TestProcessResponse_StopError_SetsEndInvocation(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv-stop",
+	}
+	// Tool returns StopError so ProcessResponse should mark
+	// EndInvocation and return immediately.
+	errTool := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "err"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, agent.NewStopError("stop")
+		},
+	}
+	tools := map[string]tool.Tool{"err": errTool}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "err",
+				Arguments: []byte(`{}`),
+			},
+		}}},
+	}}}
+
+	ch := make(chan *event.Event, 2)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	require.True(t, inv.EndInvocation)
+}
+
 func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(true, nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1495,6 +1683,87 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	res, err := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
 	require.NotNil(t, res)
 	require.NoError(t, err)
+}
+
+func TestConvertToolArguments_DefaultMessageAndSetter(t *testing.T) {
+	// Preserve and restore default message to avoid cross‑test impact.
+	old := defaultTransferMessage
+	defer SetDefaultTransferMessage(old)
+
+	SetDefaultTransferMessage("Delegated task")
+	// No message provided in original args should use default.
+	b := convertToolArguments(
+		"weather-agent", []byte("{}"), transfer.TransferToolName,
+	)
+	require.NotNil(t, b)
+	var req transfer.Request
+	require.NoError(t, json.Unmarshal(b, &req))
+	require.Equal(t, "weather-agent", req.AgentName)
+	require.Equal(t, "Delegated task", req.Message)
+}
+
+// Tool that is streamable but opts out via StreamInnerPreference.
+type noStreamPrefTool struct{}
+
+func (n *noStreamPrefTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "s"}
+}
+func (n *noStreamPrefTool) StreamableCall(
+	_ context.Context, _ []byte,
+) (*tool.StreamReader, error) {
+	return nil, nil
+}
+func (n *noStreamPrefTool) StreamInner() bool { return false }
+
+func TestIsStreamable_RespectsPreferenceFalse(t *testing.T) {
+	require.False(t, isStreamable(&noStreamPrefTool{}))
+}
+
+// onlyTool implements Tool but neither Callable nor Streamable.
+type onlyTool struct{}
+
+func (o *onlyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "only"}
+}
+
+func TestExecuteTool_UnsupportedToolType(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
+	tc := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "only"}}
+	_, err := p.executeTool(ctx, inv, tc, &onlyTool{}, nil)
+	require.Error(t, err)
+}
+
+func TestCollectParallelToolResults_IndexOutOfRange(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(true, nil)
+	ch := make(chan toolResult, 2)
+	// One valid index, one out of range to hit the log branch.
+	ch <- toolResult{index: 5, event: &event.Event{}}
+	ch <- toolResult{index: 0, event: &event.Event{}}
+	close(ch)
+
+	evs, err := p.collectParallelToolResults(
+		context.Background(), ch, 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+}
+
+func TestProcessStreamChunk_EmptyText_NoEvent(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tc := model.ToolCall{ID: "x", Function: model.FunctionDefinitionParam{Name: "t"}}
+	out := make([]any, 0)
+	ch := make(chan *event.Event, 1)
+	// Empty string chunk should be ignored.
+	err := f.processStreamChunk(
+		ctx, inv, tc, tool.StreamChunk{Content: ""}, ch, &out,
+	)
+	require.NoError(t, err)
+	require.Empty(t, out)
+	require.Len(t, ch, 0)
 }
 
 func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
