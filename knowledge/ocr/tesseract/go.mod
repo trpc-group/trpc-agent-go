@@ -1,10 +1,10 @@
 module trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract
 
-go 1.23
+go 1.21
+
+replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
 require (
 	github.com/otiai10/gosseract/v2 v2.4.1
-	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr v0.0.0
+	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
 )
-
-replace trpc.group/trpc-go/trpc-agent-go/ => ../../
