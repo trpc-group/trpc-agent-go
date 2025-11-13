@@ -153,6 +153,9 @@ func copyArray(rv reflect.Value, visited map[uintptr]any) any {
 }
 
 func copyStruct(rv reflect.Value, visited map[uintptr]any) any {
+	if isTimeType(rv) {
+		return copyTimeType(rv)
+	}
 	newStruct := reflect.New(rv.Type()).Elem()
 	for i := 0; i < rv.NumField(); i++ {
 		ft := rv.Type().Field(i)
@@ -179,4 +182,50 @@ func copyStruct(rv reflect.Value, visited map[uintptr]any) any {
 		}
 	}
 	return newStruct.Interface()
+}
+
+func isTimeType(value reflect.Value) bool {
+	rt := value.Type()
+	if rt == reflect.TypeOf(time.Time{}) {
+		return true
+	}
+
+	if rt == reflect.TypeOf((*time.Time)(nil)) {
+		return true
+	}
+
+	for value.Kind() == reflect.Ptr {
+		if value.IsNil() {
+			return false
+		}
+		value = value.Elem()
+	}
+
+	if rt.ConvertibleTo(reflect.TypeOf(time.Time{})) {
+		return true
+	}
+
+	return false
+}
+
+func copyTimeType(value reflect.Value) any {
+	for value.Kind() == reflect.Ptr {
+		if value.IsNil() {
+			return nil
+		}
+		value = value.Elem()
+	}
+
+	if value.Type().ConvertibleTo(reflect.TypeOf(time.Time{})) {
+		timeVal := value.Convert(reflect.TypeOf(time.Time{})).Interface().(time.Time)
+		originalType := value.Type()
+		if originalType.Kind() == reflect.Ptr {
+			copiedTime := timeVal
+			return reflect.ValueOf(&copiedTime).Convert(originalType).Interface()
+		} else {
+			return reflect.ValueOf(timeVal).Convert(originalType).Interface()
+		}
+	}
+
+	return value
 }
