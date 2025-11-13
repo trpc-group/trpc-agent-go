@@ -109,6 +109,14 @@ func WithEnableStreaming(enable bool) Option {
 	}
 }
 
+// WithAutoGenConversationName sets whether to auto-generate conversation names in Dify.
+// This option is only applicable for chatflow mode.
+func WithAutoGenConversationName(enable bool) Option {
+	return func(a *DifyAgent) {
+		a.autoGenConversationName = &enable
+	}
+}
+
 // WithGetDifyClientFunc sets a custom function to create Dify client for each invocation.
 // This is optional - if not provided, the agent will use a default client with base configuration.
 //

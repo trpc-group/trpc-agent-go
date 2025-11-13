@@ -165,6 +165,11 @@ func (r *DifyAgent) processStreamEvent(
 ) (*event.Event, string, error) {
 	evt := r.eventConverter.ConvertStreamingToEvent(streamEvent, r.name, invocation)
 
+	// Handle nil event (e.g., when Answer is empty)
+	if evt == nil {
+		return nil, "", nil
+	}
+
 	// Aggregate content from delta
 	var content string
 	if evt.Response != nil && len(evt.Response.Choices) > 0 {
@@ -346,6 +351,11 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 			if err != nil {
 				r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
 				return
+			}
+
+			// Skip nil events (empty responses)
+			if evt == nil {
+				continue
 			}
 
 			if content != "" {
