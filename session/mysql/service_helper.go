@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -291,7 +290,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	if sessState.State == nil {
 		sessState.State = make(session.StateMap)
 	}
-	isession.ApplyEventStateDeltaMap(sessState.State, event)
+	session.ApplyEventStateDeltaMap(sessState.State, event)
 	updatedStateBytes, err := json.Marshal(sessState)
 	if err != nil {
 		return fmt.Errorf("marshal session state failed: %w", err)

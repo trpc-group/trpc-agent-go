@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -272,12 +271,12 @@ func (s *Service) CreateSession(
 	if sessionExists {
 		// If session exists and has not expired, reject creation
 		if !existingExpiresAt.Valid {
-			log.Errorf("CreateSession: session already exists with no expiration (app=%s, user=%s, session=%s)", 
+			log.Errorf("CreateSession: session already exists with no expiration (app=%s, user=%s, session=%s)",
 				key.AppName, key.UserID, key.SessionID)
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
 		if existingExpiresAt.Time.After(now) {
-			log.Errorf("CreateSession: session already exists and not expired yet (app=%s, user=%s, session=%s, expires=%v)", 
+			log.Errorf("CreateSession: session already exists and not expired yet (app=%s, user=%s, session=%s, expires=%v)",
 				key.AppName, key.UserID, key.SessionID, existingExpiresAt.Time)
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
@@ -286,8 +285,8 @@ func (s *Service) CreateSession(
 			key.AppName, key.UserID, key.SessionID)
 		s.cleanupExpiredForUser(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
 	}
-	
-	log.Debugf("CreateSession: inserting new session (app=%s, user=%s, session=%s)", 
+
+	log.Debugf("CreateSession: inserting new session (app=%s, user=%s, session=%s)",
 		key.AppName, key.UserID, key.SessionID)
 
 	// Insert session state (MySQL syntax)
@@ -546,7 +545,7 @@ func (s *Service) AppendEvent(
 		return err
 	}
 	// update user session with the given event
-	isession.UpdateUserSession(sess, event, opts...)
+	sess.UpdateUserSession(event, opts...)
 
 	// persist event to MySQL asynchronously
 	if s.opts.enableAsyncPersist {
