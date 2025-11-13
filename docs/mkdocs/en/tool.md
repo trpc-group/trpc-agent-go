@@ -79,12 +79,12 @@ type StreamChunk struct {
 
 ### Tool Types
 
-| Tool Type | Definition | Integration Method |
-|----------|------------|--------------------|
-| **Function Tools** | Tools implemented by directly calling Go functions | `Tool` interface, in-process calls |
-| **Agent Tool (AgentTool)** | Wrap any Agent as a callable tool | `Tool` interface, supports streaming inner forwarding |
-| **DuckDuckGo Tool** | Search tool based on DuckDuckGo API | `Tool` interface, HTTP API |
-| **MCP ToolSet** | External toolset based on MCP protocol | `ToolSet` interface, multiple transports |
+| Tool Type                  | Definition                                         | Integration Method                                    |
+| -------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
+| **Function Tools**         | Tools implemented by directly calling Go functions | `Tool` interface, in-process calls                    |
+| **Agent Tool (AgentTool)** | Wrap any Agent as a callable tool                  | `Tool` interface, supports streaming inner forwarding |
+| **DuckDuckGo Tool**        | Search tool based on DuckDuckGo API                | `Tool` interface, HTTP API                            |
+| **MCP ToolSet**            | External toolset based on MCP protocol             | `ToolSet` interface, multiple transports              |
 
 > **📖 Related docs**: For Agent Tool and Transfer Tool used in multi-Agent collaboration, see the Multi-Agent System document.
 
@@ -143,7 +143,7 @@ func getStreamableWeather(input weatherInput) *tool.StreamReader {
     stream := tool.NewStream(10)
     go func() {
         defer stream.Writer.Close()
-        
+
         // Simulate progressively returning weather data.
         result := "Sunny, 25°C in " + input.Location
         for i := 0; i < len(result); i++ {
@@ -153,14 +153,14 @@ func getStreamableWeather(input weatherInput) *tool.StreamReader {
                 },
                 Metadata: tool.Metadata{CreatedAt: time.Now()},
             }
-            
+
             if closed := stream.Writer.Send(chunk, nil); closed {
                 break
             }
             time.Sleep(10 * time.Millisecond) // Simulate latency.
         }
     }()
-    
+
     return stream.Reader
 }
 
@@ -186,7 +186,7 @@ for {
     if err != nil {
         return err
     }
-    
+
     // Process each chunk.
     fmt.Printf("Received: %v\n", chunk.Content)
 }
@@ -404,10 +404,12 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
 ### Options
 
 - WithSkipSummarization(bool):
+
   - false (default): Allow an additional summarization/answer call after the tool result
   - true: Skip the outer summarization LLM call once the tool returns
 
 - WithStreamInner(bool):
+
   - true: Forward child Agent events to the parent flow (recommended: enable `GenerationConfig{Stream: true}` for both parent and child Agents)
   - false: Treat as a callable-only tool, without inner event forwarding
 
@@ -439,6 +441,7 @@ child := agenttool.NewTool(
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool/function"
     "trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo"
     "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
@@ -450,7 +453,7 @@ calculatorTool := function.NewFunctionTool(calculator,
     function.WithDescription("Perform basic mathematical operations."))
 
 timeTool := function.NewFunctionTool(getCurrentTime,
-    function.WithName("current_time"), 
+    function.WithName("current_time"),
     function.WithDescription("Get the current time."))
 
 // Create a built-in tool.
@@ -622,9 +625,9 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 
 The framework automatically distinguishes **user tools** from **framework tools**, filtering only user tools:
 
-| Tool Category | Includes | Filtered? |
-|--------------|----------|-----------|
-| **User Tools** | Tools registered via `WithTools`<br>Tools registered via `WithToolSets` | ✅ Subject to filtering |
+| Tool Category       | Includes                                                                                                                      | Filtered?                         |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| **User Tools**      | Tools registered via `WithTools`<br>Tools registered via `WithToolSets`                                                       | ✅ Subject to filtering           |
 | **Framework Tools** | `transfer_to_agent` (multi-Agent coordination)<br>`knowledge_search` (knowledge base retrieval)<br>`agentic_knowledge_search` | ❌ Never filtered, auto-preserved |
 
 **Example:**
@@ -663,7 +666,7 @@ func sensitiveOperation(ctx context.Context, req Request) (Result, error) {
     if !hasPermission(ctx, req.UserID, "sensitive_operation") {
         return nil, fmt.Errorf("permission denied")
     }
-    
+
     // Execute operation
     return performOperation(req)
 }
@@ -694,14 +697,14 @@ stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
 ```bash
 # Parallel execution (enabled).
 Tool 1: get_weather     [====] 50ms
-Tool 2: get_population  [====] 50ms  
+Tool 2: get_population  [====] 50ms
 Tool 3: get_time       [====] 50ms
 Total time: ~50ms (executed simultaneously)
 
 # Serial execution (default).
 Tool 1: get_weather     [====] 50ms
 Tool 2: get_population       [====] 50ms
-Tool 3: get_time                  [====] 50ms  
+Tool 3: get_time                  [====] 50ms
 Total time: ~150ms (executed sequentially)
 ```
 
@@ -722,7 +725,7 @@ package main
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -752,7 +755,7 @@ func main() {
         function.WithName("calculator"),
         function.WithDescription("Simple calculator."),
     )
-    
+
     // 2. Create model and Agent.
     llmModel := openai.New("DeepSeek-V3-Online-64K")
     agent := llmagent.New("calculator-assistant",
@@ -761,25 +764,25 @@ func main() {
         llmagent.WithTools([]tool.Tool{calculatorTool}),
         llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
     )
-    
+
     // 3. Create Runner and execute.
     r := runner.NewRunner("math-app", agent)
-    
+
     ctx := context.Background()
     userMessage := model.NewUserMessage("Please calculate 25 times 4.")
-    
+
     eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
     if err != nil {
         panic(err)
     }
-    
+
     // 4. Handle responses.
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("Error: %s\n", event.Error.Message)
             continue
         }
-        
+
         // Display tool calls.
         if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
             for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
@@ -787,12 +790,12 @@ func main() {
                 fmt.Printf("   Params: %s\n", string(toolCall.Function.Arguments))
             }
         }
-        
+
         // Display streaming content.
         if len(event.Response.Choices) > 0 {
             fmt.Print(event.Response.Choices[0].Delta.Content)
         }
-        
+
         if event.Done {
             break
         }
@@ -807,7 +810,7 @@ func main() {
 cd examples/tool
 go run .
 
-# Enter the MCP tool example directory.  
+# Enter the MCP tool example directory.
 cd examples/mcp_tool
 
 # Start the external server.

@@ -995,8 +995,11 @@ model := anthropic.New("claude-sonnet-4-0",
 ```
 
 #### 6. Variant Optimization: Adapting to Platform-Specific Behaviors
+
 The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, especially for file upload, deletion, and processing logic.
+
 ##### 6.1. Supported Variant Types
+
 The framework currently supports the following Variants:
 
 **1. VariantOpenAI（default）**
@@ -1048,6 +1051,7 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
 )
 ```
+
 ##### 6.3. Behavioral Differences of Variants Examples
 
 **Message content handling differences**：
@@ -1068,6 +1072,7 @@ message := model.Message{
     },
 }
 ```
+
 **Environment variable auto-configuration**
 
 For certain Variants, the framework supports reading configuration from environment variables automatically:
@@ -1275,8 +1280,8 @@ In environments like gateways, proprietary platforms, or proxy setups, model API
 
 Recommended order:
 
-* Use **Anthropic RequestOption** to set global headers (simple and intuitive)
-* Use a custom `http.RoundTripper` injection (advanced, more cross-cutting capabilities)
+- Use **Anthropic RequestOption** to set global headers (simple and intuitive)
+- Use a custom `http.RoundTripper` injection (advanced, more cross-cutting capabilities)
 
 Both methods affect streaming requests, as they use the same underlying client.
 
@@ -1358,8 +1363,8 @@ llm := anthropic.New("claude-sonnet-4-0",
 
 Regarding **"per-request" headers**:
 
-* The Agent/Runner will propagate `ctx` to the model call; middleware can read the value from `req.Context()` to inject headers for "this call."
-* For **message completion**, the current API doesn't expose per-call BaseURL overrides; if switching is needed, create a model using a different BaseURL or modify the `r.URL` in middleware.
+- The Agent/Runner will propagate `ctx` to the model call; middleware can read the value from `req.Context()` to inject headers for "this call."
+- For **message completion**, the current API doesn't expose per-call BaseURL overrides; if switching is needed, create a model using a different BaseURL or modify the `r.URL` in middleware.
 
 #### 3. Token Tailoring
 
