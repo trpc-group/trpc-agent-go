@@ -146,11 +146,12 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	if err := graph.validate(); err != nil {
 		return nil, fmt.Errorf("invalid graph: %w", err)
 	}
-	var options ExecutorOptions
-	options.ChannelBufferSize = defaultChannelBufferSize         // Default buffer size.
-	options.MaxSteps = defaultMaxSteps                           // Default max steps.
-	options.StepTimeout = defaultStepTimeout                     // Default step timeout.
-	options.CheckpointSaveTimeout = defaultCheckpointSaveTimeout // Default checkpoint save timeout.
+	options := ExecutorOptions{
+		ChannelBufferSize:     defaultChannelBufferSize,
+		MaxSteps:              defaultMaxSteps,
+		StepTimeout:           defaultStepTimeout,
+		CheckpointSaveTimeout: defaultCheckpointSaveTimeout,
+	}
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)

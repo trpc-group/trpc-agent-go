@@ -126,6 +126,9 @@ func WithGenerationConfig(config model.GenerationConfig) Option {
 // WithChannelBufferSize sets the buffer size for event channels.
 func WithChannelBufferSize(size int) Option {
 	return func(opts *Options) {
+		if size < 0 {
+			size = defaultChannelBufferSize
+		}
 		opts.ChannelBufferSize = size
 	}
 }
@@ -954,7 +957,8 @@ func (a *LLMAgent) wrapEventChannel(
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
 ) <-chan *event.Event {
-	wrappedChan := make(chan *event.Event, 256) // Use default buffer size
+	// Create a new channel with the same capacity as the original channel
+	wrappedChan := make(chan *event.Event, cap(originalChan))
 
 	go func() {
 		var fullRespEvent *event.Event

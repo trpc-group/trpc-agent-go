@@ -56,7 +56,12 @@ func WithSubAgents(subAgents []agent.Agent) Option {
 // This controls how many events can be buffered before blocking.
 // Default is 256 if not specified.
 func WithChannelBufferSize(size int) Option {
-	return func(o *Options) { o.channelBufferSize = size }
+	return func(o *Options) {
+		if size < 0 {
+			size = defaultChannelBufferSize
+		}
+		o.channelBufferSize = size
+	}
 }
 
 // WithAgentCallbacks attaches lifecycle callbacks to the chain agent.
@@ -78,11 +83,6 @@ func New(name string, opts ...Option) *ChainAgent {
 		if opt != nil {
 			opt(&cfg)
 		}
-	}
-
-	// Ensure sane defaults.
-	if cfg.channelBufferSize <= 0 {
-		cfg.channelBufferSize = defaultChannelBufferSize
 	}
 
 	return &ChainAgent{

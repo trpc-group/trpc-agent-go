@@ -30,8 +30,6 @@ import (
 )
 
 const (
-	defaultChannelBufferSize = 256
-
 	// Timeout for event completion signaling.
 	eventCompletionTimeout = 5 * time.Second
 )
@@ -57,16 +55,10 @@ func New(
 	responseProcessors []flow.ResponseProcessor,
 	opts Options,
 ) *Flow {
-	// Set default channel buffer size if not specified.
-	channelBufferSize := opts.ChannelBufferSize
-	if channelBufferSize <= 0 {
-		channelBufferSize = defaultChannelBufferSize
-	}
-
 	return &Flow{
 		requestProcessors:  requestProcessors,
 		responseProcessors: responseProcessors,
-		channelBufferSize:  channelBufferSize,
+		channelBufferSize:  opts.ChannelBufferSize,
 		modelCallbacks:     opts.ModelCallbacks,
 	}
 }
