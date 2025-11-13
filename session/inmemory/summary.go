@@ -142,9 +142,10 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 // tryEnqueueJob attempts to enqueue a summary job to the appropriate channel.
 // Returns true if successful, false if the job should be processed synchronously.
 func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
-	// Check if channels are initialized
-	if len(s.summaryJobChans) == 0 {
-		return false // Channels not initialized or closed, fall back to sync processing
+	// Check if context is already cancelled before attempting to enqueue.
+	if ctx.Err() != nil {
+		log.Debugf("summary job channel context cancelled, falling back to synchronous processing, error: %v", ctx.Err())
+		return false
 	}
 
 	// Select a channel using hash distribution.
