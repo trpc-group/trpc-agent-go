@@ -135,7 +135,7 @@ func (d *defaultEventDifyConverter) ConvertToDifyRequest(
 ) (*dify.ChatMessageRequest, error) {
 	req := &dify.ChatMessageRequest{
 		Query:  invocation.Message.Content,
-		Inputs: make(map[string]interface{}),
+		Inputs: make(map[string]any),
 	}
 	if invocation.Session != nil {
 		req.User = invocation.Session.UserID
@@ -188,7 +188,7 @@ func (d *defaultWorkflowRequestConverter) ConvertToWorkflowRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (dify.WorkflowRequest, error) {
-	inputs := make(map[string]interface{})
+	inputs := make(map[string]any)
 	inputs["query"] = invocation.Message.Content
 
 	// Handle content parts if available

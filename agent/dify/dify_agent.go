@@ -101,13 +101,6 @@ func (r *DifyAgent) sendErrorEvent(ctx context.Context, eventChan chan<- *event.
 	))
 }
 
-// validateA2ARequestOptions validates that all A2A request options are of the correct type
-func (r *DifyAgent) validateRequestOptions(invocation *agent.Invocation) error {
-	// For Dify agent, we don't need to validate A2A client options
-	// CustomAgentConfigs can contain any configuration for Dify requests
-	return nil
-}
-
 // Run implements the Agent interface
 func (r *DifyAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	cli, err := r.getDifyClient(invocation)
@@ -115,11 +108,6 @@ func (r *DifyAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 		return nil, err
 	}
 	r.difyClient = cli
-
-	// Validate A2A request options early
-	if err := r.validateRequestOptions(invocation); err != nil {
-		return nil, err
-	}
 
 	useStreaming := r.shouldUseStreaming()
 	if useStreaming {
@@ -154,7 +142,7 @@ func (r *DifyAgent) buildDifyRequest(
 		return nil, err
 	}
 	if req.Inputs == nil {
-		req.Inputs = map[string]interface{}{}
+		req.Inputs = map[string]any{}
 	}
 
 	// Transfer additional state keys
@@ -207,7 +195,7 @@ func (r *DifyAgent) buildStreamingRequest(
 
 	streamChan, err := r.difyClient.API().ChatMessagesStream(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("Dify chatflow streaming request failed to %s: %v", r.baseUrl, err)
+		return nil, fmt.Errorf("dify chatflow streaming request failed to %s: %v", r.baseUrl, err)
 	}
 
 	return streamChan, nil
@@ -241,7 +229,6 @@ func (r *DifyAgent) buildWorkflowStreamingRequest(
 
 	var aggregatedContentBuilder strings.Builder
 
-	// RunStreamWorkflow uses a callback pattern
 	err = r.difyClient.API().RunStreamWorkflow(ctx, req, func(resp dify.StreamingResponse) {
 		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return
@@ -400,7 +387,7 @@ func (r *DifyAgent) executeNonStreamingRequest(
 
 		workflowResp, err := r.difyClient.API().RunWorkflow(ctx, req)
 		if err != nil {
-			return nil, fmt.Errorf("Dify workflow request failed to %s: %v", r.baseUrl, err)
+			return nil, fmt.Errorf("dify workflow request failed to %s: %v", r.baseUrl, err)
 		}
 
 		// Convert WorkflowResponse to ChatMessageResponse
@@ -437,7 +424,7 @@ func (r *DifyAgent) executeNonStreamingRequest(
 
 	result, err := r.difyClient.API().ChatMessages(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("Dify chatflow request failed to %s: %v", r.baseUrl, err)
+		return nil, fmt.Errorf("dify chatflow request failed to %s: %v", r.baseUrl, err)
 	}
 
 	return result, nil

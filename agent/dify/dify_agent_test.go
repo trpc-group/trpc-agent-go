@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestNew(t *testing.T) {
@@ -182,16 +183,6 @@ func TestDifyAgent_RequestConverter(t *testing.T) {
 			t.Error("expected nil request when converter is nil")
 		}
 	})
-}
-
-func TestDifyAgent_ValidateRequestOptions(t *testing.T) {
-	difyAgent := &DifyAgent{}
-	invocation := &agent.Invocation{}
-
-	err := difyAgent.validateRequestOptions(invocation)
-	if err != nil {
-		t.Errorf("expected no error, got: %v", err)
-	}
 }
 
 func TestDifyAgent_BuildDifyRequest(t *testing.T) {
@@ -720,31 +711,6 @@ func TestDifyAgent_ExecuteNonStreamingRequest(t *testing.T) {
 	})
 }
 
-// Test Run with streaming enabled
-func TestDifyAgent_Run_Streaming(t *testing.T) {
-	t.Run("validates request options", func(t *testing.T) {
-		difyAgent := &DifyAgent{
-			name:             "test-agent",
-			requestConverter: &defaultEventDifyConverter{},
-			eventConverter:   &defaultDifyEventConverter{},
-			getDifyClientFunc: func(*agent.Invocation) (*dify.Client, error) {
-				return &dify.Client{}, nil
-			},
-		}
-
-		invocation := &agent.Invocation{
-			InvocationID: "test-inv",
-			Message:      model.Message{Content: "test"},
-		}
-
-		// validateRequestOptions should pass
-		err := difyAgent.validateRequestOptions(invocation)
-		if err != nil {
-			t.Errorf("expected validation to pass, got: %v", err)
-		}
-	})
-}
-
 // ========== Mock Server Integration Tests ==========
 
 func TestDifyAgent_Run_IntegrationWithMockServer(t *testing.T) {
@@ -989,25 +955,6 @@ func TestDifyAgent_HelperFunctions(t *testing.T) {
 		}
 	})
 
-	t.Run("validateRequestOptions - always succeeds", func(t *testing.T) {
-		difyAgent := createMockDifyAgent(t, mockServer)
-
-		invocation := &agent.Invocation{
-			Message: model.Message{
-				Role:    model.RoleUser,
-				Content: "test",
-			},
-			RunOptions: agent.RunOptions{
-				RuntimeState: make(map[string]any),
-			},
-		}
-
-		err := difyAgent.validateRequestOptions(invocation)
-		if err != nil {
-			t.Errorf("Expected no validation error, got: %v", err)
-		}
-	})
-
 	t.Run("sendErrorEvent", func(t *testing.T) {
 		difyAgent := createMockDifyAgent(t, mockServer)
 
@@ -1035,4 +982,479 @@ func TestDifyAgent_HelperFunctions(t *testing.T) {
 			t.Errorf("Expected error message 'test error message', got: %s", evt.Response.Error.Message)
 		}
 	})
+}
+
+// ========== Workflow Mode Coverage Tests ==========
+
+func TestDifyAgent_WorkflowMode(t *testing.T) {
+	mockServer := NewMockDifyServer()
+	defer mockServer.Close()
+
+	t.Run("workflow mode non-streaming with default converter", func(t *testing.T) {
+		difyAgent := createMockDifyAgent(t, mockServer,
+			WithMode(ModeWorkflow),
+		)
+
+		invocation := &agent.Invocation{
+			InvocationID: "workflow-test-1",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test workflow request",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: make(map[string]any),
+			},
+		}
+
+		eventChan, err := difyAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		var events []*event.Event
+		for evt := range eventChan {
+			events = append(events, evt)
+		}
+
+		if len(events) == 0 {
+			t.Error("Expected at least one event")
+		}
+	})
+
+	t.Run("workflow mode with transfer state keys", func(t *testing.T) {
+		difyAgent := createMockDifyAgent(t, mockServer,
+			WithMode(ModeWorkflow),
+			WithTransferStateKey("workflow_param1", "workflow_param2"),
+		)
+
+		invocation := &agent.Invocation{
+			InvocationID: "workflow-test-2",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test with state",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"workflow_param1": "value1",
+					"workflow_param2": 42,
+					"ignored_param":   "should not transfer",
+				},
+			},
+		}
+
+		eventChan, err := difyAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		var events []*event.Event
+		for evt := range eventChan {
+			events = append(events, evt)
+		}
+
+		if len(events) == 0 {
+			t.Error("Expected at least one event")
+		}
+	})
+
+	t.Run("workflow mode with custom converter", func(t *testing.T) {
+		customConverter := &defaultWorkflowRequestConverter{}
+		difyAgent := createMockDifyAgent(t, mockServer,
+			WithMode(ModeWorkflow),
+			WithCustomWorkflowConverter(customConverter),
+		)
+
+		if difyAgent.workflowConverter != customConverter {
+			t.Error("Custom workflow converter not set correctly")
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "workflow-test-3",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test custom converter",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: make(map[string]any),
+			},
+		}
+
+		eventChan, err := difyAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		var events []*event.Event
+		for evt := range eventChan {
+			events = append(events, evt)
+		}
+
+		if len(events) == 0 {
+			t.Error("Expected at least one event")
+		}
+	})
+
+	t.Run("workflow mode converter error handling", func(t *testing.T) {
+		errorConverter := &errorWorkflowConverter{}
+		difyAgent := createMockDifyAgent(t, mockServer,
+			WithMode(ModeWorkflow),
+			WithCustomWorkflowConverter(errorConverter),
+		)
+
+		invocation := &agent.Invocation{
+			InvocationID: "workflow-error-test",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "This should fail",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: make(map[string]any),
+			},
+		}
+
+		eventChan, err := difyAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Errorf("Expected error to be sent via event, not returned: %v", err)
+		}
+
+		// Should receive error event
+		var receivedError bool
+		for evt := range eventChan {
+			if evt.Response != nil && evt.Response.Error != nil {
+				receivedError = true
+			}
+		}
+		if !receivedError {
+			t.Error("Expected to receive error event from converter")
+		}
+	})
+
+	t.Run("workflow nil converter error", func(t *testing.T) {
+		difyAgent := createMockDifyAgent(t, mockServer,
+			WithMode(ModeWorkflow),
+		)
+		difyAgent.workflowConverter = nil
+
+		invocation := &agent.Invocation{
+			InvocationID: "workflow-nil-converter",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: make(map[string]any),
+			},
+		}
+
+		eventChan, err := difyAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Errorf("Expected error via event, got: %v", err)
+		}
+
+		var receivedError bool
+		for evt := range eventChan {
+			if evt.Response != nil && evt.Response.Error != nil {
+				receivedError = true
+			}
+		}
+		if !receivedError {
+			t.Error("Expected error event when converter is nil")
+		}
+	})
+}
+
+func TestDifyAgent_WorkflowStreaming(t *testing.T) {
+	t.Skip("Skipping workflow streaming test - needs SSE implementation")
+	mockServer := NewMockDifyServer()
+	defer mockServer.Close()
+
+	t.Run("workflow streaming mode", func(t *testing.T) {
+		streaming := true
+		difyAgent := createMockDifyAgent(t, mockServer,
+			WithMode(ModeWorkflow),
+			WithEnableStreaming(streaming),
+		)
+
+		invocation := &agent.Invocation{
+			InvocationID: "workflow-stream-test",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Stream workflow output",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: make(map[string]any),
+			},
+		}
+
+		eventChan, err := difyAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		var events []*event.Event
+		for evt := range eventChan {
+			events = append(events, evt)
+		}
+
+		if len(events) == 0 {
+			t.Error("Expected workflow streaming events")
+		}
+	})
+
+	t.Run("workflow streaming with transfer state", func(t *testing.T) {
+		streaming := true
+		difyAgent := createMockDifyAgent(t, mockServer,
+			WithMode(ModeWorkflow),
+			WithEnableStreaming(streaming),
+			WithTransferStateKey("stream_key"),
+		)
+
+		invocation := &agent.Invocation{
+			InvocationID: "workflow-stream-state",
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Stream with state",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"stream_key": "stream_value",
+				},
+			},
+		}
+
+		eventChan, err := difyAgent.Run(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		var events []*event.Event
+		for evt := range eventChan {
+			events = append(events, evt)
+		}
+
+		if len(events) == 0 {
+			t.Error("Expected workflow streaming events")
+		}
+	})
+}
+
+// Test invalid mode validation
+func TestDifyAgent_InvalidMode(t *testing.T) {
+	t.Run("invalid mode returns error", func(t *testing.T) {
+		_, err := New(
+			WithName("test-agent"),
+			WithMode("invalid-mode"),
+		)
+		if err == nil {
+			t.Error("Expected error for invalid mode")
+		}
+	})
+
+	t.Run("valid chatflow mode", func(t *testing.T) {
+		agent, err := New(
+			WithName("test-agent"),
+			WithMode(ModeChatflow),
+		)
+		if err != nil {
+			t.Errorf("Expected no error for valid mode, got: %v", err)
+		}
+		if agent.mode != ModeChatflow {
+			t.Errorf("Expected mode chatflow, got: %s", agent.mode)
+		}
+	})
+
+	t.Run("valid workflow mode", func(t *testing.T) {
+		agent, err := New(
+			WithName("test-agent"),
+			WithMode(ModeWorkflow),
+		)
+		if err != nil {
+			t.Errorf("Expected no error for valid mode, got: %v", err)
+		}
+		if agent.mode != ModeWorkflow {
+			t.Errorf("Expected mode workflow, got: %s", agent.mode)
+		}
+	})
+}
+
+// Test converter edge cases
+func TestDifyConverter_EdgeCases(t *testing.T) {
+	t.Run("ConvertToWorkflowRequest with content parts", func(t *testing.T) {
+		converter := &defaultWorkflowRequestConverter{}
+
+		textContent := "Text content"
+		imageURL := "https://example.com/image.png"
+		fileName := "document.pdf"
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Main content",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: &textContent,
+					},
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							URL: imageURL,
+						},
+					},
+					{
+						Type: model.ContentTypeFile,
+						File: &model.File{
+							Name: fileName,
+						},
+					},
+					{
+						Type: "unknown_type",
+					},
+				},
+			},
+			Session: &session.Session{
+				UserID: "test-user",
+			},
+		}
+
+		req, err := converter.ConvertToWorkflowRequest(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("ConvertToWorkflowRequest failed: %v", err)
+		}
+
+		if req.Inputs["query"] != textContent {
+			t.Errorf("Expected query to be '%s', got: %v", textContent, req.Inputs["query"])
+		}
+		if req.Inputs["image_url"] != imageURL {
+			t.Errorf("Expected image_url to be '%s', got: %v", imageURL, req.Inputs["image_url"])
+		}
+		if req.Inputs["file_name"] != fileName {
+			t.Errorf("Expected file_name to be '%s', got: %v", fileName, req.Inputs["file_name"])
+		}
+		if req.User != "test-user" {
+			t.Errorf("Expected user to be 'test-user', got: %s", req.User)
+		}
+	})
+
+	t.Run("ConvertToWorkflowRequest with empty session", func(t *testing.T) {
+		converter := &defaultWorkflowRequestConverter{}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test",
+			},
+			Session: nil,
+		}
+
+		req, err := converter.ConvertToWorkflowRequest(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("ConvertToWorkflowRequest failed: %v", err)
+		}
+
+		if req.User != "anonymous" {
+			t.Errorf("Expected user to be 'anonymous', got: %s", req.User)
+		}
+	})
+
+	t.Run("ConvertToWorkflowRequest with empty user ID", func(t *testing.T) {
+		converter := &defaultWorkflowRequestConverter{}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test",
+			},
+			Session: &session.Session{
+				UserID: "",
+			},
+		}
+
+		req, err := converter.ConvertToWorkflowRequest(context.Background(), invocation)
+		if err != nil {
+			t.Fatalf("ConvertToWorkflowRequest failed: %v", err)
+		}
+
+		if req.User != "anonymous" {
+			t.Errorf("Expected user to be 'anonymous', got: %s", req.User)
+		}
+	})
+}
+
+// Test workflow response output field extraction
+func TestDifyAgent_WorkflowOutputFields(t *testing.T) {
+	mockServer := NewMockDifyServer()
+	defer mockServer.Close()
+
+	tests := []struct {
+		name         string
+		outputKey    string
+		outputValue  string
+		expectedText string
+	}{
+		{"answer field", "answer", "Answer from workflow", "Answer from workflow"},
+		{"text field", "text", "Text from workflow", "Text from workflow"},
+		{"result field", "result", "Result from workflow", "Result from workflow"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Configure mock server to return specific output field
+			mockServer.SetCustomResponse(map[string]any{
+				"data": map[string]any{
+					"outputs": map[string]any{
+						tt.outputKey: tt.outputValue,
+					},
+				},
+				"workflow_run_id": "test-run-id",
+			})
+
+			difyAgent := createMockDifyAgent(t, mockServer,
+				WithMode(ModeWorkflow),
+			)
+
+			invocation := &agent.Invocation{
+				InvocationID: "output-test",
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "Test output field",
+				},
+				RunOptions: agent.RunOptions{
+					RuntimeState: make(map[string]any),
+				},
+			}
+
+			eventChan, err := difyAgent.Run(context.Background(), invocation)
+			if err != nil {
+				t.Fatalf("Run failed: %v", err)
+			}
+
+			var foundContent bool
+			for evt := range eventChan {
+				if evt.Response != nil && len(evt.Response.Choices) > 0 {
+					content := evt.Response.Choices[0].Message.Content
+					if content == tt.expectedText {
+						foundContent = true
+					}
+				}
+			}
+
+			if !foundContent {
+				t.Errorf("Expected to find content '%s'", tt.expectedText)
+			}
+		})
+	}
+
+	// Reset mock server
+	mockServer.SetCustomResponse(nil)
+}
+
+// Helper converter for error testing
+type errorWorkflowConverter struct{}
+
+func (e *errorWorkflowConverter) ConvertToWorkflowRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (dify.WorkflowRequest, error) {
+	return dify.WorkflowRequest{}, fmt.Errorf("workflow converter error")
 }

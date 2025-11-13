@@ -24,13 +24,25 @@ type MockDifyServer struct {
 	Server          *httptest.Server
 	ChatflowHandler func(w http.ResponseWriter, r *http.Request)
 	WorkflowHandler func(w http.ResponseWriter, r *http.Request)
+	CustomResponse  map[string]any
+	ErrorResponse   error
+	ErrorStatusCode int
 }
 
 // NewMockDifyServer 创建一个新的 Mock Dify 服务器
 func NewMockDifyServer() *MockDifyServer {
-	mock := &MockDifyServer{
-		ChatflowHandler: defaultChatflowHandler,
-		WorkflowHandler: defaultWorkflowHandler,
+	mock := &MockDifyServer{}
+
+	// 设置默认处理器
+	mock.ChatflowHandler = defaultChatflowHandler
+	mock.WorkflowHandler = func(w http.ResponseWriter, r *http.Request) {
+		// 如果有自定义响应，使用自定义响应
+		if mock.CustomResponse != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(mock.CustomResponse)
+			return
+		}
+		defaultWorkflowHandler(w, r)
 	}
 
 	mux := http.NewServeMux()
@@ -209,6 +221,18 @@ func (m *MockDifyServer) WithWorkflowError(statusCode int, message string) {
 			"message": message,
 		})
 	}
+}
+
+// SetCustomResponse 设置自定义的 Workflow 响应
+func (m *MockDifyServer) SetCustomResponse(response map[string]any) {
+	m.CustomResponse = response
+}
+
+// ResetHandlers 重置处理器为默认值
+func (m *MockDifyServer) ResetHandlers() {
+	m.ChatflowHandler = defaultChatflowHandler
+	m.WorkflowHandler = defaultWorkflowHandler
+	m.CustomResponse = nil
 }
 
 // createMockDifyAgent 创建一个用于测试的 DifyAgent，连接到 Mock 服务器
