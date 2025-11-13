@@ -203,5 +203,5 @@ func copyTimeType(value reflect.Value) any {
 		return reflect.ValueOf(timeVal).Convert(value.Type()).Interface()
 	}
 
-	return value
+	return value.Interface()
 }

@@ -232,6 +232,118 @@ func TestDeepCopyUnexportedFields(t *testing.T) {
 	}
 }
 
+func TestCopyTimeType(t *testing.T) {
+	now := time.Now()
+	dTime := newDataTime()
+
+	tests := []struct {
+		name     string
+		input    reflect.Value
+		validate func(t *testing.T, result any)
+	}{
+		{
+			name:  "time.Time value",
+			input: reflect.ValueOf(now),
+			validate: func(t *testing.T, result any) {
+				resultTime, ok := result.(time.Time)
+				if !ok {
+					t.Errorf("Expected time.Time, got %T", result)
+					return
+				}
+				if !resultTime.Equal(now) {
+					t.Errorf("Times should be equal: original %v, result %v", now, resultTime)
+				}
+				modified := now.Add(time.Hour)
+				if resultTime.Equal(modified) {
+					t.Error("Modifying original time affected the result")
+				}
+			},
+		},
+		{
+			name:  "custom time type (convertible to time.Time)",
+			input: reflect.ValueOf(dTime),
+			validate: func(t *testing.T, result any) {
+				_, ok := result.(DataTime)
+				if !ok {
+					t.Errorf("Expected MyTime, got %T", result)
+					return
+				}
+				resultTime := time.Time(result.(DataTime))
+				if !resultTime.Equal(time.Time(dTime)) {
+					t.Errorf("Times should be equal: original %v, result %v", dTime, resultTime)
+				}
+			},
+		},
+		{
+			name:  "non-time type (string)",
+			input: reflect.ValueOf("not a time"),
+			validate: func(t *testing.T, result any) {
+				resultStr, ok := result.(string)
+				if !ok {
+					t.Errorf("Expected string, got %T", result)
+					return
+				}
+				if resultStr != "not a time" {
+					t.Errorf("Expected 'not a time', got '%s'", resultStr)
+				}
+			},
+		},
+		{
+			name:  "non-time type (int)",
+			input: reflect.ValueOf(42),
+			validate: func(t *testing.T, result any) {
+				resultInt, ok := result.(int)
+				if !ok {
+					t.Errorf("Expected int, got %T", result)
+					return
+				}
+				if resultInt != 42 {
+					t.Errorf("Expected 42, got %d", resultInt)
+				}
+			},
+		},
+		{
+			name:  "zero time",
+			input: reflect.ValueOf(time.Time{}),
+			validate: func(t *testing.T, result any) {
+				resultTime, ok := result.(time.Time)
+				if !ok {
+					t.Errorf("Expected time.Time, got %T", result)
+					return
+				}
+				if !resultTime.IsZero() {
+					t.Error("Expected zero time")
+				}
+			},
+		},
+		{
+			name:  "time with location",
+			input: reflect.ValueOf(time.Date(2023, 12, 25, 10, 30, 0, 0, time.UTC)),
+			validate: func(t *testing.T, result any) {
+				resultTime, ok := result.(time.Time)
+				if !ok {
+					t.Errorf("Expected time.Time, got %T", result)
+					return
+				}
+				expected := time.Date(2023, 12, 25, 10, 30, 0, 0, time.UTC)
+				if !resultTime.Equal(expected) {
+					t.Errorf("Times should be equal: expected %v, result %v", expected, resultTime)
+				}
+				if resultTime.Location() != time.UTC {
+					t.Error("Location should be preserved")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := copyTimeType(tt.input)
+			tt.validate(t, result)
+		})
+	}
+}
+
 func BenchmarkDeepCopyAny(b *testing.B) {
 	complexData := map[string]any{
 		"users": []map[string]any{
