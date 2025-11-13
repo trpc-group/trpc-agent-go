@@ -179,13 +179,14 @@ func (a *CycleAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
+// Returns the updated context and whether execution should stop early.
 func (a *CycleAgent) handleBeforeAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) bool {
+) (context.Context, bool) {
 	if a.agentCallbacks == nil {
-		return false
+		return ctx, false
 	}
 
 	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
@@ -199,7 +200,7 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
 	// Use the context from result if provided.
 	if result != nil && result.Context != nil {
@@ -212,9 +213,9 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 			invocation.AgentName,
 			result.CustomResponse,
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	return false // Continue execution
+	return ctx, false // Continue execution
 }
 
 // runSubAgent executes a single sub-agent and forwards its events.
@@ -335,7 +336,7 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 
 		// Handle before agent callbacks.
 		var shouldReturn bool
-		shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+		ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
 		if shouldReturn {
 			return
 		}

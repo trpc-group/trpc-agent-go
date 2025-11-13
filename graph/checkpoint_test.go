@@ -699,7 +699,7 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	cbs := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return map[string]any{"short": true}, nil
 	})
-	res, _, err := runTool(ctx, call, cbs, tdecl)
+	_, res, _, err := runTool(ctx, call, cbs, tdecl)
 	require.NoError(t, err)
 	m, _ := res.(map[string]any)
 	require.Equal(t, true, m["short"])
@@ -708,20 +708,20 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	cbs2 := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return nil, assert.AnError
 	})
-	_, _, err = runTool(ctx, call, cbs2, tdecl)
+	_, _, _, err = runTool(ctx, call, cbs2, tdecl)
 	require.Error(t, err)
 
 	// After callback returns custom result
 	cbs3 := tool.NewCallbacks().RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
 		return map[string]any{"override": true}, nil
 	})
-	res, _, err = runTool(ctx, call, cbs3, tdecl)
+	_, res, _, err = runTool(ctx, call, cbs3, tdecl)
 	require.NoError(t, err)
 	m2, _ := res.(map[string]any)
 	require.Equal(t, true, m2["override"])
 
 	// Not callable tool
-	_, _, err = runTool(ctx, call, nil, &notCallableTool{})
+	_, _, _, err = runTool(ctx, call, nil, &notCallableTool{})
 	require.Error(t, err)
 }
 
@@ -1135,7 +1135,7 @@ func TestRunModel_BeforeModelCustomResponse(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
 		return &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("custom")}}}, nil
 	})
-	ch, err := runModel(context.Background(), cbs, &dummyModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
+	_, ch, err := runModel(context.Background(), cbs, &dummyModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.NoError(t, err)
 	rsp := <-ch
 	require.NotNil(t, rsp)
@@ -1442,8 +1442,112 @@ func (e *errModel) GenerateContent(ctx context.Context, req *model.Request) (<-c
 func (e *errModel) Info() model.Info { return model.Info{Name: "err"} }
 
 func TestRunModel_GenerateContentError(t *testing.T) {
-	_, err := runModel(context.Background(), nil, &errModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
+	_, _, err := runModel(context.Background(), nil, &errModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.Error(t, err)
+}
+
+// TestRunModel_CallbackContextPropagation tests that context values set in
+// BeforeModel callback can be retrieved in AfterModel callback through processModelResponse.
+func TestRunModel_CallbackContextPropagation(t *testing.T) {
+	type contextKey string
+	const testKey contextKey = "test-key"
+	const testValue = "test-value-from-before"
+
+	// Create callbacks that set and read context values.
+	callbacks := model.NewCallbacks()
+	var capturedValue any
+
+	// BeforeModel callback sets a context value.
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+		ctxWithValue := context.WithValue(ctx, testKey, testValue)
+		return &model.BeforeModelResult{
+			Context: ctxWithValue,
+		}, nil
+	})
+
+	// AfterModel callback reads the context value.
+	callbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+		capturedValue = ctx.Value(testKey)
+		return nil, nil
+	})
+
+	// Create a dummy model that returns a response.
+	dummyModel := &dummyModel{}
+
+	// Run the model.
+	ctx := context.Background()
+	request := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	}
+
+	ctx, responseChan, err := runModel(ctx, callbacks, dummyModel, request)
+	require.NoError(t, err)
+
+	// Process the response to trigger AfterModel callback.
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(ctx, "s")
+	defer span.End()
+
+	// Consume all responses.
+	for response := range responseChan {
+		// Process each response to trigger AfterModel callback.
+		_, _, err = processModelResponse(ctx, modelResponseConfig{
+			Response:       response,
+			ModelCallbacks: callbacks,
+			EventChan:      make(chan *event.Event, 1),
+			InvocationID:   "test-inv",
+			SessionID:      "test-session",
+			LLMModel:       dummyModel,
+			Request:        request,
+			Span:           span,
+		})
+		require.NoError(t, err)
+	}
+
+	// Verify that the context value was captured in AfterModel callback.
+	require.Equal(t, testValue, capturedValue, "context value should be propagated from BeforeModel to AfterModel")
+}
+
+// TestRunTool_CallbackContextPropagation tests that context values set in
+// BeforeTool callback can be retrieved in AfterTool callback.
+func TestRunTool_CallbackContextPropagation(t *testing.T) {
+	type contextKey string
+	const testKey contextKey = "test-key"
+	const testValue = "test-value-from-before"
+
+	// Create callbacks that set and read context values.
+	callbacks := tool.NewCallbacks()
+	var capturedValue any
+
+	// BeforeTool callback sets a context value.
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		ctxWithValue := context.WithValue(ctx, testKey, testValue)
+		return &tool.BeforeToolResult{
+			Context: ctxWithValue,
+		}, nil
+	})
+
+	// AfterTool callback reads the context value.
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		capturedValue = ctx.Value(testKey)
+		return nil, nil
+	})
+
+	// Create a dummy tool that returns a result.
+	dummyTool := &dummyTool{name: "echo"}
+	toolCall := model.ToolCall{
+		ID:       "id",
+		Function: model.FunctionDefinitionParam{Name: "echo", Arguments: []byte(`{"x":1}`)},
+	}
+
+	// Run the tool.
+	ctx := context.Background()
+	ctx, result, _, err := runTool(ctx, toolCall, callbacks, dummyTool)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the context value was captured in AfterTool callback.
+	require.Equal(t, testValue, capturedValue, "context value should be propagated from BeforeTool to AfterTool")
 }
 
 // Mock saver to cover GetParent fallback cross-namespace path

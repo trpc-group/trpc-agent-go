@@ -135,7 +135,7 @@ func (a *ChainAgent) executeChainRun(
 
 	// Handle before agent callbacks.
 	var shouldReturn bool
-	shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+	ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
 	if shouldReturn {
 		return
 	}
@@ -158,13 +158,14 @@ func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
+// Returns the updated context and whether execution should stop early.
 func (a *ChainAgent) handleBeforeAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) bool {
+) (context.Context, bool) {
 	if a.agentCallbacks == nil {
-		return false
+		return ctx, false
 	}
 
 	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
@@ -178,7 +179,7 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
 	// Use the context from result if provided.
 	if result != nil && result.Context != nil {
@@ -191,9 +192,9 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 			invocation.AgentName,
 			result.CustomResponse,
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	return false // Continue execution
+	return ctx, false // Continue execution
 }
 
 // executeSubAgents runs all sub-agents in sequence.

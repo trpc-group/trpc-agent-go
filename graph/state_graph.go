@@ -980,7 +980,7 @@ func runModel(
 	modelCallbacks *model.Callbacks,
 	llmModel model.Model,
 	request *model.Request,
-) (<-chan *model.Response, error) {
+) (context.Context, <-chan *model.Response, error) {
 	ctx, span := trace.Tracer.Start(ctx, "run_model")
 	defer span.End()
 
@@ -994,7 +994,7 @@ func runModel(
 		result, err := modelCallbacks.RunBeforeModel(ctx, args)
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return nil, fmt.Errorf("callback before model error: %w", err)
+			return ctx, nil, fmt.Errorf("callback before model error: %w", err)
 		}
 		// Use the context from result if provided.
 		if result != nil && result.Context != nil {
@@ -1004,16 +1004,16 @@ func runModel(
 			responseChan := make(chan *model.Response, 1)
 			responseChan <- result.CustomResponse
 			close(responseChan)
-			return responseChan, nil
+			return ctx, responseChan, nil
 		}
 	}
 	// Generate content.
 	responseChan, err := llmModel.GenerateContent(ctx, request)
 	if err != nil {
 		span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-		return nil, fmt.Errorf("failed to generate content: %w", err)
+		return ctx, nil, fmt.Errorf("failed to generate content: %w", err)
 	}
-	return responseChan, nil
+	return ctx, responseChan, nil
 }
 
 // NewToolsNodeFunc creates a NodeFunc that uses the tools package directly.
@@ -1329,6 +1329,7 @@ func buildAgentInvocationWithStateAndScope(
 //   - t: the tool implementation to execute
 //
 // Returns:
+//   - context.Context: the updated context from callbacks (if any)
 //   - any: the result from tool execution or custom callback result
 //   - []byte: the modified arguments after before-tool callbacks (for telemetry)
 //   - error: any error that occurred during execution
@@ -1337,7 +1338,7 @@ func runTool(
 	toolCall model.ToolCall,
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
-) (any, []byte, error) {
+) (context.Context, any, []byte, error) {
 	if toolCallbacks != nil {
 		args := &tool.BeforeToolArgs{
 			ToolName:    toolCall.Function.Name,
@@ -1346,10 +1347,14 @@ func runTool(
 		}
 		result, err := toolCallbacks.RunBeforeTool(ctx, args)
 		if err != nil {
-			return nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
+			return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
+		}
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
 		}
 		if result != nil && result.CustomResult != nil {
-			return result.CustomResult, toolCall.Function.Arguments, nil
+			return ctx, result.CustomResult, toolCall.Function.Arguments, nil
 		}
 		if result != nil && result.ModifiedArguments != nil {
 			toolCall.Function.Arguments = result.ModifiedArguments
@@ -1369,18 +1374,22 @@ func runTool(
 			}
 			afterResult, afterErr := toolCallbacks.RunAfterTool(ctx, args)
 			if afterErr != nil {
-				return nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", afterErr)
+				return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", afterErr)
+			}
+			// Use the context from result if provided for subsequent operations.
+			if afterResult != nil && afterResult.Context != nil {
+				ctx = afterResult.Context
 			}
 			if afterResult != nil && afterResult.CustomResult != nil {
-				return afterResult.CustomResult, toolCall.Function.Arguments, nil
+				return ctx, afterResult.CustomResult, toolCall.Function.Arguments, nil
 			}
 		}
 		if err != nil {
-			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
+			return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
 		}
-		return result, toolCall.Function.Arguments, nil
+		return ctx, result, toolCall.Function.Arguments, nil
 	}
-	return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+	return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 
 // extractModelInput extracts the model input from state and instruction.
@@ -1476,7 +1485,7 @@ type modelExecutionConfig struct {
 
 // executeModelWithEvents executes the model with event processing.
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
-	responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
+	ctx, responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
 	if err != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 		return nil, fmt.Errorf("failed to run model: %w", err)
@@ -1720,7 +1729,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Execute the tool with callbacks and get modified arguments.
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
-	result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
 
 	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
