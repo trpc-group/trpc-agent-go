@@ -190,17 +190,6 @@ func isTimeType(value reflect.Value) bool {
 		return true
 	}
 
-	if rt == reflect.TypeOf((*time.Time)(nil)) {
-		return true
-	}
-
-	for value.Kind() == reflect.Ptr {
-		if value.IsNil() {
-			return false
-		}
-		value = value.Elem()
-	}
-
 	if rt.ConvertibleTo(reflect.TypeOf(time.Time{})) {
 		return true
 	}
@@ -209,22 +198,9 @@ func isTimeType(value reflect.Value) bool {
 }
 
 func copyTimeType(value reflect.Value) any {
-	for value.Kind() == reflect.Ptr {
-		if value.IsNil() {
-			return nil
-		}
-		value = value.Elem()
-	}
-
 	if value.Type().ConvertibleTo(reflect.TypeOf(time.Time{})) {
 		timeVal := value.Convert(reflect.TypeOf(time.Time{})).Interface().(time.Time)
-		originalType := value.Type()
-		if originalType.Kind() == reflect.Ptr {
-			copiedTime := timeVal
-			return reflect.ValueOf(&copiedTime).Convert(originalType).Interface()
-		} else {
-			return reflect.ValueOf(timeVal).Convert(originalType).Interface()
-		}
+		return reflect.ValueOf(timeVal).Convert(value.Type()).Interface()
 	}
 
 	return value
