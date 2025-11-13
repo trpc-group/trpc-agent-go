@@ -58,12 +58,12 @@ func TestGetSession_Success(t *testing.T) {
 			AddRow(stateBytes, sessState.CreatedAt, sessState.UpdatedAt))
 
 	// Mock: List app states (empty)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM app_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
 		WithArgs(key.AppName, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
 	// Mock: List user states (empty)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM user_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
 		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
@@ -143,12 +143,12 @@ func TestGetSession_WithLimit(t *testing.T) {
 			AddRow(stateBytes, sessState.CreatedAt, sessState.UpdatedAt))
 
 	// Mock: List app states
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM app_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
 		WithArgs(key.AppName, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
 	// Mock: List user states
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM user_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
 		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
@@ -206,12 +206,12 @@ func TestGetSession_WithRefreshTTL(t *testing.T) {
 			AddRow(stateBytes, sessState.CreatedAt, sessState.UpdatedAt))
 
 	// Mock: List app states
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM app_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
 		WithArgs(key.AppName, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
 	// Mock: List user states
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM user_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
 		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
@@ -288,12 +288,12 @@ func TestListSessions_Success(t *testing.T) {
 	stateBytes, _ := json.Marshal(sessState)
 
 	// Mock: List app states (empty)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM app_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
 		WithArgs(userKey.AppName, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
 	// Mock: List user states (empty)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM user_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
 		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
@@ -332,13 +332,13 @@ func TestListSessions_WithMultipleSessions(t *testing.T) {
 	}
 
 	// Mock: List app states
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM app_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
 		WithArgs(userKey.AppName, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}).
 			AddRow("app-key", []byte(`"app-value"`)))
 
 	// Mock: List user states
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM user_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
 		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}).
 			AddRow("user-key", []byte(`"user-value"`)))
@@ -388,7 +388,7 @@ func TestListSessions_Error(t *testing.T) {
 	}
 
 	// Mock: List app states fails
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT key, value FROM app_states")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
 		WithArgs(userKey.AppName, sqlmock.AnyArg()).
 		WillReturnError(fmt.Errorf("database error"))
 
@@ -483,8 +483,12 @@ func TestAddEvent_ExpiredSession(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events")).
-		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+	// enforceEventLimit: first query cutoff time, then update
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1*time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
@@ -582,26 +586,29 @@ func TestEnforceEventLimit(t *testing.T) {
 			ctx := context.Background()
 			key := session.Key{AppName: "test-app", UserID: "user-123", SessionID: "session-456"}
 
-			mock.ExpectBegin()
-			tx, err := db.Begin()
-			require.NoError(t, err)
+		mock.ExpectBegin()
+		tx, err := db.Begin()
+		require.NoError(t, err)
 
-			if tt.softDelete {
-				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events")).
-					WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID,
-						key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).
-					WillReturnResult(sqlmock.NewResult(0, 5))
-			} else {
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events")).
-					WithArgs(key.AppName, key.UserID, key.SessionID,
-						key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).
-					WillReturnResult(sqlmock.NewResult(0, 5))
-			}
+		// First, expect QueryRow to get cutoff time
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?")).
+			WithArgs(key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).
+			WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1*time.Hour)))
 
-			err = s.enforceEventLimit(ctx, tx, key, time.Now())
-			assert.NoError(t, err)
-			_ = tx.Rollback()
-			assert.NoError(t, mock.ExpectationsWereMet())
+		if tt.softDelete {
+			mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?")).
+				WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(0, 5))
+		} else {
+			mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND created_at < ?")).
+				WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(0, 5))
+		}
+
+		err = s.enforceEventLimit(ctx, tx, key, time.Now())
+		assert.NoError(t, err)
+		_ = tx.Rollback()
+		assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
 }

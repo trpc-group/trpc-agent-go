@@ -56,19 +56,18 @@ func (s *Service) createSessionSummary(
 	if !force {
 		var existingSummary *session.Summary
 		err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-			if rows.Next() {
-				var summaryBytes []byte
-				var updatedAt time.Time
-				if err := rows.Scan(&summaryBytes, &updatedAt); err != nil {
-					return err
-				}
-				var sum session.Summary
-				if err := json.Unmarshal(summaryBytes, &sum); err != nil {
-					return fmt.Errorf("unmarshal summary failed: %w", err)
-				}
-				sum.UpdatedAt = updatedAt
-				existingSummary = &sum
+			// rows.Next() is already called by the Query loop
+			var summaryBytes []byte
+			var updatedAt time.Time
+			if err := rows.Scan(&summaryBytes, &updatedAt); err != nil {
+				return err
 			}
+			var sum session.Summary
+			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+				return fmt.Errorf("unmarshal summary failed: %w", err)
+			}
+			sum.UpdatedAt = updatedAt
+			existingSummary = &sum
 			return nil
 		}, fmt.Sprintf(`SELECT summary, updated_at FROM %s
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
@@ -203,17 +202,16 @@ func (s *Service) GetSessionSummaryText(
 	filterKey := ""
 	var summaryText string
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			var summaryBytes []byte
-			if err := rows.Scan(&summaryBytes); err != nil {
-				return err
-			}
-			var sum session.Summary
-			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
-				return fmt.Errorf("unmarshal summary failed: %w", err)
-			}
-			summaryText = sum.Summary
+		// rows.Next() is already called by the Query loop
+		var summaryBytes []byte
+		if err := rows.Scan(&summaryBytes); err != nil {
+			return err
 		}
+		var sum session.Summary
+		if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+			return fmt.Errorf("unmarshal summary failed: %w", err)
+		}
+		summaryText = sum.Summary
 		return nil
 	}, fmt.Sprintf(`SELECT summary FROM %s
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?

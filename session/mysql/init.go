@@ -119,27 +119,27 @@ const (
 
 	// session_summaries: TTL index on (expires_at)
 	sqlCreateSessionSummariesExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
 	// app_states: unique index on (app_name, key, deleted_at)
 	sqlCreateAppStatesUniqueIndex = `
-		CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name, ` + "`key`" + `, deleted_at)`
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name(191), ` + "`key`" + `(191), deleted_at)`
 
 	// app_states: TTL index on (expires_at)
 	sqlCreateAppStatesExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
 	// user_states: unique index on (app_name, user_id, key, deleted_at)
 	sqlCreateUserStatesUniqueIndex = `
-		CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name, user_id, ` + "`key`" + `, deleted_at)`
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name(191), user_id(191), ` + "`key`" + `(191), deleted_at)`
 
 	// user_states: TTL index on (expires_at)
 	sqlCreateUserStatesExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 )
 

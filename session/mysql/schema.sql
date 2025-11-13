@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS session_states (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
     deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_cCOMMENT='Session states table';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Session states table';
 
 -- Unique index on (app_name, user_id, session_id, deleted_at)
 -- Note: deleted_at is included because MySQL doesn't support partial indexes like PostgreSQL

@@ -253,36 +253,46 @@ func (s *Service) CreateSession(
 	// Calculate expires_at based on TTL
 	expiresAt := calculateExpiresAt(s.sessionTTL)
 
-	// Check if session already exists
+	// Check if session already exists (matching PostgreSQL behavior)
+	var sessionExists bool
 	var existingExpiresAt sql.NullTime
-	err = s.mysqlClient.QueryRow(ctx,
-		[]any{&existingExpiresAt},
-		fmt.Sprintf(`SELECT expires_at FROM %s
-		WHERE app_name = ? AND user_id = ? AND session_id = ?
-		AND deleted_at IS NULL`, s.tableSessionStates),
+	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		// rows.Next() is already called by the Query loop
+		sessionExists = true
+		if err := rows.Scan(&existingExpiresAt); err != nil {
+			return err
+		}
+		return nil
+	}, fmt.Sprintf(`SELECT expires_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
-
-	sessionExists := (err == nil)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil {
 		return nil, fmt.Errorf("check existing session failed: %w", err)
 	}
 
 	if sessionExists {
+		// If session exists and has not expired, reject creation
 		if !existingExpiresAt.Valid {
+			log.Errorf("CreateSession: session already exists with no expiration (app=%s, user=%s, session=%s)", 
+				key.AppName, key.UserID, key.SessionID)
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
 		if existingExpiresAt.Time.After(now) {
+			log.Errorf("CreateSession: session already exists and not expired yet (app=%s, user=%s, session=%s, expires=%v)", 
+				key.AppName, key.UserID, key.SessionID, existingExpiresAt.Time)
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
+		// If session exists but has expired, trigger cleanup before creating new one
 		log.Infof("found expired session (app=%s, user=%s, session=%s), triggering cleanup",
 			key.AppName, key.UserID, key.SessionID)
 		s.cleanupExpiredForUser(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
 	}
+	
+	log.Debugf("CreateSession: inserting new session (app=%s, user=%s, session=%s)", 
+		key.AppName, key.UserID, key.SessionID)
 
 	// Insert session state (MySQL syntax)
 	_, err = s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`, s.tableSessionStates),
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID, sessBytes, sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 	)
 	if err != nil {
@@ -384,13 +394,7 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
 		// Use UPSERT (MySQL syntax: ON DUPLICATE KEY UPDATE)
 		_, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, key, value, updated_at, expires_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, NULL)
-			 ON DUPLICATE KEY UPDATE
-			   value = VALUES(value),
-			   updated_at = VALUES(updated_at),
-			   expires_at = VALUES(expires_at),
-			   deleted_at = NULL`, s.tableAppStates),
+			fmt.Sprintf("INSERT INTO %s (app_name, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at), expires_at = VALUES(expires_at), deleted_at = NULL", s.tableAppStates),
 			appName, k, v, now, expiresAt,
 		)
 		if err != nil {
@@ -408,19 +412,15 @@ func (s *Service) ListAppStates(ctx context.Context, appName string) (session.St
 
 	appStateMap := make(session.StateMap)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		for rows.Next() {
-			var key string
-			var value []byte
-			if err := rows.Scan(&key, &value); err != nil {
-				return err
-			}
-			appStateMap[key] = value
+		// rows.Next() is already called by the Query loop
+		var key string
+		var value []byte
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
 		}
+		appStateMap[key] = value
 		return nil
-	}, fmt.Sprintf(`SELECT key, value FROM %s
-		WHERE app_name = ?
-		AND (expires_at IS NULL OR expires_at > ?)
-		AND deleted_at IS NULL`, s.tableAppStates),
+	}, fmt.Sprintf("SELECT `key`, value FROM %s WHERE app_name = ? AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", s.tableAppStates),
 		appName, time.Now())
 
 	if err != nil {
@@ -442,14 +442,12 @@ func (s *Service) DeleteAppState(ctx context.Context, appName string, key string
 	if s.opts.softDelete {
 		// Soft delete: set deleted_at timestamp
 		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-			 WHERE app_name = ? AND key = ? AND deleted_at IS NULL`, s.tableAppStates),
+			fmt.Sprintf("UPDATE %s SET deleted_at = ? WHERE app_name = ? AND `key` = ? AND deleted_at IS NULL", s.tableAppStates),
 			time.Now(), appName, key)
 	} else {
 		// Hard delete: permanently remove record
 		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s
-			 WHERE app_name = ? AND key = ?`, s.tableAppStates),
+			fmt.Sprintf("DELETE FROM %s WHERE app_name = ? AND `key` = ?", s.tableAppStates),
 			appName, key)
 	}
 
@@ -472,13 +470,7 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 		k = strings.TrimPrefix(k, session.StateUserPrefix)
 		// Use UPSERT (MySQL syntax)
 		_, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, key, value, updated_at, expires_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, ?, NULL)
-			 ON DUPLICATE KEY UPDATE
-			   value = VALUES(value),
-			   updated_at = VALUES(updated_at),
-			   expires_at = VALUES(expires_at),
-			   deleted_at = NULL`, s.tableUserStates),
+			fmt.Sprintf("INSERT INTO %s (app_name, user_id, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at), expires_at = VALUES(expires_at), deleted_at = NULL", s.tableUserStates),
 			userKey.AppName, userKey.UserID, k, v, now, expiresAt,
 		)
 		if err != nil {
@@ -496,19 +488,15 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 
 	userStateMap := make(session.StateMap)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		for rows.Next() {
-			var key string
-			var value []byte
-			if err := rows.Scan(&key, &value); err != nil {
-				return err
-			}
-			userStateMap[key] = value
+		// rows.Next() is already called by the Query loop
+		var key string
+		var value []byte
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
 		}
+		userStateMap[key] = value
 		return nil
-	}, fmt.Sprintf(`SELECT key, value FROM %s
-		WHERE app_name = ? AND user_id = ?
-		AND (expires_at IS NULL OR expires_at > ?)
-		AND deleted_at IS NULL`, s.tableUserStates),
+	}, fmt.Sprintf("SELECT `key`, value FROM %s WHERE app_name = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", s.tableUserStates),
 		userKey.AppName, userKey.UserID, time.Now())
 
 	if err != nil {
@@ -529,13 +517,11 @@ func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, 
 	var err error
 	if s.opts.softDelete {
 		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-			 WHERE app_name = ? AND user_id = ? AND key = ? AND deleted_at IS NULL`, s.tableUserStates),
+			fmt.Sprintf("UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND `key` = ? AND deleted_at IS NULL", s.tableUserStates),
 			time.Now(), userKey.AppName, userKey.UserID, key)
 	} else {
 		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s
-			 WHERE app_name = ? AND user_id = ? AND key = ?`, s.tableUserStates),
+			fmt.Sprintf("DELETE FROM %s WHERE app_name = ? AND user_id = ? AND `key` = ?", s.tableUserStates),
 			userKey.AppName, userKey.UserID, key)
 	}
 	if err != nil {
@@ -726,9 +712,7 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 	if s.opts.softDelete {
 		// Soft delete expired sessions
 		result, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-			 WHERE expires_at IS NOT NULL AND expires_at <= ?
-			 AND deleted_at IS NULL`, s.tableSessionStates),
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
 			now, now)
 		if err != nil {
 			log.Errorf("cleanup expired sessions failed: %v", err)
@@ -739,20 +723,14 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 		// Also soft delete related events and summaries
 		if deletedCount > 0 {
 			if _, err := s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`UPDATE %s e
-				 INNER JOIN %s s ON e.app_name = s.app_name AND e.user_id = s.user_id AND e.session_id = s.session_id
-				 SET e.deleted_at = ?
-				 WHERE s.deleted_at IS NOT NULL AND e.deleted_at IS NULL`,
+				fmt.Sprintf(`UPDATE %s e INNER JOIN %s s ON e.app_name = s.app_name AND e.user_id = s.user_id AND e.session_id = s.session_id SET e.deleted_at = ? WHERE s.deleted_at IS NOT NULL AND e.deleted_at IS NULL`,
 					s.tableSessionEvents, s.tableSessionStates),
 				now); err != nil {
 				log.Errorf("cleanup expired session events failed: %v", err)
 			}
 
 			if _, err := s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`UPDATE %s sm
-				 INNER JOIN %s s ON sm.app_name = s.app_name AND sm.user_id = s.user_id AND sm.session_id = s.session_id
-				 SET sm.deleted_at = ?
-				 WHERE s.deleted_at IS NOT NULL AND sm.deleted_at IS NULL`,
+				fmt.Sprintf(`UPDATE %s sm INNER JOIN %s s ON sm.app_name = s.app_name AND sm.user_id = s.user_id AND sm.session_id = s.session_id SET sm.deleted_at = ? WHERE s.deleted_at IS NOT NULL AND sm.deleted_at IS NULL`,
 					s.tableSessionSummaries, s.tableSessionStates),
 				now); err != nil {
 				log.Errorf("cleanup expired session summaries failed: %v", err)
@@ -761,8 +739,7 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 	} else {
 		// Hard delete expired sessions
 		result, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s
-			 WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
+			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
 			now)
 		if err != nil {
 			log.Errorf("cleanup expired sessions failed: %v", err)
@@ -775,17 +752,13 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 		if deletedCount > 0 {
 			// Manual cleanup (if no FK constraints)
 			if _, err := s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`DELETE e FROM %s e
-				 LEFT JOIN %s s ON e.app_name = s.app_name AND e.user_id = s.user_id AND e.session_id = s.session_id
-				 WHERE s.session_id IS NULL`,
+				fmt.Sprintf(`DELETE e FROM %s e LEFT JOIN %s s ON e.app_name = s.app_name AND e.user_id = s.user_id AND e.session_id = s.session_id WHERE s.session_id IS NULL`,
 					s.tableSessionEvents, s.tableSessionStates)); err != nil {
 				log.Errorf("cleanup orphaned session events failed: %v", err)
 			}
 
 			if _, err := s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`DELETE sm FROM %s sm
-				 LEFT JOIN %s s ON sm.app_name = s.app_name AND sm.user_id = s.user_id AND sm.session_id = s.session_id
-				 WHERE s.session_id IS NULL`,
+				fmt.Sprintf(`DELETE sm FROM %s sm LEFT JOIN %s s ON sm.app_name = s.app_name AND sm.user_id = s.user_id AND sm.session_id = s.session_id WHERE s.session_id IS NULL`,
 					s.tableSessionSummaries, s.tableSessionStates)); err != nil {
 				log.Errorf("cleanup orphaned session summaries failed: %v", err)
 			}
@@ -803,9 +776,7 @@ func (s *Service) cleanupExpiredAppStates(ctx context.Context, now time.Time) {
 
 	if s.opts.softDelete {
 		result, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-			 WHERE expires_at IS NOT NULL AND expires_at <= ?
-			 AND deleted_at IS NULL`, s.tableAppStates),
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableAppStates),
 			now, now)
 		if err != nil {
 			log.Errorf("cleanup expired app states failed: %v", err)
@@ -814,8 +785,7 @@ func (s *Service) cleanupExpiredAppStates(ctx context.Context, now time.Time) {
 		deletedCount, _ = result.RowsAffected()
 	} else {
 		result, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s
-			 WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableAppStates),
+			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableAppStates),
 			now)
 		if err != nil {
 			log.Errorf("cleanup expired app states failed: %v", err)
@@ -835,9 +805,7 @@ func (s *Service) cleanupExpiredUserStates(ctx context.Context, now time.Time) {
 
 	if s.opts.softDelete {
 		result, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-			 WHERE expires_at IS NOT NULL AND expires_at <= ?
-			 AND deleted_at IS NULL`, s.tableUserStates),
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableUserStates),
 			now, now)
 		if err != nil {
 			log.Errorf("cleanup expired user states failed: %v", err)
@@ -846,8 +814,7 @@ func (s *Service) cleanupExpiredUserStates(ctx context.Context, now time.Time) {
 		deletedCount, _ = result.RowsAffected()
 	} else {
 		result, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s
-			 WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableUserStates),
+			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableUserStates),
 			now)
 		if err != nil {
 			log.Errorf("cleanup expired user states failed: %v", err)
@@ -869,19 +836,14 @@ func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.Use
 	if s.opts.softDelete {
 		// Soft delete expired sessions for this user
 		if _, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-			 WHERE app_name = ? AND user_id = ?
-			 AND expires_at IS NOT NULL AND expires_at <= ?
-			 AND deleted_at IS NULL`, s.tableSessionStates),
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
 			now, userKey.AppName, userKey.UserID, now); err != nil {
 			log.Errorf("cleanup expired sessions for user failed: %v", err)
 		}
 	} else {
 		// Hard delete expired sessions for this user
 		if _, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s
-			 WHERE app_name = ? AND user_id = ?
-			 AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
+			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
 			userKey.AppName, userKey.UserID, now); err != nil {
 			log.Errorf("cleanup expired sessions for user failed: %v", err)
 		}

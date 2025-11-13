@@ -32,26 +32,23 @@ func (s *Service) getSession(
 ) (*session.Session, error) {
 	// Query session state (MySQL syntax with ?)
 	var sessState *SessionState
-	stateQuery := fmt.Sprintf(`SELECT state, created_at, updated_at FROM %s
-		WHERE app_name = ? AND user_id = ? AND session_id = ?
-		AND (expires_at IS NULL OR expires_at > ?)
-		AND deleted_at IS NULL`, s.tableSessionStates)
+	stateQuery := fmt.Sprintf(`SELECT state, created_at, updated_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL`, s.tableSessionStates)
 	stateArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now()}
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			var stateBytes []byte
-			var createdAt, updatedAt time.Time
-			if err := rows.Scan(&stateBytes, &createdAt, &updatedAt); err != nil {
-				return err
-			}
-			sessState = &SessionState{}
-			if err := json.Unmarshal(stateBytes, sessState); err != nil {
-				return fmt.Errorf("unmarshal session state failed: %w", err)
-			}
-			sessState.CreatedAt = createdAt
-			sessState.UpdatedAt = updatedAt
+		// rows.Next() is already called by the Query loop, so we just scan directly
+		var stateBytes []byte
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&stateBytes, &createdAt, &updatedAt); err != nil {
+			return err
 		}
+		sessState = &SessionState{}
+		if err := json.Unmarshal(stateBytes, sessState); err != nil {
+			return fmt.Errorf("unmarshal session state failed: %w", err)
+		}
+		sessState.CreatedAt = createdAt
+		sessState.UpdatedAt = updatedAt
+		log.Debugf("getSession found session state: app=%s, user=%s, session=%s", key.AppName, key.UserID, key.SessionID)
 		return nil
 	}, stateQuery, stateArgs...)
 
@@ -59,6 +56,7 @@ func (s *Service) getSession(
 		return nil, fmt.Errorf("get session state failed: %w", err)
 	}
 	if sessState == nil {
+		log.Debugf("getSession found no session: app=%s, user=%s, session=%s", key.AppName, key.UserID, key.SessionID)
 		return nil, nil
 	}
 
@@ -103,17 +101,16 @@ func (s *Service) getSession(
 	}
 
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		for rows.Next() {
-			var eventBytes []byte
-			if err := rows.Scan(&eventBytes); err != nil {
-				return err
-			}
-			var evt event.Event
-			if err := json.Unmarshal(eventBytes, &evt); err != nil {
-				return fmt.Errorf("unmarshal event failed: %w", err)
-			}
-			events = append(events, evt)
+		// rows.Next() is already called by the Query loop, so we just scan directly
+		var eventBytes []byte
+		if err := rows.Scan(&eventBytes); err != nil {
+			return err
 		}
+		var evt event.Event
+		if err := json.Unmarshal(eventBytes, &evt); err != nil {
+			return fmt.Errorf("unmarshal event failed: %w", err)
+		}
+		events = append(events, evt)
 		return nil
 	}, eventQuery, eventArgs...)
 
@@ -135,18 +132,17 @@ func (s *Service) getSession(
 	summaryArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now()}
 
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		for rows.Next() {
-			var filterKey string
-			var summaryBytes []byte
-			if err := rows.Scan(&filterKey, &summaryBytes); err != nil {
-				return err
-			}
-			var sum session.Summary
-			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
-				return fmt.Errorf("unmarshal summary failed: %w", err)
-			}
-			summaries[filterKey] = &sum
+		// rows.Next() is already called by the Query loop, so we just scan directly
+		var filterKey string
+		var summaryBytes []byte
+		if err := rows.Scan(&filterKey, &summaryBytes); err != nil {
+			return err
 		}
+		var sum session.Summary
+		if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+			return fmt.Errorf("unmarshal summary failed: %w", err)
+		}
+		summaries[filterKey] = &sum
 		return nil
 	}, summaryQuery, summaryArgs...)
 
@@ -197,22 +193,21 @@ func (s *Service) listSessions(
 	listArgs := []interface{}{key.AppName, key.UserID, time.Now()}
 
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		for rows.Next() {
-			var sessionID string
-			var stateBytes []byte
-			var createdAt, updatedAt time.Time
-			if err := rows.Scan(&sessionID, &stateBytes, &createdAt, &updatedAt); err != nil {
-				return err
-			}
-			var state SessionState
-			if err := json.Unmarshal(stateBytes, &state); err != nil {
-				return fmt.Errorf("unmarshal session state failed: %w", err)
-			}
-			state.ID = sessionID
-			state.CreatedAt = createdAt
-			state.UpdatedAt = updatedAt
-			sessStates = append(sessStates, &state)
+		// rows.Next() is already called by the Query loop
+		var sessionID string
+		var stateBytes []byte
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&sessionID, &stateBytes, &createdAt, &updatedAt); err != nil {
+			return err
 		}
+		var state SessionState
+		if err := json.Unmarshal(stateBytes, &state); err != nil {
+			return fmt.Errorf("unmarshal session state failed: %w", err)
+		}
+		state.ID = sessionID
+		state.CreatedAt = createdAt
+		state.UpdatedAt = updatedAt
+		sessStates = append(sessStates, &state)
 		return nil
 	}, listQuery, listArgs...)
 
@@ -349,42 +344,37 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 // enforceEventLimit removes old events beyond the configured limit (MySQL syntax).
 func (s *Service) enforceEventLimit(ctx context.Context, tx *sql.Tx, key session.Key, now time.Time) error {
+	// MySQL approach: use NOT IN with IDs from subquery to avoid same-table restrictions
+	// First, get IDs of events to keep (Nth newest)
+	var cutoffCreatedAt time.Time
+	err := tx.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT created_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?",
+			s.tableSessionEvents),
+		key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).Scan(&cutoffCreatedAt)
+
+	// If no cutoff time found (fewer events than limit), nothing to delete
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get cutoff time failed: %w", err)
+	}
+
 	if s.opts.softDelete {
-		// Soft delete: mark events older than the Nth newest event
+		// Soft delete: mark events older than the cutoff time
 		_, err := tx.ExecContext(ctx,
-			fmt.Sprintf(`UPDATE %s
-			SET deleted_at = ?
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND deleted_at IS NULL
-			AND created_at < (
-				SELECT created_at
-				FROM %s
-				WHERE app_name = ? AND user_id = ? AND session_id = ?
-				AND deleted_at IS NULL
-				ORDER BY created_at DESC
-				LIMIT 1 OFFSET ?
-			)`, s.tableSessionEvents, s.tableSessionEvents),
-			now, key.AppName, key.UserID, key.SessionID,
-			key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit)
+			fmt.Sprintf("UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?",
+				s.tableSessionEvents),
+			now, key.AppName, key.UserID, key.SessionID, cutoffCreatedAt)
 		if err != nil {
 			return fmt.Errorf("soft delete old events failed: %w", err)
 		}
 	} else {
-		// Hard delete: physically remove events older than the Nth newest event
+		// Hard delete: physically remove events older than the cutoff time
 		_, err := tx.ExecContext(ctx,
-			fmt.Sprintf(`DELETE FROM %s
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND deleted_at IS NULL
-			AND created_at < (
-				SELECT created_at
-				FROM %s
-				WHERE app_name = ? AND user_id = ? AND session_id = ?
-				AND deleted_at IS NULL
-				ORDER BY created_at DESC
-				LIMIT 1 OFFSET ?
-			)`, s.tableSessionEvents, s.tableSessionEvents),
-			key.AppName, key.UserID, key.SessionID,
-			key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit)
+			fmt.Sprintf("DELETE FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND created_at < ?",
+				s.tableSessionEvents),
+			key.AppName, key.UserID, key.SessionID, cutoffCreatedAt)
 		if err != nil {
 			return fmt.Errorf("hard delete old events failed: %w", err)
 		}
@@ -530,19 +520,18 @@ func (s *Service) getEventsList(
 	eventsMap := make(map[string][]event.Event)
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		for rows.Next() {
-			var appName, userID, sessionID string
-			var eventBytes []byte
-			if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes); err != nil {
-				return err
-			}
-			var evt event.Event
-			if err := json.Unmarshal(eventBytes, &evt); err != nil {
-				return fmt.Errorf("unmarshal event failed: %w", err)
-			}
-			key := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-			eventsMap[key] = append(eventsMap[key], evt)
+		// rows.Next() is already called by the Query loop
+		var appName, userID, sessionID string
+		var eventBytes []byte
+		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes); err != nil {
+			return err
 		}
+		var evt event.Event
+		if err := json.Unmarshal(eventBytes, &evt); err != nil {
+			return fmt.Errorf("unmarshal event failed: %w", err)
+		}
+		key := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
+		eventsMap[key] = append(eventsMap[key], evt)
 		return nil
 	}, query, args...)
 
@@ -602,22 +591,21 @@ func (s *Service) getSummariesList(
 	summariesMap := make(map[string]map[string]*session.Summary)
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		for rows.Next() {
-			var appName, userID, sessionID, filterKey string
-			var summaryBytes []byte
-			if err := rows.Scan(&appName, &userID, &sessionID, &filterKey, &summaryBytes); err != nil {
-				return err
-			}
-			var sum session.Summary
-			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
-				return fmt.Errorf("unmarshal summary failed: %w", err)
-			}
-			key := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-			if summariesMap[key] == nil {
-				summariesMap[key] = make(map[string]*session.Summary)
-			}
-			summariesMap[key][filterKey] = &sum
+		// rows.Next() is already called by the Query loop
+		var appName, userID, sessionID, filterKey string
+		var summaryBytes []byte
+		if err := rows.Scan(&appName, &userID, &sessionID, &filterKey, &summaryBytes); err != nil {
+			return err
 		}
+		var sum session.Summary
+		if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+			return fmt.Errorf("unmarshal summary failed: %w", err)
+		}
+		key := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
+		if summariesMap[key] == nil {
+			summariesMap[key] = make(map[string]*session.Summary)
+		}
+		summariesMap[key][filterKey] = &sum
 		return nil
 	}, query, args...)
 
