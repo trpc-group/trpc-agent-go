@@ -207,7 +207,7 @@ func TestDifyAgent_BuildDifyRequest(t *testing.T) {
 				Content: "test message",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: map[string]interface{}{
+				RuntimeState: map[string]any{
 					"key1": "value1",
 					"key2": "value2",
 					"key3": "value3", // should not be transferred
@@ -294,11 +294,6 @@ func (e *errorRequestConverter) ConvertToDifyRequest(
 	isStream bool,
 ) (*dify.ChatMessageRequest, error) {
 	return nil, fmt.Errorf("converter error")
-}
-
-// Helper function to create bool pointer
-func boolPtr(b bool) *bool {
-	return &b
 }
 
 func TestDifyAgentOptions(t *testing.T) {
@@ -687,32 +682,6 @@ func TestDifyAgent_ConvertAndEmitNonStreamingEvent(t *testing.T) {
 	}
 }
 
-// Mock Dify client for testing
-type mockDifyClient struct {
-	chatMessagesFunc       func(ctx context.Context, req *dify.ChatMessageRequest) (*dify.ChatMessageResponse, error)
-	chatMessagesStreamFunc func(ctx context.Context, req *dify.ChatMessageRequest) (<-chan dify.ChatMessageStreamChannelResponse, error)
-}
-
-type mockDifyAPI struct {
-	client *mockDifyClient
-}
-
-func (m *mockDifyAPI) ChatMessages(ctx context.Context, req *dify.ChatMessageRequest) (*dify.ChatMessageResponse, error) {
-	if m.client.chatMessagesFunc != nil {
-		return m.client.chatMessagesFunc(ctx, req)
-	}
-	return &dify.ChatMessageResponse{Answer: "mock response"}, nil
-}
-
-func (m *mockDifyAPI) ChatMessagesStream(ctx context.Context, req *dify.ChatMessageRequest) (<-chan dify.ChatMessageStreamChannelResponse, error) {
-	if m.client.chatMessagesStreamFunc != nil {
-		return m.client.chatMessagesStreamFunc(ctx, req)
-	}
-	ch := make(chan dify.ChatMessageStreamChannelResponse)
-	close(ch)
-	return ch, nil
-}
-
 func TestDifyAgent_BuildStreamingRequest(t *testing.T) {
 	t.Run("error on buildDifyRequest failure", func(t *testing.T) {
 		difyAgent := &DifyAgent{
@@ -794,7 +763,7 @@ func TestDifyAgent_Run_IntegrationWithMockServer(t *testing.T) {
 				Content: "Hello Dify",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: make(map[string]interface{}),
+				RuntimeState: make(map[string]any),
 			},
 		}
 
@@ -827,7 +796,7 @@ func TestDifyAgent_Run_IntegrationWithMockServer(t *testing.T) {
 				Content: "Hello Workflow",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: make(map[string]interface{}),
+				RuntimeState: make(map[string]any),
 			},
 		}
 
@@ -861,7 +830,7 @@ func TestDifyAgent_Run_IntegrationWithMockServer(t *testing.T) {
 				Content: "Stream this",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: make(map[string]interface{}),
+				RuntimeState: make(map[string]any),
 			},
 		}
 
@@ -897,7 +866,7 @@ func TestDifyAgent_Run_IntegrationWithMockServer(t *testing.T) {
 				Content: "Stream workflow",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: make(map[string]interface{}),
+				RuntimeState: make(map[string]any),
 			},
 		}
 
@@ -932,7 +901,7 @@ func TestDifyAgent_BuildDifyRequest_Integration(t *testing.T) {
 				Content: "test",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: map[string]interface{}{
+				RuntimeState: map[string]any{
 					"custom_key":  "custom_value",
 					"another_key": 123,
 					"ignored_key": "should not transfer",
@@ -963,7 +932,7 @@ func TestDifyAgent_BuildDifyRequest_Integration(t *testing.T) {
 				Content: "test",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: make(map[string]interface{}),
+				RuntimeState: make(map[string]any),
 			},
 		}
 
@@ -1029,7 +998,7 @@ func TestDifyAgent_HelperFunctions(t *testing.T) {
 				Content: "test",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: make(map[string]interface{}),
+				RuntimeState: make(map[string]any),
 			},
 		}
 

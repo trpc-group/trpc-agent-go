@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/cloudernative/dify-sdk-go"
@@ -75,7 +74,7 @@ func defaultChatflowHandler(w http.ResponseWriter, r *http.Request) {
 
 // defaultWorkflowHandler 默认的 Workflow 处理器
 func defaultWorkflowHandler(w http.ResponseWriter, r *http.Request) {
-	var req map[string]interface{}
+	var req map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -90,17 +89,17 @@ func defaultWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNonStreamingChatflow 处理非流式 Chatflow 请求
-func handleNonStreamingChatflow(w http.ResponseWriter, r *http.Request) {
+func handleNonStreamingChatflow(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
+	response := map[string]any{
 		"event":           "message",
 		"message_id":      "mock-message-id",
 		"conversation_id": "mock-conversation-id",
 		"mode":            "chat",
 		"answer":          "This is a mock response from Dify chatflow",
 		"created_at":      1234567890,
-		"metadata": map[string]interface{}{
-			"usage": map[string]interface{}{
+		"metadata": map[string]any{
+			"usage": map[string]any{
 				"prompt_tokens":     10,
 				"completion_tokens": 20,
 				"total_tokens":      30,
@@ -111,7 +110,7 @@ func handleNonStreamingChatflow(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStreamingChatflow 处理流式 Chatflow 请求
-func handleStreamingChatflow(w http.ResponseWriter, r *http.Request) {
+func handleStreamingChatflow(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -137,15 +136,15 @@ func handleStreamingChatflow(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNonStreamingWorkflow 处理非流式 Workflow 请求
-func handleNonStreamingWorkflow(w http.ResponseWriter, r *http.Request) {
+func handleNonStreamingWorkflow(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
+	response := map[string]any{
 		"workflow_run_id": "mock-workflow-run-id",
 		"task_id":         "mock-task-id",
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			"id":     "mock-workflow-id",
 			"status": "succeeded",
-			"outputs": map[string]interface{}{
+			"outputs": map[string]any{
 				"answer": "This is a mock workflow response",
 			},
 			"created_at": 1234567890,
@@ -155,7 +154,7 @@ func handleNonStreamingWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStreamingWorkflow 处理流式 Workflow 请求
-func handleStreamingWorkflow(w http.ResponseWriter, r *http.Request) {
+func handleStreamingWorkflow(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -181,7 +180,7 @@ func handleStreamingWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 // WithCustomChatflowResponse 设置自定义的 Chatflow 响应
-func (m *MockDifyServer) WithCustomChatflowResponse(response map[string]interface{}) {
+func (m *MockDifyServer) WithCustomChatflowResponse(response map[string]any) {
 	m.ChatflowHandler = func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -190,10 +189,10 @@ func (m *MockDifyServer) WithCustomChatflowResponse(response map[string]interfac
 
 // WithChatflowError 设置 Chatflow 返回错误
 func (m *MockDifyServer) WithChatflowError(statusCode int, message string) {
-	m.ChatflowHandler = func(w http.ResponseWriter, r *http.Request) {
+	m.ChatflowHandler = func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"code":    statusCode,
 			"message": message,
 		})
@@ -202,28 +201,13 @@ func (m *MockDifyServer) WithChatflowError(statusCode int, message string) {
 
 // WithWorkflowError 设置 Workflow 返回错误
 func (m *MockDifyServer) WithWorkflowError(statusCode int, message string) {
-	m.WorkflowHandler = func(w http.ResponseWriter, r *http.Request) {
+	m.WorkflowHandler = func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"code":    statusCode,
 			"message": message,
 		})
-	}
-}
-
-// VerifyRequest 验证请求内容的辅助函数
-type RequestVerifier struct {
-	t            *testing.T
-	expectedPath string
-	verifyFunc   func(*testing.T, *http.Request)
-}
-
-// WithRequestVerifier 添加请求验证
-func (m *MockDifyServer) WithRequestVerifier(path string, verifyFunc func(*testing.T, *http.Request)) *RequestVerifier {
-	return &RequestVerifier{
-		expectedPath: path,
-		verifyFunc:   verifyFunc,
 	}
 }
 
@@ -248,15 +232,4 @@ func createMockDifyAgent(t *testing.T, mockServer *MockDifyServer, opts ...Optio
 	}
 
 	return difyAgent
-}
-
-// verifyRequestContains 验证请求体包含指定内容
-func verifyRequestContains(t *testing.T, r *http.Request, expectedQuery string) {
-	body := make([]byte, r.ContentLength)
-	r.Body.Read(body)
-	bodyStr := string(body)
-
-	if !strings.Contains(bodyStr, expectedQuery) {
-		t.Errorf("Expected request body to contain '%s', got: %s", expectedQuery, bodyStr)
-	}
 }
