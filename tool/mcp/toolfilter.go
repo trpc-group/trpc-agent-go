@@ -153,6 +153,17 @@ func (f *PatternFilter) matchesTool(tool ToolInfo) bool {
 }
 
 // NewIncludeFilter creates a filter that only includes specified tool names.
+// Deprecated: Use tool.NewIncludeToolNamesFilter instead.
+// This function is deprecated and will be removed in a future version.
+//
+// Migration example:
+//
+//	// Old (deprecated):
+//	filter := mcp.NewIncludeFilter("echo", "add")
+//	mcp.WithToolFilter(filter)
+//
+//	// New (recommended):
+//	mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add"))
 func NewIncludeFilter(toolNames ...string) ToolFilter {
 	return &ToolNameFilter{
 		AllowedNames: toolNames,
@@ -161,6 +172,17 @@ func NewIncludeFilter(toolNames ...string) ToolFilter {
 }
 
 // NewExcludeFilter creates a filter that excludes specified tool names.
+// Deprecated: Use tool.NewExcludeToolNamesFilter instead.
+// This function is deprecated and will be removed in a future version.
+//
+// Migration example:
+//
+//	// Old (deprecated):
+//	filter := mcp.NewExcludeFilter("deprecated_tool")
+//	mcp.WithToolFilter(filter)
+//
+//	// New (recommended):
+//	mcp.WithToolFilterFunc(tool.NewExcludeToolNamesFilter("deprecated_tool"))
 func NewExcludeFilter(toolNames ...string) ToolFilter {
 	return &ToolNameFilter{
 		AllowedNames: toolNames,

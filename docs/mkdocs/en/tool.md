@@ -497,21 +497,36 @@ agent := llmagent.New("ai-assistant",
 
 ### MCP Tool Filters
 
-MCP ToolSets support filtering tools at creation time:
+MCP ToolSets support filtering tools at creation time. It's recommended to use the unified `tool.FilterFunc` interface:
 
 ```go
-// Include filter: only allow specified tools.
-includeFilter := mcp.NewIncludeFilter("get_weather", "get_news", "calculator")
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
 
-// Exclude filter: exclude specified tools.
-excludeFilter := mcp.NewExcludeFilter("deprecated_tool", "slow_tool")
+// ✅ Recommended: Use the unified filter interface
+includeFilter := tool.NewIncludeToolNamesFilter("get_weather", "get_news", "calculator")
+excludeFilter := tool.NewExcludeToolNamesFilter("deprecated_tool", "slow_tool")
 
-// Apply filter.
-combinedToolSet := mcp.NewMCPToolSet(
+// Apply filter
+toolSet := mcp.NewMCPToolSet(
     connectionConfig,
-    mcp.WithToolFilter(includeFilter),
+    mcp.WithToolFilterFunc(includeFilter),
 )
 ```
+
+**Deprecated legacy interface** (not recommended):
+```go
+// ⚠️ Deprecated: MCP-specific filters (not recommended)
+// includeFilter := mcp.NewIncludeFilter("get_weather", "get_news")
+// excludeFilter := mcp.NewExcludeFilter("deprecated_tool")
+// mcp.WithToolFilter(includeFilter)
+```
+
+**Migration guide:**
+- Old code: `mcp.WithToolFilter(mcp.NewIncludeFilter("tool1", "tool2"))`
+- New code: `mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("tool1", "tool2"))`
 
 ### Per-Run Tool Filtering
 

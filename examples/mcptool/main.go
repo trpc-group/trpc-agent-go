@@ -102,7 +102,10 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			Args:      []string{"run", "./stdioserver/main.go"},
 			Timeout:   10 * time.Second,
 		},
-		mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")),
+		// Old way (deprecated, will be removed in a future version):
+		// mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add"))
+		// New way (recommended):
+		mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add")),
 	)
 	fmt.Println("STDIO MCP Toolset created successfully")
 
@@ -113,7 +116,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			ServerURL: "http://localhost:3000/mcp", // Use ServerURL instead of URL
 			Timeout:   10 * time.Second,
 		},
-		mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
+		mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("get_weather", "get_news")),
 		mcp.WithMCPOptions(
 			// WithSimpleRetry(3): Uses default settings with 3 retry attempts
 			// - MaxRetries: 3 (range: 0-10)
@@ -140,7 +143,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 				"User-Agent": "trpc-agent-go/1.0.0",
 			},
 		},
-		mcp.WithToolFilter(mcp.NewIncludeFilter("sse_recipe", "sse_health_tip")),
+		mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("sse_recipe", "sse_health_tip")),
 		// Enable session reconnection for automatic recovery when server restarts (max 3 attempts)
 		mcp.WithSessionReconnect(3),
 		mcp.WithMCPOptions(
