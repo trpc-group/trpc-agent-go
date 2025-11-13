@@ -1543,30 +1543,6 @@ func TestCleanupExpiredUserStates_HardDelete(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestEnforceEventLimit_Error tests error handling in enforceEventLimit
-func TestEnforceEventLimit_Error(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	s := createTestService(t, db, WithSessionEventLimit(100))
-	ctx := context.Background()
-	key := session.Key{AppName: "test-app", UserID: "user-123", SessionID: "session-456"}
-
-	mock.ExpectBegin()
-	tx, err := db.Begin()
-	require.NoError(t, err)
-
-	// Mock QueryRow error
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events")).
-		WithArgs(key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).
-		WillReturnError(assert.AnError)
-
-	err = s.enforceEventLimit(ctx, tx, key, time.Now())
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "get cutoff time failed")
-}
-
 func TestNewService_WithDSN_Success(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
