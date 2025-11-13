@@ -142,7 +142,7 @@ func TestMultiConditionalEdgesWithEnds(t *testing.T) {
 	sg.SetEntryPoint("A")
 	// Multi-conditional returns two symbolic keys; ends mapping should
 	// resolve them to B and C respectively.
-	sg.AddConditionalEdges("A", func(ctx context.Context, s State) ([]string, error) {
+	sg.AddMultiConditionalEdges("A", func(ctx context.Context, s State) ([]string, error) {
 		return []string{"goB", "goC"}, nil
 	}, nil)
 	sg.SetFinishPoint("B").SetFinishPoint("C")
