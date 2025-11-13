@@ -50,7 +50,7 @@ func WithCustomEventConverter(converter DifyEventConverter) Option {
 	}
 }
 
-// WithCustomA2AConverter adds a custom A2A message converter to the DifyAgent.
+// WithCustomRequestConverter adds a custom A2A message converter to the DifyAgent.
 // This converter will be used to convert invocations to A2A protocol messages.
 func WithCustomRequestConverter(converter DifyRequestConverter) Option {
 	return func(a *DifyAgent) {

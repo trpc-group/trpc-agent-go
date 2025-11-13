@@ -23,7 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// DifyRequestConverter defines an interface for converting A2A protocol types to Event.
+// DifyEventConverter defines an interface for converting Dify response to Event.
 type DifyEventConverter interface {
 	// ConvertToEvent converts an A2A protocol type to an Event.
 	ConvertToEvent(
@@ -40,7 +40,7 @@ type DifyEventConverter interface {
 	) *event.Event
 }
 
-// InvocationDifyConverter defines an interface for converting invocations to A2A protocol messages.
+// DifyRequestConverter defines an interface for converting invocations to Dify request messages.
 type DifyRequestConverter interface {
 	// ConvertToDifyRequest converts agent invocation to Dify request
 	ConvertToDifyRequest(

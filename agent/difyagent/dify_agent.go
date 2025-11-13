@@ -28,7 +28,7 @@ const (
 	defaultNonStreamingChannelSize = 10
 )
 
-// A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
+// DifyAgent is an agent that communicates with a remote Dify service.
 type DifyAgent struct {
 	// options
 	baseUrl          string // dify base url
