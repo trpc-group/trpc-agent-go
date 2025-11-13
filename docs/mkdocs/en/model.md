@@ -972,7 +972,7 @@ If the default token allocation strategy does not meet your needs, you can custo
 ```go
 model := openai.New("deepseek-chat",
     openai.WithEnableTokenTailoring(true),
-    openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+    openai.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         ProtocolOverheadTokens: 1024,   // Custom protocol overhead
         ReserveOutputTokens:    4096,   // Custom output reserve
         InputTokensFloor:       2048,   // Custom input floor
@@ -988,15 +988,18 @@ For Anthropic models, you can use the same configuration:
 ```go
 model := anthropic.New("claude-sonnet-4-0",
     anthropic.WithEnableTokenTailoring(true),
-    anthropic.WithTokenTailoringConfig(&anthropic.TokenTailoringConfig{
+    anthropic.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         SafetyMarginRatio: 0.15,  // Increase safety margin to 15%
     }),
 )
 ```
 
 #### 6. Variant Optimization: Adapting to Platform-Specific Behaviors
+
 The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, especially for file upload, deletion, and processing logic.
+
 ##### 6.1. Supported Variant Types
+
 The framework currently supports the following Variants:
 
 **1. VariantOpenAI（default）**
@@ -1048,6 +1051,7 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
 )
 ```
+
 ##### 6.3. Behavioral Differences of Variants Examples
 
 **Message content handling differences**：
@@ -1068,6 +1072,7 @@ message := model.Message{
     },
 }
 ```
+
 **Environment variable auto-configuration**
 
 For certain Variants, the framework supports reading configuration from environment variables automatically:
@@ -1275,8 +1280,8 @@ In environments like gateways, proprietary platforms, or proxy setups, model API
 
 Recommended order:
 
-* Use **Anthropic RequestOption** to set global headers (simple and intuitive)
-* Use a custom `http.RoundTripper` injection (advanced, more cross-cutting capabilities)
+- Use **Anthropic RequestOption** to set global headers (simple and intuitive)
+- Use a custom `http.RoundTripper` injection (advanced, more cross-cutting capabilities)
 
 Both methods affect streaming requests, as they use the same underlying client.
 
@@ -1358,8 +1363,8 @@ llm := anthropic.New("claude-sonnet-4-0",
 
 Regarding **"per-request" headers**:
 
-* The Agent/Runner will propagate `ctx` to the model call; middleware can read the value from `req.Context()` to inject headers for "this call."
-* For **message completion**, the current API doesn't expose per-call BaseURL overrides; if switching is needed, create a model using a different BaseURL or modify the `r.URL` in middleware.
+- The Agent/Runner will propagate `ctx` to the model call; middleware can read the value from `req.Context()` to inject headers for "this call."
+- For **message completion**, the current API doesn't expose per-call BaseURL overrides; if switching is needed, create a model using a different BaseURL or modify the `r.URL` in middleware.
 
 #### 3. Token Tailoring
 
@@ -1410,7 +1415,8 @@ The Provider supports the following `Option`:
 | `WithCallbacks`                                                                                   | Configure OpenAI / Anthropic request, response, and streaming callbacks |
 | `WithExtraFields`                                                                                 | Configure custom fields in the request body                             |
 | `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token trimming related parameters                                       |
-| `WithOpenAI` / `WithAnthropic`                                                                    | Pass-through native options for the respective providers                |
+| `WithTokenTailoringConfig`                                                                        | Custom token tailoring budget parameters for advanced configuration     |
+| `WithOpenAIOption` / `WithAnthropicOption`                                                        | Pass-through native options for the respective providers                |
 
 #### Usage Example
 
@@ -1434,6 +1440,32 @@ modelInstance, err := provider.Model(
 )
 
 agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))
+```
+
+**Advanced Configuration with TokenTailoringConfig**:
+
+For advanced users who need to fine-tune token allocation strategy, you can use `WithTokenTailoringConfig`:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
+)
+
+// Custom token tailoring budget parameters for all providers
+config := &model.TokenTailoringConfig{
+    ProtocolOverheadTokens: 1024,
+    ReserveOutputTokens:    4096,
+    SafetyMarginRatio:      0.15,
+}
+
+modelInstance, err := provider.Model(
+    "openai",
+    "deepseek-chat",
+    provider.WithAPIKey(c.apiKey),
+    provider.WithEnableTokenTailoring(true),
+    provider.WithTokenTailoringConfig(config),
+)
 ```
 
 Full code can be found in [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider).
