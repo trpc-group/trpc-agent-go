@@ -28,15 +28,27 @@ const (
 	defaultNonStreamingChannelSize = 10
 )
 
+// DifyMode represents the Dify service mode
+type DifyMode string
+
+const (
+	// ModeChatflow represents Dify chatflow mode (default)
+	ModeChatflow DifyMode = "chatflow"
+	// ModeWorkflow represents Dify workflow mode
+	ModeWorkflow DifyMode = "workflow"
+)
+
 // DifyAgent is an agent that communicates with a remote Dify service.
 type DifyAgent struct {
 	// options
-	baseUrl          string // dify base url
-	apiSecret        string // dify api secret
-	name             string
-	description      string
-	eventConverter   DifyEventConverter   // Custom A2A event converters
-	requestConverter DifyRequestConverter // Custom Dify request converter
+	baseUrl           string // dify base url
+	apiSecret         string // dify api secret
+	name              string
+	description       string
+	mode              DifyMode                     // Dify service mode: chatflow or workflow (default: chatflow)
+	eventConverter    DifyEventConverter           // Custom event converters
+	requestConverter  DifyRequestConverter         // Custom Dify chatflow request converter
+	workflowConverter DifyWorkflowRequestConverter // Custom Dify workflow request converter
 
 	streamingBufSize        int                  // Buffer size for streaming responses
 	streamingRespHandler    StreamingRespHandler // Handler for streaming responses
@@ -48,11 +60,14 @@ type DifyAgent struct {
 	getDifyClientFunc func(*agent.Invocation) (*dify.Client, error)
 }
 
-// New creates a new A2AAgent.
+// New creates a new DifyAgent.
 func New(opts ...Option) (*DifyAgent, error) {
 	difyAgent := &DifyAgent{
-		eventConverter:   &defaultDifyEventConverter{},
-		streamingBufSize: defaultStreamingChannelSize,
+		eventConverter:    &defaultDifyEventConverter{},
+		requestConverter:  &defaultEventDifyConverter{},
+		workflowConverter: &defaultWorkflowRequestConverter{},
+		streamingBufSize:  defaultStreamingChannelSize,
+		mode:              ModeChatflow, // Default to chatflow mode
 	}
 
 	for _, opt := range opts {
@@ -62,6 +77,11 @@ func New(opts ...Option) (*DifyAgent, error) {
 	// Validate that required fields are set
 	if difyAgent.name == "" {
 		return nil, fmt.Errorf("agent name is required")
+	}
+
+	// Validate mode
+	if difyAgent.mode != ModeChatflow && difyAgent.mode != ModeWorkflow {
+		return nil, fmt.Errorf("invalid mode: %s, must be either 'chatflow' or 'workflow'", difyAgent.mode)
 	}
 
 	return difyAgent, nil
@@ -174,7 +194,7 @@ func (r *DifyAgent) processStreamEvent(
 	return evt, content, nil
 }
 
-// buildStreamingRequest builds and sends streaming request to Dify
+// buildStreamingRequest builds and sends streaming request to Dify chatflow
 func (r *DifyAgent) buildStreamingRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -187,10 +207,94 @@ func (r *DifyAgent) buildStreamingRequest(
 
 	streamChan, err := r.difyClient.API().ChatMessagesStream(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("Dify streaming request failed to %s: %v", r.baseUrl, err)
+		return nil, fmt.Errorf("Dify chatflow streaming request failed to %s: %v", r.baseUrl, err)
 	}
 
 	return streamChan, nil
+}
+
+// buildWorkflowStreamingRequest builds and sends streaming request to Dify workflow
+func (r *DifyAgent) buildWorkflowStreamingRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) error {
+	if r.workflowConverter == nil {
+		return fmt.Errorf("workflow converter not set")
+	}
+
+	req, err := r.workflowConverter.ConvertToWorkflowRequest(ctx, invocation)
+	if err != nil {
+		return fmt.Errorf("failed to construct workflow request: %v", err)
+	}
+
+	// Transfer additional state keys
+	if len(r.transferStateKey) > 0 {
+		for _, key := range r.transferStateKey {
+			if value, ok := invocation.RunOptions.RuntimeState[key]; ok {
+				req.Inputs[key] = value
+			}
+		}
+	}
+
+	req.ResponseMode = "streaming"
+
+	var aggregatedContentBuilder strings.Builder
+
+	// RunStreamWorkflow uses a callback pattern
+	err = r.difyClient.API().RunStreamWorkflow(ctx, req, func(resp dify.StreamingResponse) {
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			return
+		}
+
+		// Convert workflow streaming response to event
+		// Extract text from outputs
+		var content string
+		if resp.Data.Outputs != nil {
+			// Try to get answer from common output fields
+			if val, ok := resp.Data.Outputs["answer"]; ok {
+				if strVal, ok := val.(string); ok {
+					content = strVal
+				}
+			} else if val, ok := resp.Data.Outputs["text"]; ok {
+				if strVal, ok := val.(string); ok {
+					content = strVal
+				}
+			}
+		}
+
+		if content != "" {
+			aggregatedContentBuilder.WriteString(content)
+
+			message := model.Message{
+				Role:    model.RoleAssistant,
+				Content: content,
+			}
+
+			evt := event.New(
+				invocation.InvocationID,
+				r.name,
+				event.WithResponse(&model.Response{
+					Object:    model.ObjectTypeChatCompletionChunk,
+					Choices:   []model.Choice{{Delta: message}},
+					Timestamp: time.Now(),
+					Created:   time.Now().Unix(),
+					IsPartial: true,
+					Done:      false,
+				}),
+				event.WithObject(model.ObjectTypeChatCompletionChunk),
+			)
+			agent.EmitEvent(ctx, invocation, eventChan, evt)
+		}
+	})
+
+	if err != nil {
+		return fmt.Errorf("workflow streaming request failed to %s: %v", r.baseUrl, err)
+	}
+
+	// Send final aggregated event
+	r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String())
+	return nil
 }
 
 // sendFinalStreamingEvent sends the final aggregated event for streaming
@@ -218,15 +322,27 @@ func (r *DifyAgent) sendFinalStreamingEvent(
 	))
 }
 
-// runStreaming handles streaming A2A communication
+// runStreaming handles streaming communication
 func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if r.eventConverter == nil {
 		return nil, fmt.Errorf("event converter not set")
 	}
 	eventChan := make(chan *event.Event, r.streamingBufSize)
+
 	go func() {
 		defer close(eventChan)
 
+		// Handle workflow and chatflow differently due to different SDK APIs
+		if r.mode == ModeWorkflow {
+			// Workflow uses callback-based streaming
+			err := r.buildWorkflowStreamingRequest(ctx, invocation, eventChan)
+			if err != nil {
+				r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
+			}
+			return
+		}
+
+		// Chatflow uses channel-based streaming
 		streamChan, err := r.buildStreamingRequest(ctx, invocation)
 		if err != nil {
 			r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
@@ -262,6 +378,58 @@ func (r *DifyAgent) executeNonStreamingRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (*dify.ChatMessageResponse, error) {
+	// Handle workflow mode
+	if r.mode == ModeWorkflow {
+		if r.workflowConverter == nil {
+			return nil, fmt.Errorf("workflow converter not set")
+		}
+
+		req, err := r.workflowConverter.ConvertToWorkflowRequest(ctx, invocation)
+		if err != nil {
+			return nil, fmt.Errorf("failed to construct workflow request: %v", err)
+		}
+
+		// Transfer additional state keys
+		if len(r.transferStateKey) > 0 {
+			for _, key := range r.transferStateKey {
+				if value, ok := invocation.RunOptions.RuntimeState[key]; ok {
+					req.Inputs[key] = value
+				}
+			}
+		}
+
+		workflowResp, err := r.difyClient.API().RunWorkflow(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("Dify workflow request failed to %s: %v", r.baseUrl, err)
+		}
+
+		// Convert WorkflowResponse to ChatMessageResponse
+		// Extract answer from workflow outputs
+		answer := ""
+		if workflowResp.Data.Outputs != nil {
+			// Try to get answer from common output fields
+			if val, ok := workflowResp.Data.Outputs["answer"]; ok {
+				if strVal, ok := val.(string); ok {
+					answer = strVal
+				}
+			} else if val, ok := workflowResp.Data.Outputs["text"]; ok {
+				if strVal, ok := val.(string); ok {
+					answer = strVal
+				}
+			} else if val, ok := workflowResp.Data.Outputs["result"]; ok {
+				if strVal, ok := val.(string); ok {
+					answer = strVal
+				}
+			}
+		}
+
+		return &dify.ChatMessageResponse{
+			Answer: answer,
+			ID:     workflowResp.WorkflowRunID,
+		}, nil
+	}
+
+	// Handle chatflow mode
 	req, err := r.buildDifyRequest(ctx, invocation, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct Dify request: %v", err)
@@ -269,7 +437,7 @@ func (r *DifyAgent) executeNonStreamingRequest(
 
 	result, err := r.difyClient.API().ChatMessages(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("Dify request failed to %s: %v", r.baseUrl, err)
+		return nil, fmt.Errorf("Dify chatflow request failed to %s: %v", r.baseUrl, err)
 	}
 
 	return result, nil

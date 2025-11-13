@@ -50,6 +50,15 @@ type DifyRequestConverter interface {
 	) (*dify.ChatMessageRequest, error)
 }
 
+// DifyWorkflowRequestConverter defines an interface for converting invocations to Dify workflow requests.
+type DifyWorkflowRequestConverter interface {
+	// ConvertToWorkflowRequest converts agent invocation to Dify workflow request
+	ConvertToWorkflowRequest(
+		ctx context.Context,
+		invocation *agent.Invocation,
+	) (dify.WorkflowRequest, error)
+}
+
 type defaultDifyEventConverter struct {
 }
 
@@ -170,6 +179,48 @@ func (d *defaultEventDifyConverter) ConvertToDifyRequest(
 	}
 
 	return req, nil
+}
+
+// defaultWorkflowRequestConverter is the default converter for workflow requests
+type defaultWorkflowRequestConverter struct{}
+
+func (d *defaultWorkflowRequestConverter) ConvertToWorkflowRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (dify.WorkflowRequest, error) {
+	inputs := make(map[string]interface{})
+	inputs["query"] = invocation.Message.Content
+
+	// Handle content parts if available
+	for _, contentPart := range invocation.Message.ContentParts {
+		switch contentPart.Type {
+		case model.ContentTypeText:
+			if contentPart.Text != nil {
+				inputs["query"] = *contentPart.Text
+			}
+		case model.ContentTypeImage:
+			if contentPart.Image != nil && contentPart.Image.URL != "" {
+				inputs["image_url"] = contentPart.Image.URL
+			}
+		case model.ContentTypeFile:
+			if contentPart.File != nil && contentPart.File.Name != "" {
+				inputs["file_name"] = contentPart.File.Name
+			}
+		default:
+			inputs["other_content_type"] = contentPart.Type
+		}
+	}
+
+	user := "anonymous"
+	if invocation.Session != nil && invocation.Session.UserID != "" {
+		user = invocation.Session.UserID
+	}
+
+	return dify.WorkflowRequest{
+		Inputs:       inputs,
+		User:         user,
+		ResponseMode: "blocking", // workflow default mode
+	}, nil
 }
 
 // extractTextFromParts extracts text content from protocol message parts

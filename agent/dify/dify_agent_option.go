@@ -29,6 +29,19 @@ func WithBaseUrl(baseUrl string) Option {
 	}
 }
 
+// WithMode sets the Dify service mode (chatflow or workflow).
+// Default is ModeChatflow if not specified.
+//
+// Example:
+//
+//	WithMode(dify.ModeWorkflow)  // Use workflow mode
+//	WithMode(dify.ModeChatflow)  // Use chatflow mode (default)
+func WithMode(mode DifyMode) Option {
+	return func(a *DifyAgent) {
+		a.mode = mode
+	}
+}
+
 // WithName sets the name of agent
 func WithName(name string) Option {
 	return func(a *DifyAgent) {
@@ -55,6 +68,14 @@ func WithCustomEventConverter(converter DifyEventConverter) Option {
 func WithCustomRequestConverter(converter DifyRequestConverter) Option {
 	return func(a *DifyAgent) {
 		a.requestConverter = converter
+	}
+}
+
+// WithCustomWorkflowConverter adds a custom workflow request converter to the DifyAgent.
+// This converter will be used when mode is set to ModeWorkflow.
+func WithCustomWorkflowConverter(converter DifyWorkflowRequestConverter) Option {
+	return func(a *DifyAgent) {
+		a.workflowConverter = converter
 	}
 }
 
