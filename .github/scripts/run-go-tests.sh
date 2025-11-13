@@ -41,7 +41,7 @@ for mod in "${gomodules[@]}"; do
   echo "module import path: ${module_path}"
   (
     cd "${mod_dir}"
-    go test -v -coverprofile=coverage.out ./...
+    go test -v -coverprofile=coverage.out -coverpkg=./... ./...
   )
   relative_prefix="${mod_dir#./}"
   if [ "${relative_prefix}" = "" ] || [ "${relative_prefix}" = "." ]; then
