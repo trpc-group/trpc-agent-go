@@ -1343,6 +1343,7 @@ func (e *Executor) handleCachedResult(
 	} else if res != nil {
 		result = res
 	}
+	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
 	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
@@ -1396,6 +1397,7 @@ func (e *Executor) executeTaskWithRetry(
 	for {
 		// Execute single attempt.
 		result, err := e.executeSingleAttempt(ctx, execCtx, t)
+		e.syncResumeState(execCtx, nodeCtx.stateCopy)
 		if err == nil {
 			// Handle successful execution.
 			return e.finalizeSuccessfulExecution(ctx, invocation, execCtx, t, result, step, nodeCtx)
@@ -1443,6 +1445,7 @@ func (e *Executor) finalizeSuccessfulExecution(
 	} else if res != nil {
 		result = res
 	}
+	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
 	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
@@ -1513,6 +1516,7 @@ func (e *Executor) evaluateRetryDecision(
 	if nodeCtx.mergedCallbacks != nil {
 		nodeCtx.mergedCallbacks.RunOnNodeError(ctx, nodeCtx.callbackCtx, nodeCtx.stateCopy, retryCtx.err)
 	}
+	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Evaluate retry policy.
 	matched, pol, maxAttempts := e.selectRetryPolicy(retryCtx.err, nodeCtx.nodePolicies)
@@ -1763,6 +1767,7 @@ func (e *Executor) runBeforeCallbacks(
 	if customResult == nil {
 		return false, nil
 	}
+	e.syncResumeState(execCtx, stateCopy)
 	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult)
 	if err != nil {
 		return true, err
@@ -2128,6 +2133,34 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 	}
 	// Fallback to direct assignment if no schema available.
 	maps.Copy(execCtx.State, stateResult)
+}
+
+// syncResumeState copies resume-related keys from a node-local state view into the shared executor state.
+func (e *Executor) syncResumeState(execCtx *ExecutionContext, source State) {
+	if execCtx == nil || source == nil {
+		return
+	}
+	execCtx.stateMutex.Lock()
+	defer execCtx.stateMutex.Unlock()
+	if execCtx.State == nil {
+		execCtx.State = make(State)
+	}
+	syncResumeKey(execCtx.State, source, ResumeChannel)
+	syncResumeKey(execCtx.State, source, StateKeyResumeMap)
+	syncResumeKey(execCtx.State, source, StateKeyUsedInterrupts)
+}
+
+// syncResumeKey applies a specific resume key mutation from the node state.
+func syncResumeKey(target, source State, key string) {
+	if value, exists := source[key]; exists {
+		if value == nil {
+			delete(target, key)
+			return
+		}
+		target[key] = deepCopyAny(value)
+		return
+	}
+	delete(target, key)
 }
 
 // handleCommandResult handles a Command result from node execution.
