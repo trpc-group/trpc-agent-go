@@ -1,7 +1,7 @@
 ## Callbacks
 
 > **Version Requirement**  
-> The structured callback API (recommended) requires **trpc-agent-go >= 0.5.0**.
+> The structured callback API (recommended) requires **trpc-agent-go >= 0.6.0**.
 
 This page describes the callback system used across the project to intercept,
 observe, and customize model inference, tool invocation, and agent execution.
