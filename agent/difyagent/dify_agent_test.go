@@ -16,6 +16,8 @@ import (
 
 	"github.com/cloudernative/dify-sdk-go"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestNew(t *testing.T) {
@@ -182,6 +184,118 @@ func TestDifyAgent_RequestConverter(t *testing.T) {
 	})
 }
 
+func TestDifyAgent_ValidateRequestOptions(t *testing.T) {
+	difyAgent := &DifyAgent{}
+	invocation := &agent.Invocation{}
+
+	err := difyAgent.validateRequestOptions(invocation)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func TestDifyAgent_BuildDifyRequest(t *testing.T) {
+	t.Run("with transfer state keys", func(t *testing.T) {
+		converter := &defaultEventDifyConverter{}
+		difyAgent := &DifyAgent{
+			requestConverter: converter,
+			transferStateKey: []string{"key1", "key2"},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Content: "test message",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]interface{}{
+					"key1": "value1",
+					"key2": "value2",
+					"key3": "value3", // should not be transferred
+				},
+			},
+		}
+
+		req, err := difyAgent.buildDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+		if req == nil {
+			t.Fatal("expected request, got nil")
+		}
+		if req.Inputs["key1"] != "value1" {
+			t.Errorf("expected key1 to be value1, got %v", req.Inputs["key1"])
+		}
+		if req.Inputs["key2"] != "value2" {
+			t.Errorf("expected key2 to be value2, got %v", req.Inputs["key2"])
+		}
+		if _, exists := req.Inputs["key3"]; exists {
+			t.Error("key3 should not be transferred")
+		}
+	})
+
+	t.Run("with nil inputs initialization", func(t *testing.T) {
+		customConverter := &customNilInputsConverter{}
+		difyAgent := &DifyAgent{
+			requestConverter: customConverter,
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Content: "test",
+			},
+		}
+
+		req, err := difyAgent.buildDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+		if req.Inputs == nil {
+			t.Error("inputs should be initialized")
+		}
+	})
+
+	t.Run("converter returns error", func(t *testing.T) {
+		customConverter := &errorRequestConverter{}
+		difyAgent := &DifyAgent{
+			requestConverter: customConverter,
+		}
+
+		invocation := &agent.Invocation{}
+
+		req, err := difyAgent.buildDifyRequest(context.Background(), invocation, false)
+		if err == nil {
+			t.Error("expected error from converter")
+		}
+		if req != nil {
+			t.Error("expected nil request on error")
+		}
+	})
+}
+
+// Helper converters for testing
+type customNilInputsConverter struct{}
+
+func (c *customNilInputsConverter) ConvertToDifyRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	isStream bool,
+) (*dify.ChatMessageRequest, error) {
+	return &dify.ChatMessageRequest{
+		Query:  invocation.Message.Content,
+		Inputs: nil, // nil inputs to test initialization
+	}, nil
+}
+
+type errorRequestConverter struct{}
+
+func (e *errorRequestConverter) ConvertToDifyRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	isStream bool,
+) (*dify.ChatMessageRequest, error) {
+	return nil, fmt.Errorf("converter error")
+}
+
 // Helper function to create bool pointer
 func boolPtr(b bool) *bool {
 	return &b
@@ -222,4 +336,202 @@ func TestDifyAgentOptions(t *testing.T) {
 			t.Error("transfer keys not set correctly")
 		}
 	})
+
+	t.Run("WithBaseUrl", func(t *testing.T) {
+		difyAgent := &DifyAgent{}
+		WithBaseUrl("http://example.com")(difyAgent)
+		if difyAgent.baseUrl != "http://example.com" {
+			t.Errorf("expected baseUrl 'http://example.com', got %s", difyAgent.baseUrl)
+		}
+	})
+
+	t.Run("WithCustomEventConverter", func(t *testing.T) {
+		difyAgent := &DifyAgent{}
+		customConverter := &defaultDifyEventConverter{}
+		WithCustomEventConverter(customConverter)(difyAgent)
+		if difyAgent.eventConverter != customConverter {
+			t.Error("event converter not set correctly")
+		}
+	})
+
+	t.Run("WithCustomRequestConverter", func(t *testing.T) {
+		difyAgent := &DifyAgent{}
+		customConverter := &defaultEventDifyConverter{}
+		WithCustomRequestConverter(customConverter)(difyAgent)
+		if difyAgent.requestConverter != customConverter {
+			t.Error("request converter not set correctly")
+		}
+	})
+
+	t.Run("WithStreamingRespHandler", func(t *testing.T) {
+		difyAgent := &DifyAgent{}
+		handler := func(resp *model.Response) (string, error) {
+			return "test", nil
+		}
+		WithStreamingRespHandler(handler)(difyAgent)
+		if difyAgent.streamingRespHandler == nil {
+			t.Error("streaming response handler not set")
+		}
+	})
+
+	t.Run("WithGetDifyClientFunc", func(t *testing.T) {
+		difyAgent := &DifyAgent{}
+		clientFunc := func(*agent.Invocation) (*dify.Client, error) {
+			return &dify.Client{}, nil
+		}
+		WithGetDifyClientFunc(clientFunc)(difyAgent)
+		if difyAgent.getDifyClientFunc == nil {
+			t.Error("getDifyClientFunc not set")
+		}
+	})
+}
+
+func TestDifyAgent_Run(t *testing.T) {
+	t.Run("error when getDifyClient fails", func(t *testing.T) {
+		expectedErr := fmt.Errorf("client error")
+		difyAgent := &DifyAgent{
+			name: "test-agent",
+			getDifyClientFunc: func(*agent.Invocation) (*dify.Client, error) {
+				return nil, expectedErr
+			},
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		eventChan, err := difyAgent.Run(context.Background(), invocation)
+		if err != expectedErr {
+			t.Errorf("expected error %v, got: %v", expectedErr, err)
+		}
+		if eventChan != nil {
+			t.Error("expected nil event channel on error")
+		}
+	})
+}
+
+func TestDifyAgent_RunStreaming_Errors(t *testing.T) {
+	t.Run("error when event converter not set", func(t *testing.T) {
+		difyAgent := &DifyAgent{
+			name:             "test-agent",
+			eventConverter:   nil, // Not set
+			streamingBufSize: 10,
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		eventChan, err := difyAgent.runStreaming(context.Background(), invocation)
+		if err == nil {
+			t.Error("expected error when event converter not set")
+		}
+		if eventChan != nil {
+			t.Error("expected nil event channel on error")
+		}
+	})
+
+	t.Run("error when buildDifyRequest fails", func(t *testing.T) {
+		difyAgent := &DifyAgent{
+			name:             "test-agent",
+			eventConverter:   &defaultDifyEventConverter{},
+			requestConverter: nil, // Will cause buildDifyRequest to fail
+			streamingBufSize: 10,
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		eventChan, err := difyAgent.runStreaming(context.Background(), invocation)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+
+		// Should receive error event
+		if eventChan == nil {
+			t.Fatal("expected event channel")
+		}
+
+		var receivedError bool
+		for evt := range eventChan {
+			if evt.Response != nil && evt.Response.Error != nil {
+				receivedError = true
+				if evt.Response.Error.Message == "" {
+					t.Error("expected error message")
+				}
+			}
+		}
+		if !receivedError {
+			t.Error("expected to receive error event")
+		}
+	})
+}
+
+func TestDifyAgent_RunNonStreaming_Errors(t *testing.T) {
+	t.Run("error when buildDifyRequest fails", func(t *testing.T) {
+		difyAgent := &DifyAgent{
+			name:             "test-agent",
+			eventConverter:   &defaultDifyEventConverter{},
+			requestConverter: nil, // Will cause buildDifyRequest to fail
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		eventChan, err := difyAgent.runNonStreaming(context.Background(), invocation)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+
+		// Should receive error event
+		if eventChan == nil {
+			t.Fatal("expected event channel")
+		}
+
+		var receivedError bool
+		for evt := range eventChan {
+			if evt.Response != nil && evt.Response.Error != nil {
+				receivedError = true
+			}
+		}
+		if !receivedError {
+			t.Error("expected to receive error event")
+		}
+	})
+}
+
+func TestDifyAgent_SendErrorEvent(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name: "test-agent",
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	difyAgent.sendErrorEvent(context.Background(), eventChan, invocation, "test error message")
+	close(eventChan)
+
+	evt := <-eventChan
+	if evt == nil {
+		t.Fatal("expected event")
+	}
+	if evt.Response == nil {
+		t.Fatal("expected response")
+	}
+	if evt.Response.Error == nil {
+		t.Fatal("expected error in response")
+	}
+	if evt.Response.Error.Message != "test error message" {
+		t.Errorf("expected error message 'test error message', got: %s", evt.Response.Error.Message)
+	}
+	if evt.Author != "test-agent" {
+		t.Errorf("expected author 'test-agent', got: %s", evt.Author)
+	}
+	if evt.InvocationID != "test-inv" {
+		t.Errorf("expected invocation ID 'test-inv', got: %s", evt.InvocationID)
+	}
 }

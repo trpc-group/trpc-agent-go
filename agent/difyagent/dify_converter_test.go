@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cloudernative/dify-sdk-go"
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -301,6 +302,203 @@ func TestDefaultDifyRequestConverter_ConvertToDifyRequest(t *testing.T) {
 			t.Errorf("expected query '%s', got '%s'", expectedQuery, req.Query)
 		}
 	})
+
+	t.Run("handles image content parts", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Check this image",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							URL: "http://example.com/image.jpg",
+						},
+					},
+				},
+			},
+			Session: &session.Session{
+				UserID: "user-123",
+			},
+		}
+
+		req, err := converter.ConvertToDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+
+		if req.Inputs["image_url"] != "http://example.com/image.jpg" {
+			t.Errorf("expected image_url in inputs, got: %v", req.Inputs["image_url"])
+		}
+	})
+
+	t.Run("handles file content parts", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Check this file",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeFile,
+						File: &model.File{
+							Name: "document.pdf",
+						},
+					},
+				},
+			},
+			Session: &session.Session{
+				UserID: "user-123",
+			},
+		}
+
+		req, err := converter.ConvertToDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+
+		if req.Inputs["file_name"] != "document.pdf" {
+			t.Errorf("expected file_name in inputs, got: %v", req.Inputs["file_name"])
+		}
+	})
+
+	t.Run("handles unknown content parts", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test",
+				ContentParts: []model.ContentPart{
+					{
+						Type: "unknown_type",
+					},
+				},
+			},
+			Session: &session.Session{
+				UserID: "user-123",
+			},
+		}
+
+		req, err := converter.ConvertToDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+
+		if val, ok := req.Inputs["other_content_type"].(model.ContentType); !ok || val != "unknown_type" {
+			t.Errorf("expected other_content_type to be 'unknown_type', got: %v", req.Inputs["other_content_type"])
+		}
+	})
+
+	t.Run("handles text content part without main content", func(t *testing.T) {
+		textContent := "Only text part"
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: &textContent,
+					},
+				},
+			},
+			Session: &session.Session{
+				UserID: "user-123",
+			},
+		}
+
+		req, err := converter.ConvertToDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+
+		if req.Query != "Only text part" {
+			t.Errorf("expected query 'Only text part', got '%s'", req.Query)
+		}
+	})
+
+	t.Run("handles nil text in text content part", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Main",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: nil,
+					},
+				},
+			},
+			Session: &session.Session{
+				UserID: "user-123",
+			},
+		}
+
+		req, err := converter.ConvertToDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+
+		if req.Query != "Main" {
+			t.Errorf("expected query 'Main', got '%s'", req.Query)
+		}
+	})
+
+	t.Run("handles empty image URL", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							URL: "",
+						},
+					},
+				},
+			},
+			Session: &session.Session{
+				UserID: "user-123",
+			},
+		}
+
+		req, err := converter.ConvertToDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+
+		if _, exists := req.Inputs["image_url"]; exists {
+			t.Error("image_url should not be added for empty URL")
+		}
+	})
+
+	t.Run("handles empty file name", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "Test",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeFile,
+						File: &model.File{
+							Name: "",
+						},
+					},
+				},
+			},
+			Session: &session.Session{
+				UserID: "user-123",
+			},
+		}
+
+		req, err := converter.ConvertToDifyRequest(context.Background(), invocation, false)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+
+		if _, exists := req.Inputs["file_name"]; exists {
+			t.Error("file_name should not be added for empty name")
+		}
+	})
 }
 
 // TestCustomConverters tests custom converter implementations
@@ -434,4 +632,212 @@ func (c *customTestRequestConverter) ConvertToDifyRequest(
 	}
 
 	return req, nil
+}
+
+func TestDefaultDifyEventConverter_BuildRespEvent(t *testing.T) {
+	converter := &defaultDifyEventConverter{}
+
+	t.Run("builds non-streaming event", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		// Test with empty message (no parts)
+		msg := &protocol.Message{
+			Role:  protocol.MessageRoleAgent,
+			Parts: []protocol.Part{},
+		}
+
+		evt := converter.buildRespEvent(false, msg, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event")
+		}
+		if evt.Response == nil {
+			t.Fatal("expected response")
+		}
+		if evt.Response.Done != true {
+			t.Error("expected Done to be true for non-streaming")
+		}
+		if evt.Response.IsPartial != false {
+			t.Error("expected IsPartial to be false for non-streaming")
+		}
+	})
+
+	t.Run("builds streaming event", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		msg := &protocol.Message{
+			Role:  protocol.MessageRoleAgent,
+			Parts: []protocol.Part{},
+		}
+
+		evt := converter.buildRespEvent(true, msg, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event")
+		}
+		if evt.Response == nil {
+			t.Fatal("expected response")
+		}
+		if evt.Response.Done != false {
+			t.Error("expected Done to be false for streaming")
+		}
+		if evt.Response.IsPartial != true {
+			t.Error("expected IsPartial to be true for streaming")
+		}
+	})
+
+	t.Run("handles text parts", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		textPart := &protocol.TextPart{Text: "Hello, world!"}
+		msg := &protocol.Message{
+			Role:  protocol.MessageRoleAgent,
+			Parts: []protocol.Part{textPart},
+		}
+
+		evt := converter.buildRespEvent(false, msg, "test-agent", invocation)
+
+		if evt == nil || evt.Response == nil {
+			t.Fatal("expected event with response")
+		}
+		if len(evt.Response.Choices) == 0 {
+			t.Fatal("expected at least one choice")
+		}
+		if evt.Response.Choices[0].Message.Content != "Hello, world!" {
+			t.Errorf("expected content 'Hello, world!', got: %s", evt.Response.Choices[0].Message.Content)
+		}
+	})
+
+	t.Run("handles multiple text parts", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		textPart1 := &protocol.TextPart{Text: "Hello, "}
+		textPart2 := &protocol.TextPart{Text: "world!"}
+		msg := &protocol.Message{
+			Role:  protocol.MessageRoleAgent,
+			Parts: []protocol.Part{textPart1, textPart2},
+		}
+
+		evt := converter.buildRespEvent(false, msg, "test-agent", invocation)
+
+		if evt == nil || evt.Response == nil {
+			t.Fatal("expected event with response")
+		}
+		if evt.Response.Choices[0].Message.Content != "Hello, world!" {
+			t.Errorf("expected content 'Hello, world!', got: %s", evt.Response.Choices[0].Message.Content)
+		}
+	})
+}
+
+func TestConvertTaskToMessage(t *testing.T) {
+	t.Run("converts task with no artifacts", func(t *testing.T) {
+		task := &protocol.Task{
+			Artifacts: []protocol.Artifact{},
+		}
+
+		msg := convertTaskToMessage(task)
+
+		if msg == nil {
+			t.Fatal("expected message")
+		}
+		if msg.Role != protocol.MessageRoleAgent {
+			t.Errorf("expected role Agent, got: %s", msg.Role)
+		}
+		if len(msg.Parts) != 0 {
+			t.Errorf("expected no parts, got: %d", len(msg.Parts))
+		}
+	})
+
+	t.Run("converts task with artifacts", func(t *testing.T) {
+		textPart := &protocol.TextPart{Text: "artifact content"}
+		task := &protocol.Task{
+			Artifacts: []protocol.Artifact{
+				{
+					Parts: []protocol.Part{textPart},
+				},
+			},
+		}
+
+		msg := convertTaskToMessage(task)
+
+		if msg == nil {
+			t.Fatal("expected message")
+		}
+		if len(msg.Parts) != 1 {
+			t.Errorf("expected 1 part, got: %d", len(msg.Parts))
+		}
+	})
+}
+
+func TestConvertTaskStatusToMessage(t *testing.T) {
+	t.Run("converts with nil status message", func(t *testing.T) {
+		event := &protocol.TaskStatusUpdateEvent{
+			Status: protocol.TaskStatus{
+				Message: nil,
+			},
+		}
+
+		msg := convertTaskStatusToMessage(event)
+
+		if msg == nil {
+			t.Fatal("expected message")
+		}
+		if msg.Role != protocol.MessageRoleAgent {
+			t.Errorf("expected role Agent, got: %s", msg.Role)
+		}
+		if msg.Parts != nil {
+			t.Error("expected nil parts when status message is nil")
+		}
+	})
+
+	t.Run("converts with status message", func(t *testing.T) {
+		textPart := &protocol.TextPart{Text: "status message"}
+		event := &protocol.TaskStatusUpdateEvent{
+			Status: protocol.TaskStatus{
+				Message: &protocol.Message{
+					Parts: []protocol.Part{textPart},
+				},
+			},
+		}
+
+		msg := convertTaskStatusToMessage(event)
+
+		if msg == nil {
+			t.Fatal("expected message")
+		}
+		if len(msg.Parts) != 1 {
+			t.Errorf("expected 1 part, got: %d", len(msg.Parts))
+		}
+	})
+}
+
+func TestConvertTaskArtifactToMessage(t *testing.T) {
+	t.Run("converts artifact event", func(t *testing.T) {
+		textPart := &protocol.TextPart{Text: "artifact content"}
+		event := &protocol.TaskArtifactUpdateEvent{
+			Artifact: protocol.Artifact{
+				Parts: []protocol.Part{textPart},
+			},
+		}
+
+		msg := convertTaskArtifactToMessage(event)
+
+		if msg == nil {
+			t.Fatal("expected message")
+		}
+		if msg.Role != protocol.MessageRoleAgent {
+			t.Errorf("expected role Agent, got: %s", msg.Role)
+		}
+		if len(msg.Parts) != 1 {
+			t.Errorf("expected 1 part, got: %d", len(msg.Parts))
+		}
+	})
 }
