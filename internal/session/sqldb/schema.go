@@ -1,0 +1,40 @@
+// Package sqldb provides common utilities for SQL database-based session implementations.
+package sqldb
+
+// Table name constants
+// These table names are used by both PostgreSQL and MySQL session implementations.
+const (
+	// TableNameSessionStates is the name of the session states table
+	TableNameSessionStates = "session_states"
+
+	// TableNameSessionEvents is the name of the session events table
+	TableNameSessionEvents = "session_events"
+
+	// TableNameSessionSummaries is the name of the session summaries table
+	TableNameSessionSummaries = "session_summaries"
+
+	// TableNameAppStates is the name of the app states table
+	TableNameAppStates = "app_states"
+
+	// TableNameUserStates is the name of the user states table
+	TableNameUserStates = "user_states"
+)
+
+// Index suffix constants
+// These suffixes are appended to table names to create index names.
+const (
+	// IndexSuffixUniqueActive is the suffix for the unique index on active (non-deleted) records
+	IndexSuffixUniqueActive = "unique_active"
+
+	// IndexSuffixLookup is the suffix for general lookup indexes
+	IndexSuffixLookup = "lookup"
+
+	// IndexSuffixExpires is the suffix for TTL/expiration indexes
+	IndexSuffixExpires = "expires"
+
+	// IndexSuffixCreatedAt is the suffix for created_at timestamp indexes
+	IndexSuffixCreatedAt = "created_at"
+
+	// IndexSuffixUpdatedAt is the suffix for updated_at timestamp indexes
+	IndexSuffixUpdatedAt = "updated_at"
+)
