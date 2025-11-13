@@ -172,18 +172,10 @@ func (d *defaultEventDifyConverter) ConvertToDifyRequest(
 	return req, nil
 }
 
-// buildRespEvent converts A2A response to tRPC event
-func (d *defaultDifyEventConverter) buildRespEvent(
-	isStreaming bool,
-	msg *protocol.Message,
-	agentName string,
-	invocation *agent.Invocation) *event.Event {
-
-	// Convert A2A parts to model content parts
+// extractTextFromParts extracts text content from protocol message parts
+func extractTextFromParts(parts []protocol.Part) string {
 	var content strings.Builder
-
-	// Don't handle content parts of output temporally
-	for _, part := range msg.Parts {
+	for _, part := range parts {
 		if part.GetKind() == protocol.KindText {
 			p, ok := part.(*protocol.TextPart)
 			if !ok {
@@ -193,31 +185,50 @@ func (d *defaultDifyEventConverter) buildRespEvent(
 			content.WriteString(p.Text)
 		}
 	}
-	// Create message with both content and content parts
+	return content.String()
+}
+
+// buildResponseForEvent creates a Response object based on streaming mode
+func buildResponseForEvent(isStreaming bool, content string) *model.Response {
 	message := model.Message{
 		Role:    model.RoleAssistant,
-		Content: content.String(),
+		Content: content,
 	}
-	event := event.New(invocation.InvocationID, agentName)
+
 	if isStreaming {
-		event.Response = &model.Response{
+		return &model.Response{
 			Choices:   []model.Choice{{Delta: message}},
 			Timestamp: time.Now(),
 			Created:   time.Now().Unix(),
 			IsPartial: true,
 			Done:      false,
 		}
-		return event
 	}
 
-	event.Response = &model.Response{
+	return &model.Response{
 		Choices:   []model.Choice{{Message: message}},
 		Timestamp: time.Now(),
 		Created:   time.Now().Unix(),
 		IsPartial: false,
 		Done:      true,
 	}
-	return event
+}
+
+// buildRespEvent converts A2A response to tRPC event
+func (d *defaultDifyEventConverter) buildRespEvent(
+	isStreaming bool,
+	msg *protocol.Message,
+	agentName string,
+	invocation *agent.Invocation) *event.Event {
+
+	// Extract text content from parts
+	content := extractTextFromParts(msg.Parts)
+
+	// Create event with appropriate response
+	evt := event.New(invocation.InvocationID, agentName)
+	evt.Response = buildResponseForEvent(isStreaming, content)
+
+	return evt
 }
 
 // convertTaskToMessage converts a Task to a Message

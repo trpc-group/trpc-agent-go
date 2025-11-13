@@ -535,3 +535,243 @@ func TestDifyAgent_SendErrorEvent(t *testing.T) {
 		t.Errorf("expected invocation ID 'test-inv', got: %s", evt.InvocationID)
 	}
 }
+
+// Test new extracted functions for streaming
+func TestDifyAgent_ProcessStreamEvent(t *testing.T) {
+	t.Run("with default handler", func(t *testing.T) {
+		difyAgent := &DifyAgent{
+			name:           "test-agent",
+			eventConverter: &defaultDifyEventConverter{},
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		streamEvent := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer: "test content",
+			},
+		}
+
+		evt, content, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+		if evt == nil {
+			t.Fatal("expected event")
+		}
+		if content != "test content" {
+			t.Errorf("expected content 'test content', got: %s", content)
+		}
+	})
+
+	t.Run("with custom handler success", func(t *testing.T) {
+		handler := func(resp *model.Response) (string, error) {
+			return "custom content", nil
+		}
+		difyAgent := &DifyAgent{
+			name:                 "test-agent",
+			eventConverter:       &defaultDifyEventConverter{},
+			streamingRespHandler: handler,
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		streamEvent := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer: "test",
+			},
+		}
+
+		evt, content, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+		if content != "custom content" {
+			t.Errorf("expected 'custom content', got: %s", content)
+		}
+		if evt == nil {
+			t.Fatal("expected event")
+		}
+	})
+
+	t.Run("with custom handler error", func(t *testing.T) {
+		handler := func(resp *model.Response) (string, error) {
+			return "", fmt.Errorf("handler error")
+		}
+		difyAgent := &DifyAgent{
+			name:                 "test-agent",
+			eventConverter:       &defaultDifyEventConverter{},
+			streamingRespHandler: handler,
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		streamEvent := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer: "test",
+			},
+		}
+
+		_, _, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
+		if err == nil {
+			t.Error("expected error from handler")
+		}
+	})
+}
+
+func TestDifyAgent_SendFinalStreamingEvent(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name: "test-agent",
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "aggregated content")
+	close(eventChan)
+
+	evt := <-eventChan
+	if evt == nil {
+		t.Fatal("expected event")
+	}
+	if evt.Response == nil {
+		t.Fatal("expected response")
+	}
+	if !evt.Response.Done {
+		t.Error("expected Done to be true")
+	}
+	if evt.Response.IsPartial {
+		t.Error("expected IsPartial to be false")
+	}
+	if len(evt.Response.Choices) == 0 {
+		t.Fatal("expected choices")
+	}
+	if evt.Response.Choices[0].Message.Content != "aggregated content" {
+		t.Errorf("expected content 'aggregated content', got: %s", evt.Response.Choices[0].Message.Content)
+	}
+}
+
+// Test new extracted functions for non-streaming
+func TestDifyAgent_ConvertAndEmitNonStreamingEvent(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name:           "test-agent",
+		eventConverter: &defaultDifyEventConverter{},
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	result := &dify.ChatMessageResponse{
+		Answer: "test answer",
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	difyAgent.convertAndEmitNonStreamingEvent(context.Background(), eventChan, invocation, result)
+	close(eventChan)
+
+	evt := <-eventChan
+	if evt == nil {
+		t.Fatal("expected event")
+	}
+	if evt.Object != model.ObjectTypeChatCompletion {
+		t.Errorf("expected object type %s, got: %s", model.ObjectTypeChatCompletion, evt.Object)
+	}
+}
+
+// Mock Dify client for testing
+type mockDifyClient struct {
+	chatMessagesFunc       func(ctx context.Context, req *dify.ChatMessageRequest) (*dify.ChatMessageResponse, error)
+	chatMessagesStreamFunc func(ctx context.Context, req *dify.ChatMessageRequest) (<-chan dify.ChatMessageStreamChannelResponse, error)
+}
+
+type mockDifyAPI struct {
+	client *mockDifyClient
+}
+
+func (m *mockDifyAPI) ChatMessages(ctx context.Context, req *dify.ChatMessageRequest) (*dify.ChatMessageResponse, error) {
+	if m.client.chatMessagesFunc != nil {
+		return m.client.chatMessagesFunc(ctx, req)
+	}
+	return &dify.ChatMessageResponse{Answer: "mock response"}, nil
+}
+
+func (m *mockDifyAPI) ChatMessagesStream(ctx context.Context, req *dify.ChatMessageRequest) (<-chan dify.ChatMessageStreamChannelResponse, error) {
+	if m.client.chatMessagesStreamFunc != nil {
+		return m.client.chatMessagesStreamFunc(ctx, req)
+	}
+	ch := make(chan dify.ChatMessageStreamChannelResponse)
+	close(ch)
+	return ch, nil
+}
+
+func TestDifyAgent_BuildStreamingRequest(t *testing.T) {
+	t.Run("error on buildDifyRequest failure", func(t *testing.T) {
+		difyAgent := &DifyAgent{
+			name:             "test-agent",
+			requestConverter: nil, // This will cause buildDifyRequest to fail
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+			Message:      model.Message{Content: "test"},
+		}
+
+		_, err := difyAgent.buildStreamingRequest(context.Background(), invocation)
+		if err == nil {
+			t.Error("expected error when buildDifyRequest fails")
+		}
+	})
+}
+
+func TestDifyAgent_ExecuteNonStreamingRequest(t *testing.T) {
+	t.Run("error on buildDifyRequest failure", func(t *testing.T) {
+		difyAgent := &DifyAgent{
+			name:             "test-agent",
+			requestConverter: nil, // This will cause buildDifyRequest to fail
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+			Message:      model.Message{Content: "test"},
+		}
+
+		_, err := difyAgent.executeNonStreamingRequest(context.Background(), invocation)
+		if err == nil {
+			t.Error("expected error when buildDifyRequest fails")
+		}
+	})
+}
+
+// Test Run with streaming enabled
+func TestDifyAgent_Run_Streaming(t *testing.T) {
+	t.Run("validates request options", func(t *testing.T) {
+		difyAgent := &DifyAgent{
+			name:             "test-agent",
+			requestConverter: &defaultEventDifyConverter{},
+			eventConverter:   &defaultDifyEventConverter{},
+			getDifyClientFunc: func(*agent.Invocation) (*dify.Client, error) {
+				return &dify.Client{}, nil
+			},
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+			Message:      model.Message{Content: "test"},
+		}
+
+		// validateRequestOptions should pass
+		err := difyAgent.validateRequestOptions(invocation)
+		if err != nil {
+			t.Errorf("expected validation to pass, got: %v", err)
+		}
+	})
+}

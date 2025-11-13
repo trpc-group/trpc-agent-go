@@ -149,6 +149,75 @@ func (r *DifyAgent) buildDifyRequest(
 	return req, nil
 }
 
+// processStreamEvent processes a single stream event and returns the content to aggregate
+func (r *DifyAgent) processStreamEvent(
+	ctx context.Context,
+	streamEvent dify.ChatMessageStreamChannelResponse,
+	invocation *agent.Invocation,
+) (*event.Event, string, error) {
+	evt := r.eventConverter.ConvertStreamingToEvent(streamEvent, r.name, invocation)
+
+	// Aggregate content from delta
+	var content string
+	if evt.Response != nil && len(evt.Response.Choices) > 0 {
+		if r.streamingRespHandler != nil {
+			var err error
+			content, err = r.streamingRespHandler(evt.Response)
+			if err != nil {
+				return nil, "", fmt.Errorf("streaming resp handler failed: %v", err)
+			}
+		} else if evt.Response.Choices[0].Delta.Content != "" {
+			content = evt.Response.Choices[0].Delta.Content
+		}
+	}
+
+	return evt, content, nil
+}
+
+// buildStreamingRequest builds and sends streaming request to Dify
+func (r *DifyAgent) buildStreamingRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan dify.ChatMessageStreamChannelResponse, error) {
+	req, err := r.buildDifyRequest(ctx, invocation, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct Dify request: %v", err)
+	}
+	req.AutoGenerateName = r.autoGenConversationName
+
+	streamChan, err := r.difyClient.API().ChatMessagesStream(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("Dify streaming request failed to %s: %v", r.baseUrl, err)
+	}
+
+	return streamChan, nil
+}
+
+// sendFinalStreamingEvent sends the final aggregated event for streaming
+func (r *DifyAgent) sendFinalStreamingEvent(
+	ctx context.Context,
+	eventChan chan<- *event.Event,
+	invocation *agent.Invocation,
+	aggregatedContent string,
+) {
+	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+		invocation.InvocationID,
+		r.name,
+		event.WithResponse(&model.Response{
+			Done:      true,
+			IsPartial: false,
+			Timestamp: time.Now(),
+			Created:   time.Now().Unix(),
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: aggregatedContent,
+				},
+			}},
+		}),
+	))
+}
+
 // runStreaming handles streaming A2A communication
 func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if r.eventConverter == nil {
@@ -158,15 +227,9 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 	go func() {
 		defer close(eventChan)
 
-		req, err := r.buildDifyRequest(ctx, invocation, true)
+		streamChan, err := r.buildStreamingRequest(ctx, invocation)
 		if err != nil {
-			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("failed to construct Dify request: %v", err))
-			return
-		}
-		req.AutoGenerateName = r.autoGenConversationName
-		streamChan, err := r.difyClient.API().ChatMessagesStream(ctx, req)
-		if err != nil {
-			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("Dify streaming request failed to %s: %v", r.baseUrl, err))
+			r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
 			return
 		}
 
@@ -176,44 +239,52 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 				return
 			}
 
-			evt := r.eventConverter.ConvertStreamingToEvent(streamEvent, r.name, invocation)
-			// Aggregate content from delta
-			if evt.Response != nil && len(evt.Response.Choices) > 0 {
-				if r.streamingRespHandler != nil {
-					content, err := r.streamingRespHandler(evt.Response)
-					if err != nil {
-						r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
-						return
-					}
-					if content != "" {
-						aggregatedContentBuilder.WriteString(content)
-					}
-				} else if evt.Response.Choices[0].Delta.Content != "" {
-					aggregatedContentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
-				}
+			evt, content, err := r.processStreamEvent(ctx, streamEvent, invocation)
+			if err != nil {
+				r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
+				return
+			}
+
+			if content != "" {
+				aggregatedContentBuilder.WriteString(content)
 			}
 
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 		}
 
-		agent.EmitEvent(ctx, invocation, eventChan, event.New(
-			invocation.InvocationID,
-			r.name,
-			event.WithResponse(&model.Response{
-				Done:      true,
-				IsPartial: false,
-				Timestamp: time.Now(),
-				Created:   time.Now().Unix(),
-				Choices: []model.Choice{{
-					Message: model.Message{
-						Role:    model.RoleAssistant,
-						Content: aggregatedContentBuilder.String(),
-					},
-				}},
-			}),
-		))
+		r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String())
 	}()
 	return eventChan, nil
+}
+
+// executeNonStreamingRequest executes a non-streaming Dify request
+func (r *DifyAgent) executeNonStreamingRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (*dify.ChatMessageResponse, error) {
+	req, err := r.buildDifyRequest(ctx, invocation, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct Dify request: %v", err)
+	}
+
+	result, err := r.difyClient.API().ChatMessages(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("Dify request failed to %s: %v", r.baseUrl, err)
+	}
+
+	return result, nil
+}
+
+// convertAndEmitNonStreamingEvent converts result to event and emits it
+func (r *DifyAgent) convertAndEmitNonStreamingEvent(
+	ctx context.Context,
+	eventChan chan<- *event.Event,
+	invocation *agent.Invocation,
+	result *dify.ChatMessageResponse,
+) {
+	evt := r.eventConverter.ConvertToEvent(result, r.name, invocation)
+	evt.Object = model.ObjectTypeChatCompletion
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // runNonStreaming handles non-streaming A2A communication
@@ -222,22 +293,13 @@ func (r *DifyAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoc
 	go func() {
 		defer close(eventChan)
 
-		// Construct Dify request from invocation
-		req, err := r.buildDifyRequest(ctx, invocation, false)
+		result, err := r.executeNonStreamingRequest(ctx, invocation)
 		if err != nil {
-			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("failed to construct Dify request: %v", err))
-			return
-		}
-		// Dify requests don't use A2A request options
-		result, err := r.difyClient.API().ChatMessages(ctx, req)
-		if err != nil {
-			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("Dify request failed to %s: %v", r.baseUrl, err))
+			r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
 			return
 		}
 
-		evt := r.eventConverter.ConvertToEvent(result, r.name, invocation)
-		evt.Object = model.ObjectTypeChatCompletion
-		agent.EmitEvent(ctx, invocation, eventChan, evt)
+		r.convertAndEmitNonStreamingEvent(ctx, eventChan, invocation, result)
 	}()
 	return eventChan, nil
 }

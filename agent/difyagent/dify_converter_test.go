@@ -735,6 +735,30 @@ func TestDefaultDifyEventConverter_BuildRespEvent(t *testing.T) {
 			t.Errorf("expected content 'Hello, world!', got: %s", evt.Response.Choices[0].Message.Content)
 		}
 	})
+
+	t.Run("handles non-text parts gracefully", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			InvocationID: "test-inv",
+		}
+
+		// Create a non-text part (e.g., FilePart)
+		filePart := protocol.NewFilePartWithURI("file", "text/plain", "file.txt")
+
+		msg := &protocol.Message{
+			Role:  protocol.MessageRoleAgent,
+			Parts: []protocol.Part{filePart},
+		}
+
+		evt := converter.buildRespEvent(false, msg, "test-agent", invocation)
+
+		if evt == nil || evt.Response == nil {
+			t.Fatal("expected event with response")
+		}
+		// Non-text parts should be skipped, resulting in empty content
+		if evt.Response.Choices[0].Message.Content != "" {
+			t.Errorf("expected empty content for non-text parts, got: %s", evt.Response.Choices[0].Message.Content)
+		}
+	})
 }
 
 func TestConvertTaskToMessage(t *testing.T) {
@@ -838,6 +862,106 @@ func TestConvertTaskArtifactToMessage(t *testing.T) {
 		}
 		if len(msg.Parts) != 1 {
 			t.Errorf("expected 1 part, got: %d", len(msg.Parts))
+		}
+	})
+}
+
+func TestExtractTextFromParts(t *testing.T) {
+	t.Run("extracts text from single part", func(t *testing.T) {
+		textPart := &protocol.TextPart{Text: "Hello"}
+		parts := []protocol.Part{textPart}
+
+		content := extractTextFromParts(parts)
+
+		if content != "Hello" {
+			t.Errorf("expected 'Hello', got: %s", content)
+		}
+	})
+
+	t.Run("extracts text from multiple parts", func(t *testing.T) {
+		textPart1 := &protocol.TextPart{Text: "Hello, "}
+		textPart2 := &protocol.TextPart{Text: "world!"}
+		parts := []protocol.Part{textPart1, textPart2}
+
+		content := extractTextFromParts(parts)
+
+		if content != "Hello, world!" {
+			t.Errorf("expected 'Hello, world!', got: %s", content)
+		}
+	})
+
+	t.Run("handles empty parts", func(t *testing.T) {
+		parts := []protocol.Part{}
+
+		content := extractTextFromParts(parts)
+
+		if content != "" {
+			t.Errorf("expected empty string, got: %s", content)
+		}
+	})
+
+	t.Run("skips non-text parts", func(t *testing.T) {
+		textPart := &protocol.TextPart{Text: "text"}
+		filePart := protocol.NewFilePartWithURI("file", "text/plain", "file.txt")
+		parts := []protocol.Part{textPart, filePart}
+
+		content := extractTextFromParts(parts)
+
+		if content != "text" {
+			t.Errorf("expected 'text', got: %s", content)
+		}
+	})
+}
+
+func TestBuildResponseForEvent(t *testing.T) {
+	t.Run("builds streaming response", func(t *testing.T) {
+		resp := buildResponseForEvent(true, "streaming content")
+
+		if resp == nil {
+			t.Fatal("expected response")
+		}
+		if !resp.IsPartial {
+			t.Error("expected IsPartial to be true")
+		}
+		if resp.Done {
+			t.Error("expected Done to be false")
+		}
+		if len(resp.Choices) != 1 {
+			t.Fatal("expected 1 choice")
+		}
+		if resp.Choices[0].Delta.Content != "streaming content" {
+			t.Errorf("expected delta content 'streaming content', got: %s", resp.Choices[0].Delta.Content)
+		}
+	})
+
+	t.Run("builds non-streaming response", func(t *testing.T) {
+		resp := buildResponseForEvent(false, "complete content")
+
+		if resp == nil {
+			t.Fatal("expected response")
+		}
+		if resp.IsPartial {
+			t.Error("expected IsPartial to be false")
+		}
+		if !resp.Done {
+			t.Error("expected Done to be true")
+		}
+		if len(resp.Choices) != 1 {
+			t.Fatal("expected 1 choice")
+		}
+		if resp.Choices[0].Message.Content != "complete content" {
+			t.Errorf("expected message content 'complete content', got: %s", resp.Choices[0].Message.Content)
+		}
+	})
+
+	t.Run("builds response with empty content", func(t *testing.T) {
+		resp := buildResponseForEvent(false, "")
+
+		if resp == nil {
+			t.Fatal("expected response")
+		}
+		if resp.Choices[0].Message.Content != "" {
+			t.Errorf("expected empty content, got: %s", resp.Choices[0].Message.Content)
 		}
 	})
 }
