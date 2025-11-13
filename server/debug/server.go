@@ -691,21 +691,15 @@ func filterEventParts(
 		}
 	} else {
 		// Non-streaming endpoint should include:
-		//   1. Final assistant messages (Done == true)
-		//   2. Tool response events (object == tool.response)
-		//   3. Function call events which contain ToolCalls.
-		//   4. User messages so sessions replay from the first turn.
+		//   1. Final assistant messages (IsFinalResponse)
+		//   2. Tool result events (object == tool.response)
+		//   3. Function call events (IsToolCallResponse)
+		//   4. User messages (IsUserMessage) for session replay.
 		toolResp := isToolResponse(e)
-		hasToolCall := false
-		if len(e.Response.Choices) > 0 && len(e.Response.Choices[0].Message.ToolCalls) > 0 {
-			hasToolCall = true
-		}
-		isUser := false
-		if len(e.Response.Choices) > 0 &&
-			e.Response.Choices[0].Message.Role == model.RoleUser {
-			isUser = true
-		}
-		if !e.Response.Done && !toolResp && !hasToolCall && !isUser {
+		hasToolCall := e.Response.IsToolCallResponse()
+		isUser := e.Response.IsUserMessage()
+		isFinal := e.Response.IsFinalResponse()
+		if !isFinal && !toolResp && !hasToolCall && !isUser {
 			return nil
 		}
 	}
