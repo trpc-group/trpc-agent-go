@@ -2141,6 +2141,9 @@ func (e *Executor) syncResumeState(execCtx *ExecutionContext, source State) {
 	}
 	execCtx.stateMutex.Lock()
 	defer execCtx.stateMutex.Unlock()
+	if execCtx.State == nil {
+		execCtx.State = make(State)
+	}
 	syncResumeKey(execCtx.State, source, ResumeChannel)
 	syncResumeKey(execCtx.State, source, StateKeyResumeMap)
 	syncResumeKey(execCtx.State, source, StateKeyUsedInterrupts)
@@ -2148,9 +2151,6 @@ func (e *Executor) syncResumeState(execCtx *ExecutionContext, source State) {
 
 // syncResumeKey applies a specific resume key mutation from the node state.
 func syncResumeKey(target, source State, key string) {
-	if target == nil || source == nil {
-		return
-	}
 	if value, exists := source[key]; exists {
 		if value == nil {
 			delete(target, key)

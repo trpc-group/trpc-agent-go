@@ -410,6 +410,37 @@ func TestExecutor_SyncResumeState_CopiesMapMutations(t *testing.T) {
 	require.Equal(t, "new", execCtx.State[StateKeyUsedInterrupts].(map[string]any)["node"])
 }
 
+func TestExecutor_SyncResumeState_NilInputs(t *testing.T) {
+	exec := &Executor{graph: New(NewStateSchema())}
+	require.NotPanics(t, func() {
+		exec.syncResumeState(nil, State{ResumeChannel: "value"})
+	})
+	execCtx := &ExecutionContext{State: State{ResumeChannel: "existing"}}
+	require.NotPanics(t, func() {
+		exec.syncResumeState(execCtx, nil)
+	})
+	require.Equal(t, "existing", execCtx.State[ResumeChannel])
+}
+
+func TestExecutor_SyncResumeState_InitializesNilState(t *testing.T) {
+	exec := &Executor{graph: New(NewStateSchema())}
+	execCtx := &ExecutionContext{}
+	nodeState := State{
+		ResumeChannel: "value",
+	}
+	exec.syncResumeState(execCtx, nodeState)
+	require.NotNil(t, execCtx.State)
+	require.Equal(t, "value", execCtx.State[ResumeChannel])
+}
+
+func TestSyncResumeKey_NilValueDeletesKey(t *testing.T) {
+	target := State{ResumeChannel: "to-delete"}
+	source := State{ResumeChannel: nil}
+	syncResumeKey(target, source, ResumeChannel)
+	_, exists := target[ResumeChannel]
+	require.False(t, exists)
+}
+
 func TestExecutor_BuildExecutionContext_ResumedVersionsSeen(t *testing.T) {
 	exec := &Executor{graph: New(NewStateSchema())}
 	last := &Checkpoint{VersionsSeen: map[string]map[string]int64{"n": {"ch": 2}}}
