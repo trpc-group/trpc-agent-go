@@ -218,55 +218,78 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	event := event.New(invocation.InvocationID, agentName)
 	if isStreaming {
 		event.Response = &model.Response{
+			ID:        msg.MessageID,
 			Choices:   []model.Choice{{Delta: message}},
 			Timestamp: time.Now(),
 			Created:   time.Now().Unix(),
 			IsPartial: true,
 			Done:      false,
 		}
+		if message.Content != "" {
+			event.Response.Object = model.ObjectTypeChatCompletionChunk
+		}
 		return event
 	}
 
 	event.Response = &model.Response{
+		ID:        msg.MessageID,
 		Choices:   []model.Choice{{Message: message}},
 		Timestamp: time.Now(),
 		Created:   time.Now().Unix(),
 		IsPartial: false,
 		Done:      true,
 	}
+	if message.Content != "" {
+		event.Response.Object = model.ObjectTypeChatCompletion
+	}
 	return event
 }
 
 // convertTaskToMessage converts a Task to a Message
 func convertTaskToMessage(task *protocol.Task) *protocol.Message {
-	var parts []protocol.Part
-
+	var (
+		parts     []protocol.Part
+		messageID string
+	)
 	// Add artifacts if any
 	for _, artifact := range task.Artifacts {
 		parts = append(parts, artifact.Parts...)
+		messageID = artifact.ArtifactID
 	}
 
 	return &protocol.Message{
-		Role:  protocol.MessageRoleAgent,
-		Parts: parts,
+		Role:      protocol.MessageRoleAgent,
+		Kind:      protocol.KindMessage,
+		MessageID: messageID,
+		Parts:     parts,
+		TaskID:    &task.ID,
+		ContextID: &task.ContextID,
 	}
 }
 
 // convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message
 func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol.Message {
 	msg := &protocol.Message{
-		Role: protocol.MessageRoleAgent,
+		Role:      protocol.MessageRoleAgent,
+		Kind:      protocol.KindMessage,
+		TaskID:    &event.TaskID,
+		ContextID: &event.ContextID,
 	}
 	if event.Status.Message != nil {
 		msg.Parts = event.Status.Message.Parts
+		msg.MessageID = event.Status.Message.MessageID
 	}
 	return msg
 }
 
-// convertTaskArtifactToMessage converts a TaskArtifactUpdateEvent to a Message
+// convertTaskArtifactToMessage converts a TaskArtifactUpdateEvent to a Message.
 func convertTaskArtifactToMessage(event *protocol.TaskArtifactUpdateEvent) *protocol.Message {
 	return &protocol.Message{
-		Role:  protocol.MessageRoleAgent,
-		Parts: event.Artifact.Parts,
+		Role:      protocol.MessageRoleAgent,
+		Kind:      protocol.KindMessage,
+		MessageID: event.Artifact.ArtifactID,
+		Parts:     event.Artifact.Parts,
+		TaskID:    &event.TaskID,
+		ContextID: &event.ContextID,
 	}
 }
