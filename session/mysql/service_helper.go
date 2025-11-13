@@ -471,7 +471,7 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	return nil
 }
 
-// getEventsList批量加载多个 session 的 events.
+// getEventsList loads events for multiple sessions in batch.
 func (s *Service) getEventsList(
 	ctx context.Context,
 	sessionKeys []session.Key,
@@ -495,25 +495,15 @@ func (s *Service) getEventsList(
 	// Add additional args
 	args = append(args, time.Now(), afterTime)
 
-	var query string
-	if limit > 0 {
-		// Note: This query gets all events and we'll need to split by session
-		query = fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
-			WHERE (app_name, user_id, session_id) IN (%s)
-			AND (expires_at IS NULL OR expires_at > ?)
-			AND created_at > ?
-			AND deleted_at IS NULL
-			ORDER BY app_name, user_id, session_id, created_at DESC`,
-			s.tableSessionEvents, strings.Join(placeholders, ","))
-	} else {
-		query = fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
-			WHERE (app_name, user_id, session_id) IN (%s)
-			AND (expires_at IS NULL OR expires_at > ?)
-			AND created_at > ?
-			AND deleted_at IS NULL
-			ORDER BY app_name, user_id, session_id, created_at DESC`,
-			s.tableSessionEvents, strings.Join(placeholders, ","))
-	}
+	// Note: We cannot apply LIMIT in SQL because we're querying multiple sessions
+	// The limit is applied per session in memory after grouping by session key
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
+		WHERE (app_name, user_id, session_id) IN (%s)
+		AND (expires_at IS NULL OR expires_at > ?)
+		AND created_at > ?
+		AND deleted_at IS NULL
+		ORDER BY app_name, user_id, session_id, created_at DESC`,
+		s.tableSessionEvents, strings.Join(placeholders, ","))
 
 	// Map to collect events by session
 	eventsMap := make(map[string][]event.Event)
@@ -560,7 +550,7 @@ func (s *Service) getEventsList(
 	return result, nil
 }
 
-// getSummariesList 批量加载多个 session 的 summaries.
+// getSummariesList loads summaries for multiple sessions in batch.
 func (s *Service) getSummariesList(
 	ctx context.Context,
 	sessionKeys []session.Key,
