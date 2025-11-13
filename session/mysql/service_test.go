@@ -80,7 +80,8 @@ func (m *mockMySQLClient) Transaction(ctx context.Context, fn storage.TxFunc, op
 }
 
 func (m *mockMySQLClient) Close() error {
-	return m.db.Close()
+	// Do nothing - we manage db lifecycle in tests
+	return nil
 }
 
 // createTestService creates a Service with sqlmock for testing
@@ -1246,8 +1247,9 @@ func TestApplyOptions(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	db, _, err := sqlmock.New()
 	require.NoError(t, err)
+	defer db.Close()
 
 	s := createTestService(t, db)
 
@@ -1256,13 +1258,9 @@ func TestClose(t *testing.T) {
 	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob)}
 	s.cleanupDone = make(chan struct{})
 
-	// Mock: Expect Close on database
-	mock.ExpectClose()
-
-	// Call Close
+	// Call Close (no mock expectations needed since mockMySQLClient.Close() does nothing)
 	err = s.Close()
 	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
 
 	// Verify channels are closed by checking if they're nil or closed
 	// We can't directly check if a channel is closed, but we can verify the cleanup was called
@@ -1341,4 +1339,566 @@ func TestGetSession_WithAfterTime(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAppendEvent_AsyncPath tests async persist path
+func TestAppendEvent_AsyncPath(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithEnableAsyncPersist(true), WithAsyncPersisterNum(2))
+	s.startAsyncPersistWorker()
+	defer s.Close()
+
+	ctx := context.Background()
+	sess := &session.Session{
+		AppName: "test-app",
+		UserID:  "user-123",
+		ID:      "session-456",
+		Events:  make([]event.Event, 0),
+		State:   make(session.StateMap),
+	}
+
+	evt := event.New("inv-1", "test-author")
+	evt.Response = &model.Response{
+		Object: model.ObjectTypeChatCompletion,
+		Done:   true,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Message: model.Message{
+					Content: "test response",
+				},
+			},
+		},
+	}
+
+	// Should not block - async path
+	err = s.AppendEvent(ctx, sess, evt)
+	assert.NoError(t, err)
+
+	// Wait a bit for async processing
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestCleanupExpiredData tests cleanup of all expired data
+func TestCleanupExpiredData(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db,
+		WithSessionTTL(1*time.Hour),
+		WithAppStateTTL(2*time.Hour),
+		WithUserStateTTL(3*time.Hour),
+		WithSoftDelete(true),
+	)
+
+	ctx := context.Background()
+
+	// Mock cleanup sessions
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+
+	// Mock cleanup app states
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE app_states SET deleted_at = ?")).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+
+	// Mock cleanup user states
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE user_states SET deleted_at = ?")).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	s.cleanupExpiredData(ctx)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCleanupExpiredSessions_HardDelete tests hard delete of sessions
+func TestCleanupExpiredSessions_HardDelete(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSoftDelete(false))
+	ctx := context.Background()
+	now := time.Now()
+
+	// Mock hard delete sessions
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states WHERE expires_at IS NOT NULL AND expires_at <= ?")).
+		WithArgs(now).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+
+	s.cleanupExpiredSessions(ctx, now)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDeleteAppState_HardDelete tests hard delete of app state
+func TestDeleteAppState_HardDelete(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(false))
+	ctx := context.Background()
+
+	// Mock hard delete
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM app_states WHERE app_name = ? AND `key` = ?")).
+		WithArgs("test-app", "test-key").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = s.DeleteAppState(ctx, "test-app", "test-key")
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDeleteAppState_EmptyKey tests error handling for empty key
+func TestDeleteAppState_EmptyKey(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	err = s.DeleteAppState(ctx, "test-app", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "state key is required")
+}
+
+// TestDeleteSession_HardDelete tests hard delete of session
+func TestDeleteSession_HardDelete(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(false))
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	// Mock transaction
+	mock.ExpectBegin()
+
+	// Mock hard delete session state
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states WHERE app_name = ? AND user_id = ? AND session_id = ?")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock hard delete session summaries
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_summaries WHERE app_name = ? AND user_id = ? AND session_id = ?")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock hard delete session events
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ?")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectCommit()
+
+	err = s.DeleteSession(ctx, key)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCleanupExpiredAppStates_HardDelete tests hard delete of app states
+func TestCleanupExpiredAppStates_HardDelete(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithAppStateTTL(1*time.Hour), WithSoftDelete(false))
+	ctx := context.Background()
+	now := time.Now()
+
+	// Mock hard delete app states
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM app_states WHERE expires_at IS NOT NULL AND expires_at <= ?")).
+		WithArgs(now).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	s.cleanupExpiredAppStates(ctx, now)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCleanupExpiredUserStates_HardDelete tests hard delete of user states
+func TestCleanupExpiredUserStates_HardDelete(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithUserStateTTL(1*time.Hour), WithSoftDelete(false))
+	ctx := context.Background()
+	now := time.Now()
+
+	// Mock hard delete user states
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM user_states WHERE expires_at IS NOT NULL AND expires_at <= ?")).
+		WithArgs(now).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	s.cleanupExpiredUserStates(ctx, now)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestEnforceEventLimit_Error tests error handling in enforceEventLimit
+func TestEnforceEventLimit_Error(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionEventLimit(100))
+	ctx := context.Background()
+	key := session.Key{AppName: "test-app", UserID: "user-123", SessionID: "session-456"}
+
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	require.NoError(t, err)
+
+	// Mock QueryRow error
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).
+		WillReturnError(assert.AnError)
+
+	err = s.enforceEventLimit(ctx, tx, key, time.Now())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "get cutoff time failed")
+}
+
+func TestNewService_WithDSN_Success(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Save original builder
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Set custom builder that returns our mock
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	// Mock database initialization
+	mockDBInit(mock)
+
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+		WithSessionTTL(1*time.Hour),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+
+	// Verify service configuration
+	assert.Equal(t, 1*time.Hour, svc.sessionTTL)
+	assert.Equal(t, defaultSessionEventLimit, svc.opts.sessionEventLimit)
+	assert.Equal(t, defaultAsyncPersisterNum, svc.opts.asyncPersisterNum)
+	assert.True(t, svc.opts.softDelete)
+
+	// Verify table names
+	assert.Equal(t, "session_states", svc.tableSessionStates)
+	assert.Equal(t, "session_events", svc.tableSessionEvents)
+	assert.Equal(t, "session_summaries", svc.tableSessionSummaries)
+	assert.Equal(t, "app_states", svc.tableAppStates)
+	assert.Equal(t, "user_states", svc.tableUserStates)
+
+	// Clean up
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_WithTablePrefix(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	mockDBInit(mock)
+
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+		WithTablePrefix("test_"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+
+	// Verify table names with prefix
+	assert.Equal(t, "test_session_states", svc.tableSessionStates)
+	assert.Equal(t, "test_session_events", svc.tableSessionEvents)
+	assert.Equal(t, "test_session_summaries", svc.tableSessionSummaries)
+	assert.Equal(t, "test_app_states", svc.tableAppStates)
+	assert.Equal(t, "test_user_states", svc.tableUserStates)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_WithSkipDBInit(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	// No other mock expectations because DB init should be skipped
+
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_MissingDSNAndInstance(t *testing.T) {
+	svc, err := NewService()
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Contains(t, err.Error(), "either dsn or instance name must be provided")
+}
+
+func TestNewService_WithInstance_Success(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	// Register instance
+	instanceName := "test-instance-success"
+	storage.RegisterMySQLInstance(instanceName,
+		storage.WithClientBuilderDSN("test:test@tcp(localhost:3306)/testdb"),
+	)
+
+	mockDBInit(mock)
+
+	svc, err := NewService(
+		WithMySQLInstance(instanceName),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_InstanceNotFound(t *testing.T) {
+	svc, err := NewService(
+		WithMySQLInstance("non-existent-instance"),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Contains(t, err.Error(), "mysql instance")
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestNewService_ClientBuilderError(t *testing.T) {
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Set a builder that always returns error
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return nil, assert.AnError
+	})
+
+	// Test with DSN
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Contains(t, err.Error(), "create mysql client from dsn failed")
+
+	// Test with instance name
+	storage.RegisterMySQLInstance("test-error-instance",
+		storage.WithClientBuilderDSN("test:test@tcp(localhost:3306)/testdb"),
+	)
+
+	svc, err = NewService(
+		WithMySQLInstance("test-error-instance"),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Contains(t, err.Error(), "create mysql client from instance name failed")
+}
+
+func TestNewService_DBInitFailure(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	// Mock DB init failure
+	mock.ExpectExec("CREATE TABLE").WillReturnError(assert.AnError)
+
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Contains(t, err.Error(), "init database failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_WithAsyncPersist(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	mockDBInit(mock)
+
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(5),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+
+	// Verify async persist is enabled
+	assert.True(t, svc.opts.enableAsyncPersist)
+	assert.Equal(t, 5, svc.opts.asyncPersisterNum)
+	assert.NotNil(t, svc.eventPairChans)
+	assert.Len(t, svc.eventPairChans, 5)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_WithCleanupRoutine(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	mockDBInit(mock)
+
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+		WithSessionTTL(1*time.Hour),
+		WithAppStateTTL(2*time.Hour),
+		WithUserStateTTL(3*time.Hour),
+		WithCleanupInterval(10*time.Minute),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+
+	// Verify cleanup routine is started
+	assert.NotNil(t, svc.cleanupTicker)
+	assert.NotNil(t, svc.cleanupDone)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_WithAllOptions(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	mockDBInit(mock)
+
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+		WithSessionEventLimit(500),
+		WithSessionTTL(1*time.Hour),
+		WithAppStateTTL(2*time.Hour),
+		WithUserStateTTL(3*time.Hour),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(3),
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(128),
+		WithSummaryJobTimeout(30*time.Second),
+		WithSoftDelete(false),
+		WithCleanupInterval(5*time.Minute),
+		WithTablePrefix("myapp_"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+
+	// Verify all options
+	assert.Equal(t, 500, svc.opts.sessionEventLimit)
+	assert.Equal(t, 1*time.Hour, svc.sessionTTL)
+	assert.Equal(t, 2*time.Hour, svc.appStateTTL)
+	assert.Equal(t, 3*time.Hour, svc.userStateTTL)
+	assert.True(t, svc.opts.enableAsyncPersist)
+	assert.Equal(t, 3, svc.opts.asyncPersisterNum)
+	assert.Equal(t, 2, svc.opts.asyncSummaryNum)
+	assert.Equal(t, 128, svc.opts.summaryQueueSize)
+	assert.Equal(t, 30*time.Second, svc.opts.summaryJobTimeout)
+	assert.False(t, svc.opts.softDelete)
+	assert.Equal(t, 5*time.Minute, svc.opts.cleanupInterval)
+
+	// Verify table names with prefix
+	assert.Equal(t, "myapp_session_states", svc.tableSessionStates)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// mockDBInit mocks the database initialization process
+func mockDBInit(mock sqlmock.Sqlmock) {
+	// Mock: Create 5 tables
+	for i := 0; i < 5; i++ {
+		mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
+	// Mock: Create 10 indexes
+	for i := 0; i < 10; i++ {
+		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
+	}
 }
