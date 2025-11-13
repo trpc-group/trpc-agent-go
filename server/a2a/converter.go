@@ -220,7 +220,10 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 		taskStatus := protocol.NewTaskArtifactUpdateEvent(
 			options.TaskID,
 			options.CtxID,
-			protocol.Artifact{Parts: parts},
+			protocol.Artifact{
+				ArtifactID: event.Response.ID,
+				Parts:      parts,
+			},
 			false,
 		)
 		return &taskStatus, nil

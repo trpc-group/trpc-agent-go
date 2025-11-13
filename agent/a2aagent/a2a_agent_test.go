@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1421,6 +1422,80 @@ func TestNew_URLChanges(t *testing.T) {
 	})
 }
 
+func TestA2AAgentRunStreamingPreservesResponseID(t *testing.T) {
+	t.Run("preserves_response_id_when_following_chunks_are_empty", func(t *testing.T) {
+		sseBody := mustBuildSSEBody(t, []sseEvent{
+			{
+				eventType: protocol.EventMessage,
+				payload: protocol.Message{
+					Kind:      protocol.KindMessage,
+					Role:      protocol.MessageRoleAgent,
+					MessageID: "resp-1",
+					Parts: []protocol.Part{
+						&protocol.TextPart{Kind: protocol.KindText, Text: "partial response"},
+					},
+				},
+			},
+			{
+				eventType: protocol.EventStatusUpdate,
+				payload: protocol.TaskStatusUpdateEvent{
+					Kind:      protocol.KindTaskStatusUpdate,
+					TaskID:    "task-1",
+					ContextID: "ctx-1",
+					Status: protocol.TaskStatus{
+						State: protocol.TaskStateCompleted,
+					},
+				},
+			},
+		})
+
+		testClient := newTestStreamClient(t, sseBody)
+		a := &A2AAgent{
+			name:                "test-agent",
+			agentCard:           &server.AgentCard{URL: "http://stream.test/"},
+			eventConverter:      &defaultA2AEventConverter{},
+			a2aMessageConverter: stubInvocationConverter{},
+			streamingBufSize:    4,
+			a2aClient:           testClient,
+		}
+		invocation := &agent.Invocation{
+			InvocationID: "inv-test",
+			Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		eventCh, err := a.runStreaming(ctx, invocation)
+		if err != nil {
+			t.Fatalf("runStreaming() error = %v", err)
+		}
+
+		var finalResponse *model.Response
+		for evt := range eventCh {
+			if evt.Response != nil && evt.Response.Done {
+				finalResponse = evt.Response
+			}
+		}
+
+		if finalResponse == nil {
+			t.Fatal("expected final response event, got nil")
+		}
+		if finalResponse.ID != "resp-1" {
+			t.Fatalf("expected final response ID 'resp-1', got %q", finalResponse.ID)
+		}
+		if finalResponse.Object != model.ObjectTypeChatCompletion {
+			t.Fatalf("expected final response object %s, got %s", model.ObjectTypeChatCompletion, finalResponse.Object)
+		}
+		if len(finalResponse.Choices) == 0 {
+			t.Fatal("expected final response choices, got none")
+		}
+		if finalResponse.Choices[0].Message.Content != "partial response" {
+			t.Fatalf("expected aggregated content 'partial response', got %q", finalResponse.Choices[0].Message.Content)
+		}
+	})
+}
+
 // TestValidateA2ARequestOptions tests validation logic for A2A request options
 func TestValidateA2ARequestOptions(t *testing.T) {
 	tests := []struct {
@@ -1458,4 +1533,73 @@ func TestValidateA2ARequestOptions(t *testing.T) {
 			}
 		})
 	}
+}
+
+type staticStreamHandler struct {
+	body string
+}
+
+func (h *staticStreamHandler) Handle(
+	ctx context.Context,
+	_ *http.Client,
+	_ *http.Request,
+) (*http.Response, error) {
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(h.body)),
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+	}
+	resp.Header.Set("Content-Type", "text/event-stream")
+	return resp, nil
+}
+
+func newTestStreamClient(t *testing.T, body string) *client.A2AClient {
+	t.Helper()
+	cli, err := client.NewA2AClient(
+		"http://stream.test/",
+		client.WithHTTPReqHandler(&staticStreamHandler{body: body}),
+	)
+	if err != nil {
+		t.Fatalf("failed to create test A2A client: %v", err)
+	}
+	return cli
+}
+
+type sseEvent struct {
+	eventType string
+	payload   any
+}
+
+func mustBuildSSEBody(t *testing.T, events []sseEvent) string {
+	t.Helper()
+	var builder strings.Builder
+	for _, evt := range events {
+		data, err := json.Marshal(evt.payload)
+		if err != nil {
+			t.Fatalf("failed to marshal SSE payload: %v", err)
+		}
+		builder.WriteString("event: ")
+		builder.WriteString(evt.eventType)
+		builder.WriteByte('\n')
+		builder.WriteString("data: ")
+		builder.Write(data)
+		builder.WriteString("\n\n")
+	}
+	return builder.String()
+}
+
+type stubInvocationConverter struct{}
+
+func (stubInvocationConverter) ConvertToA2AMessage(
+	_ bool,
+	_ string,
+	_ *agent.Invocation,
+) (*protocol.Message, error) {
+	msg := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "test message"}},
+	)
+	return &msg, nil
 }

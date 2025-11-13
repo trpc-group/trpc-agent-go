@@ -243,7 +243,10 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 			return
 		}
 
-		var aggregatedContentBuilder strings.Builder
+		var (
+			responseID               string
+			aggregatedContentBuilder strings.Builder
+		)
 		for streamEvent := range streamChan {
 			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
@@ -257,6 +260,9 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 
 			// Aggregate content from delta
 			if evt.Response != nil && len(evt.Response.Choices) > 0 {
+				if evt.Response.ID != "" {
+					responseID = evt.Response.ID
+				}
 				if r.streamingRespHandler != nil {
 					content, err := r.streamingRespHandler(evt.Response)
 					if err != nil {
@@ -278,6 +284,8 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 			invocation.InvocationID,
 			r.name,
 			event.WithResponse(&model.Response{
+				ID:        responseID,
+				Object:    model.ObjectTypeChatCompletion,
 				Done:      true,
 				IsPartial: false,
 				Timestamp: time.Now(),

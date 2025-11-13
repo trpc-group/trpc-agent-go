@@ -346,6 +346,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			name: "streaming event with delta content",
 			event: &event.Event{
 				Response: &model.Response{
+					ID: "resp-123",
 					Choices: []model.Choice{
 						{
 							Delta: model.Message{
@@ -357,7 +358,15 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			},
 			expected: func() protocol.StreamingMessageResult {
 				parts := []protocol.Part{protocol.NewTextPart("Hello")}
-				taskEvent := protocol.NewTaskArtifactUpdateEvent("test-task-id", "test-ctx-id", protocol.Artifact{Parts: parts}, false)
+				taskEvent := protocol.NewTaskArtifactUpdateEvent(
+					"test-task-id",
+					"test-ctx-id",
+					protocol.Artifact{
+						ArtifactID: "resp-123",
+						Parts:      parts,
+					},
+					false,
+				)
 				return &taskEvent
 			}(),
 			wantErr: false,
