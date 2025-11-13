@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
@@ -35,10 +36,18 @@ import (
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
+
+// localruntimeFallback returns a simple local workspace executor used when
+// no explicit executor is provided.
+func defaultCodeExecutor() codeexecutor.CodeExecutor {
+	return localexec.New()
+}
 
 var defaultChannelBufferSize = 256
 
@@ -117,6 +126,9 @@ func WithGenerationConfig(config model.GenerationConfig) Option {
 // WithChannelBufferSize sets the buffer size for event channels.
 func WithChannelBufferSize(size int) Option {
 	return func(opts *Options) {
+		if size < 0 {
+			size = defaultChannelBufferSize
+		}
 		opts.ChannelBufferSize = size
 	}
 }
@@ -139,6 +151,15 @@ func WithTools(tools []tool.Tool) Option {
 func WithToolSets(toolSets []tool.ToolSet) Option {
 	return func(opts *Options) {
 		opts.ToolSets = toolSets
+	}
+}
+
+// WithSkills enables model-agnostic Agent Skills support using the
+// provided repository. The processor will inject a small overview
+// and on-demand content according to session state.
+func WithSkills(repo skill.Repository) Option {
+	return func(opts *Options) {
+		opts.SkillsRepository = repo
 	}
 }
 
@@ -475,6 +496,8 @@ type Options struct {
 	//   - Configured with non-empty: use the provided message.
 	DefaultTransferMessage *string
 
+	// SkillsRepository enables Agent Skills if non-nil.
+	SkillsRepository          skill.Repository
 	messageTimelineFilterMode string
 	messageBranchFilterMode   string
 }
@@ -671,6 +694,18 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, timeProcessor)
 	}
 
+	// 6. Skills processor - injects skill overview and loaded contents
+	// when a skills repository is configured. This ensures the model
+	// sees available skills (names/descriptions) and any loaded
+	// SKILL.md/doc texts before deciding on tool calls.
+	if options.SkillsRepository != nil {
+		skillsProcessor := processor.NewSkillsRequestProcessor(
+			options.SkillsRepository,
+		)
+		requestProcessors = append(requestProcessors, skillsProcessor)
+	}
+
+	// 7. Content processor - appends conversation/context history.
 	contentProcessor := processor.NewContentRequestProcessor(
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
@@ -797,6 +832,24 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 		}
 	}
 
+	// Add skill tools when skills are enabled.
+	if options.SkillsRepository != nil {
+		allTools = append(allTools,
+			toolskill.NewLoadTool(options.SkillsRepository))
+		// Specialized doc tools for clarity and control.
+		allTools = append(allTools,
+			toolskill.NewSelectDocsTool(options.SkillsRepository))
+		allTools = append(allTools,
+			toolskill.NewListDocsTool(options.SkillsRepository))
+		// Provide executor to skill_run, fallback to local.
+		exec := options.codeExecutor
+		if exec == nil {
+			exec = defaultCodeExecutor()
+		}
+		allTools = append(allTools,
+			toolskill.NewRunTool(options.SkillsRepository, exec))
+	}
+
 	return allTools, userToolNames
 }
 
@@ -910,7 +963,8 @@ func (a *LLMAgent) wrapEventChannel(
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
 ) <-chan *event.Event {
-	wrappedChan := make(chan *event.Event, 256) // Use default buffer size
+	// Create a new channel with the same capacity as the original channel
+	wrappedChan := make(chan *event.Event, cap(originalChan))
 
 	go func() {
 		var fullRespEvent *event.Event

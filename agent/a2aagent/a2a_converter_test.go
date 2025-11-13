@@ -67,8 +67,10 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 			name: "message result",
 			result: protocol.MessageResult{
 				Result: &protocol.Message{
-					Role:  protocol.MessageRoleAgent,
-					Parts: []protocol.Part{protocol.NewTextPart("Hello, world!")},
+					Kind:      protocol.KindMessage,
+					MessageID: "msg-123",
+					Role:      protocol.MessageRoleAgent,
+					Parts:     []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "Hello, world!"}},
 				},
 			},
 			agentName: "test-agent",
@@ -98,15 +100,24 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 				if len(event.Response.Choices) != 1 {
 					t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
 				}
+				if event.Response.ID != "msg-123" {
+					t.Errorf("expected response ID 'msg-123', got %s", event.Response.ID)
+				}
+				if event.Response.Object != model.ObjectTypeChatCompletion {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletion, event.Response.Object)
+				}
 			},
 		},
 		{
 			name: "task result",
 			result: protocol.MessageResult{
 				Result: &protocol.Task{
+					ID:        "task-1",
+					ContextID: "ctx-1",
 					Artifacts: []protocol.Artifact{
 						{
-							Parts: []protocol.Part{protocol.NewTextPart("Task content")},
+							ArtifactID: "artifact-1",
+							Parts:      []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "Task content"}},
 						},
 					},
 				},
@@ -131,6 +142,12 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 				}
 				if len(event.Response.Choices) != 1 {
 					t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
+				}
+				if event.Response.ID != "artifact-1" {
+					t.Errorf("expected response ID 'artifact-1', got %s", event.Response.ID)
+				}
+				if event.Response.Object != model.ObjectTypeChatCompletion {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletion, event.Response.Object)
 				}
 			},
 		},
@@ -187,8 +204,10 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 			name: "streaming message result",
 			result: protocol.StreamingMessageEvent{
 				Result: &protocol.Message{
-					Role:  protocol.MessageRoleAgent,
-					Parts: []protocol.Part{protocol.NewTextPart("Streaming content")},
+					Kind:      protocol.KindMessage,
+					MessageID: "stream-1",
+					Role:      protocol.MessageRoleAgent,
+					Parts:     []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "Streaming content"}},
 				},
 			},
 			agentName: "test-agent",
@@ -215,15 +234,24 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				if len(event.Response.Choices) != 1 {
 					t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
 				}
+				if event.Response.ID != "stream-1" {
+					t.Errorf("expected response ID 'stream-1', got %s", event.Response.ID)
+				}
+				if event.Response.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, event.Response.Object)
+				}
 			},
 		},
 		{
 			name: "streaming task result",
 			result: protocol.StreamingMessageEvent{
 				Result: &protocol.Task{
+					ID:        "task-1",
+					ContextID: "ctx-1",
 					Artifacts: []protocol.Artifact{
 						{
-							Parts: []protocol.Part{protocol.NewTextPart("Task streaming content")},
+							ArtifactID: "artifact-1",
+							Parts:      []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "Task streaming content"}},
 						},
 					},
 				},
@@ -242,6 +270,12 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				}
 				if event.Response == nil {
 					t.Fatal("expected response, got nil")
+				}
+				if event.Response.ID != "artifact-1" {
+					t.Errorf("expected response ID 'artifact-1', got %s", event.Response.ID)
+				}
+				if event.Response.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, event.Response.Object)
 				}
 			},
 		},
@@ -249,10 +283,15 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 			name: "task status update event",
 			result: protocol.StreamingMessageEvent{
 				Result: &protocol.TaskStatusUpdateEvent{
+					Kind:      protocol.KindTaskStatusUpdate,
+					TaskID:    "task-2",
+					ContextID: "ctx-2",
 					Status: protocol.TaskStatus{
 						Message: &protocol.Message{
-							Role:  protocol.MessageRoleAgent,
-							Parts: []protocol.Part{protocol.NewTextPart("Status update")},
+							Kind:      protocol.KindMessage,
+							MessageID: "status-1",
+							Role:      protocol.MessageRoleAgent,
+							Parts:     []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "Status update"}},
 						},
 					},
 				},
@@ -272,14 +311,23 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				if event.Response == nil {
 					t.Fatal("expected response, got nil")
 				}
+				if event.Response.ID != "status-1" {
+					t.Errorf("expected response ID 'status-1', got %s", event.Response.ID)
+				}
+				if event.Response.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, event.Response.Object)
+				}
 			},
 		},
 		{
 			name: "task artifact update event",
 			result: protocol.StreamingMessageEvent{
 				Result: &protocol.TaskArtifactUpdateEvent{
+					TaskID:    "task-3",
+					ContextID: "ctx-3",
 					Artifact: protocol.Artifact{
-						Parts: []protocol.Part{protocol.NewTextPart("Artifact update")},
+						ArtifactID: "artifact-99",
+						Parts:      []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "Artifact update"}},
 					},
 				},
 			},
@@ -297,6 +345,12 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				}
 				if event.Response == nil {
 					t.Fatal("expected response, got nil")
+				}
+				if event.Response.ID != "artifact-99" {
+					t.Errorf("expected response ID 'artifact-99', got %s", event.Response.ID)
+				}
+				if event.Response.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, event.Response.Object)
 				}
 			},
 		},
@@ -552,9 +606,12 @@ func TestConvertTaskToMessage(t *testing.T) {
 		{
 			name: "task with artifacts",
 			task: &protocol.Task{
+				ID:        "task-1",
+				ContextID: "ctx-1",
 				Artifacts: []protocol.Artifact{
 					{
-						Parts: []protocol.Part{&protocol.TextPart{Text: "artifact content"}},
+						ArtifactID: "artifact-1",
+						Parts:      []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "artifact content"}},
 					},
 				},
 			},
@@ -562,6 +619,18 @@ func TestConvertTaskToMessage(t *testing.T) {
 			validateFunc: func(t *testing.T, msg *protocol.Message) {
 				if msg.Role != protocol.MessageRoleAgent {
 					t.Errorf("expected role Agent, got %s", msg.Role)
+				}
+				if msg.Kind != protocol.KindMessage {
+					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
+				}
+				if msg.MessageID != "artifact-1" {
+					t.Errorf("expected message ID 'artifact-1', got %s", msg.MessageID)
+				}
+				if msg.TaskID == nil || *msg.TaskID != "task-1" {
+					t.Errorf("expected task ID 'task-1', got %v", msg.TaskID)
+				}
+				if msg.ContextID == nil || *msg.ContextID != "ctx-1" {
+					t.Errorf("expected context ID 'ctx-1', got %v", msg.ContextID)
 				}
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
@@ -576,12 +645,27 @@ func TestConvertTaskToMessage(t *testing.T) {
 			},
 		},
 		{
-			name:      "task without artifacts",
-			task:      &protocol.Task{},
+			name: "task without artifacts",
+			task: &protocol.Task{
+				ID:        "task-2",
+				ContextID: "ctx-2",
+			},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, msg *protocol.Message) {
 				if msg.Role != protocol.MessageRoleAgent {
 					t.Errorf("expected role Agent, got %s", msg.Role)
+				}
+				if msg.Kind != protocol.KindMessage {
+					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
+				}
+				if msg.MessageID != "" {
+					t.Errorf("expected empty message ID, got %s", msg.MessageID)
+				}
+				if msg.TaskID == nil || *msg.TaskID != "task-2" {
+					t.Errorf("expected task ID 'task-2', got %v", msg.TaskID)
+				}
+				if msg.ContextID == nil || *msg.ContextID != "ctx-2" {
+					t.Errorf("expected context ID 'ctx-2', got %v", msg.ContextID)
 				}
 				if len(msg.Parts) != 0 {
 					t.Errorf("expected 0 parts, got %d", len(msg.Parts))
@@ -611,10 +695,14 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 		{
 			name: "status with message",
 			event: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
 				Status: protocol.TaskStatus{
 					Message: &protocol.Message{
-						Role:  protocol.MessageRoleAgent,
-						Parts: []protocol.Part{&protocol.TextPart{Text: "status message"}},
+						Kind:      protocol.KindMessage,
+						MessageID: "status-1",
+						Role:      protocol.MessageRoleAgent,
+						Parts:     []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "status message"}},
 					},
 				},
 			},
@@ -622,6 +710,18 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 			validateFunc: func(t *testing.T, msg *protocol.Message) {
 				if msg.Role != protocol.MessageRoleAgent {
 					t.Errorf("expected role Agent, got %s", msg.Role)
+				}
+				if msg.Kind != protocol.KindMessage {
+					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
+				}
+				if msg.MessageID != "status-1" {
+					t.Errorf("expected message ID 'status-1', got %s", msg.MessageID)
+				}
+				if msg.TaskID == nil || *msg.TaskID != "task-1" {
+					t.Errorf("expected task ID 'task-1', got %v", msg.TaskID)
+				}
+				if msg.ContextID == nil || *msg.ContextID != "ctx-1" {
+					t.Errorf("expected context ID 'ctx-1', got %v", msg.ContextID)
 				}
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
@@ -638,6 +738,8 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 		{
 			name: "status without message",
 			event: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-2",
+				ContextID: "ctx-2",
 				Status: protocol.TaskStatus{
 					Message: nil,
 				},
@@ -646,6 +748,18 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 			validateFunc: func(t *testing.T, msg *protocol.Message) {
 				if msg.Role != protocol.MessageRoleAgent {
 					t.Errorf("expected role Agent, got %s", msg.Role)
+				}
+				if msg.Kind != protocol.KindMessage {
+					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
+				}
+				if msg.MessageID != "" {
+					t.Errorf("expected empty message ID, got %s", msg.MessageID)
+				}
+				if msg.TaskID == nil || *msg.TaskID != "task-2" {
+					t.Errorf("expected task ID 'task-2', got %v", msg.TaskID)
+				}
+				if msg.ContextID == nil || *msg.ContextID != "ctx-2" {
+					t.Errorf("expected context ID 'ctx-2', got %v", msg.ContextID)
 				}
 				if len(msg.Parts) != 0 {
 					t.Errorf("expected 0 parts, got %d", len(msg.Parts))
@@ -675,14 +789,29 @@ func TestConvertTaskArtifactToMessage(t *testing.T) {
 		{
 			name: "artifact with parts",
 			event: &protocol.TaskArtifactUpdateEvent{
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
 				Artifact: protocol.Artifact{
-					Parts: []protocol.Part{&protocol.TextPart{Text: "artifact content"}},
+					ArtifactID: "artifact-1",
+					Parts:      []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "artifact content"}},
 				},
 			},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, msg *protocol.Message) {
 				if msg.Role != protocol.MessageRoleAgent {
 					t.Errorf("expected role Agent, got %s", msg.Role)
+				}
+				if msg.Kind != protocol.KindMessage {
+					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
+				}
+				if msg.MessageID != "artifact-1" {
+					t.Errorf("expected message ID 'artifact-1', got %s", msg.MessageID)
+				}
+				if msg.TaskID == nil || *msg.TaskID != "task-1" {
+					t.Errorf("expected task ID 'task-1', got %v", msg.TaskID)
+				}
+				if msg.ContextID == nil || *msg.ContextID != "ctx-1" {
+					t.Errorf("expected context ID 'ctx-1', got %v", msg.ContextID)
 				}
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
@@ -699,12 +828,28 @@ func TestConvertTaskArtifactToMessage(t *testing.T) {
 		{
 			name: "artifact without parts",
 			event: &protocol.TaskArtifactUpdateEvent{
-				Artifact: protocol.Artifact{},
+				TaskID:    "task-2",
+				ContextID: "ctx-2",
+				Artifact: protocol.Artifact{
+					ArtifactID: "artifact-2",
+				},
 			},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, msg *protocol.Message) {
 				if msg.Role != protocol.MessageRoleAgent {
 					t.Errorf("expected role Agent, got %s", msg.Role)
+				}
+				if msg.Kind != protocol.KindMessage {
+					t.Errorf("expected kind %s, got %s", protocol.KindMessage, msg.Kind)
+				}
+				if msg.MessageID != "artifact-2" {
+					t.Errorf("expected message ID 'artifact-2', got %s", msg.MessageID)
+				}
+				if msg.TaskID == nil || *msg.TaskID != "task-2" {
+					t.Errorf("expected task ID 'task-2', got %v", msg.TaskID)
+				}
+				if msg.ContextID == nil || *msg.ContextID != "ctx-2" {
+					t.Errorf("expected context ID 'ctx-2', got %v", msg.ContextID)
 				}
 				if len(msg.Parts) != 0 {
 					t.Errorf("expected 0 parts, got %d", len(msg.Parts))

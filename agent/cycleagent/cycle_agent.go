@@ -70,7 +70,12 @@ func WithMaxIterations(max int) Option {
 // This controls how many events can be buffered before blocking.
 // Default is 256 if not specified.
 func WithChannelBufferSize(size int) Option {
-	return func(o *Options) { o.channelBufferSize = size }
+	return func(o *Options) {
+		if size < 0 {
+			size = defaultChannelBufferSize
+		}
+		o.channelBufferSize = size
+	}
 }
 
 // WithAgentCallbacks attaches lifecycle callbacks to the cycle agent.
@@ -96,9 +101,6 @@ func New(name string, opts ...Option) *CycleAgent {
 		if opt != nil {
 			opt(&cfg)
 		}
-	}
-	if cfg.channelBufferSize <= 0 {
-		cfg.channelBufferSize = defaultChannelBufferSize
 	}
 	return &CycleAgent{
 		name:              name,

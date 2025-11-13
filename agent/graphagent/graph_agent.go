@@ -70,6 +70,9 @@ func WithInitialState(state graph.State) Option {
 // WithChannelBufferSize sets the buffer size for event channels.
 func WithChannelBufferSize(size int) Option {
 	return func(opts *Options) {
+		if size < 0 {
+			size = defaultChannelBufferSize
+		}
 		opts.ChannelBufferSize = size
 	}
 }

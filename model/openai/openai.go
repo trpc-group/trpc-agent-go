@@ -95,6 +95,8 @@ type variantConfig struct {
 	defaultBaseURL string
 	// Default API key name for this variant.
 	apiKeyName string
+	// Thinking key for this variant.
+	thinkingEnabledKey string
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -113,6 +115,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionMethod:        http.MethodDelete,
 		skipFileTypeInContent:     false,
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		thinkingEnabledKey:        model.ThinkingEnabledKey,
 	},
 	VariantDeepSeek: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -122,6 +125,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
+		thinkingEnabledKey:        model.ThinkingEnabledKey,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -169,6 +173,7 @@ var variantConfigs = map[Variant]variantConfig{
 			r.ContentLength = int64(body.Len())
 			return r, nil
 		},
+		thinkingEnabledKey: model.ThinkingEnabledKey,
 	},
 	VariantQwen: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -178,6 +183,8 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                qwenAPIKeyName,
 		defaultBaseURL:            defaultQwenBaseURL,
+		// refer:https://help.aliyun.com/zh/model-studio/deep-thinking
+		thinkingEnabledKey: model.EnabledThinkingKey,
 	},
 }
 
@@ -835,14 +842,7 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
-	var opts []openaiopt.RequestOption
-	if request.ThinkingEnabled != nil {
-		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
-	}
-	if request.ThinkingTokens != nil {
-		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
-	}
-
+	opts := m.buildThinkingOption(request)
 	// Add extra fields to the request
 	for key, value := range m.extraFields {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
@@ -855,6 +855,25 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 		}
 	}
 	return chatRequest, opts
+}
+
+// buildThinkingOption converts our Request to OpenAI request RequestOption
+func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
+	var opts []openaiopt.RequestOption
+	if request.ThinkingTokens != nil {
+		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
+	}
+	if request.ThinkingEnabled == nil {
+		return opts
+	}
+	// Set default API key and base URL if not specified.
+	cfg, ok := variantConfigs[m.variant]
+	if !ok || cfg.thinkingEnabledKey == "" {
+		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
+		return opts
+	}
+	opts = append(opts, openaiopt.WithJSONSet(cfg.thinkingEnabledKey, *request.ThinkingEnabled))
+	return opts
 }
 
 // convertMessages converts our Message format to OpenAI's format.

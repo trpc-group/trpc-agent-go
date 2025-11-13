@@ -356,18 +356,37 @@ llmAgent := llmagent.New(
 
 向量存储可在代码中通过选项配置，配置来源可以是配置文件、命令行参数或环境变量，用户可以自行实现。
 
+trpc-agent-go 支持多种向量存储实现：
+
+- **Memory**：内存向量存储，适用于测试和小规模数据
+- **PgVector**：基于 PostgreSQL + pgvector 扩展的向量存储，支持混合检索
+- **TcVector**：腾讯云向量数据库，支持远程 embedding 计算和混合检索
+- **Elasticsearch**：支持 v7/v8/v9 多版本的 Elasticsearch 向量存储
+
 #### 向量存储配置示例
+
+##### Memory（内存向量存储）
 
 ```go
 import (
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
-    vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
-    vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
-    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 )
 
-// 内存实现，可用于测试
+// 内存实现，适用于测试和小规模数据
 memVS := vectorinmemory.New()
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(memVS),
+    knowledge.WithEmbedder(embedder), // 需要配置本地 embedder
+)
+```
+
+##### PgVector（PostgreSQL + pgvector）
+
+```go
+import (
+    vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+)
 
 // PostgreSQL + pgvector
 pgVS, err := vectorpgvector.New(
@@ -376,38 +395,89 @@ pgVS, err := vectorpgvector.New(
     vectorpgvector.WithUser("postgres"),
     vectorpgvector.WithPassword("your-password"),
     vectorpgvector.WithDatabase("your-database"),
-    // 根据 embedding 模型设置索引维度（text-embedding-3-small 为 1536）。
-    pgvector.WithIndexDimension(1536),
-    // 启用/关闭文本检索向量，配合混合检索权重使用。
-    pgvector.WithEnableTSVector(true),
-    // 调整混合检索权重（向量相似度权重与文本相关性权重）。
-    pgvector.WithHybridSearchWeights(0.7, 0.3),
-    // 如安装了中文分词扩展（如 zhparser/jieba），可设置语言以提升文本召回。
-    pgvector.WithLanguageExtension("english"),
+    // 根据 embedding 模型设置索引维度（text-embedding-3-small 为 1536）
+    vectorpgvector.WithIndexDimension(1536),
+    // 启用/关闭文本检索向量，配合混合检索权重使用
+    vectorpgvector.WithEnableTSVector(true),
+    // 调整混合检索权重（向量相似度权重与文本相关性权重）
+    vectorpgvector.WithHybridSearchWeights(0.7, 0.3),
+    // 如安装了中文分词扩展（如 zhparser/jieba），可设置语言以提升文本召回
+    vectorpgvector.WithLanguageExtension("english"),
 )
 if err != nil {
     // 处理 error
 }
 
+kb := knowledge.New(
+    knowledge.WithVectorStore(pgVS),
+    knowledge.WithEmbedder(embedder), // 需要配置本地 embedder
+)
+```
+
+##### TcVector（腾讯云向量数据库）
+
+TcVector 支持两种 embedding 模式：
+
+**1. 本地 Embedding 模式（默认）**
+
+使用本地 embedder 计算向量，然后存储到 TcVector：
+
+```go
+import (
+    vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+)
+
 docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
     return &document.Document{ID: tcDoc.Id}, nil, nil
 }
 
-// TcVector
+// 本地 embedding 模式
 tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
-    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法
     vectortcvector.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // 处理 error
 }
 
-// 传递给 Knowledge
 kb := knowledge.New(
-    knowledge.WithVectorStore(memVS), // pgVS, tcVS
+    knowledge.WithVectorStore(tcVS),
+    knowledge.WithEmbedder(embedder), // 需要配置本地 embedder
+)
+```
+
+**2. 远程 Embedding 模式**
+
+使用 TcVector 云端 embedding 计算，无需本地 embedder，节省资源：
+
+```go
+import (
+    vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+)
+
+// 远程 embedding 模式
+tcVS, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-tcvector-endpoint"),
+    vectortcvector.WithUsername("your-username"),
+    vectortcvector.WithPassword("your-password"),
+    // 启用远程 embedding 计算
+    vectortcvector.WithEnableRemoteEmbedding(true),
+    // 指定 TcVector 的 embedding 模型（如 bge-base-zh）
+    vectortcvector.WithRemoteEmbeddingModel("bge-base-zh"),
+    // 如需混合检索，需启用 TSVector
+    vectortcvector.WithEnableTSVector(true),
+)
+if err != nil {
+    // 处理 error
+}
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(tcVS),
+    // 注意：使用远程 embedding 时，不需要配置 embedder
+    // knowledge.WithEmbedder(embedder), // 不需要
 )
 ```
 

@@ -35,7 +35,7 @@ require (
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a
-	trpc.group/trpc-go/trpc-mcp-go v0.0.5
+	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
 require (
