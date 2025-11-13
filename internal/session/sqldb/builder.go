@@ -71,7 +71,8 @@ func BuildTableNameWithSchema(schema, prefix, base string) string {
 // BuildIndexNameWithSchema constructs an index name based on schema, table name and suffix.
 // For PostgreSQL with schema support, the schema part is replaced with underscore to create a valid index name.
 // The format is: idx_{schema}_{tableName}_{suffix} (if schema is provided)
-//             or idx_{tableName}_{suffix} (if schema is empty)
+//
+//	or idx_{tableName}_{suffix} (if schema is empty)
 //
 // Examples:
 //   - BuildIndexNameWithSchema("", "", "session_states", "unique_active")
@@ -86,7 +87,7 @@ func BuildIndexNameWithSchema(schema, prefix, tableName, suffix string) string {
 	if schema == "" {
 		return BuildIndexName(prefix, tableName, suffix)
 	}
-	
+
 	fullTableName := BuildTableName(prefix, tableName)
 	return fmt.Sprintf("idx_%s_%s_%s", schema, fullTableName, suffix)
 }

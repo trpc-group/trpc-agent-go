@@ -43,12 +43,15 @@ func (m *mockMySQLClient) Query(ctx context.Context, next storage.NextFunc, quer
 	}
 	defer rows.Close()
 
-	// Call the callback function once, letting it handle the iteration
-	if err := next(rows); err != nil {
-		if err == storage.ErrBreak {
-			return nil
+	// Iterate all rows, calling the callback function
+	// This matches the behavior of the real MySQL client
+	for rows.Next() {
+		if err := next(rows); err != nil {
+			if err == storage.ErrBreak {
+				break
+			}
+			return err
 		}
-		return err
 	}
 	return rows.Err()
 }
@@ -130,7 +133,7 @@ func TestCreateSession_Success(t *testing.T) {
 	// Mock: Check if session exists (should return no rows)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
 
 	// Mock: Insert new session
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
@@ -246,11 +249,11 @@ func TestListAppStates_Success(t *testing.T) {
 	states, err := s.ListAppStates(ctx, appName)
 	require.NoError(t, err)
 	assert.Len(t, states, 2)
-	
+
 	// Check both keys exist
 	assert.Contains(t, states, "key1")
 	assert.Contains(t, states, "key2")
-	
+
 	// Unmarshal and verify values
 	var val1, val2 string
 	_ = json.Unmarshal(states["key1"], &val1)
@@ -347,7 +350,7 @@ func TestAppendEvent_Sync(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, updated_at = ?, expires_at = ?")).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	
+
 	// Only insert if event passes the filter (Response != nil && !IsPartial && IsValidContent())
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
 		WithArgs(
@@ -360,15 +363,15 @@ func TestAppendEvent_Sync(t *testing.T) {
 			sqlmock.AnyArg(), // expires_at
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	
+
 	// Enforce event limit: get cutoff time then soft delete old events
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?")).
 		WithArgs(sess.AppName, sess.UserID, sess.ID, sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1*time.Hour)))
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1 * time.Hour)))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?")).
 		WithArgs(sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	
+
 	mock.ExpectCommit()
 
 	err = s.AppendEvent(ctx, sess, evt)
@@ -378,8 +381,6 @@ func TestAppendEvent_Sync(t *testing.T) {
 	// We focus on testing SQL operations here.
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
-
-
 
 func TestDeleteSession_SoftDelete(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -456,7 +457,7 @@ func TestCleanupExpiredSessions(t *testing.T) {
 
 // Mock summarizer for testing
 type mockSummarizer struct {
-	summarizeFunc      func(ctx context.Context, sess *session.Session) (string, error)
+	summarizeFunc       func(ctx context.Context, sess *session.Session) (string, error)
 	shouldSummarizeFunc func(sess *session.Session) bool
 }
 
@@ -477,8 +478,6 @@ func (m *mockSummarizer) ShouldSummarize(sess *session.Session) bool {
 func (m *mockSummarizer) Metadata() map[string]any {
 	return map[string]any{"type": "mock"}
 }
-
-
 
 func TestUpdateUserState_Success(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -668,10 +667,6 @@ func TestCleanupExpiredForUser(t *testing.T) {
 	}
 }
 
-
-
-
-
 func TestAppendEvent_Async(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -679,7 +674,7 @@ func TestAppendEvent_Async(t *testing.T) {
 
 	// Enable async persist
 	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithEnableAsyncPersist(true), WithAsyncPersisterNum(1))
-	
+
 	// Start async workers
 	s.startAsyncPersistWorker()
 	defer func() {
@@ -745,7 +740,7 @@ func TestAppendEvent_Async(t *testing.T) {
 	// Enforce event limit: get cutoff time then soft delete old events
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?")).
 		WithArgs(sess.AppName, sess.UserID, sess.ID, sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1*time.Hour)))
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1 * time.Hour)))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?")).
 		WithArgs(sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -758,8 +753,6 @@ func TestAppendEvent_Async(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
-
-
 
 func TestUpdateAppState_Error(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -816,24 +809,6 @@ func TestDeleteSession_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 func TestDeleteUserState_InvalidKey(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
@@ -870,8 +845,6 @@ func TestListUserStates_InvalidKey(t *testing.T) {
 	assert.Nil(t, states)
 }
 
-
-
 func TestCreateSession_WithAutoGeneratedID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -891,7 +864,7 @@ func TestCreateSession_WithAutoGeneratedID(t *testing.T) {
 	// Mock: Check if session exists (will use auto-generated ID)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs("test-app", "user-123", sqlmock.AnyArg()).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
 
 	// Mock: Insert new session
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
@@ -1222,8 +1195,6 @@ func TestDeleteUserState_Error(t *testing.T) {
 	assert.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
-
-
 
 func TestOptions_Coverage(t *testing.T) {
 	// Test option functions that aren't covered elsewhere
