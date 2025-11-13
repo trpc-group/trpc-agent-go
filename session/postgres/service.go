@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
@@ -88,32 +89,6 @@ type summaryJob struct {
 	filterKey  string
 	force      bool
 	session    *session.Session
-}
-
-// buildFullTableName builds a full table name with optional schema and prefix.
-// Examples:
-// - schema="", prefix="", table="session_states" -> "session_states"
-// - schema="myschema", prefix="", table="session_states" -> "myschema.session_states"
-// - schema="", prefix="trpc_", table="session_states" -> "trpc_session_states"
-// - schema="myschema", prefix="trpc_", table="session_states" -> "myschema.trpc_session_states"
-func buildFullTableName(schema, prefix, tableName string) string {
-	fullTableName := prefix + tableName
-	if schema != "" {
-		return schema + "." + fullTableName
-	}
-	return fullTableName
-}
-
-// parseTableName parses a full table name into schema and table components.
-// Examples:
-// - "session_states" -> ("public", "session_states")
-// - "myschema.session_states" -> ("myschema", "session_states")
-func parseTableName(fullTableName string) (schema, tableName string) {
-	parts := strings.Split(fullTableName, ".")
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return "public", fullTableName
 }
 
 // buildConnString builds a PostgreSQL connection string from options.
@@ -214,12 +189,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL: opts.userStateTTL,
 		cleanupDone:  make(chan struct{}),
 
-		// Initialize table names with schema and prefix
-		tableSessionStates:    buildFullTableName(opts.schema, opts.tablePrefix, "session_states"),
-		tableSessionEvents:    buildFullTableName(opts.schema, opts.tablePrefix, "session_events"),
-		tableSessionSummaries: buildFullTableName(opts.schema, opts.tablePrefix, "session_summaries"),
-		tableAppStates:        buildFullTableName(opts.schema, opts.tablePrefix, "app_states"),
-		tableUserStates:       buildFullTableName(opts.schema, opts.tablePrefix, "user_states"),
+		// Initialize table names with schema and prefix using internal/session/sqldb
+		tableSessionStates:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionStates),
+		tableSessionEvents:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionEvents),
+		tableSessionSummaries: sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionSummaries),
+		tableAppStates:        sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameAppStates),
+		tableUserStates:       sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameUserStates),
 	}
 
 	// Initialize database schema unless skipped
