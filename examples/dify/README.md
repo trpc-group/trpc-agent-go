@@ -141,17 +141,39 @@ difyAgent, err := difyagent.New(
 
 ### Custom Client Configuration
 
+The `WithGetDifyClientFunc` option allows you to customize the Dify client creation for each invocation. This is particularly useful when you need:
+
+- **Dynamic API Keys**: Different API secrets per user or session
+- **Custom Timeouts**: Varying timeout settings based on request type
+- **Multi-tenant Setup**: Different Dify instances per organization
+- **Advanced Authentication**: Custom headers or authentication methods
+- **Load Balancing**: Dynamic endpoint selection
+
 ```go
 difyAgent, err := difyagent.New(
+    // Custom client function - called for each invocation
     difyagent.WithGetDifyClientFunc(func(invocation *agent.Invocation) (*dify.Client, error) {
+        // Access invocation context for dynamic configuration
+        userID := invocation.Session.UserID
+        
+        // Example: Use different API keys per user
+        apiSecret := getUserAPISecret(userID)
+        
+        // Example: Custom timeout based on user tier
+        timeout := getUserTimeout(userID)
+        
         return dify.NewClientWithConfig(&dify.ClientConfig{
-            Host:             baseURL,
-            DefaultAPISecret: apiSecret,
-            Timeout:          30 * time.Second,
+            Host:             baseURL,     // Can be dynamic too
+            DefaultAPISecret: apiSecret,   // Per-user API secret
+            Timeout:          timeout,     // Custom timeout
+            // Add custom headers if needed
+            // Headers: map[string]string{"X-User-ID": userID},
         }), nil
     }),
 )
 ```
+
+**Note**: If `WithGetDifyClientFunc` is not provided, the agent will create a default client using the base configuration.
 
 ## Custom Converters
 

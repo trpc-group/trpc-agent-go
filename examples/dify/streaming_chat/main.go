@@ -18,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudernative/dify-sdk-go"
+	difySDK "github.com/cloudernative/dify-sdk-go"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/difyagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/dify"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -52,18 +52,22 @@ func main() {
 	}
 
 	// Create Dify agent with streaming enabled
-	difyAgent, err := difyagent.New(
-		difyagent.WithBaseUrl(difyBaseURL),
-		difyagent.WithName("dify-streaming-assistant"),
-		difyagent.WithDescription("A streaming chat assistant powered by Dify"),
-		difyagent.WithEnableStreaming(true), // Enable streaming
-		difyagent.WithStreamingRespHandler(streamingHandler),
-		difyagent.WithStreamingChannelBufSize(2048), // Larger buffer for streaming
-		difyagent.WithGetDifyClientFunc(func(invocation *agent.Invocation) (*dify.Client, error) {
-			return dify.NewClientWithConfig(&dify.ClientConfig{
-				Host:             difyBaseURL,
-				DefaultAPISecret: difyAPISecret,
-				Timeout:          60 * time.Second, // Longer timeout for streaming
+	difyAgent, err := dify.New(
+		dify.WithBaseUrl(difyBaseURL),
+		dify.WithName("dify-streaming-assistant"),
+		dify.WithDescription("A streaming chat assistant powered by Dify"),
+		dify.WithEnableStreaming(true), // Enable streaming
+		dify.WithStreamingRespHandler(streamingHandler),
+		dify.WithStreamingChannelBufSize(2048), // Larger buffer for streaming
+		// WithGetDifyClientFunc enables custom client configuration per invocation
+		// For streaming: often need longer timeouts and specific connection settings
+		// The invocation parameter provides access to user context and session data
+		dify.WithGetDifyClientFunc(func(invocation *agent.Invocation) (*difySDK.Client, error) {
+			// Configure client optimized for streaming responses
+			return difySDK.NewClientWithConfig(&difySDK.ClientConfig{
+				Host:             difyBaseURL,      // Dify streaming endpoint
+				DefaultAPISecret: difyAPISecret,    // API authentication
+				Timeout:          60 * time.Second, // Extended timeout for streaming
 			}), nil
 		}),
 	)

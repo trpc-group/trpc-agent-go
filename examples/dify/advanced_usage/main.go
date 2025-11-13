@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudernative/dify-sdk-go"
+	difySDK "github.com/cloudernative/dify-sdk-go"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/difyagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/dify"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -33,7 +33,7 @@ import (
 type CustomEventConverter struct{}
 
 func (c *CustomEventConverter) ConvertToEvent(
-	resp *dify.ChatMessageResponse,
+	resp *difySDK.ChatMessageResponse,
 	agentName string,
 	invocation *agent.Invocation,
 ) *event.Event {
@@ -59,20 +59,11 @@ func (c *CustomEventConverter) ConvertToEvent(
 		}),
 	)
 
-	// Add custom metadata to the event
-	if resp != nil {
-		evt.Metadata = map[string]any{
-			"dify_conversation_id": resp.ConversationID,
-			"dify_message_id":      resp.MessageID,
-			"custom_processed":     true,
-		}
-	}
-
 	return evt
 }
 
 func (c *CustomEventConverter) ConvertStreamingToEvent(
-	resp dify.ChatMessageStreamChannelResponse,
+	resp difySDK.ChatMessageStreamChannelResponse,
 	agentName string,
 	invocation *agent.Invocation,
 ) *event.Event {
@@ -97,13 +88,6 @@ func (c *CustomEventConverter) ConvertStreamingToEvent(
 		}),
 	)
 
-	// Add streaming metadata
-	evt.Metadata = map[string]any{
-		"dify_event_type":      resp.Event,
-		"dify_conversation_id": resp.ConversationID,
-		"streaming_chunk":      true,
-	}
-
 	return evt
 }
 
@@ -114,11 +98,11 @@ func (c *CustomRequestConverter) ConvertToDifyRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	isStream bool,
-) (*dify.ChatMessageRequest, error) {
+) (*difySDK.ChatMessageRequest, error) {
 	// Extract user preferences from runtime state
 	userPrefs := extractUserPreferences(invocation.RunOptions.RuntimeState)
 
-	req := &dify.ChatMessageRequest{
+	req := &difySDK.ChatMessageRequest{
 		Query:  invocation.Message.Content,
 		Inputs: make(map[string]interface{}),
 	}
@@ -138,7 +122,6 @@ func (c *CustomRequestConverter) ConvertToDifyRequest(
 
 	// Add context information
 	req.Inputs["timestamp"] = time.Now().Format(time.RFC3339)
-	req.Inputs["session_id"] = invocation.Session.SessionID
 	req.Inputs["invocation_id"] = invocation.InvocationID
 
 	// Handle streaming
@@ -192,19 +175,28 @@ func main() {
 	requestConverter := &CustomRequestConverter{}
 
 	// Create Dify agent with custom converters
-	difyAgent, err := difyagent.New(
-		difyagent.WithBaseUrl(difyBaseURL),
-		difyagent.WithName("dify-advanced-assistant"),
-		difyagent.WithDescription("Advanced Dify assistant with custom converters"),
-		difyagent.WithCustomEventConverter(eventConverter),
-		difyagent.WithCustomRequestConverter(requestConverter),
-		difyagent.WithTransferStateKey("user_language", "response_tone", "expertise_level"),
-		difyagent.WithEnableStreaming(false),
-		difyagent.WithGetDifyClientFunc(func(invocation *agent.Invocation) (*dify.Client, error) {
-			return dify.NewClientWithConfig(&dify.ClientConfig{
-				Host:             difyBaseURL,
-				DefaultAPISecret: difyAPISecret,
-				Timeout:          30 * time.Second,
+	difyAgent, err := dify.New(
+		dify.WithBaseUrl(difyBaseURL),
+		dify.WithName("dify-advanced-assistant"),
+		dify.WithDescription("Advanced Dify assistant with custom converters"),
+		dify.WithCustomEventConverter(eventConverter),
+		dify.WithCustomRequestConverter(requestConverter),
+		dify.WithTransferStateKey("user_language", "response_tone", "expertise_level"),
+		dify.WithEnableStreaming(false),
+		// WithGetDifyClientFunc allows customizing the Dify client creation for each invocation
+		// This is optional - if not provided, the agent will use a default client
+		// Use this when you need:
+		// - Different API keys per user/session
+		// - Custom timeout settings per request
+		// - Dynamic host selection based on invocation context
+		// - Custom authentication or headers
+		dify.WithGetDifyClientFunc(func(invocation *agent.Invocation) (*difySDK.Client, error) {
+			// Create a custom Dify client with specific configuration
+			// The invocation parameter provides access to session, user info, and runtime state
+			return difySDK.NewClientWithConfig(&difySDK.ClientConfig{
+				Host:             difyBaseURL,      // Base URL for Dify API
+				DefaultAPISecret: difyAPISecret,    // API secret for authentication
+				Timeout:          30 * time.Second, // Request timeout duration
 			}), nil
 		}),
 	)
@@ -235,10 +227,10 @@ func main() {
 		{
 			sessionID: "expert-session",
 			preferences: map[string]any{
-				"user_language":    "en",
-				"response_tone":    "professional",
-				"expertise_level":  "expert",
-				"response_format":  "detailed",
+				"user_language":   "en",
+				"response_tone":   "professional",
+				"expertise_level": "expert",
+				"response_format": "detailed",
 			},
 			message:     "Explain quantum computing",
 			description: "Expert user asking about quantum computing",
@@ -246,10 +238,10 @@ func main() {
 		{
 			sessionID: "beginner-session",
 			preferences: map[string]any{
-				"user_language":    "en",
-				"response_tone":    "friendly",
-				"expertise_level":  "beginner",
-				"response_format":  "simple",
+				"user_language":   "en",
+				"response_tone":   "friendly",
+				"expertise_level": "beginner",
+				"response_format": "simple",
 			},
 			message:     "What is artificial intelligence?",
 			description: "Beginner user asking about AI",
@@ -306,14 +298,6 @@ func main() {
 				choice := event.Response.Choices[0]
 				if event.Response.Done {
 					fmt.Println(choice.Message.Content)
-
-					// Show custom metadata if available
-					if event.Metadata != nil && len(event.Metadata) > 0 {
-						fmt.Println("\n📊 Event Metadata:")
-						for key, value := range event.Metadata {
-							fmt.Printf("   • %s: %v\n", key, value)
-						}
-					}
 				}
 			}
 		}

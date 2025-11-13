@@ -7,7 +7,7 @@
 //
 //
 
-package difyagent
+package dify
 
 import (
 	"github.com/cloudernative/dify-sdk-go"
@@ -88,7 +88,31 @@ func WithEnableStreaming(enable bool) Option {
 	}
 }
 
-// WithGetDifyClientFunc sets a custom function to get Dify client
+// WithGetDifyClientFunc sets a custom function to create Dify client for each invocation.
+// This is optional - if not provided, the agent will use a default client with base configuration.
+//
+// Use cases:
+//   - Dynamic API keys per user/session (multi-tenant scenarios)
+//   - Custom timeout settings based on request type or user tier
+//   - Different Dify instances per organization
+//   - Custom authentication headers or connection settings
+//   - Load balancing across multiple Dify endpoints
+//
+// The function receives an *agent.Invocation parameter that provides access to:
+//   - Session information (user ID, session ID)
+//   - Runtime state (user preferences, context)
+//   - Message content and metadata
+//
+// Example:
+//
+//	WithGetDifyClientFunc(func(inv *agent.Invocation) (*dify.Client, error) {
+//	    apiSecret := getUserAPISecret(inv.Session.UserID)
+//	    return dify.NewClientWithConfig(&dify.ClientConfig{
+//	        Host:             "https://api.dify.ai/v1",
+//	        DefaultAPISecret: apiSecret,
+//	        Timeout:          30 * time.Second,
+//	    }), nil
+//	})
 func WithGetDifyClientFunc(fn func(*agent.Invocation) (*dify.Client, error)) Option {
 	return func(a *DifyAgent) {
 		a.getDifyClientFunc = fn

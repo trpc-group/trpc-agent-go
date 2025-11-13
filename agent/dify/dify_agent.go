@@ -7,8 +7,8 @@
 //
 //
 
-// Package difyagent provides an agent that can communicate with dify workflow or chatflow.
-package difyagent
+// Package dify provides an agent that can communicate with dify workflow or chatflow.
+package dify
 
 import (
 	"context"

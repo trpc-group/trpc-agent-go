@@ -7,7 +7,7 @@
 //
 //
 
-package difyagent
+package dify
 
 import (
 	"context"

@@ -4,7 +4,6 @@ go 1.21
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1
-	github.com/cloudernative/dify-sdk-go v1.0.0
 	github.com/gomutex/godocx v0.1.5
 	github.com/gonfva/docxlib v0.0.0-20210517191039-d8f39cecf1ad
 	github.com/google/go-cmp v0.6.0

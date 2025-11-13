@@ -18,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudernative/dify-sdk-go"
+	difySDK "github.com/cloudernative/dify-sdk-go"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/difyagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/dify"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -39,16 +39,20 @@ func main() {
 	}
 
 	// Create Dify agent
-	difyAgent, err := difyagent.New(
-		difyagent.WithBaseUrl(difyBaseURL),
-		difyagent.WithName("dify-chat-assistant"),
-		difyagent.WithDescription("A helpful chat assistant powered by Dify"),
-		difyagent.WithEnableStreaming(false), // Start with non-streaming for simplicity
-		difyagent.WithGetDifyClientFunc(func(invocation *agent.Invocation) (*dify.Client, error) {
-			return dify.NewClientWithConfig(&dify.ClientConfig{
-				Host:             difyBaseURL,
-				DefaultAPISecret: difyAPISecret,
-				Timeout:          30 * time.Second,
+	difyAgent, err := dify.New(
+		dify.WithBaseUrl(difyBaseURL),
+		dify.WithName("dify-chat-assistant"),
+		dify.WithDescription("A helpful chat assistant powered by Dify"),
+		dify.WithEnableStreaming(false), // Start with non-streaming for simplicity
+		// WithGetDifyClientFunc provides custom Dify client creation for each request
+		// This is optional - allows per-invocation client customization
+		// Useful for: dynamic API keys, custom timeouts, different endpoints
+		dify.WithGetDifyClientFunc(func(invocation *agent.Invocation) (*difySDK.Client, error) {
+			// Create client with standard configuration for basic chat
+			return difySDK.NewClientWithConfig(&difySDK.ClientConfig{
+				Host:             difyBaseURL,      // Dify API endpoint
+				DefaultAPISecret: difyAPISecret,    // Authentication secret
+				Timeout:          30 * time.Second, // Request timeout
 			}), nil
 		}),
 	)
