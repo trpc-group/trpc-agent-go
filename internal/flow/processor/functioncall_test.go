@@ -1309,6 +1309,40 @@ func TestMergeParallelToolCallResponseEvents_PropagatesSkipSummarization(t *test
 	require.True(t, merged.Actions.SkipSummarization)
 }
 
+func TestMergeParallelToolCallResponseEvents_ReturnsNilOnEmptyInput(t *testing.T) {
+	merged := mergeParallelToolCallResponseEvents(nil)
+	require.Nil(t, merged)
+
+	merged = mergeParallelToolCallResponseEvents([]*event.Event{})
+	require.Nil(t, merged)
+}
+
+func TestMergeParallelToolCallResponseEvents_MergesStateDelta(t *testing.T) {
+	e1 := event.New("inv1", "author", event.WithResponse(&model.Response{Model: "m"}))
+	e1.StateDelta = map[string][]byte{"k1": []byte("v1")}
+
+	e2 := event.New("inv2", "author", event.WithResponse(&model.Response{Model: "m"}))
+	e2.StateDelta = map[string][]byte{
+		"k2": []byte("v2"),
+		"k1": []byte("override"),
+	}
+
+	merged := mergeParallelToolCallResponseEvents([]*event.Event{e1, e2})
+	require.NotNil(t, merged)
+	require.Equal(t, []byte("override"), merged.StateDelta["k1"])
+	require.Equal(t, []byte("v2"), merged.StateDelta["k2"])
+}
+
+func TestMergeParallelToolCallResponseEvents_FallbackWithoutBaseEvent(t *testing.T) {
+	merged := mergeParallelToolCallResponseEvents([]*event.Event{nil, nil})
+	require.NotNil(t, merged)
+	require.Equal(t, "", merged.InvocationID)
+	require.Equal(t, "", merged.Author)
+	require.NotNil(t, merged.Response)
+	require.Equal(t, "unknown", merged.Response.Model)
+	require.Empty(t, merged.StateDelta)
+}
+
 // Ensure FunctionTool configured to skip summarization ends the turn.
 func TestHandleFunctionCalls_FunctionTool_SkipSummarization_EndInvocation(
 	t *testing.T,
