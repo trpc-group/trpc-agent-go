@@ -361,3 +361,50 @@ if err != nil {
 ```
 
 此时聊天路由为 `/agui/chat`，用消息快照路由为 `/agui/history`。
+
+## 最佳实践
+
+### 生成文档
+
+长篇文档如果直接插入到对话正文，很容易把主对话“刷屏”，用户也难以区分对话内容和文档内容。为了解决这个问题，建议使用“文档面板”来承载长文档。通过 AG-UI 的事件流约定一套“打开文档面板 → 写入文档内容 → 关闭文档面板”的工作流，将长文档从对话中“抽离”出来，避免干扰正常交流，示例方案如下。
+
+1. **后端：定义工具并约束调用顺序**
+
+   为 Agent 提供两个工具：**打开文档面板** 和 **关闭文档面板**，并在 prompt 中约束生成顺序：
+   当进入文档生成流程时，按以下顺序执行：
+
+   1. 先调用“打开文档面板”工具
+   2. 紧接着输出文档内容
+   3. 最后调用“关闭文档面板”工具
+
+   转换为 AG-UI 事件流，大致形态如下：
+
+   ```text
+   打开文档面板工具
+     → ToolCallStart
+     → ToolCallArgs
+     → ToolCallEnd
+     → ToolCallResult
+
+   文档内容
+     → TextMessageStart
+     → TextMessageContent
+     → TextMessageEnd
+
+   关闭文档面板工具
+     → ToolCallStart
+     → ToolCallArgs
+     → ToolCallEnd
+     → ToolCallResult
+   ```
+
+2. **前端：监听工具事件并维护文档面板**
+
+   在前端监听事件流：
+
+   - 当捕捉到 `open_report_document` 工具事件时：创建文档面板，并将其后的文本消息内容写入该文档面板；
+   - 当捕捉到 `close_report_document` 工具事件时：关闭文档面板（或将其标记为生成完成）。
+
+实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)。
+
+![report](../assets/gif/agui/report.gif)
