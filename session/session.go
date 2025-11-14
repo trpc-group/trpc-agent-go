@@ -53,7 +53,7 @@ type Session struct {
 	UpdatedAt   time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
 	CreatedAt   time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
 
-	// Hash is the hash of the session id.
+	// Hash is the slot hash value for asynchronous task dispatching.
 	Hash int `json:"-"`
 }
 
