@@ -936,6 +936,17 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 		return es[0]
 	}
 
+	mergedChoices, mergedDelta := mergeChoicesAndDeltas(es)
+	baseEvent := findBaseEvent(es)
+	resp := buildMergedResponse(baseEvent, mergedChoices)
+	merged := createMergedEvent(baseEvent, resp, mergedDelta)
+	propagateSkipSummarization(es, merged)
+
+	return merged
+}
+
+// mergeChoicesAndDeltas merges choices and state deltas from multiple events.
+func mergeChoicesAndDeltas(es []*event.Event) ([]model.Choice, map[string][]byte) {
 	// Pre-calculate capacity to avoid multiple slice reallocations
 	totalChoices := 0
 	for _, e := range es {
@@ -957,24 +968,28 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 			}
 		}
 	}
-	eventID := uuid.New().String()
+	return mergedChoices, mergedDelta
+}
 
-	// Find a valid base event for metadata.
-	var baseEvent *event.Event
+// findBaseEvent finds a valid base event for metadata.
+func findBaseEvent(es []*event.Event) *event.Event {
 	for _, e := range es {
 		if e != nil {
-			baseEvent = e
-			break
+			return e
 		}
 	}
+	return nil
+}
 
-	// Build response payload with appropriate metadata.
+// buildMergedResponse builds a merged response from base event and choices.
+func buildMergedResponse(baseEvent *event.Event, mergedChoices []model.Choice) *model.Response {
 	modelName := "unknown"
 	if baseEvent != nil && baseEvent.Response != nil {
 		modelName = baseEvent.Response.Model
 	}
 
-	resp := &model.Response{
+	eventID := uuid.New().String()
+	return &model.Response{
 		ID:        eventID,
 		Object:    model.ObjectTypeToolResponse,
 		Created:   time.Now().Unix(),
@@ -982,8 +997,10 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 		Choices:   mergedChoices,
 		Timestamp: time.Now(),
 	}
+}
 
-	// If we have a base event, carry over invocation, author and branch.
+// createMergedEvent creates the merged event with response and state delta.
+func createMergedEvent(baseEvent *event.Event, resp *model.Response, mergedDelta map[string][]byte) *event.Event {
 	var merged *event.Event
 	if baseEvent != nil {
 		merged = event.New(
@@ -998,7 +1015,11 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 	if len(mergedDelta) > 0 {
 		merged.StateDelta = mergedDelta
 	}
-	// If any child event prefers skipping summarization, propagate it.
+	return merged
+}
+
+// propagateSkipSummarization propagates SkipSummarization flag from any child event.
+func propagateSkipSummarization(es []*event.Event, merged *event.Event) {
 	for _, e := range es {
 		if e != nil && e.Actions != nil && e.Actions.SkipSummarization {
 			if merged.Actions == nil {
@@ -1008,7 +1029,6 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 			break
 		}
 	}
-	return merged
 }
 
 // findCompatibleTool attempts to map a requested (missing) tool name to a compatible tool.
