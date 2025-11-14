@@ -236,7 +236,7 @@ func writeConditionalEdges(b *strings.Builder, g *Graph, cond map[string]*Condit
 		}
 		// For MultiCondition with empty PathMap, fallback to node-level ends
 		// to render potential branches for visualization.
-		if len(keys) == 0 && ce.MultiCondition != nil {
+		if len(keys) == 0 {
 			if n, ok := g.nodes[from]; ok && n != nil && n.ends != nil {
 				for k := range n.ends {
 					keys = append(keys, k)
@@ -246,7 +246,7 @@ func writeConditionalEdges(b *strings.Builder, g *Graph, cond map[string]*Condit
 		sort.Strings(keys)
 		for _, k := range keys {
 			to := ce.PathMap[k]
-			if to == "" && ce.MultiCondition != nil {
+			if to == "" {
 				// Resolve through ends map for display purposes.
 				if n, ok := g.nodes[from]; ok && n != nil && n.ends != nil {
 					if v, ok2 := n.ends[k]; ok2 {
