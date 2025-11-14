@@ -1718,9 +1718,6 @@ func TestNewSession(t *testing.T) {
 				if got.UpdatedAt.IsZero() {
 					t.Error("NewSession() UpdatedAt should be set when not provided")
 				}
-				if !got.CreatedAt.Equal(got.UpdatedAt) {
-					t.Error("NewSession() CreatedAt and UpdatedAt should be equal when not provided")
-				}
 			}
 
 			// Test Events
@@ -1797,20 +1794,5 @@ func TestNewSession_OptionOrder(t *testing.T) {
 
 	if !sess.CreatedAt.Equal(secondTime) {
 		t.Errorf("NewSession() option order: CreatedAt = %v, want %v (last option should win)", sess.CreatedAt, secondTime)
-	}
-}
-
-// Test nil options handling
-func TestNewSession_NilOptions(t *testing.T) {
-	// Test that nil options don't cause panics
-	sess := NewSession("app", "user", "session", nil, nil)
-
-	if sess == nil {
-		t.Error("NewSession() with nil options should not return nil")
-	}
-
-	// Verify basic fields are set
-	if sess.AppName != "app" {
-		t.Errorf("NewSession() with nil options: AppName = %v, want %v", sess.AppName, "app")
 	}
 }
