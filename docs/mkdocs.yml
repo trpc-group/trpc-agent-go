@@ -13,6 +13,7 @@ nav:
           - Multi Agent: multiagent.md
           - Graph Agent: graph.md
           - Custom Agent: custom-agent.md
+          - Dify Agent: dify.md
       - Runner: runner.md
       - Model: model.md
       - Callbacks: callbacks.md
@@ -53,6 +54,7 @@ plugins:
                     - Multi Agent: multiagent.md
                     - Graph Agent: graph.md
                     - 自定义 Agent: custom-agent.md
+                    - Dify Agent: dify.md
                 - Runner: runner.md
                 - Model: model.md
                 - Callbacks: callbacks.md
