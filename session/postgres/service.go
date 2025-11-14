@@ -84,10 +84,9 @@ type sessionEventPair struct {
 
 // summaryJob represents a summary job to be processed asynchronously.
 type summaryJob struct {
-	sessionKey session.Key
-	filterKey  string
-	force      bool
-	session    *session.Session
+	filterKey string
+	force     bool
+	session   *session.Session
 }
 
 // buildFullTableName builds a full table name with optional schema and prefix.
@@ -329,16 +328,12 @@ func (s *Service) CreateSession(
 		return nil, fmt.Errorf("list user states failed: %w", err)
 	}
 
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    []event.Event{},
-		Summaries: make(map[string]*session.Summary),
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
-	}
+	sess := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -789,15 +784,15 @@ func (s *Service) getSession(
 		return nil, fmt.Errorf("get summaries failed: %w", err)
 	}
 
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    events,
-		Summaries: summaries,
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
+	sess := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionEvents(events),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
+	if len(events) > 0 {
+		sess.Summaries = summaries
 	}
 
 	return mergeState(appState, userState, sess), nil

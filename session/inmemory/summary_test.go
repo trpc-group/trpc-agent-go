@@ -240,10 +240,9 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 
 	// Fill up the target worker queue with a blocking job
 	blockingJob := &summaryJob{
-		sessionKey: key,
-		filterKey:  "blocking",
-		force:      true,
-		session:    sess,
+		filterKey: "blocking",
+		force:     true,
+		session:   sess,
 	}
 
 	// Choose the same worker index as tryEnqueueJob would select.
@@ -498,10 +497,9 @@ func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
 
 	// Process a job with no stored session - should trigger error but not panic.
 	job := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+		filterKey: "",
+		force:     false,
+		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
 	}
 
 	// This should not panic, just log error.
@@ -525,10 +523,9 @@ func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
 
 	// Fill the queue first
 	job1 := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    sess,
+		filterKey: "",
+		force:     false,
+		session:   sess,
 	}
 
 	// First job should succeed
@@ -540,10 +537,9 @@ func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
 
 	// Second job with cancelled context should fail
 	job2 := &summaryJob{
-		sessionKey: session.Key{AppName: "app", UserID: "u2", SessionID: "s2"},
-		filterKey:  "",
-		force:      false,
-		session:    sess,
+		filterKey: "",
+		force:     false,
+		session:   sess,
 	}
 	assert.False(t, service.tryEnqueueJob(cancelledCtx, job2))
 }
@@ -704,10 +700,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -731,10 +726,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "branch1",
-					force:      false,
-					session:    sess,
+					filterKey: "branch1",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -751,10 +745,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -771,10 +764,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeErrorSummarizer{}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false, // Should not panic or error, just log

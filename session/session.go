@@ -13,9 +13,11 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -50,6 +52,114 @@ type Session struct {
 	Summaries   map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
 	UpdatedAt   time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
 	CreatedAt   time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
+
+	// Hash is the hash of the session id.
+	Hash int `json:"-"`
+}
+
+// Clone returns a copy of the session.
+func (sess *Session) Clone() *Session {
+	sess.EventMu.RLock()
+	copiedSess := &Session{
+		ID:        sess.ID,
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		State:     make(StateMap), // Create new state to avoid reference sharing.
+		Events:    make([]event.Event, len(sess.Events)),
+		UpdatedAt: sess.UpdatedAt,
+		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field.
+		Hash:      sess.Hash,
+	}
+	copy(copiedSess.Events, sess.Events)
+	sess.EventMu.RUnlock()
+
+	// Copy state.
+	if sess.State != nil {
+		for k, v := range sess.State {
+			copiedValue := make([]byte, len(v))
+			copy(copiedValue, v)
+			copiedSess.State[k] = copiedValue
+		}
+	}
+
+	// Copy summaries.
+	sess.SummariesMu.RLock()
+	if sess.Summaries != nil {
+		copiedSess.Summaries = make(map[string]*Summary, len(sess.Summaries))
+		for b, sum := range sess.Summaries {
+			if sum == nil {
+				continue
+			}
+			// Shallow copy is fine since Summary is immutable after write.
+			copied := *sum
+			copiedSess.Summaries[b] = &copied
+		}
+	}
+	sess.SummariesMu.RUnlock()
+
+	return copiedSess
+}
+
+// SessionOptions is the options for a session.
+type SessionOptions func(*Session)
+
+// WithSessionEvents is the option for the session events.
+func WithSessionEvents(events []event.Event) SessionOptions {
+	return func(sess *Session) {
+		sess.Events = events
+	}
+}
+
+// WithSessionSummaries is the option for the session summaries.
+func WithSessionSummaries(summaries map[string]*Summary) SessionOptions {
+	return func(sess *Session) {
+		sess.Summaries = summaries
+	}
+}
+
+// WithSessionState is the option for the session state.
+func WithSessionState(state StateMap) SessionOptions {
+	return func(sess *Session) {
+		sess.State = state
+	}
+}
+
+// WithSessionCreatedAt is the option for the session createdAt.
+func WithSessionCreatedAt(createdAt time.Time) SessionOptions {
+	return func(sess *Session) {
+		sess.CreatedAt = createdAt
+	}
+}
+
+// WithSessionUpdatedAt is the option for the session updatedAt.
+func WithSessionUpdatedAt(updatedAt time.Time) SessionOptions {
+	return func(sess *Session) {
+		sess.UpdatedAt = updatedAt
+	}
+}
+
+// NewSession creates a new session.
+func NewSession(appName, userID, sessionID string, options ...SessionOptions) *Session {
+	hashKey := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
+	hash := int(murmur3.Sum32([]byte(hashKey)))
+
+	sess := &Session{
+		ID:        sessionID,
+		AppName:   appName,
+		UserID:    userID,
+		Events:    []event.Event{},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+		Summaries: make(map[string]*Summary),
+		State:     make(StateMap),
+
+		Hash: hash,
+	}
+	for _, o := range options {
+		o(sess)
+	}
+
+	return sess
 }
 
 // GetEvents returns the session events.
