@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -470,11 +469,7 @@ func TestEnqueueSummaryJob_ContextCancelled(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	sess := &session.Session{
-		ID:      "session-123",
-		AppName: "test-app",
-		UserID:  "user-456",
-	}
+	sess := session.NewSession("test-app", "user-456", "session-123")
 
 	// Fill the queue with a blocking job
 	blockingJob := &summaryJob{
@@ -482,8 +477,7 @@ func TestEnqueueSummaryJob_ContextCancelled(t *testing.T) {
 		force:     false,
 		session:   sess,
 	}
-	keyStr := fmt.Sprintf("%s:%s:%s", sess.AppName, sess.UserID, sess.ID)
-	index := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+	index := sess.Hash % len(s.summaryJobChans)
 	s.summaryJobChans[index] <- blockingJob
 
 	// Create cancelled context
@@ -517,12 +511,7 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	sess := &session.Session{
-		ID:        "session-123",
-		AppName:   "test-app",
-		UserID:    "user-456",
-		UpdatedAt: time.Now(),
-	}
+	sess := session.NewSession("test-app", "user-456", "session-123")
 
 	// Fill the queue first
 	job1 := &summaryJob{
@@ -530,8 +519,7 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 		force:     false,
 		session:   sess,
 	}
-	keyStr := fmt.Sprintf("%s:%s:%s", sess.AppName, sess.UserID, sess.ID)
-	index := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+	index := sess.Hash % len(s.summaryJobChans)
 	s.summaryJobChans[index] <- job1
 
 	// Mock sync fallback processing
