@@ -11,16 +11,65 @@ package arxiv_test
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch/internal/arxiv"
 )
 
+func newFakeArxivServer() *httptest.Server {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		feed := arxiv.AtomFeed{
+			TotalResults: "2",
+			Entries: []arxiv.AtomEntry{
+				{
+					ID:         "http://arxiv.org/abs/2401.12345v1",
+					Title:      "Test Paper 1",
+					Summary:    "Summary 1",
+					Authors:    []arxiv.AtomAuthor{{Name: "Author1"}},
+					Categories: []arxiv.AtomCategory{{Term: "cs.AI"}},
+					Links: []arxiv.AtomLink{
+						{Href: "http://arxiv.org/pdf/2401.12345v1", Rel: "related", Type: "application/pdf"},
+					},
+				},
+				{
+					ID:         "http://arxiv.org/abs/2401.12345v2",
+					Title:      "Test Paper 2",
+					Summary:    "Summary 2",
+					Authors:    []arxiv.AtomAuthor{{Name: "Author2"}},
+					Categories: []arxiv.AtomCategory{{Term: "cs.LG"}},
+					Links: []arxiv.AtomLink{
+						{Href: "http://arxiv.org/pdf/2401.12345v2", Rel: "related", Type: "application/pdf"},
+					},
+				},
+				{
+					ID:         "http://arxiv.org/abs/2401.12345v3",
+					Title:      "Test Paper 3",
+					Summary:    "Summary 3",
+					Authors:    []arxiv.AtomAuthor{{Name: "Author3"}},
+					Categories: []arxiv.AtomCategory{{Term: "cs.LG"}},
+					Links: []arxiv.AtomLink{
+						{Href: "http://arxiv.org/pdf/2401.12345v3", Rel: "related", Type: "application/pdf"},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/atom+xml")
+		xml.NewEncoder(w).Encode(feed)
+	}))
+	return server
+}
+
 // Example_basicSearch
 func Example_basicSearch() {
+	srv := newFakeArxivServer()
+	defer srv.Close()
 	client := arxiv.DefaultClient()
+	client.BaseURL = srv.URL
 
 	search := arxiv.NewSearch(
 		"machine learning",
@@ -48,7 +97,10 @@ func Example_basicSearch() {
 
 // Example_advancedSearch search by advanced query
 func Example_advancedSearch() {
+	srv := newFakeArxivServer()
+	defer srv.Close()
 	client := arxiv.DefaultClient()
+	client.BaseURL = srv.URL
 
 	search := arxiv.NewSearch(
 		"ti:transformer AND au:vaswani",
@@ -67,7 +119,10 @@ func Example_advancedSearch() {
 
 // Example_searchByID search by id
 func Example_searchByID() {
+	srv := newFakeArxivServer()
+	defer srv.Close()
 	client := arxiv.DefaultClient()
+	client.BaseURL = srv.URL
 
 	search := arxiv.NewSearch(
 		"",
@@ -89,6 +144,8 @@ func Example_searchByID() {
 
 // Example_customClient custom client
 func Example_customClient() {
+	srv := newFakeArxivServer()
+	defer srv.Close()
 	config := arxiv.ClientConfig{
 		PageSize:     1,
 		DelaySeconds: 5 * time.Second,
@@ -96,6 +153,7 @@ func Example_customClient() {
 	}
 
 	client := arxiv.NewClient(config)
+	client.BaseURL = srv.URL
 
 	search := arxiv.NewSearch(
 		"quantum computing",
@@ -115,7 +173,10 @@ func Example_customClient() {
 
 // Example_resultMethods result methods
 func Example_resultMethods() {
+	srv := newFakeArxivServer()
+	defer srv.Close()
 	client := arxiv.DefaultClient()
+	client.BaseURL = srv.URL
 
 	search := arxiv.NewSearch(
 		"deep learning",
