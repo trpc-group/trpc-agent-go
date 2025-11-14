@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -37,8 +36,8 @@ func (e *userContextExample) createToolCallbacks() *tool.Callbacks {
 }
 
 // createBeforeAgentCallback creates the before agent callback.
-func (e *userContextExample) createBeforeAgentCallback() agent.BeforeAgentCallback {
-	return func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+func (e *userContextExample) createBeforeAgentCallback() agent.BeforeAgentCallbackStructured {
+	return func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
 		// Inject user context into invocation state.
 		// In a real application, you would get this from request metadata,
 		// JWT token, session, etc.
@@ -48,7 +47,7 @@ func (e *userContextExample) createBeforeAgentCallback() agent.BeforeAgentCallba
 			Permissions: getPermissionsForRole(e.role),
 		}
 
-		inv.SetState("custom:user_context", userCtx)
+		args.Invocation.SetState("custom:user_context", userCtx)
 
 		fmt.Printf("👤 User Context Injected: %s (role: %s, permissions: %v)\n",
 			userCtx.UserID, userCtx.Role, userCtx.Permissions)
@@ -59,10 +58,10 @@ func (e *userContextExample) createBeforeAgentCallback() agent.BeforeAgentCallba
 }
 
 // createAfterAgentCallback creates the after agent callback.
-func (e *userContextExample) createAfterAgentCallback() agent.AfterAgentCallback {
-	return func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+func (e *userContextExample) createAfterAgentCallback() agent.AfterAgentCallbackStructured {
+	return func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
 		// Print audit summary.
-		if auditLogVal, ok := inv.GetState("custom:audit_log"); ok {
+		if auditLogVal, ok := args.Invocation.GetState("custom:audit_log"); ok {
 			auditLog := auditLogVal.([]AuditEntry)
 			if len(auditLog) > 0 {
 				fmt.Println()
@@ -80,19 +79,19 @@ func (e *userContextExample) createAfterAgentCallback() agent.AfterAgentCallback
 				}
 			}
 			// Clean up audit log.
-			inv.DeleteState("custom:audit_log")
+			args.Invocation.DeleteState("custom:audit_log")
 		}
 
 		// Clean up user context.
-		inv.DeleteState("custom:user_context")
+		args.Invocation.DeleteState("custom:user_context")
 
 		return nil, nil
 	}
 }
 
 // createBeforeToolCallback creates the before tool callback for authorization.
-func (e *userContextExample) createBeforeToolCallback() tool.BeforeToolCallback {
-	return func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
+func (e *userContextExample) createBeforeToolCallback() tool.BeforeToolCallbackStructured {
+	return func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
 		// Get invocation from context.
 		inv, ok := agent.InvocationFromContext(ctx)
 		if !ok || inv == nil {
@@ -107,9 +106,9 @@ func (e *userContextExample) createBeforeToolCallback() tool.BeforeToolCallback 
 		userCtx := userCtxVal.(*UserContext)
 
 		// Check if user has permission to use this tool.
-		if !hasPermission(userCtx, toolName) {
+		if !hasPermission(userCtx, args.ToolName) {
 			errMsg := fmt.Sprintf("permission denied: user %s (role: %s) cannot use tool %s",
-				userCtx.UserID, userCtx.Role, toolName)
+				userCtx.UserID, userCtx.Role, args.ToolName)
 			fmt.Printf("❌ %s\n", errMsg)
 
 			// Log failed authorization attempt.
@@ -117,7 +116,7 @@ func (e *userContextExample) createBeforeToolCallback() tool.BeforeToolCallback 
 				Timestamp: time.Now().Format(time.RFC3339),
 				UserID:    userCtx.UserID,
 				Role:      userCtx.Role,
-				ToolName:  toolName,
+				ToolName:  args.ToolName,
 				Error:     "permission denied",
 			})
 
@@ -125,15 +124,15 @@ func (e *userContextExample) createBeforeToolCallback() tool.BeforeToolCallback 
 		}
 
 		fmt.Printf("✅ Permission granted: %s (%s) can use %s\n",
-			userCtx.UserID, userCtx.Role, toolName)
+			userCtx.UserID, userCtx.Role, args.ToolName)
 
 		return nil, nil
 	}
 }
 
 // createAfterToolCallback creates the after tool callback for audit logging.
-func (e *userContextExample) createAfterToolCallback() tool.AfterToolCallback {
-	return func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+func (e *userContextExample) createAfterToolCallback() tool.AfterToolCallbackStructured {
+	return func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
 		// Get invocation from context.
 		inv, ok := agent.InvocationFromContext(ctx)
 		if !ok || inv == nil {
@@ -152,22 +151,22 @@ func (e *userContextExample) createAfterToolCallback() tool.AfterToolCallback {
 			Timestamp: time.Now().Format(time.RFC3339),
 			UserID:    userCtx.UserID,
 			Role:      userCtx.Role,
-			ToolName:  toolName,
-			Args:      string(jsonArgs),
+			ToolName:  args.ToolName,
+			Args:      string(args.Arguments),
 		}
 
-		if runErr != nil {
-			entry.Error = runErr.Error()
-		} else if result != nil {
-			entry.Result = fmt.Sprintf("%v", result)
+		if args.Error != nil {
+			entry.Error = args.Error.Error()
+		} else if args.Result != nil {
+			entry.Result = fmt.Sprintf("%v", args.Result)
 		}
 
 		// Append to audit log.
 		e.appendAuditLog(inv, entry)
 
-		fmt.Printf("📝 Audit: User %s (%s) called %s\n", userCtx.UserID, userCtx.Role, toolName)
-		if runErr != nil {
-			fmt.Printf("   Error: %v\n", runErr)
+		fmt.Printf("📝 Audit: User %s (%s) called %s\n", userCtx.UserID, userCtx.Role, args.ToolName)
+		if args.Error != nil {
+			fmt.Printf("   Error: %v\n", args.Error)
 		}
 
 		return nil, nil

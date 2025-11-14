@@ -477,7 +477,7 @@ func (w *diamondWorkflow) runWorkflow(ctx context.Context, inputData string) err
 	// Process events.
 	for event := range eventChan {
 		if event.Error != nil {
-			return fmt.Errorf("workflow error: %w", event.Error)
+			return fmt.Errorf("workflow error: %s", event.Error.Message)
 		}
 		// Silently consume events for cleaner output.
 	}
@@ -514,7 +514,7 @@ func (w *diamondWorkflow) runWorkflowWithLineage(ctx context.Context, inputData,
 
 	for event := range eventChan {
 		if event.Error != nil {
-			return fmt.Errorf("workflow error: %w", event.Error)
+			return fmt.Errorf("workflow error: %s", event.Error.Message)
 		}
 	}
 
@@ -558,7 +558,7 @@ func (w *diamondWorkflow) resumeWorkflow(ctx context.Context, lineageID, checkpo
 
 	for event := range eventChan {
 		if event.Error != nil {
-			return fmt.Errorf("workflow error: %w", event.Error)
+			return fmt.Errorf("workflow error: %s", event.Error.Message)
 		}
 	}
 

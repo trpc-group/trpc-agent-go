@@ -343,23 +343,28 @@ inv.DeleteState(key string)
 
 **Usage Example:**
 
+> **Version Requirement**  
+> The structured callback API (recommended) requires **trpc-agent-go >= 0.6.0**.
+
 ```go
 // Store data in BeforeAgentCallback
-func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-    inv.SetState("agent:start_time", time.Now())
-    inv.SetState("custom:request_id", "req-123")
+// Note: Structured callback API requires trpc-agent-go >= 0.6.0
+callbacks := agent.NewCallbacks()
+callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    args.Invocation.SetState("agent:start_time", time.Now())
+    args.Invocation.SetState("custom:request_id", "req-123")
     return nil, nil
-}
+})
 
 // Read data in AfterAgentCallback
-func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-    if startTime, ok := inv.GetState("agent:start_time"); ok {
+callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if startTime, ok := args.Invocation.GetState("agent:start_time"); ok {
         duration := time.Since(startTime.(time.Time))
         log.Printf("Execution took: %v", duration)
-        inv.DeleteState("agent:start_time")
+        args.Invocation.DeleteState("agent:start_time")
     }
     return nil, nil
-}
+})
 ```
 
 **Recommended Key Naming Convention:**
@@ -433,6 +438,9 @@ The framework provides multiple types of Agent implementations, including LLMAge
 
 Callbacks provide a rich callback mechanism that allows you to inject custom logic at key points during Agent execution.
 
+> **Version Requirement**  
+> The structured callback API (recommended) requires **trpc-agent-go >= 0.6.0**.
+
 ### Callback Types
 
 The framework provides three types of callbacks:
@@ -440,54 +448,44 @@ The framework provides three types of callbacks:
 **Agent Callbacks**: Triggered before and after Agent execution
 
 ```go
-type AgentCallbacks struct {
-    BeforeAgent []BeforeAgentCallback  // Callbacks before Agent runs.
-    AfterAgent  []AfterAgentCallback   // Callbacks after Agent runs.
-}
+// Create callbacks using agent.NewCallbacks()
+callbacks := agent.NewCallbacks()
 ```
 
 **Model Callbacks**: Triggered before and after model calls
 
 ```go
-type ModelCallbacks struct {
-    BeforeModel []BeforeModelCallback  // Callbacks before model calls.
-    AfterModel  []AfterModelCallback   // Callbacks after model calls.
-}
+// Create callbacks using model.NewCallbacks()
+callbacks := model.NewCallbacks()
 ```
 
 **Tool Callbacks**: Triggered before and after tool calls
 
 ```go
-type ToolCallbacks struct {
-	BeforeTool []BeforeToolCallback  // Callbacks before tool calls.
-	AfterTool []AfterToolCallback    // Callbacks after tool calls.
-}
+// Create callbacks using tool.NewCallbacks()
+callbacks := tool.NewCallbacks()
 ```
 
 ### Usage Example
 
 ```go
-// Create Agent callbacks.
-callbacks := &agent.AgentCallbacks{
-    BeforeAgent: []agent.BeforeAgentCallback{
-        func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-            log.Printf("Agent %s started execution", invocation.AgentName)
-            return nil, nil
-        },
-    },
-    AfterAgent: []agent.AfterAgentCallback{
-        func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-            if runErr != nil {
-                log.Printf("Agent %s execution error: %v", invocation.AgentName, runErr)
-            } else {
-                log.Printf("Agent %s execution completed", invocation.AgentName)
-            }
-            return nil, nil
-        },
-    },
-}
+// Create Agent callbacks (using structured API)
+// Note: Structured callback API requires trpc-agent-go >= 0.6.0
+callbacks := agent.NewCallbacks()
+callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    log.Printf("Agent %s started execution", args.Invocation.AgentName)
+    return nil, nil
+})
+callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if args.Error != nil {
+        log.Printf("Agent %s execution error: %v", args.Invocation.AgentName, args.Error)
+    } else {
+        log.Printf("Agent %s execution completed", args.Invocation.AgentName)
+    }
+    return nil, nil
+})
 
-// Use callbacks in Invocation.
+// Use callbacks in llmAgent
 llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 ```
 
@@ -600,24 +598,27 @@ _, _ = run.Run(context.Background(), user, sid, model.NewUserMessage("Hi!"))
 
 Example: per‑turn temp value via a before‑agent callback
 
+> **Version Requirement**  
+> The structured callback API (recommended) requires **trpc-agent-go >= 0.6.0**.
+
 ```go
-callbacks := &agent.AgentCallbacks{
-  BeforeAgent: []agent.BeforeAgentCallback{
-    func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-      if inv != nil && inv.Session != nil {
-        if inv.Session.State == nil { inv.Session.State = make(map[string][]byte) }
-        // Write a one-off instruction for this turn only
-        inv.Session.State["temp:sys"] = []byte("Translate to French.")
-      }
-      return nil, nil
-    },
-  },
-}
+// Note: Structured callback API requires trpc-agent-go >= 0.6.0
+callbacks := agent.NewCallbacks()
+callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+  if args.Invocation != nil && args.Invocation.Session != nil {
+    if args.Invocation.Session.State == nil {
+      args.Invocation.Session.State = make(map[string][]byte)
+    }
+    // Write a one-off instruction for this turn only
+    args.Invocation.Session.State["temp:sys"] = []byte("Translate to French.")
+  }
+  return nil, nil
+})
 
 llm := llmagent.New(
   "temp-agent",
   llmagent.WithInstruction("{temp:sys}"),
-  llmagent.WithAgentCallbacks(callbacks),
+  llmagent.WithAgentCallbacks(callbacks), // requires trpc-agent-go >= 0.6.0
 )
 ```
 

@@ -123,16 +123,23 @@ func (a *ParallelAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
+// Returns the updated context and whether execution should stop early.
 func (a *ParallelAgent) handleBeforeAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) bool {
+) (context.Context, bool) {
 	if a.agentCallbacks == nil {
-		return false
+		return ctx, false
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+		Invocation: invocation,
+	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 
 	if err != nil {
@@ -143,17 +150,17 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
-		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 	}
 
 	if evt == nil {
-		return false // Continue execution
+		return ctx, false // Continue execution
 	}
 
 	agent.EmitEvent(ctx, invocation, eventChan, evt)
-	return true
+	return ctx, true
 }
 
 // startSubAgents starts all sub-agents in parallel and returns their event channels.
@@ -226,7 +233,14 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 		return
 	}
 
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation: invocation,
+		Error:      nil,
+	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -236,9 +250,9 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response.
-		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 	}
 
 	agent.EmitEvent(ctx, invocation, eventChan, evt)
@@ -270,7 +284,9 @@ func (a *ParallelAgent) executeParallelRun(
 	a.setupInvocation(invocation)
 
 	// Handle before agent callbacks.
-	if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+	var shouldReturn bool
+	ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+	if shouldReturn {
 		return
 	}
 
