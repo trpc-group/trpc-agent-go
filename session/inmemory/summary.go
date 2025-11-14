@@ -141,12 +141,9 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 
 // tryEnqueueJob attempts to enqueue a summary job to the appropriate channel.
 // Returns true if successful, false if the job should be processed synchronously.
+// Note: This method assumes channels are already initialized. Callers should check
+// len(s.summaryJobChans) > 0 before calling this method.
 func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
-	// Check if channels are initialized
-	if len(s.summaryJobChans) == 0 {
-		return false // Channels not initialized or closed, fall back to sync processing
-	}
-
 	// Select a channel using hash distribution.
 	keyStr := fmt.Sprintf("%s:%s:%s", job.sessionKey.AppName, job.sessionKey.UserID, job.sessionKey.SessionID)
 	index := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
