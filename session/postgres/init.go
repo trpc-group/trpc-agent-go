@@ -296,7 +296,7 @@ func buildCreateTableSQL(schema, prefix, tableName, template string) string {
 func buildCreateIndexSQL(schema, prefix, tableName, suffix, template string) string {
 	fullTableName := sqldb.BuildTableNameWithSchema(schema, prefix, tableName)
 	indexName := sqldb.BuildIndexNameWithSchema(schema, prefix, tableName, suffix)
-	
+
 	sql := strings.ReplaceAll(template, "{{TABLE_NAME}}", fullTableName)
 	sql = strings.ReplaceAll(sql, "{{INDEX_NAME}}", indexName)
 	return sql
