@@ -633,15 +633,13 @@ func (s *Service) listSessions(
 	}
 
 	for i, sessState := range sessStates {
-		sess := &session.Session{
-			ID:        sessState.ID,
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			State:     sessState.State,
-			Events:    events[i],
-			UpdatedAt: sessState.UpdatedAt,
-			CreatedAt: sessState.CreatedAt,
-		}
+		sess := session.NewSession(
+			key.AppName, key.UserID, sessState.ID,
+			session.WithSessionState(sessState.State),
+			session.WithSessionEvents(events[i]),
+			session.WithSessionCreatedAt(sessState.CreatedAt),
+			session.WithSessionUpdatedAt(sessState.UpdatedAt),
+		)
 
 		// filter events to ensure they start with RoleUser
 		sess.EnsureEventStartWithUser()
