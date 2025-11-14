@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -872,6 +873,10 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 
+	// Calculate the worker index for this key to ensure we use the same worker
+	keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
+	idx := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+
 	// Fill the queue first with a blocking job
 	blockingJob := &summaryJob{
 		sessionKey: key,
@@ -881,7 +886,7 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 	}
 
 	select {
-	case s.summaryJobChans[0] <- blockingJob:
+	case s.summaryJobChans[idx] <- blockingJob:
 		// Queue is now full
 	default:
 		// Already full
@@ -891,14 +896,15 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
+	// Use the same key to ensure it hashes to the same worker (queue is full)
 	job := &summaryJob{
-		sessionKey: session.Key{AppName: "app2", UserID: "user2", SessionID: "sid2"},
+		sessionKey: key,
 		filterKey:  "",
 		force:      false,
-		session:    &session.Session{ID: "sid2", AppName: "app2", UserID: "user2"},
+		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
 	}
 
-	// Should return false when context is cancelled
+	// Should return false when context is cancelled (even if queue is full)
 	result := s.tryEnqueueJob(ctx, job)
 	assert.False(t, result)
 

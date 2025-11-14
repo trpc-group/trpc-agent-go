@@ -833,17 +833,24 @@ func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
 	sess, err := service.CreateSession(ctx, key, session.StateMap{})
 	require.NoError(t, err)
 
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, service.AppendEvent(ctx, sess, e))
+
 	// Close the service to simulate shutdown and set channels to nil
 	service.Close()
 
-	job := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    sess,
-	}
+	// EnqueueSummaryJob should fall back to sync processing when channels are nil
+	err = service.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
 
-	// Should return false when channels are nil (after close)
-	result := service.tryEnqueueJob(ctx, job)
-	assert.False(t, result)
+	// Verify summary was created through sync fallback
+	got, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	sum, ok := got.Summaries[""]
+	require.True(t, ok)
+	require.Equal(t, "test", sum.Summary)
 }
