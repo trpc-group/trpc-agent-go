@@ -152,7 +152,12 @@ func (ts *ToolSet) listTools(ctx context.Context) error {
 	}
 
 	// Apply tool filter if configured.
-	if ts.config.toolFilter != nil {
+	// Priority: unified filter (toolFilterFunc) takes precedence over legacy filter (toolFilter).
+	if ts.config.toolFilterFunc != nil {
+		// Use unified filtering interface (recommended).
+		tools = tool.FilterTools(ctx, tools, ts.config.toolFilterFunc)
+	} else if ts.config.toolFilter != nil {
+		// Use legacy MCP-specific filtering (deprecated).
 		toolInfos := make([]ToolInfo, len(tools))
 		for i, tool := range tools {
 			decl := tool.Declaration()
