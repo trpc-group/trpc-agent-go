@@ -212,7 +212,7 @@ func TestUpdateAppState_Success(t *testing.T) {
 
 	// Mock: UPSERT for each state key
 	for range state {
-		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO app_states")).
+		mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO app_states")).
 			WithArgs(
 				appName,
 				sqlmock.AnyArg(), // key
@@ -434,25 +434,25 @@ func TestCleanupExpiredSessions(t *testing.T) {
 			ctx := context.Background()
 			now := time.Now()
 
-		if tt.softDelete {
-			mock.ExpectBegin()
-			mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
-				WillReturnResult(sqlmock.NewResult(0, 5))
-			mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
-				WillReturnResult(sqlmock.NewResult(0, 10))
-			mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
-				WillReturnResult(sqlmock.NewResult(0, 3))
-			mock.ExpectCommit()
-		} else {
-			mock.ExpectBegin()
-			mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
-				WillReturnResult(sqlmock.NewResult(0, 5))
-			mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events")).
-				WillReturnResult(sqlmock.NewResult(0, 10))
-			mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_summaries")).
-				WillReturnResult(sqlmock.NewResult(0, 3))
-			mock.ExpectCommit()
-		}
+			if tt.softDelete {
+				mock.ExpectBegin()
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+					WillReturnResult(sqlmock.NewResult(0, 5))
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
+					WillReturnResult(sqlmock.NewResult(0, 10))
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
+					WillReturnResult(sqlmock.NewResult(0, 3))
+				mock.ExpectCommit()
+			} else {
+				mock.ExpectBegin()
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
+					WillReturnResult(sqlmock.NewResult(0, 5))
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events")).
+					WillReturnResult(sqlmock.NewResult(0, 10))
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_summaries")).
+					WillReturnResult(sqlmock.NewResult(0, 3))
+				mock.ExpectCommit()
+			}
 
 			s.cleanupExpiredSessions(ctx, now)
 			assert.NoError(t, mock.ExpectationsWereMet())
@@ -504,7 +504,7 @@ func TestUpdateUserState_Success(t *testing.T) {
 
 	// Mock: UPSERT for each state key
 	for range state {
-		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO user_states")).
+		mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO user_states")).
 			WithArgs(
 				userKey.AppName,
 				userKey.UserID,
@@ -773,7 +773,7 @@ func TestUpdateAppState_Error(t *testing.T) {
 	}
 
 	// Mock: UPSERT fails
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO app_states")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO app_states")).
 		WithArgs(
 			appName,
 			sqlmock.AnyArg(),
@@ -1137,7 +1137,7 @@ func TestUpdateUserState_Error(t *testing.T) {
 	}
 
 	// Mock: UPSERT fails
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO user_states")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO user_states")).
 		WithArgs(
 			userKey.AppName,
 			userKey.UserID,
@@ -1899,38 +1899,38 @@ func mockDBInit(mock sqlmock.Sqlmock) {
 
 // TestUpdateUserState_InvalidKey tests update user state with invalid key
 func TestUpdateUserState_InvalidKey(t *testing.T) {
-db, _, err := sqlmock.New()
-require.NoError(t, err)
-defer db.Close()
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-s := createTestService(t, db)
-ctx := context.Background()
+	s := createTestService(t, db)
+	ctx := context.Background()
 
-userKey := session.UserKey{
-AppName: "", // Invalid: empty app name
-UserID:  "user-123",
-}
-state := session.StateMap{"key1": []byte("value1")}
+	userKey := session.UserKey{
+		AppName: "", // Invalid: empty app name
+		UserID:  "user-123",
+	}
+	state := session.StateMap{"key1": []byte("value1")}
 
-err = s.UpdateUserState(ctx, userKey, state)
-assert.Error(t, err)
+	err = s.UpdateUserState(ctx, userKey, state)
+	assert.Error(t, err)
 }
 
 // TestCreateSession_InvalidAppName tests creating session with invalid app name
 func TestCreateSession_InvalidAppName(t *testing.T) {
-db, _, err := sqlmock.New()
-require.NoError(t, err)
-defer db.Close()
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-s := createTestService(t, db)
-ctx := context.Background()
+	s := createTestService(t, db)
+	ctx := context.Background()
 
-key := session.Key{
-AppName:   "", // Invalid: empty app name
-UserID:    "user-123",
-SessionID: "session-456",
-}
+	key := session.Key{
+		AppName:   "", // Invalid: empty app name
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
 
-_, err = s.CreateSession(ctx, key, session.StateMap{})
-assert.Error(t, err)
+	_, err = s.CreateSession(ctx, key, session.StateMap{})
+	assert.Error(t, err)
 }

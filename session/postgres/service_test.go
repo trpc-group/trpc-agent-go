@@ -1273,7 +1273,7 @@ func TestCleanupExpired(t *testing.T) {
 	})
 	defer db.Close()
 
-	// Mock cleanup queries: session-related tables in transaction, others separately
+	// Mock cleanup queries: all tables in a single transaction
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 5))
@@ -1281,11 +1281,11 @@ func TestCleanupExpired(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 10))
 	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 2))
-	mock.ExpectCommit()
 	mock.ExpectExec("UPDATE app_states SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE user_states SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectCommit()
 
 	s.cleanupExpired()
 
@@ -1305,7 +1305,7 @@ func TestCleanupExpiredForUser(t *testing.T) {
 		UserID:  "test-user",
 	}
 
-	// Mock cleanup queries: session-related tables in transaction, user_states separately
+	// Mock cleanup queries: all tables in a single transaction
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
@@ -1316,10 +1316,10 @@ func TestCleanupExpiredForUser(t *testing.T) {
 	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
 	mock.ExpectExec("UPDATE user_states SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	s.cleanupExpiredForUser(context.Background(), userKey)
 

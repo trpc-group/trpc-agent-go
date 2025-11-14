@@ -51,7 +51,7 @@ func TestCreateSessionSummary_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
 
 	// Mock: Insert new summary
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -126,7 +126,7 @@ func TestCreateSessionSummary_Force(t *testing.T) {
 	}
 
 	// With force=true, skip checking existing summary
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -409,7 +409,7 @@ func TestEnqueueSummaryJob_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
 
 	// Mock: Insert new summary (async worker)
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -456,7 +456,7 @@ func TestEnqueueSummaryJob_NoWorkers(t *testing.T) {
 		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
 
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -604,7 +604,7 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
 
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -651,7 +651,7 @@ func TestCreateSessionSummary_WithFilterKey(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
 
 	// Mock: Insert new summary with custom filter key
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -704,7 +704,7 @@ func TestCreateSessionSummary_ExistingButStale(t *testing.T) {
 			AddRow(summaryBytes, existingSummary.UpdatedAt))
 
 	// Mock: Insert updated summary
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,
@@ -774,8 +774,8 @@ func TestCreateSessionSummary_UpsertError(t *testing.T) {
 		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
 
-	// Mock: Insert fails
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+	// Mock: Replace fails
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
 			sess.UserID,

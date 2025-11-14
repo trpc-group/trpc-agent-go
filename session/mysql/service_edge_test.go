@@ -809,7 +809,7 @@ func TestUpdateUserState_WithStatePrefix(t *testing.T) {
 		session.StateUserPrefix + "key1": []byte(`"value1"`),
 	}
 
-	mock.ExpectExec("INSERT INTO user_states").
+	mock.ExpectExec("REPLACE INTO user_states").
 		WithArgs("test-app", "user-123", "key1", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
