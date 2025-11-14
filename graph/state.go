@@ -124,6 +124,12 @@ func (s *StateSchema) ApplyUpdate(currentState State, update State) State {
 		if !hasCurrentValue && field.Default != nil {
 			currentValue = field.Default()
 		}
+
+		if field.DisableDeepCopy {
+			result[key] = field.Reducer(currentValue, updateValue)
+			continue
+		}
+
 		// Apply reducer with deep-copied update to prevent reference sharing.
 		safeUpdate := deepCopyAny(updateValue)
 		merged := field.Reducer(currentValue, safeUpdate)
