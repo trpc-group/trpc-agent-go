@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
@@ -86,32 +87,6 @@ type summaryJob struct {
 	filterKey string
 	force     bool
 	session   *session.Session
-}
-
-// buildFullTableName builds a full table name with optional schema and prefix.
-// Examples:
-// - schema="", prefix="", table="session_states" -> "session_states"
-// - schema="myschema", prefix="", table="session_states" -> "myschema.session_states"
-// - schema="", prefix="trpc_", table="session_states" -> "trpc_session_states"
-// - schema="myschema", prefix="trpc_", table="session_states" -> "myschema.trpc_session_states"
-func buildFullTableName(schema, prefix, tableName string) string {
-	fullTableName := prefix + tableName
-	if schema != "" {
-		return schema + "." + fullTableName
-	}
-	return fullTableName
-}
-
-// parseTableName parses a full table name into schema and table components.
-// Examples:
-// - "session_states" -> ("public", "session_states")
-// - "myschema.session_states" -> ("myschema", "session_states")
-func parseTableName(fullTableName string) (schema, tableName string) {
-	parts := strings.Split(fullTableName, ".")
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return "public", fullTableName
 }
 
 // buildConnString builds a PostgreSQL connection string from options.
@@ -212,12 +187,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL: opts.userStateTTL,
 		cleanupDone:  make(chan struct{}),
 
-		// Initialize table names with schema and prefix
-		tableSessionStates:    buildFullTableName(opts.schema, opts.tablePrefix, "session_states"),
-		tableSessionEvents:    buildFullTableName(opts.schema, opts.tablePrefix, "session_events"),
-		tableSessionSummaries: buildFullTableName(opts.schema, opts.tablePrefix, "session_summaries"),
-		tableAppStates:        buildFullTableName(opts.schema, opts.tablePrefix, "app_states"),
-		tableUserStates:       buildFullTableName(opts.schema, opts.tablePrefix, "user_states"),
+		// Initialize table names with schema and prefix using internal/session/sqldb
+		tableSessionStates:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionStates),
+		tableSessionEvents:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionEvents),
+		tableSessionSummaries: sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionSummaries),
+		tableAppStates:        sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameAppStates),
+		tableUserStates:       sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameUserStates),
 	}
 
 	// Initialize database schema unless skipped
@@ -1334,110 +1309,105 @@ func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.Use
 func (s *Service) cleanupExpiredData(ctx context.Context, userKey *session.UserKey) {
 	now := time.Now()
 
-	// Define cleanup tasks: table name, TTL, and whether it's session-scoped
 	type cleanupTask struct {
-		tableName      string
-		ttl            time.Duration
-		isSessionScope bool // true for session-related tables, false for app/user states
+		tableName string
+		ttl       time.Duration
 	}
 
 	tasks := []cleanupTask{
-		{s.tableSessionStates, s.sessionTTL, true},
-		{s.tableSessionEvents, s.sessionTTL, true},
-		{s.tableSessionSummaries, s.sessionTTL, true},
-		{s.tableAppStates, s.appStateTTL, false},
-		{s.tableUserStates, s.userStateTTL, false},
+		{s.tableSessionStates, s.sessionTTL},
+		{s.tableSessionEvents, s.sessionTTL},
+		{s.tableSessionSummaries, s.sessionTTL},
+		{s.tableAppStates, s.appStateTTL},
+		{s.tableUserStates, s.userStateTTL},
 	}
 
+	validTasks := []cleanupTask{}
 	for _, task := range tasks {
-		// Skip if TTL is not set
 		if task.ttl <= 0 {
 			continue
 		}
-
-		// Skip app_states when cleaning up for a specific user (app states are global)
 		if userKey != nil && task.tableName == s.tableAppStates {
 			continue
 		}
+		validTasks = append(validTasks, task)
+	}
 
-		if s.opts.softDelete {
-			s.softDeleteExpiredTable(ctx, task.tableName, now, userKey, task.isSessionScope)
-		} else {
-			s.hardDeleteExpiredTable(ctx, task.tableName, now, userKey, task.isSessionScope)
+	if len(validTasks) > 0 {
+		err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+			for _, task := range validTasks {
+				if s.opts.softDelete {
+					if err := s.softDeleteExpiredTableInTx(ctx, tx, task.tableName, now, userKey); err != nil {
+						return err
+					}
+				} else {
+					if err := s.hardDeleteExpiredTableInTx(ctx, tx, task.tableName, now, userKey); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Errorf("cleanup expired tables failed: %v", err)
 		}
 	}
 }
 
-// softDeleteExpiredTable soft-deletes expired records from a specific table.
-func (s *Service) softDeleteExpiredTable(
+func (s *Service) softDeleteExpiredTableInTx(
 	ctx context.Context,
+	tx *sql.Tx,
 	tableName string,
 	now time.Time,
 	userKey *session.UserKey,
-	isSessionScope bool,
-) {
+) error {
 	var query string
 	var args []any
 
-	if userKey != nil && isSessionScope {
-		// User-scoped cleanup for session-related tables
-		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
-			WHERE app_name = $2 AND user_id = $3
-			AND expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
-		args = []any{now, userKey.AppName, userKey.UserID}
-	} else if userKey != nil && !isSessionScope {
-		// User-scoped cleanup for user_states table
+	if userKey != nil {
 		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			WHERE app_name = $2 AND user_id = $3
 			AND expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
 		args = []any{now, userKey.AppName, userKey.UserID}
 	} else {
-		// Global cleanup
 		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
 		args = []any{now}
 	}
 
-	_, err := s.pgClient.ExecContext(ctx, query, args...)
+	_, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		log.Errorf("soft delete expired %s failed: %v", tableName, err)
+		return fmt.Errorf("soft delete expired %s: %w", tableName, err)
 	}
+	return nil
 }
 
-// hardDeleteExpiredTable physically removes expired records from a specific table.
-func (s *Service) hardDeleteExpiredTable(
+func (s *Service) hardDeleteExpiredTableInTx(
 	ctx context.Context,
+	tx *sql.Tx,
 	tableName string,
 	now time.Time,
 	userKey *session.UserKey,
-	isSessionScope bool,
-) {
+) error {
 	var query string
 	var args []any
 
-	if userKey != nil && isSessionScope {
-		// User-scoped cleanup for session-related tables
-		query = fmt.Sprintf(`DELETE FROM %s
-			WHERE app_name = $1 AND user_id = $2
-			AND expires_at IS NOT NULL AND expires_at <= $3`, tableName)
-		args = []any{userKey.AppName, userKey.UserID, now}
-	} else if userKey != nil && !isSessionScope {
-		// User-scoped cleanup for user_states table
+	if userKey != nil {
 		query = fmt.Sprintf(`DELETE FROM %s
 			WHERE app_name = $1 AND user_id = $2
 			AND expires_at IS NOT NULL AND expires_at <= $3`, tableName)
 		args = []any{userKey.AppName, userKey.UserID, now}
 	} else {
-		// Global cleanup
 		query = fmt.Sprintf(`DELETE FROM %s
 			WHERE expires_at IS NOT NULL AND expires_at <= $1`, tableName)
 		args = []any{now}
 	}
 
-	_, err := s.pgClient.ExecContext(ctx, query, args...)
+	_, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		log.Errorf("hard delete expired %s failed: %v", tableName, err)
+		return fmt.Errorf("hard delete expired %s: %w", tableName, err)
 	}
+	return nil
 }
 
 // startCleanupRoutine starts the background cleanup routine.

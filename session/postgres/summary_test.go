@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"testing"
 	"time"
 
@@ -715,13 +716,13 @@ func TestProcessSummaryJob(t *testing.T) {
 			s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer, summaryJobTimeout: time.Second})
 			job := tt.setup(t, s)
 
-			mock.ExpectExec(fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+			mock.ExpectExec(regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
 		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
 		 DO UPDATE SET
 		   summary = EXCLUDED.summary,
 		   updated_at = EXCLUDED.updated_at,
-		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries)).
+		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries))).
 				WithArgs(job.session.AppName, job.session.UserID, job.session.ID, job.filterKey, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 				WillReturnResult(sqlmock.NewResult(1, 1))
 			defer db.Close()

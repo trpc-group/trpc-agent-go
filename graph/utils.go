@@ -14,6 +14,10 @@ import (
 	"time"
 )
 
+var (
+	timeType = reflect.TypeOf(time.Time{})
+)
+
 // deepCopyAny performs a deep copy of common JSON-serializable Go types to
 // avoid sharing mutable references (maps/slices) across goroutines.
 func deepCopyAny(value any) any {
@@ -153,6 +157,9 @@ func copyArray(rv reflect.Value, visited map[uintptr]any) any {
 }
 
 func copyStruct(rv reflect.Value, visited map[uintptr]any) any {
+	if isTimeType(rv) {
+		return copyTimeType(rv)
+	}
 	newStruct := reflect.New(rv.Type()).Elem()
 	for i := 0; i < rv.NumField(); i++ {
 		ft := rv.Type().Field(i)
@@ -179,4 +186,26 @@ func copyStruct(rv reflect.Value, visited map[uintptr]any) any {
 		}
 	}
 	return newStruct.Interface()
+}
+
+func isTimeType(value reflect.Value) bool {
+	rt := value.Type()
+	if rt == timeType {
+		return true
+	}
+
+	if rt.ConvertibleTo(timeType) {
+		return true
+	}
+
+	return false
+}
+
+func copyTimeType(value reflect.Value) any {
+	if value.Type().ConvertibleTo(timeType) {
+		timeVal := value.Convert(timeType).Interface().(time.Time)
+		return reflect.ValueOf(timeVal).Convert(value.Type()).Interface()
+	}
+
+	return value.Interface()
 }
