@@ -1878,3 +1878,41 @@ func mockDBInit(mock sqlmock.Sqlmock) {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 }
+
+// TestUpdateUserState_InvalidKey tests update user state with invalid key
+func TestUpdateUserState_InvalidKey(t *testing.T) {
+db, _, err := sqlmock.New()
+require.NoError(t, err)
+defer db.Close()
+
+s := createTestService(t, db)
+ctx := context.Background()
+
+userKey := session.UserKey{
+AppName: "", // Invalid: empty app name
+UserID:  "user-123",
+}
+state := session.StateMap{"key1": []byte("value1")}
+
+err = s.UpdateUserState(ctx, userKey, state)
+assert.Error(t, err)
+}
+
+// TestCreateSession_InvalidAppName tests creating session with invalid app name
+func TestCreateSession_InvalidAppName(t *testing.T) {
+db, _, err := sqlmock.New()
+require.NoError(t, err)
+defer db.Close()
+
+s := createTestService(t, db)
+ctx := context.Background()
+
+key := session.Key{
+AppName:   "", // Invalid: empty app name
+UserID:    "user-123",
+SessionID: "session-456",
+}
+
+_, err = s.CreateSession(ctx, key, session.StateMap{})
+assert.Error(t, err)
+}

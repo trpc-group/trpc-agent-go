@@ -720,3 +720,108 @@ func TestCreateSessionSummary_ExistingButStale(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestCreateSessionSummary_CheckExistingError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizer{}
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: Query error when checking existing summary
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
+		WillReturnError(fmt.Errorf("database error"))
+
+	err = s.CreateSessionSummary(ctx, sess, "", false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "check existing summary failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSessionSummary_UpsertError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizer{
+		summarizeFunc: func(ctx context.Context, sess *session.Session) (string, error) {
+			return "Test summary", nil
+		},
+	}
+
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: Check existing summary (no existing)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
+
+	// Mock: Insert fails
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnError(fmt.Errorf("insert error"))
+
+	err = s.CreateSessionSummary(ctx, sess, "", false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "upsert summary failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEnqueueSummaryJob_ChannelClosed(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizer{
+		summarizeFunc: func(ctx context.Context, sess *session.Session) (string, error) {
+			return "test summary", nil
+		},
+	}
+
+	s := createTestService(t, db, WithSummarizer(summarizer), WithAsyncSummaryNum(1), WithSummaryQueueSize(1))
+
+	// Manually initialize and close summary job channels
+	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob, 1)}
+	close(s.summaryJobChans[0])
+
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// When the channel is closed, panic is caught and logged, function returns nil
+	// This test verifies the panic recovery mechanism works without crashing
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	// The panic is recovered, so no error is returned (defer return doesn't affect outer function)
+	assert.NoError(t, err)
+}

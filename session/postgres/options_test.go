@@ -319,4 +319,10 @@ func TestServiceOptions(t *testing.T) {
 		WithSkipDBInit(true)(opts)
 		assert.True(t, opts.skipDBInit)
 	})
+
+	t.Run("WithSchema", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithSchema("public")(opts)
+		assert.Equal(t, "public", opts.schema)
+	})
 }

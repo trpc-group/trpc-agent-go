@@ -994,3 +994,134 @@ func TestClose_WithCleanupRoutine(t *testing.T) {
 	err = s.Close()
 	assert.NoError(t, err)
 }
+
+// TestCreateSession_ExistingWithoutExpiry tests creating session when an existing non-expiring session exists
+func TestCreateSession_ExistingWithoutExpiry(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	// Mock: Check existing session - returns a row with NULL expires_at (no expiration)
+	mock.ExpectQuery("SELECT expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(nil))
+
+	_, err = s.CreateSession(ctx, key, session.StateMap{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "session already exists and has not expired")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDeleteUserState_KeyRequired tests delete user state with empty key
+func TestDeleteUserState_KeyRequired(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	userKey := session.UserKey{AppName: "test-app", UserID: "user-123"}
+
+	err = s.DeleteUserState(ctx, userKey, "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "state key is required")
+}
+
+// TestDeleteSession_HardDeleteSummariesError tests hard delete when summaries deletion fails
+func TestDeleteSession_HardDeleteSummariesError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	s.opts.softDelete = false
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM session_summaries").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnError(fmt.Errorf("summaries delete error"))
+	mock.ExpectRollback()
+
+	err = s.DeleteSession(context.Background(), key)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "delete session state failed")
+}
+
+// TestDeleteSession_HardDeleteEventsError tests hard delete when events deletion fails
+func TestDeleteSession_HardDeleteEventsError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	s.opts.softDelete = false
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM session_summaries").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM session_events").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnError(fmt.Errorf("events delete error"))
+	mock.ExpectRollback()
+
+	err = s.DeleteSession(context.Background(), key)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "delete session state failed")
+}
+
+// TestDeleteSession_SoftDeleteSummariesError tests soft delete when summaries fails
+func TestDeleteSession_SoftDeleteSummariesError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	s.opts.softDelete = true
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnError(fmt.Errorf("summaries update error"))
+	mock.ExpectRollback()
+
+	err = s.DeleteSession(context.Background(), key)
+	assert.Error(t, err)
+}
