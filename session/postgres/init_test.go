@@ -16,6 +16,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
@@ -163,7 +164,7 @@ func TestBuildIndexName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildIndexName(tt.schema, tt.prefix, tt.tableName, tt.suffix)
+			result := sqldb.BuildIndexNameWithSchema(tt.schema, tt.prefix, tt.tableName, tt.suffix)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -196,7 +197,7 @@ func TestBuildIndexSQL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			template := "CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}} (id)"
-			result := buildIndexSQL("", tt.prefix, tt.table, tt.suffix, template)
+			result := buildCreateIndexSQL("", tt.prefix, tt.table, tt.suffix, template)
 			assert.Contains(t, result, tt.expected)
 		})
 	}
@@ -504,7 +505,7 @@ func TestBuildCreateTableSQL_WithPrefixMock(t *testing.T) {
 
 // TestBuildIndexSQL_Mock tests index SQL template replacement
 func TestBuildIndexSQL_Mock(t *testing.T) {
-	sql := buildIndexSQL("", "", "test_table", "test_suffix", "CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}} ON {{TABLE_NAME}}(id)")
+	sql := buildCreateIndexSQL("", "", "test_table", "test_suffix", "CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}} ON {{TABLE_NAME}}(id)")
 	assert.Contains(t, sql, "ON test_table(id)")
 	assert.Contains(t, sql, "idx_test_table_test_suffix")
 	assert.NotContains(t, sql, "{{TABLE_NAME}}")
