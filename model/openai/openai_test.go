@@ -2821,6 +2821,61 @@ func TestWithChatStreamCompleteCallback_OptionSetting(t *testing.T) {
 	assert.NotNil(t, opts.ChatStreamCompleteCallback, "expected ChatStreamCompleteCallback to be set")
 }
 
+// TestWithAccumulateChunkTokenUsage tests that the accumulate chunk usage function is properly set.
+func TestWithAccumulateChunkTokenUsage(t *testing.T) {
+	t.Run("custom accumulate function is set", func(t *testing.T) {
+		customAccumulateFunc := func(u model.Usage, delta model.Usage) model.Usage {
+			return model.Usage{
+				PromptTokens:     u.PromptTokens + delta.PromptTokens,
+				CompletionTokens: u.CompletionTokens + delta.CompletionTokens,
+				TotalTokens:      u.TotalTokens + delta.TotalTokens,
+			}
+		}
+
+		opts := &options{}
+		WithAccumulateChunkTokenUsage(customAccumulateFunc)(opts)
+
+		assert.NotNil(t, opts.accumulateChunkUsage, "expected accumulateChunkUsage to be set")
+	})
+
+	t.Run("accumulate function works correctly", func(t *testing.T) {
+		customAccumulateFunc := func(u model.Usage, delta model.Usage) model.Usage {
+			return model.Usage{
+				PromptTokens:     u.PromptTokens + delta.PromptTokens*2,
+				CompletionTokens: u.CompletionTokens + delta.CompletionTokens*2,
+				TotalTokens:      u.TotalTokens + delta.TotalTokens*2,
+			}
+		}
+
+		opts := &options{}
+		WithAccumulateChunkTokenUsage(customAccumulateFunc)(opts)
+
+		// Test the function behavior
+		currentUsage := model.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 20,
+			TotalTokens:      30,
+		}
+		delta := model.Usage{
+			PromptTokens:     5,
+			CompletionTokens: 10,
+			TotalTokens:      15,
+		}
+
+		result := opts.accumulateChunkUsage(currentUsage, delta)
+		assert.Equal(t, 20, result.PromptTokens, "expected prompt tokens to be 20 (10 + 5*2)")
+		assert.Equal(t, 40, result.CompletionTokens, "expected completion tokens to be 40 (20 + 10*2)")
+		assert.Equal(t, 60, result.TotalTokens, "expected total tokens to be 60 (30 + 15*2)")
+	})
+
+	t.Run("nil function is set", func(t *testing.T) {
+		opts := &options{}
+		WithAccumulateChunkTokenUsage(nil)(opts)
+
+		assert.Nil(t, opts.accumulateChunkUsage, "expected accumulateChunkUsage to be nil")
+	})
+}
+
 // TestWithChannelBufferSize_EdgeCases tests WithChannelBufferSize with edge cases.
 func TestWithChannelBufferSize_EdgeCases(t *testing.T) {
 	t.Run("zero size should use default", func(t *testing.T) {
