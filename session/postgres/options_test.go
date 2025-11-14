@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 )
 
 func TestValidateTablePrefix(t *testing.T) {
@@ -76,7 +77,7 @@ func TestValidateTablePrefix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateTablePrefix(tt.prefix)
+			err := sqldb.ValidateTablePrefix(tt.prefix)
 			if tt.wantError {
 				assert.Error(t, err, "Expected error for prefix: %s", tt.prefix)
 			} else {
@@ -317,5 +318,11 @@ func TestServiceOptions(t *testing.T) {
 		opts := &ServiceOpts{}
 		WithSkipDBInit(true)(opts)
 		assert.True(t, opts.skipDBInit)
+	})
+
+	t.Run("WithSchema", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithSchema("public")(opts)
+		assert.Equal(t, "public", opts.schema)
 	})
 }

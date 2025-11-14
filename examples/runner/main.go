@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/session/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -38,7 +39,7 @@ import (
 
 var (
 	modelName       = flag.String("model", "deepseek-chat", "Name of the model to use")
-	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / pgsql")
+	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / pgsql / mysql")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	enableParallel  = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
 	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan/ deepseek / qwen")
@@ -55,6 +56,13 @@ var (
 	pgUser     = getEnvOrDefault("PG_USER", "root")
 	pgPassword = getEnvOrDefault("PG_PASSWORD", "")
 	pgDatabase = getEnvOrDefault("PG_DATABASE", "trpc-agent-go")
+
+	// MySQL.
+	mysqlHost     = getEnvOrDefault("MYSQL_HOST", "localhost")
+	mysqlPort     = getEnvOrDefault("MYSQL_PORT", "3306")
+	mysqlUser     = getEnvOrDefault("MYSQL_USER", "root")
+	mysqlPassword = getEnvOrDefault("MYSQL_PASSWORD", "")
+	mysqlDatabase = getEnvOrDefault("MYSQL_DATABASE", "trpc_agent_go")
 )
 
 func main() {
@@ -73,6 +81,8 @@ func main() {
 		fmt.Printf("Redis: %s\n", redisAddr)
 	} else if *sessServiceName == "pgsql" {
 		fmt.Printf("PostgreSQL: %s:%s/%s\n", pgHost, pgPort, pgDatabase)
+	} else if *sessServiceName == "mysql" {
+		fmt.Printf("MySQL: %s:%s/%s\n", mysqlHost, mysqlPort, mysqlDatabase)
 	}
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time\n")
@@ -155,6 +165,19 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create postgres session service: %w", err)
+		}
+
+	case "mysql":
+		// Build MySQL DSN
+		mysqlDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4",
+			mysqlUser, mysqlPassword, mysqlHost, mysqlPort, mysqlDatabase)
+		sessionService, err = mysql.NewService(
+			mysql.WithMySQLClientDSN(mysqlDSN),
+			mysql.WithTablePrefix("trpc_"),
+			mysql.WithSessionTTL(10*time.Second),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create mysql session service: %w", err)
 		}
 
 	default:
