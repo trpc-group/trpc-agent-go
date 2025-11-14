@@ -2876,6 +2876,164 @@ func TestWithAccumulateChunkTokenUsage(t *testing.T) {
 	})
 }
 
+// TestInverseOPENAISKDAddChunkUsage tests the inverse accumulation of chunk usage.
+func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
+	t.Run("subtracts delta from current usage", func(t *testing.T) {
+		currentUsage := model.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+		}
+		delta := model.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		}
+
+		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+
+		assert.Equal(t, 90, result.PromptTokens, "expected prompt tokens to be 90 (100 - 10)")
+		assert.Equal(t, 45, result.CompletionTokens, "expected completion tokens to be 45 (50 - 5)")
+		assert.Equal(t, 135, result.TotalTokens, "expected total tokens to be 135 (150 - 15)")
+	})
+
+	t.Run("handles zero delta", func(t *testing.T) {
+		currentUsage := model.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+		}
+		delta := model.Usage{
+			PromptTokens:     0,
+			CompletionTokens: 0,
+			TotalTokens:      0,
+		}
+
+		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+
+		assert.Equal(t, 100, result.PromptTokens, "expected prompt tokens to remain 100")
+		assert.Equal(t, 50, result.CompletionTokens, "expected completion tokens to remain 50")
+		assert.Equal(t, 150, result.TotalTokens, "expected total tokens to remain 150")
+	})
+
+	t.Run("handles negative result", func(t *testing.T) {
+		currentUsage := model.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		}
+		delta := model.Usage{
+			PromptTokens:     20,
+			CompletionTokens: 10,
+			TotalTokens:      30,
+		}
+
+		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+
+		assert.Equal(t, -10, result.PromptTokens, "expected prompt tokens to be -10 (10 - 20)")
+		assert.Equal(t, -5, result.CompletionTokens, "expected completion tokens to be -5 (5 - 10)")
+		assert.Equal(t, -15, result.TotalTokens, "expected total tokens to be -15 (15 - 30)")
+	})
+}
+
+// TestModelUsageToCompletionUsage tests conversion from model.Usage to openai.CompletionUsage.
+func TestModelUsageToCompletionUsage(t *testing.T) {
+	t.Run("converts all fields correctly", func(t *testing.T) {
+		modelUsage := model.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: 20,
+			},
+		}
+
+		result := modelUsageToCompletionUsage(modelUsage)
+
+		assert.Equal(t, int64(100), result.PromptTokens, "expected prompt tokens to be 100")
+		assert.Equal(t, int64(50), result.CompletionTokens, "expected completion tokens to be 50")
+		assert.Equal(t, int64(150), result.TotalTokens, "expected total tokens to be 150")
+		assert.Equal(t, int64(20), result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 20")
+	})
+
+	t.Run("converts zero values", func(t *testing.T) {
+		modelUsage := model.Usage{
+			PromptTokens:     0,
+			CompletionTokens: 0,
+			TotalTokens:      0,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: 0,
+			},
+		}
+
+		result := modelUsageToCompletionUsage(modelUsage)
+
+		assert.Equal(t, int64(0), result.PromptTokens, "expected prompt tokens to be 0")
+		assert.Equal(t, int64(0), result.CompletionTokens, "expected completion tokens to be 0")
+		assert.Equal(t, int64(0), result.TotalTokens, "expected total tokens to be 0")
+		assert.Equal(t, int64(0), result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
+	})
+
+	t.Run("roundtrip conversion", func(t *testing.T) {
+		originalUsage := model.Usage{
+			PromptTokens:     123,
+			CompletionTokens: 456,
+			TotalTokens:      579,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: 78,
+			},
+		}
+
+		// Convert to OpenAI format and back
+		openaiUsage := modelUsageToCompletionUsage(originalUsage)
+		backToModel := completionUsageToModelUsage(openaiUsage)
+
+		assert.Equal(t, originalUsage.PromptTokens, backToModel.PromptTokens, "expected prompt tokens to match after roundtrip")
+		assert.Equal(t, originalUsage.CompletionTokens, backToModel.CompletionTokens, "expected completion tokens to match after roundtrip")
+		assert.Equal(t, originalUsage.TotalTokens, backToModel.TotalTokens, "expected total tokens to match after roundtrip")
+		assert.Equal(t, originalUsage.PromptTokensDetails.CachedTokens, backToModel.PromptTokensDetails.CachedTokens, "expected cached tokens to match after roundtrip")
+	})
+}
+
+// TestCompletionUsageToModelUsage tests conversion from openai.CompletionUsage to model.Usage.
+func TestCompletionUsageToModelUsage(t *testing.T) {
+	t.Run("converts all fields correctly", func(t *testing.T) {
+		openaiUsage := openai.CompletionUsage{
+			PromptTokens:     int64(200),
+			CompletionTokens: int64(75),
+			TotalTokens:      int64(275),
+			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
+				CachedTokens: int64(30),
+			},
+		}
+
+		result := completionUsageToModelUsage(openaiUsage)
+
+		assert.Equal(t, 200, result.PromptTokens, "expected prompt tokens to be 200")
+		assert.Equal(t, 75, result.CompletionTokens, "expected completion tokens to be 75")
+		assert.Equal(t, 275, result.TotalTokens, "expected total tokens to be 275")
+		assert.Equal(t, 30, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 30")
+	})
+
+	t.Run("converts zero values", func(t *testing.T) {
+		openaiUsage := openai.CompletionUsage{
+			PromptTokens:     int64(0),
+			CompletionTokens: int64(0),
+			TotalTokens:      int64(0),
+			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
+				CachedTokens: int64(0),
+			},
+		}
+
+		result := completionUsageToModelUsage(openaiUsage)
+
+		assert.Equal(t, 0, result.PromptTokens, "expected prompt tokens to be 0")
+		assert.Equal(t, 0, result.CompletionTokens, "expected completion tokens to be 0")
+		assert.Equal(t, 0, result.TotalTokens, "expected total tokens to be 0")
+		assert.Equal(t, 0, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
+	})
+}
+
 // TestWithChannelBufferSize_EdgeCases tests WithChannelBufferSize with edge cases.
 func TestWithChannelBufferSize_EdgeCases(t *testing.T) {
 	t.Run("zero size should use default", func(t *testing.T) {
