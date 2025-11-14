@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
@@ -388,23 +389,8 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			log.Warnf("failed to clean task %s: %v", taskID, err)
 		}
 	}()
-	produce := func() (*event.Event, bool) {
-		select {
-		case <-ctx.Done():
-			return nil, false
-		case agentEvent, ok := <-agentMsgChan:
-			if !ok {
-				return nil, false
-			}
-			return agentEvent, true
-		}
-	}
 
-	// define consume function
-	consume := func(batch []*event.Event) (bool, error) {
-		return m.processBatchStreamingEvents(ctx, taskID, a2aMsg, batch, subscriber)
-	}
-
+	// Send task submitted status
 	taskSubmitted := protocol.NewTaskStatusUpdateEvent(
 		taskID, *a2aMsg.ContextID,
 		protocol.TaskStatus{
@@ -418,19 +404,77 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
 
-	// run event tunnel
-	tunnel := newEventTunnel(defaultBatchSize, defaultFlushInterval, produce, consume)
-	if err := tunnel.Run(ctx); err != nil {
-		log.Warnf("Event transfer error: %v", err)
+	// Send task working status
+	taskWorking := protocol.NewTaskStatusUpdateEvent(
+		taskID, *a2aMsg.ContextID,
+		protocol.TaskStatus{
+			State:     protocol.TaskStateWorking,
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+		false,
+	)
+	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &taskWorking}); err != nil {
+		log.Errorf("failed to send task working message: %v", err)
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
 
-	finalArtifact := protocol.NewTaskArtifactUpdateEvent(taskID, *a2aMsg.ContextID, protocol.Artifact{}, true)
+	// Create an aggregator to track task results
+	taskAggregator := NewTaskResultAggregator()
+
+	// Process events one by one to aggregate the final result
+	done := false
+	for !done {
+		select {
+		case <-ctx.Done():
+			// Context cancelled
+			return
+		case agentEvent, ok := <-agentMsgChan:
+			if !ok {
+				// Channel closed, we're done
+				done = true
+				break
+			}
+
+			if agentEvent == nil || agentEvent.Response == nil {
+				continue
+			}
+
+			// Track the event for final result aggregation
+			taskAggregator.ProcessEvent(agentEvent)
+
+			// Convert the event to A2A message
+			convertedResult, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(
+				ctx, agentEvent, EventToA2AStreamingOptions{CtxID: *a2aMsg.ContextID, TaskID: taskID},
+			)
+			if err != nil {
+				m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+				return
+			}
+
+			if convertedResult != nil {
+				if err := subscriber.Send(protocol.StreamingMessageEvent{Result: convertedResult}); err != nil {
+					log.Errorf("failed to send streaming message event: %v", err)
+					m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+					return
+				}
+			}
+
+			// Check if this is the final event
+			if isFinalStreamingEvent(agentEvent) {
+				done = true
+				break
+			}
+		}
+	}
+
+	// Send the final aggregated artifact
+	finalArtifact := taskAggregator.FinalArtifact(taskID, *a2aMsg.ContextID)
 	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &finalArtifact}); err != nil {
 		log.Errorf("failed to send final artifact message: %v", err)
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
 
+	// Send the final task status update event with completed state
 	taskCompleted := protocol.NewTaskStatusUpdateEvent(
 		taskID, *a2aMsg.ContextID,
 		protocol.TaskStatus{
@@ -443,6 +487,52 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		log.Errorf("failed to send task completed message: %v", err)
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
+}
+
+// TaskResultAggregator tracks the aggregated results of task processing
+type TaskResultAggregator struct {
+	state       protocol.TaskState
+	message     *protocol.Message
+	artifact    protocol.Artifact
+	content     strings.Builder
+}
+
+// NewTaskResultAggregator creates a new TaskResultAggregator
+func NewTaskResultAggregator() *TaskResultAggregator {
+	return &TaskResultAggregator{
+		state: protocol.TaskStateWorking,
+	}
+}
+
+// ProcessEvent processes an event and updates the aggregated state
+func (t *TaskResultAggregator) ProcessEvent(event *event.Event) {
+	if event == nil || event.Response == nil {
+		return
+	}
+
+	// Process the event content
+	if len(event.Response.Choices) > 0 && event.Response.Choices[0].Delta.Content != "" {
+		t.content.WriteString(event.Response.Choices[0].Delta.Content)
+	}
+}
+
+// FinalArtifact returns the aggregated artifact for the final result
+func (t *TaskResultAggregator) FinalArtifact(taskID, ctxID string) protocol.TaskArtifactUpdateEvent {
+	// Create the final artifact with all aggregated content
+	parts := []protocol.Part{}
+	if t.content.Len() > 0 {
+		parts = append(parts, protocol.NewTextPart(t.content.String()))
+	}
+
+	return protocol.NewTaskArtifactUpdateEvent(
+		taskID,
+		ctxID,
+		protocol.Artifact{
+			ArtifactID: fmt.Sprintf("artifact-%s", taskID),
+			Parts:      parts,
+		},
+		true, // last chunk
+	)
 }
 
 // processBatchStreamingEvents processes a batch of streaming events and sends them through msgChan.

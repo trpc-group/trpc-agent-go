@@ -186,7 +186,7 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 }
 
 // ConvertStreamingToA2AMessage converts an Agent event to an A2A protocol message for streaming.
-// For streaming responses, it returns delta content and filters out tool call events.
+// For streaming responses, it returns delta content as task artifact updates following ADK pattern.
 func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	ctx context.Context,
 	event *event.Event,
@@ -212,21 +212,22 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 		return nil, nil
 	}
 
-	var parts []protocol.Part
 	choice := event.Response.Choices[0]
-	// Use delta choice.Message.Content for non-streaming events mixed in streaming
+	// Use delta content for streaming updates
 	if choice.Delta.Content != "" {
-		parts = append(parts, protocol.NewTextPart(choice.Delta.Content))
-		taskStatus := protocol.NewTaskArtifactUpdateEvent(
+		parts := []protocol.Part{protocol.NewTextPart(choice.Delta.Content)}
+		// Send as task artifact update (not status update) for incremental content
+		// This follows ADK pattern: artifacts for content, status for state changes
+		taskArtifact := protocol.NewTaskArtifactUpdateEvent(
 			options.TaskID,
 			options.CtxID,
 			protocol.Artifact{
 				ArtifactID: event.Response.ID,
 				Parts:      parts,
 			},
-			false,
+			false, // append mode - not last chunk
 		)
-		return &taskStatus, nil
+		return &taskArtifact, nil
 	}
 
 	log.Debugf("delta content is empty, event: %v", event)
