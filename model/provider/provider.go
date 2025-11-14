@@ -7,6 +7,7 @@
 //
 //
 
+// Package provider provides a unified interface for constructing model.Model instances from different providers.
 package provider
 
 import (
@@ -113,6 +114,9 @@ func openaiProvider(opts *Options) (model.Model, error) {
 	if opts.TailoringStrategy != nil {
 		res = append(res, openai.WithTailoringStrategy(opts.TailoringStrategy))
 	}
+	if opts.TokenTailoringConfig != nil {
+		res = append(res, openai.WithTokenTailoringConfig(opts.TokenTailoringConfig))
+	}
 	res = append(res, opts.OpenAIOption...)
 	return openai.New(opts.ModelName, res...), nil
 }
@@ -152,6 +156,21 @@ func anthropicProvider(opts *Options) (model.Model, error) {
 	}
 	if opts.ChannelBufferSize != nil {
 		res = append(res, anthropic.WithChannelBufferSize(*opts.ChannelBufferSize))
+	}
+	if opts.EnableTokenTailoring != nil {
+		res = append(res, anthropic.WithEnableTokenTailoring(*opts.EnableTokenTailoring))
+	}
+	if opts.MaxInputTokens != nil {
+		res = append(res, anthropic.WithMaxInputTokens(*opts.MaxInputTokens))
+	}
+	if opts.TokenCounter != nil {
+		res = append(res, anthropic.WithTokenCounter(opts.TokenCounter))
+	}
+	if opts.TailoringStrategy != nil {
+		res = append(res, anthropic.WithTailoringStrategy(opts.TailoringStrategy))
+	}
+	if opts.TokenTailoringConfig != nil {
+		res = append(res, anthropic.WithTokenTailoringConfig(opts.TokenTailoringConfig))
 	}
 	res = append(res, opts.AnthropicOption...)
 	return anthropic.New(opts.ModelName, res...), nil

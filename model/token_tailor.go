@@ -17,6 +17,27 @@ import (
 
 const approxRunesPerToken = 4 // heuristic: ~1 token per 4 UTF-8 runes
 
+// TokenTailoringConfig holds custom token tailoring budget parameters.
+// This configuration allows advanced users to fine-tune the token allocation strategy.
+type TokenTailoringConfig struct {
+	// ProtocolOverheadTokens is the number of tokens reserved for protocol
+	// overhead (request/response formatting).
+	ProtocolOverheadTokens int
+	// ReserveOutputTokens is the number of tokens reserved for output
+	// generation.
+	ReserveOutputTokens int
+	// InputTokensFloor is the minimum number of input tokens.
+	InputTokensFloor int
+	// OutputTokensFloor is the minimum number of output tokens.
+	OutputTokensFloor int
+	// SafetyMarginRatio is the safety margin ratio for token counting
+	// inaccuracies.
+	SafetyMarginRatio float64
+	// MaxInputTokensRatio is the maximum input tokens ratio of the context
+	// window.
+	MaxInputTokensRatio float64
+}
+
 // TokenCounter counts tokens for messages and tools.
 // The implementation is model-agnostic to keep the model package lightweight.
 type TokenCounter interface {

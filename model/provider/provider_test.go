@@ -178,6 +178,113 @@ func TestWithExtraFieldsCopiesInput(t *testing.T) {
 	assert.Equal(t, "id", opts.ExtraFields["trace"])
 }
 
+func TestProviderWithTokenTailoringConfig(t *testing.T) {
+	config := &model.TokenTailoringConfig{
+		ProtocolOverheadTokens: 1024,
+		ReserveOutputTokens:    4096,
+		SafetyMarginRatio:      0.15,
+	}
+
+	// Test OpenAI provider
+	opts := &Options{ModelName: "gpt-4"}
+	WithTokenTailoringConfig(config)(opts)
+	modelInstance, err := openaiProvider(opts)
+	assert.NoError(t, err)
+	assert.NotNil(t, modelInstance)
+	openaiModel, ok := modelInstance.(*openai.Model)
+	assert.True(t, ok)
+	assert.NotNil(t, openaiModel)
+
+	// Test Anthropic provider
+	opts = &Options{ModelName: "claude"}
+	WithTokenTailoringConfig(config)(opts)
+	modelInstance, err = anthropicProvider(opts)
+	assert.NoError(t, err)
+	assert.NotNil(t, modelInstance)
+	anthropicModel, ok := modelInstance.(*anthropic.Model)
+	assert.True(t, ok)
+	assert.NotNil(t, anthropicModel)
+}
+
+func TestGetProvider(t *testing.T) {
+	provider, ok := Get("openai")
+	assert.True(t, ok)
+	assert.NotNil(t, provider)
+
+	provider, ok = Get("anthropic")
+	assert.True(t, ok)
+	assert.NotNil(t, provider)
+
+	provider, ok = Get("not-exist")
+	assert.False(t, ok)
+	assert.Nil(t, provider)
+}
+
+func TestRegisterProvider(t *testing.T) {
+	var captured *Options
+	testProvider := func(opts *Options) (model.Model, error) {
+		captured = opts
+		return testModel{}, nil
+	}
+
+	Register("test-provider", testProvider)
+	defer func() {
+		providersMu.Lock()
+		delete(providers, "test-provider")
+		providersMu.Unlock()
+	}()
+
+	provider, ok := Get("test-provider")
+	assert.True(t, ok)
+	assert.NotNil(t, provider)
+
+	_, err := provider(&Options{ModelName: "test-model"})
+	assert.NoError(t, err)
+	assert.NotNil(t, captured)
+	assert.Equal(t, "test-model", captured.ModelName)
+}
+
+func TestModelWithAllOptions(t *testing.T) {
+	counter := model.NewSimpleTokenCounter()
+	strategy := model.NewMiddleOutStrategy(counter)
+	config := &model.TokenTailoringConfig{
+		ProtocolOverheadTokens: 1024,
+		ReserveOutputTokens:    4096,
+	}
+
+	modelInstance, err := Model(
+		"openai",
+		"gpt-4",
+		WithAPIKey("test-key"),
+		WithBaseURL("https://test.example.com"),
+		WithChannelBufferSize(128),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(2048),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+		WithTokenTailoringConfig(config),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, modelInstance)
+	assert.Equal(t, "gpt-4", modelInstance.Info().Name)
+
+	modelInstance, err = Model(
+		"anthropic",
+		"claude",
+		WithAPIKey("test-key"),
+		WithBaseURL("https://test.example.com"),
+		WithChannelBufferSize(128),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(2048),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+		WithTokenTailoringConfig(config),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, modelInstance)
+	assert.Equal(t, "claude", modelInstance.Info().Name)
+}
+
 func readStringField(obj any, name string) string {
 	return getField(obj, name).String()
 }
