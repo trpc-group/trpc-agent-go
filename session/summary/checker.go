@@ -60,6 +60,7 @@ func CheckTokenThreshold(tokenCount int) Checker {
 			if event.Response == nil || event.Response.Usage == nil {
 				continue
 			}
+			// may need to fix
 			totalTokens += event.Response.Usage.TotalTokens
 		}
 
