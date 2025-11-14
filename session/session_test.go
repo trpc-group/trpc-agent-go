@@ -10,10 +10,15 @@
 package session
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -1210,5 +1215,584 @@ func TestApplyOptions(t *testing.T) {
 			assert.Equal(t, tt.expectedNum, result.EventNum, tt.description)
 			assert.Equal(t, tt.expectedTime, result.EventTime, tt.description)
 		})
+	}
+}
+
+func TestSession_Clone(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name         string
+		setupSession func() *Session
+		wantErr      bool
+	}{
+		{
+			name: "complete session with all fields populated",
+			setupSession: func() *Session {
+				return &Session{
+					ID:      "session-123",
+					AppName: "test-app",
+					UserID:  "user-456",
+					State: StateMap{
+						"key1": []byte("value1"),
+						"key2": []byte("value2"),
+					},
+					Events: []event.Event{
+						{ID: "event1"},
+						{ID: "event2"},
+					},
+					Summaries: map[string]*Summary{
+						"filter1": {Summary: "filter1"},
+						"filter2": {Summary: "filter2"},
+					},
+					UpdatedAt: now,
+					CreatedAt: now.Add(-time.Hour),
+					Hash:      12345,
+				}
+			},
+		},
+		{
+			name: "session with nil state map",
+			setupSession: func() *Session {
+				return &Session{
+					ID:        "session-nil-state",
+					AppName:   "test-app",
+					UserID:    "user-789",
+					State:     nil,
+					Events:    []event.Event{},
+					Summaries: map[string]*Summary{},
+					UpdatedAt: now,
+					CreatedAt: now.Add(-2 * time.Hour),
+					Hash:      67890,
+				}
+			},
+		},
+		{
+			name: "session with empty state map",
+			setupSession: func() *Session {
+				return &Session{
+					ID:        "session-empty-state",
+					AppName:   "test-app",
+					UserID:    "user-000",
+					State:     StateMap{},
+					Events:    []event.Event{{ID: "event1"}},
+					Summaries: nil,
+					UpdatedAt: now.Add(-30 * time.Minute),
+					CreatedAt: now.Add(-3 * time.Hour),
+					Hash:      11111,
+				}
+			},
+		},
+		{
+			name: "session with nil summaries",
+			setupSession: func() *Session {
+				return &Session{
+					ID:      "session-nil-summaries",
+					AppName: "test-app",
+					UserID:  "user-111",
+					State: StateMap{
+						"singleKey": []byte("singleValue"),
+					},
+					Events:    []event.Event{},
+					Summaries: nil,
+					UpdatedAt: now.Add(-time.Hour),
+					CreatedAt: now.Add(-4 * time.Hour),
+					Hash:      22222,
+				}
+			},
+		},
+		{
+			name: "session with empty events slice",
+			setupSession: func() *Session {
+				return &Session{
+					ID:        "session-empty-events",
+					AppName:   "test-app",
+					UserID:    "user-222",
+					State:     StateMap{},
+					Events:    []event.Event{},
+					Summaries: map[string]*Summary{},
+					UpdatedAt: now,
+					CreatedAt: now.Add(-5 * time.Hour),
+					Hash:      33333,
+				}
+			},
+		},
+		{
+			name: "session with nil events slice",
+			setupSession: func() *Session {
+				sess := &Session{
+					ID:      "session-nil-events",
+					AppName: "test-app",
+					UserID:  "user-333",
+					State:   StateMap{"test": []byte("value")},
+					Summaries: map[string]*Summary{
+						"test": &Summary{Summary: "test"},
+					},
+					UpdatedAt: now,
+					CreatedAt: now.Add(-6 * time.Hour),
+					Hash:      44444,
+				}
+				// Use reflection to set Events to nil since it's not exported in the literal
+				// This is a workaround for testing edge cases
+				sess.Events = nil
+				return sess
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := tt.setupSession()
+
+			// Execute clone operation
+			cloned := original.Clone()
+
+			// Validate basic field equality
+			if cloned.ID != original.ID {
+				t.Errorf("Clone() ID = %v, want %v", cloned.ID, original.ID)
+			}
+			if cloned.AppName != original.AppName {
+				t.Errorf("Clone() AppName = %v, want %v", cloned.AppName, original.AppName)
+			}
+			if cloned.UserID != original.UserID {
+				t.Errorf("Clone() UserID = %v, want %v", cloned.UserID, original.UserID)
+			}
+			if !cloned.UpdatedAt.Equal(original.UpdatedAt) {
+				t.Errorf("Clone() UpdatedAt = %v, want %v", cloned.UpdatedAt, original.UpdatedAt)
+			}
+			if !cloned.CreatedAt.Equal(original.CreatedAt) {
+				t.Errorf("Clone() CreatedAt = %v, want %v", cloned.CreatedAt, original.CreatedAt)
+			}
+			if cloned.Hash != original.Hash {
+				t.Errorf("Clone() Hash = %v, want %v", cloned.Hash, original.Hash)
+			}
+
+			// Test that it's a different instance
+			if cloned == original {
+				t.Error("Clone() should return a different instance")
+			}
+
+			// Test Events deep copy
+			if len(cloned.Events) != len(original.Events) {
+				t.Errorf("Clone() Events length = %v, want %v", len(cloned.Events), len(original.Events))
+			} else {
+				// Verify content equality
+				for i := range original.Events {
+					if !reflect.DeepEqual(cloned.Events[i], original.Events[i]) {
+						t.Errorf("Clone() Events[%d] = %v, want %v", i, cloned.Events[i], original.Events[i])
+					}
+				}
+
+				// Test deep copy by modifying clone (if there are events)
+				if len(cloned.Events) > 0 {
+					originalFirstEvent := original.Events[0]
+					// Create a modified event (assuming event.Event has a Type field)
+					modifiedEvent := event.Event{ID: "modified"}
+					cloned.Events[0] = modifiedEvent
+
+					// Original should remain unchanged
+					if !reflect.DeepEqual(original.Events[0], originalFirstEvent) {
+						t.Error("Clone() Events are not deep copied - modifying clone affected original")
+					}
+				}
+			}
+
+			// Test State deep copy
+			if len(cloned.State) != len(original.State) {
+				t.Errorf("Clone() State length = %v, want %v", len(cloned.State), len(original.State))
+			} else {
+				// Verify content equality
+				for k, v := range original.State {
+					clonedVal, exists := cloned.State[k]
+					if !exists {
+						t.Errorf("Clone() State missing key %s", k)
+						continue
+					}
+					if !bytes.Equal(clonedVal, v) {
+						t.Errorf("Clone() State[%s] = %v, want %v", k, clonedVal, v)
+					}
+				}
+
+				// Test deep copy by modifying clone
+				if len(cloned.State) > 0 {
+					for k := range cloned.State {
+						originalVal := original.State[k]
+						cloned.State[k] = []byte("modified")
+
+						// Original should remain unchanged
+						if bytes.Equal(original.State[k], []byte("modified")) {
+							t.Errorf("Clone() State are not deep copied - modifying clone affected original state key %s", k)
+						}
+						// Restore original value for other tests
+						cloned.State[k] = originalVal
+						break // Only test one key
+					}
+				}
+			}
+
+			// Test Summaries deep copy
+			if len(cloned.Summaries) != len(original.Summaries) {
+				t.Errorf("Clone() Summaries length = %v, want %v", len(cloned.Summaries), len(original.Summaries))
+			} else {
+				for k, originalSummary := range original.Summaries {
+					clonedSummary, exists := cloned.Summaries[k]
+					if !exists {
+						t.Errorf("Clone() Summaries missing key %s", k)
+						continue
+					}
+
+					// Test that we have a copy (different pointer)
+					if clonedSummary == originalSummary {
+						t.Errorf("Clone() Summaries[%s] should be a different pointer", k)
+					}
+
+					// Test content equality
+					if clonedSummary.Summary != originalSummary.Summary {
+						t.Errorf("Clone() Summaries[%s].Count = %v, want %v", k, clonedSummary.Summary, originalSummary.Summary)
+					}
+				}
+			}
+
+			// Test that mutex fields are zero values (not copied)
+			if cloned.EventMu != (sync.RWMutex{}) {
+				t.Error("Clone() should not copy EventMu mutex")
+			}
+			if cloned.SummariesMu != (sync.RWMutex{}) {
+				t.Error("Clone() should not copy SummariesMu mutex")
+			}
+		})
+	}
+}
+
+// Additional test for concurrent access during clone
+func TestSession_Clone_Concurrent(t *testing.T) {
+	sess := &Session{
+		ID:      "concurrent-session",
+		AppName: "test-app",
+		UserID:  "user-123",
+		State: StateMap{
+			"key1": []byte("value1"),
+			"key2": []byte("value2"),
+		},
+		Events: []event.Event{
+			{ID: "event1"},
+			{ID: "event2"},
+		},
+		Summaries: map[string]*Summary{
+			"summary1": {Summary: "summary1"},
+		},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now().Add(-time.Hour),
+		Hash:      99999,
+	}
+
+	// Test concurrent access doesn't cause race conditions
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cloned := sess.Clone()
+			if cloned.ID != sess.ID {
+				t.Errorf("Concurrent Clone() ID mismatch: got %v, want %v", cloned.ID, sess.ID)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestNewSession(t *testing.T) {
+	fixedTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		appName   string
+		userID    string
+		sessionID string
+		options   []SessionOptions
+		want      *Session
+		wantErr   bool
+	}{
+		{
+			name:      "basic session without options",
+			appName:   "test-app",
+			userID:    "user-123",
+			sessionID: "session-456",
+			options:   []SessionOptions{},
+			want: &Session{
+				ID:        "session-456",
+				AppName:   "test-app",
+				UserID:    "user-123",
+				Events:    []event.Event{},
+				Summaries: map[string]*Summary{},
+				State:     StateMap{},
+			},
+		},
+		{
+			name:      "session with events",
+			appName:   "test-app",
+			userID:    "user-123",
+			sessionID: "session-456",
+			options: []SessionOptions{
+				WithSessionEvents([]event.Event{
+					{ID: "event1"},
+					{ID: "event2"},
+				}),
+			},
+			want: &Session{
+				ID:      "session-456",
+				AppName: "test-app",
+				UserID:  "user-123",
+				Events: []event.Event{
+					{ID: "event1"},
+					{ID: "event2"},
+				},
+				Summaries: map[string]*Summary{},
+				State:     StateMap{},
+			},
+		},
+		{
+			name:      "session with summaries",
+			appName:   "test-app",
+			userID:    "user-123",
+			sessionID: "session-456",
+			options: []SessionOptions{
+				WithSessionSummaries(map[string]*Summary{
+					"filter1": {Summary: "summary1"},
+					"filter2": {Summary: "summary2"},
+				}),
+			},
+			want: &Session{
+				ID:      "session-456",
+				AppName: "test-app",
+				UserID:  "user-123",
+				Events:  []event.Event{},
+				Summaries: map[string]*Summary{
+					"filter1": {Summary: "summary1"},
+					"filter2": {Summary: "summary2"},
+				},
+				State: StateMap{},
+			},
+		},
+		{
+			name:      "session with state",
+			appName:   "test-app",
+			userID:    "user-123",
+			sessionID: "session-456",
+			options: []SessionOptions{
+				WithSessionState(StateMap{
+					"key1": []byte("value1"),
+					"key2": []byte("value2"),
+				}),
+			},
+			want: &Session{
+				ID:        "session-456",
+				AppName:   "test-app",
+				UserID:    "user-123",
+				Events:    []event.Event{},
+				Summaries: map[string]*Summary{},
+				State: StateMap{
+					"key1": []byte("value1"),
+					"key2": []byte("value2"),
+				},
+			},
+		},
+		{
+			name:      "session with custom timestamps",
+			appName:   "test-app",
+			userID:    "user-123",
+			sessionID: "session-456",
+			options: []SessionOptions{
+				WithSessionCreatedAt(fixedTime),
+				WithSessionUpdatedAt(fixedTime.Add(time.Hour)),
+			},
+			want: &Session{
+				ID:        "session-456",
+				AppName:   "test-app",
+				UserID:    "user-123",
+				Events:    []event.Event{},
+				Summaries: map[string]*Summary{},
+				State:     StateMap{},
+				CreatedAt: fixedTime,
+				UpdatedAt: fixedTime.Add(time.Hour),
+			},
+		},
+		{
+			name:      "session with all options combined",
+			appName:   "test-app",
+			userID:    "user-123",
+			sessionID: "session-456",
+			options: []SessionOptions{
+				WithSessionEvents([]event.Event{
+					{ID: "event1"},
+				}),
+				WithSessionSummaries(map[string]*Summary{
+					"filter1": {Summary: "summary1"},
+				}),
+				WithSessionState(StateMap{
+					"key1": []byte("value1"),
+				}),
+				WithSessionCreatedAt(fixedTime),
+				WithSessionUpdatedAt(fixedTime.Add(time.Hour)),
+			},
+			want: &Session{
+				ID:      "session-456",
+				AppName: "test-app",
+				UserID:  "user-123",
+				Events: []event.Event{
+					{ID: "event1"},
+				},
+				Summaries: map[string]*Summary{
+					"filter1": {Summary: "summary1"},
+				},
+				State: StateMap{
+					"key1": []byte("value1"),
+				},
+				CreatedAt: fixedTime,
+				UpdatedAt: fixedTime.Add(time.Hour),
+			},
+		},
+		{
+			name:      "session with empty strings",
+			appName:   "",
+			userID:    "",
+			sessionID: "",
+			options:   []SessionOptions{},
+			want: &Session{
+				ID:        "",
+				AppName:   "",
+				UserID:    "",
+				Events:    []event.Event{},
+				Summaries: map[string]*Summary{},
+				State:     StateMap{},
+			},
+		},
+		{
+			name:      "session with special characters in IDs",
+			appName:   "test-app-特殊字符",
+			userID:    "user@example.com",
+			sessionID: "session/with/slashes",
+			options:   []SessionOptions{},
+			want: &Session{
+				ID:        "session/with/slashes",
+				AppName:   "test-app-特殊字符",
+				UserID:    "user@example.com",
+				Events:    []event.Event{},
+				Summaries: map[string]*Summary{},
+				State:     StateMap{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create the session
+			got := NewSession(tt.appName, tt.userID, tt.sessionID, tt.options...)
+
+			// Test basic fields
+			if got.ID != tt.want.ID {
+				t.Errorf("NewSession() ID = %v, want %v", got.ID, tt.want.ID)
+			}
+			if got.AppName != tt.want.AppName {
+				t.Errorf("NewSession() AppName = %v, want %v", got.AppName, tt.want.AppName)
+			}
+			if got.UserID != tt.want.UserID {
+				t.Errorf("NewSession() UserID = %v, want %v", got.UserID, tt.want.UserID)
+			}
+
+			// If CreatedAt was set in options, verify it
+			if !tt.want.CreatedAt.IsZero() && !got.CreatedAt.Equal(tt.want.CreatedAt) {
+				t.Errorf("NewSession() CreatedAt = %v, want %v", got.CreatedAt, tt.want.CreatedAt)
+			}
+
+			// If UpdatedAt was set in options, verify it
+			if !tt.want.UpdatedAt.IsZero() && !got.UpdatedAt.Equal(tt.want.UpdatedAt) {
+				t.Errorf("NewSession() UpdatedAt = %v, want %v", got.UpdatedAt, tt.want.UpdatedAt)
+			}
+
+			// Test that timestamps are set when not provided (for default case)
+			if len(tt.options) == 0 {
+				if got.CreatedAt.IsZero() {
+					t.Error("NewSession() CreatedAt should be set when not provided")
+				}
+				if got.UpdatedAt.IsZero() {
+					t.Error("NewSession() UpdatedAt should be set when not provided")
+				}
+			}
+
+			// Test Events
+			if len(got.Events) != len(tt.want.Events) {
+				t.Errorf("NewSession() Events length = %v, want %v", len(got.Events), len(tt.want.Events))
+			} else {
+				for i, event := range tt.want.Events {
+					if !reflect.DeepEqual(got.Events[i], event) {
+						t.Errorf("NewSession() Events[%d] = %v, want %v", i, got.Events[i], event)
+					}
+				}
+			}
+
+			// Test Summaries
+			if len(got.Summaries) != len(tt.want.Summaries) {
+				t.Errorf("NewSession() Summaries length = %v, want %v", len(got.Summaries), len(tt.want.Summaries))
+			} else {
+				for k, wantSummary := range tt.want.Summaries {
+					gotSummary, exists := got.Summaries[k]
+					if !exists {
+						t.Errorf("NewSession() Summaries missing key %s", k)
+						continue
+					}
+					if gotSummary.Summary != wantSummary.Summary {
+						t.Errorf("NewSession() Summaries[%s].Count = %v, want %v", k, gotSummary.Summary, wantSummary.Summary)
+					}
+				}
+			}
+
+			// Test State
+			if len(got.State) != len(tt.want.State) {
+				t.Errorf("NewSession() State length = %v, want %v", len(got.State), len(tt.want.State))
+			} else {
+				for k, wantValue := range tt.want.State {
+					gotValue, exists := got.State[k]
+					if !exists {
+						t.Errorf("NewSession() State missing key %s", k)
+						continue
+					}
+					if !bytes.Equal(gotValue, wantValue) {
+						t.Errorf("NewSession() State[%s] = %v, want %v", k, gotValue, wantValue)
+					}
+				}
+			}
+
+			// Test that Hash is computed correctly
+			expectedHashKey := fmt.Sprintf("%s:%s:%s", tt.appName, tt.userID, tt.sessionID)
+			expectedHash := int(murmur3.Sum32([]byte(expectedHashKey)))
+			if got.Hash != expectedHash {
+				t.Errorf("NewSession() Hash = %v, want %v", got.Hash, expectedHash)
+			}
+
+			// Test that mutexes are initialized (zero values)
+			if got.EventMu != (sync.RWMutex{}) {
+				t.Error("NewSession() EventMu should be initialized")
+			}
+			if got.SummariesMu != (sync.RWMutex{}) {
+				t.Error("NewSession() SummariesMu should be initialized")
+			}
+		})
+	}
+}
+
+// Test option function application order
+func TestNewSession_OptionOrder(t *testing.T) {
+	// Test that later options override earlier ones
+	firstTime := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+	secondTime := time.Date(2023, 12, 31, 23, 59, 59, 0, time.UTC)
+
+	sess := NewSession("app", "user", "session",
+		WithSessionCreatedAt(firstTime),
+		WithSessionCreatedAt(secondTime), // This should override the first
+	)
+
+	if !sess.CreatedAt.Equal(secondTime) {
+		t.Errorf("NewSession() option order: CreatedAt = %v, want %v (last option should win)", sess.CreatedAt, secondTime)
 	}
 }

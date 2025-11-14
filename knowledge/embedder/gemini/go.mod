@@ -2,6 +2,8 @@ module trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini
 
 go 1.23
 
+toolchain go1.24.10
+
 replace trpc.group/trpc-go/trpc-agent-go => ../../..
 
 require (
@@ -23,6 +25,7 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/otel v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
