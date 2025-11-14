@@ -59,7 +59,7 @@ jobs:
         go-version: '1.21'
     - uses: joelanford/go-apidiff@main 
   docs-build:
-    name: docs build
+    name: docs-build
     runs-on: ubuntu-latest
     defaults:
       run:
