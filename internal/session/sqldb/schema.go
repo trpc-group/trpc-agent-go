@@ -47,3 +47,15 @@ const (
 	// IndexSuffixUpdatedAt is the suffix for updated_at timestamp indexes
 	IndexSuffixUpdatedAt = "updated_at"
 )
+
+// MySQL error code constants
+// These error codes are consistent across all MySQL versions and language settings.
+const (
+	// MySQLErrDuplicateKeyName is the error code when an index with the same name already exists
+	// Error 1061: Duplicate key name
+	MySQLErrDuplicateKeyName uint16 = 1061
+
+	// MySQLErrDuplicateEntry is the error code when a duplicate entry violates a unique constraint
+	// Error 1062: Duplicate entry for key
+	MySQLErrDuplicateEntry uint16 = 1062
+)

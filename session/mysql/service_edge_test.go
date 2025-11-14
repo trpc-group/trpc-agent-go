@@ -712,8 +712,10 @@ func TestCleanupExpired(t *testing.T) {
 		s := createTestService(t, db)
 		s.opts.softDelete = true
 
+		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE session_states SET deleted_at").
 			WillReturnError(fmt.Errorf("database error"))
+		mock.ExpectRollback()
 
 		s.cleanupExpiredSessions(context.Background(), time.Now())
 		require.NoError(t, mock.ExpectationsWereMet())

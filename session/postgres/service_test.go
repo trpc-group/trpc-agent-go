@@ -406,6 +406,8 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 		WillReturnRows(checkRows)
 
 	// Mock cleanup for expired sessions (soft delete) - order matters!
+	// Now in transaction
+	mock.ExpectBegin()
 	// 1. Soft delete session_states
 	mock.ExpectExec(`UPDATE session_states SET deleted_at = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -415,6 +417,7 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 	// 3. Soft delete session_summaries
 	mock.ExpectExec(`UPDATE session_summaries SET deleted_at = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	// Mock INSERT session state
 	mock.ExpectExec("INSERT INTO session_states").
@@ -1270,13 +1273,15 @@ func TestCleanupExpired(t *testing.T) {
 	})
 	defer db.Close()
 
-	// Mock cleanup queries for all tables with soft delete
+	// Mock cleanup queries: session-related tables in transaction, others separately
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("UPDATE session_events SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 10))
 	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectCommit()
 	mock.ExpectExec("UPDATE app_states SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE user_states SET deleted_at").
@@ -1300,7 +1305,8 @@ func TestCleanupExpiredForUser(t *testing.T) {
 		UserID:  "test-user",
 	}
 
-	// Mock cleanup queries for user-specific tables
+	// Mock cleanup queries: session-related tables in transaction, user_states separately
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 2))
@@ -1310,6 +1316,7 @@ func TestCleanupExpiredForUser(t *testing.T) {
 	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	mock.ExpectExec("UPDATE user_states SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -1326,13 +1333,15 @@ func TestHardDeleteExpired(t *testing.T) {
 	})
 	defer db.Close()
 
-	// Mock hard delete queries
+	// Mock hard delete queries in transaction
+	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM session_states").
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectExec("DELETE FROM session_events").
 		WillReturnResult(sqlmock.NewResult(0, 7))
 	mock.ExpectExec("DELETE FROM session_summaries").
 		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectCommit()
 
 	s.cleanupExpired()
 
@@ -1386,88 +1395,6 @@ func TestCleanupRoutineRunsPeriodically(t *testing.T) {
 
 	// Should have run at least a few times
 	// We set expectations for 3 iterations
-}
-
-func TestSoftDeleteExpiredTable_SessionScope(t *testing.T) {
-	s, mock, db := setupMockService(t, &TestServiceOpts{
-		sessionTTL: time.Hour,
-		softDelete: boolPtr(true),
-	})
-	defer db.Close()
-
-	userKey := &session.UserKey{
-		AppName: "test-app",
-		UserID:  "test-user",
-	}
-
-	now := time.Now()
-
-	mock.ExpectExec("UPDATE session_states SET deleted_at").
-		WithArgs(now, "test-app", "test-user").
-		WillReturnResult(sqlmock.NewResult(0, 2))
-
-	s.softDeleteExpiredTable(context.Background(), s.tableSessionStates, now, userKey, true)
-
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSoftDeleteExpiredTable_GlobalScope(t *testing.T) {
-	s, mock, db := setupMockService(t, &TestServiceOpts{
-		sessionTTL: time.Hour,
-		softDelete: boolPtr(true),
-	})
-	defer db.Close()
-
-	now := time.Now()
-
-	mock.ExpectExec("UPDATE session_states SET deleted_at").
-		WithArgs(now).
-		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	s.softDeleteExpiredTable(context.Background(), s.tableSessionStates, now, nil, true)
-
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestHardDeleteExpiredTable_SessionScope(t *testing.T) {
-	s, mock, db := setupMockService(t, &TestServiceOpts{
-		sessionTTL: time.Hour,
-		softDelete: boolPtr(false),
-	})
-	defer db.Close()
-
-	userKey := &session.UserKey{
-		AppName: "test-app",
-		UserID:  "test-user",
-	}
-
-	now := time.Now()
-
-	mock.ExpectExec("DELETE FROM session_states").
-		WithArgs("test-app", "test-user", now).
-		WillReturnResult(sqlmock.NewResult(0, 2))
-
-	s.hardDeleteExpiredTable(context.Background(), s.tableSessionStates, now, userKey, true)
-
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestHardDeleteExpiredTable_GlobalScope(t *testing.T) {
-	s, mock, db := setupMockService(t, &TestServiceOpts{
-		sessionTTL: time.Hour,
-		softDelete: boolPtr(false),
-	})
-	defer db.Close()
-
-	now := time.Now()
-
-	mock.ExpectExec("DELETE FROM session_states").
-		WithArgs(now).
-		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	s.hardDeleteExpiredTable(context.Background(), s.tableSessionStates, now, nil, true)
-
-	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAppendEvent_Async_Success(t *testing.T) {

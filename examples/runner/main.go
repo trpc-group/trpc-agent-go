@@ -54,8 +54,8 @@ var (
 	pgHost     = getEnvOrDefault("PG_HOST", "localhost")
 	pgPort     = getEnvOrDefault("PG_PORT", "5432")
 	pgUser     = getEnvOrDefault("PG_USER", "root")
-	pgPassword = getEnvOrDefault("PG_PASSWORD", "123")
-	pgDatabase = getEnvOrDefault("PG_DATABASE", "qqq")
+	pgPassword = getEnvOrDefault("PG_PASSWORD", "")
+	pgDatabase = getEnvOrDefault("PG_DATABASE", "trpc-agent-go")
 
 	// MySQL.
 	mysqlHost     = getEnvOrDefault("MYSQL_HOST", "localhost")
@@ -174,7 +174,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		sessionService, err = mysql.NewService(
 			mysql.WithMySQLClientDSN(mysqlDSN),
 			mysql.WithTablePrefix("trpc_"),
-			mysql.WithSessionEventLimit(5),
+			mysql.WithSessionTTL(10*time.Second),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create mysql session service: %w", err)

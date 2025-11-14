@@ -11,12 +11,15 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 )
 
 func TestInitDB_Success(t *testing.T) {
@@ -188,4 +191,55 @@ func TestInitDB_DuplicateIndexIgnored(t *testing.T) {
 	// This will fail because our mock doesn't actually return "Duplicate key name" error
 	// In real scenario, MySQL would return specific error for duplicate index
 	assert.Error(t, err) // Expected to fail with our simple mock
+}
+
+func TestIsDuplicateKeyError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "generic error",
+			err:      errors.New("some other error"),
+			expected: false,
+		},
+		{
+			name:     "MySQL error 1061 - Duplicate key name",
+			err:      &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateKeyName, Message: "Duplicate key name 'idx_test'"},
+			expected: true,
+		},
+		{
+			name:     "MySQL error 1062 - Duplicate entry",
+			err:      &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateEntry, Message: "Duplicate entry 'test' for key 'PRIMARY'"},
+			expected: true,
+		},
+		{
+			name:     "MySQL error 1050 - Table already exists (should not be treated as duplicate key)",
+			err:      &mysql.MySQLError{Number: 1050, Message: "Table 'test' already exists"},
+			expected: false,
+		},
+		{
+			name:     "wrapped MySQL error 1061",
+			err:      errors.Join(errors.New("wrapped"), &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateKeyName}),
+			expected: true,
+		},
+		{
+			name:     "wrapped MySQL error 1062",
+			err:      errors.Join(errors.New("context"), &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateEntry}),
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isDuplicateKeyError(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

@@ -109,15 +109,9 @@ func (s *Service) createSessionSummary(
 
 	expiresAt := calculateExpiresAt(s.sessionTTL)
 
-	// Use UPSERT (MySQL syntax: ON DUPLICATE KEY UPDATE)
 	_, err = s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-		 ON DUPLICATE KEY UPDATE
-		   summary = VALUES(summary),
-		   updated_at = VALUES(updated_at),
-		   expires_at = VALUES(expires_at),
-		   deleted_at = NULL`, s.tableSessionSummaries),
+		fmt.Sprintf(`REPLACE INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`, s.tableSessionSummaries),
 		key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, summary.UpdatedAt, expiresAt)
 
 	if err != nil {

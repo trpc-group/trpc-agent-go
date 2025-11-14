@@ -60,6 +60,7 @@ type Service struct {
 	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
 	cleanupDone     chan struct{}            // signal to stop cleanup routine
 	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
+	summaryWg       sync.WaitGroup           // wait group for summary workers
 	once            sync.Once
 
 	// Table names with prefix applied
@@ -188,11 +189,12 @@ func (s *Service) Close() error {
 		}
 	}
 
-	// Close async summary workers
+	// Close async summary workers and wait for them to finish
 	if s.summaryJobChans != nil {
 		for _, ch := range s.summaryJobChans {
 			close(ch)
 		}
+		s.summaryWg.Wait()
 	}
 
 	// Close MySQL client
@@ -281,7 +283,7 @@ func (s *Service) CreateSession(
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
 		// If session exists but has expired, trigger cleanup before creating new one
-		log.Infof("found expired session (app=%s, user=%s, session=%s), triggering cleanup",
+		log.Debugf("found expired session (app=%s, user=%s, session=%s), triggering cleanup",
 			key.AppName, key.UserID, key.SessionID)
 		s.cleanupExpiredForUser(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
 	}
@@ -391,9 +393,8 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
-		// Use UPSERT (MySQL syntax: ON DUPLICATE KEY UPDATE)
 		_, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf("INSERT INTO %s (app_name, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at), expires_at = VALUES(expires_at), deleted_at = NULL", s.tableAppStates),
+			fmt.Sprintf("REPLACE INTO %s (app_name, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)", s.tableAppStates),
 			appName, k, v, now, expiresAt,
 		)
 		if err != nil {
@@ -467,9 +468,8 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateUserPrefix)
-		// Use UPSERT (MySQL syntax)
 		_, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf("INSERT INTO %s (app_name, user_id, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at), expires_at = VALUES(expires_at), deleted_at = NULL", s.tableUserStates),
+			fmt.Sprintf("REPLACE INTO %s (app_name, user_id, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL)", s.tableUserStates),
 			userKey.AppName, userKey.UserID, k, v, now, expiresAt,
 		)
 		if err != nil {
@@ -623,9 +623,13 @@ func (s *Service) startAsyncSummaryWorker() {
 	s.summaryJobChans = make([]chan *summaryJob, workerNum)
 	for i := 0; i < workerNum; i++ {
 		s.summaryJobChans[i] = make(chan *summaryJob, queueSize/workerNum)
+	}
 
+	s.summaryWg.Add(workerNum)
+	for i := 0; i < workerNum; i++ {
 		// Start worker goroutine
 		go func(ch chan *summaryJob) {
+			defer s.summaryWg.Done()
 			for job := range ch {
 				timeout := s.opts.summaryJobTimeout
 				if timeout <= 0 {
@@ -709,58 +713,68 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 	var deletedCount int64
 
 	if s.opts.softDelete {
-		// Soft delete expired sessions
-		result, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
-			now, now)
+		// Use transaction to ensure atomicity
+		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+			// Soft delete expired sessions
+			result, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
+				now, now)
+			if err != nil {
+				return fmt.Errorf("soft delete sessions: %w", err)
+			}
+			deletedCount, _ = result.RowsAffected()
+
+			// Soft delete related events and summaries with same expiration condition
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
+					s.tableSessionEvents),
+				now, now); err != nil {
+				return fmt.Errorf("soft delete events: %w", err)
+			}
+
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
+					s.tableSessionSummaries),
+				now, now); err != nil {
+				return fmt.Errorf("soft delete summaries: %w", err)
+			}
+			return nil
+		})
 		if err != nil {
 			log.Errorf("cleanup expired sessions failed: %v", err)
 			return
-		}
-		deletedCount, _ = result.RowsAffected()
-
-		// Also soft delete related events and summaries
-		if deletedCount > 0 {
-			if _, err := s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`UPDATE %s e INNER JOIN %s s ON e.app_name = s.app_name AND e.user_id = s.user_id AND e.session_id = s.session_id SET e.deleted_at = ? WHERE s.deleted_at IS NOT NULL AND e.deleted_at IS NULL`,
-					s.tableSessionEvents, s.tableSessionStates),
-				now); err != nil {
-				log.Errorf("cleanup expired session events failed: %v", err)
-			}
-
-			if _, err := s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`UPDATE %s sm INNER JOIN %s s ON sm.app_name = s.app_name AND sm.user_id = s.user_id AND sm.session_id = s.session_id SET sm.deleted_at = ? WHERE s.deleted_at IS NOT NULL AND sm.deleted_at IS NULL`,
-					s.tableSessionSummaries, s.tableSessionStates),
-				now); err != nil {
-				log.Errorf("cleanup expired session summaries failed: %v", err)
-			}
 		}
 	} else {
-		// Hard delete expired sessions
-		result, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
-			now)
+		// Use transaction to ensure atomicity
+		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+			// Hard delete expired sessions, events, and summaries with same condition
+			result, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
+				now)
+			if err != nil {
+				return fmt.Errorf("hard delete sessions: %w", err)
+			}
+			deletedCount, _ = result.RowsAffected()
+
+			// Hard delete events and summaries with same expiration condition
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+					s.tableSessionEvents),
+				now); err != nil {
+				return fmt.Errorf("hard delete events: %w", err)
+			}
+
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+					s.tableSessionSummaries),
+				now); err != nil {
+				return fmt.Errorf("hard delete summaries: %w", err)
+			}
+			return nil
+		})
 		if err != nil {
 			log.Errorf("cleanup expired sessions failed: %v", err)
 			return
-		}
-		deletedCount, _ = result.RowsAffected()
-
-		// Note: Related events and summaries will be cascade deleted if FK constraints are set up
-		// Or we need to delete them manually
-		if deletedCount > 0 {
-			// Manual cleanup (if no FK constraints)
-			if _, err := s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`DELETE e FROM %s e LEFT JOIN %s s ON e.app_name = s.app_name AND e.user_id = s.user_id AND e.session_id = s.session_id WHERE s.session_id IS NULL`,
-					s.tableSessionEvents, s.tableSessionStates)); err != nil {
-				log.Errorf("cleanup orphaned session events failed: %v", err)
-			}
-
-			if _, err := s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`DELETE sm FROM %s sm LEFT JOIN %s s ON sm.app_name = s.app_name AND sm.user_id = s.user_id AND sm.session_id = s.session_id WHERE s.session_id IS NULL`,
-					s.tableSessionSummaries, s.tableSessionStates)); err != nil {
-				log.Errorf("cleanup orphaned session summaries failed: %v", err)
-			}
 		}
 	}
 

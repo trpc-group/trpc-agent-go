@@ -11,9 +11,11 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/go-sql-driver/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -208,15 +210,33 @@ func (s *Service) initDB(ctx context.Context) error {
 		// MySQL doesn't have "IF NOT EXISTS" for indexes in older versions
 		// We'll use a different approach: try to create and ignore duplicate key errors
 		if _, err := s.mysqlClient.Exec(ctx, sql); err != nil {
-			// Ignore "duplicate key" errors (index already exists)
-			if !strings.Contains(err.Error(), "Duplicate key name") &&
-				!strings.Contains(err.Error(), "already exists") {
+			// Check if it's a duplicate key error (error code 1061)
+			// This is more robust than checking error message strings
+			if !isDuplicateKeyError(err) {
 				return fmt.Errorf("create index %s on table %s failed: %w", indexName, fullTableName, err)
 			}
+			// Index already exists, log and continue
+			log.Infof("index %s already exists on table %s, skipping", indexName, fullTableName)
+		} else {
+			log.Infof("created index: %s on table %s", indexName, fullTableName)
 		}
-		log.Infof("created index: %s on table %s", indexName, fullTableName)
 	}
 
 	log.Info("mysql session database schema initialized successfully")
 	return nil
+}
+
+// isDuplicateKeyError checks if the error is a MySQL duplicate key error.
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == sqldb.MySQLErrDuplicateKeyName ||
+			mysqlErr.Number == sqldb.MySQLErrDuplicateEntry
+	}
+
+	return false
 }
