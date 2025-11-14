@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -244,10 +243,7 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 		force:     true,
 		session:   sess,
 	}
-
-	// Choose the same worker index as tryEnqueueJob would select.
-	keyStr := key.AppName + ":" + key.UserID + ":" + key.SessionID
-	idx := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+	idx := sess.Hash % len(s.summaryJobChans)
 
 	// Send a job to fill that queue (this will block the worker)
 	select {

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -607,10 +606,7 @@ func (s *Service) AppendEvent(
 			}
 		}()
 
-		// TODO: Init hash index at session creation to prevent duplicate computation.
-		hKey := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-		n := len(s.eventPairChans)
-		index := int(murmur3.Sum32([]byte(hKey))) % n
+		index := sess.Hash % len(s.eventPairChans)
 		select {
 		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
 		case <-ctx.Done():

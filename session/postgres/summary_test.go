@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -867,14 +866,14 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 
 	// Calculate the worker index for this key to ensure we use the same worker
-	keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-	idx := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	idx := sess.Hash % len(s.summaryJobChans)
 
 	// Fill the queue first with a blocking job
 	blockingJob := &summaryJob{
 		filterKey: "",
 		force:     false,
-		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+		session:   sess,
 	}
 
 	select {
