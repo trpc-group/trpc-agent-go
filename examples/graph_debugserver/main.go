@@ -293,7 +293,7 @@ func formatResultNode(ctx context.Context, state graph.State) (any, error) {
 
 	originalExpr, _ := state[stateKeyOriginalExpression].(string)
 
-	finalOutput := fmt.Sprintf("计算结果：%s = %s",
+	finalOutput := fmt.Sprintf("Calculation result: %s = %s",
 		originalExpr,
 		content)
 

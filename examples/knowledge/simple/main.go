@@ -346,7 +346,7 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectorelasticsearch.WithIndexName(elasticsearchIndexName),
 			vectorelasticsearch.WithMaxRetries(3),
 			vectorelasticsearch.WithVersion(*esVersion),
-			// 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+			// Custom document builder for document retrieval. If not provided, uses default builder.
 			vectorelasticsearch.WithDocBuilder(docBuilder),
 		)
 		if err != nil {
