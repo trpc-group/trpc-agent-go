@@ -1389,10 +1389,10 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#5-token-裁剪token-tailoring)。
+关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#3-token-token-tailoring)。
 
 
-### 3. Provider
+## Provider
 
 随着多个大模型供应商的出现，一些供应商定义了各自的 API 规范。目前，框架已接入 OpenAI 和 Anthropic 的 API，并以 Model 的形式提供，用户可以通过 `openai.New` 和 `anthropic.New` 来使用不同供应商的模型。
 
@@ -1412,7 +1412,7 @@ Provider 支持以下 `Option`：
 | `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token 裁剪相关参数                      |
 | `WithOpenAI` / `WithAnthropic`                                                                    | 透传供应商原生 Option                    |
 
-#### 使用示例
+### 使用示例
 
 ```go
 import (
@@ -1438,7 +1438,7 @@ agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))
 
 完整代码可参见 [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider)。
 
-#### 注册自定义 Provider
+### 注册自定义 Provider
 
 框架支持通过注册自定义 Provider 来接入其他大模型供应商或自定义实现的模型。
 

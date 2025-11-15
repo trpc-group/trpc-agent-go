@@ -51,7 +51,7 @@ skills/
     ...
 ```
 
-Repository and parsing: [skill/repository.go](skill/repository.go)
+Repository and parsing: [skill/repository.go](https://github.com/trpc-group/trpc-agent-go/blob/main/skill/repository.go)
 
 ## Quickstart
 
@@ -94,20 +94,20 @@ agent := llmagent.New(
 Key points:
 - Request processor injects overview and on‑demand content:
   [internal/flow/processor/skills.go]
-  (internal/flow/processor/skills.go)
+  (https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go)
 - Tools are auto‑registered with `WithSkills`: `skill_load`,
   `skill_select_docs`, `skill_list_docs`, and `skill_run` show up
   automatically; no manual wiring required.
 - Auto prompt guidance is injected in the system message so the model
   learns to `skill_load` first, select docs with `skill_select_docs`
   as needed, and then `skill_run` at the right time.
-  - Loader: [tool/skill/load.go](tool/skill/load.go)
-  - Runner: [tool/skill/run.go](tool/skill/run.go)
+  - Loader: [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
+  - Runner: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
 ### 3) Run the Example
 
 Interactive demo:
-[examples/skillrun/main.go](examples/skillrun/main.go)
+[examples/skillrun/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
 
 ```bash
 cd examples/skillrun
@@ -117,7 +117,7 @@ go run . -executor local     # or: -executor container
 
 Sample skill (excerpt):
 [examples/skillrun/skills/python_math/SKILL.md]
-(examples/skillrun/skills/python_math/SKILL.md)
+(https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
 
 Natural prompts:
 - Say what you want to accomplish; the model will decide if a skill is
@@ -158,7 +158,7 @@ https://github.com/anthropics/skills
 
 ### `skill_load`
 
-Declaration: [tool/skill/load.go](tool/skill/load.go)
+Declaration: [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
 
 Input:
 - `skill` (required)
@@ -176,7 +176,7 @@ Notes:
 
 ### `skill_select_docs`
 
-Declaration: [tool/skill/select_docs.go](tool/skill/select_docs.go)
+Declaration: [tool/skill/select_docs.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/select_docs.go)
 
 Input:
 - `skill` (required)
@@ -191,7 +191,7 @@ Behavior:
 
 ### `skill_list_docs`
 
-Declaration: [tool/skill/list_docs.go](tool/skill/list_docs.go)
+Declaration: [tool/skill/list_docs.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/list_docs.go)
 
 Input:
 - `skill` (required)
@@ -204,7 +204,7 @@ them directly when driving the conversation naturally.
 
 ### `skill_run`
 
-Declaration: [tool/skill/run.go](tool/skill/run.go)
+Declaration: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
 Input:
 - `skill` (required)
@@ -263,14 +263,14 @@ Environment and CWD:
 
 ## Executor
 
-Interface: [codeexecutor/codeexecutor.go](codeexecutor/codeexecutor.go)
+Interface: [codeexecutor/codeexecutor.go](https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/codeexecutor.go)
 
 Implementations:
 - Local: [codeexecutor/local/workspace_runtime.go]
-  (codeexecutor/local/workspace_runtime.go)
+  (https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/local/workspace_runtime.go)
 - Container (Docker):
   [codeexecutor/container/workspace_runtime.go]
-  (codeexecutor/container/workspace_runtime.go)
+  (https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/container/workspace_runtime.go)
 
 Container notes:
 - Writable run base; `$SKILLS_ROOT` mounted read‑only when present
@@ -320,6 +320,6 @@ Common spans:
   - Open repo: https://github.com/anthropics/skills
 - This repo:
   - Interactive demo: [examples/skillrun/main.go]
-    (examples/skillrun/main.go)
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
   - Sample skill: [examples/skillrun/skills/python_math/SKILL.md]
-    (examples/skillrun/skills/python_math/SKILL.md)
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
