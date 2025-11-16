@@ -3,6 +3,7 @@ package text_embedding_interface
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -26,9 +27,16 @@ func ExampleNew_customOptions() {
 
 // ExampleEmbedder_GetEmbedding demonstrates basic embedding generation.
 func ExampleEmbedder_GetEmbedding() {
+	modeURL := "http://localhost:8080"
+	// Get info from the model. Check that the model is available.
+	_, err := http.DefaultClient.Get(fmt.Sprintf("%s/info", modeURL))
+	if err != nil {
+		log.Errorf("Failed to get info: %v", err)
+		return
+	}
 	// Create embedder with API key.
 	embedder := New(
-		WithBaseURL("http://localhost:8080"),
+		WithBaseURL(modeURL),
 	)
 
 	// Generate embedding for some text.
@@ -57,20 +65,21 @@ func ExampleEmbedder_GetEmbedding() {
 	fmt.Printf("Generated embedding_all with %d dimensions\n", len(embeddingAll))
 	fmt.Printf("First few values: [%.4f, %.4f, %.4f, ...]",
 		embeddingAll[0], embeddingAll[1], embeddingAll[2])
-
-	// Output:
-	// Generated embedding with 1024 dimensions
-	// First few values: [0.0241, -0.0454, -0.0033, ...]
-	// Generated embedding_all with 1024 dimensions
-	// First few values: [1.7969, -21.4219, 0.1415, ...]
 }
 
 // ExampleEmbedder_GetEmbeddingWithUsage demonstrates basic embedding generation with usage tracking.
 // Text-embedding-interface don't support usage tracking. So it is similar to GetEmbedding().
 func ExampleEmbedder_GetEmbeddingWithUsage() {
+	modeURL := "http://localhost:8080"
+	// Get info from the model. Check that the model is available.
+	_, err := http.DefaultClient.Get(fmt.Sprintf("%s/info", modeURL))
+	if err != nil {
+		log.Errorf("Failed to get info: %v", err)
+		return
+	}
 	// Create embedder with API key.
 	embedder := New(
-		WithBaseURL("http://localhost:8080"),
+		WithBaseURL(modeURL),
 	)
 
 	// Generate embedding for some text.
@@ -85,8 +94,4 @@ func ExampleEmbedder_GetEmbeddingWithUsage() {
 	fmt.Printf("Generated embedding with %d dimensions\n", len(embedding))
 	fmt.Printf("First few values: [%.4f, %.4f, %.4f, ...]",
 		embedding[0], embedding[1], embedding[2])
-
-	// Output:
-	// Generated embedding with 1024 dimensions
-	// First few values: [0.0241, -0.0454, -0.0033, ...]
 }
