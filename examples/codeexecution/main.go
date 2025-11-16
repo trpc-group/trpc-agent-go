@@ -73,6 +73,10 @@ You should NEVER install any package on your own like pip install ....
 		"data_science_agent",
 		llmAgent,
 	)
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	eventChan, err := r.Run(context.Background(), "user-id", "session-id", model.NewUserMessage("analyze some sample data: 5, 12, 8, 15, 7, 9, 11"))
 	if err != nil {
 		log.Fatalf("Failed to run LLMAgent: %v", err)

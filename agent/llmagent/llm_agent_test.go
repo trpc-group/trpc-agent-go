@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -293,6 +294,88 @@ func TestLLMAgent_Run_AfterAgentCbErr(t *testing.T) {
 	}
 	if !foundErr {
 		t.Errorf("expected error event from after agent callback")
+	}
+}
+
+func TestLLMAgent_Run_AfterAgentReceivesResponseError(t *testing.T) {
+	// Test that AfterAgent callback receives error from response.Error field.
+	var receivedErr error
+	agentCallbacks := agent.NewCallbacks()
+	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+		receivedErr = runErr
+		return nil, nil
+	})
+
+	// Mock model that returns error in response.Error (like Taiji rate limit).
+	mockModel := &mockModelWithResponse{
+		response: &model.Response{
+			Error: &model.ResponseError{
+				Type:    "rate_limit_exceeded",
+				Message: "Rate limit exceeded",
+			},
+			Done: true,
+		},
+	}
+
+	agt := New("test", WithModel(mockModel), WithAgentCallbacks(agentCallbacks))
+	inv := &agent.Invocation{Message: model.NewUserMessage("hi"), InvocationID: "test-invocation", Session: &session.Session{ID: "test-session"}}
+	events, err := agt.Run(context.Background(), inv)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	// Consume all events.
+	for range events {
+	}
+
+	// Verify callback received the error.
+	if receivedErr == nil {
+		t.Errorf("expected AfterAgent callback to receive error")
+	}
+	if !strings.Contains(receivedErr.Error(), "rate_limit_exceeded") {
+		t.Errorf("expected error to contain 'rate_limit_exceeded', got: %v", receivedErr)
+	}
+	if !strings.Contains(receivedErr.Error(), "Rate limit exceeded") {
+		t.Errorf("expected error to contain 'Rate limit exceeded', got: %v", receivedErr)
+	}
+}
+
+func TestLLMAgent_Run_AfterAgentNoErrorOnSuccess(t *testing.T) {
+	// Test that AfterAgent callback receives nil error when response is successful.
+	var receivedErr error
+	agentCallbacks := agent.NewCallbacks()
+	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+		receivedErr = runErr
+		return nil, nil
+	})
+
+	// Mock model that returns successful response.
+	mockModel := &mockModelWithResponse{
+		response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Success",
+				},
+			}},
+			Done: true,
+		},
+	}
+
+	agt := New("test", WithModel(mockModel), WithAgentCallbacks(agentCallbacks))
+	inv := &agent.Invocation{Message: model.NewUserMessage("hi"), InvocationID: "test-invocation", Session: &session.Session{ID: "test-session"}}
+	events, err := agt.Run(context.Background(), inv)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	// Consume all events.
+	for range events {
+	}
+
+	// Verify callback received nil error.
+	if receivedErr != nil {
+		t.Errorf("expected AfterAgent callback to receive nil error, got: %v", receivedErr)
 	}
 }
 
@@ -810,6 +893,55 @@ func (m *mockCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter 
 		Start: "```",
 		End:   "```",
 	}
+}
+
+func (m *mockCodeExecutor) CreateWorkspace(
+	ctx context.Context, id string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/mock"}, nil
+}
+
+func (m *mockCodeExecutor) Cleanup(
+	ctx context.Context, ws codeexecutor.Workspace,
+) error {
+	return nil
+}
+
+func (m *mockCodeExecutor) PutFiles(
+	ctx context.Context, ws codeexecutor.Workspace,
+	files []codeexecutor.PutFile,
+) error {
+	return nil
+}
+
+func (m *mockCodeExecutor) PutDirectory(
+	ctx context.Context, ws codeexecutor.Workspace,
+	hostPath, to string,
+) error {
+	return nil
+}
+
+func (m *mockCodeExecutor) RunProgram(
+	ctx context.Context, ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{}, nil
+}
+
+func (m *mockCodeExecutor) Collect(
+	ctx context.Context, ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	return nil, nil
+}
+
+func (m *mockCodeExecutor) ExecuteInline(
+	ctx context.Context, id string,
+	blocks []codeexecutor.CodeBlock,
+	timeout time.Duration,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{}, nil
 }
 
 // TestWithModels tests the WithModels option.

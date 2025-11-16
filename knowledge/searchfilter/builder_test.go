@@ -205,4 +205,3 @@ func TestBetweenWithFloats(t *testing.T) {
 	assert.Equal(t, 10.5, values[0])
 	assert.Equal(t, 99.99, values[1])
 }
-

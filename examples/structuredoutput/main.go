@@ -90,6 +90,9 @@ func run() error {
 		runner.WithSessionService(inmemory.NewSessionService()),
 	)
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	userID := "user"
 	sessionID := fmt.Sprintf("so-session-%d", time.Now().Unix())
 	fmt.Printf("✅ Ready! Session: %s\n\n", sessionID)

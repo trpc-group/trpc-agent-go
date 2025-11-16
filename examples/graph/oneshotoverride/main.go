@@ -126,6 +126,9 @@ func runOnce(userText string, sysText string) error {
 		runner.WithSessionService(sessionService),
 	)
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	userID := "user"
 	sessionID := fmt.Sprintf("oneshot-%d", time.Now().Unix())
 	// Pass an empty user message; content is provided via OneShot.

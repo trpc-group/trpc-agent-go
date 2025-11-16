@@ -51,9 +51,10 @@ const (
 	MetaChunkSize = MetaPrefix + "chunk_size"
 
 	// necessary metadata
-	MetaURI        = MetaPrefix + "uri"         // URI (absolute path / URL / md5 for pure text)
-	MetaSourceName = MetaPrefix + "source_name" // source name
-	MetaChunkIndex = MetaPrefix + "chunk_index" // chunk index
+	MetaURI                = MetaPrefix + "uri"                  // URI (absolute path / URL / md5 for pure text)
+	MetaSourceName         = MetaPrefix + "source_name"          // source name
+	MetaChunkIndex         = MetaPrefix + "chunk_index"          // chunk index
+	MetaMarkdownHeaderPath = MetaPrefix + "markdown_header_path" // header path for markdown chunks
 )
 
 // Source represents a knowledge source that can provide documents.

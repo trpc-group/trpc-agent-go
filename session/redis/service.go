@@ -22,7 +22,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
@@ -37,7 +36,7 @@ const (
 	defaultAsyncPersisterNum = 10
 
 	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 256
+	defaultSummaryQueueSize = 100
 )
 
 // SessionState is the state of a session.
@@ -62,7 +61,9 @@ type Service struct {
 	userStateTTL    time.Duration            // TTL for user state
 	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
 	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
-	once            sync.Once
+	persistWg       sync.WaitGroup           // wait group for persist workers
+	summaryWg       sync.WaitGroup           // wait group for summary workers
+	once            sync.Once                // ensure Close is called only once
 }
 
 type sessionEventPair struct {
@@ -421,7 +422,7 @@ func (s *Service) AppendEvent(
 		return err
 	}
 	// update user session with the given event
-	isession.UpdateUserSession(sess, event, opts...)
+	sess.UpdateUserSession(event, opts...)
 
 	// persist event to redis asynchronously
 	if s.opts.enableAsyncPersist {
@@ -457,18 +458,22 @@ func (s *Service) AppendEvent(
 // Close closes the service.
 func (s *Service) Close() error {
 	s.once.Do(func() {
-		// close redis connection
+		// Close redis connection.
 		if s.redisClient != nil {
 			s.redisClient.Close()
 		}
 
+		// Close event pair channels and wait for persist workers.
 		for _, ch := range s.eventPairChans {
 			close(ch)
 		}
+		s.persistWg.Wait()
 
+		// Close summary job channels and wait for summary workers.
 		for _, ch := range s.summaryJobChans {
 			close(ch)
 		}
+		s.summaryWg.Wait()
 	})
 
 	return nil
@@ -579,7 +584,7 @@ func (s *Service) getSession(
 	}
 
 	// filter events to ensure they start with RoleUser
-	isession.EnsureEventStartWithUser(sess)
+	sess.EnsureEventStartWithUser()
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -649,7 +654,7 @@ func (s *Service) listSessions(
 		}
 
 		// filter events to ensure they start with RoleUser
-		isession.EnsureEventStartWithUser(sess)
+		sess.EnsureEventStartWithUser()
 		sessList = append(sessList, mergeState(appState, userState, sess))
 	}
 	return sessList, nil
@@ -787,7 +792,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	if sessState.State == nil {
 		sessState.State = make(session.StateMap)
 	}
-	isession.ApplyEventStateDeltaMap(sessState.State, event)
+	session.ApplyEventStateDeltaMap(sessState.State, event)
 	updatedStateBytes, err := json.Marshal(sessState)
 	if err != nil {
 		return fmt.Errorf("marshal session state failed: %w", err)
@@ -847,8 +852,10 @@ func (s *Service) startAsyncPersistWorker() {
 		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
 	}
 
+	s.persistWg.Add(persisterNum)
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
+			defer s.persistWg.Done()
 			for eventPair := range eventPairChan {
 				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:%s",

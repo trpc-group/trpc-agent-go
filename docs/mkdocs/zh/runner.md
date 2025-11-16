@@ -69,6 +69,7 @@ func main() {
 
 	// 3. 创建 Runner
 	r := runner.NewRunner("my-app", a)
+	defer r.Close()  // 确保资源被清理 (trpc-agent-go >= v0.5.0)
 
 	// 4. 运行对话
 	ctx := context.Background()
@@ -480,22 +481,112 @@ for event := range eventChan {
 
 ### 资源管理
 
+#### 🔒 关闭 Runner（重要）
+
+**Runner 在不使用时必须调用 `Close()` 方法，否则会导致 goroutine 泄漏（要求 `trpc-agent-go >= v0.5.0`）。**
+
+**Runner 只关闭它自己创建的资源** 
+
+当 Runner 创建时如果未提供 Session Service，会自动创建默认的 inmemory Session Service。该 Service 内部会启动后台 goroutines（用于异步处理 summary、基于 TTL 的会话清理等任务）。**Runner 只管理这个自己创建的 inmemory Session Service 的生命周期。** 如果你通过 `WithSessionService()` 提供了自己的 Session Service，你需要自己管理它的生命周期——Runner 不会关闭它。
+
+如果不调用拥有 inmemory Session Service 的 Runner 的 `Close()`，这些后台 goroutines 将永远运行，造成资源泄漏。
+
+**推荐做法**：
+
 ```go
-// 使用 context 控制生命周期
+// ✅ 推荐：使用 defer 确保资源被清理
+r := runner.NewRunner("my-app", agent)
+defer r.Close()  // 确保在函数退出时关闭 (trpc-agent-go >= v0.5.0)
+
+// 使用 runner
+eventChan, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+	return err
+}
+
+for event := range eventChan {
+	// 处理事件
+	if event.IsRunnerCompletion() {
+		break
+	}
+}
+```
+
+**当你提供自己的 Session Service 时**：
+
+```go
+// 你创建并管理 session service 的生命周期
+sessionService := redis.NewService(redis.WithRedisClientURL("redis://localhost:6379"))
+defer sessionService.Close()  // 你负责关闭它
+
+// Runner 使用但不拥有这个 session service
+r := runner.NewRunner("my-app", agent, 
+	runner.WithSessionService(sessionService))
+defer r.Close()  // 这不会关闭 sessionService（因为是你提供的） (trpc-agent-go >= v0.5.0)
+
+// ... 使用 runner
+```
+
+**长期运行的服务**：
+
+```go
+type Service struct {
+	runner runner.Runner
+	sessionService session.Service  // 如果你自己管理它
+}
+
+func NewService() *Service {
+	r := runner.NewRunner("my-app", agent)
+	return &Service{runner: r}
+}
+
+func (s *Service) Start() error {
+	// 启动服务逻辑
+	return nil
+}
+
+// 在服务关闭时调用 Close
+func (s *Service) Stop() error {
+	// 关闭 runner（它会关闭自己拥有的 inmemory session service）
+    // 要求 trpc-agent-go >= v0.5.0
+	if err := s.runner.Close(); err != nil {
+		return err
+	}
+	
+	// 如果你提供了自己的 session service，在这里关闭它
+	if s.sessionService != nil {
+		return s.sessionService.Close()
+	}
+	
+	return nil
+}
+```
+
+**注意事项**：
+
+- ✅ `Close()` 是幂等的，多次调用是安全的
+- ✅ **Runner 只关闭它默认创建的 inmemory Session Service**
+- ✅ 如果你通过 `WithSessionService()` 提供了自己的 Session Service，Runner 不会关闭它（你需要自己管理）
+- ❌ 如果 Runner 拥有 inmemory Session Service 但不调用 `Close()`，会导致 goroutine 泄漏
+
+#### Context 生命周期控制
+
+```go
+// 使用 context 控制单次运行的生命周期
 ctx, cancel := context.WithCancel(context.Background())
 defer cancel()
 
 // 确保消费完所有事件
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 if err != nil {
-    return err
+	return err
 }
 
 for event := range eventChan {
-    // 处理事件
-    if event.Done {
-        break
-    }
+	// 处理事件
+	if event.Done {
+		break
+	}
 }
 ```
 

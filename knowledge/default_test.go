@@ -678,13 +678,24 @@ func TestAddDocument(t *testing.T) {
 			setupKB: func() *BuiltinKnowledge {
 				return &BuiltinKnowledge{}
 			},
-			expectError: false,
+			expectError:    true,
+			expectedErrMsg: "vector store is not configured",
 		},
 		{
 			name: "successful_add",
 			setupKB: func() *BuiltinKnowledge {
 				return &BuiltinKnowledge{
 					embedder:    stubEmbedder{},
+					vectorStore: &stubVectorStore{},
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "nil_embedder_with_vectorstore",
+			setupKB: func() *BuiltinKnowledge {
+				return &BuiltinKnowledge{
+					embedder:    nil,
 					vectorStore: &stubVectorStore{},
 				}
 			},
@@ -712,6 +723,74 @@ func TestAddDocument(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAddDocument_EmptyEmbedding tests adding document with empty embedding (for remote embedding)
+func TestAddDocument_EmptyEmbedding(t *testing.T) {
+	doc := &document.Document{
+		ID:      "test-doc",
+		Content: "test content",
+	}
+
+	// Create a vector store that tracks the embedding it receives
+	vs := &trackingVectorStore{}
+
+	kb := &BuiltinKnowledge{
+		embedder:    nil, // No embedder - should pass empty embedding
+		vectorStore: vs,
+	}
+
+	err := kb.addDocument(context.Background(), doc)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify that empty embedding was passed
+	if len(vs.lastEmbedding) != 0 {
+		t.Errorf("Expected empty embedding, got length %d", len(vs.lastEmbedding))
+	}
+}
+
+// trackingVectorStore is a mock vector store that tracks the last embedding it received
+type trackingVectorStore struct {
+	lastEmbedding []float64
+}
+
+func (t *trackingVectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
+	t.lastEmbedding = embedding
+	return nil
+}
+
+func (t *trackingVectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
+	return nil, nil, nil
+}
+
+func (t *trackingVectorStore) Update(ctx context.Context, doc *document.Document, embedding []float64) error {
+	return nil
+}
+
+func (t *trackingVectorStore) Delete(ctx context.Context, id string) error {
+	return nil
+}
+
+func (t *trackingVectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	return &vectorstore.SearchResult{}, nil
+}
+
+func (t *trackingVectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.DeleteOption) error {
+	return nil
+}
+
+func (t *trackingVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
+	return 0, nil
+}
+
+func (t *trackingVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
+	return nil, nil
+}
+
+func (t *trackingVectorStore) Close() error {
+	return nil
 }
 
 // containsString helper removed - use strings.Contains directly

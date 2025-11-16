@@ -34,6 +34,7 @@ var (
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	thinkingEnabled = flag.Bool("thinking", true, "Enable reasoning/thinking mode if provider supports it")
 	thinkingTokens  = flag.Int("thinking-tokens", 2048, "Max reasoning tokens if provider supports it")
+	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan / deepseek / qwen")
 )
 
 func main() {
@@ -45,7 +46,7 @@ func main() {
 	fmt.Printf("Thinking: %t (tokens=%d)\n", *thinkingEnabled, *thinkingTokens)
 	fmt.Println(strings.Repeat("=", 50))
 
-	chat := &thinkingChat{modelName: *modelName, streaming: *streaming}
+	chat := &thinkingChat{modelName: *modelName, streaming: *streaming, variant: *variant}
 	if err := chat.run(context.Background()); err != nil {
 		log.Fatalf("Thinking demo failed: %v", err)
 	}
@@ -59,17 +60,22 @@ type thinkingChat struct {
 	sessionID string
 	appName   string
 	sessSvc   session.Service
+	variant   string
 }
 
 func (c *thinkingChat) run(ctx context.Context) error {
 	if err := c.setup(ctx); err != nil {
 		return err
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer c.runner.Close()
+
 	return c.startChat(ctx)
 }
 
 func (c *thinkingChat) setup(_ context.Context) error {
-	modelInstance := openai.New(c.modelName)
+	modelInstance := openai.New(c.modelName, openai.WithVariant(openai.Variant(c.variant)))
 
 	// always use in-memory session for this demo
 	var sessionService session.Service = sessioninmemory.NewSessionService()

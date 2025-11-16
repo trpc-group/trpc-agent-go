@@ -451,32 +451,32 @@ func TestParallelAgent_PanicRecovery(t *testing.T) {
 
 // TestParallelAgent_MultiplePanics tests recovery from multiple simultaneous panics.
 func TestParallelAgent_MultiplePanics(t *testing.T) {
-	// Create multiple panic agents
+	// Create multiple panic agents.
 	panicAgent1 := &panicTestAgent{name: "panic-agent-1"}
 	panicAgent2 := &panicTestAgent{name: "panic-agent-2"}
 	normalAgent := &mockAgent{name: "normal-agent", eventCount: 1}
 
-	// Create parallel agent
+	// Create parallel agent.
 	parallelAgent := newFromLegacy(legacyOptions{
 		Name:      "test-multi-panic",
 		SubAgents: []agent.Agent{panicAgent1, normalAgent, panicAgent2},
 	})
 
-	// Create invocation
+	// Create invocation.
 	invocation := &agent.Invocation{
 		AgentName:    "test-multi-panic",
 		InvocationID: "test-multiple-panics",
 	}
 
-	// Set timeout context
+	// Set timeout context.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Run the parallel agent
+	// Run the parallel agent.
 	eventChan, err := parallelAgent.Run(ctx, invocation)
 	require.NoError(t, err, "Should handle multiple panics gracefully")
 
-	// Collect events
+	// Collect events.
 	var errorEvents []*event.Event
 	for evt := range eventChan {
 		if evt.Error != nil {
@@ -484,6 +484,59 @@ func TestParallelAgent_MultiplePanics(t *testing.T) {
 		}
 	}
 
-	// Should have received error events for both panics
+	// Should have received error events for both panics.
 	require.GreaterOrEqual(t, len(errorEvents), 2, "Should have error events for multiple panics")
+}
+
+func TestParallelAgent_AfterCallbackError(t *testing.T) {
+	cb := agent.NewCallbacks()
+	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+		return nil, errors.New("after callback failed")
+	})
+
+	pa := newFromLegacy(legacyOptions{
+		Name:           "parallel",
+		SubAgents:      []agent.Agent{&silentAgent{"a"}},
+		AgentCallbacks: cb,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := pa.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.NotNil(t, last.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
+}
+
+func TestParallelAgent_ToolsAndSubAgents(t *testing.T) {
+	sub1 := &silentAgent{name: "sub1"}
+	sub2 := &silentAgent{name: "sub2"}
+
+	pa := newFromLegacy(legacyOptions{
+		Name:      "parallel",
+		SubAgents: []agent.Agent{sub1, sub2},
+	})
+
+	// Test Tools.
+	tools := pa.Tools()
+	require.Empty(t, tools)
+
+	// Test SubAgents.
+	subs := pa.SubAgents()
+	require.Len(t, subs, 2)
+
+	// Test FindSubAgent.
+	found := pa.FindSubAgent("sub1")
+	require.NotNil(t, found)
+	require.Equal(t, "sub1", found.Info().Name)
+
+	notFound := pa.FindSubAgent("nonexistent")
+	require.Nil(t, notFound)
 }

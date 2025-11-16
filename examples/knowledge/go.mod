@@ -14,9 +14,10 @@ replace (
 
 require (
 	github.com/tencent/vectordatabase-sdk-go v1.8.0
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v0.4.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-20250917031858-f0ddbd5b2cb4
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-20250917031858-f0ddbd5b2cb4
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama v0.0.0-20251111070215-8fe58a4f2ffa
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
@@ -52,8 +53,9 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mozillazg/go-httpheader v0.4.0 // indirect
+	github.com/ollama/ollama v0.12.9 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
-	github.com/panjf2000/ants/v2 v2.9.0 // indirect
+	github.com/panjf2000/ants/v2 v2.11.3 // indirect
 	github.com/pgvector/pgvector-go v0.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect

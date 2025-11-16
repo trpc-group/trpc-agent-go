@@ -19,7 +19,6 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -28,7 +27,7 @@ const (
 	defaultCleanupIntervalSecond = 300 // 5 min
 
 	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 256
+	defaultSummaryQueueSize = 100
 )
 
 // stateWithTTL wraps state data with expiration time.
@@ -100,6 +99,8 @@ type SessionService struct {
 	cleanupDone     chan struct{}
 	cleanupOnce     sync.Once
 	summaryJobChans []chan *summaryJob // channel for summary jobs to processing
+	summaryWg       sync.WaitGroup     // wait group for summary workers
+	once            sync.Once          // ensure Close is called only once
 }
 
 // summaryJob represents a summary job to be processed asynchronously
@@ -278,9 +279,9 @@ func (s *SessionService) GetSession(
 	copiedSess := copySession(sess)
 
 	// apply filtering options if provided
-	isession.ApplyEventFiltering(copiedSess, opts...)
+	copiedSess.ApplyEventFiltering(opts...)
 	// filter events to ensure they start with RoleUser
-	isession.EnsureEventStartWithUser(copiedSess)
+	copiedSess.EnsureEventStartWithUser()
 
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
@@ -322,9 +323,9 @@ func (s *SessionService) ListSessions(
 			continue // Skip expired sessions
 		}
 		copiedSess := copySession(s)
-		isession.ApplyEventFiltering(copiedSess, opts...)
+		copiedSess.ApplyEventFiltering(opts...)
 		// filter events to ensure they start with RoleUser
-		isession.EnsureEventStartWithUser(copiedSess)
+		copiedSess.EnsureEventStartWithUser()
 
 		appState := getValidState(app.appState)
 		userState := getValidState(app.userState[userKey.UserID])
@@ -555,7 +556,7 @@ func (s *SessionService) AppendEvent(
 	event *event.Event,
 	opts ...session.Option,
 ) error {
-	isession.UpdateUserSession(sess, event, opts...)
+	sess.UpdateUserSession(event, opts...)
 	key := session.Key{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
@@ -664,8 +665,10 @@ func (s *SessionService) stopCleanupRoutine() {
 
 // Close closes the service.
 func (s *SessionService) Close() error {
-	s.stopCleanupRoutine()
-	s.stopAsyncSummaryWorker()
+	s.once.Do(func() {
+		s.stopCleanupRoutine()
+		s.stopAsyncSummaryWorker()
+	})
 	return nil
 }
 
@@ -682,7 +685,7 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 
 	sess.UpdatedAt = time.Now()
 	// Merge event state delta to session state.
-	isession.ApplyEventStateDelta(sess, e)
+	sess.ApplyEventStateDelta(e)
 }
 
 // copySession creates a  copy of a session.

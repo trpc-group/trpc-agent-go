@@ -2177,7 +2177,7 @@ Constants live in `graph/state.go` and `graph/keys.go`. Prefer referencing const
 Per‑node options (see `graph/state_graph.go`):
 - `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
 - LLM nodes: `graph.WithGenerationConfig`, `graph.WithModelCallbacks`
-- Tool nodes: `graph.WithToolCallbacks`
+- Tooling: `graph.WithToolCallbacks`, `graph.WithToolSets` (supply ToolSets in addition to `tools []tool.Tool`)
 - Agent nodes: `graph.WithAgentNodeEventCallback`
 
 Additionally, `graph.WithName`/`graph.WithDescription` add friendly labels; `graph.WithDestinations` declares potential dynamic destinations (for static checks/visualization only).
@@ -2325,7 +2325,7 @@ Good practice:
   - `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`, `graph.StateKeyMessages`, `graph.StateKeyLastResponse`, `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
 
 - Per‑node options
-  - `graph.WithGenerationConfig`, `graph.WithModelCallbacks`, `graph.WithToolCallbacks`
+  - `graph.WithGenerationConfig`, `graph.WithModelCallbacks`, `graph.WithToolCallbacks`, `graph.WithToolSets`
   - `graph.WithPreNodeCallback`, `graph.WithPostNodeCallback`, `graph.WithNodeErrorCallback`
 
 - Execution

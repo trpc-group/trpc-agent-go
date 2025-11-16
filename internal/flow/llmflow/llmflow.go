@@ -13,6 +13,7 @@ package llmflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -29,8 +30,6 @@ import (
 )
 
 const (
-	defaultChannelBufferSize = 256
-
 	// Timeout for event completion signaling.
 	eventCompletionTimeout = 5 * time.Second
 )
@@ -56,16 +55,10 @@ func New(
 	responseProcessors []flow.ResponseProcessor,
 	opts Options,
 ) *Flow {
-	// Set default channel buffer size if not specified.
-	channelBufferSize := opts.ChannelBufferSize
-	if channelBufferSize <= 0 {
-		channelBufferSize = defaultChannelBufferSize
-	}
-
 	return &Flow{
 		requestProcessors:  requestProcessors,
 		responseProcessors: responseProcessors,
-		channelBufferSize:  channelBufferSize,
+		channelBufferSize:  opts.ChannelBufferSize,
 		modelCallbacks:     opts.ModelCallbacks,
 	}
 }
@@ -295,7 +288,14 @@ func (f *Flow) runAfterModelCallbacks(
 	if f.modelCallbacks == nil {
 		return response, nil
 	}
-	return f.modelCallbacks.RunAfterModel(ctx, req, response, nil)
+
+	// Convert response.Error to Go error for callback.
+	var modelErr error
+	if response != nil && response.Error != nil {
+		modelErr = fmt.Errorf("%s: %s", response.Error.Type, response.Error.Message)
+	}
+
+	return f.modelCallbacks.RunAfterModel(ctx, req, response, modelErr)
 }
 
 // preprocess handles pre-LLM call preparation using request processors.

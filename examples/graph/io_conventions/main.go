@@ -7,6 +7,7 @@
 //
 //
 
+// Package main demonstrates the I/O conventions of a graph.
 package main
 
 import (
@@ -82,6 +83,8 @@ func run() error {
 	// Runner + memory session
 	sessionSvc := inmemory.NewSessionService()
 	r := runner.NewRunner("io-conventions-app", ga, runner.WithSessionService(sessionSvc))
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
 
 	// Interactive
 	user := "user"

@@ -73,6 +73,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "setup failed: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer demo.runner.Close()
+
 	if err := demo.runInteractive(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "run failed: %v\n", err)
 		os.Exit(1)
@@ -94,7 +98,7 @@ type mapReduceDemo struct {
 	sessionID string
 }
 
-func (d *mapReduceDemo) setup(ctx context.Context) error {
+func (d *mapReduceDemo) setup(_ context.Context) error {
 	// Load document text eagerly so node functions can reference it.
 	text, err := os.ReadFile(*flagFile)
 	if err != nil {

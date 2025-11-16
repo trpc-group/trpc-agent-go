@@ -146,11 +146,12 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	if err := graph.validate(); err != nil {
 		return nil, fmt.Errorf("invalid graph: %w", err)
 	}
-	var options ExecutorOptions
-	options.ChannelBufferSize = defaultChannelBufferSize         // Default buffer size.
-	options.MaxSteps = defaultMaxSteps                           // Default max steps.
-	options.StepTimeout = defaultStepTimeout                     // Default step timeout.
-	options.CheckpointSaveTimeout = defaultCheckpointSaveTimeout // Default checkpoint save timeout.
+	options := ExecutorOptions{
+		ChannelBufferSize:     defaultChannelBufferSize,
+		MaxSteps:              defaultMaxSteps,
+		StepTimeout:           defaultStepTimeout,
+		CheckpointSaveTimeout: defaultCheckpointSaveTimeout,
+	}
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)
@@ -1342,6 +1343,7 @@ func (e *Executor) handleCachedResult(
 	} else if res != nil {
 		result = res
 	}
+	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
 	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
@@ -1395,6 +1397,7 @@ func (e *Executor) executeTaskWithRetry(
 	for {
 		// Execute single attempt.
 		result, err := e.executeSingleAttempt(ctx, execCtx, t)
+		e.syncResumeState(execCtx, nodeCtx.stateCopy)
 		if err == nil {
 			// Handle successful execution.
 			return e.finalizeSuccessfulExecution(ctx, invocation, execCtx, t, result, step, nodeCtx)
@@ -1442,6 +1445,7 @@ func (e *Executor) finalizeSuccessfulExecution(
 	} else if res != nil {
 		result = res
 	}
+	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
 	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
@@ -1512,6 +1516,7 @@ func (e *Executor) evaluateRetryDecision(
 	if nodeCtx.mergedCallbacks != nil {
 		nodeCtx.mergedCallbacks.RunOnNodeError(ctx, nodeCtx.callbackCtx, nodeCtx.stateCopy, retryCtx.err)
 	}
+	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Evaluate retry policy.
 	matched, pol, maxAttempts := e.selectRetryPolicy(retryCtx.err, nodeCtx.nodePolicies)
@@ -1762,6 +1767,7 @@ func (e *Executor) runBeforeCallbacks(
 	if customResult == nil {
 		return false, nil
 	}
+	e.syncResumeState(execCtx, stateCopy)
 	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult)
 	if err != nil {
 		return true, err
@@ -2129,6 +2135,34 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 	maps.Copy(execCtx.State, stateResult)
 }
 
+// syncResumeState copies resume-related keys from a node-local state view into the shared executor state.
+func (e *Executor) syncResumeState(execCtx *ExecutionContext, source State) {
+	if execCtx == nil || source == nil {
+		return
+	}
+	execCtx.stateMutex.Lock()
+	defer execCtx.stateMutex.Unlock()
+	if execCtx.State == nil {
+		execCtx.State = make(State)
+	}
+	syncResumeKey(execCtx.State, source, ResumeChannel)
+	syncResumeKey(execCtx.State, source, StateKeyResumeMap)
+	syncResumeKey(execCtx.State, source, StateKeyUsedInterrupts)
+}
+
+// syncResumeKey applies a specific resume key mutation from the node state.
+func syncResumeKey(target, source State, key string) {
+	if value, exists := source[key]; exists {
+		if value == nil {
+			delete(target, key)
+			return
+		}
+		target[key] = deepCopyAny(value)
+		return
+	}
+	delete(target, key)
+}
+
 // handleCommandResult handles a Command result from node execution.
 func (e *Executor) handleCommandResult(ctx context.Context, invocation *agent.Invocation,
 	execCtx *ExecutionContext, cmdResult *Command) error {
@@ -2400,37 +2434,24 @@ func (e *Executor) processConditionalEdges(
 	stateCopy := make(State, len(execCtx.State))
 	maps.Copy(stateCopy, execCtx.State)
 	execCtx.stateMutex.RUnlock()
-	if condEdge.MultiCondition != nil {
-		results, err := condEdge.MultiCondition(ctx, stateCopy)
-		if err != nil {
-			return fmt.Errorf(
-				"conditional edge evaluation failed for node %s: %w",
-				nodeID, err,
-			)
-		}
-		// Deduplicate results to avoid double triggers.
-		seen := make(map[string]bool)
-		for _, r := range results {
-			if r == "" || seen[r] {
-				continue
-			}
-			seen[r] = true
-			if err := e.processConditionalResult(
-				ctx, invocation, execCtx, condEdge, r, step,
-			); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	result, err := condEdge.Condition(ctx, stateCopy)
 	if err != nil {
 		return fmt.Errorf("conditional edge evaluation failed for node %s: %w", nodeID, err)
 	}
-
-	// Process the conditional result.
-	return e.processConditionalResult(ctx, invocation, execCtx, condEdge, result, step)
+	// Deduplicate results to avoid double triggers.
+	seen := make(map[string]bool)
+	for _, r := range result.NextNodes {
+		if seen[r] {
+			continue
+		}
+		seen[r] = true
+		if err := e.processConditionalResult(
+			ctx, invocation, execCtx, condEdge, r, step,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // processConditionalResult processes the result of a conditional edge evaluation.

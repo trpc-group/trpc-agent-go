@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -98,24 +99,13 @@ func TestAddConditionalEdge_Exclusivity(t *testing.T) {
 		t.Fatal("expected error when no condition provided")
 	}
 
-	// Both set should error.
-	both := &ConditionalEdge{
-		From:      "A",
-		Condition: func(ctx context.Context, s State) (string, error) { return "B", nil },
-		MultiCondition: func(ctx context.Context, s State) ([]string, error) {
-			return []string{"B"}, nil
-		},
-		PathMap: map[string]string{"B": "B"},
-	}
-	if err := g.addConditionalEdge(both); err == nil {
-		t.Fatal("expected error when both conditions are set")
-	}
-
 	// Only MultiCondition set should succeed.
 	mc := &ConditionalEdge{
-		From:           "A",
-		MultiCondition: func(ctx context.Context, s State) ([]string, error) { return []string{"B"}, nil },
-		PathMap:        map[string]string{"B": "B"},
+		From: "A",
+		Condition: func(ctx context.Context, s State) (ConditionResult, error) {
+			return ConditionResult{NextNodes: []string{"B"}}, nil
+		},
+		PathMap: map[string]string{"B": "B"},
 	}
 	if err := g.addConditionalEdge(mc); err != nil {
 		t.Fatalf("unexpected error adding multi-conditional edge: %v", err)
@@ -130,9 +120,11 @@ func TestAddConditionalEdge_PathMapValidation(t *testing.T) {
 	_ = g.addNode(&Node{ID: "A", Name: "A", Function: func(ctx context.Context, s State) (any, error) { return s, nil }})
 	// PathMap refers to Z which does not exist.
 	ce := &ConditionalEdge{
-		From:      "A",
-		Condition: func(ctx context.Context, s State) (string, error) { return "Z", nil },
-		PathMap:   map[string]string{"Z": "Z"},
+		From: "A",
+		Condition: func(ctx context.Context, s State) (ConditionResult, error) {
+			return ConditionResult{NextNodes: []string{"Z"}}, nil
+		},
+		PathMap: map[string]string{"Z": "Z"},
 	}
 	if err := g.addConditionalEdge(ce); err == nil {
 		t.Fatalf("expected error when path map points to missing node")
@@ -450,5 +442,185 @@ func TestDefaultReducer_CompositeDeepCopy(t *testing.T) {
 	update["k"].([]int)[0] = 99
 	if m["k"].([]int)[0] != 1 {
 		t.Fatalf("deep copy not performed; got %v", m["k"])
+	}
+}
+
+func TestWrapperCondFunc(t *testing.T) {
+	tests := []struct {
+		name       string
+		inputFunc  any
+		setupState State
+		wantNodes  []string
+		wantErr    bool
+		wantPanic  bool
+		panicMsg   string
+	}{
+		{
+			name:      "nil function should panic",
+			inputFunc: nil,
+			wantPanic: true,
+			panicMsg:  "conditional function is nil",
+		},
+		{
+			name: "valid ConditionalFunc returns single node",
+			inputFunc: ConditionalFunc(func(ctx context.Context, state State) (string, error) {
+				return "next_node_1", nil
+			}),
+			wantNodes: []string{"next_node_1"},
+			wantErr:   false,
+		},
+		{
+			name: "ConditionalFunc that returns error",
+			inputFunc: ConditionalFunc(func(ctx context.Context, state State) (string, error) {
+				return "", fmt.Errorf("conditional error")
+			}),
+			wantNodes: nil,
+			wantErr:   true,
+		},
+		{
+			name: "valid MultiConditionalFunc returns multiple nodes",
+			inputFunc: MultiConditionalFunc(func(ctx context.Context, state State) ([]string, error) {
+				return []string{"node1", "node2", "node3"}, nil
+			}),
+			wantNodes: []string{"node1", "node2", "node3"},
+			wantErr:   false,
+		},
+		{
+			name: "MultiConditionalFunc that returns error",
+			inputFunc: MultiConditionalFunc(func(ctx context.Context, state State) ([]string, error) {
+				return nil, fmt.Errorf("multi conditional error")
+			}),
+			wantNodes: nil,
+			wantErr:   true,
+		},
+		{
+			name: "valid UniversalCondFunc passes through",
+			inputFunc: UniversalCondFunc(func(ctx context.Context, state State) (ConditionResult, error) {
+				return ConditionResult{NextNodes: []string{"universal_node"}}, nil
+			}),
+			wantNodes: []string{"universal_node"},
+			wantErr:   false,
+		},
+		{
+			name: "UniversalCondFunc that returns error",
+			inputFunc: UniversalCondFunc(func(ctx context.Context, state State) (ConditionResult, error) {
+				return ConditionResult{}, fmt.Errorf("universal error")
+			}),
+			wantNodes: nil,
+			wantErr:   true,
+		},
+		{
+			name:      "unsupported function type should panic",
+			inputFunc: 42, // int is not a supported function type
+			wantPanic: true,
+			panicMsg:  "unsupported conditional function type: int",
+		},
+		{
+			name: "function with wrong signature but same arity",
+			inputFunc: func(ctx context.Context, state State) (int, error) {
+				return 42, nil
+			},
+			wantPanic: true,
+			panicMsg:  "unsupported conditional function type: func(context.Context, graph.State) (int, error)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 处理预期的panic
+			if tt.wantPanic {
+				defer func() {
+					if r := recover(); r != nil {
+						if tt.panicMsg != "" {
+							if panicStr, ok := r.(string); ok {
+								if panicStr != tt.panicMsg {
+									t.Errorf("Expected panic message '%s', got '%s'", tt.panicMsg, panicStr)
+								}
+							} else {
+								t.Errorf("Expected string panic, got %v", r)
+							}
+						}
+					} else {
+						t.Error("Expected panic but none occurred")
+					}
+				}()
+			}
+
+			wrappedFunc := wrapperCondFunc(tt.inputFunc)
+
+			// 如果不应该panic，继续测试包装后的函数
+			if !tt.wantPanic {
+				ctx := context.Background()
+				_, err := wrappedFunc(ctx, tt.setupState)
+
+				// 检查错误
+				if (err != nil) != tt.wantErr {
+					t.Errorf("Expected error = %v, but got error = %v", tt.wantErr, err)
+					return
+				}
+
+				// 如果有错误，检查错误信息
+				if tt.wantErr && err != nil {
+					// 可以在这里添加具体的错误信息检查
+					t.Logf("Got expected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestWrapperCondFunc_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		inputFunc interface{}
+	}{
+		{
+			name: "ConditionalFunc returning empty string",
+			inputFunc: ConditionalFunc(func(ctx context.Context, state State) (string, error) {
+				return "", nil
+			}),
+		},
+		{
+			name: "MultiConditionalFunc returning empty slice",
+			inputFunc: MultiConditionalFunc(func(ctx context.Context, state State) ([]string, error) {
+				return []string{}, nil
+			}),
+		},
+		{
+			name: "MultiConditionalFunc returning nil slice",
+			inputFunc: MultiConditionalFunc(func(ctx context.Context, state State) ([]string, error) {
+				return nil, nil
+			}),
+		},
+		{
+			name: "UniversalCondFunc returning empty nodes",
+			inputFunc: UniversalCondFunc(func(ctx context.Context, state State) (ConditionResult, error) {
+				return ConditionResult{NextNodes: []string{}}, nil
+			}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 确保不会panic
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Unexpected panic: %v", r)
+				}
+			}()
+
+			wrappedFunc := wrapperCondFunc(tt.inputFunc)
+
+			// 简单调用确保函数可以正常执行
+			ctx := context.Background()
+			state := State{"value": "test"}
+			_, err := wrappedFunc(ctx, state)
+
+			if err != nil {
+				t.Logf("Function executed with error: %v", err)
+			} else {
+				t.Logf("Function executed successfully")
+			}
+		})
 	}
 }

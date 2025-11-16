@@ -50,6 +50,10 @@ func main() {
 
 	// Use Runner for session + event handling.
 	r := runner.NewRunner("customagent-app", ag)
+
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer r.Close()
+
 	ctx := context.Background()
 
 	chat := &interactiveChat{

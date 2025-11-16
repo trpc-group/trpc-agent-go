@@ -358,58 +358,128 @@ llmAgent := llmagent.New(
 
 Vector storage can be configured through options in code. Configuration sources can be configuration files, command line parameters, or environment variables, which users can implement themselves.
 
+trpc-agent-go supports multiple vector store implementations:
+
+- **Memory**: In-memory vector store, suitable for testing and small-scale data
+- **PgVector**: PostgreSQL + pgvector extension based vector store, supports hybrid search
+- **TcVector**: Tencent Cloud Vector Database, supports remote embedding computation and hybrid search
+- **Elasticsearch**: Supports v7/v8/v9 multi-version Elasticsearch vector store
+
 #### Vector Store Configuration Examples
+
+##### Memory (In-memory Vector Store)
 
 ```go
 import (
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
-    vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
-    vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
-    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 )
 
-// In-memory implementation, can be used for testing.
+// In-memory implementation, suitable for testing and small-scale data
 memVS := vectorinmemory.New()
 
-// PostgreSQL + pgvector.
+kb := knowledge.New(
+    knowledge.WithVectorStore(memVS),
+    knowledge.WithEmbedder(embedder), // Requires local embedder
+)
+```
+
+##### PgVector (PostgreSQL + pgvector)
+
+```go
+import (
+    vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+)
+
+// PostgreSQL + pgvector
 pgVS, err := vectorpgvector.New(
     vectorpgvector.WithHost("127.0.0.1"),
     vectorpgvector.WithPort(5432),
     vectorpgvector.WithUser("postgres"),
     vectorpgvector.WithPassword("your-password"),
     vectorpgvector.WithDatabase("your-database"),
-    // Set index dimension based on embedding model (text-embedding-3-small is 1536).
-    pgvector.WithIndexDimension(1536),
-    // Enable/disable text retrieval vector, used with hybrid search weights.
-    pgvector.WithEnableTSVector(true),
-    // Adjust hybrid search weights (vector similarity weight vs text relevance weight).
-    pgvector.WithHybridSearchWeights(0.7, 0.3),
-    // If Chinese word segmentation extension is installed (like zhparser/jieba), set language to improve text recall.
-    pgvector.WithLanguageExtension("english"),
+    // Set index dimension based on embedding model (text-embedding-3-small is 1536)
+    vectorpgvector.WithIndexDimension(1536),
+    // Enable/disable text retrieval vector, used with hybrid search weights
+    vectorpgvector.WithEnableTSVector(true),
+    // Adjust hybrid search weights (vector similarity weight vs text relevance weight)
+    vectorpgvector.WithHybridSearchWeights(0.7, 0.3),
+    // If Chinese word segmentation extension is installed (like zhparser/jieba), set language to improve text recall
+    vectorpgvector.WithLanguageExtension("english"),
 )
 if err != nil {
-    // Handle error.
+    // Handle error
 }
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(pgVS),
+    knowledge.WithEmbedder(embedder), // Requires local embedder
+)
+```
+
+##### TcVector (Tencent Cloud Vector Database)
+
+TcVector supports two embedding modes:
+
+**1. Local Embedding Mode (Default)**
+
+Use local embedder to compute vectors, then store to TcVector:
+
+```go
+import (
+    vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+)
 
 docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
     return &document.Document{ID: tcDoc.Id}, nil, nil
 }
 
-// TcVector.
+// Local embedding mode
 tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
-    // Optional custom method to build documents for retrieval. Falls back to the default if not provided.
+    // Optional custom method to build documents for retrieval. Falls back to the default if not provided
     vectortcvector.WithDocBuilder(docBuilder),
 )
 if err != nil {
-    // Handle error.
+    // Handle error
 }
 
-// Pass to Knowledge.
 kb := knowledge.New(
-    knowledge.WithVectorStore(memVS), // pgVS, tcVS.
+    knowledge.WithVectorStore(tcVS),
+    knowledge.WithEmbedder(embedder), // Requires local embedder
+)
+```
+
+**2. Remote Embedding Mode**
+
+Use TcVector cloud-side embedding computation, no local embedder needed, saves resources:
+
+```go
+import (
+    vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+)
+
+// Remote embedding mode
+tcVS, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-tcvector-endpoint"),
+    vectortcvector.WithUsername("your-username"),
+    vectortcvector.WithPassword("your-password"),
+    // Enable remote embedding computation
+    vectortcvector.WithEnableRemoteEmbedding(true),
+    // Specify TcVector embedding model (e.g., bge-base-zh)
+    vectortcvector.WithRemoteEmbeddingModel("bge-base-zh"),
+    // If hybrid search is needed, enable TSVector
+    vectortcvector.WithEnableTSVector(true),
+)
+if err != nil {
+    // Handle error
+}
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(tcVS),
+    // Note: When using remote embedding, no need to configure embedder
+    // knowledge.WithEmbedder(embedder), // Not needed
 )
 ```
 

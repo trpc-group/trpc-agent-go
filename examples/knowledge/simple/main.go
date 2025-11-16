@@ -151,6 +151,9 @@ func (c *knowledgeChat) run() error {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 
+	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
+	defer c.runner.Close()
+
 	// Start interactive chat.
 	return c.startChat(ctx)
 }
@@ -343,7 +346,7 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectorelasticsearch.WithIndexName(elasticsearchIndexName),
 			vectorelasticsearch.WithMaxRetries(3),
 			vectorelasticsearch.WithVersion(*esVersion),
-			// 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+			// Custom document builder for document retrieval. If not provided, uses default builder.
 			vectorelasticsearch.WithDocBuilder(docBuilder),
 		)
 		if err != nil {

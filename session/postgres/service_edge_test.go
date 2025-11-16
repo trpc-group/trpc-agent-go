@@ -60,7 +60,7 @@ func TestGetSession_RefreshTTL(t *testing.T) {
 	}
 	stateBytes, _ := json.Marshal(sessState)
 	stateRows := sqlmock.NewRows([]string{"state", "created_at", "updated_at"}).
-		AddRow(stateBytes, time.Now().UTC(), time.Now().UTC())
+		AddRow(stateBytes, time.Now(), time.Now())
 
 	mock.ExpectQuery("SELECT state, created_at, updated_at FROM session_states").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
@@ -232,7 +232,7 @@ func TestAppendEvent_ToExpiredSession(t *testing.T) {
 		State: session.StateMap{},
 	}
 	stateBytes, _ := json.Marshal(sessState)
-	pastTime := time.Now().UTC().Add(-2 * time.Hour)
+	pastTime := time.Now().Add(-2 * time.Hour)
 	stateRows := sqlmock.NewRows([]string{"state", "expires_at"}).
 		AddRow(stateBytes, pastTime)
 

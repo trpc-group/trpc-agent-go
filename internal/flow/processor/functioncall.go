@@ -238,6 +238,10 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		modelName string
 		agentName string
 	)
+	// Attach state delta if the tool provides it.
+	if tl, ok := tools[toolCall.Function.Name]; ok {
+		p.attachStateDelta(tl, modifiedArgs, choice, toolEvent)
+	}
 
 	if invocation != nil {
 		if invocation.Session != nil {
@@ -402,6 +406,10 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
+	// Attach state delta if the tool provides it.
+	if tl, ok := tools[tc.Function.Name]; ok {
+		p.attachStateDelta(tl, modifiedArgs, choice, toolCallResponseEvent)
+	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: modelName,
@@ -416,6 +424,37 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	p.sendToolResult(
 		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},
 	)
+}
+
+// attachStateDelta copies tool-provided state delta to the event.
+func (p *FunctionCallResponseProcessor) attachStateDelta(
+	tl tool.Tool, args []byte, choice *model.Choice, ev *event.Event,
+) {
+	if tl == nil || choice == nil || ev == nil {
+		return
+	}
+	original := tl
+	if nameTool, ok := tl.(*itool.NamedTool); ok {
+		original = nameTool.Original()
+	}
+	type stateDeltaProvider interface {
+		StateDelta([]byte, []byte) map[string][]byte
+	}
+	sdp, ok := original.(stateDeltaProvider)
+	if !ok {
+		return
+	}
+	b := []byte(choice.Message.Content)
+	delta := sdp.StateDelta(args, b)
+	if len(delta) == 0 {
+		return
+	}
+	if ev.StateDelta == nil {
+		ev.StateDelta = map[string][]byte{}
+	}
+	for k, v := range delta {
+		ev.StateDelta[k] = v
+	}
 }
 
 // annotateSkipSummarization marks an event to skip outer summarization.
@@ -890,14 +929,34 @@ func newToolCallResponseEvent(
 }
 
 func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
-	if len(es) == 0 {
+	switch len(es) {
+	case 0:
 		return nil
-	}
-	if len(es) == 1 {
+	case 1:
 		return es[0]
+	default:
 	}
 
-	// Pre-calculate capacity to avoid multiple slice reallocations
+	mergedChoices := collectMergedChoices(es)
+	mergedDelta := collectStateDelta(es)
+	baseEvent := findBaseEvent(es)
+	resp := buildMergedToolResponse(baseEvent, mergedChoices)
+	mergedEvent := buildMergedEvent(baseEvent, resp)
+
+	if len(mergedDelta) > 0 {
+		mergedEvent.StateDelta = mergedDelta
+	}
+	if shouldSkipSummarization(es) {
+		if mergedEvent.Actions == nil {
+			mergedEvent.Actions = &event.EventActions{}
+		}
+		mergedEvent.Actions.SkipSummarization = true
+	}
+	return mergedEvent
+}
+
+// collectMergedChoices collects the choices from all events.
+func collectMergedChoices(es []*event.Event) []model.Choice {
 	totalChoices := 0
 	for _, e := range es {
 		if e != nil && e.Response != nil {
@@ -912,55 +971,67 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 			mergedChoices = append(mergedChoices, e.Response.Choices...)
 		}
 	}
-	eventID := uuid.New().String()
+	return mergedChoices
+}
 
-	// Find a valid base event for metadata.
-	var baseEvent *event.Event
+// collectStateDelta collects the state delta from all events.
+func collectStateDelta(es []*event.Event) map[string][]byte {
+	mergedDelta := map[string][]byte{}
 	for _, e := range es {
-		if e != nil {
-			baseEvent = e
-			break
+		if e == nil || len(e.StateDelta) == 0 {
+			continue
+		}
+		for k, v := range e.StateDelta {
+			mergedDelta[k] = v
 		}
 	}
+	return mergedDelta
+}
 
-	// Build response payload with appropriate metadata.
+// findBaseEvent finds a valid base event for metadata.
+func findBaseEvent(es []*event.Event) *event.Event {
+	for _, e := range es {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// buildMergedToolResponse builds the merged tool response.
+func buildMergedToolResponse(baseEvent *event.Event, mergedChoices []model.Choice) *model.Response {
 	modelName := "unknown"
 	if baseEvent != nil && baseEvent.Response != nil {
 		modelName = baseEvent.Response.Model
 	}
-
-	resp := &model.Response{
-		ID:        eventID,
+	return &model.Response{
+		ID:        uuid.New().String(),
 		Object:    model.ObjectTypeToolResponse,
 		Created:   time.Now().Unix(),
 		Model:     modelName,
 		Choices:   mergedChoices,
 		Timestamp: time.Now(),
 	}
+}
 
+// buildMergedEvent builds the merged event.
+func buildMergedEvent(baseEvent *event.Event, resp *model.Response) *event.Event {
 	// If we have a base event, carry over invocation, author and branch.
-	var merged *event.Event
 	if baseEvent != nil {
-		merged = event.New(
-			baseEvent.InvocationID,
-			baseEvent.Author,
-			event.WithResponse(resp),
-		)
-	} else {
-		// Fallback: construct without base metadata.
-		merged = event.New("", "", event.WithResponse(resp))
+		return event.New(baseEvent.InvocationID, baseEvent.Author, event.WithResponse(resp))
 	}
-	// If any child event prefers skipping summarization, propagate it.
+	// Fallback: construct without base metadata.
+	return event.New("", "", event.WithResponse(resp))
+}
+
+// shouldSkipSummarization checks if any event prefers skipping summarization.
+func shouldSkipSummarization(es []*event.Event) bool {
 	for _, e := range es {
 		if e != nil && e.Actions != nil && e.Actions.SkipSummarization {
-			if merged.Actions == nil {
-				merged.Actions = &event.EventActions{}
-			}
-			merged.Actions.SkipSummarization = true
-			break
+			return true
 		}
 	}
-	return merged
+	return false
 }
 
 // findCompatibleTool attempts to map a requested (missing) tool name to a compatible tool.

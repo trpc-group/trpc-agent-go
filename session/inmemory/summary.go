@@ -141,6 +141,8 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 
 // tryEnqueueJob attempts to enqueue a summary job to the appropriate channel.
 // Returns true if successful, false if the job should be processed synchronously.
+// Note: This method assumes channels are already initialized. Callers should check
+// len(s.summaryJobChans) > 0 before calling this method.
 func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
 	// Select a channel using hash distribution.
 	keyStr := fmt.Sprintf("%s:%s:%s", job.sessionKey.AppName, job.sessionKey.UserID, job.sessionKey.SessionID)
@@ -174,8 +176,10 @@ func (s *SessionService) startAsyncSummaryWorker() {
 		s.summaryJobChans[i] = make(chan *summaryJob, s.opts.summaryQueueSize)
 	}
 
+	s.summaryWg.Add(summaryNum)
 	for _, summaryJobChan := range s.summaryJobChans {
 		go func(summaryJobChan chan *summaryJob) {
+			defer s.summaryWg.Done()
 			for job := range summaryJobChan {
 				s.processSummaryJob(job)
 				// After branch summary, cascade a full-session summary by
@@ -207,27 +211,19 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 		defer cancel()
 	}
 
-	// Perform the actual summary generation for the requested filterKey.
-	updated, err := isession.SummarizeSession(ctx, s.opts.summarizer, job.session, job.filterKey, job.force)
-	if err != nil {
-		log.Errorf("summary worker failed to generate summary: %v", err)
-		return
-	}
-	if !updated {
-		return
-	}
-
-	// Persist to in-memory store under lock.
-	app := s.getOrCreateAppSessions(job.sessionKey.AppName)
-	if err := s.writeSummaryUnderLock(app, job.sessionKey, job.filterKey, job.session.Summaries[job.filterKey].Summary); err != nil {
-		log.Errorf("summary worker failed to write summary: %v", err)
+	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
+		log.Warnf("summary worker failed to create session summary: %v", err)
 	}
 }
 
 // stopAsyncSummaryWorker stops all async summary workers and closes their channels.
 func (s *SessionService) stopAsyncSummaryWorker() {
+	if len(s.summaryJobChans) == 0 {
+		return
+	}
 	for _, ch := range s.summaryJobChans {
 		close(ch)
 	}
+	s.summaryWg.Wait()
 	s.summaryJobChans = nil
 }
