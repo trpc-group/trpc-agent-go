@@ -164,7 +164,7 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 
 	embedding := response.Embeddings[0]
 	if len(embedding) == 0 {
-		log.Warn("received empty embedding vector from Ollaama API")
+		log.Warn("received empty embedding vector from text embedding interface API")
 		return []float64{}, nil
 	}
 	return embedding, nil
@@ -199,7 +199,7 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *embedRespons
 		return nil, err
 	}
 	requestURL := fmt.Sprintf("%s%s", e.baseURL, string(e.embedRoute))
-	req, err := http.NewRequest("POST", requestURL, bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
@@ -220,15 +220,17 @@ func (e *Embedder) requestBody(text string) ([]byte, error) {
 			Truncate:            e.truncate,
 			TruncationDirection: e.truncationDirection,
 		})
+	} else if e.embedRoute == EmbedDefault {
+		return json.Marshal(requestBody{
+			Dimensions:          e.dimensions,
+			Inputs:              text,
+			Normalize:           e.normalize,
+			PromptName:          e.promptName,
+			Truncate:            e.truncate,
+			TruncationDirection: e.truncationDirection,
+		})
 	}
-	return json.Marshal(requestBody{
-		Dimensions:          e.dimensions,
-		Inputs:              text,
-		Normalize:           e.normalize,
-		PromptName:          e.promptName,
-		Truncate:            e.truncate,
-		TruncationDirection: e.truncationDirection,
-	})
+	return nil, fmt.Errorf("unknown route type: %s", e.embedRoute)
 }
 
 func (e *Embedder) parseResponse(resp *http.Response) (rsp *embedResponse, err error) {
@@ -242,7 +244,6 @@ func (e *Embedder) parseResponse(resp *http.Response) (rsp *embedResponse, err e
 			return nil, err
 		}
 	} else if e.embedRoute == EmbedAll {
-		log.Infof("embed all: %v", resp.Body)
 		var allData [][][]float64
 		if err := json.NewDecoder(resp.Body).Decode(&allData); err != nil {
 			return nil, err
@@ -250,8 +251,6 @@ func (e *Embedder) parseResponse(resp *http.Response) (rsp *embedResponse, err e
 		if len(allData) > 0 {
 			data = allData[0]
 		}
-	} else {
-		return nil, fmt.Errorf(" EmbedRoute: %s not ready", e.embedRoute)
 	}
 	return &embedResponse{
 		Embeddings: data,

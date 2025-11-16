@@ -165,16 +165,18 @@ func TestGetEmbeddingValidation(t *testing.T) {
 }
 
 func TestEmbedder_GetEmbedding(t *testing.T) {
-	// Prepare fake OpenAI server.
+	// Prepare fake server.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Respond only to embeddings endpoint.
-		if !strings.HasSuffix(r.URL.Path, string(EmbedDefault)) && !strings.HasSuffix(r.URL.Path, string(EmbedAll)) {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
+		if strings.HasSuffix(r.URL.Path, string(EmbedDefault)) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := [][]float64{{0.1, 0.2, 0.3}}
+			_ = json.NewEncoder(w).Encode(rsp)
+		} else if strings.HasSuffix(r.URL.Path, string(EmbedAll)) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := [][][]float64{{{0.1, 0.2, 0.3}}}
+			_ = json.NewEncoder(w).Encode(rsp)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		rsp := [][]float64{{0.1, 0.2, 0.3}}
-		_ = json.NewEncoder(w).Encode(rsp)
 	}))
 	defer srv.Close()
 
@@ -202,18 +204,52 @@ func TestEmbedder_GetEmbedding(t *testing.T) {
 		t.Fatalf("expected error for empty text")
 	}
 
-	// Test alternate encoding format path.
 	emb2 := New(
 		WithBaseURL(srv.URL),
+		WithEmbedRoute(EmbedAll),
 	)
-	if _, err := emb2.GetEmbedding(context.Background(), "world"); err != nil {
-		t.Fatalf("base64 embedding failed: %v", err)
+	if _, err := emb2.GetEmbedding(context.Background(), "test"); err != nil {
+		t.Fatalf("ada embedding failed: %v", err)
 	}
 
+	// Test alternate encoding format path.
 	emb3 := New(
 		WithBaseURL(srv.URL),
+		WithEmbedRoute("/error_path"),
 	)
-	if _, err := emb3.GetEmbedding(context.Background(), "test"); err != nil {
-		t.Fatalf("ada embedding failed: %v", err)
+	if _, err := emb3.GetEmbedding(context.Background(), "world"); err == nil {
+		t.Fatal("error path not failed")
+	}
+
+}
+
+func TestGetEmbeddingResponseValidation(t *testing.T) {
+	// Prepare fake server.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Respond only to embeddings endpoint.
+		if strings.HasSuffix(r.URL.Path, string(EmbedDefault)) {
+			w.Header().Set("Content-Type", "application/json")
+			var rsp [][]float64
+			_ = json.NewEncoder(w).Encode(rsp)
+		} else if strings.HasSuffix(r.URL.Path, string(EmbedAll)) {
+			w.Header().Set("Content-Type", "application/json")
+			rsp := [][][]float64{{{}}}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}
+	}))
+	defer srv.Close()
+	emb := New(
+		WithBaseURL(srv.URL),
+	)
+	if _, err := emb.GetEmbedding(context.Background(), "hello"); err != nil {
+		t.Fatalf("expected error for empty response")
+	}
+
+	emb2 := New(
+		WithBaseURL(srv.URL),
+		WithEmbedRoute(EmbedAll),
+	)
+	if _, err := emb2.GetEmbedding(context.Background(), "hello"); err != nil {
+		t.Fatalf("received empty embedding vector from text embedding interface API")
 	}
 }
