@@ -175,7 +175,7 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 // TEI don't provide usage information
 func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error) {
 	embedding, err := e.GetEmbedding(ctx, text)
-	return embedding, nil, err
+	return embedding, map[string]any{}, err
 }
 
 // GetDimensions returns the dimensionality of the embeddings produced by this embedder.
@@ -237,7 +237,6 @@ func (e *Embedder) parseResponse(resp *http.Response) (rsp *embedResponse, err e
 		return nil, fmt.Errorf("failed to embed: %s", resp.Status)
 	}
 	var data [][]float64
-	log.Infof("embed default: %v", resp.Body)
 	if e.embedRoute == EmbedDefault {
 		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 			return nil, err
