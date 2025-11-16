@@ -8,6 +8,7 @@
 //
 
 // Package text_embedding_interface provides text_embedding_interface-compatible model implementations.
+// Text-Embeddings-Inference API: https://github.com/huggingface/text-embeddings-inference
 package text_embedding_interface
 
 import (
@@ -30,6 +31,7 @@ const (
 	// DefaultDimensions is the default embedding dimension.
 	DefaultDimensions = 1024
 
+	// DefaultBaseURL is the default base URL for the Text-Embeddings-Inference API.
 	DefaultBaseURL = "http://localhost:8080"
 )
 
@@ -64,6 +66,8 @@ const (
 // Option represents a functional option for configuring the Embedder.
 type Option func(*Embedder)
 
+// WithBaseURL sets the base URL for the Text-Embeddings-Inference API.
+// Such as "http://localhost:8080".
 func WithBaseURL(baseURL string) Option {
 	return func(e *Embedder) {
 		e.baseURL = baseURL
