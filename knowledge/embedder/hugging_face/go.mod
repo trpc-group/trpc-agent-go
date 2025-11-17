@@ -4,7 +4,7 @@ go 1.21
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../..
 
-require trpc.group/trpc-go/trpc-agent-go v0.4.0
+require trpc.group/trpc-go/trpc-agent-go v0.5.0
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
