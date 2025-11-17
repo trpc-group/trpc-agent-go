@@ -20,6 +20,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -463,6 +465,17 @@ func TestEnqueueSummaryJob_InvalidKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestEnqueueSummaryJob_WithNilSession(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	summarizer := &mockSummarizer{}
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	ctx := context.Background()
+	err = s.EnqueueSummaryJob(ctx, nil, "", false)
+	assert.Error(t, err)
+}
+
 func TestEnqueueSummaryJob_ContextCancelled(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
@@ -602,6 +615,19 @@ func TestCreateSessionSummary_WithFilterKey(t *testing.T) {
 
 	err = s.CreateSessionSummary(ctx, sess, filterKey, false)
 	assert.NoError(t, err)
+}
+
+func TestCreateSessionSummary_WithNilSession(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizer{}
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	ctx := context.Background()
+
+	err = s.CreateSessionSummary(ctx, nil, "", false)
+	assert.Error(t, err)
 }
 
 func TestCreateSessionSummary_ExistingButStale(t *testing.T) {
@@ -843,6 +869,146 @@ func TestEnqueueSummaryJob_NoSummarizer(t *testing.T) {
 
 	err := s.EnqueueSummaryJob(context.Background(), sess, "", false)
 	require.NoError(t, err)
+}
+
+func TestRedisService_ProcessSummaryJob_Panic(t *testing.T) {
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db,
+		WithSummaryQueueSize(1),
+		WithAsyncSummaryNum(1),
+		WithSummarizer(summarizer),
+	)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+
+	// Process a job with no stored session - should trigger error but not panic.
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+	}
+
+	// This should not panic, just log error.
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
+}
+
+func TestProcessSummaryJob(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, service *Service) *summaryJob
+		expectError bool
+	}{
+		{
+			name: "successful summary processing",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+
+				// Add an event to make delta non-empty
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				sess.Events = append(sess.Events, *e)
+
+				// Enable summarizer
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
+
+				return &summaryJob{
+					filterKey: "",
+					force:     false,
+					session:   sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summary job with branch filter",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session with events
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid2"}
+				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+
+				// Add an event
+				e := event.New("inv", "author")
+				e.Timestamp = time.Now()
+				e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+				sess.Events = append(sess.Events, *e)
+				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
+
+				return &summaryJob{
+					filterKey: "branch1",
+					force:     false,
+					session:   sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns false",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
+				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
+
+				return &summaryJob{
+					filterKey: "",
+					force:     false,
+					session:   sess,
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "summarizer returns error",
+			setup: func(t *testing.T, service *Service) *summaryJob {
+				// Create a session
+				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid4"}
+				sess := &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}
+				service.opts.summarizer = &fakeErrorSummarizer{}
+
+				return &summaryJob{
+					filterKey: "",
+					force:     false,
+					session:   sess,
+				}
+			},
+			expectError: false, // Should not panic or error, just log
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			s := createTestService(t, db,
+				WithSummaryQueueSize(1),
+				WithAsyncSummaryNum(1),
+				WithSummarizer(summarizer),
+				WithSummaryJobTimeout(time.Second*10),
+			)
+			job := tt.setup(t, s)
+
+			mock.ExpectExec(regexp.QuoteMeta(fmt.Sprintf(`REPLACE INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`, s.tableSessionSummaries))).
+				WithArgs(job.session.AppName, job.session.UserID, job.session.ID, job.filterKey, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(1, 1))
+			defer db.Close()
+
+			// This should not panic
+			require.NotPanics(t, func() {
+				s.processSummaryJob(job)
+			})
+		})
+	}
 }
 
 type fakeSummarizer struct {
