@@ -57,12 +57,14 @@ func WithCodeBlockDelimiter(delimiter codeexecutor.CodeBlockDelimiter) CodeExecu
 	return func(l *CodeExecutor) { l.codeBlockDelimiter = delimiter }
 }
 
+var defaultCodeBlockDelimiter = codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+
 // New creates a local CodeExecutor.
 func New(options ...CodeExecutorOption) *CodeExecutor {
 	executor := &CodeExecutor{
 		Timeout:            1 * time.Second,
 		CleanTempFiles:     true,
-		codeBlockDelimiter: codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"},
+		codeBlockDelimiter: defaultCodeBlockDelimiter,
 	}
 	for _, option := range options {
 		option(executor)
