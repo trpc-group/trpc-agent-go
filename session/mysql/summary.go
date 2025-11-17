@@ -144,17 +144,20 @@ func (s *Service) GetSessionSummaryText(
 	ctx context.Context,
 	sess *session.Session,
 ) (string, bool) {
-	key := session.Key{
-		AppName:   sess.AppName,
-		UserID:    sess.UserID,
-		SessionID: sess.ID,
+	if sess == nil {
+		return "", false
 	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	if err := key.CheckSessionKey(); err != nil {
 		return "", false
 	}
-
+	// Prefer local in-memory session summaries when available.
+	if len(sess.Summaries) > 0 {
+		if text, ok := pickSummaryText(sess.Summaries); ok {
+			return text, true
+		}
+	}
 	// Use empty filterKey to get the default summary
-	filterKey := ""
 	var summaryText string
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		// rows.Next() is already called by the Query loop
@@ -172,7 +175,7 @@ func (s *Service) GetSessionSummaryText(
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, time.Now())
+		key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now())
 
 	if err != nil {
 		return "", false
@@ -183,6 +186,24 @@ func (s *Service) GetSessionSummaryText(
 	}
 
 	return summaryText, true
+}
+
+// pickSummaryText picks a non-empty summary string with preference for the
+// all-contents key "" (empty filterKey). No special handling for "root".
+func pickSummaryText(summaries map[string]*session.Summary) (string, bool) {
+	if summaries == nil {
+		return "", false
+	}
+	// Prefer full-summary stored under empty filterKey.
+	if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
+		return sum.Summary, true
+	}
+	for _, s := range summaries {
+		if s != nil && s.Summary != "" {
+			return s.Summary, true
+		}
+	}
+	return "", false
 }
 
 // startAsyncSummaryWorker starts worker goroutines for async summary generation.
