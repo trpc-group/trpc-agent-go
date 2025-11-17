@@ -162,6 +162,16 @@ func WithMessages(messages []model.Message) RunOption {
 	}
 }
 
+// WithResume enables or disables resume mode for this run.
+// When enabled, flows like llmflow may inspect the existing Session history
+// and resume unfinished work (for example, executing pending tool calls)
+// before issuing a new model call.
+func WithResume(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.Resume = enabled
+	}
+}
+
 // WithRequestID sets the request id for the RunOptions.
 func WithRequestID(requestID string) RunOption {
 	return func(opts *RunOptions) {
@@ -322,6 +332,13 @@ type RunOptions struct {
 	// ignores this field and reads only from Session events (or falls back to
 	// `invocation.Message` when no events exist).
 	Messages []model.Message
+
+	// Resume indicates whether this run should attempt to resume from existing
+	// session context before making a new model call. When true, flows may
+	// inspect the latest session events (for example, assistant messages with
+	// pending tool calls) and complete unfinished work prior to issuing a new
+	// LLM request.
+	Resume bool
 
 	// RequestID is the request id of the request.
 	RequestID string
