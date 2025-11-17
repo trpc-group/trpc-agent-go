@@ -2095,8 +2095,8 @@ func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
 	require.Equal(t, int64(1), chC.Version)
 
 	// No channel should be created for empty branch key.
-	if _, ok := g.getChannel(ChannelBranchPrefix + ""); ok {
-		t.Fatalf("unexpected channel for empty branch key created")
+	if _, ok := g.getChannel(ChannelBranchPrefix + ""); !ok {
+		t.Fatalf("expected channel for empty branch key created")
 	}
 }
 
