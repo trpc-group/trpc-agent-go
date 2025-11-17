@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -142,10 +141,9 @@ func (s *Service) EnqueueSummaryJob(
 	}
 
 	job := &summaryJob{
-		sessionKey: key,
-		filterKey:  filterKey,
-		force:      force,
-		session:    sess,
+		filterKey: filterKey,
+		force:     force,
+		session:   sess,
 	}
 
 	// Try to enqueue job
@@ -158,13 +156,7 @@ func (s *Service) EnqueueSummaryJob(
 			panic(r)
 		}
 	}()
-
-	n := len(s.summaryJobChans)
-	if n == 0 {
-		log.Warnf("summary workers not started, fallback to sync processing")
-		return s.CreateSessionSummary(ctx, sess, filterKey, force)
-	}
-	index := int(murmur3.Sum32([]byte(fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)))) % n
+	index := sess.Hash % len(s.summaryJobChans)
 
 	select {
 	case s.summaryJobChans[index] <- job:

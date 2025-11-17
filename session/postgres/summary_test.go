@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -614,10 +613,9 @@ func TestRedisService_ProcessSummaryJob_Panic(t *testing.T) {
 
 	// Process a job with no stored session - should trigger error but not panic.
 	job := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+		filterKey: "",
+		force:     false,
+		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
 	}
 
 	// This should not panic, just log error.
@@ -649,10 +647,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -672,10 +669,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "branch1",
-					force:      false,
-					session:    sess,
+					filterKey: "branch1",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -689,10 +685,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -706,10 +701,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeErrorSummarizer{}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false, // Should not panic or error, just log
@@ -752,10 +746,9 @@ func TestTryEnqueueJob(t *testing.T) {
 			setup: func(t *testing.T, service *Service) (context.Context, *summaryJob, bool) {
 				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 				job := &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+					filterKey: "",
+					force:     false,
+					session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
 				}
 				return context.Background(), job, true
 			},
@@ -767,10 +760,9 @@ func TestTryEnqueueJob(t *testing.T) {
 				// Fill up the queue by creating a job that blocks
 				key := session.Key{AppName: "app", UserID: "user", SessionID: "sid3"}
 				job := &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+					filterKey: "",
+					force:     false,
+					session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
 				}
 
 				// Fill the channel to capacity
@@ -875,15 +867,14 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 
 	// Calculate the worker index for this key to ensure we use the same worker
-	keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-	idx := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	idx := sess.Hash % len(s.summaryJobChans)
 
 	// Fill the queue first with a blocking job
 	blockingJob := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+		filterKey: "",
+		force:     false,
+		session:   sess,
 	}
 
 	select {
@@ -899,10 +890,9 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 
 	// Use the same key to ensure it hashes to the same worker (queue is full)
 	job := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+		filterKey: "",
+		force:     false,
+		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
 	}
 
 	// Should return false when context is cancelled (even if queue is full)
@@ -928,10 +918,9 @@ func TestTryEnqueueJob_SendSuccess(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
 	job := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+		filterKey: "",
+		force:     false,
+		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
 	}
 
 	// Should successfully send the job

@@ -367,7 +367,7 @@ func TestListSessions_WithMultipleSessions(t *testing.T) {
 	sessions, err := s.ListSessions(ctx, userKey)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 2)
-	
+
 	// Verify app state and user state are merged
 	assert.Contains(t, sessions[0].State, "app:app-key")
 	assert.Contains(t, sessions[0].State, "user:user-key")
@@ -459,8 +459,8 @@ func TestAddEvent_ExpiredSession(t *testing.T) {
 
 	evt := event.New("inv-1", "author")
 	evt.Response = &model.Response{
-		Object: model.ObjectTypeChatCompletion,
-		Done:   true,
+		Object:  model.ObjectTypeChatCompletion,
+		Done:    true,
 		Choices: []model.Choice{{Index: 0, Message: model.Message{Content: "test"}}},
 	}
 	evt.IsPartial = false
@@ -486,7 +486,7 @@ func TestAddEvent_ExpiredSession(t *testing.T) {
 	// enforceEventLimit: first query cutoff time, then update
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1*time.Hour)))
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1 * time.Hour)))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?")).
 		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -586,29 +586,29 @@ func TestEnforceEventLimit(t *testing.T) {
 			ctx := context.Background()
 			key := session.Key{AppName: "test-app", UserID: "user-123", SessionID: "session-456"}
 
-		mock.ExpectBegin()
-		tx, err := db.Begin()
-		require.NoError(t, err)
+			mock.ExpectBegin()
+			tx, err := db.Begin()
+			require.NoError(t, err)
 
-		// First, expect QueryRow to get cutoff time
-		mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?")).
-			WithArgs(key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).
-			WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1*time.Hour)))
+			// First, expect QueryRow to get cutoff time
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT created_at FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?")).
+				WithArgs(key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).
+				WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now().Add(-1 * time.Hour)))
 
-		if tt.softDelete {
-			mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?")).
-				WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
-				WillReturnResult(sqlmock.NewResult(0, 5))
-		} else {
-			mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND created_at < ?")).
-				WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
-				WillReturnResult(sqlmock.NewResult(0, 5))
-		}
+			if tt.softDelete {
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?")).
+					WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(0, 5))
+			} else {
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ? AND created_at < ?")).
+					WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(0, 5))
+			}
 
-		err = s.enforceEventLimit(ctx, tx, key, time.Now())
-		assert.NoError(t, err)
-		_ = tx.Rollback()
-		assert.NoError(t, mock.ExpectationsWereMet())
+			err = s.enforceEventLimit(ctx, tx, key, time.Now())
+			assert.NoError(t, err)
+			_ = tx.Rollback()
+			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
 }
@@ -683,29 +683,6 @@ func TestCalculateExpiresAt(t *testing.T) {
 	// Test with negative TTL
 	expiresAt = calculateExpiresAt(-1 * time.Hour)
 	assert.Nil(t, expiresAt)
-}
-
-func TestHashKey(t *testing.T) {
-	key1 := session.Key{
-		AppName:   "app1",
-		UserID:    "user1",
-		SessionID: "sess1",
-	}
-	key2 := session.Key{
-		AppName:   "app1",
-		UserID:    "user1",
-		SessionID: "sess2",
-	}
-
-	hash1 := hashKey(key1)
-	hash2 := hashKey(key2)
-
-	// Different keys should produce different hashes
-	assert.NotEqual(t, hash1, hash2)
-
-	// Same key should produce same hash
-	hash1Again := hashKey(key1)
-	assert.Equal(t, hash1, hash1Again)
 }
 
 func TestMergeState_NilSession(t *testing.T) {

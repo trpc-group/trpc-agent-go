@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -78,10 +77,9 @@ type sessionEventPair struct {
 
 // summaryJob represents a summary job to be processed asynchronously.
 type summaryJob struct {
-	sessionKey session.Key
-	filterKey  string
-	force      bool
-	session    *session.Session
+	filterKey string
+	force     bool
+	session   *session.Session
 }
 
 // NewService creates a new MySQL session service.
@@ -205,12 +203,6 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// hashKey hashes a session key to determine which worker channel to use.
-func hashKey(key session.Key) uint32 {
-	data := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-	return murmur3.Sum32([]byte(data))
-}
-
 // calculateExpiresAt calculates the expiration timestamp based on TTL.
 // Returns nil if TTL is 0 (no expiration).
 func calculateExpiresAt(ttl time.Duration) *time.Time {
@@ -310,16 +302,12 @@ func (s *Service) CreateSession(
 		return nil, fmt.Errorf("list user states failed: %w", err)
 	}
 
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    []event.Event{},
-		Summaries: make(map[string]*session.Summary),
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
-	}
+	sess := session.NewSession(
+		key.AppName, key.UserID, sessState.ID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -560,8 +548,7 @@ func (s *Service) AppendEvent(
 		}()
 
 		// Hash key to determine which worker channel to use
-		n := len(s.eventPairChans)
-		index := int(hashKey(key)) % n
+		index := sess.Hash % len(s.eventPairChans)
 		select {
 		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
 		case <-ctx.Done():
@@ -639,7 +626,7 @@ func (s *Service) startAsyncSummaryWorker() {
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				if _, err := s.createSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
 					log.Errorf("async create summary failed (app=%s, user=%s, session=%s, filter=%s): %v",
-						job.sessionKey.AppName, job.sessionKey.UserID, job.sessionKey.SessionID,
+						job.session.AppName, job.session.UserID, job.session.ID,
 						job.filterKey, err)
 				}
 				cancel()

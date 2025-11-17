@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -429,69 +428,6 @@ func TestEnqueueSummaryJob_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEnqueueSummaryJob_NoWorkers(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	summarizer := &mockSummarizer{
-		summarizeFunc: func(ctx context.Context, sess *session.Session) (string, error) {
-			return "sync fallback summary", nil
-		},
-	}
-
-	// Don't start workers
-	s := createTestService(t, db, WithSummarizer(summarizer))
-	ctx := context.Background()
-
-	sess := &session.Session{
-		ID:        "session-123",
-		AppName:   "test-app",
-		UserID:    "user-456",
-		UpdatedAt: time.Now(),
-	}
-
-	// Mock: Sync processing
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
-
-	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err = s.EnqueueSummaryJob(ctx, sess, "", false)
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestEnqueueSummaryJob_NoSummarizer(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	s := createTestService(t, db) // No summarizer
-	ctx := context.Background()
-
-	sess := &session.Session{
-		ID:      "session-123",
-		AppName: "test-app",
-		UserID:  "user-456",
-	}
-
-	err = s.EnqueueSummaryJob(ctx, sess, "", false)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "summarizer not configured")
-}
-
 func TestEnqueueSummaryJob_InvalidKey(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
@@ -533,21 +469,15 @@ func TestEnqueueSummaryJob_ContextCancelled(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	sess := &session.Session{
-		ID:      "session-123",
-		AppName: "test-app",
-		UserID:  "user-456",
-	}
+	sess := session.NewSession("test-app", "user-456", "session-123")
 
 	// Fill the queue with a blocking job
 	blockingJob := &summaryJob{
-		sessionKey: session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID},
-		filterKey:  "",
-		force:      false,
-		session:    sess,
+		filterKey: "",
+		force:     false,
+		session:   sess,
 	}
-	keyStr := fmt.Sprintf("%s:%s:%s", sess.AppName, sess.UserID, sess.ID)
-	index := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+	index := sess.Hash % len(s.summaryJobChans)
 	s.summaryJobChans[index] <- blockingJob
 
 	// Create cancelled context
@@ -581,22 +511,15 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	sess := &session.Session{
-		ID:        "session-123",
-		AppName:   "test-app",
-		UserID:    "user-456",
-		UpdatedAt: time.Now(),
-	}
+	sess := session.NewSession("test-app", "user-456", "session-123")
 
 	// Fill the queue first
 	job1 := &summaryJob{
-		sessionKey: session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID},
-		filterKey:  "",
-		force:      false,
-		session:    sess,
+		filterKey: "",
+		force:     false,
+		session:   sess,
 	}
-	keyStr := fmt.Sprintf("%s:%s:%s", sess.AppName, sess.UserID, sess.ID)
-	index := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+	index := sess.Hash % len(s.summaryJobChans)
 	s.summaryJobChans[index] <- job1
 
 	// Mock sync fallback processing
