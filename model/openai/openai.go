@@ -236,6 +236,7 @@ type Model struct {
 	name                       string
 	baseURL                    string
 	apiKey                     string
+	showToolCallDelta          bool
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
 	chatResponseCallback       ChatResponseCallbackFunc
@@ -331,6 +332,12 @@ type options struct {
 	MaxInputTokens int
 	// TokenTailoringConfig allows customization of token tailoring parameters.
 	TokenTailoringConfig *TokenTailoringConfig
+	// ShowToolCallDelta controls whether to expose tool call
+	// deltas in streaming responses. When true, raw tool_call
+	// chunks from the provider will be forwarded via
+	// Response.Choices[].Delta.ToolCalls instead of being
+	// suppressed until the final aggregated response.
+	ShowToolCallDelta bool
 }
 
 // TokenTailoringConfig holds custom token tailoring budget parameters.
@@ -545,6 +552,16 @@ func WithTokenTailoringConfig(config *TokenTailoringConfig) Option {
 	}
 }
 
+// WithShowToolCallDelta controls whether to expose tool call
+// deltas in streaming responses. When enabled, the model will
+// forward provider tool_call chunks via Delta.ToolCalls so
+// callers can reconstruct arguments incrementally.
+func WithShowToolCallDelta(show bool) Option {
+	return func(opts *options) {
+		opts.ShowToolCallDelta = show
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -632,6 +649,7 @@ func New(name string, opts ...Option) *Model {
 		name:                       name,
 		baseURL:                    o.BaseURL,
 		apiKey:                     o.APIKey,
+		showToolCallDelta:          o.ShowToolCallDelta,
 		channelBufferSize:          o.ChannelBufferSize,
 		chatRequestCallback:        o.ChatRequestCallback,
 		chatResponseCallback:       o.ChatResponseCallback,
@@ -1253,7 +1271,7 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 
 	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
 	// tool calls in the final aggregated response to avoid noisy blank chunks.
-	if delta.JSON.ToolCalls.Valid() {
+	if delta.JSON.ToolCalls.Valid() && !m.showToolCallDelta {
 		return true
 	}
 	if choice.FinishReason != "" {
@@ -1346,12 +1364,37 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 			response.Choices = make([]model.Choice, 1)
 		}
 
-		reasoningContent := extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields)
+		reasoningContent := extractReasoningContent(
+			chunk.Choices[0].Delta.JSON.ExtraFields)
+		var toolCalls []model.ToolCall
+		if m.showToolCallDelta &&
+			len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			toolCalls = make(
+				[]model.ToolCall, 0,
+				len(chunk.Choices[0].Delta.ToolCalls))
+			for _, toolCall := range chunk.Choices[0].Delta.ToolCalls {
+				var indexPtr *int
+				if toolCall.Index != 0 {
+					index := int(toolCall.Index)
+					indexPtr = &index
+				}
+				toolCalls = append(toolCalls, model.ToolCall{
+					Type: string(toolCall.Type),
+					Function: model.FunctionDefinitionParam{
+						Name:      toolCall.Function.Name,
+						Arguments: []byte(toolCall.Function.Arguments),
+					},
+					ID:    toolCall.ID,
+					Index: indexPtr,
+				})
+			}
+		}
 
 		response.Choices[0].Delta = model.Message{
 			Role:             model.RoleAssistant,
 			Content:          chunk.Choices[0].Delta.Content,
 			ReasoningContent: reasoningContent,
+			ToolCalls:        toolCalls,
 		}
 
 		// Handle finish reason - FinishReason is a plain string.
