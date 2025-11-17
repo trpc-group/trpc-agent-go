@@ -183,13 +183,19 @@ func (m *mockA2AToAgentConverter) ConvertToAgentMessage(ctx context.Context, mes
 	}, nil
 }
 
-type mockEventToA2AConverter struct{}
+type mockEventToA2AConverter struct {
+	convertToA2AMessageFunc          func(ctx context.Context, event *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error)
+	convertStreamingToA2AMessageFunc func(ctx context.Context, event *event.Event, options EventToA2AStreamingOptions) (protocol.StreamingMessageResult, error)
+}
 
 func (m *mockEventToA2AConverter) ConvertToA2AMessage(
 	ctx context.Context,
 	event *event.Event,
 	options EventToA2AUnaryOptions,
 ) (protocol.UnaryMessageResult, error) {
+	if m.convertToA2AMessageFunc != nil {
+		return m.convertToA2AMessageFunc(ctx, event, options)
+	}
 	return &protocol.Message{
 		Role:  protocol.MessageRoleAgent,
 		Parts: []protocol.Part{&protocol.TextPart{Text: "converted event"}},
@@ -201,6 +207,9 @@ func (m *mockEventToA2AConverter) ConvertStreamingToA2AMessage(
 	event *event.Event,
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
+	if m.convertStreamingToA2AMessageFunc != nil {
+		return m.convertStreamingToA2AMessageFunc(ctx, event, options)
+	}
 	return &protocol.Message{
 		Role:  protocol.MessageRoleAgent,
 		Parts: []protocol.Part{&protocol.TextPart{Text: "streaming event"}},
@@ -2092,4 +2101,309 @@ func TestExtractBasePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMessageProcessor_ProcessMessage_ContextCancellation tests context cancellation during event processing
+func TestMessageProcessor_ProcessMessage_ContextCancellation(t *testing.T) {
+	ctxID := "ctx"
+	ctx, cancel := context.WithCancel(context.Background())
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "cancel-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		debugLogging: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 2)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response1"}}},
+					},
+				}
+				// Cancel context before sending second event
+				cancel()
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response2"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{},
+		errorHandler:        defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	// handleError returns a result with error message, not an error
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Result)
+}
+
+// TestMessageProcessor_ProcessMessage_NilEvent tests handling of nil events
+func TestMessageProcessor_ProcessMessage_NilEvent(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.Background()
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "nil-event-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		debugLogging: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 2)
+				// Send nil event
+				ch <- nil
+				// Send valid event
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{},
+		errorHandler:        defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Result)
+}
+
+// TestMessageProcessor_ProcessMessage_NilResponse tests handling of events with nil response
+func TestMessageProcessor_ProcessMessage_NilResponse(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.Background()
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "nil-response-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		debugLogging: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 2)
+				// Send event with nil response
+				ch <- &event.Event{Response: nil}
+				// Send valid event
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{},
+		errorHandler:        defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Result)
+}
+
+// TestMessageProcessor_ProcessMessage_ConversionFailure tests handling of conversion errors
+func TestMessageProcessor_ProcessMessage_ConversionFailure(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.Background()
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "conversion-fail-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		debugLogging: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{
+			convertToA2AMessageFunc: func(ctx context.Context, event *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error) {
+				return nil, errors.New("conversion failed")
+			},
+		},
+		errorHandler: defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	// handleError returns a result with error message, not an error
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Result)
+}
+
+// TestMessageProcessor_ProcessMessage_TaskTypeResult tests handling of Task type conversion results
+func TestMessageProcessor_ProcessMessage_TaskTypeResult(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.Background()
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "task-type-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		debugLogging: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{
+			convertToA2AMessageFunc: func(ctx context.Context, event *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error) {
+				// Return a Task type result
+				return &protocol.Task{
+					ID:        "task-123",
+					ContextID: ctxID,
+					Artifacts: []protocol.Artifact{
+						{
+							ArtifactID: "artifact-1",
+							Parts: []protocol.Part{
+								protocol.NewTextPart("artifact content"),
+							},
+						},
+					},
+				}, nil
+			},
+		},
+		errorHandler: defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Result)
+	// Verify that parts from Task artifacts were collected
+	resultMsg, ok := result.Result.(*protocol.Message)
+	assert.True(t, ok)
+	assert.Equal(t, 1, len(resultMsg.Parts))
+}
+
+// TestMessageProcessor_ProcessMessage_MultipleEvents tests handling of multiple events
+func TestMessageProcessor_ProcessMessage_MultipleEvents(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.Background()
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "multi-event-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		debugLogging: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 3)
+				// Send multiple events
+				for i := 1; i <= 3; i++ {
+					ch <- &event.Event{
+						Response: &model.Response{
+							Choices: []model.Choice{{Message: model.Message{Content: fmt.Sprintf("response%d", i)}}},
+						},
+					}
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{},
+		errorHandler:        defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Result)
+	// Verify that parts from all events were collected
+	resultMsg, ok := result.Result.(*protocol.Message)
+	assert.True(t, ok)
+	assert.Equal(t, 3, len(resultMsg.Parts))
+}
+
+// TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected
+func TestMessageProcessor_ProcessMessage_NoPartsCollected(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.Background()
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "no-parts-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		debugLogging: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 1)
+				// Send event that converts to nil result
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{
+			convertToA2AMessageFunc: func(ctx context.Context, event *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error) {
+				// Return nil to simulate no parts collected
+				return nil, nil
+			},
+		},
+		errorHandler: defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	// handleError returns a result with error message, not an error
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Result)
 }
