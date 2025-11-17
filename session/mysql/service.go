@@ -35,7 +35,7 @@ const (
 	defaultAsyncPersisterNum     = 10
 	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
 
-	defaultTimeout = 10 * time.Second
+	defaultAsyncPersistTimeout = 10 * time.Second
 
 	defaultAsyncSummaryNum  = 3
 	defaultSummaryQueueSize = 100
@@ -582,7 +582,7 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			for eventPair := range eventPairChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
 					cap(eventPairChan), len(eventPairChan), eventPair.key.AppName, eventPair.key.UserID, eventPair.key.SessionID)
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
