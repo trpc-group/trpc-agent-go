@@ -1,4 +1,4 @@
-module trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/text_embedding_interface
+module trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/hugging_face
 
 go 1.21
 

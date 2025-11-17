@@ -1,4 +1,4 @@
-package text_embedding_interface
+package hugging_face
 
 import (
 	"context"

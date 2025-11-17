@@ -1,4 +1,4 @@
-package text_embedding_interface
+package hugging_face
 
 import (
 	"context"
@@ -8,14 +8,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
-// ExampleNew demonstrates how to create a new text-embedding-interface embedder with default settings.
+// ExampleNew demonstrates how to create a new hugging-face embedder with default settings.
 func ExampleNew() {
 	embedder := New()
 	fmt.Printf("Created embedder with model: %d dimensions", embedder.GetDimensions())
 	// Output: Created embedder with model: 1024 dimensions
 }
 
-// ExampleNew_customOptions demonstrates how to create an text-embedding-interface embedder with custom options.
+// ExampleNew_customOptions demonstrates how to create a hugging-face embedder with custom options.
 func ExampleNew_customOptions() {
 	embedder := New(
 		WithDimensions(3072),

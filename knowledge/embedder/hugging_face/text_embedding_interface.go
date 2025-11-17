@@ -7,9 +7,37 @@
 //
 //
 
-// Package text_embedding_interface provides text_embedding_interface-compatible model implementations.
+// Package hugging_face provides hugging_face-compatible model implementations.
 // Text-Embeddings-Inference API: https://github.com/huggingface/text-embeddings-inference
-package text_embedding_interface
+//
+// Hugging Face Text-Embeddings-Inference (TEI) is a high-performance, production-ready
+// inference server for text embedding models. It supports a wide range of transformer-based
+// models and provides optimized inference for embedding generation.
+//
+// Key Features:
+// - Support for popular embedding models (SentenceTransformers, etc.)
+// - Batch processing capabilities
+// - GPU acceleration support
+// - RESTful API interface
+// - Configurable embedding dimensions
+// - Text truncation and normalization options
+//
+// The API provides two main endpoints:
+// - /embed: Default embedding endpoint with pooling
+// - /embed_all: Returns all embeddings without pooling (useful for sentence-level embeddings)
+//
+// Usage Example:
+//
+//	embedder := New(WithBaseURL("http://localhost:8080"))
+//	embedding, err := embedder.GetEmbedding(ctx, "Hello world")
+//
+// Configuration Options:
+// - Base URL: API server address
+// - Dimensions: Output embedding size
+// - Normalize: Whether to normalize embeddings
+// - Truncate: Text truncation behavior
+// - Embed Route: Choose between /embed and /embed_all endpoints
+package hugging_face
 
 import (
 	"bytes"
@@ -136,7 +164,7 @@ type embedResponse struct {
 	Embeddings [][]float64 `json:"embeddings"`
 }
 
-// New creates a new Text Embeddings Inference Embedder instance.
+// New creates a new hugging face Embedder instance
 func New(opts ...Option) *Embedder {
 	e := &Embedder{
 		baseURL:             DefaultBaseURL,
