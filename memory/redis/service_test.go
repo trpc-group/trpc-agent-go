@@ -564,6 +564,40 @@ func TestNewService_InstanceName(t *testing.T) {
 	assert.Contains(t, err.Error(), "redis instance")
 }
 
+func TestNewService_ConnectionFailure(t *testing.T) {
+	// Test with invalid Redis address that will fail on ping.
+	// Use a non-routable IP address to ensure connection failure.
+	invalidURL := "redis://255.255.255.255:6379"
+	_, err := NewService(WithRedisClientURL(invalidURL))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redis connection test failed")
+}
+
+func TestNewService_ConnectionFailure_WrongHost(t *testing.T) {
+	// Test with wrong hostname that will fail DNS lookup.
+	wrongHostURL := "redis://wrong-host-that-does-not-exist:6379"
+	_, err := NewService(WithRedisClientURL(wrongHostURL))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redis connection test failed")
+}
+
+func TestNewService_ConnectionSuccess(t *testing.T) {
+	// Test with valid Redis connection (using miniredis).
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(url))
+	require.NoError(t, err)
+	assert.NotNil(t, svc)
+
+	// Verify the service works by calling a method.
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	assert.NotNil(t, entries)
+}
+
 func TestService_ReadMemoriesWithLimit(t *testing.T) {
 	svc, cleanup := newTestService(t)
 	defer cleanup()

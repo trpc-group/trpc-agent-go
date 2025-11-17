@@ -74,6 +74,14 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
+
+		// Test connection with Ping to ensure Redis is accessible.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			return nil, fmt.Errorf("redis connection test failed: %w", err)
+		}
+
 		return &Service{
 			opts:        opts,
 			redisClient: redisClient,
@@ -88,6 +96,14 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
+
+	// Test connection with Ping to ensure Redis is accessible.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		return nil, fmt.Errorf("redis connection test failed: %w", err)
+	}
+
 	return &Service{
 		opts:        opts,
 		redisClient: redisClient,
