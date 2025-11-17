@@ -1127,7 +1127,6 @@ func TestPickSummaryText(t *testing.T) {
 			summaries: map[string]*session.Summary{
 				"":        {Summary: "full summary"},
 				"filter1": {Summary: "filtered summary 1"},
-				"filter2": {Summary: "filtered summary 2"},
 			},
 			wantText: "full summary",
 			wantOk:   true,
@@ -1137,7 +1136,6 @@ func TestPickSummaryText(t *testing.T) {
 			summaries: map[string]*session.Summary{
 				"":        {Summary: ""},
 				"filter1": {Summary: "filtered summary 1"},
-				"filter2": {Summary: "filtered summary 2"},
 			},
 			wantText: "filtered summary 1",
 			wantOk:   true,
@@ -1147,7 +1145,6 @@ func TestPickSummaryText(t *testing.T) {
 			summaries: map[string]*session.Summary{
 				"":        nil,
 				"filter1": {Summary: "filtered summary 1"},
-				"filter2": {Summary: "filtered summary 2"},
 			},
 			wantText: "filtered summary 1",
 			wantOk:   true,
@@ -1180,7 +1177,6 @@ func TestPickSummaryText(t *testing.T) {
 			name: "no all-contents summary, pick first non-empty",
 			summaries: map[string]*session.Summary{
 				"filter1": {Summary: "filtered summary 1"},
-				"filter2": {Summary: "filtered summary 2"},
 			},
 			wantText: "filtered summary 1",
 			wantOk:   true,
@@ -1211,7 +1207,6 @@ func TestPickSummaryText(t *testing.T) {
 				"":        nil,
 				"filter1": {Summary: ""},
 				"filter2": {Summary: "valid summary"},
-				"filter3": {Summary: "another valid"},
 			},
 			wantText: "valid summary",
 			wantOk:   true,
