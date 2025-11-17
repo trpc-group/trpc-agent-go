@@ -20,12 +20,11 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 var (
@@ -56,9 +55,10 @@ func main() {
 // llmAgentChat manages the conversation.
 type llmAgentChat struct {
 	modelName string
-	streaming bool
-	llmAgent  agent.Agent
+	runner    runner.Runner
 	userID    string
+	sessionID string
+	streaming bool
 }
 
 // run starts the interactive chat session.
@@ -87,7 +87,7 @@ func (c *llmAgentChat) setup(_ context.Context) error {
 	}
 
 	// Create an LLMAgent with configuration.
-	c.llmAgent = llmagent.New(
+	llmAgent := llmagent.New(
 		"demo-llm-agent",
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant for interactive demonstrations"),
@@ -96,8 +96,13 @@ func (c *llmAgentChat) setup(_ context.Context) error {
 		llmagent.WithGenerationConfig(genConfig),
 	)
 
+	// Create runner with the demo agent.
+	appName := "llm-agent-chat-demo"
+	c.runner = runner.NewRunner(appName, llmAgent)
+
 	// Setup identifiers.
 	c.userID = "user"
+	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
 
 	fmt.Printf("✅ Chat ready!\n\n")
 
@@ -147,16 +152,9 @@ func (c *llmAgentChat) startChat(ctx context.Context) error {
 
 // processMessage handles a single message exchange.
 func (c *llmAgentChat) processMessage(ctx context.Context, userMessage string) error {
-	// Create an invocation context.
-	invocation := agent.NewInvocation(
-		agent.WithInvocationAgent(c.llmAgent),
-		agent.WithInvocationSession(&session.Session{ID: fmt.Sprintf("session-%d", time.Now().Unix())}),
-		agent.WithInvocationMessage(model.NewUserMessage(userMessage)),
-		agent.WithInvocationModel(openai.New(c.modelName)),
-	)
-
 	// Run the agent.
-	eventChan, err := c.llmAgent.Run(ctx, invocation)
+	message := model.NewUserMessage(userMessage)
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run LLMAgent: %w", err)
 	}
