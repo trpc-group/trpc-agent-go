@@ -238,7 +238,7 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 				ArtifactID: event.Response.ID,
 				Parts:      parts,
 			},
-			false, // append mode - not last chunk
+			false,
 		)
 		return &taskArtifact, nil
 	}

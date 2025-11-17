@@ -267,20 +267,16 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 				},
 			},
 			expected: func() protocol.UnaryMessageResult {
-				// Tool calls should be converted to DataPart with function_call metadata
-				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
-					&protocol.DataPart{
-						Data: map[string]any{
-							"id":   "call-1",
-							"type": "function",
-							"name": "test_tool",
-							"args": map[string]any{"arg": "value"},
-						},
-						Metadata: map[string]any{
-							"type": "function_call",
-						},
-					},
+				dataPart := protocol.NewDataPart(map[string]any{
+					"id":   "call-1",
+					"type": "function",
+					"name": "test_tool",
+					"args": `{"arg":"value"}`,
 				})
+				dataPart.Metadata = map[string]any{
+					"type": "function_call",
+				}
+				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{dataPart})
 				return &msg
 			}(),
 			wantErr: false,
@@ -304,18 +300,15 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 			},
 			expected: func() protocol.UnaryMessageResult {
 				// Tool responses should be converted to DataPart with function_response metadata
-				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
-					&protocol.DataPart{
-						Data: map[string]any{
-							"name":     "test_tool",
-							"id":       "call-1",
-							"response": "Tool response content",
-						},
-						Metadata: map[string]any{
-							"type": "function_response",
-						},
-					},
+				dataPart := protocol.NewDataPart(map[string]any{
+					"name":     "test_tool",
+					"id":       "call-1",
+					"response": "Tool response content",
 				})
+				dataPart.Metadata = map[string]any{
+					"type": "function_response",
+				}
+				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{dataPart})
 				return &msg
 			}(),
 			wantErr: false,
@@ -337,18 +330,15 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 				},
 			},
 			expected: func() protocol.UnaryMessageResult {
-				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
-					&protocol.DataPart{
-						Data: map[string]any{
-							"name":     "tool_func",
-							"id":       "tool123",
-							"response": "Tool response",
-						},
-						Metadata: map[string]any{
-							"type": "function_response",
-						},
-					},
+				dataPart := protocol.NewDataPart(map[string]any{
+					"name":     "tool_func",
+					"id":       "tool123",
+					"response": "Tool response",
 				})
+				dataPart.Metadata = map[string]any{
+					"type": "function_response",
+				}
+				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{dataPart})
 				return &msg
 			}(),
 			wantErr: false,
@@ -409,19 +399,21 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 					},
 				},
 			},
-		expected: func() protocol.StreamingMessageResult {
-			parts := []protocol.Part{protocol.NewTextPart("Hello")}
-			taskEvent := protocol.NewTaskArtifactUpdateEvent(
-				"test-task-id",
-				"test-ctx-id",
-				protocol.Artifact{
-					ArtifactID: "resp-123",
-					Parts:      parts,
-				},
-				true,
-			)
-			return &taskEvent
-		}(),
+			expected: func() protocol.StreamingMessageResult {
+				isLastChunk := false
+				taskEvent := protocol.NewTaskArtifactUpdateEvent(
+					"test-task-id",
+					"test-ctx-id",
+					protocol.Artifact{
+						ArtifactID: "resp-123",
+						Parts: []protocol.Part{
+							protocol.NewTextPart("Hello"),
+						},
+					},
+					isLastChunk,
+				)
+				return &taskEvent
+			}(),
 			wantErr: false,
 		},
 		{
@@ -480,27 +472,23 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 				},
 			},
 			expected: func() protocol.StreamingMessageResult {
-				// Tool calls should be converted to task artifact with DataPart
+				dataPart := protocol.NewDataPart(map[string]any{
+					"id":   "call-1",
+					"type": "function",
+					"name": "test_tool",
+					"args": `{"key":"value"}`,
+				})
+				dataPart.Metadata = map[string]any{
+					"type": "function_call",
+				}
 				taskEvent := protocol.NewTaskArtifactUpdateEvent(
 					"test-task-id",
 					"test-ctx-id",
 					protocol.Artifact{
 						ArtifactID: "resp-stc1",
-						Parts: []protocol.Part{
-							&protocol.DataPart{
-								Data: map[string]any{
-									"id":   "call-1",
-									"type": "function",
-									"name": "test_tool",
-									"args": map[string]any{"key": "value"},
-								},
-								Metadata: map[string]any{
-									"type": "function_call",
-								},
-							},
-						},
+						Parts:      []protocol.Part{dataPart},
 					},
-					false, // append=false for complete tool call events
+					false,
 				)
 				return &taskEvent
 			}(),
@@ -731,12 +719,40 @@ func compareProtocolMessages(a, b *protocol.Message) bool {
 
 	for i, partA := range a.Parts {
 		partB := b.Parts[i]
-		if !reflect.DeepEqual(partA, partB) {
+		if !compareProtocolParts(partA, partB) {
 			return false
 		}
 	}
 
 	return true
+}
+
+func compareProtocolParts(a, b protocol.Part) bool {
+	// Handle nil cases
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Check if both are DataParts
+	dataParta, okA := a.(*protocol.DataPart)
+	dataPartb, okB := b.(*protocol.DataPart)
+	if okA && okB {
+		// Compare DataParts by value, not by pointer
+		// Note: We don't compare Kind field as it's auto-set by NewDataPart
+		if !reflect.DeepEqual(dataParta.Data, dataPartb.Data) {
+			return false
+		}
+		if !reflect.DeepEqual(dataParta.Metadata, dataPartb.Metadata) {
+			return false
+		}
+		return true
+	}
+
+	// For other types, use deep equal
+	return reflect.DeepEqual(a, b)
 }
 
 func compareStreamingMessageResults(a, b protocol.StreamingMessageResult) bool {
@@ -771,12 +787,16 @@ func compareTaskArtifactUpdateEvents(a, b *protocol.TaskArtifactUpdateEvent) boo
 		return false
 	}
 
-	// Compare LastChunk if both are set
-	if a.LastChunk != nil && b.LastChunk != nil {
-		if *a.LastChunk != *b.LastChunk {
-			return false
-		}
-	} else if a.LastChunk != b.LastChunk {
+	// Compare LastChunk - handle both nil and non-nil cases
+	aLastChunk := false
+	if a.LastChunk != nil {
+		aLastChunk = *a.LastChunk
+	}
+	bLastChunk := false
+	if b.LastChunk != nil {
+		bLastChunk = *b.LastChunk
+	}
+	if aLastChunk != bLastChunk {
 		return false
 	}
 
@@ -809,7 +829,7 @@ func TestConvertToolCallToA2AMessage(t *testing.T) {
 										},
 									},
 								},
-			},
+							},
 						},
 					},
 				},

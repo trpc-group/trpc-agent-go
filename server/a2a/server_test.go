@@ -1122,10 +1122,9 @@ func TestMessageProcessor_ProcessMessage_NilAgentMessage(t *testing.T) {
 	ctx := context.Background()
 	ctxID := "ctx"
 	msg := &protocol.Message{ContextID: &ctxID}
-	handler := &mockTaskHandler{}
 	processor := createTestMessageProcessor()
 
-	result, err := processor.processMessage(ctx, "user", "session", msg, nil, handler, nil)
+	result, err := processor.processMessage(ctx, "user", "session", msg, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 }
