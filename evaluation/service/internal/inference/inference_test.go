@@ -40,6 +40,10 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 	return ch, nil
 }
 
+func (f fakeRunner) Close() error {
+	return nil
+}
+
 func TestInferenceSuccess(t *testing.T) {
 
 	args, err := json.Marshal(map[string]any{"foo": "bar"})
