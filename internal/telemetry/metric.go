@@ -132,8 +132,8 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 		}
 	}
 	if response.Usage != nil {
-		t.totalPromptTokens += response.Usage.PromptTokens
-		t.totalCompletionTokens += response.Usage.CompletionTokens
+		t.totalPromptTokens = response.Usage.PromptTokens
+		t.totalCompletionTokens = response.Usage.CompletionTokens
 	}
 }
 

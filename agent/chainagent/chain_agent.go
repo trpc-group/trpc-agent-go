@@ -220,7 +220,7 @@ func (a *ChainAgent) executeSubAgents(
 		// Forward all events from the sub-agent.
 		for subEvent := range subEventChan {
 			if subEvent != nil && subEvent.Response != nil {
-				if subEvent.Response.Usage != nil {
+				if subEvent.Response.Usage != nil && !subEvent.Response.IsPartial {
 					tokenUsage.PromptTokens += subEvent.Response.Usage.PromptTokens
 					tokenUsage.CompletionTokens += subEvent.Response.Usage.CompletionTokens
 					tokenUsage.TotalTokens += subEvent.Response.Usage.TotalTokens
