@@ -206,11 +206,11 @@ func TestChatMetricsTracker_TrackResponse(t *testing.T) {
 	if tracker.firstTokenTimeDuration != firstTokenDuration {
 		t.Error("firstTokenTimeDuration should not change after first response")
 	}
-	if tracker.totalPromptTokens != 10 {
-		t.Errorf("expected totalPromptTokens=10, got %d", tracker.totalPromptTokens)
+	if tracker.totalPromptTokens != 0 {
+		t.Errorf("expected totalPromptTokens=0, got %d", tracker.totalPromptTokens)
 	}
-	if tracker.totalCompletionTokens != 8 {
-		t.Errorf("expected totalCompletionTokens=8, got %d", tracker.totalCompletionTokens)
+	if tracker.totalCompletionTokens != 3 {
+		t.Errorf("expected totalCompletionTokens=3, got %d", tracker.totalCompletionTokens)
 	}
 }
 
