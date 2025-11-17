@@ -468,12 +468,12 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 // AddConditionalEdges adds conditional routing from a node.
 func (sg *StateGraph) AddConditionalEdges(
 	from string,
-	condition ConditionalFunc,
+	condFunc any,
 	pathMap map[string]string,
 ) *StateGraph {
 	condEdge := &ConditionalEdge{
 		From:      from,
-		Condition: condition,
+		Condition: wrapperCondFunc(condFunc),
 		PathMap:   pathMap,
 	}
 	sg.graph.addConditionalEdge(condEdge)
@@ -484,13 +484,13 @@ func (sg *StateGraph) AddConditionalEdges(
 // The condition returns multiple branch keys for parallel routing.
 func (sg *StateGraph) AddMultiConditionalEdges(
 	from string,
-	condition MultiConditionalFunc,
+	condFunc MultiConditionalFunc,
 	pathMap map[string]string,
 ) *StateGraph {
 	condEdge := &ConditionalEdge{
-		From:           from,
-		MultiCondition: condition,
-		PathMap:        pathMap,
+		From:      from,
+		Condition: wrapperCondFunc(condFunc),
+		PathMap:   pathMap,
 	}
 	sg.graph.addConditionalEdge(condEdge)
 	return sg
@@ -504,15 +504,15 @@ func (sg *StateGraph) AddToolsConditionalEdges(
 	toToolsNode string,
 	fallbackNode string,
 ) *StateGraph {
-	condition := func(ctx context.Context, state State) (string, error) {
+	condition := func(ctx context.Context, state State) (ConditionResult, error) {
 		if msgs, ok := state[StateKeyMessages].([]model.Message); ok {
 			if len(msgs) > 0 {
 				if len(msgs[len(msgs)-1].ToolCalls) > 0 {
-					return toToolsNode, nil
+					return ConditionResult{NextNodes: []string{toToolsNode}}, nil
 				}
 			}
 		}
-		return fallbackNode, nil
+		return ConditionResult{NextNodes: []string{fallbackNode}}, nil
 	}
 	condEdge := &ConditionalEdge{
 		From:      fromLLMNode,

@@ -980,10 +980,11 @@ func (a *LLMAgent) wrapEventChannel(
 		// Forward all events from the original channel
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil {
+
 				if evt.Response.Usage != nil {
-					tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
-					tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
-					tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+					tokenUsage.PromptTokens = evt.Response.Usage.PromptTokens
+					tokenUsage.CompletionTokens = evt.Response.Usage.CompletionTokens
+					tokenUsage.TotalTokens = evt.Response.Usage.TotalTokens
 				}
 				if !evt.Response.IsPartial {
 					fullRespEvent = evt

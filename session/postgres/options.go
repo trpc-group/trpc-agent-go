@@ -10,10 +10,10 @@
 package postgres
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -236,23 +236,6 @@ func WithSkipDBInit(skip bool) ServiceOpt {
 	}
 }
 
-// validateTablePrefix validates that table prefix only contains safe characters.
-// Only allows: alphanumeric characters (a-z, A-Z, 0-9) and underscore (_).
-func validateTablePrefix(prefix string) error {
-	if prefix == "" {
-		return nil
-	}
-	for _, ch := range prefix {
-		if !((ch >= 'a' && ch <= 'z') ||
-			(ch >= 'A' && ch <= 'Z') ||
-			(ch >= '0' && ch <= '9') ||
-			ch == '_') {
-			return fmt.Errorf("table prefix contains invalid character: %c (only alphanumeric and underscore allowed)", ch)
-		}
-	}
-	return nil
-}
-
 // WithTablePrefix sets a prefix for all table names.
 // For example, with prefix "trpc", tables will be named:
 // - trpc_session_states
@@ -262,7 +245,7 @@ func validateTablePrefix(prefix string) error {
 // Note: An underscore will be automatically added if not present.
 // "trpc" and "trpc_" both result in "trpc_" prefix.
 //
-// Security: Only alphanumeric characters and underscore are allowed to prevent SQL injection.
+// Security: Uses internal/session/sqldb.ValidateTablePrefix to prevent SQL injection.
 func WithTablePrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		if prefix == "" {
@@ -270,9 +253,8 @@ func WithTablePrefix(prefix string) ServiceOpt {
 			return
 		}
 
-		if err := validateTablePrefix(prefix); err != nil {
-			panic(fmt.Sprintf("invalid table prefix: %v", err))
-		}
+		// Use internal/session/sqldb validation
+		sqldb.MustValidateTablePrefix(prefix)
 
 		// Automatically add underscore if not present
 		if !strings.HasSuffix(prefix, "_") {
@@ -290,13 +272,12 @@ func WithTablePrefix(prefix string) ServiceOpt {
 // - etc.
 //
 // Note: The schema must already exist in the database before using this option.
-// Security: Only alphanumeric characters and underscore are allowed to prevent SQL injection.
+// Security: Uses internal/session/sqldb.ValidateTableName to prevent SQL injection.
 func WithSchema(schema string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		if schema != "" {
-			if err := validateTablePrefix(schema); err != nil {
-				panic(fmt.Sprintf("invalid schema name: %v", err))
-			}
+			// Use internal/session/sqldb validation
+			sqldb.MustValidateTableName(schema)
 		}
 		opts.schema = schema
 	}

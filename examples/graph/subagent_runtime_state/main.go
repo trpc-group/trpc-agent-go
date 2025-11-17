@@ -266,7 +266,7 @@ func preNode(ctx context.Context, state graph.State) (any, error) {
 	// Scene info in English to prevent non-English model behavior
 	sceneInfo := fmt.Sprintf("[Scene %s] You are helping with event-related tasks (schedule, tickets, times).", sceneID)
 
-	// Naive time parsing from Chinese phrases like 今天/明天HH:MM or explicit 2006-01-02 15:04
+	// Naive time parsing from phrases like "today/tomorrow HH:MM" or explicit 2006-01-02 15:04
 	parsed := parseTimeInText(input)
 
 	out := graph.State{
@@ -290,11 +290,11 @@ func parseTimeInText(s string) string {
 			return t.Format(time.RFC3339)
 		}
 	}
-	// Simple 今天/明天 HH:MM
-	re2 := regexp.MustCompile(`(今天|明天)\s*(\d{1,2}:\d{2})`)
+	// Simple today/tomorrow HH:MM (using keywords: today, tomorrow)
+	re2 := regexp.MustCompile(`(today|tomorrow)\s*(\d{1,2}:\d{2})`)
 	if m := re2.FindStringSubmatch(s); len(m) == 3 {
 		base := time.Now()
-		if m[1] == "明天" {
+		if m[1] == "tomorrow" {
 			base = base.Add(24 * time.Hour)
 		}
 		tday := time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, base.Location())
