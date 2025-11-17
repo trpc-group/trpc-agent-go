@@ -1641,7 +1641,7 @@ func TestService_SearchMemories_UnmarshalError(t *testing.T) {
 
 func TestService_Close_NilClient(t *testing.T) {
 	svc := &Service{
-		pgClient: nil,
+		db: nil,
 	}
 
 	err := svc.Close()

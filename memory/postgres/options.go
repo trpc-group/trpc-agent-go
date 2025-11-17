@@ -28,7 +28,7 @@ const (
 
 // ServiceOpts is the options for the postgres memory service.
 type ServiceOpts struct {
-	// PostgreSQL connection settings
+	// PostgreSQL connection settings.
 	host     string
 	port     int
 	user     string

@@ -72,7 +72,7 @@ func (s *Service) initDB(ctx context.Context) error {
 	// Create table
 	tableSQL := buildCreateTableSQL(s.opts.schema, baseTableName, sqlCreateMemoriesTable)
 	fullTableName := sqldb.BuildTableNameWithSchema(s.opts.schema, "", baseTableName)
-	if _, err := s.pgClient.ExecContext(ctx, tableSQL); err != nil {
+	if _, err := s.db.ExecContext(ctx, tableSQL); err != nil {
 		return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 	}
 	log.Infof("created table: %s", fullTableName)
@@ -96,7 +96,7 @@ func (s *Service) initDB(ctx context.Context) error {
 
 	for _, idx := range indexes {
 		indexSQL := buildCreateIndexSQL(s.opts.schema, baseTableName, idx.suffix, idx.template)
-		if _, err := s.pgClient.ExecContext(ctx, indexSQL); err != nil {
+		if _, err := s.db.ExecContext(ctx, indexSQL); err != nil {
 			return fmt.Errorf("create index %s on table %s failed: %w", idx.suffix, fullTableName, err)
 		}
 		log.Infof("created index: %s on table %s", idx.suffix, fullTableName)

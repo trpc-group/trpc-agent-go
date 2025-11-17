@@ -38,7 +38,7 @@ var _ memory.Service = (*Service)(nil)
 //	Index: (app_name, user_id).
 type Service struct {
 	opts      ServiceOpts
-	pgClient  storage.Client
+	db        storage.Client
 	tableName string
 
 	cachedTools map[string]tool.Tool
@@ -64,15 +64,15 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
-	var pgClient storage.Client
+	var db storage.Client
 	var err error
 	builder := storage.GetClientBuilder()
 
 	// Priority: direct connection settings > instance name
-	// If direct connection settings are provided, use them
+	// If direct connection settings are provided, use them.
 	if opts.host != "" {
 		connString := buildConnString(opts)
-		pgClient, err = builder(
+		db, err = builder(
 			context.Background(),
 			storage.WithClientConnString(connString),
 			storage.WithExtraOptions(opts.extraOptions...),
@@ -81,12 +81,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 			return nil, fmt.Errorf("create postgres client from connection settings failed: %w", err)
 		}
 	} else if opts.instanceName != "" {
-		// Otherwise, use instance name if provided
+		// Otherwise, use instance name if provided.
 		builderOpts, ok := storage.GetPostgresInstance(opts.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("postgres instance %s not found", opts.instanceName)
 		}
-		pgClient, err = builder(context.Background(), builderOpts...)
+		db, err = builder(context.Background(), builderOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
 		}
@@ -94,17 +94,17 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		return nil, fmt.Errorf("either connection settings (host, port, etc.) or instance name must be provided")
 	}
 
-	// Build full table name with schema
+	// Build full table name with schema.
 	fullTableName := sqldb.BuildTableNameWithSchema(opts.schema, "", opts.tableName)
 
 	s := &Service{
 		opts:        opts,
-		pgClient:    pgClient,
+		db:          db,
 		tableName:   fullTableName,
 		cachedTools: make(map[string]tool.Tool),
 	}
 
-	// Initialize database schema unless skipped
+	// Initialize database schema unless skipped.
 	if !opts.skipDBInit {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -118,7 +118,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 // buildConnString builds a PostgreSQL connection string from options.
 func buildConnString(opts ServiceOpts) string {
-	// Default values
+	// Default values.
 	host := opts.host
 	if host == "" {
 		host = defaultHost
@@ -136,7 +136,7 @@ func buildConnString(opts ServiceOpts) string {
 		sslMode = defaultSSLMode
 	}
 
-	// Build connection string
+	// Build connection string.
 	connString := fmt.Sprintf("host=%s port=%d dbname=%s sslmode=%s",
 		host, port, database, sslMode)
 
@@ -156,14 +156,14 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return err
 	}
 
-	// Enforce memory limit.
+	// Enforce memory limit if set.
 	if s.opts.memoryLimit > 0 {
 		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = $1 AND user_id = $2", s.tableName)
 		if s.opts.softDelete {
 			countQuery += " AND deleted_at IS NULL"
 		}
 		var count int
-		err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+		err := s.db.Query(ctx, func(rows *sql.Rows) error {
 			if rows.Next() {
 				return rows.Scan(&count)
 			}
@@ -202,7 +202,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		"INSERT INTO %s (memory_id, app_name, user_id, memory_data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
 		s.tableName,
 	)
-	_, err = s.pgClient.ExecContext(ctx, insertQuery, entry.ID, userKey.AppName, userKey.UserID, memoryData, now, now)
+	_, err = s.db.ExecContext(ctx, insertQuery, entry.ID, userKey.AppName, userKey.UserID, memoryData, now, now)
 	if err != nil {
 		return fmt.Errorf("store memory entry failed: %w", err)
 	}
@@ -216,7 +216,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		return err
 	}
 
-	// Get existing entry.
+	// Get existing entry if exists.
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
 		s.tableName,
@@ -225,7 +225,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		selectQuery += " AND deleted_at IS NULL"
 	}
 	var memoryData []byte
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		if rows.Next() {
 			return rows.Scan(&memoryData)
 		}
@@ -261,7 +261,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	if s.opts.softDelete {
 		updateQuery += " AND deleted_at IS NULL"
 	}
-	_, err = s.pgClient.ExecContext(ctx, updateQuery, updated, now, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
+	_, err = s.db.ExecContext(ctx, updateQuery, updated, now, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
 	}
@@ -275,6 +275,7 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 		return err
 	}
 
+	// Delete memory entry.
 	var (
 		query string
 		args  []any
@@ -293,7 +294,7 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 		)
 		args = []any{memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID}
 	}
-	_, err := s.pgClient.ExecContext(ctx, query, args...)
+	_, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("delete memory entry failed: %w", err)
 	}
@@ -307,6 +308,7 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 		return err
 	}
 
+	// Clear memories.
 	var err error
 	if s.opts.softDelete {
 		now := time.Now()
@@ -314,13 +316,13 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 			"UPDATE %s SET deleted_at = $1 WHERE app_name = $2 AND user_id = $3 AND deleted_at IS NULL",
 			s.tableName,
 		)
-		_, err = s.pgClient.ExecContext(ctx, query, now, userKey.AppName, userKey.UserID)
+		_, err = s.db.ExecContext(ctx, query, now, userKey.AppName, userKey.UserID)
 	} else {
 		query := fmt.Sprintf(
 			"DELETE FROM %s WHERE app_name = $1 AND user_id = $2",
 			s.tableName,
 		)
-		_, err = s.pgClient.ExecContext(ctx, query, userKey.AppName, userKey.UserID)
+		_, err = s.db.ExecContext(ctx, query, userKey.AppName, userKey.UserID)
 	}
 	if err != nil {
 		return fmt.Errorf("clear memories failed: %w", err)
@@ -348,7 +350,7 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 	}
 
 	entries := make([]*memory.Entry, 0)
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var memoryData []byte
 			if err := rows.Scan(&memoryData); err != nil {
@@ -377,7 +379,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, err
 	}
 
-	// Get all memories for the user.
+	// Get all memories for the user if exists.
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,
@@ -387,7 +389,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	}
 
 	results := make([]*memory.Entry, 0)
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var memoryData []byte
 			if err := rows.Scan(&memoryData); err != nil {
@@ -447,8 +449,8 @@ func (s *Service) Tools() []tool.Tool {
 
 // Close closes the database connection.
 func (s *Service) Close() error {
-	if s.pgClient != nil {
-		return s.pgClient.Close()
+	if s.db != nil {
+		return s.db.Close()
 	}
 	return nil
 }
