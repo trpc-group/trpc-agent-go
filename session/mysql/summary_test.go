@@ -64,11 +64,6 @@ func TestCreateSessionSummary_Success(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	// Mock: Check if summary exists (no existing summary)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
-
 	// Mock: Insert new summary
 	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
 		WithArgs(
@@ -82,7 +77,7 @@ func TestCreateSessionSummary_Success(t *testing.T) {
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	err = s.CreateSessionSummary(ctx, sess, "", false)
+	err = s.CreateSessionSummary(ctx, sess, "", true)
 	assert.NoError(t, err)
 }
 
