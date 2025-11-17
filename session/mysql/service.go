@@ -33,7 +33,7 @@ const (
 	defaultSessionEventLimit     = 1000
 	defaultChanBufferSize        = 100
 	defaultAsyncPersisterNum     = 10
-	defaultCleanupIntervalSecond = 300 // 5 min
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
 
 	defaultTimeout = 10 * time.Second
 
@@ -598,7 +598,7 @@ func (s *Service) startAsyncPersistWorker() {
 func (s *Service) startCleanupRoutine() {
 	interval := s.opts.cleanupInterval
 	if interval <= 0 {
-		interval = defaultCleanupIntervalSecond * time.Second
+		interval = defaultCleanupIntervalSecond
 	}
 
 	s.cleanupTicker = time.NewTicker(interval)
