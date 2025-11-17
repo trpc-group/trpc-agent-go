@@ -1314,6 +1314,55 @@ model := openai.New("deepseek-chat",
 )
 ```
 
+#### 8. Streaming Tool Call Deltas: ShowToolCallDelta
+
+By default, the OpenAI adapter suppresses raw `tool_calls` chunks in streaming
+responses. Tool calls are accumulated internally and only exposed once in the
+final aggregated response via `Response.Choices[0].Message.ToolCalls`. This
+keeps the stream clean for typical chat UIs that only render assistant text.
+
+For advanced use cases (for example, when the model streams document content
+inside tool arguments and you need to display it incrementally), you can turn
+on raw tool call deltas with `WithShowToolCallDelta`:
+
+```go
+llm := openai.New(
+    "gpt-4.1",
+    openai.WithShowToolCallDelta(true), // Forward tool_call deltas.
+)
+```
+
+When `WithShowToolCallDelta(true)` is enabled:
+
+- Streaming chunks that contain `tool_calls` are no longer suppressed by the
+  adapter.
+- Each chunk is converted into a partial `model.Response` where:
+  - `Response.IsPartial == true`
+  - `Response.Choices[0].Delta.ToolCalls` contains the provider’s raw
+    `tool_calls` delta mapped to `model.ToolCall`:
+    - `Type` comes from the provider `type` field (for example, `"function"`).
+    - `Function.Name` and `Function.Arguments` mirror the original tool name
+      and JSON-encoded arguments string.
+    - `ID` and `Index` preserve the tool call identity so callers can stitch
+      fragments together.
+- The final aggregated response still exposes the merged tool calls in
+  `Response.Choices[0].Message.ToolCalls`, so existing tool execution logic
+  (for example, `FunctionCallResponseProcessor`) continues to work unchanged.
+
+Typical integration pattern when this flag is enabled:
+
+1. Read `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments` on each
+   partial response.
+2. Group chunks by tool call `ID` and append the `Arguments` fragments in
+   order.
+3. Once the accumulated string forms valid JSON, unmarshal it into your
+   business struct (for example, `{ "content": "..." }`) and use it for
+   progressive UI rendering.
+
+If you do not need to inspect tool arguments during streaming, keep
+`WithShowToolCallDelta` disabled to avoid handling partial JSON fragments and
+to preserve the default clean text-streaming behavior.
+
 ## Anthropic Model
 
 Anthropic Model is used to interface with Claude models and compatible platforms, supporting streaming output, thought modes and tool calls, and providing a rich callback mechanism, while also allowing for flexible configuration of custom HTTP headers.

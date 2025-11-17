@@ -1310,6 +1310,54 @@ model := openai.New("deepseek-chat",
 )
 ```
 
+#### 8. 流式工具调用增量：ShowToolCallDelta
+
+默认情况下，OpenAI 适配层会**隐藏流式响应中的原始 `tool_calls` 分片**：
+
+- 含有 `tool_calls` 但没有可见文本内容的 chunk 会在适配层被过滤；
+- 工具调用会在内部累积，最终只在一次性汇总的响应中，通过
+  `Response.Choices[0].Message.ToolCalls` 对外暴露；
+- 这种行为适合只关心助手文本的普通聊天界面，避免在流中出现半截
+  JSON 片段。
+
+对于更高级的场景（例如：模型将文档正文写入工具入参的 JSON 字段，
+前端希望“边生成边预览”正文），可以通过 `WithShowToolCallDelta`
+打开原始工具调用增量：
+
+```go
+llm := openai.New(
+    "gpt-4.1",
+    openai.WithShowToolCallDelta(true), // 转发 tool_call 增量分片
+)
+```
+
+当启用 `WithShowToolCallDelta(true)` 时：
+
+- 含有 `tool_calls` 的流式 chunk 不再被适配层压制；
+- 每个 chunk 会被转换为部分响应 `model.Response`，其中：
+  - `Response.IsPartial == true`
+  - `Response.Choices[0].Delta.ToolCalls` 中包含来自提供方的原始
+    `tool_calls` 增量，并映射为 `model.ToolCall`：
+    - `Type` 来自底层的 `type` 字段（例如 `"function"`）；
+    - `Function.Name`、`Function.Arguments` 与原始工具名和
+      JSON 字符串参数保持一致；
+    - `ID`、`Index` 保留工具调用的唯一标识，方便调用方按 ID 合并分片；
+- 最终汇总响应仍然会把合并后的工具调用放在
+  `Response.Choices[0].Message.ToolCalls` 中，原有工具执行链路
+  （例如 `FunctionCallResponseProcessor`）可以无缝复用。
+
+典型的业务接入模式：
+
+1. 在每个部分响应中读取
+   `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments`；
+2. 按工具调用 `ID` 分组并追加 `Arguments` 字符串分片；
+3. 当累积字符串构成合法 JSON 后，将其反序列化为业务结构体
+   （例如 `{ "content": "..." }`），用于前端渐进式展示。
+
+如果不需要在流式阶段解析工具入参，只关心最终调用结果，建议保持
+`WithShowToolCallDelta` 的默认关闭状态，以避免处理部分 JSON 片段，
+并保留默认的“仅流式输出助手文本”的简洁行为。
+
 ## Anthropic Model
 
 Anthropic Model 用于对接 Claude 模型及其兼容平台，支持流式输出、思考模式与工具调用，并提供丰富的回调机制，同时可灵活设置自定义 HTTP Header.
