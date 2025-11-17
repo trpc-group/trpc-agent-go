@@ -81,7 +81,7 @@ func (c *multiTurnChat) run() error {
 	if err := c.setup(ctx); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
-
+	
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer c.runner.Close()
 
