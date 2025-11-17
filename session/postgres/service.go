@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -85,10 +84,9 @@ type sessionEventPair struct {
 
 // summaryJob represents a summary job to be processed asynchronously.
 type summaryJob struct {
-	sessionKey session.Key
-	filterKey  string
-	force      bool
-	session    *session.Session
+	filterKey string
+	force     bool
+	session   *session.Session
 }
 
 // buildConnString builds a PostgreSQL connection string from options.
@@ -304,16 +302,12 @@ func (s *Service) CreateSession(
 		return nil, fmt.Errorf("list user states failed: %w", err)
 	}
 
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    []event.Event{},
-		Summaries: make(map[string]*session.Summary),
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
-	}
+	sess := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -587,10 +581,7 @@ func (s *Service) AppendEvent(
 			}
 		}()
 
-		// TODO: Init hash index at session creation to prevent duplicate computation.
-		hKey := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-		n := len(s.eventPairChans)
-		index := int(murmur3.Sum32([]byte(hKey))) % n
+		index := sess.Hash % len(s.eventPairChans)
 		select {
 		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
 		case <-ctx.Done():
@@ -764,15 +755,15 @@ func (s *Service) getSession(
 		return nil, fmt.Errorf("get summaries failed: %w", err)
 	}
 
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    events,
-		Summaries: summaries,
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
+	sess := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionEvents(events),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
+	if len(events) > 0 {
+		sess.Summaries = summaries
 	}
 
 	return mergeState(appState, userState, sess), nil
@@ -854,16 +845,14 @@ func (s *Service) listSessions(
 
 	sessions := make([]*session.Session, 0, len(sessStates))
 	for i, sessState := range sessStates {
-		sess := &session.Session{
-			ID:        sessState.ID,
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			State:     sessState.State,
-			Events:    eventsList[i],
-			Summaries: summariesList[i],
-			UpdatedAt: sessState.UpdatedAt,
-			CreatedAt: sessState.CreatedAt,
-		}
+		sess := session.NewSession(
+			key.AppName, key.UserID, sessState.ID,
+			session.WithSessionState(sessState.State),
+			session.WithSessionEvents(eventsList[i]),
+			session.WithSessionSummaries(summariesList[i]),
+			session.WithSessionCreatedAt(sessState.CreatedAt),
+			session.WithSessionUpdatedAt(sessState.UpdatedAt),
+		)
 		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
 
