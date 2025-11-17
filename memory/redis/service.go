@@ -26,6 +26,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	// defaultConnectionTimeout is the default timeout for Redis connection test.
+	defaultConnectionTimeout = 5 * time.Second
+)
+
 var _ memory.Service = (*Service)(nil)
 
 // Service is the redis memory service.
@@ -76,7 +81,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		}
 
 		// Test connection with Ping to ensure Redis is accessible.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), defaultConnectionTimeout)
 		defer cancel()
 		if err := redisClient.Ping(ctx).Err(); err != nil {
 			return nil, fmt.Errorf("redis connection test failed: %w", err)
@@ -98,7 +103,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	// Test connection with Ping to ensure Redis is accessible.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultConnectionTimeout)
 	defer cancel()
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("redis connection test failed: %w", err)
