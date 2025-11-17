@@ -606,6 +606,29 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -719,6 +742,29 @@
   
   <span class="md-ellipsis">
     Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
     
   </span>
   
@@ -1095,6 +1141,30 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      最佳实践
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="最佳实践">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      生成文档
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1290,6 +1360,30 @@
   <a href="#basepath" class="md-nav__link">
     <span class="md-ellipsis">
       设置路由前缀 BasePath
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      最佳实践
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="最佳实践">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      生成文档
     </span>
   </a>
   
@@ -1860,6 +1954,64 @@
 </span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>此时聊天路由为 <code>/agui/chat</code>，用消息快照路由为 <code>/agui/history</code>。</p>
+<h2 id="_6">最佳实践</h2>
+<h3 id="_7">生成文档</h3>
+<p>长篇文档如果直接插入到对话正文，很容易把主对话“刷屏”，用户也难以区分对话内容和文档内容。为了解决这个问题，建议使用“文档面板”来承载长文档。通过 AG-UI 的事件流约定一套“打开文档面板 → 写入文档内容 → 关闭文档面板”的工作流，将长文档从对话中“抽离”出来，避免干扰正常交流，示例方案如下。</p>
+<ol>
+<li>
+<p><strong>后端：定义工具并约束调用顺序</strong></p>
+<p>为 Agent 提供两个工具：<strong>打开文档面板</strong> 和 <strong>关闭文档面板</strong>，并在 prompt 中约束生成顺序：
+ 当进入文档生成流程时，按以下顺序执行：</p>
+<ol>
+<li>先调用“打开文档面板”工具</li>
+<li>紧接着输出文档内容</li>
+<li>最后调用“关闭文档面板”工具</li>
+</ol>
+<p>转换为 AG-UI 事件流，大致形态如下：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span>
+<span class="normal"><a href="#__codelineno-9-11">11</a></span>
+<span class="normal"><a href="#__codelineno-9-12">12</a></span>
+<span class="normal"><a href="#__codelineno-9-13">13</a></span>
+<span class="normal"><a href="#__codelineno-9-14">14</a></span>
+<span class="normal"><a href="#__codelineno-9-15">15</a></span>
+<span class="normal"><a href="#__codelineno-9-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a>打开文档面板工具
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>  → ToolCallStart
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a>  → ToolCallArgs
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a>  → ToolCallEnd
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a>  → ToolCallResult
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a>文档内容
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a>  → TextMessageStart
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a>  → TextMessageContent
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a>  → TextMessageEnd
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a>关闭文档面板工具
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a>  → ToolCallStart
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a>  → ToolCallArgs
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a>  → ToolCallEnd
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a>  → ToolCallResult
+</span></code></pre></div></td></tr></table></div>
+</li>
+<li>
+<p><strong>前端：监听工具事件并维护文档面板</strong></p>
+<p>在前端监听事件流：</p>
+<ul>
+<li>当捕捉到 <code>open_report_document</code> 工具事件时：创建文档面板，并将其后的文本消息内容写入该文档面板；</li>
+<li>当捕捉到 <code>close_report_document</code> 工具事件时：关闭文档面板（或将其标记为生成完成）。</li>
+</ul>
+</li>
+</ol>
+<p>实际效果如下图所示，完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report">examples/agui/server/report</a>。</p>
+<p><img alt="report" src="../../assets/gif/agui/report.gif" /></p>
 
 
 
@@ -1882,7 +2034,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月7日 02:00:25 UTC">2025-11-07 02:00:25</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月14日 02:17:05 UTC">2025-11-14 02:17:05</span>
   </span>
 
     

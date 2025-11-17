@@ -606,6 +606,29 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -719,6 +742,29 @@
   
   <span class="md-ellipsis">
     Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
     
   </span>
   
@@ -1095,6 +1141,30 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Practices
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#generating-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generating Documents
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1290,6 +1360,30 @@
   <a href="#setting-the-basepath-for-routes" class="md-nav__link">
     <span class="md-ellipsis">
       Setting the BasePath for Routes
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Practices
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#generating-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generating Documents
     </span>
   </a>
   
@@ -1860,6 +1954,65 @@
 </span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>In this case, the chat route will be <code>/agui/chat</code>, and the message snapshot route will be <code>/agui/history</code>.</p>
+<h2 id="best-practices">Best Practices</h2>
+<h3 id="generating-documents">Generating Documents</h3>
+<p>If a long-form document is inserted directly into the main conversation, it can easily “flood” the dialogue, making it hard for users to distinguish between conversation content and document content. To solve this, it’s recommended to use a <strong>document panel</strong> to carry long documents. By defining a workflow in the AG-UI event stream — “open document panel → write document content → close document panel” — you can pull long documents out of the main conversation and avoid disturbing normal interactions. A sample approach is as follows.</p>
+<ol>
+<li>
+<p><strong>Backend: Define tools and constrain call order</strong></p>
+<p>Provide the Agent with two tools: <strong>open document panel</strong> and <strong>close document panel</strong>, and constrain the generation order in the prompt:
+ when entering the document generation flow, execute in the following order:</p>
+<ol>
+<li>Call the “open document panel” tool first</li>
+<li>Then output the document content</li>
+<li>Finally call the “close document panel” tool</li>
+</ol>
+<p>Converted into an AG-UI event stream, it looks roughly like this:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span>
+<span class="normal"><a href="#__codelineno-9-11">11</a></span>
+<span class="normal"><a href="#__codelineno-9-12">12</a></span>
+<span class="normal"><a href="#__codelineno-9-13">13</a></span>
+<span class="normal"><a href="#__codelineno-9-14">14</a></span>
+<span class="normal"><a href="#__codelineno-9-15">15</a></span>
+<span class="normal"><a href="#__codelineno-9-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a>Open document panel tool
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>  → ToolCallStart
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a>  → ToolCallArgs
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a>  → ToolCallEnd
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a>  → ToolCallResult
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a>Document content
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a>  → TextMessageStart
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a>  → TextMessageContent
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a>  → TextMessageEnd
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a>Close document panel tool
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a>  → ToolCallStart
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a>  → ToolCallArgs
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a>  → ToolCallEnd
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a>  → ToolCallResult
+</span></code></pre></div></td></tr></table></div>
+</li>
+<li>
+<p><strong>Frontend: Listen for tool events and manage the document panel</strong></p>
+<p>On the frontend, listen to the event stream:</p>
+<ul>
+<li>When an <code>open_report_document</code> tool event is captured: create a document panel and write all subsequent text message content into that panel.</li>
+<li>When a <code>close_report_document</code> tool event is captured: close the document panel (or mark it as completed).</li>
+</ul>
+</li>
+</ol>
+<p>The effect is shown below. For a full example, refer to
+<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report">examples/agui/server/report</a>.</p>
+<p><img alt="report" src="../assets/gif/agui/report.gif" /></p>
 
 
 
@@ -1882,7 +2035,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 7, 2025 02:00:25 UTC">2025-11-07 02:00:25</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 14, 2025 02:17:05 UTC">2025-11-14 02:17:05</span>
   </span>
 
     
