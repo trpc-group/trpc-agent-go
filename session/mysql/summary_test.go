@@ -52,11 +52,7 @@ func TestCreateSessionSummary_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	summarizer := &mockSummarizer{
-		summarizeFunc: func(ctx context.Context, sess *session.Session) (string, error) {
-			return "This is a test summary", nil
-		},
-	}
+	summarizer := &fakeSummarizer{allow: true, out: "test summary"}
 
 	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSummarizer(summarizer))
 	ctx := context.Background()
@@ -390,6 +386,30 @@ func TestGetSessionSummaryText_EmptySummary(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetSessionSummaryText_FromInMemory(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:      "session-123",
+		AppName: "test-app",
+		UserID:  "user-456",
+		Summaries: map[string]*session.Summary{
+			"": {
+				Summary: "cached summary",
+			},
+		},
+	}
+
+	text, found := s.GetSessionSummaryText(ctx, sess)
+	assert.True(t, found)
+	assert.Equal(t, "cached summary", text)
+}
+
 func TestEnqueueSummaryJob_Success(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -474,6 +494,45 @@ func TestEnqueueSummaryJob_WithNilSession(t *testing.T) {
 	ctx := context.Background()
 	err = s.EnqueueSummaryJob(ctx, nil, "", false)
 	assert.Error(t, err)
+}
+
+func TestEnqueueSummaryJob_WithNotChan(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "test summary"}
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSummarizer(summarizer))
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: Check if summary exists (no existing summary)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary, updated_at FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}))
+
+	// Mock: Insert new summary
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	assert.NoError(t, err)
 }
 
 func TestEnqueueSummaryJob_ContextCancelled(t *testing.T) {
