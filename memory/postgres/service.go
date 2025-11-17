@@ -29,6 +29,11 @@ import (
 
 var _ memory.Service = (*Service)(nil)
 
+const (
+	// defaultDBInitTimeout is the default timeout for database initialization.
+	defaultDBInitTimeout = 30 * time.Second
+)
+
 // Service is the postgres memory service.
 // Storage structure:
 //
@@ -106,7 +111,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	// Initialize database schema unless skipped.
 	if !opts.skipDBInit {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), defaultDBInitTimeout)
 		defer cancel()
 		if err := s.initDB(ctx); err != nil {
 			return nil, fmt.Errorf("init database failed: %w", err)
