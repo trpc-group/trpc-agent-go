@@ -1233,8 +1233,6 @@ func (m *Model) handleStreamingResponse(
 			}
 		}
 
-		log.Infof("openai chunk: promptToken: %d, completionToken: %d, totalToken: %d", chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.TotalTokens)
-
 		// Aggregate reasoning delta (if any) for final response fallback.
 		if len(chunk.Choices) > 0 {
 			if reasoningContent := extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields); reasoningContent != "" {
