@@ -262,8 +262,8 @@ func TestLLMAgent_TokenUsageCounting(t *testing.T) {
 	}
 }
 
-// TestLLMAgent_TokenUsageMutipleInvocation tests that token usage correctly across multiple invocations.
-func TestLLMAgent_TokenUsageMutipleInvocation(t *testing.T) {
+// TestLLMAgent_TokenUsageMultipleInvocation tests that token usage correctly across multiple invocations.
+func TestLLMAgent_TokenUsageMultipleInvocation(t *testing.T) {
 	mockModel := &mockModelWithUsage{
 		responses: []*model.Response{
 			{
