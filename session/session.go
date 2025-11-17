@@ -283,6 +283,8 @@ func (sess *Session) ApplyEventFiltering(opts ...Option) {
 			return
 		}
 	}
+
+	sess.Events = []event.Event{}
 }
 
 // ApplyEventStateDelta merges the state delta of the event into the session state.
