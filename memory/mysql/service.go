@@ -47,10 +47,10 @@ type Service struct {
 // NewService creates a new mysql memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := ServiceOpts{
+		tableName:    "memories",
 		memoryLimit:  imemory.DefaultMemoryLimit,
 		toolCreators: make(map[string]memory.ToolCreator),
 		enabledTools: make(map[string]bool),
-		tableName:    "memories",
 	}
 	// Copy all tool creators.
 	for name, creator := range imemory.AllToolCreators {
