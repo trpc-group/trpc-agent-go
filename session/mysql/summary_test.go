@@ -410,6 +410,20 @@ func TestGetSessionSummaryText_FromInMemory(t *testing.T) {
 	assert.Equal(t, "cached summary", text)
 }
 
+func TestGetSessionSummaryText_WithNilSession(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	text, found := s.GetSessionSummaryText(ctx, nil)
+	assert.False(t, found)
+	assert.Empty(t, text)
+}
+
+// func TestPickSummaryText
+
 func TestEnqueueSummaryJob_Success(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1088,3 +1102,131 @@ func (f *fakeErrorSummarizer) Summarize(ctx context.Context, sess *session.Sessi
 	return "", fmt.Errorf("summarizer error")
 }
 func (f *fakeErrorSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestPickSummaryText(t *testing.T) {
+	tests := []struct {
+		name      string
+		summaries map[string]*session.Summary
+		wantText  string
+		wantOk    bool
+	}{
+		{
+			name:      "nil summaries",
+			summaries: nil,
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name:      "empty summaries",
+			summaries: map[string]*session.Summary{},
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name: "prefer all-contents summary when available",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: "full summary"},
+				"filter1": {Summary: "filtered summary 1"},
+				"filter2": {Summary: "filtered summary 2"},
+			},
+			wantText: "full summary",
+			wantOk:   true,
+		},
+		{
+			name: "all-contents summary exists but empty, should pick other non-empty",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: ""},
+				"filter1": {Summary: "filtered summary 1"},
+				"filter2": {Summary: "filtered summary 2"},
+			},
+			wantText: "filtered summary 1",
+			wantOk:   true,
+		},
+		{
+			name: "all-contents summary is nil, should pick other non-empty",
+			summaries: map[string]*session.Summary{
+				"":        nil,
+				"filter1": {Summary: "filtered summary 1"},
+				"filter2": {Summary: "filtered summary 2"},
+			},
+			wantText: "filtered summary 1",
+			wantOk:   true,
+		},
+		{
+			name: "only all-contents summary exists and is non-empty",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "full summary"},
+			},
+			wantText: "full summary",
+			wantOk:   true,
+		},
+		{
+			name: "only all-contents summary exists but is empty",
+			summaries: map[string]*session.Summary{
+				"": {Summary: ""},
+			},
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "only all-contents summary exists but is nil",
+			summaries: map[string]*session.Summary{
+				"": nil,
+			},
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "no all-contents summary, pick first non-empty",
+			summaries: map[string]*session.Summary{
+				"filter1": {Summary: "filtered summary 1"},
+				"filter2": {Summary: "filtered summary 2"},
+			},
+			wantText: "filtered summary 1",
+			wantOk:   true,
+		},
+		{
+			name: "all summaries are empty",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: ""},
+				"filter1": {Summary: ""},
+				"filter2": {Summary: ""},
+			},
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "all summaries are nil",
+			summaries: map[string]*session.Summary{
+				"":        nil,
+				"filter1": nil,
+				"filter2": nil,
+			},
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "mixed nil and empty summaries, pick first non-empty",
+			summaries: map[string]*session.Summary{
+				"":        nil,
+				"filter1": {Summary: ""},
+				"filter2": {Summary: "valid summary"},
+				"filter3": {Summary: "another valid"},
+			},
+			wantText: "valid summary",
+			wantOk:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotOk := pickSummaryText(tt.summaries)
+			if gotText != tt.wantText {
+				t.Errorf("pickSummaryText() text = %v, want %v", gotText, tt.wantText)
+			}
+			if gotOk != tt.wantOk {
+				t.Errorf("pickSummaryText() ok = %v, want %v", gotOk, tt.wantOk)
+			}
+		})
+	}
+}
