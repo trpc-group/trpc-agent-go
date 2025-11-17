@@ -370,7 +370,7 @@ func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response,
 - 中间件：`"middleware:xxx"`
 - 自定义逻辑：`"custom:xxx"`
 
-详细的使用说明和更多示例请参考 [Callbacks](./callbacks.md#invocation-state在回调间共享状态)。
+详细的使用说明和更多示例请参考 [Callbacks](./callbacks.md#invocation-state)。
 
 ### Event
 

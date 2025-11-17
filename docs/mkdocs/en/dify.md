@@ -549,5 +549,5 @@ func (c *MyConverter) ConvertToDifyRequest(...) (*dify.ChatMessageRequest, error
 
 - [Dify Official Documentation](https://docs.dify.ai/)
 - [Dify SDK Go](https://github.com/cloudernative/dify-sdk-go)
-- [tRPC-Agent-Go Documentation](../README.md)
+- [tRPC-Agent-Go Documentation](https://github.com/trpc-group/trpc-agent-go/blob/main/README.md)
 - [A2A Integration Guide](./a2a.md)

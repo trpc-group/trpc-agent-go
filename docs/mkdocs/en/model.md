@@ -1390,9 +1390,9 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to [Token Tailoring under OpenAI Model](#5-token-tailoring).
+For detailed explanations of the token calculation formula, tailoring strategy, and custom strategy implementation, please refer to [Token Tailoring under OpenAI Model](#3-token-tailoring).
 
-### 3. Provider
+## Provider
 
 With the emergence of multiple large model providers, some have defined their own API specifications. Currently, the framework has integrated the APIs of OpenAI and Anthropic, and exposes them as models. Users can access different provider models through `openai.New` and `anthropic.New`.
 
@@ -1412,7 +1412,7 @@ The Provider supports the following `Option`:
 | `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token trimming related parameters                                       |
 | `WithOpenAI` / `WithAnthropic`                                                                    | Pass-through native options for the respective providers                |
 
-#### Usage Example
+### Usage Example
 
 ```go
 import (
@@ -1438,7 +1438,7 @@ agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))
 
 Full code can be found in [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider).
 
-#### Registering a Custom Provider
+### Registering a Custom Provider
 
 The framework supports registering custom providers to integrate other large model providers or custom model implementations.
 
