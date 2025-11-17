@@ -242,7 +242,13 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 					continue
 				}
 
-				switch typeVal {
+				// Convert typeVal to string for comparison
+				typeStr, ok := typeVal.(string)
+				if !ok {
+					continue
+				}
+
+				switch typeStr {
 				case dataPartMetadataTypeFunctionCall:
 					// Server is requesting Client to call a tool
 					toolCall := convertDataPartToToolCall(d)
