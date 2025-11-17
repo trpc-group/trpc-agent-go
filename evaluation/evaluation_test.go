@@ -36,6 +36,10 @@ func (stubRunner) Run(ctx context.Context, userID string, sessionID string, mess
 	return nil, nil
 }
 
+func (stubRunner) Close() error {
+	return nil
+}
+
 type fakeService struct {
 	inferenceResults [][]*service.InferenceResult
 	evaluateResults  []*evalresult.EvalSetResult
