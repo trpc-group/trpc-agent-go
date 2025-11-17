@@ -775,6 +775,16 @@ func TestApplyEventFiltering(t *testing.T) {
 			description: "Should clear all events when none match time filter",
 		},
 		{
+			name: "not user message",
+			inputSession: createTestSession([]event.Event{
+				*createTestEvent(model.RoleAssistant, "old msg 1", baseTime, nil),
+				*createTestEvent(model.RoleAssistant, "old msg 2", baseTime.Add(time.Minute), nil),
+			}, nil),
+			options:        []Option{WithEventTime(baseTime.Add(10 * time.Minute))},
+			expectedEvents: []event.Event{},
+			description:    "Should clear all events when none match user message",
+		},
+		{
 			name: "both number and time filters",
 			inputSession: createTestSession([]event.Event{
 				*createTestEvent(model.RoleUser, "msg 1", baseTime, nil),

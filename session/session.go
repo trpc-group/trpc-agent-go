@@ -240,10 +240,6 @@ func (sess *Session) ApplyEventFiltering(opts ...Option) {
 		log.Info("session is nil")
 		return
 	}
-	if len(sess.Events) == 0 {
-		log.Info("session has no events")
-		return
-	}
 	originalEvents := sess.Events
 	opt := applyOptions(opts...)
 
