@@ -68,8 +68,10 @@ func TestServiceOpts_Defaults(t *testing.T) {
 
 	// Test default values.
 	assert.Equal(t, 0, opts.memoryLimit, "Expected default memoryLimit to be 0")
-	assert.Empty(t, opts.connString, "Expected default connString to be empty")
+	assert.Empty(t, opts.host, "Expected default host to be empty")
 	assert.Empty(t, opts.instanceName, "Expected default instanceName to be empty")
+	assert.False(t, opts.skipDBInit, "Expected default skipDBInit to be false")
+	assert.Empty(t, opts.schema, "Expected default schema to be empty")
 	// Note: toolCreators and enabledTools are nil by default in the zero value.
 	// They get initialized when NewService is called.
 }
@@ -83,13 +85,88 @@ func TestServiceOpts_WithMemoryLimit(t *testing.T) {
 	assert.Equal(t, limit, opts.memoryLimit)
 }
 
-func TestServiceOpts_WithPostgresConnString(t *testing.T) {
+func TestServiceOpts_WithHost(t *testing.T) {
 	opts := ServiceOpts{}
-	connString := "postgres://localhost:5432/testdb"
+	host := "localhost"
 
-	WithPostgresConnString(connString)(&opts)
+	WithHost(host)(&opts)
 
-	assert.Equal(t, connString, opts.connString)
+	assert.Equal(t, host, opts.host)
+}
+
+func TestServiceOpts_WithPort(t *testing.T) {
+	opts := ServiceOpts{}
+	port := 5432
+
+	WithPort(port)(&opts)
+
+	assert.Equal(t, port, opts.port)
+}
+
+func TestServiceOpts_WithUser(t *testing.T) {
+	opts := ServiceOpts{}
+	user := "testuser"
+
+	WithUser(user)(&opts)
+
+	assert.Equal(t, user, opts.user)
+}
+
+func TestServiceOpts_WithPassword(t *testing.T) {
+	opts := ServiceOpts{}
+	password := "testpass"
+
+	WithPassword(password)(&opts)
+
+	assert.Equal(t, password, opts.password)
+}
+
+func TestServiceOpts_WithDatabase(t *testing.T) {
+	opts := ServiceOpts{}
+	database := "testdb"
+
+	WithDatabase(database)(&opts)
+
+	assert.Equal(t, database, opts.database)
+}
+
+func TestServiceOpts_WithSSLMode(t *testing.T) {
+	opts := ServiceOpts{}
+	sslMode := "require"
+
+	WithSSLMode(sslMode)(&opts)
+
+	assert.Equal(t, sslMode, opts.sslMode)
+}
+
+func TestServiceOpts_WithSkipDBInit(t *testing.T) {
+	opts := ServiceOpts{}
+
+	WithSkipDBInit(true)(&opts)
+	assert.True(t, opts.skipDBInit)
+
+	WithSkipDBInit(false)(&opts)
+	assert.False(t, opts.skipDBInit)
+}
+
+func TestServiceOpts_WithSchema(t *testing.T) {
+	opts := ServiceOpts{}
+	schema := "test_schema"
+
+	WithSchema(schema)(&opts)
+
+	assert.Equal(t, schema, opts.schema)
+}
+
+func TestServiceOpts_WithSchema_Invalid(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic for invalid schema name")
+		assert.Contains(t, fmt.Sprintf("%v", r), "invalid table name")
+	}()
+
+	opts := ServiceOpts{}
+	WithSchema("invalid-schema-name")(&opts)
 }
 
 func TestServiceOpts_WithPostgresInstance(t *testing.T) {
@@ -185,12 +262,20 @@ func TestServiceOpts_CombinedOptions(t *testing.T) {
 	opts := ServiceOpts{}
 
 	// Apply multiple options.
-	WithPostgresConnString("postgres://localhost:5432/testdb")(&opts)
+	WithHost("localhost")(&opts)
+	WithPort(5432)(&opts)
+	WithUser("testuser")(&opts)
+	WithPassword("testpass")(&opts)
+	WithDatabase("testdb")(&opts)
 	WithMemoryLimit(1000)(&opts)
 	WithPostgresInstance("backup-instance")(&opts)
 
 	// Verify all options are set correctly.
-	assert.Equal(t, "postgres://localhost:5432/testdb", opts.connString)
+	assert.Equal(t, "localhost", opts.host)
+	assert.Equal(t, 5432, opts.port)
+	assert.Equal(t, "testuser", opts.user)
+	assert.Equal(t, "testpass", opts.password)
+	assert.Equal(t, "testdb", opts.database)
 	assert.Equal(t, 1000, opts.memoryLimit)
 	assert.Equal(t, "backup-instance", opts.instanceName)
 }
@@ -277,9 +362,12 @@ func setupTestPostgres(t testing.TB) (string, func()) {
 }
 
 func newTestService(t *testing.T) (*Service, func()) {
-	connString, cleanup := setupTestPostgres(t)
+	_, cleanup := setupTestPostgres(t)
+	// For integration tests, we'll use the connection settings directly
 	svc, err := NewService(
-		WithPostgresConnString(connString),
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
 	)
 	require.NoError(t, err)
 	return svc, func() {
@@ -401,11 +489,13 @@ func TestService_SearchMemories(t *testing.T) {
 }
 
 func TestService_MemoryLimit(t *testing.T) {
-	connString, cleanup := setupTestPostgres(t)
+	_, cleanup := setupTestPostgres(t)
 	defer cleanup()
 	ctx := context.Background()
 	svc, err := NewService(
-		WithPostgresConnString(connString),
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
 		WithMemoryLimit(1),
 	)
 	require.NoError(t, err)
@@ -589,12 +679,14 @@ func TestService_AddMemory_InvalidKey(t *testing.T) {
 }
 
 func TestService_AddMemory_LimitError(t *testing.T) {
-	connString, cleanup := setupTestPostgres(t)
+	_, cleanup := setupTestPostgres(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	svc, err := NewService(
-		WithPostgresConnString(connString),
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
 		WithMemoryLimit(2),
 	)
 	require.NoError(t, err)
@@ -629,12 +721,14 @@ func TestService_Tools_Caching(t *testing.T) {
 }
 
 func TestService_Tools_DisabledTools(t *testing.T) {
-	connString, cleanup := setupTestPostgres(t)
+	_, cleanup := setupTestPostgres(t)
 	defer cleanup()
 
 	// Disable a tool.
 	svc, err := NewService(
-		WithPostgresConnString(connString),
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
 		WithToolEnabled(memory.SearchToolName, false),
 	)
 	require.NoError(t, err)
@@ -715,8 +809,39 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 		storage.SetClientBuilder(originalBuilder)
 	})
 
-	// Mock table creation - initTable executes all CREATE statements in one ExecContext call
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	// Check if skipDBInit is set in opts
+	skipDBInit := false
+	for _, opt := range opts {
+		testOpts := &ServiceOpts{}
+		opt(testOpts)
+		if testOpts.skipDBInit {
+			skipDBInit = true
+			break
+		}
+	}
+
+	if !skipDBInit {
+		// Mock table creation
+		mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+		// Mock index creation (3 indexes)
+		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
+	// Ensure host is set if not already set
+	hasHost := false
+	for _, opt := range opts {
+		testOpts := &ServiceOpts{}
+		opt(testOpts)
+		if testOpts.host != "" {
+			hasHost = true
+			break
+		}
+	}
+	if !hasHost {
+		opts = append(opts, WithHost("localhost"))
+	}
 
 	svc, err := NewService(opts...)
 	require.NoError(t, err)
@@ -756,7 +881,7 @@ func TestValidateTableName_TooLong(t *testing.T) {
 	WithTableName(longName)(&opts)
 }
 
-func TestNewService_WithDSN(t *testing.T) {
+func TestNewService_WithHost(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 
@@ -767,10 +892,13 @@ func TestNewService_WithDSN(t *testing.T) {
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
-	// initTable executes all CREATE statements in one ExecContext call
+	// Mock table and index creation
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	service, err := NewService(WithPostgresConnString("postgres://localhost:5432/testdb"))
+	service, err := NewService(WithHost("localhost"), WithPort(5432), WithDatabase("testdb"))
 	require.NoError(t, err)
 	assert.NotNil(t, service)
 
@@ -778,7 +906,7 @@ func TestNewService_WithDSN(t *testing.T) {
 	service.Close()
 }
 
-func TestNewService_InitTableError(t *testing.T) {
+func TestNewService_InitDBError(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 
@@ -791,13 +919,9 @@ func TestNewService_InitTableError(t *testing.T) {
 
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnError(fmt.Errorf("table creation failed"))
 
-	defer func() {
-		r := recover()
-		require.NotNil(t, r, "expected panic for table creation failure")
-		assert.Contains(t, fmt.Sprintf("%v", r), "failed to initialize table")
-	}()
-
-	NewService(WithPostgresConnString("postgres://localhost:5432/testdb"))
+	_, err := NewService(WithHost("localhost"), WithPort(5432), WithDatabase("testdb"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "init database failed")
 }
 
 func TestService_AddMemory_Success(t *testing.T) {
@@ -1237,16 +1361,16 @@ func TestService_SearchMemories_InvalidKey(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestNewService_ConnStringBuilderError(t *testing.T) {
+func TestNewService_ConnectionSettingsBuilderError(t *testing.T) {
 	originalBuilder := storage.GetClientBuilder()
 	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
 		return nil, fmt.Errorf("connection failed")
 	})
 	defer storage.SetClientBuilder(originalBuilder)
 
-	_, err := NewService(WithPostgresConnString("postgres://localhost:5432/testdb"))
+	_, err := NewService(WithHost("localhost"), WithPort(5432), WithDatabase("testdb"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "create postgres client from connection string failed")
+	assert.Contains(t, err.Error(), "create postgres client from connection settings failed")
 }
 
 func TestNewService_InstanceNameBuilderError(t *testing.T) {
@@ -1266,7 +1390,7 @@ func TestNewService_InstanceNameBuilderError(t *testing.T) {
 	assert.Contains(t, err.Error(), "create postgres client from instance name failed")
 }
 
-func TestNewService_ConnStringPriority(t *testing.T) {
+func TestNewService_ConnectionSettingsPriority(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 
@@ -1288,14 +1412,20 @@ func TestNewService_ConnStringPriority(t *testing.T) {
 	)
 
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	service, err := NewService(
-		WithPostgresConnString("postgres://localhost:5432/customdb"),
+		WithHost("customhost"),
+		WithPort(5433),
+		WithDatabase("customdb"),
 		WithPostgresInstance("test-instance"),
 	)
 	require.NoError(t, err)
 	assert.NotNil(t, service)
-	assert.Equal(t, "postgres://localhost:5432/customdb", receivedConnString, "connString should have priority over instanceName")
+	assert.Contains(t, receivedConnString, "customhost", "direct connection settings should have priority over instanceName")
+	assert.Contains(t, receivedConnString, "customdb", "direct connection settings should have priority over instanceName")
 
 	require.NoError(t, mock.ExpectationsWereMet())
 	service.Close()
@@ -1509,9 +1639,9 @@ func TestService_SearchMemories_UnmarshalError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestService_Close_NilDB(t *testing.T) {
+func TestService_Close_NilClient(t *testing.T) {
 	svc := &Service{
-		db: nil,
+		pgClient: nil,
 	}
 
 	err := svc.Close()
@@ -1535,4 +1665,280 @@ func TestService_AddMemory_CountQueryNoRows(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Test buildConnString function
+func TestBuildConnString(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     ServiceOpts
+		expected string
+	}{
+		{
+			name: "all fields set",
+			opts: ServiceOpts{
+				host:     "testhost",
+				port:     5433,
+				user:     "testuser",
+				password: "testpass",
+				database: "testdb",
+				sslMode:  "require",
+			},
+			expected: "host=testhost port=5433 dbname=testdb sslmode=require user=testuser password=testpass",
+		},
+		{
+			name: "default values",
+			opts: ServiceOpts{
+				host: "",
+			},
+			expected: "host=localhost port=5432 dbname=trpc-agent-go-pgmemory sslmode=disable",
+		},
+		{
+			name: "without user and password",
+			opts: ServiceOpts{
+				host:     "testhost",
+				port:     5432,
+				database: "testdb",
+				sslMode:  "disable",
+			},
+			expected: "host=testhost port=5432 dbname=testdb sslmode=disable",
+		},
+		{
+			name: "with user only",
+			opts: ServiceOpts{
+				host:     "testhost",
+				port:     5432,
+				user:     "testuser",
+				database: "testdb",
+				sslMode:  "disable",
+			},
+			expected: "host=testhost port=5432 dbname=testdb sslmode=disable user=testuser",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildConnString(tt.opts)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// Test buildCreateTableSQL function
+func TestBuildCreateTableSQL(t *testing.T) {
+	tests := []struct {
+		name      string
+		schema    string
+		tableName string
+		expected  string
+	}{
+		{
+			name:      "no schema",
+			schema:    "",
+			tableName: "memories",
+			expected:  "memories",
+		},
+		{
+			name:      "with schema",
+			schema:    "test_schema",
+			tableName: "memories",
+			expected:  "test_schema.memories",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildCreateTableSQL(tt.schema, tt.tableName, sqlCreateMemoriesTable)
+			assert.Contains(t, result, tt.expected)
+			assert.Contains(t, result, "CREATE TABLE IF NOT EXISTS")
+		})
+	}
+}
+
+// Test buildCreateIndexSQL function
+func TestBuildCreateIndexSQL(t *testing.T) {
+	tests := []struct {
+		name        string
+		schema      string
+		tableName   string
+		indexSuffix string
+		expected    string
+	}{
+		{
+			name:        "no schema",
+			schema:      "",
+			tableName:   "memories",
+			indexSuffix: "app_user",
+			expected:    "memories",
+		},
+		{
+			name:        "with schema",
+			schema:      "test_schema",
+			tableName:   "memories",
+			indexSuffix: "app_user",
+			expected:    "test_schema.memories",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildCreateIndexSQL(tt.schema, tt.tableName, tt.indexSuffix, sqlCreateMemoriesAppUserIndex)
+			assert.Contains(t, result, tt.expected)
+			assert.Contains(t, result, "CREATE INDEX IF NOT EXISTS")
+		})
+	}
+}
+
+// Test NewService with missing connection settings
+func TestNewService_MissingConnectionSettings(t *testing.T) {
+	_, err := NewService()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "either connection settings")
+}
+
+// Test NewService with skipDBInit
+func TestNewService_WithSkipDBInit(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Should not expect any CREATE statements
+	service, err := NewService(
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	service.Close()
+}
+
+// Test NewService with schema
+func TestNewService_WithSchema(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Mock table and index creation with schema
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS.*test_schema.memories").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	service, err := NewService(
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
+		WithSchema("test_schema"),
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+	assert.Contains(t, service.tableName, "test_schema")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	service.Close()
+}
+
+// Test initDB with index creation error
+func TestInitDB_IndexCreationError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Mock table creation success
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	// Mock first index creation error
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnError(fmt.Errorf("index creation failed"))
+
+	_, err := NewService(
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "init database failed")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Test Service operations with schema
+func TestService_WithSchema(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return client, nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Mock table and index creation
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS.*test_schema.memories").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	service, err := NewService(
+		WithHost("localhost"),
+		WithPort(5432),
+		WithDatabase("testdb"),
+		WithSchema("test_schema"),
+		WithMemoryLimit(0), // Disable memory limit to avoid COUNT query
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Test AddMemory with schema-qualified table name
+	mock.ExpectExec("INSERT INTO.*test_schema.memories").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = service.AddMemory(ctx, userKey, "test memory", []string{"topic1"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Test generateMemoryID with different inputs
+func TestGenerateMemoryID_DifferentContent(t *testing.T) {
+	mem1 := &memory.Memory{Memory: "content1"}
+	mem2 := &memory.Memory{Memory: "content2"}
+
+	id1 := generateMemoryID(mem1)
+	id2 := generateMemoryID(mem2)
+
+	assert.NotEqual(t, id1, id2, "Different content should generate different IDs")
+}
+
+func TestGenerateMemoryID_DifferentTopics(t *testing.T) {
+	mem1 := &memory.Memory{Memory: "content", Topics: []string{"topic1"}}
+	mem2 := &memory.Memory{Memory: "content", Topics: []string{"topic2"}}
+
+	id1 := generateMemoryID(mem1)
+	id2 := generateMemoryID(mem2)
+
+	assert.NotEqual(t, id1, id2, "Different topics should generate different IDs")
 }
