@@ -271,8 +271,6 @@ func (s *SessionService) GetSession(
 
 	// apply filtering options if provided
 	copiedSess.ApplyEventFiltering(opts...)
-	// filter events to ensure they start with RoleUser
-	copiedSess.EnsureEventStartWithUser()
 
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
