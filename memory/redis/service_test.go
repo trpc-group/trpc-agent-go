@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -587,6 +588,37 @@ func TestNewService_ConnectionSuccess(t *testing.T) {
 	defer cleanup()
 
 	svc, err := NewService(WithRedisClientURL(url))
+	require.NoError(t, err)
+	assert.NotNil(t, svc)
+
+	// Verify the service works by calling a method.
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	assert.NotNil(t, entries)
+}
+
+func TestNewService_InstanceName_ConnectionFailure(t *testing.T) {
+	// Register an instance with invalid Redis address that will fail on ping.
+	storage.RegisterRedisInstance("test-instance-failure", storage.WithClientBuilderURL("redis://255.255.255.255:6379"))
+
+	// Test with instance name that has invalid Redis address.
+	_, err := NewService(WithRedisInstance("test-instance-failure"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redis connection test failed")
+}
+
+func TestNewService_InstanceName_ConnectionSuccess(t *testing.T) {
+	// Isolate global state to avoid affecting other tests.
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	instanceName := "test-instance-success"
+	storage.RegisterRedisInstance(instanceName, storage.WithClientBuilderURL(url))
+
+	// Test with instance name that has valid Redis connection.
+	svc, err := NewService(WithRedisInstance(instanceName))
 	require.NoError(t, err)
 	assert.NotNil(t, svc)
 
