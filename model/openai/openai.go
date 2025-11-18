@@ -331,33 +331,13 @@ type options struct {
 	// MaxInputTokens is the max input tokens for token tailoring.
 	MaxInputTokens int
 	// TokenTailoringConfig allows customization of token tailoring parameters.
-	TokenTailoringConfig *TokenTailoringConfig
+	TokenTailoringConfig *model.TokenTailoringConfig
 	// ShowToolCallDelta controls whether to expose tool call
 	// deltas in streaming responses. When true, raw tool_call
 	// chunks from the provider will be forwarded via
 	// Response.Choices[].Delta.ToolCalls instead of being
 	// suppressed until the final aggregated response.
 	ShowToolCallDelta bool
-}
-
-// TokenTailoringConfig holds custom token tailoring budget parameters.
-type TokenTailoringConfig struct {
-	// ProtocolOverheadTokens is the number of tokens reserved for protocol
-	// overhead.
-	ProtocolOverheadTokens int
-	// ReserveOutputTokens is the number of tokens reserved for output
-	// generation.
-	ReserveOutputTokens int
-	// InputTokensFloor is the minimum number of input tokens.
-	InputTokensFloor int
-	// OutputTokensFloor is the minimum number of output tokens.
-	OutputTokensFloor int
-	// SafetyMarginRatio is the safety margin ratio for token counting
-	// inaccuracies.
-	SafetyMarginRatio float64
-	// MaxInputTokensRatio is the maximum input tokens ratio of the context
-	// window.
-	MaxInputTokensRatio float64
 }
 
 // Option is a function that configures an OpenAI model.
@@ -538,7 +518,7 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 //
 // Example:
 //
-//	openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+//	openai.WithTokenTailoringConfig(&model.TokenTailoringConfig{
 //	    ProtocolOverheadTokens: 1024,
 //	    ReserveOutputTokens:    4096,
 //	    SafetyMarginRatio:      0.15,
@@ -546,7 +526,7 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 //
 // Note: It is recommended to use the default values unless you have specific
 // requirements.
-func WithTokenTailoringConfig(config *TokenTailoringConfig) Option {
+func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	return func(opts *options) {
 		opts.TokenTailoringConfig = config
 	}
