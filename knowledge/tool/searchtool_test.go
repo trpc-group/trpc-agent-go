@@ -189,8 +189,13 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		decl = ttool.Declaration()
 		require.NotEmpty(t, decl.Name)
 
+		// Verify WithMinScore option
+		ttool = NewKnowledgeSearchTool(kb, WithMinScore(0.5))
+		decl = ttool.Declaration()
+		require.NotEmpty(t, decl.Name)
+
 		// Verify all options together
-		ttool = NewKnowledgeSearchTool(kb, WithToolName(customName), WithToolDescription(customDesc), WithFilter(customFilter), WithMaxResults(10))
+		ttool = NewKnowledgeSearchTool(kb, WithToolName(customName), WithToolDescription(customDesc), WithFilter(customFilter), WithMaxResults(10), WithMinScore(0.7))
 		decl = ttool.Declaration()
 		require.Equal(t, customName, decl.Name)
 		require.Equal(t, customDesc, decl.Description)
@@ -372,8 +377,13 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 		decl = searchTool.Declaration()
 		require.NotEmpty(t, decl.Name)
 
+		// Verify WithMinScore option
+		searchTool = NewAgenticFilterSearchTool(kb, agenticFilterInfo, WithMinScore(0.6))
+		decl = searchTool.Declaration()
+		require.NotEmpty(t, decl.Name)
+
 		// Verify all options together
-		searchTool = NewAgenticFilterSearchTool(kb, agenticFilterInfo, WithToolName(customName), WithToolDescription(customDesc), WithFilter(customFilter))
+		searchTool = NewAgenticFilterSearchTool(kb, agenticFilterInfo, WithToolName(customName), WithToolDescription(customDesc), WithFilter(customFilter), WithMinScore(0.8))
 		decl = searchTool.Declaration()
 		require.Equal(t, customName, decl.Name)
 		require.Contains(t, decl.Description, "tool description:"+customDesc)
