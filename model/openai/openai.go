@@ -1239,7 +1239,7 @@ func (m *Model) handleStreamingResponse(
 
 		// Always accumulate for correctness (tool call deltas are assembled later),
 		// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
-		if len(chunk.Choices) > 0 && !m.hasReasoningContent(chunk.Choices[0].Delta) {
+		if !m.hasReasoningContent(chunk.Choices) {
 			acc.AddChunk(chunk)
 			if m.accumulateChunkUsage != nil {
 				accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
@@ -1261,7 +1261,7 @@ func (m *Model) handleStreamingResponse(
 		// tool_call deltas, which we'll surface only in the final response).
 		// Note: reasoning content chunks are not suppressed even if they have no other content.
 		if m.shouldSuppressChunk(chunk) {
-			if len(chunk.Choices) == 0 || !m.hasReasoningContent(chunk.Choices[0].Delta) {
+			if !m.hasReasoningContent(chunk.Choices) {
 				continue
 			}
 		}
@@ -1310,16 +1310,16 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	if len(chunk.Choices) == 0 {
 		return true
 	}
+	// Check for reasoning content - if present, don't suppress.
+	if m.hasReasoningContent(chunk.Choices) {
+		return false
+	}
+
 	choice := chunk.Choices[0]
 	delta := choice.Delta
 
 	// Any meaningful payload disables suppression.
 	if delta.Content != "" {
-		return false
-	}
-
-	// Check for reasoning content - if present, don't suppress.
-	if m.hasReasoningContent(delta) {
 		return false
 	}
 
@@ -1330,10 +1330,7 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	hasToolCall := delta.JSON.ToolCalls.Valid() ||
 		len(delta.ToolCalls) > 0
 	if hasToolCall {
-		if m.showToolCallDelta {
-			return false
-		}
-		return true
+		return !m.showToolCallDelta
 	}
 
 	if choice.FinishReason != "" {
@@ -1358,13 +1355,13 @@ func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 		return false
 	}
 
-	// Extract delta for inspection.
-	delta := chunk.Choices[0].Delta
-
 	// Reasoning content is meaningful even if other fields are empty.
-	if m.hasReasoningContent(delta) {
+	if m.hasReasoningContent(chunk.Choices) {
 		return false
 	}
+
+	// Extract delta for inspection.
+	delta := chunk.Choices[0].Delta
 
 	// Content or refusal indicates meaningful output.
 	if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
@@ -1380,9 +1377,12 @@ func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 	return true
 }
 
-// hasReasoningContent checks if the delta contains reasoning content.
-func (m *Model) hasReasoningContent(delta openai.ChatCompletionChunkChoiceDelta) bool {
-	return extractReasoningContent(delta.JSON.ExtraFields) != ""
+// hasReasoningContent checks if the choices contains reasoning content.
+func (m *Model) hasReasoningContent(choices []openai.ChatCompletionChunkChoice) bool {
+	if len(choices) == 0 {
+		return false
+	}
+	return extractReasoningContent(choices[0].Delta.JSON.ExtraFields) != ""
 }
 
 // extractReasoningContent extracts reasoning content from ExtraFields.
