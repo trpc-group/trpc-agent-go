@@ -55,12 +55,20 @@ func CheckTokenThreshold(tokenCount int) Checker {
 			return false
 		}
 
-		totalTokens := 0
+		invocationTokens := make(map[string]int)
 		for _, event := range sess.Events {
 			if event.Response == nil || event.Response.Usage == nil {
 				continue
 			}
-			totalTokens += event.Response.Usage.TotalTokens
+			invocationID := event.InvocationID
+			if event.Response.Usage.TotalTokens > 0 {
+				invocationTokens[invocationID] = event.Response.Usage.TotalTokens
+			}
+		}
+
+		totalTokens := 0
+		for _, tokens := range invocationTokens {
+			totalTokens += tokens
 		}
 
 		return totalTokens > tokenCount

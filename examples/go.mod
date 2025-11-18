@@ -18,6 +18,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
 	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch => ../tool/arxivsearch
+	trpc.group/trpc-go/trpc-agent-go/tool/google => ../tool/google
 )
 
 require (

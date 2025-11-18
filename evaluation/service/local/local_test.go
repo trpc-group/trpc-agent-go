@@ -57,6 +57,10 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 	return ch, nil
 }
 
+func (f *fakeRunner) Close() error {
+	return nil
+}
+
 type fakeEvaluator struct {
 	name   string
 	result *evaluator.EvaluateResult

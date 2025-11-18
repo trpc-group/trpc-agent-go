@@ -1194,7 +1194,7 @@ model := openai.New("deepseek-chat",
 ```go
 model := openai.New("deepseek-chat",
     openai.WithEnableTokenTailoring(true),
-    openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+    openai.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         ProtocolOverheadTokens: 1024,   // 自定义协议开销
         ReserveOutputTokens:    4096,   // 自定义输出预留
         InputTokensFloor:       2048,   // 自定义输入最小值
@@ -1210,15 +1210,18 @@ model := openai.New("deepseek-chat",
 ```go
 model := anthropic.New("claude-sonnet-4-0",
     anthropic.WithEnableTokenTailoring(true),
-    anthropic.WithTokenTailoringConfig(&anthropic.TokenTailoringConfig{
+    anthropic.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         SafetyMarginRatio: 0.15,  // 提高安全边际到 15%
     }),
 )
 ```
 
 #### 7. Variant 优化：平台特有行为适配
+
 Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，特别是文件上传、删除和处理逻辑。
-##### 6.1. 支持的 Variant 类型
+
+##### 7.1. 支持的 Variant 类型
+
 框架目前支持以下 Variant：
 
 **1. VariantOpenAI（默认）**
@@ -1226,14 +1229,14 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - 标准 OpenAI API 兼容行为
 - 文件上传路径：`/openapi/v1/files`
 - 文件用途：`user_data`
-- 删除文件的Http请求方法：`DELETE`
+- 删除文件的 Http 请求方法：`DELETE`
 
 **2. VariantHunyuan（混元）**
 
 - 腾讯混元平台特有适配
 - 文件上传路径：`/openapi/v1/files/uploads`
 - 文件用途：`file-extract`
-- 删除文件的Http请求方法：`POST`
+- 删除文件的 Http 请求方法：`POST`
 
 **3. VariantDeepSeek**
 
@@ -1249,7 +1252,7 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - API Key 环境变量名：`DASHSCOPE_API_KEY`
 - 其他行为与标准 OpenAI 一致
 
-##### 6.2. 使用方式
+##### 7.2. 使用方式
 
 **使用示例**：
 
@@ -1270,7 +1273,8 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // 指定 DeepSeek
 )
 ```
-##### 6.3. Variant 的行为差异示例
+
+##### 7.3. Variant 的行为差异示例
 
 **消息内容处理差异**：
 
@@ -1309,6 +1313,54 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
 )
 ```
+
+#### 8. 流式工具调用增量：ShowToolCallDelta
+
+默认情况下，OpenAI 适配层会**隐藏流式响应中的原始 `tool_calls` 分片**：
+
+- 含有 `tool_calls` 但没有可见文本内容的 chunk 会在适配层被过滤；
+- 工具调用会在内部累积，最终只在一次性汇总的响应中，通过
+  `Response.Choices[0].Message.ToolCalls` 对外暴露；
+- 这种行为适合只关心助手文本的普通聊天界面，避免在流中出现半截
+  JSON 片段。
+
+对于更高级的场景（例如：模型将文档正文写入工具入参的 JSON 字段，
+前端希望“边生成边预览”正文），可以通过 `WithShowToolCallDelta`
+打开原始工具调用增量：
+
+```go
+llm := openai.New(
+    "gpt-4.1",
+    openai.WithShowToolCallDelta(true), // 转发 tool_call 增量分片
+)
+```
+
+当启用 `WithShowToolCallDelta(true)` 时：
+
+- 含有 `tool_calls` 的流式 chunk 不再被适配层压制；
+- 每个 chunk 会被转换为部分响应 `model.Response`，其中：
+  - `Response.IsPartial == true`
+  - `Response.Choices[0].Delta.ToolCalls` 中包含来自提供方的原始
+    `tool_calls` 增量，并映射为 `model.ToolCall`：
+    - `Type` 来自底层的 `type` 字段（例如 `"function"`）；
+    - `Function.Name`、`Function.Arguments` 与原始工具名和
+      JSON 字符串参数保持一致；
+    - `ID`、`Index` 保留工具调用的唯一标识，方便调用方按 ID 合并分片；
+- 最终汇总响应仍然会把合并后的工具调用放在
+  `Response.Choices[0].Message.ToolCalls` 中，原有工具执行链路
+  （例如 `FunctionCallResponseProcessor`）可以无缝复用。
+
+典型的业务接入模式：
+
+1. 在每个部分响应中读取
+   `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments`；
+2. 按工具调用 `ID` 分组并追加 `Arguments` 字符串分片；
+3. 当累积字符串构成合法 JSON 后，将其反序列化为业务结构体
+   （例如 `{ "content": "..." }`），用于前端渐进式展示。
+
+如果不需要在流式阶段解析工具入参，只关心最终调用结果，建议保持
+`WithShowToolCallDelta` 的默认关闭状态，以避免处理部分 JSON 片段，
+并保留默认的“仅流式输出助手文本”的简洁行为。
 
 ## Anthropic Model
 
@@ -1718,7 +1770,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 
 #### 3. 自定义 HTTP Header
 
-在网关、专有平台或代理环境中，请求模型 API 往往需要额外的HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、文件上传、批处理等全链路。
+在网关、专有平台或代理环境中，请求模型 API 往往需要额外的 HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、文件上传、批处理等全链路。
 
 推荐顺序：
 
@@ -1837,8 +1889,7 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#3-token-token-tailoring)。
-
+关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#5-token-裁剪token-tailoring)。
 
 ## Provider
 
@@ -1850,15 +1901,16 @@ model := anthropic.New("claude-3-5-sonnet",
 
 Provider 支持以下 `Option`：
 
-| Option                                                                                            | 说明                                |
-| ------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `WithAPIKey` / `WithBaseURL`                                                                      | 设置模型的 API Key 和 Base URL                      |
-| `WithHTTPClientName` / `WithHTTPClientTransport`                                                  | 配置 HTTP 客户端属性                     |
-| `WithChannelBufferSize`                                                                           | 调整响应 channel 缓冲区容量                |
+| Option                                                                                            | 说明                                           |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `WithAPIKey` / `WithBaseURL`                                                                      | 设置模型的 API Key 和 Base URL                 |
+| `WithHTTPClientName` / `WithHTTPClientTransport`                                                  | 配置 HTTP 客户端属性                           |
+| `WithChannelBufferSize`                                                                           | 调整响应 channel 缓冲区容量                    |
 | `WithCallbacks`                                                                                   | 配置 OpenAI / Anthropic 的请求、响应、流式回调 |
-| `WithExtraFields`                                                                                 | 配置请求体自定义字段                        |
-| `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token 裁剪相关参数                      |
-| `WithOpenAI` / `WithAnthropic`                                                                    | 透传供应商原生 Option                    |
+| `WithExtraFields`                                                                                 | 配置请求体自定义字段                           |
+| `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token 裁剪相关参数                             |
+| `WithTokenTailoringConfig`                                                                        | 高级配置：自定义 token 裁剪预算参数            |
+| `WithOpenAIOption` / `WithAnthropicOption`                                                        | 透传供应商原生 Option                          |
 
 ### 使用示例
 
@@ -1882,6 +1934,32 @@ modelInstance, err := provider.Model(
 )
 
 agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))
+```
+
+**高级配置：使用 TokenTailoringConfig**：
+
+对于需要精细调整 token 分配策略的高级用户，可以使用 `WithTokenTailoringConfig`：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
+)
+
+// 为所有 provider 自定义 token 裁剪预算参数
+config := &model.TokenTailoringConfig{
+    ProtocolOverheadTokens: 1024,
+    ReserveOutputTokens:    4096,
+    SafetyMarginRatio:      0.15,
+}
+
+modelInstance, err := provider.Model(
+    "openai",
+    "deepseek-chat",
+    provider.WithAPIKey(c.apiKey),
+    provider.WithEnableTokenTailoring(true),
+    provider.WithTokenTailoringConfig(config),
+)
 ```
 
 完整代码可参见 [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider)。

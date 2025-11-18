@@ -24,7 +24,7 @@ import (
 
 const (
 	defaultSessionEventLimit     = 1000
-	defaultCleanupIntervalSecond = 300 // 5 min
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
 
 	defaultAsyncSummaryNum  = 3
 	defaultSummaryQueueSize = 100
@@ -126,7 +126,7 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	// Set default cleanup interval if any TTL is configured and auto cleanup is not disabled
 	if opts.cleanupInterval <= 0 {
 		if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
-			opts.cleanupInterval = defaultCleanupIntervalSecond * time.Second
+			opts.cleanupInterval = defaultCleanupIntervalSecond
 		}
 	}
 

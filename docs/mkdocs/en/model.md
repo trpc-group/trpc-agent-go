@@ -1199,7 +1199,7 @@ If the default token allocation strategy does not meet your needs, you can custo
 ```go
 model := openai.New("deepseek-chat",
     openai.WithEnableTokenTailoring(true),
-    openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+    openai.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         ProtocolOverheadTokens: 1024,   // Custom protocol overhead
         ReserveOutputTokens:    4096,   // Custom output reserve
         InputTokensFloor:       2048,   // Custom input floor
@@ -1215,15 +1215,18 @@ For Anthropic models, you can use the same configuration:
 ```go
 model := anthropic.New("claude-sonnet-4-0",
     anthropic.WithEnableTokenTailoring(true),
-    anthropic.WithTokenTailoringConfig(&anthropic.TokenTailoringConfig{
+    anthropic.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         SafetyMarginRatio: 0.15,  // Increase safety margin to 15%
     }),
 )
 ```
 
 #### 7. Variant Optimization: Adapting to Platform-Specific Behaviors
+
 The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, especially for file upload, deletion, and processing logic.
-##### 6.1. Supported Variant Types
+
+##### 7.1. Supported Variant Types
+
 The framework currently supports the following Variants:
 
 **1. VariantOpenAI（default）**
@@ -1254,7 +1257,7 @@ The framework currently supports the following Variants:
 - API Key environment variable name：`DASHSCOPE_API_KEY`
 - Other behaviors are consistent with standard OpenAI
 
-##### 6.2. Usage
+##### 7.2. Usage
 
 **Usage Example**：
 
@@ -1275,7 +1278,8 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
 )
 ```
-##### 6.3. Behavioral Differences of Variants Examples
+
+##### 7.3. Behavioral Differences of Variants Examples
 
 **Message content handling differences**：
 
@@ -1295,6 +1299,7 @@ message := model.Message{
     },
 }
 ```
+
 **Environment variable auto-configuration**
 
 For certain Variants, the framework supports reading configuration from environment variables automatically:
@@ -1313,6 +1318,55 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY
 )
 ```
+
+#### 8. Streaming Tool Call Deltas: ShowToolCallDelta
+
+By default, the OpenAI adapter suppresses raw `tool_calls` chunks in streaming
+responses. Tool calls are accumulated internally and only exposed once in the
+final aggregated response via `Response.Choices[0].Message.ToolCalls`. This
+keeps the stream clean for typical chat UIs that only render assistant text.
+
+For advanced use cases (for example, when the model streams document content
+inside tool arguments and you need to display it incrementally), you can turn
+on raw tool call deltas with `WithShowToolCallDelta`:
+
+```go
+llm := openai.New(
+    "gpt-4.1",
+    openai.WithShowToolCallDelta(true), // Forward tool_call deltas.
+)
+```
+
+When `WithShowToolCallDelta(true)` is enabled:
+
+- Streaming chunks that contain `tool_calls` are no longer suppressed by the
+  adapter.
+- Each chunk is converted into a partial `model.Response` where:
+  - `Response.IsPartial == true`
+  - `Response.Choices[0].Delta.ToolCalls` contains the provider’s raw
+    `tool_calls` delta mapped to `model.ToolCall`:
+    - `Type` comes from the provider `type` field (for example, `"function"`).
+    - `Function.Name` and `Function.Arguments` mirror the original tool name
+      and JSON-encoded arguments string.
+    - `ID` and `Index` preserve the tool call identity so callers can stitch
+      fragments together.
+- The final aggregated response still exposes the merged tool calls in
+  `Response.Choices[0].Message.ToolCalls`, so existing tool execution logic
+  (for example, `FunctionCallResponseProcessor`) continues to work unchanged.
+
+Typical integration pattern when this flag is enabled:
+
+1. Read `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments` on each
+   partial response.
+2. Group chunks by tool call `ID` and append the `Arguments` fragments in
+   order.
+3. Once the accumulated string forms valid JSON, unmarshal it into your
+   business struct (for example, `{ "content": "..." }`) and use it for
+   progressive UI rendering.
+
+If you do not need to inspect tool arguments during streaming, keep
+`WithShowToolCallDelta` disabled to avoid handling partial JSON fragments and
+to preserve the default clean text-streaming behavior.
 
 ## Anthropic Model
 
@@ -1726,8 +1780,8 @@ In environments like gateways, proprietary platforms, or proxy setups, model API
 
 Recommended order:
 
-* Use **Anthropic RequestOption** to set global headers (simple and intuitive)
-* Use a custom `http.RoundTripper` injection (advanced, more cross-cutting capabilities)
+- Use **Anthropic RequestOption** to set global headers (simple and intuitive)
+- Use a custom `http.RoundTripper` injection (advanced, more cross-cutting capabilities)
 
 Both methods affect streaming requests, as they use the same underlying client.
 
@@ -1809,8 +1863,8 @@ llm := anthropic.New("claude-sonnet-4-0",
 
 Regarding **"per-request" headers**:
 
-* The Agent/Runner will propagate `ctx` to the model call; middleware can read the value from `req.Context()` to inject headers for "this call."
-* For **message completion**, the current API doesn't expose per-call BaseURL overrides; if switching is needed, create a model using a different BaseURL or modify the `r.URL` in middleware.
+- The Agent/Runner will propagate `ctx` to the model call; middleware can read the value from `req.Context()` to inject headers for "this call."
+- For **message completion**, the current API doesn't expose per-call BaseURL overrides; if switching is needed, create a model using a different BaseURL or modify the `r.URL` in middleware.
 
 #### 4. Token Tailoring
 
@@ -1861,7 +1915,8 @@ The Provider supports the following `Option`:
 | `WithCallbacks`                                                                                   | Configure OpenAI / Anthropic request, response, and streaming callbacks |
 | `WithExtraFields`                                                                                 | Configure custom fields in the request body                             |
 | `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token trimming related parameters                                       |
-| `WithOpenAI` / `WithAnthropic`                                                                    | Pass-through native options for the respective providers                |
+| `WithTokenTailoringConfig`                                                                        | Custom token tailoring budget parameters for advanced configuration     |
+| `WithOpenAIOption` / `WithAnthropicOption`                                                        | Pass-through native options for the respective providers                |
 
 ### Usage Example
 
@@ -1885,6 +1940,32 @@ modelInstance, err := provider.Model(
 )
 
 agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))
+```
+
+**Advanced Configuration with TokenTailoringConfig**:
+
+For advanced users who need to fine-tune token allocation strategy, you can use `WithTokenTailoringConfig`:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
+)
+
+// Custom token tailoring budget parameters for all providers
+config := &model.TokenTailoringConfig{
+    ProtocolOverheadTokens: 1024,
+    ReserveOutputTokens:    4096,
+    SafetyMarginRatio:      0.15,
+}
+
+modelInstance, err := provider.Model(
+    "openai",
+    "deepseek-chat",
+    provider.WithAPIKey(c.apiKey),
+    provider.WithEnableTokenTailoring(true),
+    provider.WithTokenTailoringConfig(config),
+)
 ```
 
 Full code can be found in [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider).
