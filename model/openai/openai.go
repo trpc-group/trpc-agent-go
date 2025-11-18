@@ -1249,11 +1249,19 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 		return false
 	}
 
-	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
-	// tool calls in the final aggregated response to avoid noisy blank chunks.
-	if delta.JSON.ToolCalls.Valid() && !m.showToolCallDelta {
+	// If this chunk is a tool_calls delta, optionally suppress emission.
+	// By default we only expose tool calls in the final aggregated response
+	// to avoid noisy blank chunks. When showToolCallDelta is enabled, treat
+	// tool_call chunks as meaningful streaming payload.
+	hasToolCall := delta.JSON.ToolCalls.Valid() ||
+		len(delta.ToolCalls) > 0
+	if hasToolCall {
+		if m.showToolCallDelta {
+			return false
+		}
 		return true
 	}
+
 	if choice.FinishReason != "" {
 		return false
 	}
