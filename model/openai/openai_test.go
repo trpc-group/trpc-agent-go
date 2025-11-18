@@ -3360,11 +3360,19 @@ func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
 func TestHasReasoningContent(t *testing.T) {
 	m := &Model{}
 
-	// Test with nil ExtraFields.
-	delta1 := openai.ChatCompletionChunkChoiceDelta{}
+	// Test with empty choices.
+	choices := []openai.ChatCompletionChunkChoice{}
 	// Since we can't easily construct the JSON field in tests,
-	// we'll test the method doesn't panic with empty delta.
-	assert.False(t, m.hasReasoningContent(delta1))
+	// we'll test the method doesn't panic with empty choices.
+	assert.False(t, m.hasReasoningContent(choices))
+
+	// Test with a choice that has an empty delta.
+	choicesWithDelta := []openai.ChatCompletionChunkChoice{
+		{
+			Delta: openai.ChatCompletionChunkChoiceDelta{},
+		},
+	}
+	assert.False(t, m.hasReasoningContent(choicesWithDelta))
 
 	// Note: Testing with actual reasoning content would require
 	// integration tests with real API responses, as the JSON field
@@ -3629,9 +3637,13 @@ func TestReasoningContentIntegration(t *testing.T) {
 func TestReasoningContentChunkHandling(t *testing.T) {
 	m := &Model{}
 
-	t.Run("hasReasoningContent returns false for empty delta", func(t *testing.T) {
-		delta := openai.ChatCompletionChunkChoiceDelta{}
-		assert.False(t, m.hasReasoningContent(delta))
+	t.Run("hasReasoningContent returns false for empty choices", func(t *testing.T) {
+		choices := []openai.ChatCompletionChunkChoice{
+			{
+				Delta: openai.ChatCompletionChunkChoiceDelta{},
+			},
+		}
+		assert.False(t, m.hasReasoningContent(choices))
 	})
 
 	t.Run("shouldSkipEmptyChunk handles chunks without choices", func(t *testing.T) {
@@ -3717,9 +3729,13 @@ func TestEmptyChunkHandling(t *testing.T) {
 		assert.False(t, m.shouldSuppressChunk(chunk))
 	})
 
-	t.Run("hasReasoningContent returns false for empty delta", func(t *testing.T) {
-		delta := openai.ChatCompletionChunkChoiceDelta{}
-		assert.False(t, m.hasReasoningContent(delta))
+	t.Run("hasReasoningContent returns false for empty choices", func(t *testing.T) {
+		choices := []openai.ChatCompletionChunkChoice{
+			{
+				Delta: openai.ChatCompletionChunkChoiceDelta{},
+			},
+		}
+		assert.False(t, m.hasReasoningContent(choices))
 	})
 
 	t.Run("createPartialResponse includes tool calls when enabled", func(t *testing.T) {
