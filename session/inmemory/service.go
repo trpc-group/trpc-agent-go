@@ -313,8 +313,6 @@ func (s *SessionService) ListSessions(
 		}
 		copiedSess := s.Clone()
 		copiedSess.ApplyEventFiltering(opts...)
-		// filter events to ensure they start with RoleUser
-		copiedSess.EnsureEventStartWithUser()
 
 		appState := getValidState(app.appState)
 		userState := getValidState(app.userState[userKey.UserID])

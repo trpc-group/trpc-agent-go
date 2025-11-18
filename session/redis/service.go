@@ -572,9 +572,6 @@ func (s *Service) getSession(
 			}
 		}
 	}
-
-	// filter events to ensure they start with RoleUser
-	sess.EnsureEventStartWithUser()
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -641,8 +638,6 @@ func (s *Service) listSessions(
 			session.WithSessionUpdatedAt(sessState.UpdatedAt),
 		)
 
-		// filter events to ensure they start with RoleUser
-		sess.EnsureEventStartWithUser()
 		sessList = append(sessList, mergeState(appState, userState, sess))
 	}
 	return sessList, nil
