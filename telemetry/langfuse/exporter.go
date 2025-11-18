@@ -125,8 +125,13 @@ func transformCallLLM(span *tracepb.Span) {
 	})
 
 	// Process existing attributes
+	var llmSessionID *commonpb.AnyValue
 	for _, attr := range span.Attributes {
 		switch attr.Key {
+		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
+			llmSessionID = attr.Value
+		case itelemetry.KeyRunnerUserID:
+			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
 		case itelemetry.KeyLLMRequest:
 			if attr.Value != nil {
 				request := attr.Value.GetStringValue()
@@ -159,6 +164,7 @@ func transformCallLLM(span *tracepb.Span) {
 					},
 				})
 			}
+
 			// Skip this attribute (delete it)
 		case itelemetry.KeyLLMResponse:
 			if attr.Value != nil {
@@ -182,6 +188,9 @@ func transformCallLLM(span *tracepb.Span) {
 			newAttributes = append(newAttributes, attr)
 		}
 	}
+	if llmSessionID != nil { // use post set session id
+		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: llmSessionID})
+	}
 
 	// Replace span attributes
 	span.Attributes = newAttributes
@@ -200,8 +209,13 @@ func transformExecuteTool(span *tracepb.Span) {
 	})
 
 	// Process existing attributes
+	var llmSessionID *commonpb.AnyValue
 	for _, attr := range span.Attributes {
 		switch attr.Key {
+		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
+			llmSessionID = attr.Value
+		case itelemetry.KeyRunnerUserID:
+			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
 		case itelemetry.KeyGenAIToolCallArguments:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
@@ -240,6 +254,9 @@ func transformExecuteTool(span *tracepb.Span) {
 			// Keep other attributes
 			newAttributes = append(newAttributes, attr)
 		}
+	}
+	if llmSessionID != nil { // use post set session id
+		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: llmSessionID})
 	}
 
 	// Replace span attributes
