@@ -23,8 +23,7 @@ import (
 	openaisdk "github.com/openai/openai-go"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
 )
 
@@ -54,15 +53,10 @@ func main() {
 		modelName = getDefaultModel(provider)
 	}
 
-	// Build model based on provider.
-	var modelInstance model.Model
-	switch provider {
-	case "openai":
-		modelInstance = buildOpenAIModel(modelName)
-	case "anthropic":
-		modelInstance = buildAnthropicModel(modelName)
-	default:
-		log.Fatalf("Invalid provider: %s (must be 'openai' or 'anthropic')", provider)
+	// Build model using provider package.
+	modelInstance, err := buildModel(provider, modelName)
+	if err != nil {
+		log.Fatalf("Failed to build model: %v", err)
 	}
 
 	fmt.Printf("✂️  Token Tailoring Demo\n")
@@ -118,84 +112,69 @@ func getDefaultModel(provider string) string {
 	}
 }
 
-func buildOpenAIModel(modelName string) model.Model {
-	var opts []openai.Option
-	opts = append(opts, openai.WithEnableTokenTailoring(*flagEnableTokenTailoring))
+// buildModel creates a model instance using the provider package with unified configuration.
+func buildModel(providerName, modelName string) (model.Model, error) {
+	counter := buildCounter(strings.ToLower(*flagCounter), modelName)
+	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
 
+	// Build common provider options.
+	var opts []provider.Option
+	opts = append(opts, provider.WithEnableTokenTailoring(*flagEnableTokenTailoring))
 	if *flagMaxInputTokens > 0 {
-		opts = append(opts, openai.WithMaxInputTokens(*flagMaxInputTokens))
+		opts = append(opts, provider.WithMaxInputTokens(*flagMaxInputTokens))
+	}
+	opts = append(opts, provider.WithTokenCounter(counter))
+	opts = append(opts, provider.WithTailoringStrategy(strategy))
+
+	// Set provider-specific callbacks for token statistics display.
+	switch providerName {
+	case "openai":
+		opts = append(opts, provider.WithCallbacks(provider.Callbacks{
+			OpenAIChatRequest: func(ctx context.Context, req *openaisdk.ChatCompletionNewParams) {
+				// Convert OpenAI messages back to model.Message for token counting.
+				messages := convertFromOpenAIMessages(req.Messages)
+				tokensAfter, _ := counter.CountTokensRange(ctx, messages, 0, len(messages))
+
+				// Display tailoring statistics.
+				if *flagMaxInputTokens > 0 {
+					fmt.Printf("\n✂️  [Tailoring] maxInputTokens=%d 📨 messages=%d 🎯 tokens=%d\n",
+						*flagMaxInputTokens, len(messages), tokensAfter)
+				} else {
+					fmt.Printf("\n✂️  [Tailoring] maxInputTokens=auto 📨 messages=%d 🎯 tokens=%d\n",
+						len(messages), tokensAfter)
+				}
+
+				// Show head and tail messages to visualize what was kept/removed.
+				fmt.Printf("📝 Messages (after tailoring, showing head + tail):\n%s",
+					summarizeMessagesHeadTail(messages, 5, 5))
+			},
+		}))
+	case "anthropic":
+		opts = append(opts, provider.WithCallbacks(provider.Callbacks{
+			AnthropicChatRequest: func(ctx context.Context, req *anthropicsdk.MessageNewParams) {
+				// Convert Anthropic messages back to model.Message for token counting.
+				messages := convertFromAnthropicMessages(req.Messages, req.System)
+				tokensAfter, _ := counter.CountTokensRange(ctx, messages, 0, len(messages))
+
+				// Display tailoring statistics.
+				if *flagMaxInputTokens > 0 {
+					fmt.Printf("\n✂️  [Tailoring] maxInputTokens=%d 📨 messages=%d 🎯 tokens=%d\n",
+						*flagMaxInputTokens, len(messages), tokensAfter)
+				} else {
+					fmt.Printf("\n✂️  [Tailoring] maxInputTokens=auto 📨 messages=%d 🎯 tokens=%d\n",
+						len(messages), tokensAfter)
+				}
+
+				// Show head and tail messages to visualize what was kept/removed.
+				fmt.Printf("📝 Messages (after tailoring, showing head + tail):\n%s",
+					summarizeMessagesHeadTail(messages, 5, 5))
+			},
+		}))
+	default:
+		return nil, fmt.Errorf("invalid provider: %s (must be 'openai' or 'anthropic')", providerName)
 	}
 
-	counter := buildCounter(strings.ToLower(*flagCounter), modelName)
-	opts = append(opts, openai.WithTokenCounter(counter))
-
-	// Always create strategy with the user-provided counter to ensure consistency.
-	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
-	opts = append(opts, openai.WithTailoringStrategy(strategy))
-
-	// Add callback to print token statistics before sending request.
-	opts = append(opts, openai.WithChatRequestCallback(
-		func(ctx context.Context, req *openaisdk.ChatCompletionNewParams) {
-			// Convert OpenAI messages back to model.Message for token counting.
-			messages := convertFromOpenAIMessages(req.Messages)
-			tokensAfter, _ := counter.CountTokensRange(ctx, messages, 0, len(messages))
-
-			// Display tailoring statistics.
-			if *flagMaxInputTokens > 0 {
-				fmt.Printf("\n✂️  [Tailoring] maxInputTokens=%d 📨 messages=%d 🎯 tokens=%d\n",
-					*flagMaxInputTokens, len(messages), tokensAfter)
-			} else {
-				fmt.Printf("\n✂️  [Tailoring] maxInputTokens=auto 📨 messages=%d 🎯 tokens=%d\n",
-					len(messages), tokensAfter)
-			}
-
-			// Show head and tail messages to visualize what was kept/removed.
-			fmt.Printf("📝 Messages (after tailoring, showing head + tail):\n%s",
-				summarizeMessagesHeadTail(messages, 5, 5))
-		},
-	))
-
-	return openai.New(modelName, opts...)
-}
-
-func buildAnthropicModel(modelName string) model.Model {
-	var opts []anthropic.Option
-	opts = append(opts, anthropic.WithEnableTokenTailoring(*flagEnableTokenTailoring))
-
-	if *flagMaxInputTokens > 0 {
-		opts = append(opts, anthropic.WithMaxInputTokens(*flagMaxInputTokens))
-	}
-
-	counter := buildCounter(strings.ToLower(*flagCounter), modelName)
-	opts = append(opts, anthropic.WithTokenCounter(counter))
-
-	// Always create strategy with the user-provided counter to ensure consistency.
-	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
-	opts = append(opts, anthropic.WithTailoringStrategy(strategy))
-
-	// Add callback to print token statistics before sending request.
-	opts = append(opts, anthropic.WithChatRequestCallback(
-		func(ctx context.Context, req *anthropicsdk.MessageNewParams) {
-			// Convert Anthropic messages back to model.Message for token counting.
-			messages := convertFromAnthropicMessages(req.Messages, req.System)
-			tokensAfter, _ := counter.CountTokensRange(ctx, messages, 0, len(messages))
-
-			// Display tailoring statistics.
-			if *flagMaxInputTokens > 0 {
-				fmt.Printf("\n✂️  [Tailoring] maxInputTokens=%d 📨 messages=%d 🎯 tokens=%d\n",
-					*flagMaxInputTokens, len(messages), tokensAfter)
-			} else {
-				fmt.Printf("\n✂️  [Tailoring] maxInputTokens=auto 📨 messages=%d 🎯 tokens=%d\n",
-					len(messages), tokensAfter)
-			}
-
-			// Show head and tail messages to visualize what was kept/removed.
-			fmt.Printf("📝 Messages (after tailoring, showing head + tail):\n%s",
-				summarizeMessagesHeadTail(messages, 5, 5))
-		},
-	))
-
-	return anthropic.New(modelName, opts...)
+	return provider.Model(providerName, modelName, opts...)
 }
 
 func buildStrategy(counter model.TokenCounter, strategyName string) model.TailoringStrategy {
