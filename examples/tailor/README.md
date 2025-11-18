@@ -349,6 +349,39 @@ m := openai.New("deepseek-chat",
 )
 ```
 
+**Using Provider Package**:
+
+You can also use the `provider` package for unified model instantiation:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
+)
+
+// Simple mode with provider
+m, err := provider.Model(
+    "openai",
+    "deepseek-chat",
+    provider.WithEnableTokenTailoring(true),
+)
+
+// Advanced mode with custom token tailoring config
+config := &model.TokenTailoringConfig{
+    ProtocolOverheadTokens: 1024,
+    ReserveOutputTokens:    4096,
+    SafetyMarginRatio:      0.15,
+}
+m, err := provider.Model(
+    "openai",
+    "deepseek-chat",
+    provider.WithEnableTokenTailoring(true),
+    provider.WithTokenTailoringConfig(config),
+)
+```
+
+This approach allows easy switching between different providers (OpenAI and Anthropic) with the same configuration interface.
+
 ## Performance Notes
 
 ### Tailoring Thresholds (Examples)

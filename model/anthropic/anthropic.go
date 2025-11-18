@@ -173,27 +173,7 @@ type options struct {
 	// maxInputTokens is the max input tokens for token tailoring.
 	maxInputTokens int
 	// tokenTailoringConfig allows customization of token tailoring parameters.
-	tokenTailoringConfig *TokenTailoringConfig
-}
-
-// TokenTailoringConfig holds custom token tailoring budget parameters.
-type TokenTailoringConfig struct {
-	// ProtocolOverheadTokens is the number of tokens reserved for protocol
-	// overhead.
-	ProtocolOverheadTokens int
-	// ReserveOutputTokens is the number of tokens reserved for output
-	// generation.
-	ReserveOutputTokens int
-	// InputTokensFloor is the minimum number of input tokens.
-	InputTokensFloor int
-	// OutputTokensFloor is the minimum number of output tokens.
-	OutputTokensFloor int
-	// SafetyMarginRatio is the safety margin ratio for token counting
-	// inaccuracies.
-	SafetyMarginRatio float64
-	// MaxInputTokensRatio is the maximum input tokens ratio of the context
-	// window.
-	MaxInputTokensRatio float64
+	tokenTailoringConfig *model.TokenTailoringConfig
 }
 
 // Option is a function that configures an Anthropic model.
@@ -314,7 +294,7 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 //
 // Example:
 //
-//	anthropic.WithTokenTailoringConfig(&anthropic.TokenTailoringConfig{
+//	anthropic.WithTokenTailoringConfig(&model.TokenTailoringConfig{
 //	    ProtocolOverheadTokens: 1024,
 //	    ReserveOutputTokens:    4096,
 //	    SafetyMarginRatio:      0.15,
@@ -322,7 +302,7 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 //
 // Note: It is recommended to use the default values unless you have specific
 // requirements.
-func WithTokenTailoringConfig(config *TokenTailoringConfig) Option {
+func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	return func(opts *options) {
 		opts.tokenTailoringConfig = config
 	}

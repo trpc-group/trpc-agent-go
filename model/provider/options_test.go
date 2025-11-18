@@ -100,3 +100,23 @@ func TestWithAnthropicOption(t *testing.T) {
 	WithAnthropicOption(anthropic.WithBaseURL("https://example.com"))(opts)
 	assert.Equal(t, 1, len(opts.AnthropicOption))
 }
+
+func TestWithTokenTailoringConfig(t *testing.T) {
+	opts := &Options{}
+	config := &model.TokenTailoringConfig{
+		ProtocolOverheadTokens: 1024,
+		ReserveOutputTokens:    4096,
+		InputTokensFloor:       2048,
+		OutputTokensFloor:      512,
+		SafetyMarginRatio:      0.15,
+		MaxInputTokensRatio:    0.90,
+	}
+	WithTokenTailoringConfig(config)(opts)
+	assert.NotNil(t, opts.TokenTailoringConfig)
+	assert.Equal(t, 1024, opts.TokenTailoringConfig.ProtocolOverheadTokens)
+	assert.Equal(t, 4096, opts.TokenTailoringConfig.ReserveOutputTokens)
+	assert.Equal(t, 2048, opts.TokenTailoringConfig.InputTokensFloor)
+	assert.Equal(t, 512, opts.TokenTailoringConfig.OutputTokensFloor)
+	assert.Equal(t, 0.15, opts.TokenTailoringConfig.SafetyMarginRatio)
+	assert.Equal(t, 0.90, opts.TokenTailoringConfig.MaxInputTokensRatio)
+}

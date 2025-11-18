@@ -22,21 +22,22 @@ type Option func(*Options)
 
 // Options contains resolved settings used when constructing provider-backed models.
 type Options struct {
-	ProviderName         string                  // ProviderName is the provider identifier passed to Model.
-	ModelName            string                  // ModelName is the concrete model identifier.
-	APIKey               string                  // APIKey holds the credential used for downstream SDK initialization.
-	BaseURL              string                  // BaseURL overrides the default endpoint when specified.
-	HTTPClientName       string                  // HTTPClientName is the logical name applied to the HTTP client.
-	HTTPClientTransport  http.RoundTripper       // HTTPClientTransport allows customizing the HTTP transport.
-	Callbacks            *Callbacks              // Callbacks captures provider-specific callback hooks.
-	ChannelBufferSize    *int                    // ChannelBufferSize is the response channel buffer size.
-	ExtraFields          map[string]any          // ExtraFields are serialized into provider-specific request payloads.
-	EnableTokenTailoring *bool                   // EnableTokenTailoring toggles automatic token tailoring.
-	MaxInputTokens       *int                    // MaxInputTokens sets the maximum input tokens for token tailoring.
-	TokenCounter         model.TokenCounter      // TokenCounter provides a custom token counting implementation.
-	TailoringStrategy    model.TailoringStrategy // TailoringStrategy defines the strategy for token tailoring.
-	OpenAIOption         []openai.Option         // OpenAIOption stores additional OpenAI options.
-	AnthropicOption      []anthropic.Option      // AnthropicOption stores additional Anthropic options.
+	ProviderName         string                      // ProviderName is the provider identifier passed to Model.
+	ModelName            string                      // ModelName is the concrete model identifier.
+	APIKey               string                      // APIKey holds the credential used for downstream SDK initialization.
+	BaseURL              string                      // BaseURL overrides the default endpoint when specified.
+	HTTPClientName       string                      // HTTPClientName is the logical name applied to the HTTP client.
+	HTTPClientTransport  http.RoundTripper           // HTTPClientTransport allows customizing the HTTP transport.
+	Callbacks            *Callbacks                  // Callbacks captures provider-specific callback hooks.
+	ChannelBufferSize    *int                        // ChannelBufferSize is the response channel buffer size.
+	ExtraFields          map[string]any              // ExtraFields are serialized into provider-specific request payloads.
+	EnableTokenTailoring *bool                       // EnableTokenTailoring toggles automatic token tailoring.
+	MaxInputTokens       *int                        // MaxInputTokens sets the maximum input tokens for token tailoring.
+	TokenCounter         model.TokenCounter          // TokenCounter provides a custom token counting implementation.
+	TailoringStrategy    model.TailoringStrategy     // TailoringStrategy defines the strategy for token tailoring.
+	TokenTailoringConfig *model.TokenTailoringConfig // TokenTailoringConfig customizes token tailoring budget parameters for all providers.
+	OpenAIOption         []openai.Option             // OpenAIOption stores additional OpenAI options.
+	AnthropicOption      []anthropic.Option          // AnthropicOption stores additional Anthropic options.
 }
 
 // Callbacks collects provider specific callback hooks.
@@ -164,6 +165,25 @@ func WithTokenCounter(counter model.TokenCounter) Option {
 func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 	return func(o *Options) {
 		o.TailoringStrategy = strategy
+	}
+}
+
+// WithTokenTailoringConfig sets custom token tailoring budget parameters for all providers.
+// This allows advanced users to fine-tune the token allocation strategy.
+//
+// Example:
+//
+//	provider.WithTokenTailoringConfig(&model.TokenTailoringConfig{
+//	    ProtocolOverheadTokens: 1024,
+//	    ReserveOutputTokens:    4096,
+//	    SafetyMarginRatio:      0.15,
+//	})
+//
+// Note: It is recommended to use the default values unless you have specific
+// requirements.
+func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
+	return func(o *Options) {
+		o.TokenTailoringConfig = config
 	}
 }
 
