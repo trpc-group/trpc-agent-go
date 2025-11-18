@@ -297,8 +297,8 @@ mathAgent := llmagent.New(
 // 将 Agent 包装成工具
 agentTool := agenttool.NewTool(
     mathAgent,
-    // 默认 skip summarization=true，会在 tool.response 后直接结束本轮
-    agenttool.WithSkipSummarization(true),
+    // 默认 skip summarization=false，当设置为 true 时会在 tool.response 后直接结束本轮
+    agenttool.WithSkipSummarization(false),
     // 开启转发：把子 Agent 的流式事件内联到父流程
     agenttool.WithStreamInner(true),
 )

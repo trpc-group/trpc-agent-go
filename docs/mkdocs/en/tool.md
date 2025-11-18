@@ -365,8 +365,11 @@ mathAgent := llmagent.New(
 // 2) Wrap as an Agent tool
 mathTool := agenttool.NewTool(
     mathAgent,
-    agenttool.WithSkipSummarization(true), // opt-in: skip the outer summarization after tool.response
-    agenttool.WithStreamInner(true),       // forward child Agent streaming events to parent flow
+    // Optional, defaults to false. When set to true, the outer model summary will be skipped, 
+    // and the current round will end directly after tool.response.
+    agenttool.WithSkipSummarization(false),
+    // forward child Agent streaming events to parent flow.
+    agenttool.WithStreamInner(true),
 )
 
 // 3) Use in parent Agent

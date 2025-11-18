@@ -363,8 +363,8 @@ mathAgent := llmagent.New(
 // 2) 包装为 Agent 工具
 mathTool := agenttool.NewTool(
     mathAgent,
-    agenttool.WithSkipSummarization(true), // 可选：工具响应后跳过外层模型总结
-    agenttool.WithStreamInner(true),       // 开启：把子 Agent 的流式事件转发给父流程
+    agenttool.WithSkipSummarization(false), // 可选，默认 false，当设置为 true 时会跳过外层模型总结，在 tool.response 后直接结束本轮
+    agenttool.WithStreamInner(true),        // 开启：把子 Agent 的流式事件转发给父流程
 )
 
 // 3) 在父 Agent 中使用该工具
