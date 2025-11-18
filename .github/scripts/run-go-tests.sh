@@ -5,13 +5,43 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 cd "${repo_root}"
 
+declare -a requested_modules=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --module)
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for --module" >&2
+        exit 1
+      fi
+      requested_modules+=("$2")
+      shift 2
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 gomodules=()
-while IFS= read -r mod; do
-  gomodules+=("${mod}")
-done < <(find . -name go.mod \
-  -not -path "./.resource/*" \
-  -not -path "./docs/*" \
-  -not -path "./examples/*" | sort)
+if [ "${#requested_modules[@]}" -gt 0 ]; then
+  for module in "${requested_modules[@]}"; do
+    normalized="${module#./}"
+    normalized="./${normalized}"
+    if [ ! -f "${normalized}" ]; then
+      echo "module file not found: ${module}" >&2
+      exit 1
+    fi
+    gomodules+=("${normalized}")
+  done
+else
+  while IFS= read -r mod; do
+    gomodules+=("${mod}")
+  done < <(find . -name go.mod \
+    -not -path "./.resource/*" \
+    -not -path "./docs/*" \
+    -not -path "./examples/*" | sort)
+fi
 
 if [ "${#gomodules[@]}" -eq 0 ]; then
   echo "no go modules found"
