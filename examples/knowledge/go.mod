@@ -29,6 +29,7 @@ require (
 	cloud.google.com/go v0.116.0 // indirect
 	cloud.google.com/go/auth v0.9.3 // indirect
 	cloud.google.com/go/compute/metadata v0.6.0 // indirect
+	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
@@ -61,7 +62,7 @@ require (
 	github.com/ollama/ollama v0.12.9 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/otiai10/gosseract/v2 v2.4.1 // indirect
-	github.com/panjf2000/ants/v2 v2.9.0 // indirect
+	github.com/panjf2000/ants/v2 v2.11.3 // indirect
 	github.com/pdfcpu/pdfcpu v0.11.1 // indirect
 	github.com/pgvector/pgvector-go v0.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
