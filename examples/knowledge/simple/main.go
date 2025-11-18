@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
+	
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -34,27 +34,29 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-
+	
 	// Embedder.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
+	huggingfaceembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface"
 	ollamaembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	
 	// Source.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
-
+	
 	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
-
+	
 	// Import PDF reader to register it (optional - comment out if PDF support is not needed).
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 )
@@ -63,7 +65,7 @@ import (
 var (
 	modelName     = flag.String("model", "deepseek-chat", "Name of the model to use")
 	streaming     = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	embedderType  = flag.String("embedder", "openai", "Embedder type: openai, gemini, ollama")
+	embedderType  = flag.String("embedder", "openai", "Embedder type: openai, gemini, ollama, huggingface")
 	vectorStore   = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
 	esVersion     = flag.String("es-version", "v9", "Elasticsearch version: v7, v8, v9 (only used when vectorstore=elasticsearch)")
 	agenticFilter = flag.Bool("agentic_filter", true, "Enable agentic filter for knowledge search")
@@ -365,6 +367,8 @@ func (c *knowledgeChat) setupEmbedder(ctx context.Context) (embedder.Embedder, e
 		return geminiembedder.New(ctx)
 	case "ollama":
 		return ollamaembedder.New(), nil
+	case "huggingface":
+		return huggingfaceembedder.New(), nil
 	default: // openai
 		return openaiembedder.New(
 			openaiembedder.WithModel(openaiEmbeddingModel),
