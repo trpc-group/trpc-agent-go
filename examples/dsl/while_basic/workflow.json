@@ -1,0 +1,103 @@
+{
+  "version": "1.0",
+  "name": "while_basic",
+  "description": "Demonstrates builtin.while using an LLM agent's structured_output as the loop condition.",
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "node_type": "builtin.start"
+    },
+    {
+      "id": "loop",
+      "label": "While",
+      "node_type": "builtin.while",
+      "config": {
+        "body": {
+          "nodes": [
+            {
+              "id": "loop_agent",
+              "label": "Loop Agent",
+              "node_type": "builtin.llmagent",
+              "config": {
+                "model_name": "deepseek-chat",
+                "instruction": "You are part of a loop in a workflow engine. The same user input will be provided each time, and your job is to decide whether the loop should continue.\\n\\nEach time you are called:\\n1. Look at the full conversation so far (previous messages from yourself are available).\\n2. Produce exactly one short message field summarizing your current thinking.\\n3. Decide whether another iteration is needed.\\n\\nStructured output requirements:\\n- step_index (integer): 1-based index of this iteration. You can infer this from how many times you have already responded in this conversation.\\n- continue_loop (boolean):\\n  - true if you believe another iteration would still add value (for example, you have not yet produced three distinct suggestions).\\n  - false once you think the loop should stop (for example, after about three iterations or when you have nothing new to add).\\n- message (string): short natural-language content for this iteration.\\n\\nReturn ONLY JSON that matches the schema; do not include explanation outside the JSON.",
+                "description": "Agent that decides whether to continue the loop via structured_output.continue_loop",
+                "structured_output": {
+                  "type": "object",
+                  "properties": {
+                    "step_index": {
+                      "type": "integer",
+                      "description": "1-based index of the current loop iteration"
+                    },
+                    "continue_loop": {
+                      "type": "boolean",
+                      "description": "Whether the loop should continue after this iteration"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Natural-language content for this iteration"
+                    }
+                  },
+                  "required": ["step_index", "continue_loop", "message"],
+                  "additionalProperties": false
+                },
+                "temperature": 0.2
+              }
+            }
+          ],
+          "edges": [],
+          "start_node_id": "loop_agent",
+          "exit_node_id": "loop_agent"
+        },
+        "condition": {
+          "expression": "input.output_parsed.continue_loop == true",
+          "format": "cel"
+        }
+      }
+    },
+    {
+      "id": "end",
+      "label": "End",
+      "node_type": "builtin.end",
+      "config": {
+        "expr": {
+          "expression": "{ \"step_index\": state.node_structured.loop_agent.output_parsed.step_index, \"continue_loop\": state.node_structured.loop_agent.output_parsed.continue_loop, \"last_message\": state.node_structured.loop_agent.output_parsed.message }",
+          "format": "cel"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "step_index": {
+              "type": "integer",
+              "description": "Index of the last loop iteration (1-based)"
+            },
+            "continue_loop": {
+              "type": "boolean",
+              "description": "Whether the agent requested another iteration at the last step"
+            },
+            "last_message": {
+              "type": "string",
+              "description": "Textual content from the last loop_agent call"
+            }
+          },
+          "required": ["step_index", "continue_loop", "last_message"],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_start_loop",
+      "source": "start",
+      "target": "loop"
+    },
+    {
+      "id": "edge_loop_end",
+      "source": "loop",
+      "target": "end"
+    }
+  ],
+  "start_node_id": "start"
+}

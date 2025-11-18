@@ -1,0 +1,560 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/engine_dsl.schema.json",
+  "title": "Engine DSL Schema",
+  "description": "JSON Schema for the trpc-agent-go engine DSL (Graph/Node/Edge/etc.).",
+  "type": "object",
+  "$defs": {
+    "Graph": {
+      "type": "object",
+      "required": ["name", "nodes", "edges", "start_node_id"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "Optional DSL version string (e.g., \"1.0\")."
+        },
+        "name": {
+          "type": "string",
+          "description": "Graph name (used for display and logging)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of the graph."
+        },
+        "nodes": {
+          "type": "array",
+          "description": "Executable nodes that make up the graph.",
+          "items": { "$ref": "#/$defs/Node" }
+        },
+        "edges": {
+          "type": "array",
+          "description": "Direct edges between nodes (unconditional control flow).",
+          "items": { "$ref": "#/$defs/Edge" }
+        },
+        "conditional_edges": {
+          "type": "array",
+          "description": "Conditional routing edges evaluated after a node finishes.",
+          "items": { "$ref": "#/$defs/ConditionalEdge" }
+        },
+        "state_variables": {
+          "type": "array",
+          "description": "Graph-level state variables declared by the author.",
+          "items": { "$ref": "#/$defs/StateVariable" }
+        },
+        "start_node_id": {
+          "type": "string",
+          "description": "ID of the visual start node (usually builtin.start); the executable entry point is derived from its outgoing edge."
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Arbitrary graph-level metadata (tags, owner, etc.).",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "BaseNode": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique node identifier within the graph."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional UI label for this node."
+        },
+        "node_version": {
+          "type": "string",
+          "description": "Optional component version."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this node does."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Node": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseNode" },
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["node_type"],
+              "properties": {
+                "node_type": {
+                  "type": "string",
+                  "const": "builtin.start",
+                  "description": "Start node; marks the visual entry of the graph."
+                },
+                "config": {
+                  "type": "object",
+                  "description": "Start node has no configurable fields.",
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["node_type", "config"],
+              "properties": {
+                "node_type": {
+                  "type": "string",
+                  "const": "builtin.llmagent",
+                  "description": "LLM-backed agent node."
+                },
+                "config": { "$ref": "#/$defs/AgentConfig" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["node_type", "config"],
+              "properties": {
+                "node_type": {
+                  "type": "string",
+                  "const": "builtin.end",
+                  "description": "End node; chooses the final graph output."
+                },
+                "config": { "$ref": "#/$defs/EndConfig" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["node_type", "config"],
+              "properties": {
+                "node_type": {
+                  "type": "string",
+                  "const": "builtin.mcp",
+                  "description": "MCP node; calls a Model Context Protocol server/tool."
+                },
+                "config": { "$ref": "#/$defs/MCPConfig" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["node_type", "config"],
+              "properties": {
+                "node_type": {
+                  "type": "string",
+                  "const": "builtin.while",
+                  "description": "While control node with an embedded loop body."
+                },
+                "config": { "$ref": "#/$defs/WhileConfig" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["node_type", "config"],
+              "properties": {
+                "node_type": {
+                  "type": "string",
+                  "const": "builtin.user_approval",
+                  "description": "User approval node; pauses execution until a decision is provided."
+                },
+                "config": { "$ref": "#/$defs/UserApprovalConfig" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["node_type", "config"],
+              "properties": {
+                "node_type": {
+                  "type": "string",
+                  "const": "builtin.transform",
+                  "description": "Transform node; reshapes structured data via an expression."
+                },
+                "config": { "$ref": "#/$defs/TransformConfig" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["node_type", "config"],
+              "properties": {
+                "node_type": {
+                  "type": "string",
+                  "const": "builtin.set_state",
+                  "description": "Set State node; assigns to graph state variables."
+                },
+                "config": { "$ref": "#/$defs/SetStateConfig" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "AgentConfig": {
+      "type": "object",
+      "required": ["model_name"],
+      "properties": {
+        "model_name": {
+          "type": "string",
+          "description": "Name of the model to use (must exist in the ModelRegistry at runtime)."
+        },
+        "instruction": {
+          "type": "string",
+          "description": "System prompt / instruction for the agent."
+        },
+        "tools": {
+          "type": "array",
+          "description": "List of tool names available to this agent.",
+          "items": { "type": "string" }
+        },
+        "mcp_tools": {
+          "type": "array",
+          "description": "List of MCP server configurations attached to this agent. Each entry corresponds to one MCP server and exposes one or more tools from that server to the agent.",
+          "items": {
+            "type": "object",
+            "required": ["server_url"],
+            "properties": {
+              "server_url": {
+                "type": "string",
+                "description": "MCP server URL (e.g., https://mcp.example.com/mcp)."
+              },
+              "transport": {
+                "type": "string",
+                "enum": ["streamable_http", "sse"],
+                "description": "Transport mechanism for MCP. STDIO is intentionally not exposed at the agent DSL level.",
+                "default": "streamable_http"
+              },
+              "server_label": {
+                "type": "string",
+                "description": "Optional label for this MCP server shown in the UI (e.g., \"deepwiki\")."
+              },
+              "allowed_tools": {
+                "type": "array",
+                "description": "Optional list of tool names from this MCP server that the agent is allowed to call. When omitted, all tools are available.",
+                "items": { "type": "string" }
+              },
+              "require_approval": {
+                "type": "string",
+                "description": "High-level approval policy for calls to this MCP server (e.g., \"always\", \"never\", \"auto\"). Semantics are enforced at a higher layer.",
+                "enum": ["always", "never", "auto"],
+                "default": "auto"
+              },
+              "headers": {
+                "type": "object",
+                "description": "Optional HTTP headers to include when connecting to the MCP server.",
+                "additionalProperties": { "type": "string" }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "output_format": {
+          "type": "object",
+          "description": "Controls how the agent returns its response (e.g., text vs. JSON).",
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Output mode for this agent.",
+              "enum": ["text", "json"],
+              "default": "text"
+            },
+            "schema": {
+              "type": "object",
+              "description": "JSON Schema for structured output when type = \"json\".",
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 2.0
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "EndConfig": {
+      "type": "object",
+      "properties": {
+        "output_schema": {
+          "type": "object",
+          "description": "JSON Schema for the structured final output.",
+          "additionalProperties": true
+        },
+        "expr": {
+          "$ref": "#/$defs/Expression",
+          "description": "Expression that evaluates to the structured final output."
+        }
+      },
+      "additionalProperties": false
+    },
+    "TransformConfig": {
+      "type": "object",
+      "properties": {
+        "output_schema": {
+          "type": "object",
+          "description": "JSON Schema for the transformed output object.",
+          "additionalProperties": true
+        },
+        "expr": {
+          "$ref": "#/$defs/Expression",
+          "description": "Expression that evaluates to the transformed object."
+        }
+      },
+      "additionalProperties": false
+    },
+    "SetStateConfig": {
+      "type": "object",
+      "properties": {
+        "assignments": {
+          "type": "array",
+          "description": "List of {field, expr} objects describing state updates.",
+          "items": {
+            "type": "object",
+            "required": ["field", "expr"],
+            "properties": {
+              "field": { "type": "string" },
+              "expr": { "$ref": "#/$defs/Expression" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "UserApprovalConfig": {
+      "type": "object",
+      "description": "Configuration for a human-in-the-loop approval step. At runtime this node raises an interrupt and expects an external system to provide an approval_result string (typically \"approve\" or \"reject\"), which downstream conditions can read from state.approval_result.",
+      "required": ["message"],
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "Approval message shown to the user."
+        },
+        "auto_approve": {
+          "type": "boolean",
+          "description": "When true, skip the interrupt and treat the decision as approved (for demos/tests)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "WhileBody": {
+      "type": "object",
+      "required": ["nodes", "edges", "start_node_id", "exit_node_id"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Node" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Edge" }
+        },
+        "conditional_edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConditionalEdge" }
+        },
+        "start_node_id": {
+          "type": "string",
+          "description": "ID of the first node executed when entering the loop body."
+        },
+        "exit_node_id": {
+          "type": "string",
+          "description": "ID of the node whose completion triggers evaluation of the loop condition."
+        }
+      },
+      "additionalProperties": false
+    },
+    "WhileConfig": {
+      "type": "object",
+      "required": ["body", "condition"],
+      "properties": {
+        "body": { "$ref": "#/$defs/WhileBody" },
+        "condition": { "$ref": "#/$defs/Expression" },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional safety cap on loop iterations."
+        }
+      },
+      "additionalProperties": false
+    },
+    "MCPConfig": {
+      "type": "object",
+      "description": "Configuration for a standalone MCP node that calls a single MCP tool.",
+      "required": ["server_url", "tool"],
+      "properties": {
+        "server_url": {
+          "type": "string",
+          "description": "MCP server URL (e.g., https://mcp.example.com/mcp)."
+        },
+        "tool": {
+          "type": "string",
+          "description": "MCP tool name to invoke (as declared by the MCP server)."
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["streamable_http", "sse"],
+          "description": "Transport mechanism for MCP. STDIO is intentionally not exposed at the DSL level."
+        },
+        "require_approval": {
+          "type": "boolean",
+          "description": "When true, execution pauses before calling the MCP tool and requires explicit user approval."
+        },
+        "headers": {
+          "type": "object",
+          "description": "Optional HTTP headers to include when connecting to the MCP server.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "params": {
+          "type": "object",
+          "description": "Optional per-parameter expressions mapping from the node input object to MCP tool arguments. Keys are parameter names; values are CEL expressions evaluated in the MCP node input context (e.g., input.repoName).",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Edge": {
+      "type": "object",
+      "required": ["source", "target"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Optional edge identifier (used for tooling)."
+        },
+        "source": {
+          "type": "string",
+          "description": "Source node ID (or \"__start__\" for virtual start)."
+        },
+        "target": {
+          "type": "string",
+          "description": "Target node ID (or \"__end__\" for virtual end)."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional UI label for this edge."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConditionalEdge": {
+      "type": "object",
+      "required": ["from", "condition"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Optional identifier for this conditional edge."
+        },
+        "from": {
+          "type": "string",
+          "description": "Node ID where this condition is evaluated."
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Condition": {
+      "type": "object",
+      "required": ["cases"],
+      "properties": {
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Ordered list of cases; the first predicate that evaluates to true wins.",
+          "items": { "$ref": "#/$defs/Case" }
+        },
+        "default": {
+          "type": "string",
+          "description": "Optional default target node ID when no case matches."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Case": {
+      "type": "object",
+      "required": ["predicate", "target"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Optional label for this case (for debugging/UI)."
+        },
+        "predicate": {
+          "$ref": "#/$defs/Expression"
+        },
+        "target": {
+          "type": "string",
+          "description": "Target node ID when this predicate evaluates to true."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Expression": {
+      "type": "object",
+      "required": ["expression"],
+      "properties": {
+        "expression": {
+          "type": "string",
+          "description": "Expression source code string."
+        },
+        "format": {
+          "type": "string",
+          "description": "Expression format; currently only \"cel\" is supported.",
+          "enum": ["cel"],
+          "default": "cel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StateVariable": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "State field name (e.g., \"counter\", \"greeting\")."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Coarse-grained type kind used by editors.",
+          "enum": ["string", "number", "boolean", "object", "array", "opaque"]
+        },
+        "json_schema": {
+          "type": "object",
+          "description": "Optional JSON Schema for structured variables.",
+          "additionalProperties": true
+        },
+        "description": { "type": "string" },
+        "default": {
+          "description": "Default value applied when the graph starts."
+        },
+        "reducer": {
+          "type": "string",
+          "description": "Reducer name used to merge concurrent writes (e.g., \"default\", \"append\", \"message\")."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "graph": { "$ref": "#/$defs/Graph" }
+  }
+}

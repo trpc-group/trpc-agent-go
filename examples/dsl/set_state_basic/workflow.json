@@ -1,0 +1,91 @@
+{
+  "version": "1.0",
+  "name": "set_state_basic",
+  "description": "Demonstrates builtin.set_state assigning workflow-level state variables.",
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "node_type": "builtin.start",
+      "config": {}
+    },
+    {
+      "id": "set_state",
+      "label": "Set greeting and counter",
+      "node_type": "builtin.set_state",
+      "config": {
+        "assignments": [
+          {
+            "field": "greeting",
+            "expr": {
+              "expression": "\"Hello, \" + state.user_input + \"!\"",
+              "format": "cel"
+            }
+          },
+          {
+            "field": "counter",
+            "expr": {
+              "expression": "1",
+              "format": "cel"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "end",
+      "label": "End",
+      "node_type": "builtin.end",
+      "config": {
+        "expr": {
+          "expression": "{ \"message\": \"Greeting and counter set in global state.\", \"greeting\": state.greeting, \"counter\": state.counter }",
+          "format": "cel"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Summary message"
+            },
+            "greeting": {
+              "type": "string",
+              "description": "Greeting stored in state.greeting"
+            },
+            "counter": {
+              "type": "string",
+              "description": "Counter stored in state.counter"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "state_variables": [
+    {
+      "name": "greeting",
+      "kind": "string",
+      "description": "Greeting message shown to the user"
+    },
+    {
+      "name": "counter",
+      "kind": "number",
+      "description": "Simple numeric counter used in the example"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_start_set_state",
+      "source": "start",
+      "target": "set_state"
+    },
+    {
+      "id": "edge_set_state_end",
+      "source": "set_state",
+      "target": "end"
+    }
+  ],
+  "conditional_edges": [],
+  "start_node_id": "start"
+}

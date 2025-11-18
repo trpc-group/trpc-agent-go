@@ -1,0 +1,909 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "trpc-agent DSL Platform API",
+    "description": "REST API for the trpc-agent DSL platform. This API allows frontend applications to:\n • List available components, models, tools, and reducers\n • Validate, compile, and execute DSL graphs\n • Manage graph lifecycle (CRUD operations)\n • Stream execution events via SSE\n\nAll endpoints use JSON for request/response unless otherwise specified.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "trpc-agent Team"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8090",
+      "description": "Local development server"
+    },
+    {
+      "url": "http://localhost:8090",
+      "description": "API v1 endpoint (prefix /api/v1)"
+    }
+  ],
+  "tags": [
+    {
+      "name": "components",
+      "description": "Component registry operations"
+    },
+    {
+      "name": "models",
+      "description": "Model registry operations"
+    },
+    {
+      "name": "tools",
+      "description": "Tool registry operations"
+    },
+    {
+      "name": "graphs",
+      "description": "Graph management (CRUD)"
+    },
+    {
+      "name": "execution",
+      "description": "Graph execution and streaming"
+    },
+    {
+      "name": "validation",
+      "description": "DSL validation"
+    }
+  ],
+  "paths": {
+    "/api/v1/components": {
+      "get": {
+        "tags": ["components"],
+        "summary": "List all registered components",
+        "description": "Returns metadata for all components in the registry, including inputs, outputs, and configuration schema.",
+        "operationId": "listComponents",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "description": "Filter by component category",
+            "schema": {
+              "type": "string",
+              "enum": ["llm", "tools", "retrieval", "processing", "control", "custom"]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Search components by name or description",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of components",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ComponentMetadata"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/components/{name}": {
+      "get": {
+        "tags": ["components"],
+        "summary": "Get component details by name",
+        "operationId": "getComponent",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Component name (e.g., 'builtin.llmagent')",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Component metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComponentMetadata"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Component not found"
+          }
+        }
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "tags": ["models"],
+        "summary": "List all registered models",
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "description": "List of model names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools": {
+      "get": {
+        "tags": ["tools"],
+        "summary": "List all registered tools",
+        "operationId": "listTools",
+        "responses": {
+          "200": {
+            "description": "List of tool metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ToolMetadata"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graphs": {
+      "get": {
+        "tags": ["graphs"],
+        "summary": "List all graphs",
+        "operationId": "listGraphs",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of graphs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["graphs"],
+        "summary": "Create a new graph",
+        "operationId": "createGraph",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Graph"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Graph created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid graph definition"
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/{id}": {
+      "get": {
+        "tags": ["graphs"],
+        "summary": "Get graph by ID",
+        "operationId": "getGraph",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/graphId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Graph details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Graph not found"
+          }
+        }
+      },
+      "put": {
+        "tags": ["graphs"],
+        "summary": "Update graph",
+        "operationId": "updateGraph",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/graphId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Graph"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Graph updated"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["graphs"],
+        "summary": "Delete graph",
+        "operationId": "deleteGraph",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/graphId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Graph deleted"
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/validate": {
+      "post": {
+        "tags": ["validation"],
+        "summary": "Validate a graph DSL",
+        "description": "Validates graph structure, component references, and configuration without executing it.",
+        "operationId": "validateGraph",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Graph"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/schema": {
+      "post": {
+        "tags": ["validation"],
+        "summary": "Infer graph state schema",
+        "description": "Infers state fields and usage (readers/writers) for a given graph (view DSL). Intended for editor variable suggestions.",
+        "operationId": "getGraphSchema",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Graph"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Inferred state fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphSchemaResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/vars": {
+      "post": {
+        "tags": ["validation"],
+        "summary": "List per-node variables for a graph",
+        "description": "Returns variables produced by each node (name/type/kind/json_schema) for editor variable pickers.",
+        "operationId": "getGraphVars",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Graph"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-node variable view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphVarsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/vars/node": {
+      "post": {
+        "tags": ["validation"],
+        "summary": "List variables for a single node",
+        "description": "Returns variables available when editing a single node. This is a convenience wrapper over /graphs/vars for editors that want node-scoped variable pickers.",
+        "operationId": "getGraphNodeVars",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphVarsNodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Variables for the requested node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphVarsNode"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (e.g., malformed JSON or missing node_id)"
+          },
+          "404": {
+            "description": "Node not found in graph"
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/{id}/compile": {
+      "post": {
+        "tags": ["graphs"],
+        "summary": "Compile a graph to executable runtime graph",
+        "description": "Compiles the DSL graph definition into an executable StateGraph. Returns compilation status and any errors.",
+        "operationId": "compileGraph",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/graphId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Compilation successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompilationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Compilation failed"
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/{id}/execute": {
+      "post": {
+        "tags": ["execution"],
+        "summary": "Execute a graph (non-streaming)",
+        "description": "Executes the graph and returns all events after completion.",
+        "operationId": "executeGraph",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/graphId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Execution completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graphs/{id}/execute/stream": {
+      "post": {
+        "tags": ["execution"],
+        "summary": "Execute a graph with SSE streaming",
+        "description": "Executes the graph and streams events via Server-Sent Events.",
+        "operationId": "executeGraphStream",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/graphId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "graphId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Graph ID",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "ComponentMetadata": {
+        "type": "object",
+        "description": "Component metadata including config schema and state IO.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "builtin.llmagent"
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Human-readable component name"
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string",
+            "description": "Icon identifier or emoji"
+          },
+          "color": {
+            "type": "string",
+            "description": "Hex color used for UI representation"
+          },
+          "version": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParameterMetadata"
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParameterMetadata"
+            }
+          },
+          "config_schema": {
+            "type": "array",
+            "description": "Schema for node.config parameters",
+            "items": {
+              "$ref": "#/components/schemas/ParameterMetadata"
+            }
+          }
+        }
+      },
+      "ParameterMetadata": {
+        "type": "object",
+        "description": "Parameter schema used for inputs, outputs, and config.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "Go type or logical type string"
+          },
+          "type_id": {
+            "type": "string",
+            "description": "Logical DSL type identifier (e.g., string, number, graph.messages)"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Coarse-grained kind for editors: string | number | boolean | object | array | opaque"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "default": {
+            "description": "Default value if not provided"
+          },
+          "enum": {
+            "type": "array",
+            "items": {}
+          },
+          "placeholder": {
+            "type": "string"
+          },
+          "json_schema": {
+            "type": "object",
+            "description": "Optional JSON Schema when this parameter is a structured object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ToolMetadata": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "Graph": {
+        "$ref": "../../dsl/schema/engine_dsl.schema.json#/$defs/Graph"
+      },
+      "FieldUsage": {
+        "type": "object",
+        "description": "Describes how a particular state field is used in the graph.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "schema_ref": {
+            "type": "string"
+          },
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "writers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "readers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GraphSchemaResponse": {
+        "type": "object",
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldUsage"
+            }
+          }
+        }
+      },
+      "GraphVar": {
+        "type": "object",
+        "properties": {
+          "variable": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "GraphVarsNode": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "vars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphVar"
+            }
+          }
+        }
+      },
+      "GraphVarsNodeRequest": {
+        "type": "object",
+        "description": "Request body for /graphs/vars/node. Carries the full graph draft plus the node_id currently being edited.",
+        "required": ["graph", "node_id"],
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/Graph"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "ID of the node whose available variables should be returned"
+          }
+        }
+      },
+      "GraphVarsResponse": {
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphVarsNode"
+            }
+          }
+        }
+      },
+      "GraphResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Graph"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ]
+      },
+      "GraphList": {
+        "type": "object",
+        "properties": {
+          "graphs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphResponse"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      },
+      "ValidationResult": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "CompilationResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "graph_id": {
+            "type": "string",
+            "description": "Compiled graph identifier"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ExecutionRequest": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "object",
+            "description": "Initial state/input for the graph",
+            "additionalProperties": true
+          },
+          "config": {
+            "type": "object",
+            "description": "Execution configuration",
+            "properties": {
+              "max_iterations": {
+                "type": "integer",
+                "default": 100
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 300
+              }
+            }
+          }
+        }
+      },
+      "ExecutionResult": {
+        "type": "object",
+        "properties": {
+          "execution_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["success", "error", "timeout"]
+          },
+          "final_state": {
+            "type": "object",
+            "description": "Final graph state",
+            "additionalProperties": true
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["node_start", "node_end", "edge", "error", "stream_chunk"]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

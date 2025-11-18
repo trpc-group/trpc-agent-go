@@ -1,0 +1,233 @@
+syntax = "proto3";
+
+package dsl_platform;
+
+// HTTP / frontend facing API schema for the DSL platform.
+// This file assumes the engine-level DSL types are defined via JSON schema
+// and only defines the RPC surface and view-layer graph wrapper.
+
+import "dsl/engine_dsl.proto";
+
+// ============================================================================
+// Shared messages
+// ============================================================================
+
+message Empty {}
+
+// View-layer graph used by HTTP APIs and frontends.
+// It wraps the engine-level Graph nodes with UI information.
+message ViewGraph {
+  string version = 1;
+  string name = 2;
+  string description = 3;
+
+  repeated ViewNode nodes = 4;
+  repeated engine_dsl.Edge edges = 5;
+  repeated engine_dsl.ConditionalEdge conditional_edges = 6;
+
+  string start_node_id = 7;
+  string finish_point = 8;
+
+  // Arbitrary graph-level metadata.
+  engine_dsl.StructValue metadata = 9;
+}
+
+message ViewNode {
+  string id = 1;
+  string type = 2;             // UI-only type (e.g., "custom").
+  ViewPosition position = 3;   // UI-only position.
+  ViewNodeData data = 4;       // UI metadata + engine node.
+}
+
+message ViewPosition {
+  double x = 1;
+  double y = 2;
+}
+
+message ViewNodeData {
+  string label = 1;                          // UI-only label.
+  string icon = 2;                           // UI-only icon.
+  engine_dsl.EngineNode engine = 3;          // Engine-level node definition.
+}
+
+// Simple model info placeholder. Actual fields depend on ModelRegistry usage.
+message ModelInfo {
+  string name = 1;
+  string provider = 2;
+  string description = 3;
+}
+
+message ToolInfo {
+  string name = 1;
+  string description = 2;
+  // Optional input schema for the tool, represented as a generic struct.
+  engine_dsl.StructValue input_schema = 3;
+}
+
+message ToolSetInfo {
+  string name = 1;
+}
+
+// ============================================================================
+// Component registry RPCs
+// ============================================================================
+
+message ListComponentsRequest {
+  string category = 1;  // Optional category filter.
+  string search = 2;    // Optional search query.
+}
+
+message ListComponentsResponse {
+  repeated engine_dsl.ComponentMetadata components = 1;
+}
+
+message GetComponentRequest {
+  string name = 1;
+}
+
+// ============================================================================
+// Model / tool registry RPCs
+// ============================================================================
+
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+message ListToolsResponse {
+  repeated ToolInfo tools = 1;
+}
+
+message ListToolSetsResponse {
+  repeated ToolSetInfo toolsets = 1;
+}
+
+// ============================================================================
+// Graph CRUD RPCs
+// ============================================================================
+
+message ListGraphsRequest {
+  int32 page = 1;
+  int32 limit = 2;
+}
+
+message GraphResponse {
+  string id = 1;
+  ViewGraph graph = 2;
+  string created_at = 3;
+  string updated_at = 4;
+}
+
+message GraphList {
+  repeated GraphResponse graphs = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+message CreateGraphRequest {
+  ViewGraph graph = 1;
+}
+
+message UpdateGraphRequest {
+  string id = 1;
+  ViewGraph graph = 2;
+}
+
+message GetGraphRequest {
+  string id = 1;
+}
+
+message DeleteGraphRequest {
+  string id = 1;
+}
+
+// ============================================================================
+// Validation / schema RPCs
+// ============================================================================
+
+message ValidateGraphRequest {
+  ViewGraph graph = 1;
+}
+
+message ValidationResult {
+  bool valid = 1;
+  repeated ValidationError errors = 2;
+}
+
+message ValidationError {
+  string field = 1;
+  string message = 2;
+}
+
+message GraphSchemaRequest {
+  ViewGraph graph = 1;
+}
+
+// Uses engine_dsl.GraphSchemaResponse for the payload.
+
+message GraphVarsRequest {
+  ViewGraph graph = 1;
+}
+
+// Uses engine_dsl.GraphVarsResponse for the payload.
+
+// ============================================================================
+// Execution RPCs
+// ============================================================================
+
+message ExecutionConfig {
+  int32 max_iterations = 1;
+  int32 timeout_seconds = 2;
+}
+
+message ExecuteGraphRequest {
+  string id = 1;
+  engine_dsl.StructValue input = 2;
+  ExecutionConfig config = 3;
+}
+
+message ExecutionEvent {
+  string type = 1;
+  string timestamp = 2;
+  string node_id = 3;
+  engine_dsl.StructValue data = 4;
+}
+
+message ExecutionResult {
+  string execution_id = 1;
+  string status = 2;                       // "success" | "error" | "timeout".
+  engine_dsl.StructValue final_state = 3;  // Final graph state.
+  repeated ExecutionEvent events = 4;      // All events (non-streaming).
+  string error = 5;                        // Optional error message.
+}
+
+// ============================================================================
+// Service definition
+// ============================================================================
+
+service DSLPlatformService {
+  // Component registry
+  rpc ListComponents(ListComponentsRequest) returns (ListComponentsResponse);
+  rpc GetComponent(GetComponentRequest) returns (engine_dsl.ComponentMetadata);
+
+  // Model / tool registry
+  rpc ListModels(Empty) returns (ListModelsResponse);
+  rpc ListTools(Empty) returns (ListToolsResponse);
+  rpc ListToolSets(Empty) returns (ListToolSetsResponse);
+
+  // Graph CRUD
+  rpc ListGraphs(ListGraphsRequest) returns (GraphList);
+  rpc CreateGraph(CreateGraphRequest) returns (GraphResponse);
+  rpc GetGraph(GetGraphRequest) returns (GraphResponse);
+  rpc UpdateGraph(UpdateGraphRequest) returns (GraphResponse);
+  rpc DeleteGraph(DeleteGraphRequest) returns (Empty);
+
+  // Validation / schema
+  rpc ValidateGraph(ValidateGraphRequest) returns (ValidationResult);
+  rpc GetGraphSchema(GraphSchemaRequest) returns (engine_dsl.GraphSchemaResponse);
+  rpc GetGraphVars(GraphVarsRequest) returns (engine_dsl.GraphVarsResponse);
+
+  // Execution
+  rpc ExecuteGraph(ExecuteGraphRequest) returns (ExecutionResult);
+  rpc ExecuteGraphStream(ExecuteGraphRequest) returns (stream ExecutionEvent);
+}
