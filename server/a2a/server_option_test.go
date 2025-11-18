@@ -473,14 +473,6 @@ func TestWithOptions(t *testing.T) {
 	}
 }
 
-type mockError struct {
-	msg string
-}
-
-func (e *mockError) Error() string {
-	return e.msg
-}
-
 func TestDefaultAuthProvider_CustomUserIDHeader(t *testing.T) {
 	customHeader := "X-Custom-User-ID"
 	tests := []struct {

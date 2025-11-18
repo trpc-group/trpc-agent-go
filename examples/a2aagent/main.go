@@ -31,6 +31,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 var (
@@ -48,14 +50,20 @@ func main() {
 	flag.Parse()
 
 	// runRemoteAgent will start a a2a server that build with a remote agent
-	runRemoteAgent("agent_remote_joker", "I am a remote agent, I can tell a joke", *host)
+	runA2AServerByAgent("agent_remote_joker", "I am a remote agent, I can tell a joke", *host)
 	time.Sleep(1 * time.Second)
 
 	httpURL := fmt.Sprintf("http://%s", *host)
 	a2aAgent := buildA2AAgent(httpURL)
 
 	// Build a different local agent
-	localAgent := buildAgent("agent_local_joker", "I am a local agent, I can tell a joke")
+	localAgent := buildAgent("agent_local_joker", "I am a local agent, I can tell a joke",
+		llmagent.WithTools([]tool.Tool{
+			function.NewFunctionTool(
+				getCurrentTime,
+				function.WithName("getCurrentTime"),
+				function.WithDescription("This is tool that can get current time")),
+		}))
 	startChat(localAgent, a2aAgent)
 }
 
@@ -191,8 +199,13 @@ func (h *hookProcessor) ProcessMessage(
 	return h.next.ProcessMessage(ctx, message, options, handler)
 }
 
-func runRemoteAgent(agentName, desc, host string) {
-	remoteAgent := buildAgent(agentName, desc)
+func runA2AServerByAgent(agentName, desc, host string) {
+	remoteAgent := buildAgent(agentName, desc, llmagent.WithTools([]tool.Tool{
+		function.NewFunctionTool(
+			getCurrentTime,
+			function.WithName("getCurrentTime"),
+			function.WithDescription("This is tool that can get current time")),
+	}))
 	server, err := a2a.New(
 		a2a.WithDebugLogging(false),
 		a2a.WithErrorHandler(func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
@@ -220,7 +233,7 @@ func runRemoteAgent(agentName, desc, host string) {
 	}()
 }
 
-func buildAgent(agentName, desc string) agent.Agent {
+func buildAgent(agentName, desc string, extraOptions ...llmagent.Option) agent.Agent {
 	// Create OpenAI model.
 	modelInstance := openai.New(*modelName)
 
@@ -230,14 +243,14 @@ func buildAgent(agentName, desc string) agent.Agent {
 		Temperature: floatPtr(0.7),
 		Stream:      *streaming,
 	}
-	llmAgent := llmagent.New(
-		agentName,
+	options := []llmagent.Option{
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription(desc),
 		llmagent.WithInstruction(desc),
 		llmagent.WithGenerationConfig(genConfig),
-	)
-
+	}
+	options = append(options, extraOptions...)
+	llmAgent := llmagent.New(agentName, options...)
 	return llmAgent
 }
 
@@ -312,13 +325,21 @@ func handleToolCalls(
 	toolCallsDetected *bool,
 	assistantStarted *bool,
 ) bool {
-	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) == 0 {
+		return false
+	}
+
+	choice := event.Response.Choices[0]
+
+	// trpc-agent-go only puts tool calls in Message.ToolCalls, never in Delta.ToolCalls
+	// even in streaming mode, tool calls are aggregated and sent in final response
+	if len(choice.Message.ToolCalls) > 0 {
 		*toolCallsDetected = true
 		if *assistantStarted {
 			fmt.Printf("\n")
 		}
 		fmt.Printf("🔧 CallableTool calls initiated:\n")
-		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
+		for _, toolCall := range choice.Message.ToolCalls {
 			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 			if len(toolCall.Function.Arguments) > 0 {
 				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -335,7 +356,8 @@ func handleToolResponses(event *event.Event) bool {
 	if event.Response != nil && len(event.Response.Choices) > 0 {
 		hasToolResponse := false
 		for _, choice := range event.Response.Choices {
-			// Handle traditional tool responses (Role: tool)
+			// Tool responses are always in Message (never in Delta), even in streaming mode
+			// This follows trpc-agent-go convention
 			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
 				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
 					choice.Message.ToolID,
@@ -400,4 +422,49 @@ func intPtr(i int) *int {
 
 func floatPtr(f float64) *float64 {
 	return &f
+}
+
+// getCurrentTime returns current time information.
+func getCurrentTime(_ context.Context, args timeArgs) (timeResult, error) {
+	now := time.Now()
+	var t time.Time
+	timezone := args.Timezone
+
+	// Handle timezone conversion.
+	switch strings.ToUpper(args.Timezone) {
+	case "UTC":
+		t = now.UTC()
+	case "EST", "EASTERN":
+		t = now.Add(-5 * time.Hour) // Simplified EST.
+	case "PST", "PACIFIC":
+		t = now.Add(-8 * time.Hour) // Simplified PST.
+	case "CST", "CENTRAL":
+		t = now.Add(-6 * time.Hour) // Simplified CST.
+	case "":
+		t = now
+		timezone = "Local"
+	default:
+		t = now.UTC()
+		timezone = "UTC"
+	}
+
+	return timeResult{
+		Timezone: timezone,
+		Time:     t.Format("15:04:05"),
+		Date:     t.Format("2006-01-02"),
+		Weekday:  t.Weekday().String(),
+	}, nil
+}
+
+// timeArgs represents arguments for the time tool.
+type timeArgs struct {
+	Timezone string `json:"timezone" jsonschema:"description=Timezone or leave empty for local"`
+}
+
+// timeResult represents the current time information.
+type timeResult struct {
+	Timezone string `json:"timezone"`
+	Time     string `json:"time"`
+	Date     string `json:"date"`
+	Weekday  string `json:"weekday"`
 }

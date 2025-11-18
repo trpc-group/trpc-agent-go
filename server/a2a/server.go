@@ -316,7 +316,7 @@ func (m *messageProcessor) ProcessMessage(
 	if options.Streaming {
 		return m.processStreamingMessage(ctx, userID, ctxID, &message, agentMsg, handler, runnerOpts)
 	}
-	return m.processMessage(ctx, userID, ctxID, &message, agentMsg, handler, runnerOpts)
+	return m.processMessage(ctx, userID, ctxID, &message, agentMsg, runnerOpts)
 }
 
 func (m *messageProcessor) processStreamingMessage(
@@ -521,7 +521,6 @@ func (m *messageProcessor) processMessage(
 	ctxID string,
 	a2aMsg *protocol.Message,
 	agentMsg *model.Message,
-	handler taskmanager.TaskHandler,
 	runnerOpts []agent.RunOption,
 ) (*taskmanager.MessageProcessingResult, error) {
 	if agentMsg == nil {
