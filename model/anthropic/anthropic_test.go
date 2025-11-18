@@ -1373,7 +1373,7 @@ func TestWithEnableTokenTailoring_EmptyMessages(t *testing.T) {
 
 // TestWithTokenTailoringConfig tests the WithTokenTailoringConfig option.
 func TestWithTokenTailoringConfig(t *testing.T) {
-	config := &TokenTailoringConfig{
+	config := &model.TokenTailoringConfig{
 		ProtocolOverheadTokens: 1024,
 		ReserveOutputTokens:    4096,
 		InputTokensFloor:       2048,

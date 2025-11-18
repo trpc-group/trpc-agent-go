@@ -1194,7 +1194,7 @@ model := openai.New("deepseek-chat",
 ```go
 model := openai.New("deepseek-chat",
     openai.WithEnableTokenTailoring(true),
-    openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+    openai.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         ProtocolOverheadTokens: 1024,   // 自定义协议开销
         ReserveOutputTokens:    4096,   // 自定义输出预留
         InputTokensFloor:       2048,   // 自定义输入最小值
@@ -1210,7 +1210,7 @@ model := openai.New("deepseek-chat",
 ```go
 model := anthropic.New("claude-sonnet-4-0",
     anthropic.WithEnableTokenTailoring(true),
-    anthropic.WithTokenTailoringConfig(&anthropic.TokenTailoringConfig{
+    anthropic.WithTokenTailoringConfig(&model.TokenTailoringConfig{
         SafetyMarginRatio: 0.15,  // 提高安全边际到 15%
     }),
 )
@@ -1252,7 +1252,7 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - API Key 环境变量名：`DASHSCOPE_API_KEY`
 - 其他行为与标准 OpenAI 一致
 
-##### 6.2. 使用方式
+##### 7.2. 使用方式
 
 **使用示例**：
 
@@ -1274,7 +1274,7 @@ model := openai.New("deepseek-chat",
 )
 ```
 
-##### 6.3. Variant 的行为差异示例
+##### 7.3. Variant 的行为差异示例
 
 **消息内容处理差异**：
 
@@ -1841,7 +1841,7 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#3-token-token-tailoring)。
+关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#6-token-裁剪token-tailoring)。
 
 ## Provider
 
@@ -1861,7 +1861,8 @@ Provider 支持以下 `Option`：
 | `WithCallbacks`                                                                                   | 配置 OpenAI / Anthropic 的请求、响应、流式回调 |
 | `WithExtraFields`                                                                                 | 配置请求体自定义字段                           |
 | `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token 裁剪相关参数                             |
-| `WithOpenAI` / `WithAnthropic`                                                                    | 透传供应商原生 Option                          |
+| `WithTokenTailoringConfig`                                                                        | 高级配置：自定义 token 裁剪预算参数            |
+| `WithOpenAIOption` / `WithAnthropicOption`                                                        | 透传供应商原生 Option                          |
 
 ### 使用示例
 
@@ -1885,6 +1886,32 @@ modelInstance, err := provider.Model(
 )
 
 agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))
+```
+
+**高级配置：使用 TokenTailoringConfig**：
+
+对于需要精细调整 token 分配策略的高级用户，可以使用 `WithTokenTailoringConfig`：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/provider"
+)
+
+// 为所有 provider 自定义 token 裁剪预算参数
+config := &model.TokenTailoringConfig{
+    ProtocolOverheadTokens: 1024,
+    ReserveOutputTokens:    4096,
+    SafetyMarginRatio:      0.15,
+}
+
+modelInstance, err := provider.Model(
+    "openai",
+    "deepseek-chat",
+    provider.WithAPIKey(c.apiKey),
+    provider.WithEnableTokenTailoring(true),
+    provider.WithTokenTailoringConfig(config),
+)
 ```
 
 完整代码可参见 [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider)。
