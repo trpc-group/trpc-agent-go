@@ -69,7 +69,7 @@ func (c *multiTurnChat) run() error {
 	if err := c.setup(ctx); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
-	
+
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer c.runner.Close()
 
@@ -102,9 +102,6 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			Args:      []string{"run", "./stdioserver/main.go"},
 			Timeout:   10 * time.Second,
 		},
-		// Old way (deprecated, will be removed in a future version):
-		// mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add"))
-		// New way (recommended):
 		mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add")),
 	)
 	fmt.Println("STDIO MCP Toolset created successfully")

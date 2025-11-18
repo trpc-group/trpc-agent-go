@@ -88,8 +88,7 @@ type SessionReconnectConfig struct {
 // toolSetConfig holds internal configuration for ToolSet.
 type toolSetConfig struct {
 	connectionConfig       ConnectionConfig
-	toolFilter             ToolFilter
-	toolFilterFunc         tool.FilterFunc         // Unified tool filter function.
+	toolFilterFunc         tool.FilterFunc         // Tool filter function.
 	mcpOptions             []mcp.ClientOption      // MCP client options.
 	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration.
 	name                   string                  // ToolSet name for identification and conflict resolution.
@@ -98,8 +97,7 @@ type toolSetConfig struct {
 // ToolSetOption is a function type for configuring ToolSet.
 type ToolSetOption func(*toolSetConfig)
 
-// WithToolFilterFunc configures tool filtering using the unified tool.FilterFunc interface.
-// This is the recommended approach for forward compatibility with the framework's unified filtering.
+// WithToolFilterFunc configures tool filtering.
 //
 // Example:
 //
@@ -113,25 +111,6 @@ type ToolSetOption func(*toolSetConfig)
 func WithToolFilterFunc(filterFunc tool.FilterFunc) ToolSetOption {
 	return func(c *toolSetConfig) {
 		c.toolFilterFunc = filterFunc
-	}
-}
-
-// WithToolFilter configures tool filtering using the legacy MCP-specific filter.
-//
-// Deprecated: Use WithToolFilterFunc instead.
-// This is deprecated and will be removed in a future version. Please migrate to WithToolFilterFunc for compatibility
-// with the unified tool filtering interface.
-//
-// Migration example:
-//
-//	// Old (deprecated):
-//	mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add"))
-//
-//	// New (recommended):
-//	mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add"))
-func WithToolFilter(filter ToolFilter) ToolSetOption {
-	return func(c *toolSetConfig) {
-		c.toolFilter = filter
 	}
 }
 

@@ -20,8 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
 
-// TestFilterPriority_Integration tests the filter priority logic using a real STDIO MCP server.
-// This verifies that unified filter (toolFilterFunc) takes precedence over legacy filter (toolFilter).
+// TestFilterPriority_Integration tests the filter logic using a real STDIO MCP server.
 func TestFilterPriority_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -34,7 +33,7 @@ func TestFilterPriority_Integration(t *testing.T) {
 		description   string
 	}{
 		{
-			name: "unified filter takes priority over legacy filter",
+			name: "include filter",
 			setupConfig: func() mcp.ConnectionConfig {
 				return mcp.ConnectionConfig{
 					Transport: "stdio",
@@ -44,32 +43,13 @@ func TestFilterPriority_Integration(t *testing.T) {
 				}
 			},
 			options: []mcp.ToolSetOption{
-				// Set both filters - unified should win
 				mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("tool1")),
-				mcp.WithToolFilter(mcp.NewIncludeFilter("tool2", "tool3")),
 			},
-			expectedTools: []string{"tool1"}, // Unified filter result
-			description:   "Unified filter should take priority when both are set",
+			expectedTools: []string{"tool1"},
+			description:   "Include filter should only return tool1",
 		},
 		{
-			name: "legacy filter works when unified filter is not set",
-			setupConfig: func() mcp.ConnectionConfig {
-				return mcp.ConnectionConfig{
-					Transport: "stdio",
-					Command:   "go",
-					Args:      []string{"run", "./test_server/main.go"},
-					Timeout:   10 * time.Second,
-				}
-			},
-			options: []mcp.ToolSetOption{
-				// Only set legacy filter
-				mcp.WithToolFilter(mcp.NewIncludeFilter("tool2", "tool3")),
-			},
-			expectedTools: []string{"tool2", "tool3"},
-			description:   "Legacy filter should work when unified filter is not set",
-		},
-		{
-			name: "unified exclude filter",
+			name: "exclude filter",
 			setupConfig: func() mcp.ConnectionConfig {
 				return mcp.ConnectionConfig{
 					Transport: "stdio",
@@ -82,7 +62,7 @@ func TestFilterPriority_Integration(t *testing.T) {
 				mcp.WithToolFilterFunc(tool.NewExcludeToolNamesFilter("tool2")),
 			},
 			expectedTools: []string{"tool1", "tool3"},
-			description:   "Unified exclude filter should work correctly",
+			description:   "Exclude filter should work correctly",
 		},
 	}
 

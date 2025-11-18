@@ -516,18 +516,6 @@ toolSet := mcp.NewMCPToolSet(
 )
 ```
 
-**Deprecated legacy interface** (not recommended):
-```go
-// ⚠️ Deprecated: MCP-specific filters (not recommended)
-// includeFilter := mcp.NewIncludeFilter("get_weather", "get_news")
-// excludeFilter := mcp.NewExcludeFilter("deprecated_tool")
-// mcp.WithToolFilter(includeFilter)
-```
-
-**Migration guide:**
-- Old code: `mcp.WithToolFilter(mcp.NewIncludeFilter("tool1", "tool2"))`
-- New code: `mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("tool1", "tool2"))`
-
 ### Per-Run Tool Filtering
 
 Per-run tool filtering enables dynamic control of tool availability for each `runner.Run` invocation without modifying Agent configuration. This is a "soft constraint" mechanism for optimizing token consumption and implementing role-based tool access control.

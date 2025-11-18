@@ -12,6 +12,7 @@ package mcp
 import (
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
@@ -49,15 +50,15 @@ func TestValidateTransport(t *testing.T) {
 	}
 }
 
-func TestWithToolFilter(t *testing.T) {
-	filter := NewIncludeFilter("tool1", "tool2")
+func TestWithToolFilterFunc(t *testing.T) {
+	filter := tool.NewIncludeToolNamesFilter("tool1", "tool2")
 	cfg := &toolSetConfig{}
 
-	opt := WithToolFilter(filter)
+	opt := WithToolFilterFunc(filter)
 	opt(cfg)
 
-	if cfg.toolFilter == nil {
-		t.Error("expected toolFilter to be set")
+	if cfg.toolFilterFunc == nil {
+		t.Error("expected toolFilterFunc to be set")
 	}
 }
 

@@ -515,18 +515,6 @@ toolSet := mcp.NewMCPToolSet(
 )
 ```
 
-**废弃的旧接口** (不推荐使用):
-```go
-// ⚠️ 已废弃：使用 MCP 专用过滤器（不推荐）
-// includeFilter := mcp.NewIncludeFilter("get_weather", "get_news")
-// excludeFilter := mcp.NewExcludeFilter("deprecated_tool")
-// mcp.WithToolFilter(includeFilter)
-```
-
-**迁移指南：**
-- 旧代码：`mcp.WithToolFilter(mcp.NewIncludeFilter("tool1", "tool2"))`
-- 新代码：`mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("tool1", "tool2"))`
-
 ### 运行时工具过滤
 
 运行时工具过滤允许在每次 `runner.Run` 调用时动态控制工具可用性，无需修改 Agent 配置。这是一个"软约束"机制，用于优化 token 消耗和实现基于角色的工具访问控制。

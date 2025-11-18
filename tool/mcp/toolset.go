@@ -152,38 +152,8 @@ func (ts *ToolSet) listTools(ctx context.Context) error {
 	}
 
 	// Apply tool filter if configured.
-	// Priority: unified filter (toolFilterFunc) takes precedence over legacy filter (toolFilter).
 	if ts.config.toolFilterFunc != nil {
-		// Use unified filtering interface (recommended).
 		tools = tool.FilterTools(ctx, tools, ts.config.toolFilterFunc)
-	} else if ts.config.toolFilter != nil {
-		// Use legacy MCP-specific filtering (deprecated).
-		toolInfos := make([]ToolInfo, len(tools))
-		for i, tool := range tools {
-			decl := tool.Declaration()
-			toolInfos[i] = ToolInfo{
-				Name:        decl.Name,
-				Description: decl.Description,
-			}
-		}
-
-		filteredInfos := ts.config.toolFilter.Filter(ctx, toolInfos)
-		filteredTools := make([]tool.Tool, 0, len(filteredInfos))
-
-		// Build a map for quick lookup.
-		filteredNames := make(map[string]bool)
-		for _, info := range filteredInfos {
-			filteredNames[info.Name] = true
-		}
-
-		// Keep only filtered tools.
-		for _, tool := range tools {
-			if filteredNames[tool.Declaration().Name] {
-				filteredTools = append(filteredTools, tool)
-			}
-		}
-
-		tools = filteredTools
 	}
 
 	// Update tools atomically.
