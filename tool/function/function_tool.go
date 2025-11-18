@@ -47,6 +47,8 @@ type functionToolOptions struct {
 	unmarshaler       unmarshaler
 	longRunning       bool
 	skipSummarization bool
+	inputSchema       *tool.Schema
+	outputSchema      *tool.Schema
 }
 
 // WithName sets the name of the function tool.
@@ -88,6 +90,22 @@ func WithSkipSummarization(skip bool) Option {
 	}
 }
 
+// WithInputSchema sets a custom input schema for the function tool.
+// When provided, the automatic schema generation will be skipped.
+func WithInputSchema(schema *tool.Schema) Option {
+	return func(opts *functionToolOptions) {
+		opts.inputSchema = schema
+	}
+}
+
+// WithOutputSchema sets a custom output schema for the function tool.
+// When provided, the automatic schema generation will be skipped.
+func WithOutputSchema(schema *tool.Schema) Option {
+	return func(opts *functionToolOptions) {
+		opts.outputSchema = schema
+	}
+}
+
 // NewFunctionTool creates and returns a new instance of FunctionTool with the specified
 // function implementation and optional configuration.
 // Parameters:
@@ -117,8 +135,20 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 		emptyI I
 		emptyO O
 	)
-	iSchema := itool.GenerateJSONSchema(reflect.TypeOf(emptyI))
-	oSchema := itool.GenerateJSONSchema(reflect.TypeOf(emptyO))
+
+	var iSchema *tool.Schema
+	if options.inputSchema != nil {
+		iSchema = options.inputSchema
+	} else {
+		iSchema = itool.GenerateJSONSchema(reflect.TypeOf(emptyI))
+	}
+
+	var oSchema *tool.Schema
+	if options.outputSchema != nil {
+		oSchema = options.outputSchema
+	} else {
+		oSchema = itool.GenerateJSONSchema(reflect.TypeOf(emptyO))
+	}
 
 	return &FunctionTool[I, O]{
 		name:              options.name,
@@ -222,8 +252,20 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 		emptyI I
 		emptyO O
 	)
-	iSchema := itool.GenerateJSONSchema(reflect.TypeOf(emptyI))
-	oSchema := itool.GenerateJSONSchema(reflect.TypeOf(emptyO))
+
+	var iSchema *tool.Schema
+	if options.inputSchema != nil {
+		iSchema = options.inputSchema
+	} else {
+		iSchema = itool.GenerateJSONSchema(reflect.TypeOf(emptyI))
+	}
+
+	var oSchema *tool.Schema
+	if options.outputSchema != nil {
+		oSchema = options.outputSchema
+	} else {
+		oSchema = itool.GenerateJSONSchema(reflect.TypeOf(emptyO))
+	}
 
 	return &StreamableFunctionTool[I, O]{
 		name:              options.name,

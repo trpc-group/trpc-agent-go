@@ -502,3 +502,332 @@ func TestStreamableFunctionTool_SkipSummarizationOption(t *testing.T) {
 		t.Errorf("expected SkipSummarization true")
 	}
 }
+
+func TestFunctionTool_WithInputSchema(t *testing.T) {
+	type inputArgs struct {
+		A int `json:"a"`
+		B int `json:"b"`
+	}
+	type outputArgs struct {
+		Result int `json:"result"`
+	}
+
+	fn := func(_ context.Context, args inputArgs) (outputArgs, error) {
+		return outputArgs{Result: args.A + args.B}, nil
+	}
+
+	customInputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"a": {
+				Type:        "integer",
+				Description: "Custom first number",
+			},
+			"b": {
+				Type:        "integer",
+				Description: "Custom second number",
+			},
+		},
+		Required: []string{"a", "b"},
+	}
+
+	// Test with custom input schema
+	fTool := function.NewFunctionTool(fn,
+		function.WithName("CustomSchemaTest"),
+		function.WithInputSchema(customInputSchema),
+	)
+
+	decl := fTool.Declaration()
+	if decl == nil {
+		t.Fatal("Declaration() returned nil")
+	}
+
+	if decl.InputSchema == nil {
+		t.Fatal("expected non-nil InputSchema")
+	}
+
+	// Verify that the custom schema is used
+	if decl.InputSchema.Type != "object" {
+		t.Errorf("expected schema type 'object', got %q", decl.InputSchema.Type)
+	}
+
+	if len(decl.InputSchema.Properties) != 2 {
+		t.Errorf("expected 2 properties, got %d", len(decl.InputSchema.Properties))
+	}
+
+	// Verify the tool still works functionally
+	input := inputArgs{A: 5, B: 3}
+	args := toArguments(t, input)
+	result, err := fTool.Call(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sum, ok := result.(outputArgs)
+	if !ok {
+		t.Fatalf("expected outputArgs result, got %T", result)
+	}
+	if sum.Result != 8 {
+		t.Errorf("expected 8, got %d", sum.Result)
+	}
+}
+
+func TestFunctionTool_WithOutputSchema(t *testing.T) {
+	type inputArgs struct {
+		A int `json:"a"`
+	}
+	type outputArgs struct {
+		Result int `json:"result"`
+	}
+
+	fn := func(_ context.Context, args inputArgs) (outputArgs, error) {
+		return outputArgs{Result: args.A * 2}, nil
+	}
+
+	customOutputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"result": {
+				Type:        "integer",
+				Description: "Custom result description",
+			},
+		},
+	}
+
+	// Test with custom output schema
+	fTool := function.NewFunctionTool(fn,
+		function.WithName("CustomOutputSchemaTest"),
+		function.WithOutputSchema(customOutputSchema),
+	)
+
+	decl := fTool.Declaration()
+	if decl == nil {
+		t.Fatal("Declaration() returned nil")
+	}
+
+	if decl.OutputSchema == nil {
+		t.Fatal("expected non-nil OutputSchema")
+	}
+
+	// Verify that the custom schema is used
+	if decl.OutputSchema.Type != "object" {
+		t.Errorf("expected schema type 'object', got %q", decl.OutputSchema.Type)
+	}
+
+	// Verify the tool still works functionally
+	input := inputArgs{A: 7}
+	args := toArguments(t, input)
+	result, err := fTool.Call(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output, ok := result.(outputArgs)
+	if !ok {
+		t.Fatalf("expected outputArgs result, got %T", result)
+	}
+	if output.Result != 14 {
+		t.Errorf("expected 14, got %d", output.Result)
+	}
+}
+
+func TestFunctionTool_WithBothCustomSchemas(t *testing.T) {
+	type inputArgs struct {
+		X int `json:"x"`
+	}
+	type outputArgs struct {
+		Y int `json:"y"`
+	}
+
+	fn := func(_ context.Context, args inputArgs) (outputArgs, error) {
+		return outputArgs{Y: args.X + 10}, nil
+	}
+
+	customInputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"x": {
+				Type:        "integer",
+				Description: "Input value X",
+			},
+		},
+	}
+
+	customOutputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"y": {
+				Type:        "integer",
+				Description: "Output value Y",
+			},
+		},
+	}
+
+	// Test with both custom schemas
+	fTool := function.NewFunctionTool(fn,
+		function.WithName("BothSchemasTest"),
+		function.WithInputSchema(customInputSchema),
+		function.WithOutputSchema(customOutputSchema),
+	)
+
+	decl := fTool.Declaration()
+	if decl == nil {
+		t.Fatal("Declaration() returned nil")
+	}
+
+	if decl.InputSchema == nil {
+		t.Fatal("expected non-nil InputSchema")
+	}
+	if decl.OutputSchema == nil {
+		t.Fatal("expected non-nil OutputSchema")
+	}
+
+	// Verify both schemas are custom
+	if decl.InputSchema.Type != "object" {
+		t.Errorf("expected input schema type 'object', got %q", decl.InputSchema.Type)
+	}
+	if decl.OutputSchema.Type != "object" {
+		t.Errorf("expected output schema type 'object', got %q", decl.OutputSchema.Type)
+	}
+
+	// Verify the tool still works functionally
+	input := inputArgs{X: 5}
+	args := toArguments(t, input)
+	result, err := fTool.Call(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output, ok := result.(outputArgs)
+	if !ok {
+		t.Fatalf("expected outputArgs result, got %T", result)
+	}
+	if output.Y != 15 {
+		t.Errorf("expected 15, got %d", output.Y)
+	}
+}
+
+func TestStreamableFunctionTool_WithInputSchema(t *testing.T) {
+	customInputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"articleID": {
+				Type:        "integer",
+				Description: "Custom article ID description",
+			},
+		},
+	}
+
+	st := function.NewStreamableFunctionTool[streamTestInput, streamTestOutput](
+		streamableFunc,
+		function.WithName("StreamInputSchemaTest"),
+		function.WithInputSchema(customInputSchema),
+	)
+
+	decl := st.Declaration()
+	if decl == nil {
+		t.Fatal("Declaration() returned nil")
+	}
+
+	if decl.InputSchema == nil {
+		t.Fatal("expected non-nil InputSchema")
+	}
+
+	// Verify that the custom schema is used
+	if decl.InputSchema.Type != "object" {
+		t.Errorf("expected schema type 'object', got %q", decl.InputSchema.Type)
+	}
+
+	// Verify the tool still works functionally
+	reader, err := st.StreamableCall(context.Background(), toArguments(t, streamTestInput{ArticleID: 0}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer reader.Close()
+
+	// Just verify we can receive at least one chunk
+	_, err = reader.Recv()
+	if err != nil && err != io.EOF {
+		t.Fatalf("unexpected error receiving chunk: %v", err)
+	}
+}
+
+func TestStreamableFunctionTool_WithOutputSchema(t *testing.T) {
+	customOutputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"title": {
+				Type:        "string",
+				Description: "Custom title description",
+			},
+			"body": {
+				Type:        "string",
+				Description: "Custom body description",
+			},
+		},
+	}
+
+	st := function.NewStreamableFunctionTool[streamTestInput, streamTestOutput](
+		streamableFunc,
+		function.WithName("StreamOutputSchemaTest"),
+		function.WithOutputSchema(customOutputSchema),
+	)
+
+	decl := st.Declaration()
+	if decl == nil {
+		t.Fatal("Declaration() returned nil")
+	}
+
+	if decl.OutputSchema == nil {
+		t.Fatal("expected non-nil OutputSchema")
+	}
+
+	// Verify that the custom schema is used
+	if decl.OutputSchema.Type != "object" {
+		t.Errorf("expected schema type 'object', got %q", decl.OutputSchema.Type)
+	}
+}
+
+func TestStreamableFunctionTool_WithBothCustomSchemas(t *testing.T) {
+	customInputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"articleID": {
+				Type: "integer",
+			},
+		},
+	}
+
+	customOutputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"title": {
+				Type: "string",
+			},
+		},
+	}
+
+	st := function.NewStreamableFunctionTool[streamTestInput, streamTestOutput](
+		streamableFunc,
+		function.WithName("StreamBothSchemasTest"),
+		function.WithInputSchema(customInputSchema),
+		function.WithOutputSchema(customOutputSchema),
+	)
+
+	decl := st.Declaration()
+	if decl == nil {
+		t.Fatal("Declaration() returned nil")
+	}
+
+	if decl.InputSchema == nil {
+		t.Fatal("expected non-nil InputSchema")
+	}
+	if decl.OutputSchema == nil {
+		t.Fatal("expected non-nil OutputSchema")
+	}
+
+	// Verify both schemas are custom
+	if decl.InputSchema.Type != "object" {
+		t.Errorf("expected input schema type 'object', got %q", decl.InputSchema.Type)
+	}
+	if decl.OutputSchema.Type != "object" {
+		t.Errorf("expected output schema type 'object', got %q", decl.OutputSchema.Type)
+	}
+}
