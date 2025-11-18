@@ -1282,27 +1282,27 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#61-supported-variant-types" class="md-nav__link">
+  <a href="#71-supported-variant-types" class="md-nav__link">
     <span class="md-ellipsis">
-      6.1. Supported Variant Types
+      7.1. Supported Variant Types
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#62-usage" class="md-nav__link">
+  <a href="#72-usage" class="md-nav__link">
     <span class="md-ellipsis">
-      6.2. Usage
+      7.2. Usage
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#63-behavioral-differences-of-variants-examples" class="md-nav__link">
+  <a href="#73-behavioral-differences-of-variants-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      6.3. Behavioral Differences of Variants Examples
+      7.3. Behavioral Differences of Variants Examples
     </span>
   </a>
   
@@ -2615,27 +2615,27 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#61-supported-variant-types" class="md-nav__link">
+  <a href="#71-supported-variant-types" class="md-nav__link">
     <span class="md-ellipsis">
-      6.1. Supported Variant Types
+      7.1. Supported Variant Types
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#62-usage" class="md-nav__link">
+  <a href="#72-usage" class="md-nav__link">
     <span class="md-ellipsis">
-      6.2. Usage
+      7.2. Usage
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#63-behavioral-differences-of-variants-examples" class="md-nav__link">
+  <a href="#73-behavioral-differences-of-variants-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      6.3. Behavioral Differences of Variants Examples
+      7.3. Behavioral Differences of Variants Examples
     </span>
   </a>
   
@@ -4706,7 +4706,7 @@ metrics logic.</p>
 <span class="normal"><a href="#__codelineno-44-10">10</a></span>
 <span class="normal"><a href="#__codelineno-44-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
 </span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">openai</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
+</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
 </span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a><span class="w">        </span><span class="nx">ProtocolOverheadTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span><span class="w">   </span><span class="c1">// Custom protocol overhead</span>
 </span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a><span class="w">        </span><span class="nx">ReserveOutputTokens</span><span class="p">:</span><span class="w">    </span><span class="mi">4096</span><span class="p">,</span><span class="w">   </span><span class="c1">// Custom output reserve</span>
 </span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a><span class="w">        </span><span class="nx">InputTokensFloor</span><span class="p">:</span><span class="w">       </span><span class="mi">2048</span><span class="p">,</span><span class="w">   </span><span class="c1">// Custom input floor</span>
@@ -4724,14 +4724,14 @@ metrics logic.</p>
 <span class="normal"><a href="#__codelineno-45-5">5</a></span>
 <span class="normal"><a href="#__codelineno-45-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
 </span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
+</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
 </span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="w">        </span><span class="nx">SafetyMarginRatio</span><span class="p">:</span><span class="w"> </span><span class="mf">0.15</span><span class="p">,</span><span class="w">  </span><span class="c1">// Increase safety margin to 15%</span>
 </span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="w">    </span><span class="p">}),</span>
 </span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="7-variant-optimization-adapting-to-platform-specific-behaviors">7. Variant Optimization: Adapting to Platform-Specific Behaviors</h4>
 <p>The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, especially for file upload, deletion, and processing logic.</p>
-<h5 id="61-supported-variant-types">6.1. Supported Variant Types</h5>
+<h5 id="71-supported-variant-types">7.1. Supported Variant Types</h5>
 <p>The framework currently supports the following Variants:</p>
 <p><strong>1. VariantOpenAI（default）</strong></p>
 <ul>
@@ -4761,7 +4761,7 @@ metrics logic.</p>
 <li>API Key environment variable name：<code>DASHSCOPE_API_KEY</code></li>
 <li>Other behaviors are consistent with standard OpenAI</li>
 </ul>
-<h5 id="62-usage">6.2. Usage</h5>
+<h5 id="72-usage">7.2. Usage</h5>
 <p><strong>Usage Example</strong>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-46-2"> 2</a></span>
@@ -4793,9 +4793,9 @@ metrics logic.</p>
 </span><span id="__span-46-14"><a id="__codelineno-46-14" name="__codelineno-46-14"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithVariant</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">VariantDeepSeek</span><span class="p">),</span><span class="w"> </span><span class="c1">// Specify the DeepSeek variant</span>
 </span><span id="__span-46-15"><a id="__codelineno-46-15" name="__codelineno-46-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h5 id="63-behavioral-differences-of-variants-examples">6.3. Behavioral Differences of Variants Examples</h5>
+<h5 id="73-behavioral-differences-of-variants-examples">7.3. Behavioral Differences of Variants Examples</h5>
 <p><strong>Message content handling differences</strong>：</p>
-<p><div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-47-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-47-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-47-4"> 4</a></span>
@@ -4823,7 +4823,7 @@ metrics logic.</p>
 </span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a><span class="w">    </span><span class="p">},</span>
 </span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<strong>Environment variable auto-configuration</strong></p>
+<p><strong>Environment variable auto-configuration</strong></p>
 <p>For certain Variants, the framework supports reading configuration from environment variables automatically:</p>
 <div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1">1</a></span>
 <span class="normal"><a href="#__codelineno-48-2">2</a></span>
@@ -5692,7 +5692,11 @@ metrics logic.</p>
 <td>Token trimming related parameters</td>
 </tr>
 <tr>
-<td><code>WithOpenAI</code> / <code>WithAnthropic</code></td>
+<td><code>WithTokenTailoringConfig</code></td>
+<td>Custom token tailoring budget parameters for advanced configuration</td>
+</tr>
+<tr>
+<td><code>WithOpenAIOption</code> / <code>WithAnthropicOption</code></td>
 <td>Pass-through native options for the respective providers</td>
 </tr>
 </tbody>
@@ -5736,23 +5740,63 @@ metrics logic.</p>
 </span><span id="__span-68-18"><a id="__codelineno-68-18" name="__codelineno-68-18"></a>
 </span><span id="__span-68-19"><a id="__codelineno-68-19" name="__codelineno-68-19"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
+<p><strong>Advanced Configuration with TokenTailoringConfig</strong>:</p>
+<p>For advanced users who need to fine-tune token allocation strategy, you can use <code>WithTokenTailoringConfig</code>:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-69-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-69-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-69-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-69-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-69-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-69-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-69-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-69-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-69-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-69-10">10</a></span>
+<span class="normal"><a href="#__codelineno-69-11">11</a></span>
+<span class="normal"><a href="#__codelineno-69-12">12</a></span>
+<span class="normal"><a href="#__codelineno-69-13">13</a></span>
+<span class="normal"><a href="#__codelineno-69-14">14</a></span>
+<span class="normal"><a href="#__codelineno-69-15">15</a></span>
+<span class="normal"><a href="#__codelineno-69-16">16</a></span>
+<span class="normal"><a href="#__codelineno-69-17">17</a></span>
+<span class="normal"><a href="#__codelineno-69-18">18</a></span>
+<span class="normal"><a href="#__codelineno-69-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4"></a><span class="p">)</span>
+</span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5"></a>
+</span><span id="__span-69-6"><a id="__codelineno-69-6" name="__codelineno-69-6"></a><span class="c1">// Custom token tailoring budget parameters for all providers</span>
+</span><span id="__span-69-7"><a id="__codelineno-69-7" name="__codelineno-69-7"></a><span class="nx">config</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
+</span><span id="__span-69-8"><a id="__codelineno-69-8" name="__codelineno-69-8"></a><span class="w">    </span><span class="nx">ProtocolOverheadTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span>
+</span><span id="__span-69-9"><a id="__codelineno-69-9" name="__codelineno-69-9"></a><span class="w">    </span><span class="nx">ReserveOutputTokens</span><span class="p">:</span><span class="w">    </span><span class="mi">4096</span><span class="p">,</span>
+</span><span id="__span-69-10"><a id="__codelineno-69-10" name="__codelineno-69-10"></a><span class="w">    </span><span class="nx">SafetyMarginRatio</span><span class="p">:</span><span class="w">      </span><span class="mf">0.15</span><span class="p">,</span>
+</span><span id="__span-69-11"><a id="__codelineno-69-11" name="__codelineno-69-11"></a><span class="p">}</span>
+</span><span id="__span-69-12"><a id="__codelineno-69-12" name="__codelineno-69-12"></a>
+</span><span id="__span-69-13"><a id="__codelineno-69-13" name="__codelineno-69-13"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
+</span><span id="__span-69-14"><a id="__codelineno-69-14" name="__codelineno-69-14"></a><span class="w">    </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-69-15"><a id="__codelineno-69-15" name="__codelineno-69-15"></a><span class="w">    </span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-69-16"><a id="__codelineno-69-16" name="__codelineno-69-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
+</span><span id="__span-69-17"><a id="__codelineno-69-17" name="__codelineno-69-17"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-69-18"><a id="__codelineno-69-18" name="__codelineno-69-18"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="nx">config</span><span class="p">),</span>
+</span><span id="__span-69-19"><a id="__codelineno-69-19" name="__codelineno-69-19"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <p>Full code can be found in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider">examples/provider</a>.</p>
 <h3 id="registering-a-custom-provider">Registering a Custom Provider</h3>
 <p>The framework supports registering custom providers to integrate other large model providers or custom model implementations.</p>
 <p>Using <code>provider.Register</code>, you can define a method to create custom model instances based on the options.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-69-1">1</a></span>
-<span class="normal"><a href="#__codelineno-69-2">2</a></span>
-<span class="normal"><a href="#__codelineno-69-3">3</a></span>
-<span class="normal"><a href="#__codelineno-69-4">4</a></span>
-<span class="normal"><a href="#__codelineno-69-5">5</a></span>
-<span class="normal"><a href="#__codelineno-69-6">6</a></span>
-<span class="normal"><a href="#__codelineno-69-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
-</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2"></a>
-</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5"></a><span class="p">})</span>
-</span><span id="__span-69-6"><a id="__codelineno-69-6" name="__codelineno-69-6"></a>
-</span><span id="__span-69-7"><a id="__codelineno-69-7" name="__codelineno-69-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-70-1">1</a></span>
+<span class="normal"><a href="#__codelineno-70-2">2</a></span>
+<span class="normal"><a href="#__codelineno-70-3">3</a></span>
+<span class="normal"><a href="#__codelineno-70-4">4</a></span>
+<span class="normal"><a href="#__codelineno-70-5">5</a></span>
+<span class="normal"><a href="#__codelineno-70-6">6</a></span>
+<span class="normal"><a href="#__codelineno-70-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-70-2"><a id="__codelineno-70-2" name="__codelineno-70-2"></a>
+</span><span id="__span-70-3"><a id="__codelineno-70-3" name="__codelineno-70-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-70-4"><a id="__codelineno-70-4" name="__codelineno-70-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-70-5"><a id="__codelineno-70-5" name="__codelineno-70-5"></a><span class="p">})</span>
+</span><span id="__span-70-6"><a id="__codelineno-70-6" name="__codelineno-70-6"></a>
+</span><span id="__span-70-7"><a id="__codelineno-70-7" name="__codelineno-70-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 
 
@@ -5776,7 +5820,7 @@ metrics logic.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 17, 2025 02:17:16 UTC">2025-11-17 02:17:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 18, 2025 02:40:14 UTC">2025-11-18 02:40:14</span>
   </span>
 
     

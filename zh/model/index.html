@@ -1282,27 +1282,27 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#61-variant" class="md-nav__link">
+  <a href="#71-variant" class="md-nav__link">
     <span class="md-ellipsis">
-      6.1. 支持的 Variant 类型
+      7.1. 支持的 Variant 类型
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#62" class="md-nav__link">
+  <a href="#72" class="md-nav__link">
     <span class="md-ellipsis">
-      6.2. 使用方式
+      7.2. 使用方式
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#63-variant" class="md-nav__link">
+  <a href="#73-variant" class="md-nav__link">
     <span class="md-ellipsis">
-      6.3. Variant 的行为差异示例
+      7.3. Variant 的行为差异示例
     </span>
   </a>
   
@@ -2615,27 +2615,27 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#61-variant" class="md-nav__link">
+  <a href="#71-variant" class="md-nav__link">
     <span class="md-ellipsis">
-      6.1. 支持的 Variant 类型
+      7.1. 支持的 Variant 类型
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#62" class="md-nav__link">
+  <a href="#72" class="md-nav__link">
     <span class="md-ellipsis">
-      6.2. 使用方式
+      7.2. 使用方式
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#63-variant" class="md-nav__link">
+  <a href="#73-variant" class="md-nav__link">
     <span class="md-ellipsis">
-      6.3. Variant 的行为差异示例
+      7.3. Variant 的行为差异示例
     </span>
   </a>
   
@@ -4699,7 +4699,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <span class="normal"><a href="#__codelineno-44-10">10</a></span>
 <span class="normal"><a href="#__codelineno-44-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
 </span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">openai</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
+</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
 </span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a><span class="w">        </span><span class="nx">ProtocolOverheadTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span><span class="w">   </span><span class="c1">// 自定义协议开销</span>
 </span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a><span class="w">        </span><span class="nx">ReserveOutputTokens</span><span class="p">:</span><span class="w">    </span><span class="mi">4096</span><span class="p">,</span><span class="w">   </span><span class="c1">// 自定义输出预留</span>
 </span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a><span class="w">        </span><span class="nx">InputTokensFloor</span><span class="p">:</span><span class="w">       </span><span class="mi">2048</span><span class="p">,</span><span class="w">   </span><span class="c1">// 自定义输入最小值</span>
@@ -4717,28 +4717,28 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <span class="normal"><a href="#__codelineno-45-5">5</a></span>
 <span class="normal"><a href="#__codelineno-45-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="nx">model</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;claude-sonnet-4-0&quot;</span><span class="p">,</span>
 </span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
+</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
 </span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="w">        </span><span class="nx">SafetyMarginRatio</span><span class="p">:</span><span class="w"> </span><span class="mf">0.15</span><span class="p">,</span><span class="w">  </span><span class="c1">// 提高安全边际到 15%</span>
 </span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="w">    </span><span class="p">}),</span>
 </span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="7-variant">7. Variant 优化：平台特有行为适配</h4>
 <p>Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，特别是文件上传、删除和处理逻辑。</p>
-<h5 id="61-variant">6.1. 支持的 Variant 类型</h5>
+<h5 id="71-variant">7.1. 支持的 Variant 类型</h5>
 <p>框架目前支持以下 Variant：</p>
 <p><strong>1. VariantOpenAI（默认）</strong></p>
 <ul>
 <li>标准 OpenAI API 兼容行为</li>
 <li>文件上传路径：<code>/openapi/v1/files</code></li>
 <li>文件用途：<code>user_data</code></li>
-<li>删除文件的Http请求方法：<code>DELETE</code></li>
+<li>删除文件的 Http 请求方法：<code>DELETE</code></li>
 </ul>
 <p><strong>2. VariantHunyuan（混元）</strong></p>
 <ul>
 <li>腾讯混元平台特有适配</li>
 <li>文件上传路径：<code>/openapi/v1/files/uploads</code></li>
 <li>文件用途：<code>file-extract</code></li>
-<li>删除文件的Http请求方法：<code>POST</code></li>
+<li>删除文件的 Http 请求方法：<code>POST</code></li>
 </ul>
 <p><strong>3. VariantDeepSeek</strong></p>
 <ul>
@@ -4754,7 +4754,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <li>API Key 环境变量名：<code>DASHSCOPE_API_KEY</code></li>
 <li>其他行为与标准 OpenAI 一致</li>
 </ul>
-<h5 id="62">6.2. 使用方式</h5>
+<h5 id="72">7.2. 使用方式</h5>
 <p><strong>使用示例</strong>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-46-2"> 2</a></span>
@@ -4786,7 +4786,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 </span><span id="__span-46-14"><a id="__codelineno-46-14" name="__codelineno-46-14"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithVariant</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">VariantDeepSeek</span><span class="p">),</span><span class="w"> </span><span class="c1">// 指定 DeepSeek</span>
 </span><span id="__span-46-15"><a id="__codelineno-46-15" name="__codelineno-46-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h5 id="63-variant">6.3. Variant 的行为差异示例</h5>
+<h5 id="73-variant">7.3. Variant 的行为差异示例</h5>
 <p><strong>消息内容处理差异</strong>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-47-2"> 2</a></span>
@@ -5481,7 +5481,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <h5 id="_47">使用示例</h5>
 <p>完整的交互式示例请参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/switch">examples/model/switch</a>，该示例演示了 Agent 级别和请求级别两种切换方式。</p>
 <h4 id="3-http-header">3. 自定义 HTTP Header</h4>
-<p>在网关、专有平台或代理环境中，请求模型 API 往往需要额外的HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、文件上传、批处理等全链路。</p>
+<p>在网关、专有平台或代理环境中，请求模型 API 往往需要额外的 HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、文件上传、批处理等全链路。</p>
 <p>推荐顺序：</p>
 <ul>
 <li>通过 Anthropic RequestOption 设置全局 Header（简单、直观）</li>
@@ -5646,7 +5646,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 </span><span id="__span-67-6"><a id="__codelineno-67-6" name="__codelineno-67-6"></a><span class="w">    </span><span class="nx">anthropic</span><span class="p">.</span><span class="nx">WithTailoringStrategy</span><span class="p">(</span><span class="nx">customStrategy</span><span class="p">),</span><span class="w">        </span><span class="c1">// 可选：自定义策略</span>
 </span><span id="__span-67-7"><a id="__codelineno-67-7" name="__codelineno-67-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 <a href="#3-token-token-tailoring">OpenAI Model 的 Token 裁剪部分</a>。</p>
+<p>关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 <a href="#5-token-裁剪token-tailoring">OpenAI Model 的 Token 裁剪部分</a>。</p>
 <h2 id="provider">Provider</h2>
 <p>随着多个大模型供应商的出现，一些供应商定义了各自的 API 规范。目前，框架已接入 OpenAI 和 Anthropic 的 API，并以 Model 的形式提供，用户可以通过 <code>openai.New</code> 和 <code>anthropic.New</code> 来使用不同供应商的模型。</p>
 <p>然而，不同供应商在实例化方式和配置项上存在差异，开发者在切换供应商时往往需要修改大量代码，增加了切换成本。</p>
@@ -5685,7 +5685,11 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 <td>Token 裁剪相关参数</td>
 </tr>
 <tr>
-<td><code>WithOpenAI</code> / <code>WithAnthropic</code></td>
+<td><code>WithTokenTailoringConfig</code></td>
+<td>高级配置：自定义 token 裁剪预算参数</td>
+</tr>
+<tr>
+<td><code>WithOpenAIOption</code> / <code>WithAnthropicOption</code></td>
 <td>透传供应商原生 Option</td>
 </tr>
 </tbody>
@@ -5729,23 +5733,63 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 </span><span id="__span-68-18"><a id="__codelineno-68-18" name="__codelineno-68-18"></a>
 </span><span id="__span-68-19"><a id="__codelineno-68-19" name="__codelineno-68-19"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;chat-assistant&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
+<p><strong>高级配置：使用 TokenTailoringConfig</strong>：</p>
+<p>对于需要精细调整 token 分配策略的高级用户，可以使用 <code>WithTokenTailoringConfig</code>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-69-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-69-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-69-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-69-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-69-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-69-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-69-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-69-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-69-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-69-10">10</a></span>
+<span class="normal"><a href="#__codelineno-69-11">11</a></span>
+<span class="normal"><a href="#__codelineno-69-12">12</a></span>
+<span class="normal"><a href="#__codelineno-69-13">13</a></span>
+<span class="normal"><a href="#__codelineno-69-14">14</a></span>
+<span class="normal"><a href="#__codelineno-69-15">15</a></span>
+<span class="normal"><a href="#__codelineno-69-16">16</a></span>
+<span class="normal"><a href="#__codelineno-69-17">17</a></span>
+<span class="normal"><a href="#__codelineno-69-18">18</a></span>
+<span class="normal"><a href="#__codelineno-69-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4"></a><span class="p">)</span>
+</span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5"></a>
+</span><span id="__span-69-6"><a id="__codelineno-69-6" name="__codelineno-69-6"></a><span class="c1">// 为所有 provider 自定义 token 裁剪预算参数</span>
+</span><span id="__span-69-7"><a id="__codelineno-69-7" name="__codelineno-69-7"></a><span class="nx">config</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">TokenTailoringConfig</span><span class="p">{</span>
+</span><span id="__span-69-8"><a id="__codelineno-69-8" name="__codelineno-69-8"></a><span class="w">    </span><span class="nx">ProtocolOverheadTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span>
+</span><span id="__span-69-9"><a id="__codelineno-69-9" name="__codelineno-69-9"></a><span class="w">    </span><span class="nx">ReserveOutputTokens</span><span class="p">:</span><span class="w">    </span><span class="mi">4096</span><span class="p">,</span>
+</span><span id="__span-69-10"><a id="__codelineno-69-10" name="__codelineno-69-10"></a><span class="w">    </span><span class="nx">SafetyMarginRatio</span><span class="p">:</span><span class="w">      </span><span class="mf">0.15</span><span class="p">,</span>
+</span><span id="__span-69-11"><a id="__codelineno-69-11" name="__codelineno-69-11"></a><span class="p">}</span>
+</span><span id="__span-69-12"><a id="__codelineno-69-12" name="__codelineno-69-12"></a>
+</span><span id="__span-69-13"><a id="__codelineno-69-13" name="__codelineno-69-13"></a><span class="nx">modelInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span>
+</span><span id="__span-69-14"><a id="__codelineno-69-14" name="__codelineno-69-14"></a><span class="w">    </span><span class="s">&quot;openai&quot;</span><span class="p">,</span>
+</span><span id="__span-69-15"><a id="__codelineno-69-15" name="__codelineno-69-15"></a><span class="w">    </span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">,</span>
+</span><span id="__span-69-16"><a id="__codelineno-69-16" name="__codelineno-69-16"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">apiKey</span><span class="p">),</span>
+</span><span id="__span-69-17"><a id="__codelineno-69-17" name="__codelineno-69-17"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithEnableTokenTailoring</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-69-18"><a id="__codelineno-69-18" name="__codelineno-69-18"></a><span class="w">    </span><span class="nx">provider</span><span class="p">.</span><span class="nx">WithTokenTailoringConfig</span><span class="p">(</span><span class="nx">config</span><span class="p">),</span>
+</span><span id="__span-69-19"><a id="__codelineno-69-19" name="__codelineno-69-19"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <p>完整代码可参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider">examples/provider</a>。</p>
 <h3 id="provider_1">注册自定义 Provider</h3>
 <p>框架支持通过注册自定义 Provider 来接入其他大模型供应商或自定义实现的模型。</p>
 <p>通过 <code>provider.Register</code> 可以定义根据 Options 创建自定义模型实例的方法。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-69-1">1</a></span>
-<span class="normal"><a href="#__codelineno-69-2">2</a></span>
-<span class="normal"><a href="#__codelineno-69-3">3</a></span>
-<span class="normal"><a href="#__codelineno-69-4">4</a></span>
-<span class="normal"><a href="#__codelineno-69-5">5</a></span>
-<span class="normal"><a href="#__codelineno-69-6">6</a></span>
-<span class="normal"><a href="#__codelineno-69-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
-</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2"></a>
-</span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5"></a><span class="p">})</span>
-</span><span id="__span-69-6"><a id="__codelineno-69-6" name="__codelineno-69-6"></a>
-</span><span id="__span-69-7"><a id="__codelineno-69-7" name="__codelineno-69-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-70-1">1</a></span>
+<span class="normal"><a href="#__codelineno-70-2">2</a></span>
+<span class="normal"><a href="#__codelineno-70-3">3</a></span>
+<span class="normal"><a href="#__codelineno-70-4">4</a></span>
+<span class="normal"><a href="#__codelineno-70-5">5</a></span>
+<span class="normal"><a href="#__codelineno-70-6">6</a></span>
+<span class="normal"><a href="#__codelineno-70-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/provider&quot;</span>
+</span><span id="__span-70-2"><a id="__codelineno-70-2" name="__codelineno-70-2"></a>
+</span><span id="__span-70-3"><a id="__codelineno-70-3" name="__codelineno-70-3"></a><span class="nx">provider</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">*</span><span class="nx">provider</span><span class="p">.</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-70-4"><a id="__codelineno-70-4" name="__codelineno-70-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newCustomModel</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">ModelName</span><span class="p">,</span><span class="w"> </span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">opts</span><span class="p">.</span><span class="nx">APIKey</span><span class="p">)),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-70-5"><a id="__codelineno-70-5" name="__codelineno-70-5"></a><span class="p">})</span>
+</span><span id="__span-70-6"><a id="__codelineno-70-6" name="__codelineno-70-6"></a>
+</span><span id="__span-70-7"><a id="__codelineno-70-7" name="__codelineno-70-7"></a><span class="nx">customModel</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">provider</span><span class="p">.</span><span class="nx">Model</span><span class="p">(</span><span class="s">&quot;custom-provider&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;custom-model&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 
 
@@ -5769,7 +5813,7 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月17日 02:17:16 UTC">2025-11-17 02:17:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月18日 02:40:14 UTC">2025-11-18 02:40:14</span>
   </span>
 
     
