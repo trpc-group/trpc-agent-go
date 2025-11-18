@@ -3442,6 +3442,51 @@ func TestShouldSuppressChunk(t *testing.T) {
 	assert.False(t, m.shouldSuppressChunk(chunk2))
 }
 
+// TestShouldSuppressChunk_WithToolCallDeltaFlag verifies that tool_call
+// chunks are suppressed by default but forwarded when ShowToolCallDelta
+// is enabled.
+func TestShouldSuppressChunk_WithToolCallDeltaFlag(t *testing.T) {
+	t.Run("suppress tool_call delta by default", func(t *testing.T) {
+		m := &Model{}
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								ID:   "call-1",
+								Type: "function",
+							},
+						},
+					},
+				},
+			},
+		}
+		assert.True(t, m.shouldSuppressChunk(chunk))
+	})
+
+	t.Run("forward tool_call delta when enabled", func(t *testing.T) {
+		m := &Model{
+			showToolCallDelta: true,
+		}
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								ID:   "call-1",
+								Type: "function",
+							},
+						},
+					},
+				},
+			},
+		}
+		assert.False(t, m.shouldSuppressChunk(chunk))
+	})
+}
+
 // TestCreatePartialResponse tests basic partial response creation.
 func TestCreatePartialResponse(t *testing.T) {
 	m := &Model{}
@@ -3675,6 +3720,49 @@ func TestEmptyChunkHandling(t *testing.T) {
 	t.Run("hasReasoningContent returns false for empty delta", func(t *testing.T) {
 		delta := openai.ChatCompletionChunkChoiceDelta{}
 		assert.False(t, m.hasReasoningContent(delta))
+	})
+
+	t.Run("createPartialResponse includes tool calls when enabled", func(t *testing.T) {
+		mWithToolDelta := &Model{
+			showToolCallDelta: true,
+		}
+		chunk := openai.ChatCompletionChunk{
+			ID:    "chunk-tool",
+			Model: "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 1,
+								ID:    "call-1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "generate_document",
+									Arguments: "{\"content\":\"partial\"}",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		response := mWithToolDelta.createPartialResponse(chunk)
+		require.NotNil(t, response)
+		require.Len(t, response.Choices, 1)
+		deltaMsg := response.Choices[0].Delta
+		require.Len(t, deltaMsg.ToolCalls, 1)
+		tc := deltaMsg.ToolCalls[0]
+		assert.Equal(t, "call-1", tc.ID)
+		if tc.Index == nil {
+			t.Fatalf("expected non-nil Index for tool call")
+		}
+		assert.Equal(t, 1, *tc.Index)
+		assert.Equal(t, "function", tc.Type)
+		assert.Equal(t, "generate_document", tc.Function.Name)
+		assert.Equal(t, "{\"content\":\"partial\"}",
+			string(tc.Function.Arguments))
 	})
 }
 
@@ -3936,7 +4024,7 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 
 // TestWithTokenTailoringConfig tests the WithTokenTailoringConfig option.
 func TestWithTokenTailoringConfig(t *testing.T) {
-	config := &TokenTailoringConfig{
+	config := &model.TokenTailoringConfig{
 		ProtocolOverheadTokens: 1024,
 		ReserveOutputTokens:    4096,
 		InputTokensFloor:       2048,
