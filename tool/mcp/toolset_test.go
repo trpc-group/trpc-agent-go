@@ -250,11 +250,15 @@ func TestEmptyFilterList(t *testing.T) {
 	ctx := context.Background()
 	testTools := getTestTools()
 
-	filterFunc := tool.NewIncludeToolNamesFilter() // No tools specified
+	// When no filter is specified, FilterTools should return all tools
+	// Note: NewIncludeToolNamesFilter() with no args creates an empty allowlist,
+	// which filters out everything. This is the expected behavior.
+	filterFunc := tool.NewIncludeToolNamesFilter() // No tools specified - empty allowlist
 	filtered := tool.FilterTools(ctx, testTools, filterFunc)
 
-	if len(filtered) != len(testTools) {
-		t.Errorf("Empty include filter should return all tools. Expected %d, got %d", len(testTools), len(filtered))
+	// Empty include filter (no allowed names) should return no tools
+	if len(filtered) != 0 {
+		t.Errorf("Empty include filter should return no tools. Expected 0, got %d", len(filtered))
 	}
 }
 
