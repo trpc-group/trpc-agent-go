@@ -489,6 +489,7 @@ func WithMessageBranchFilterMode(mode string) Option {
 	}
 }
 
+// WithToolFilter sets the tool filter function.
 func WithToolFilter(filter tool.FilterFunc) Option {
 	return func(opts *Options) {
 		opts.toolFilter = filter
