@@ -20,7 +20,6 @@ import (
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // StateMap is a map of state key-value pairs.
@@ -193,11 +192,9 @@ func (sess *Session) EnsureEventStartWithUser() {
 	// Find the first event that starts with RoleUser
 	startIndex := -1
 	for i, event := range sess.Events {
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			if event.Response.Choices[0].Message.Role == model.RoleUser {
-				startIndex = i
-				break
-			}
+		if event.Response != nil && event.IsUserMessage() {
+			startIndex = i
+			break
 		}
 		// If event has no response or choices, continue to next event
 	}
@@ -226,8 +223,6 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 
 		// Apply filtering options
 		sess.ApplyEventFiltering(opts...)
-		// Ensure events start with RoleUser after filtering
-		sess.EnsureEventStartWithUser()
 		sess.EventMu.Unlock()
 	}
 
@@ -239,16 +234,14 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 }
 
 // ApplyEventFiltering applies event number and time filtering to session events
+// It ensures that the filtered events still contain at least one user message.
 func (sess *Session) ApplyEventFiltering(opts ...Option) {
 	if sess == nil {
 		log.Info("session is nil")
 		return
 	}
+	originalEvents := sess.Events
 	opt := applyOptions(opts...)
-	// Apply event number limit
-	if opt.EventNum > 0 && len(sess.Events) > opt.EventNum {
-		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
-	}
 
 	// Apply event time filter - keep events after the specified time
 	if !opt.EventTime.IsZero() {
@@ -266,6 +259,28 @@ func (sess *Session) ApplyEventFiltering(opts ...Option) {
 			sess.Events = []event.Event{}
 		}
 	}
+
+	// Apply event number limit
+	if opt.EventNum > 0 && len(sess.Events) > opt.EventNum {
+		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
+	}
+
+	// check if has user message
+	for i := 0; i < len(sess.Events); i++ {
+		if sess.Events[i].IsUserMessage() {
+			sess.Events = sess.Events[i:]
+			return
+		}
+	}
+	// find the last user message from original events
+	for i := len(originalEvents) - 1; i >= 0; i-- {
+		if originalEvents[i].IsUserMessage() {
+			sess.Events = append([]event.Event{originalEvents[i]}, sess.Events...)
+			return
+		}
+	}
+
+	sess.Events = []event.Event{}
 }
 
 // ApplyEventStateDelta merges the state delta of the event into the session state.
