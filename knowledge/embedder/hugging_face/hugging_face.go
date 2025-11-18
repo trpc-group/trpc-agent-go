@@ -14,17 +14,9 @@
 // inference server for text embedding models. It supports a wide range of transformer-based
 // models and provides optimized inference for embedding generation.
 //
-// Key Features:
-// - Support for popular embedding models (SentenceTransformers, etc.)
-// - Batch processing capabilities
-// - GPU acceleration support
-// - RESTful API interface
-// - Configurable embedding dimensions
-// - Text truncation and normalization options
-//
 // The API provides two main endpoints:
 // - /embed: Default embedding endpoint with pooling
-// - /embed_all: Returns all embeddings without pooling (useful for sentence-level embeddings)
+// - /embed_all: Returns all embeddings without pooling
 //
 // Usage Example:
 //
