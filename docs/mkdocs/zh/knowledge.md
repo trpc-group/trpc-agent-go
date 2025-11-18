@@ -581,6 +581,7 @@ kb := knowledge.New(
 - 其他兼容 OpenAI API 的 embedding 服务
 - Gemini embedding 模型（通过 `knowledge/embedder/gemini`）
 - Ollama embedding 模型 (通过 `knowledge/embedder/ollama`）
+- hugging_face text_embedding_interface 模型 (通过 `knowledge/embedder/hugging_face`）
 
 > **注意**:
 >
@@ -1202,6 +1203,7 @@ import (
     geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
     openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	ollamaembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama"
+	huggingfaceembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface"
 
     // Source
     "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -1219,7 +1221,7 @@ import (
 
 func main() {
     var (
-        embedderType    = flag.String("embedder", "openai", "ollama", "embedder type (openai, gemini, ollama)")
+        embedderType    = flag.String("embedder", "openai", "ollama", "embedder type (openai, gemini, ollama,huggingface)")
         vectorStoreType = flag.String("vectorstore", "inmemory", "vector store type (inmemory, pgvector, tcvector)")
         modelName       = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
     )
@@ -1243,6 +1245,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to create ollama embedder: %v", err)
         }
+	case "huggingface":
+		embedder = huggingfaceembedder.New()
     default: // openai
         embedder = openaiembedder.New(
             openaiembedder.WithModel(getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")),
@@ -1466,7 +1470,7 @@ go run main.go -embedder openai -vectorstore tcvector
 go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
 
 # 参数说明：
-# -embedder: 选择 embedder 类型 (openai, gemini, ollama)， 默认为 openai
+# -embedder: 选择 embedder 类型 (openai, gemini, ollama,huggingface)， 默认为 openai
 # -vectorstore: 选择向量存储类型 (inmemory, pgvector, tcvector, elasticsearch)，默认为 inmemory
 # -es-version: 指定 Elasticsearch 版本 (v7, v8, v9)，仅当 vectorstore=elasticsearch 时有效
 ```

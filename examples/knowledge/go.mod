@@ -55,7 +55,7 @@ require (
 	github.com/mozillazg/go-httpheader v0.4.0 // indirect
 	github.com/ollama/ollama v0.12.9 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
-	github.com/panjf2000/ants/v2 v2.9.0 // indirect
+	github.com/panjf2000/ants/v2 v2.11.3 // indirect
 	github.com/pgvector/pgvector-go v0.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
