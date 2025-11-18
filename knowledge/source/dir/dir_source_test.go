@@ -18,6 +18,13 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+
+	// Import readers to register them
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/docx"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
 
 // TestReadDocuments verifies Directory Source with and without
