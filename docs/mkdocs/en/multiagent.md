@@ -297,8 +297,9 @@ mathAgent := llmagent.New(
 // Wrap Agent as tool.
 agentTool := agenttool.NewTool(
     mathAgent,
-    // Default skip summarization=true: end the turn after tool.response
-    agenttool.WithSkipSummarization(true),
+    // The default value for skip summarization=false. 
+    // When set to true, the current round will end immediately after tool.response.
+    agenttool.WithSkipSummarization(false),
     // Enable inner forwarding: stream child Agent events inline to the parent
     agenttool.WithStreamInner(true),
 )

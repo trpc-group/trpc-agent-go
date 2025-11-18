@@ -236,6 +236,7 @@ type Model struct {
 	name                       string
 	baseURL                    string
 	apiKey                     string
+	showToolCallDelta          bool
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
 	chatResponseCallback       ChatResponseCallbackFunc
@@ -330,27 +331,13 @@ type options struct {
 	// MaxInputTokens is the max input tokens for token tailoring.
 	MaxInputTokens int
 	// TokenTailoringConfig allows customization of token tailoring parameters.
-	TokenTailoringConfig *TokenTailoringConfig
-}
-
-// TokenTailoringConfig holds custom token tailoring budget parameters.
-type TokenTailoringConfig struct {
-	// ProtocolOverheadTokens is the number of tokens reserved for protocol
-	// overhead.
-	ProtocolOverheadTokens int
-	// ReserveOutputTokens is the number of tokens reserved for output
-	// generation.
-	ReserveOutputTokens int
-	// InputTokensFloor is the minimum number of input tokens.
-	InputTokensFloor int
-	// OutputTokensFloor is the minimum number of output tokens.
-	OutputTokensFloor int
-	// SafetyMarginRatio is the safety margin ratio for token counting
-	// inaccuracies.
-	SafetyMarginRatio float64
-	// MaxInputTokensRatio is the maximum input tokens ratio of the context
-	// window.
-	MaxInputTokensRatio float64
+	TokenTailoringConfig *model.TokenTailoringConfig
+	// ShowToolCallDelta controls whether to expose tool call
+	// deltas in streaming responses. When true, raw tool_call
+	// chunks from the provider will be forwarded via
+	// Response.Choices[].Delta.ToolCalls instead of being
+	// suppressed until the final aggregated response.
+	ShowToolCallDelta bool
 }
 
 // Option is a function that configures an OpenAI model.
@@ -531,7 +518,7 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 //
 // Example:
 //
-//	openai.WithTokenTailoringConfig(&openai.TokenTailoringConfig{
+//	openai.WithTokenTailoringConfig(&model.TokenTailoringConfig{
 //	    ProtocolOverheadTokens: 1024,
 //	    ReserveOutputTokens:    4096,
 //	    SafetyMarginRatio:      0.15,
@@ -539,9 +526,19 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 //
 // Note: It is recommended to use the default values unless you have specific
 // requirements.
-func WithTokenTailoringConfig(config *TokenTailoringConfig) Option {
+func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	return func(opts *options) {
 		opts.TokenTailoringConfig = config
+	}
+}
+
+// WithShowToolCallDelta controls whether to expose tool call
+// deltas in streaming responses. When enabled, the model will
+// forward provider tool_call chunks via Delta.ToolCalls so
+// callers can reconstruct arguments incrementally.
+func WithShowToolCallDelta(show bool) Option {
+	return func(opts *options) {
+		opts.ShowToolCallDelta = show
 	}
 }
 
@@ -632,6 +629,7 @@ func New(name string, opts ...Option) *Model {
 		name:                       name,
 		baseURL:                    o.BaseURL,
 		apiKey:                     o.APIKey,
+		showToolCallDelta:          o.ShowToolCallDelta,
 		channelBufferSize:          o.ChannelBufferSize,
 		chatRequestCallback:        o.ChatRequestCallback,
 		chatResponseCallback:       o.ChatResponseCallback,
@@ -1251,11 +1249,19 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 		return false
 	}
 
-	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
-	// tool calls in the final aggregated response to avoid noisy blank chunks.
-	if delta.JSON.ToolCalls.Valid() {
+	// If this chunk is a tool_calls delta, optionally suppress emission.
+	// By default we only expose tool calls in the final aggregated response
+	// to avoid noisy blank chunks. When showToolCallDelta is enabled, treat
+	// tool_call chunks as meaningful streaming payload.
+	hasToolCall := delta.JSON.ToolCalls.Valid() ||
+		len(delta.ToolCalls) > 0
+	if hasToolCall {
+		if m.showToolCallDelta {
+			return false
+		}
 		return true
 	}
+
 	if choice.FinishReason != "" {
 		return false
 	}
@@ -1346,12 +1352,37 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 			response.Choices = make([]model.Choice, 1)
 		}
 
-		reasoningContent := extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields)
+		reasoningContent := extractReasoningContent(
+			chunk.Choices[0].Delta.JSON.ExtraFields)
+		var toolCalls []model.ToolCall
+		if m.showToolCallDelta &&
+			len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			toolCalls = make(
+				[]model.ToolCall, 0,
+				len(chunk.Choices[0].Delta.ToolCalls))
+			for _, toolCall := range chunk.Choices[0].Delta.ToolCalls {
+				var indexPtr *int
+				if toolCall.Index != 0 {
+					index := int(toolCall.Index)
+					indexPtr = &index
+				}
+				toolCalls = append(toolCalls, model.ToolCall{
+					Type: string(toolCall.Type),
+					Function: model.FunctionDefinitionParam{
+						Name:      toolCall.Function.Name,
+						Arguments: []byte(toolCall.Function.Arguments),
+					},
+					ID:    toolCall.ID,
+					Index: indexPtr,
+				})
+			}
+		}
 
 		response.Choices[0].Delta = model.Message{
 			Role:             model.RoleAssistant,
 			Content:          chunk.Choices[0].Delta.Content,
 			ReasoningContent: reasoningContent,
+			ToolCalls:        toolCalls,
 		}
 
 		// Handle finish reason - FinishReason is a plain string.

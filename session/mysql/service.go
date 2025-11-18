@@ -1,0 +1,836 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package mysql provides the MySQL session service.
+package mysql
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+)
+
+var _ session.Service = (*Service)(nil)
+
+const (
+	defaultSessionEventLimit     = 1000
+	defaultChanBufferSize        = 100
+	defaultAsyncPersisterNum     = 10
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
+
+	defaultAsyncPersistTimeout = 10 * time.Second
+
+	defaultAsyncSummaryNum  = 3
+	defaultSummaryQueueSize = 100
+)
+
+// SessionState is the state of a session.
+type SessionState struct {
+	ID        string           `json:"id"`
+	State     session.StateMap `json:"state"`
+	CreatedAt time.Time        `json:"createdAt"`
+	UpdatedAt time.Time        `json:"updatedAt"`
+}
+
+// Service is the MySQL session service.
+type Service struct {
+	opts            ServiceOpts
+	mysqlClient     storage.Client
+	sessionTTL      time.Duration            // TTL for session state and event list
+	appStateTTL     time.Duration            // TTL for app state
+	userStateTTL    time.Duration            // TTL for user state
+	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
+	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
+	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
+	cleanupDone     chan struct{}            // signal to stop cleanup routine
+	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
+	summaryWg       sync.WaitGroup           // wait group for summary workers
+	persistWg       sync.WaitGroup           // wait group for persist workers
+	once            sync.Once
+
+	// Table names with prefix applied
+	tableSessionStates    string
+	tableSessionEvents    string
+	tableSessionSummaries string
+	tableAppStates        string
+	tableUserStates       string
+}
+
+type sessionEventPair struct {
+	key   session.Key
+	event *event.Event
+}
+
+// summaryJob represents a summary job to be processed asynchronously.
+type summaryJob struct {
+	filterKey string
+	force     bool
+	session   *session.Session
+}
+
+// NewService creates a new MySQL session service.
+// It requires either a DSN (WithMySQLClientDSN) or an instance name (WithMySQLInstance).
+func NewService(options ...ServiceOpt) (*Service, error) {
+	// Apply default options
+	opts := ServiceOpts{
+		sessionEventLimit: defaultSessionEventLimit,
+		asyncPersisterNum: defaultAsyncPersisterNum,
+		asyncSummaryNum:   defaultAsyncSummaryNum,
+		summaryQueueSize:  defaultSummaryQueueSize,
+		softDelete:        true, // default: enable soft delete
+	}
+
+	for _, option := range options {
+		option(&opts)
+	}
+
+	// Create MySQL client
+	builder := storage.GetClientBuilder()
+	var mysqlClient storage.Client
+	var err error
+
+	// Priority: dsn > instanceName
+	if opts.dsn != "" {
+		// Method 1: Use DSN directly (recommended)
+		mysqlClient, err = builder(
+			storage.WithClientBuilderDSN(opts.dsn),
+			storage.WithExtraOptions(opts.extraOptions...),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create mysql client from dsn failed: %w", err)
+		}
+	} else if opts.instanceName != "" {
+		// Method 2: Use pre-registered MySQL instance
+		builderOpts, ok := storage.GetMySQLInstance(opts.instanceName)
+		if !ok {
+			return nil, fmt.Errorf("mysql instance %s not found", opts.instanceName)
+		}
+		mysqlClient, err = builder(builderOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create mysql client from instance name failed: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("either dsn or instance name must be provided")
+	}
+
+	// Build table names with prefix
+	tableSessionStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionStates)
+	tableSessionEvents := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionEvents)
+	tableSessionSummaries := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionSummaries)
+	tableAppStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameAppStates)
+	tableUserStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameUserStates)
+
+	// Create service
+	s := &Service{
+		opts:                  opts,
+		mysqlClient:           mysqlClient,
+		sessionTTL:            opts.sessionTTL,
+		appStateTTL:           opts.appStateTTL,
+		userStateTTL:          opts.userStateTTL,
+		tableSessionStates:    tableSessionStates,
+		tableSessionEvents:    tableSessionEvents,
+		tableSessionSummaries: tableSessionSummaries,
+		tableAppStates:        tableAppStates,
+		tableUserStates:       tableUserStates,
+	}
+
+	// Initialize database if needed
+	if !opts.skipDBInit {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.initDB(ctx); err != nil {
+			return nil, fmt.Errorf("init database failed: %w", err)
+		}
+	}
+
+	// Start async persistence workers if enabled
+	if opts.enableAsyncPersist {
+		s.startAsyncPersistWorker()
+	}
+
+	// Start async summary workers if summarizer is configured
+	if opts.summarizer != nil {
+		s.startAsyncSummaryWorker()
+	}
+
+	// Start cleanup routine if any TTL is configured
+	if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
+		s.startCleanupRoutine()
+	}
+
+	return s, nil
+}
+
+// Close closes the service and releases resources.
+func (s *Service) Close() error {
+	// Stop cleanup routine
+	s.stopCleanupRoutine()
+
+	// Close async persist workers
+	if s.eventPairChans != nil {
+		for _, ch := range s.eventPairChans {
+			close(ch)
+		}
+	}
+	s.persistWg.Wait()
+
+	// Close async summary workers and wait for them to finish
+	if s.summaryJobChans != nil {
+		for _, ch := range s.summaryJobChans {
+			close(ch)
+		}
+		s.summaryWg.Wait()
+	}
+
+	// Close MySQL client
+	if s.mysqlClient != nil {
+		return s.mysqlClient.Close()
+	}
+
+	return nil
+}
+
+// calculateExpiresAt calculates the expiration timestamp based on TTL.
+// Returns nil if TTL is 0 (no expiration).
+func calculateExpiresAt(ttl time.Duration) *time.Time {
+	if ttl <= 0 {
+		return nil
+	}
+	expiresAt := time.Now().Add(ttl)
+	return &expiresAt
+}
+
+// CreateSession creates a new session.
+func (s *Service) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	opts ...session.Option,
+) (*session.Session, error) {
+	if err := key.CheckUserKey(); err != nil {
+		return nil, err
+	}
+	if key.SessionID == "" {
+		key.SessionID = uuid.New().String()
+	}
+
+	now := time.Now()
+	sessState := &SessionState{
+		ID:        key.SessionID,
+		State:     make(session.StateMap),
+		UpdatedAt: now,
+		CreatedAt: now,
+	}
+	for k, v := range state {
+		sessState.State[k] = v
+	}
+
+	sessBytes, err := json.Marshal(sessState)
+	if err != nil {
+		return nil, fmt.Errorf("marshal session failed: %w", err)
+	}
+
+	// Calculate expires_at based on TTL
+	expiresAt := calculateExpiresAt(s.sessionTTL)
+
+	// Check if session already exists (matching PostgreSQL behavior)
+	var sessionExists bool
+	var existingExpiresAt sql.NullTime
+	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		// rows.Next() is already called by the Query loop
+		sessionExists = true
+		if err := rows.Scan(&existingExpiresAt); err != nil {
+			return err
+		}
+		return nil
+	}, fmt.Sprintf(`SELECT expires_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("check existing session failed: %w", err)
+	}
+
+	if sessionExists {
+		// If session exists and has not expired, reject creation
+		if !existingExpiresAt.Valid {
+			log.Errorf("CreateSession: session already exists with no expiration (app=%s, user=%s, session=%s)",
+				key.AppName, key.UserID, key.SessionID)
+			return nil, fmt.Errorf("session already exists and has not expired")
+		}
+		if existingExpiresAt.Time.After(now) {
+			log.Errorf("CreateSession: session already exists and not expired yet (app=%s, user=%s, session=%s, expires=%v)",
+				key.AppName, key.UserID, key.SessionID, existingExpiresAt.Time)
+			return nil, fmt.Errorf("session already exists and has not expired")
+		}
+		// If session exists but has expired, trigger cleanup before creating new one
+		log.Debugf("found expired session (app=%s, user=%s, session=%s), triggering cleanup",
+			key.AppName, key.UserID, key.SessionID)
+		s.cleanupExpiredForUser(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+	}
+
+	log.Debugf("CreateSession: inserting new session (app=%s, user=%s, session=%s)",
+		key.AppName, key.UserID, key.SessionID)
+
+	// Insert session state (MySQL syntax)
+	_, err = s.mysqlClient.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, s.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID, sessBytes, sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create session failed: %w", err)
+	}
+
+	appState, err := s.ListAppStates(ctx, key.AppName)
+	if err != nil {
+		return nil, fmt.Errorf("list app states failed: %w", err)
+	}
+
+	userState, err := s.ListUserStates(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+	if err != nil {
+		return nil, fmt.Errorf("list user states failed: %w", err)
+	}
+
+	sess := session.NewSession(
+		key.AppName, key.UserID, sessState.ID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
+
+	return mergeState(appState, userState, sess), nil
+}
+
+// GetSession gets a session.
+func (s *Service) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	opt := applyOptions(opts...)
+	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("mysql session service get session state failed: %w", err)
+	}
+
+	// Refresh session TTL if configured and session exists
+	if sess != nil && s.sessionTTL > 0 {
+		if err := s.refreshSessionTTL(ctx, key); err != nil {
+			log.Warnf("failed to refresh session TTL: %v", err)
+			// Don't fail the GetSession call, just log the warning
+		}
+	}
+
+	return sess, nil
+}
+
+// ListSessions lists all sessions by user scope of session key.
+func (s *Service) ListSessions(
+	ctx context.Context,
+	userKey session.UserKey,
+	opts ...session.Option,
+) ([]*session.Session, error) {
+	if err := userKey.CheckUserKey(); err != nil {
+		return nil, err
+	}
+	opt := applyOptions(opts...)
+	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("mysql session service get session list failed: %w", err)
+	}
+	return sessList, nil
+}
+
+// DeleteSession deletes a session.
+func (s *Service) DeleteSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	if err := s.deleteSessionState(ctx, key); err != nil {
+		return fmt.Errorf("mysql session service delete session state failed: %w", err)
+	}
+	return nil
+}
+
+// UpdateAppState updates the state by target scope and key.
+func (s *Service) UpdateAppState(ctx context.Context, appName string, state session.StateMap) error {
+	if appName == "" {
+		return session.ErrAppNameRequired
+	}
+
+	now := time.Now()
+	expiresAt := calculateExpiresAt(s.appStateTTL)
+
+	for k, v := range state {
+		k = strings.TrimPrefix(k, session.StateAppPrefix)
+		_, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("REPLACE INTO %s (app_name, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)", s.tableAppStates),
+			appName, k, v, now, expiresAt,
+		)
+		if err != nil {
+			return fmt.Errorf("mysql session service update app state failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListAppStates gets the app states.
+func (s *Service) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
+	if appName == "" {
+		return nil, session.ErrAppNameRequired
+	}
+
+	appStateMap := make(session.StateMap)
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		// rows.Next() is already called by the Query loop
+		var key string
+		var value []byte
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
+		}
+		appStateMap[key] = value
+		return nil
+	}, fmt.Sprintf("SELECT `key`, value FROM %s WHERE app_name = ? AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", s.tableAppStates),
+		appName, time.Now())
+
+	if err != nil {
+		return nil, fmt.Errorf("mysql session service list app states failed: %w", err)
+	}
+	return appStateMap, nil
+}
+
+// DeleteAppState deletes the state by target scope and key.
+func (s *Service) DeleteAppState(ctx context.Context, appName string, key string) error {
+	if appName == "" {
+		return session.ErrAppNameRequired
+	}
+	if key == "" {
+		return fmt.Errorf("state key is required")
+	}
+
+	var err error
+	if s.opts.softDelete {
+		// Soft delete: set deleted_at timestamp
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("UPDATE %s SET deleted_at = ? WHERE app_name = ? AND `key` = ? AND deleted_at IS NULL", s.tableAppStates),
+			time.Now(), appName, key)
+	} else {
+		// Hard delete: permanently remove record
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("DELETE FROM %s WHERE app_name = ? AND `key` = ?", s.tableAppStates),
+			appName, key)
+	}
+
+	if err != nil {
+		return fmt.Errorf("mysql session service delete app state failed: %w", err)
+	}
+	return nil
+}
+
+// UpdateUserState updates the state by target scope and key.
+func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, state session.StateMap) error {
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	expiresAt := calculateExpiresAt(s.userStateTTL)
+
+	for k, v := range state {
+		k = strings.TrimPrefix(k, session.StateUserPrefix)
+		_, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("REPLACE INTO %s (app_name, user_id, `key`, value, updated_at, expires_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL)", s.tableUserStates),
+			userKey.AppName, userKey.UserID, k, v, now, expiresAt,
+		)
+		if err != nil {
+			return fmt.Errorf("mysql session service update user state failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListUserStates lists the state by target scope and key.
+func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
+	if err := userKey.CheckUserKey(); err != nil {
+		return nil, err
+	}
+
+	userStateMap := make(session.StateMap)
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		// rows.Next() is already called by the Query loop
+		var key string
+		var value []byte
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
+		}
+		userStateMap[key] = value
+		return nil
+	}, fmt.Sprintf("SELECT `key`, value FROM %s WHERE app_name = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", s.tableUserStates),
+		userKey.AppName, userKey.UserID, time.Now())
+
+	if err != nil {
+		return nil, fmt.Errorf("mysql session service list user states failed: %w", err)
+	}
+	return userStateMap, nil
+}
+
+// DeleteUserState deletes the state by target scope and key.
+func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+	if key == "" {
+		return fmt.Errorf("state key is required")
+	}
+
+	var err error
+	if s.opts.softDelete {
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND `key` = ? AND deleted_at IS NULL", s.tableUserStates),
+			time.Now(), userKey.AppName, userKey.UserID, key)
+	} else {
+		_, err = s.mysqlClient.Exec(ctx,
+			fmt.Sprintf("DELETE FROM %s WHERE app_name = ? AND user_id = ? AND `key` = ?", s.tableUserStates),
+			userKey.AppName, userKey.UserID, key)
+	}
+	if err != nil {
+		return fmt.Errorf("mysql session service delete user state failed: %w", err)
+	}
+	return nil
+}
+
+// AppendEvent appends an event to a session.
+func (s *Service) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *event.Event,
+	opts ...session.Option,
+) error {
+	key := session.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	// update user session with the given event
+	sess.UpdateUserSession(event, opts...)
+
+	// persist event to MySQL asynchronously
+	if s.opts.enableAsyncPersist {
+		defer func() {
+			if r := recover(); r != nil {
+				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
+					log.Errorf("mysql session service append event failed: %v", r)
+					return
+				}
+				panic(r)
+			}
+		}()
+
+		// Hash key to determine which worker channel to use
+		index := sess.Hash % len(s.eventPairChans)
+		select {
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	if err := s.addEvent(ctx, key, event); err != nil {
+		return fmt.Errorf("mysql session service append event failed: %w", err)
+	}
+
+	return nil
+}
+
+// startAsyncPersistWorker starts worker goroutines for async event persistence.
+func (s *Service) startAsyncPersistWorker() {
+	persisterNum := s.opts.asyncPersisterNum
+	// init event pair chan
+	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
+	for i := 0; i < persisterNum; i++ {
+		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
+	}
+
+	s.persistWg.Add(persisterNum)
+	for _, eventPairChan := range s.eventPairChans {
+		go func(eventPairChan chan *sessionEventPair) {
+			defer s.persistWg.Done()
+			for eventPair := range eventPairChan {
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
+				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
+					cap(eventPairChan), len(eventPairChan), eventPair.key.AppName, eventPair.key.UserID, eventPair.key.SessionID)
+				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
+					log.Errorf("async persist event failed: %w", err)
+				}
+				cancel()
+			}
+		}(eventPairChan)
+	}
+}
+
+// startCleanupRoutine starts a background routine to periodically clean up expired data.
+func (s *Service) startCleanupRoutine() {
+	interval := s.opts.cleanupInterval
+	if interval <= 0 {
+		interval = defaultCleanupIntervalSecond
+	}
+
+	s.cleanupTicker = time.NewTicker(interval)
+	s.cleanupDone = make(chan struct{})
+
+	go func() {
+		log.Infof("started cleanup routine for mysql session service (interval: %v)", interval)
+		for {
+			select {
+			case <-s.cleanupTicker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				s.cleanupExpiredData(ctx)
+				cancel()
+			case <-s.cleanupDone:
+				log.Info("cleanup routine stopped for mysql session service")
+				return
+			}
+		}
+	}()
+}
+
+// stopCleanupRoutine stops the cleanup routine.
+func (s *Service) stopCleanupRoutine() {
+	s.cleanupOnce.Do(func() {
+		if s.cleanupTicker != nil {
+			s.cleanupTicker.Stop()
+		}
+		if s.cleanupDone != nil {
+			close(s.cleanupDone)
+		}
+	})
+}
+
+// cleanupExpiredData cleans up expired session states, events, summaries, and app/user states.
+func (s *Service) cleanupExpiredData(ctx context.Context) {
+	now := time.Now()
+
+	// Clean up expired sessions
+	if s.sessionTTL > 0 {
+		s.cleanupExpiredSessions(ctx, now)
+	}
+
+	// Clean up expired app states
+	if s.appStateTTL > 0 {
+		s.cleanupExpiredAppStates(ctx, now)
+	}
+
+	// Clean up expired user states
+	if s.userStateTTL > 0 {
+		s.cleanupExpiredUserStates(ctx, now)
+	}
+}
+
+// cleanupExpiredSessions cleans up expired session states, events, and summaries.
+func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
+	var deletedCount int64
+
+	if s.opts.softDelete {
+		// Use transaction to ensure atomicity
+		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+			// Soft delete expired sessions
+			result, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
+				now, now)
+			if err != nil {
+				return fmt.Errorf("soft delete sessions: %w", err)
+			}
+			deletedCount, _ = result.RowsAffected()
+
+			// Soft delete related events and summaries with same expiration condition
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
+					s.tableSessionEvents),
+				now, now); err != nil {
+				return fmt.Errorf("soft delete events: %w", err)
+			}
+
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
+					s.tableSessionSummaries),
+				now, now); err != nil {
+				return fmt.Errorf("soft delete summaries: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			log.Errorf("cleanup expired sessions failed: %v", err)
+			return
+		}
+	} else {
+		// Use transaction to ensure atomicity
+		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+			// Hard delete expired sessions, events, and summaries with same condition
+			result, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
+				now)
+			if err != nil {
+				return fmt.Errorf("hard delete sessions: %w", err)
+			}
+			deletedCount, _ = result.RowsAffected()
+
+			// Hard delete events and summaries with same expiration condition
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+					s.tableSessionEvents),
+				now); err != nil {
+				return fmt.Errorf("hard delete events: %w", err)
+			}
+
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+					s.tableSessionSummaries),
+				now); err != nil {
+				return fmt.Errorf("hard delete summaries: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			log.Errorf("cleanup expired sessions failed: %v", err)
+			return
+		}
+	}
+
+	if deletedCount > 0 {
+		log.Infof("cleaned up %d expired sessions", deletedCount)
+	}
+}
+
+// cleanupExpiredAppStates cleans up expired app states.
+func (s *Service) cleanupExpiredAppStates(ctx context.Context, now time.Time) {
+	var deletedCount int64
+
+	if s.opts.softDelete {
+		result, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableAppStates),
+			now, now)
+		if err != nil {
+			log.Errorf("cleanup expired app states failed: %v", err)
+			return
+		}
+		deletedCount, _ = result.RowsAffected()
+	} else {
+		result, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableAppStates),
+			now)
+		if err != nil {
+			log.Errorf("cleanup expired app states failed: %v", err)
+			return
+		}
+		deletedCount, _ = result.RowsAffected()
+	}
+
+	if deletedCount > 0 {
+		log.Infof("cleaned up %d expired app states", deletedCount)
+	}
+}
+
+// cleanupExpiredUserStates cleans up expired user states.
+func (s *Service) cleanupExpiredUserStates(ctx context.Context, now time.Time) {
+	var deletedCount int64
+
+	if s.opts.softDelete {
+		result, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableUserStates),
+			now, now)
+		if err != nil {
+			log.Errorf("cleanup expired user states failed: %v", err)
+			return
+		}
+		deletedCount, _ = result.RowsAffected()
+	} else {
+		result, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableUserStates),
+			now)
+		if err != nil {
+			log.Errorf("cleanup expired user states failed: %v", err)
+			return
+		}
+		deletedCount, _ = result.RowsAffected()
+	}
+
+	if deletedCount > 0 {
+		log.Infof("cleaned up %d expired user states", deletedCount)
+	}
+}
+
+// cleanupExpiredForUser cleans up all expired data for a specific user.
+// This is called when creating a session finds an expired session exists.
+func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.UserKey) {
+	now := time.Now()
+
+	if s.opts.softDelete {
+		// Soft delete expired sessions for this user
+		if _, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionStates),
+			now, userKey.AppName, userKey.UserID, now); err != nil {
+			log.Errorf("cleanup expired sessions for user failed: %v", err)
+		}
+	} else {
+		// Hard delete expired sessions for this user
+		if _, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
+			userKey.AppName, userKey.UserID, now); err != nil {
+			log.Errorf("cleanup expired sessions for user failed: %v", err)
+		}
+	}
+}
+
+// applyOptions is a convenience wrapper to internal/session.ApplyOptions.
+func applyOptions(opts ...session.Option) *session.Options {
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	return opt
+}
+
+// mergeState is a convenience wrapper to internal/session.MergeState.
+func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
+	if sess == nil {
+		return nil
+	}
+	if sess.State == nil {
+		sess.State = make(session.StateMap)
+	}
+
+	// Merge with priority: session state > user state > app state
+	for k, v := range appState {
+		sess.State[session.StateAppPrefix+k] = v
+	}
+	for k, v := range userState {
+		sess.State[session.StateUserPrefix+k] = v
+	}
+	return sess
+}

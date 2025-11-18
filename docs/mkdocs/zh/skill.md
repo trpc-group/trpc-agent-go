@@ -51,7 +51,7 @@ skills/
     ...
 ```
 
-仓库与解析： [skill/repository.go](skill/repository.go)
+仓库与解析： [skill/repository.go](https://github.com/trpc-group/trpc-agent-go/blob/main/skill/repository.go)
 
 ## 快速开始（从 0 到 1）
 
@@ -94,7 +94,7 @@ agent := llmagent.New(
 要点：
 - 请求处理器注入概览与按需内容：
   [internal/flow/processor/skills.go]
-  (internal/flow/processor/skills.go)
+  (https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go)
 - 工具自动注册：开启 `WithSkills` 后，`skill_load`、
   `skill_select_docs`、`skill_list_docs` 与 `skill_run`
   会自动出现在工具列表中，无需手动添加。
@@ -102,13 +102,13 @@ agent := llmagent.New(
   引导模型在合适时机先 `skill_load`，需要时用 `skill_select_docs`
   选择文档，再 `skill_run`（参见源码
   的指引文案拼接逻辑）。
-  - 加载器： [tool/skill/load.go](tool/skill/load.go)
-  - 运行器： [tool/skill/run.go](tool/skill/run.go)
+  - 加载器： [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
+  - 运行器： [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
 ### 3) 运行示例
 
 交互式技能对话示例：
-[examples/skillrun/main.go](examples/skillrun/main.go)
+[examples/skillrun/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
 
 ```bash
 cd examples/skillrun
@@ -121,7 +121,7 @@ go run . -executor container
 
 示例技能（节选）：
 [examples/skillrun/skills/python_math/SKILL.md]
-(examples/skillrun/skills/python_math/SKILL.md)
+(https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
 
 自然语言交互建议：
 - 直接说明你要做什么；模型会根据概览判断是否需要某个技能。
@@ -166,7 +166,7 @@ https://github.com/anthropics/skills
 
 ### `skill_load`（加载内容）
 
-声明： [tool/skill/load.go](tool/skill/load.go)
+声明： [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
 
 输入：
 - `skill`（必填）：技能名
@@ -183,7 +183,7 @@ https://github.com/anthropics/skills
 
 ### `skill_select_docs`（选择文档）
 
-声明： [tool/skill/select_docs.go](tool/skill/select_docs.go)
+声明： [tool/skill/select_docs.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/select_docs.go)
 
 输入：
 - `skill`（必填）
@@ -196,7 +196,7 @@ https://github.com/anthropics/skills
 
 ### `skill_list_docs`（列出文档）
 
-声明： [tool/skill/list_docs.go](tool/skill/list_docs.go)
+声明： [tool/skill/list_docs.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/list_docs.go)
 
 输入：
 - `skill`（必填）
@@ -209,7 +209,7 @@ https://github.com/anthropics/skills
 
 ### `skill_run`（执行命令）
 
-声明： [tool/skill/run.go](tool/skill/run.go)
+声明： [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
 输入：
 - `skill`（必填）：技能名
@@ -273,14 +273,14 @@ https://github.com/anthropics/skills
 
 ## 执行器
 
-接口： [codeexecutor/codeexecutor.go](codeexecutor/codeexecutor.go)
+接口： [codeexecutor/codeexecutor.go](https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/codeexecutor.go)
 
 实现：
 - 本地： [codeexecutor/local/workspace_runtime.go]
-  (codeexecutor/local/workspace_runtime.go)
+  (https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/local/workspace_runtime.go)
 - 容器（Docker）：
   [codeexecutor/container/workspace_runtime.go]
-  (codeexecutor/container/workspace_runtime.go)
+  (https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/container/workspace_runtime.go)
 
 容器模式说明：
 - 运行目录挂载为可写；`$SKILLS_ROOT`（若存在）只读挂载
@@ -296,7 +296,7 @@ https://github.com/anthropics/skills
 事件：工具响应以 `tool.response` 形式产出，可携带状态增量（见
 `skill_load`）。合并多工具结果与并行执行逻辑参见：
 [internal/flow/processor/functioncall.go]
-(internal/flow/processor/functioncall.go)
+(https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/functioncall.go)
 
 追踪（常见 span 名）：
 - `workspace.create`、`workspace.stage.*`、`workspace.run`
@@ -331,6 +331,6 @@ https://github.com/anthropics/skills
   - 开源库： https://github.com/anthropics/skills
 - 本仓库：
   - 交互示例： [examples/skillrun/main.go]
-    (examples/skillrun/main.go)
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
   - 示例技能： [examples/skillrun/skills/python_math/SKILL.md]
-    (examples/skillrun/skills/python_math/SKILL.md)
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
