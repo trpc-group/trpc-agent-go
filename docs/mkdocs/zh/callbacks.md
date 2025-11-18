@@ -64,6 +64,46 @@ type AfterModelCallbackStructured  func(ctx context.Context, args *model.AfterMo
 - Before 可返回非空响应以跳过模型调用
 - After 可获取原始请求 `req`，便于内容还原与后处理
 
+### 回调执行控制
+
+默认情况下，回调执行会在以下情况立即停止：
+
+- 回调返回错误
+- 回调返回非空的 `CustomResponse`（对于 Before 回调）或 `CustomResult`（对于 Tool 回调）
+
+你可以在创建回调时使用选项来控制此行为：
+
+```go
+// 即使发生错误也继续执行剩余的回调
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnError(true),
+)
+
+// 即使返回了 CustomResponse 也继续执行剩余的回调
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnResponse(true),
+)
+
+// 启用两个选项：在错误和 CustomResponse 时都继续执行
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnError(true),
+    model.WithContinueOnResponse(true),
+)
+```
+
+**执行模式：**
+
+1. **默认（两者均为 false）**：遇到第一个错误或 CustomResponse 时停止
+2. **继续执行（错误）**：即使某个回调返回错误，也继续执行剩余的回调
+3. **继续执行（响应）**：即使某个回调返回了 CustomResponse，也继续执行剩余的回调
+4. **继续执行（两者）**：无论发生错误或返回 CustomResponse，都继续执行所有回调
+
+**优先级规则：**
+
+- 如果同时发生错误和 CustomResponse，错误优先，将被返回（除非 `continueOnError` 为 true）
+- 当 `continueOnError` 为 true 且发生错误时，执行会继续，但第一个错误会被保留并在最后返回
+- 当 `continueOnResponse` 为 true 且返回了 CustomResponse 时，执行会继续，但最后一个 CustomResponse 会被使用
+
 示例：
 
 ```go
@@ -157,6 +197,46 @@ type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterTool
 - `BeforeToolResult.Context` 和 `AfterToolResult.Context` 可在操作之间传递上下文
 - 可通过 `args.Arguments` 直接修改参数
 - BeforeToolCallbackStructured 返回非空自定义结果时，会跳过工具执行并直接使用该结果
+
+### 回调执行控制
+
+默认情况下，回调执行会在以下情况立即停止：
+
+- 回调返回错误
+- 回调返回非空的 `CustomResult`
+
+你可以在创建回调时使用选项来控制此行为：
+
+```go
+// 即使发生错误也继续执行剩余的回调
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnError(true),
+)
+
+// 即使返回了 CustomResult 也继续执行剩余的回调
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnResponse(true),
+)
+
+// 启用两个选项：在错误和 CustomResult 时都继续执行
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnError(true),
+    tool.WithContinueOnResponse(true),
+)
+```
+
+**执行模式：**
+
+1. **默认（两者均为 false）**：遇到第一个错误或 CustomResult 时停止
+2. **继续执行（错误）**：即使某个回调返回错误，也继续执行剩余的回调
+3. **继续执行（响应）**：即使某个回调返回了 CustomResult，也继续执行剩余的回调
+4. **继续执行（两者）**：无论发生错误或返回 CustomResult，都继续执行所有回调
+
+**优先级规则：**
+
+- 如果同时发生错误和 CustomResult，错误优先，将被返回（除非 `continueOnError` 为 true）
+- 当 `continueOnError` 为 true 且发生错误时，执行会继续，但第一个错误会被保留并在最后返回
+- 当 `continueOnResponse` 为 true 且返回了 CustomResult 时，执行会继续，但最后一个 CustomResult 会被使用
 
 示例：
 
@@ -266,6 +346,46 @@ type AfterAgentCallbackStructured  func(ctx context.Context, args *agent.AfterAg
 - 可访问完整的调用上下文，便于实现丰富的按次逻辑
 - Before 可返回自定义 `*model.Response` 以中止后续模型调用
 - After 可返回替换响应
+
+### 回调执行控制
+
+默认情况下，回调执行会在以下情况立即停止：
+
+- 回调返回错误
+- 回调返回非空的 `CustomResponse`
+
+你可以在创建回调时使用选项来控制此行为：
+
+```go
+// 即使发生错误也继续执行剩余的回调
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnError(true),
+)
+
+// 即使返回了 CustomResponse 也继续执行剩余的回调
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnResponse(true),
+)
+
+// 启用两个选项：在错误和 CustomResponse 时都继续执行
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnError(true),
+    agent.WithContinueOnResponse(true),
+)
+```
+
+**执行模式：**
+
+1. **默认（两者均为 false）**：遇到第一个错误或 CustomResponse 时停止
+2. **继续执行（错误）**：即使某个回调返回错误，也继续执行剩余的回调
+3. **继续执行（响应）**：即使某个回调返回了 CustomResponse，也继续执行剩余的回调
+4. **继续执行（两者）**：无论发生错误或返回 CustomResponse，都继续执行所有回调
+
+**优先级规则：**
+
+- 如果同时发生错误和 CustomResponse，错误优先，将被返回（除非 `continueOnError` 为 true）
+- 当 `continueOnError` 为 true 且发生错误时，执行会继续，但第一个错误会被保留并在最后返回
+- 当 `continueOnResponse` 为 true 且返回了 CustomResponse 时，执行会继续，但最后一个 CustomResponse 会被使用
 
 示例：
 

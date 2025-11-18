@@ -63,6 +63,46 @@ Key points:
 - Before can return a non-nil response to skip the model call.
 - After receives the original request, useful for content restoration and post-processing.
 
+### Callback Execution Control
+
+By default, callback execution stops immediately when:
+
+- A callback returns an error
+- A callback returns a non-nil `CustomResponse` (for Before callbacks) or `CustomResult` (for Tool callbacks)
+
+You can control this behavior using options when creating callbacks:
+
+```go
+// Continue executing remaining callbacks even if an error occurs
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnError(true),
+)
+
+// Continue executing remaining callbacks even if a CustomResponse is returned
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnResponse(true),
+)
+
+// Enable both options: continue on both error and CustomResponse
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnError(true),
+    model.WithContinueOnResponse(true),
+)
+```
+
+**Execution Modes:**
+
+1. **Default (both false)**: Stop on first error or CustomResponse
+2. **Continue on Error**: Continue executing remaining callbacks even if one returns an error
+3. **Continue on Response**: Continue executing remaining callbacks even if one returns a CustomResponse
+4. **Continue on Both**: Continue executing all callbacks regardless of errors or CustomResponse
+
+**Priority Rules:**
+
+- If both an error and a CustomResponse occur, the error takes priority and will be returned (unless `continueOnError` is true)
+- When `continueOnError` is true and an error occurs, execution continues but the first error is preserved and returned at the end
+- When `continueOnResponse` is true and a CustomResponse is returned, execution continues but the last CustomResponse is used
+
 Example:
 
 ```go
@@ -156,6 +196,46 @@ Key points:
 - `BeforeToolResult.Context` and `AfterToolResult.Context` can pass context between operations.
 - Arguments can be modified directly via `args.Arguments`.
 - If BeforeToolCallbackStructured returns a non-nil custom result, the tool is skipped and that result is used directly.
+
+### Callback Execution Control
+
+By default, callback execution stops immediately when:
+
+- A callback returns an error
+- A callback returns a non-nil `CustomResult`
+
+You can control this behavior using options when creating callbacks:
+
+```go
+// Continue executing remaining callbacks even if an error occurs
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnError(true),
+)
+
+// Continue executing remaining callbacks even if a CustomResult is returned
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnResponse(true),
+)
+
+// Enable both options: continue on both error and CustomResult
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnError(true),
+    tool.WithContinueOnResponse(true),
+)
+```
+
+**Execution Modes:**
+
+1. **Default (both false)**: Stop on first error or CustomResult
+2. **Continue on Error**: Continue executing remaining callbacks even if one returns an error
+3. **Continue on Response**: Continue executing remaining callbacks even if one returns a CustomResult
+4. **Continue on Both**: Continue executing all callbacks regardless of errors or CustomResult
+
+**Priority Rules:**
+
+- If both an error and a CustomResult occur, the error takes priority and will be returned (unless `continueOnError` is true)
+- When `continueOnError` is true and an error occurs, execution continues but the first error is preserved and returned at the end
+- When `continueOnResponse` is true and a CustomResult is returned, execution continues but the last CustomResult is used
 
 Example:
 
@@ -265,6 +345,46 @@ Key points:
 - Access to full invocation context allows for rich per-invocation logic.
 - Before can short-circuit with a custom model.Response.
 - After can return a replacement response.
+
+### Callback Execution Control
+
+By default, callback execution stops immediately when:
+
+- A callback returns an error
+- A callback returns a non-nil `CustomResponse`
+
+You can control this behavior using options when creating callbacks:
+
+```go
+// Continue executing remaining callbacks even if an error occurs
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnError(true),
+)
+
+// Continue executing remaining callbacks even if a CustomResponse is returned
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnResponse(true),
+)
+
+// Enable both options: continue on both error and CustomResponse
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnError(true),
+    agent.WithContinueOnResponse(true),
+)
+```
+
+**Execution Modes:**
+
+1. **Default (both false)**: Stop on first error or CustomResponse
+2. **Continue on Error**: Continue executing remaining callbacks even if one returns an error
+3. **Continue on Response**: Continue executing remaining callbacks even if one returns a CustomResponse
+4. **Continue on Both**: Continue executing all callbacks regardless of errors or CustomResponse
+
+**Priority Rules:**
+
+- If both an error and a CustomResponse occur, the error takes priority and will be returned (unless `continueOnError` is true)
+- When `continueOnError` is true and an error occurs, execution continues but the first error is preserved and returned at the end
+- When `continueOnResponse` is true and a CustomResponse is returned, execution continues but the last CustomResponse is used
 
 Example:
 

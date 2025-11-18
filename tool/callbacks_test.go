@@ -12,6 +12,7 @@ package tool_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -783,4 +784,134 @@ func TestToolCallbacks_After_NilResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, map[string]string{"second": "result"}, result.CustomResult)
+}
+
+// =========================
+// ContinueOnError Tests
+// =========================
+
+func TestToolCallbacks_DefaultBehavior_StopOnError(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	executed := []int{}
+
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 2)
+		return nil, nil
+	})
+
+	args := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	_, err := callbacks.RunBeforeTool(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.Equal(t, []int{1}, executed)
+}
+
+func TestToolCallbacks_ContinueOnError_ContinuesExecution(t *testing.T) {
+	callbacks := tool.NewCallbacks(
+		tool.WithContinueOnError(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 2)
+		return nil, errors.New("error 2")
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 3)
+		return nil, nil
+	})
+
+	args := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	_, err := callbacks.RunBeforeTool(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.Equal(t, []int{1, 2, 3}, executed)
+}
+
+func TestToolCallbacks_ContinueOnResponse_ContinuesExecution(t *testing.T) {
+	callbacks := tool.NewCallbacks(
+		tool.WithContinueOnResponse(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 1)
+		return &tool.BeforeToolResult{
+			CustomResult: map[string]string{"result": "1"},
+		}, nil
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 2)
+		return &tool.BeforeToolResult{
+			CustomResult: map[string]string{"result": "2"},
+		}, nil
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 3)
+		return nil, nil
+	})
+
+	args := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	result, err := callbacks.RunBeforeTool(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, map[string]string{"result": "2"}, result.CustomResult)
+	require.Equal(t, []int{1, 2, 3}, executed)
+}
+
+func TestToolCallbacks_BothOptions_ContinuesExecution(t *testing.T) {
+	callbacks := tool.NewCallbacks(
+		tool.WithContinueOnError(true),
+		tool.WithContinueOnResponse(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 2)
+		return &tool.BeforeToolResult{
+			CustomResult: map[string]string{"result": "1"},
+		}, nil
+	})
+	callbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		executed = append(executed, 3)
+		return &tool.BeforeToolResult{
+			CustomResult: map[string]string{"result": "2"},
+		}, nil
+	})
+
+	args := &tool.BeforeToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+	}
+	result, err := callbacks.RunBeforeTool(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.NotNil(t, result)
+	require.Equal(t, map[string]string{"result": "2"}, result.CustomResult)
+	require.Equal(t, []int{1, 2, 3}, executed)
 }

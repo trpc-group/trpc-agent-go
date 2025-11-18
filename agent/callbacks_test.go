@@ -11,6 +11,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -490,4 +491,142 @@ func TestAgentCallbacks_After_NilResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, "second", result.CustomResponse.ID)
+}
+
+// =========================
+// ContinueOnError Tests
+// =========================
+
+func TestAgentCallbacks_DefaultBehavior_StopOnError(t *testing.T) {
+	callbacks := NewCallbacks()
+	executed := []int{}
+
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 2)
+		return nil, nil
+	})
+
+	args := &BeforeAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+	}
+	_, err := callbacks.RunBeforeAgent(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.Equal(t, []int{1}, executed)
+}
+
+func TestAgentCallbacks_ContinueOnError_ContinuesExecution(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnError(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 2)
+		return nil, errors.New("error 2")
+	})
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 3)
+		return nil, nil
+	})
+
+	args := &BeforeAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+	}
+	_, err := callbacks.RunBeforeAgent(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.Equal(t, []int{1, 2, 3}, executed)
+}
+
+func TestAgentCallbacks_ContinueOnResponse_ContinuesExecution(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnResponse(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 1)
+		return &BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "response 1"},
+		}, nil
+	})
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 2)
+		return &BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "response 2"},
+		}, nil
+	})
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 3)
+		return nil, nil
+	})
+
+	args := &BeforeAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+	}
+	result, err := callbacks.RunBeforeAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "response 2", result.CustomResponse.ID)
+	require.Equal(t, []int{1, 2, 3}, executed)
+}
+
+func TestAgentCallbacks_BothOptions_ContinuesExecution(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnError(true),
+		WithContinueOnResponse(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 2)
+		return &BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "response 1"},
+		}, nil
+	})
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *BeforeAgentArgs) (*BeforeAgentResult, error) {
+		executed = append(executed, 3)
+		return &BeforeAgentResult{
+			CustomResponse: &model.Response{ID: "response 2"},
+		}, nil
+	})
+
+	args := &BeforeAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+	}
+	result, err := callbacks.RunBeforeAgent(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.NotNil(t, result)
+	require.Equal(t, "response 2", result.CustomResponse.ID)
+	require.Equal(t, []int{1, 2, 3}, executed)
 }

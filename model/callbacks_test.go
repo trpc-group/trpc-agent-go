@@ -535,3 +535,264 @@ func TestModelCallbacks_After_NilResult(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "second", result.CustomResponse.ID)
 }
+
+// =========================
+// ContinueOnError Tests
+// =========================
+
+// TestCallbacks_DefaultBehavior_StopOnError tests default behavior (stop on first error).
+func TestCallbacks_DefaultBehavior_StopOnError(t *testing.T) {
+	callbacks := NewCallbacks()
+	executed := []int{}
+
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 2)
+		return nil, nil
+	})
+
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{{Role: RoleUser, Content: "Hello"}},
+		},
+	}
+	_, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.Equal(t, []int{1}, executed) // Only first callback executed
+}
+
+// TestCallbacks_ContinueOnError_ContinuesExecution tests continueOnError behavior.
+func TestCallbacks_ContinueOnError_ContinuesExecution(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnError(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 2)
+		return nil, errors.New("error 2")
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 3)
+		return nil, nil
+	})
+
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{{Role: RoleUser, Content: "Hello"}},
+		},
+	}
+	_, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())   // Return first error
+	require.Equal(t, []int{1, 2, 3}, executed) // All callbacks executed
+}
+
+// TestCallbacks_ContinueOnResponse_ContinuesExecution tests continueOnResponse behavior.
+func TestCallbacks_ContinueOnResponse_ContinuesExecution(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnResponse(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 1)
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "response 1", Choices: []Choice{{Message: Message{Content: "response 1"}}}},
+		}, nil
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 2)
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "response 2", Choices: []Choice{{Message: Message{Content: "response 2"}}}},
+		}, nil
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 3)
+		return nil, nil
+	})
+
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{{Role: RoleUser, Content: "Hello"}},
+		},
+	}
+	result, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "response 2", result.CustomResponse.ID) // Use last response
+	require.Equal(t, []int{1, 2, 3}, executed)               // All callbacks executed
+}
+
+// TestCallbacks_BothOptions_ContinuesExecution tests both options enabled.
+func TestCallbacks_BothOptions_ContinuesExecution(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnError(true),
+		WithContinueOnResponse(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 2)
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "response 1", Choices: []Choice{{Message: Message{Content: "response 1"}}}},
+		}, nil
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 3)
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "response 2", Choices: []Choice{{Message: Message{Content: "response 2"}}}},
+		}, nil
+	})
+
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{{Role: RoleUser, Content: "Hello"}},
+		},
+	}
+	result, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.Error(t, err) // Return first error
+	require.Equal(t, "error 1", err.Error())
+	require.NotNil(t, result)
+	require.Equal(t, "response 2", result.CustomResponse.ID) // Use last response
+	require.Equal(t, []int{1, 2, 3}, executed)               // All callbacks executed
+}
+
+// TestCallbacks_Priority_CustomResponseOverError tests priority rules.
+func TestCallbacks_Priority_CustomResponseOverError(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnError(true),
+		WithContinueOnResponse(true),
+	)
+
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "custom", Choices: []Choice{{Message: Message{Content: "custom"}}}},
+		}, nil
+	})
+
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{{Role: RoleUser, Content: "Hello"}},
+		},
+	}
+	result, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.Error(t, err) // Return error (because continueOnError=true)
+	require.Equal(t, "error 1", err.Error())
+	require.NotNil(t, result) // But also return CustomResponse
+	require.NotNil(t, result.CustomResponse)
+}
+
+// TestCallbacks_ContinueOnError_CustomResponseStops tests that CustomResponse stops execution when continueOnResponse=false.
+func TestCallbacks_ContinueOnError_CustomResponseStops(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnError(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 2)
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "custom", Choices: []Choice{{Message: Message{Content: "custom"}}}},
+		}, nil
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 3)
+		return nil, nil
+	})
+
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{{Role: RoleUser, Content: "Hello"}},
+		},
+	}
+	result, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.Error(t, err) // Return first error
+	require.Equal(t, "error 1", err.Error())
+	require.NotNil(t, result)
+	require.Equal(t, "custom", result.CustomResponse.ID)
+	require.Equal(t, []int{1, 2}, executed) // Third callback not executed
+}
+
+// TestCallbacks_ContinueOnResponse_ErrorStops tests that error stops execution when continueOnError=false.
+func TestCallbacks_ContinueOnResponse_ErrorStops(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnResponse(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 1)
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "response 1", Choices: []Choice{{Message: Message{Content: "response 1"}}}},
+		}, nil
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 2)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterBeforeModel(func(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
+		executed = append(executed, 3)
+		return &BeforeModelResult{
+			CustomResponse: &Response{ID: "response 2", Choices: []Choice{{Message: Message{Content: "response 2"}}}},
+		}, nil
+	})
+
+	args := &BeforeModelArgs{
+		Request: &Request{
+			Messages: []Message{{Role: RoleUser, Content: "Hello"}},
+		},
+	}
+	_, err := callbacks.RunBeforeModel(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.Equal(t, []int{1, 2}, executed) // Third callback not executed
+}
+
+// TestCallbacks_AfterModel_ContinueOnError tests continueOnError for after model callbacks.
+func TestCallbacks_AfterModel_ContinueOnError(t *testing.T) {
+	callbacks := NewCallbacks(
+		WithContinueOnError(true),
+	)
+	executed := []int{}
+
+	callbacks.RegisterAfterModel(func(ctx context.Context, args *AfterModelArgs) (*AfterModelResult, error) {
+		executed = append(executed, 1)
+		return nil, errors.New("error 1")
+	})
+	callbacks.RegisterAfterModel(func(ctx context.Context, args *AfterModelArgs) (*AfterModelResult, error) {
+		executed = append(executed, 2)
+		return nil, nil
+	})
+
+	args := &AfterModelArgs{
+		Request: &Request{
+			Messages: []Message{{Role: RoleUser, Content: "Hello"}},
+		},
+		Response: &Response{ID: "original"},
+		Error:    nil,
+	}
+	_, err := callbacks.RunAfterModel(context.Background(), args)
+	require.Error(t, err)
+	require.Equal(t, "error 1", err.Error())
+	require.Equal(t, []int{1, 2}, executed) // All callbacks executed
+}

@@ -114,11 +114,38 @@ type Callbacks struct {
 	BeforeTool []BeforeToolCallbackStructured
 	// AfterTool is a list of callbacks called after the tool is executed.
 	AfterTool []AfterToolCallbackStructured
+	// continueOnError controls whether to continue executing callbacks when an error occurs.
+	// Default: false (stop on first error)
+	continueOnError bool
+	// continueOnResponse controls whether to continue executing callbacks when a CustomResult is returned.
+	// Default: false (stop on first CustomResult)
+	continueOnResponse bool
+}
+
+// CallbacksOption configures Callbacks behavior.
+type CallbacksOption func(*Callbacks)
+
+// WithContinueOnError sets whether to continue executing callbacks when an error occurs.
+func WithContinueOnError(continueOnError bool) CallbacksOption {
+	return func(c *Callbacks) {
+		c.continueOnError = continueOnError
+	}
+}
+
+// WithContinueOnResponse sets whether to continue executing callbacks when a CustomResult is returned.
+func WithContinueOnResponse(continueOnResponse bool) CallbacksOption {
+	return func(c *Callbacks) {
+		c.continueOnResponse = continueOnResponse
+	}
 }
 
 // NewCallbacks creates a new Callbacks instance for tool.
-func NewCallbacks() *Callbacks {
-	return &Callbacks{}
+func NewCallbacks(opts ...CallbacksOption) *Callbacks {
+	c := &Callbacks{}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // RegisterBeforeTool registers a before tool callback.
@@ -173,6 +200,68 @@ func (c *Callbacks) RegisterAfterTool(cb any) *Callbacks {
 	return c
 }
 
+// handleCallbackError processes callback error and returns whether to continue.
+func (c *Callbacks) handleCallbackError(err error, firstErr *error) (shouldStop bool) {
+	if err == nil {
+		return false
+	}
+	if !c.continueOnError {
+		return true
+	}
+	if *firstErr == nil {
+		*firstErr = err
+	}
+	return false
+}
+
+// processBeforeToolResult processes before tool callback result and updates context/arguments.
+// Returns whether to stop execution immediately.
+func (c *Callbacks) processBeforeToolResult(
+	result *BeforeToolResult,
+	ctx *context.Context,
+	args *BeforeToolArgs,
+	lastResult **BeforeToolResult,
+) (shouldStop bool) {
+	if result == nil {
+		return false
+	}
+	if result.Context != nil {
+		*ctx = result.Context
+	}
+	if result.ModifiedArguments != nil {
+		args.Arguments = result.ModifiedArguments
+	}
+	if result.CustomResult != nil {
+		*lastResult = result
+		if !c.continueOnResponse {
+			return true
+		}
+	} else {
+		*lastResult = result
+	}
+	return false
+}
+
+// finalizeBeforeToolResult determines the final return value for before tool callbacks.
+func (c *Callbacks) finalizeBeforeToolResult(
+	lastResult *BeforeToolResult,
+	firstErr error,
+) (*BeforeToolResult, error) {
+	if lastResult != nil && lastResult.CustomResult != nil {
+		if c.continueOnError && firstErr != nil {
+			return lastResult, firstErr
+		}
+		return lastResult, nil
+	}
+	if c.continueOnError && firstErr != nil {
+		return lastResult, firstErr
+	}
+	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResult == nil && lastResult.ModifiedArguments == nil {
+		return nil, nil
+	}
+	return lastResult, nil
+}
+
 // RunBeforeTool runs all before tool callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
@@ -181,29 +270,72 @@ func (c *Callbacks) RunBeforeTool(
 	args *BeforeToolArgs,
 ) (*BeforeToolResult, error) {
 	var lastResult *BeforeToolResult
+	var firstErr error
+
 	for _, cb := range c.BeforeTool {
 		result, err := cb(ctx, args)
-		if err != nil {
+
+		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
 		}
-		if result != nil {
-			// Use the context from result if provided for subsequent callbacks.
-			if result.Context != nil {
-				ctx = result.Context
+
+		if c.processBeforeToolResult(result, &ctx, args, &lastResult) {
+			if c.continueOnError && firstErr != nil {
+				return result, firstErr
 			}
-			// Check if arguments were modified.
-			if result.ModifiedArguments != nil {
-				args.Arguments = result.ModifiedArguments
-			}
-			lastResult = result
-			if result.CustomResult != nil {
-				return result, nil
-			}
+			return result, nil
 		}
 	}
-	// Return nil if lastResult is empty (no Context and no CustomResult).
-	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResult == nil && lastResult.ModifiedArguments == nil {
-		return nil, nil
+
+	return c.finalizeBeforeToolResult(lastResult, firstErr)
+}
+
+// processAfterToolResult processes after tool callback result and updates context.
+// Returns whether to stop execution immediately.
+func (c *Callbacks) processAfterToolResult(
+	result *AfterToolResult,
+	ctx *context.Context,
+	lastResult **AfterToolResult,
+) (shouldStop bool) {
+	if result == nil {
+		return false
+	}
+	if result.Context != nil {
+		*ctx = result.Context
+	}
+	if result.CustomResult != nil {
+		*lastResult = result
+		if !c.continueOnResponse {
+			return true
+		}
+	} else {
+		*lastResult = result
+	}
+	return false
+}
+
+// finalizeAfterToolResult determines the final return value for after tool callbacks.
+func (c *Callbacks) finalizeAfterToolResult(
+	lastResult *AfterToolResult,
+	firstErr error,
+	args *AfterToolArgs,
+) (*AfterToolResult, error) {
+	if lastResult != nil && lastResult.CustomResult != nil {
+		if c.continueOnError && firstErr != nil {
+			return lastResult, firstErr
+		}
+		return lastResult, nil
+	}
+	if c.continueOnError && firstErr != nil {
+		return lastResult, firstErr
+	}
+	if lastResult == nil {
+		if args.Result != nil {
+			return &AfterToolResult{
+				CustomResult: args.Result,
+			}, nil
+		}
+		return &AfterToolResult{}, nil
 	}
 	return lastResult, nil
 }
@@ -216,30 +348,22 @@ func (c *Callbacks) RunAfterTool(
 	args *AfterToolArgs,
 ) (*AfterToolResult, error) {
 	var lastResult *AfterToolResult
+	var firstErr error
+
 	for _, cb := range c.AfterTool {
 		result, err := cb(ctx, args)
-		if err != nil {
+
+		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
 		}
-		if result != nil {
-			// Use the context from result if provided for subsequent callbacks.
-			if result.Context != nil {
-				ctx = result.Context
+
+		if c.processAfterToolResult(result, &ctx, &lastResult) {
+			if c.continueOnError && firstErr != nil {
+				return result, firstErr
 			}
-			lastResult = result
-			if result.CustomResult != nil {
-				return result, nil
-			}
+			return result, nil
 		}
 	}
-	// If no callbacks or no custom result, return the original result
-	if lastResult == nil {
-		if args.Result != nil {
-			return &AfterToolResult{
-				CustomResult: args.Result,
-			}, nil
-		}
-		return &AfterToolResult{}, nil
-	}
-	return lastResult, nil
+
+	return c.finalizeAfterToolResult(lastResult, firstErr, args)
 }

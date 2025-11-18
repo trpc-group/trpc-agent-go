@@ -94,11 +94,38 @@ type Callbacks struct {
 	BeforeAgent []BeforeAgentCallbackStructured
 	// AfterAgent is a list of callbacks called after the agent runs.
 	AfterAgent []AfterAgentCallbackStructured
+	// continueOnError controls whether to continue executing callbacks when an error occurs.
+	// Default: false (stop on first error)
+	continueOnError bool
+	// continueOnResponse controls whether to continue executing callbacks when a CustomResponse is returned.
+	// Default: false (stop on first CustomResponse)
+	continueOnResponse bool
+}
+
+// CallbacksOption configures Callbacks behavior.
+type CallbacksOption func(*Callbacks)
+
+// WithContinueOnError sets whether to continue executing callbacks when an error occurs.
+func WithContinueOnError(continueOnError bool) CallbacksOption {
+	return func(c *Callbacks) {
+		c.continueOnError = continueOnError
+	}
+}
+
+// WithContinueOnResponse sets whether to continue executing callbacks when a CustomResponse is returned.
+func WithContinueOnResponse(continueOnResponse bool) CallbacksOption {
+	return func(c *Callbacks) {
+		c.continueOnResponse = continueOnResponse
+	}
 }
 
 // NewCallbacks creates a new Callbacks instance for agent.
-func NewCallbacks() *Callbacks {
-	return &Callbacks{}
+func NewCallbacks(opts ...CallbacksOption) *Callbacks {
+	c := &Callbacks{}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // RegisterBeforeAgent registers a before agent callback.
@@ -153,6 +180,64 @@ func (c *Callbacks) RegisterAfterAgent(cb any) *Callbacks {
 	return c
 }
 
+// handleCallbackError processes callback error and returns whether to continue.
+func (c *Callbacks) handleCallbackError(err error, firstErr *error) (shouldStop bool) {
+	if err == nil {
+		return false
+	}
+	if !c.continueOnError {
+		return true
+	}
+	if *firstErr == nil {
+		*firstErr = err
+	}
+	return false
+}
+
+// processCallbackResult processes callback result and updates context.
+// Returns whether to stop execution immediately.
+func (c *Callbacks) processCallbackResult(
+	result *BeforeAgentResult,
+	ctx *context.Context,
+	lastResult **BeforeAgentResult,
+) (shouldStop bool) {
+	if result == nil {
+		return false
+	}
+	if result.Context != nil {
+		*ctx = result.Context
+	}
+	if result.CustomResponse != nil {
+		*lastResult = result
+		if !c.continueOnResponse {
+			return true
+		}
+	} else {
+		*lastResult = result
+	}
+	return false
+}
+
+// finalizeBeforeAgentResult determines the final return value for before agent callbacks.
+func (c *Callbacks) finalizeBeforeAgentResult(
+	lastResult *BeforeAgentResult,
+	firstErr error,
+) (*BeforeAgentResult, error) {
+	if lastResult != nil && lastResult.CustomResponse != nil {
+		if c.continueOnError && firstErr != nil {
+			return lastResult, firstErr
+		}
+		return lastResult, nil
+	}
+	if c.continueOnError && firstErr != nil {
+		return lastResult, firstErr
+	}
+	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+		return nil, nil
+	}
+	return lastResult, nil
+}
+
 // RunBeforeAgent runs all before agent callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
@@ -161,23 +246,64 @@ func (c *Callbacks) RunBeforeAgent(
 	args *BeforeAgentArgs,
 ) (*BeforeAgentResult, error) {
 	var lastResult *BeforeAgentResult
+	var firstErr error
+
 	for _, cb := range c.BeforeAgent {
 		result, err := cb(ctx, args)
-		if err != nil {
+
+		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
 		}
-		if result != nil {
-			// Use the context from result if provided for subsequent callbacks.
-			if result.Context != nil {
-				ctx = result.Context
+
+		if c.processCallbackResult(result, &ctx, &lastResult) {
+			if c.continueOnError && firstErr != nil {
+				return result, firstErr
 			}
-			lastResult = result
-			if result.CustomResponse != nil {
-				return result, nil
-			}
+			return result, nil
 		}
 	}
-	// Return nil if lastResult is empty (no Context and no CustomResponse).
+
+	return c.finalizeBeforeAgentResult(lastResult, firstErr)
+}
+
+// processAfterCallbackResult processes after callback result and updates context.
+// Returns whether to stop execution immediately.
+func (c *Callbacks) processAfterCallbackResult(
+	result *AfterAgentResult,
+	ctx *context.Context,
+	lastResult **AfterAgentResult,
+) (shouldStop bool) {
+	if result == nil {
+		return false
+	}
+	if result.Context != nil {
+		*ctx = result.Context
+	}
+	if result.CustomResponse != nil {
+		*lastResult = result
+		if !c.continueOnResponse {
+			return true
+		}
+	} else {
+		*lastResult = result
+	}
+	return false
+}
+
+// finalizeAfterAgentResult determines the final return value for after agent callbacks.
+func (c *Callbacks) finalizeAfterAgentResult(
+	lastResult *AfterAgentResult,
+	firstErr error,
+) (*AfterAgentResult, error) {
+	if lastResult != nil && lastResult.CustomResponse != nil {
+		if c.continueOnError && firstErr != nil {
+			return lastResult, firstErr
+		}
+		return lastResult, nil
+	}
+	if c.continueOnError && firstErr != nil {
+		return lastResult, firstErr
+	}
 	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
 		return nil, nil
 	}
@@ -192,25 +318,22 @@ func (c *Callbacks) RunAfterAgent(
 	args *AfterAgentArgs,
 ) (*AfterAgentResult, error) {
 	var lastResult *AfterAgentResult
+	var firstErr error
+
 	for _, cb := range c.AfterAgent {
 		result, err := cb(ctx, args)
-		if err != nil {
+
+		if c.handleCallbackError(err, &firstErr) {
 			return nil, err
 		}
-		if result != nil {
-			// Use the context from result if provided for subsequent callbacks.
-			if result.Context != nil {
-				ctx = result.Context
+
+		if c.processAfterCallbackResult(result, &ctx, &lastResult) {
+			if c.continueOnError && firstErr != nil {
+				return result, firstErr
 			}
-			lastResult = result
-			if result.CustomResponse != nil {
-				return result, nil
-			}
+			return result, nil
 		}
 	}
-	// Return nil if lastResult is empty (no Context and no CustomResponse).
-	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
-		return nil, nil
-	}
-	return lastResult, nil
+
+	return c.finalizeAfterAgentResult(lastResult, firstErr)
 }
