@@ -22,10 +22,10 @@ func sanitizeForCacheKey(input any) any {
 	if !ok {
 		return input
 	}
-	out := make(map[string]any)
+	out := make(map[string]any, len(st))
 	for k, v := range st {
 		// Reuse isUnsafeStateKey and additionally exclude current node id and parent agent.
-		if isUnsafeStateKey(k) || k == StateKeyCurrentNodeID || k == StateKeyParentAgent {
+		if isUnsafeStateKey(k) || k == StateKeyCurrentNodeID {
 			continue
 		}
 		out[k] = v
