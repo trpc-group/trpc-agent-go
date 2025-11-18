@@ -15,22 +15,9 @@ import (
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-)
-
-const (
-	// A2A DataPart metadata keys and values for tool call transmission
-	dataPartMetadataTypeKey          = "type"
-	dataPartMetadataTypeFunctionCall = "function_call"
-	dataPartMetadataTypeFunctionResp = "function_response"
-
-	// Tool call data field keys
-	toolCallFieldID       = "id"
-	toolCallFieldType     = "type"
-	toolCallFieldName     = "name"
-	toolCallFieldArgs     = "args"
-	toolCallFieldResponse = "response"
 )
 
 // A2AMessageToAgentMessage defines an interface for converting A2A protocol messages to Agent messages.
@@ -175,17 +162,25 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 			event.ID, event.Response.Error)
 	}
 
-	// Check if this is a tool call event
-	if isToolCallEvent(event) {
-		return c.convertToolCallToA2AMessage(ctx, event)
-	}
-
 	// Additional safety check for choices array bounds
 	if len(event.Response.Choices) == 0 {
 		log.Debugf("no choices in response, event: %v", event.ID)
 		return nil, nil
 	}
 
+	// Check if this is a tool call event
+	if isToolCallEvent(event) {
+		return c.convertToolCallToA2AMessage(event)
+	}
+
+	return c.convertContentToA2AMessage(event)
+}
+
+// convertContentToA2AMessage converts message content to A2A message.
+// It creates a message with text parts containing the content.
+func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
+	event *event.Event,
+) (protocol.UnaryMessageResult, error) {
 	choice := event.Response.Choices[0]
 	if choice.Message.Content != "" {
 		var parts []protocol.Part
@@ -214,17 +209,26 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 			event.ID, event.Response.Error)
 	}
 
-	// Check if this is a tool call event
-	if isToolCallEvent(event) {
-		return c.convertToolCallToA2AStreamingMessage(ctx, event, options)
-	}
-
 	// Additional safety check for choices array bounds
 	if len(event.Response.Choices) == 0 {
 		log.Debugf("no choices in response, event: %v", event.ID)
 		return nil, nil
 	}
 
+	// Check if this is a tool call event
+	if isToolCallEvent(event) {
+		return c.convertToolCallToA2AStreamingMessage(event, options)
+	}
+
+	return c.convertDeltaContentToA2AStreamingMessage(event, options)
+}
+
+// convertDeltaContentToA2AStreamingMessage converts delta content to A2A streaming message.
+// It creates a task artifact update event for incremental content updates.
+func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
+	event *event.Event,
+	options EventToA2AStreamingOptions,
+) (protocol.StreamingMessageResult, error) {
 	choice := event.Response.Choices[0]
 	// Use delta content for streaming updates
 	if choice.Delta.Content != "" {
@@ -276,9 +280,7 @@ func isToolCallEvent(event *event.Event) bool {
 // convertToolCallToA2AMessage converts tool call events to A2A DataPart messages.
 // This handles both tool call requests and tool call responses.
 func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
-	_ context.Context,
-	event *event.Event,
-) (protocol.UnaryMessageResult, error) {
+	event *event.Event) (protocol.UnaryMessageResult, error) {
 	if len(event.Response.Choices) == 0 {
 		return nil, nil
 	}
@@ -291,16 +293,16 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 		for _, toolCall := range choice.Message.ToolCalls {
 			// Convert ToolCall to map for DataPart
 			toolCallData := map[string]any{
-				toolCallFieldID:   toolCall.ID,
-				toolCallFieldType: toolCall.Type,
-				toolCallFieldName: toolCall.Function.Name,
-				toolCallFieldArgs: string(toolCall.Function.Arguments),
+				ia2a.ToolCallFieldID:   toolCall.ID,
+				ia2a.ToolCallFieldType: toolCall.Type,
+				ia2a.ToolCallFieldName: toolCall.Function.Name,
+				ia2a.ToolCallFieldArgs: string(toolCall.Function.Arguments),
 			}
 
 			// Create DataPart with metadata indicating this is a function call
 			dataPart := protocol.NewDataPart(toolCallData)
 			dataPart.Metadata = map[string]any{
-				dataPartMetadataTypeKey: dataPartMetadataTypeFunctionCall,
+				ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionCall,
 			}
 			parts = append(parts, dataPart)
 		}
@@ -310,20 +312,20 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 	if choice.Message.Role == model.RoleTool || choice.Message.ToolID != "" {
 		// Convert tool response to DataPart
 		toolResponseData := map[string]any{
-			toolCallFieldName: choice.Message.ToolName,
-			toolCallFieldID:   choice.Message.ToolID,
+			ia2a.ToolCallFieldName: choice.Message.ToolName,
+			ia2a.ToolCallFieldID:   choice.Message.ToolID,
 		}
 
 		// Pass content as-is without parsing
 		// Client will receive the raw response string and display it directly
 		if choice.Message.Content != "" {
-			toolResponseData[toolCallFieldResponse] = choice.Message.Content
+			toolResponseData[ia2a.ToolCallFieldResponse] = choice.Message.Content
 		}
 
 		// Create DataPart with metadata indicating this is a function response
 		dataPart := protocol.NewDataPart(toolResponseData)
 		dataPart.Metadata = map[string]any{
-			dataPartMetadataTypeKey: dataPartMetadataTypeFunctionResp,
+			ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
 		}
 		parts = append(parts, dataPart)
 	}
@@ -339,13 +341,12 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 // convertToolCallToA2AStreamingMessage converts tool call events to A2A streaming messages.
 // For streaming mode, tool calls are sent as TaskArtifactUpdateEvent.
 func (c *defaultEventToA2AMessage) convertToolCallToA2AStreamingMessage(
-	ctx context.Context,
 	event *event.Event,
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
 	// For streaming, we convert tool calls to task artifact updates
 	// First get the message parts using the unary converter
-	unaryResult, err := c.convertToolCallToA2AMessage(ctx, event)
+	unaryResult, err := c.convertToolCallToA2AMessage(event)
 	if err != nil || unaryResult == nil {
 		return nil, err
 	}

@@ -870,11 +870,10 @@ func TestConvertToolCallToA2AMessage(t *testing.T) {
 	}
 
 	converter := &defaultEventToA2AMessage{}
-	ctx := context.Background()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := converter.convertToolCallToA2AMessage(ctx, tt.event)
+			result, err := converter.convertToolCallToA2AMessage(tt.event)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("convertToolCallToA2AMessage() error = %v, wantErr %v", err, tt.wantErr)
 				return

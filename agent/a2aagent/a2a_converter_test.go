@@ -10,7 +10,6 @@
 package a2aagent
 
 import (
-	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -1245,9 +1244,8 @@ func TestConvertDataPartToToolResponse(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var content strings.Builder
-			convertDataPartToToolResponse(tc.dataPart, &content)
-			tc.validateFunc(t, content.String())
+			result := convertDataPartToToolResponse(tc.dataPart)
+			tc.validateFunc(t, result)
 		})
 	}
 }
