@@ -150,6 +150,90 @@ func TestNewService_AutoCreateTable(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestNewService_DSNPriority tests that DSN has priority over instanceName when both are provided.
+func TestNewService_DSNPriority(t *testing.T) {
+	mockDB, mock := setupMockDB(t)
+	defer mockDB.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return storage.WrapSQLDB(mockDB), nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Register instance
+	storage.RegisterMySQLInstance("test-instance",
+		storage.WithClientBuilderDSN("wrong-dsn"),
+	)
+
+	// Expect table creation
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Both DSN and instanceName provided, DSN should be used
+	service, err := NewService(
+		WithMySQLClientDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
+		WithMySQLInstance("test-instance"),
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestNewService_MissingDSNAndInstance tests that service creation fails when neither DSN nor instanceName is provided.
+func TestNewService_MissingDSNAndInstance(t *testing.T) {
+	service, err := NewService()
+	require.Error(t, err)
+	assert.Nil(t, service)
+	assert.Contains(t, err.Error(), "either dsn or instance name must be provided")
+}
+
+// TestNewService_WithSkipDBInit tests that skipDBInit option skips database initialization.
+func TestNewService_WithSkipDBInit(t *testing.T) {
+	mockDB, mock := setupMockDB(t)
+	defer mockDB.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return storage.WrapSQLDB(mockDB), nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// No table creation expected because skipDBInit is true
+	service, err := NewService(
+		WithMySQLClientDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestNewService_InitDBError tests that service creation fails when initDB fails.
+func TestNewService_InitDBError(t *testing.T) {
+	mockDB, mock := setupMockDB(t)
+	defer mockDB.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return storage.WrapSQLDB(mockDB), nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	// Mock table creation failure
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnError(errors.New("create table failed"))
+
+	service, err := NewService(
+		WithMySQLClientDSN("user:password@tcp(localhost:3306)/testdb?parseTime=true"),
+	)
+	require.Error(t, err)
+	assert.Nil(t, service)
+	assert.Contains(t, err.Error(), "init database failed")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestServiceOpts tests all service option setters to ensure they correctly modify the ServiceOpts struct.
 func TestServiceOpts(t *testing.T) {
 	opts := ServiceOpts{}
@@ -220,6 +304,16 @@ func TestWithExtraOptions(t *testing.T) {
 
 	WithExtraOptions("opt2", "opt3")(&opts)
 	assert.Len(t, opts.extraOptions, 3)
+}
+
+// TestWithSkipDBInit tests that skipDBInit option is correctly set.
+func TestWithSkipDBInit(t *testing.T) {
+	opts := ServiceOpts{}
+	WithSkipDBInit(true)(&opts)
+	assert.True(t, opts.skipDBInit)
+
+	WithSkipDBInit(false)(&opts)
+	assert.False(t, opts.skipDBInit)
 }
 
 // TestValidateTableName tests table name validation logic.
@@ -466,6 +560,32 @@ func TestAddMemory_NoLimit(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestAddMemory_SoftDeleteFalse tests AddMemory when softDelete is false.
+func TestAddMemory_SoftDeleteFalse(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+	s.opts.softDelete = false
+	s.opts.memoryLimit = 10
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	// Count query without deleted_at filter
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(5))
+
+	mock.ExpectExec("INSERT INTO").
+		WithArgs("app", "user", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := s.AddMemory(ctx, userKey, "test memory", nil)
+	require.NoError(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestUpdateMemory_InvalidMemoryKey tests that UpdateMemory rejects invalid memory keys.
 // All three fields (AppName, UserID, MemoryID) are required.
 func TestUpdateMemory_InvalidMemoryKey(t *testing.T) {
@@ -547,6 +667,46 @@ func TestUpdateMemory_Success(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err := s.UpdateMemory(ctx, memKey, "updated memory", []string{"new"})
+	require.NoError(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUpdateMemory_SoftDeleteFalse tests UpdateMemory when softDelete is false.
+func TestUpdateMemory_SoftDeleteFalse(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+	s.opts.softDelete = false
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "mem123"}
+
+	now := time.Now()
+	existingEntry := &memory.Entry{
+		ID:      "mem123",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "old memory",
+			Topics:      []string{"old"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	existingJSON, _ := json.Marshal(existingEntry)
+
+	// Query should not include deleted_at filter
+	mock.ExpectQuery("SELECT memory_data FROM.*WHERE app_name").
+		WithArgs("app", "user", "mem123").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(existingJSON))
+
+	mock.ExpectExec("UPDATE.*SET memory_data").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := s.UpdateMemory(ctx, memKey, "new memory", []string{"new"})
 	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -682,6 +842,26 @@ func TestDeleteMemory_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestDeleteMemory_HardDelete tests hard delete when softDelete is false.
+func TestDeleteMemory_HardDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+	s.opts.softDelete = false
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "mem123"}
+
+	mock.ExpectExec("DELETE FROM").
+		WithArgs("app", "user", "mem123").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := s.DeleteMemory(ctx, memKey)
+	require.NoError(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestClearMemories_InvalidUserKey tests that ClearMemories rejects invalid user keys.
 func TestClearMemories_InvalidUserKey(t *testing.T) {
 	db, _ := setupMockDB(t)
@@ -728,6 +908,26 @@ func TestClearMemories_Error(t *testing.T) {
 	err := s.ClearMemories(ctx, userKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "clear memories failed")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestClearMemories_HardDelete tests hard delete when softDelete is false.
+func TestClearMemories_HardDelete(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+	s.opts.softDelete = false
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	mock.ExpectExec("DELETE FROM").
+		WithArgs("app", "user").
+		WillReturnResult(sqlmock.NewResult(5, 5))
+
+	err := s.ClearMemories(ctx, userKey)
+	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -814,6 +1014,43 @@ func TestReadMemories_NoLimit(t *testing.T) {
 
 	_, err := s.ReadMemories(ctx, userKey, 0)
 	require.NoError(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestReadMemories_SoftDeleteFalse tests ReadMemories when softDelete is false.
+func TestReadMemories_SoftDeleteFalse(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+	s.opts.softDelete = false
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	now := time.Now()
+	entry := &memory.Entry{
+		ID:      "mem123",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "test memory",
+			Topics:      []string{"topic1"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	entryJSON, _ := json.Marshal(entry)
+
+	// Query should not include deleted_at filter
+	mock.ExpectQuery("SELECT memory_data FROM.*WHERE app_name").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryJSON))
+
+	entries, err := s.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -1054,8 +1291,8 @@ func TestService_Close(t *testing.T) {
 	})
 }
 
-// TestInitTable_Success tests successful table initialization.
-func TestInitTable_Success(t *testing.T) {
+// TestInitDB_Success tests successful table initialization.
+func TestInitDB_Success(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 	s := setupMockService(t, db)
@@ -1065,14 +1302,14 @@ func TestInitTable_Success(t *testing.T) {
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	err := s.initTable(ctx)
+	err := s.initDB(ctx)
 	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestInitTable_Error tests error handling when table creation fails.
-func TestInitTable_Error(t *testing.T) {
+// TestInitDB_Error tests error handling when table creation fails.
+func TestInitDB_Error(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 	s := setupMockService(t, db)
@@ -1082,7 +1319,7 @@ func TestInitTable_Error(t *testing.T) {
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
 		WillReturnError(errors.New("create table error"))
 
-	err := s.initTable(ctx)
+	err := s.initDB(ctx)
 	require.Error(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -1236,4 +1473,97 @@ func TestSearchMemories_NoMatches(t *testing.T) {
 	assert.Len(t, entries, 0)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSearchMemories_SoftDeleteFalse tests SearchMemories when softDelete is false.
+func TestSearchMemories_SoftDeleteFalse(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+	s.opts.softDelete = false
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	now := time.Now()
+	entry := &memory.Entry{
+		ID:      "mem123",
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory:      "test memory with query",
+			Topics:      []string{"topic1"},
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	entryJSON, _ := json.Marshal(entry)
+
+	// Query should not include deleted_at filter
+	mock.ExpectQuery("SELECT memory_data FROM.*WHERE app_name").
+		WithArgs("app", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryJSON))
+
+	entries, err := s.SearchMemories(ctx, userKey, "query")
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGenerateMemoryID_EmptyTopics tests generateMemoryID with empty topics.
+func TestGenerateMemoryID_EmptyTopics(t *testing.T) {
+	mem := &memory.Memory{
+		Memory: "test memory",
+		Topics: nil,
+	}
+	id1 := generateMemoryID(mem)
+	id2 := generateMemoryID(mem)
+	// Same input should produce same ID
+	assert.Equal(t, id1, id2)
+	assert.NotEmpty(t, id1)
+}
+
+// TestGenerateMemoryID_WithTopics tests generateMemoryID with topics.
+func TestGenerateMemoryID_WithTopics(t *testing.T) {
+	mem := &memory.Memory{
+		Memory: "test memory",
+		Topics: []string{"topic1", "topic2"},
+	}
+	id1 := generateMemoryID(mem)
+	id2 := generateMemoryID(mem)
+	// Same input should produce same ID
+	assert.Equal(t, id1, id2)
+	assert.NotEmpty(t, id1)
+}
+
+// TestGenerateMemoryID_DifferentContent tests that different content produces different IDs.
+func TestGenerateMemoryID_DifferentContent(t *testing.T) {
+	mem1 := &memory.Memory{
+		Memory: "test memory 1",
+		Topics: []string{"topic1"},
+	}
+	mem2 := &memory.Memory{
+		Memory: "test memory 2",
+		Topics: []string{"topic1"},
+	}
+	id1 := generateMemoryID(mem1)
+	id2 := generateMemoryID(mem2)
+	assert.NotEqual(t, id1, id2)
+}
+
+// TestGenerateMemoryID_DifferentTopics tests that different topics produce different IDs.
+func TestGenerateMemoryID_DifferentTopics(t *testing.T) {
+	mem1 := &memory.Memory{
+		Memory: "test memory",
+		Topics: []string{"topic1"},
+	}
+	mem2 := &memory.Memory{
+		Memory: "test memory",
+		Topics: []string{"topic2"},
+	}
+	id1 := generateMemoryID(mem1)
+	id2 := generateMemoryID(mem2)
+	assert.NotEqual(t, id1, id2)
 }
