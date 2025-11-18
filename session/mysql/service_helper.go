@@ -149,15 +149,15 @@ func (s *Service) getSession(
 		return nil, fmt.Errorf("get summaries failed: %w", err)
 	}
 
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    events,
-		Summaries: summaries,
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
+	sess := session.NewSession(
+		key.AppName, key.UserID, sessState.ID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionEvents(events),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
+	if len(events) > 0 {
+		sess.Summaries = summaries
 	}
 
 	return mergeState(appState, userState, sess), nil
@@ -238,16 +238,14 @@ func (s *Service) listSessions(
 
 	sessions := make([]*session.Session, 0, len(sessStates))
 	for i, sessState := range sessStates {
-		sess := &session.Session{
-			ID:        sessState.ID,
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			State:     sessState.State,
-			Events:    eventsList[i],
-			Summaries: summariesList[i],
-			UpdatedAt: sessState.UpdatedAt,
-			CreatedAt: sessState.CreatedAt,
-		}
+		sess := session.NewSession(
+			key.AppName, key.UserID, sessState.ID,
+			session.WithSessionState(sessState.State),
+			session.WithSessionEvents(eventsList[i]),
+			session.WithSessionSummaries(summariesList[i]),
+			session.WithSessionCreatedAt(sessState.CreatedAt),
+			session.WithSessionUpdatedAt(sessState.UpdatedAt),
+		)
 		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
 
