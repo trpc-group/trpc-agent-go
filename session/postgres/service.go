@@ -33,8 +33,8 @@ const (
 	defaultSessionEventLimit     = 1000
 	defaultChanBufferSize        = 100
 	defaultAsyncPersisterNum     = 10
-	defaultCleanupIntervalSecond = 300 // 5 min
-	defaultTimeout               = 5 * time.Second
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
+	defaultAsyncPersistTimeout   = 5 * time.Second
 
 	defaultAsyncSummaryNum  = 3
 	defaultSummaryQueueSize = 100
@@ -145,7 +145,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Set default cleanup interval if any TTL is configured and auto cleanup is not disabled
 	if opts.cleanupInterval <= 0 {
 		if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
-			opts.cleanupInterval = defaultCleanupIntervalSecond * time.Second
+			opts.cleanupInterval = defaultCleanupIntervalSecond
 		}
 	}
 
@@ -1104,7 +1104,7 @@ func (s *Service) startAsyncPersistWorker() {
 			for pair := range eventPairChan {
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:(app: %s, user: %s, session: %s)",
 					cap(eventPairChan), len(eventPairChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
-				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
 					log.Errorf("postgres session service async persist event failed: %v", err)
 				}

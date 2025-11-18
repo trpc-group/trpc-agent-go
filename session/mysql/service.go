@@ -33,10 +33,12 @@ const (
 	defaultSessionEventLimit     = 1000
 	defaultChanBufferSize        = 100
 	defaultAsyncPersisterNum     = 10
-	defaultCleanupIntervalSecond = 300 // 5 min
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
+
+	defaultAsyncPersistTimeout = 10 * time.Second
 
 	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 256
+	defaultSummaryQueueSize = 100
 )
 
 // SessionState is the state of a session.
@@ -60,6 +62,7 @@ type Service struct {
 	cleanupDone     chan struct{}            // signal to stop cleanup routine
 	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
 	summaryWg       sync.WaitGroup           // wait group for summary workers
+	persistWg       sync.WaitGroup           // wait group for persist workers
 	once            sync.Once
 
 	// Table names with prefix applied
@@ -186,6 +189,7 @@ func (s *Service) Close() error {
 			close(ch)
 		}
 	}
+	s.persistWg.Wait()
 
 	// Close async summary workers and wait for them to finish
 	if s.summaryJobChans != nil {
@@ -566,82 +570,35 @@ func (s *Service) AppendEvent(
 
 // startAsyncPersistWorker starts worker goroutines for async event persistence.
 func (s *Service) startAsyncPersistWorker() {
-	workerNum := s.opts.asyncPersisterNum
-	if workerNum < 1 {
-		workerNum = defaultAsyncPersisterNum
-	}
-
-	s.eventPairChans = make([]chan *sessionEventPair, workerNum)
-	for i := 0; i < workerNum; i++ {
+	persisterNum := s.opts.asyncPersisterNum
+	// init event pair chan
+	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
+	for i := 0; i < persisterNum; i++ {
 		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
+	}
 
-		// Start worker goroutine
-		go func(ch chan *sessionEventPair) {
-			for pair := range ch {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
-					log.Errorf("async persist event failed (app=%s, user=%s, session=%s): %v",
-						pair.key.AppName, pair.key.UserID, pair.key.SessionID, err)
+	s.persistWg.Add(persisterNum)
+	for _, eventPairChan := range s.eventPairChans {
+		go func(eventPairChan chan *sessionEventPair) {
+			defer s.persistWg.Done()
+			for eventPair := range eventPairChan {
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
+				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
+					cap(eventPairChan), len(eventPairChan), eventPair.key.AppName, eventPair.key.UserID, eventPair.key.SessionID)
+				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
+					log.Errorf("async persist event failed: %w", err)
 				}
 				cancel()
 			}
-		}(s.eventPairChans[i])
+		}(eventPairChan)
 	}
-
-	log.Infof("started %d async persist workers for mysql session service", workerNum)
-}
-
-// startAsyncSummaryWorker starts worker goroutines for async summary generation.
-func (s *Service) startAsyncSummaryWorker() {
-	if s.opts.summarizer == nil {
-		return
-	}
-
-	workerNum := s.opts.asyncSummaryNum
-	if workerNum < 1 {
-		workerNum = defaultAsyncSummaryNum
-	}
-
-	queueSize := s.opts.summaryQueueSize
-	if queueSize < 1 {
-		queueSize = defaultSummaryQueueSize
-	}
-
-	s.summaryJobChans = make([]chan *summaryJob, workerNum)
-	for i := 0; i < workerNum; i++ {
-		s.summaryJobChans[i] = make(chan *summaryJob, queueSize/workerNum)
-	}
-
-	s.summaryWg.Add(workerNum)
-	for i := 0; i < workerNum; i++ {
-		// Start worker goroutine
-		go func(ch chan *summaryJob) {
-			defer s.summaryWg.Done()
-			for job := range ch {
-				timeout := s.opts.summaryJobTimeout
-				if timeout <= 0 {
-					timeout = 30 * time.Second
-				}
-
-				ctx, cancel := context.WithTimeout(context.Background(), timeout)
-				if _, err := s.createSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
-					log.Errorf("async create summary failed (app=%s, user=%s, session=%s, filter=%s): %v",
-						job.session.AppName, job.session.UserID, job.session.ID,
-						job.filterKey, err)
-				}
-				cancel()
-			}
-		}(s.summaryJobChans[i])
-	}
-
-	log.Infof("started %d async summary workers for mysql session service", workerNum)
 }
 
 // startCleanupRoutine starts a background routine to periodically clean up expired data.
 func (s *Service) startCleanupRoutine() {
 	interval := s.opts.cleanupInterval
 	if interval <= 0 {
-		interval = defaultCleanupIntervalSecond * time.Second
+		interval = defaultCleanupIntervalSecond
 	}
 
 	s.cleanupTicker = time.NewTicker(interval)

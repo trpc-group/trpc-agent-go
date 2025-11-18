@@ -29,10 +29,10 @@ import (
 var _ session.Service = (*Service)(nil)
 
 const (
-	defaultSessionEventLimit = 1000
-	defaultTimeout           = 2 * time.Second
-	defaultChanBufferSize    = 100
-	defaultAsyncPersisterNum = 10
+	defaultSessionEventLimit   = 1000
+	defaultAsyncPersistTimeout = 2 * time.Second
+	defaultChanBufferSize      = 100
+	defaultAsyncPersisterNum   = 10
 
 	defaultAsyncSummaryNum  = 3
 	defaultSummaryQueueSize = 100
@@ -845,7 +845,7 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			for eventPair := range eventPairChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:%s",
 					cap(eventPairChan), len(eventPairChan), getSessionStateKey(eventPair.key))
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {

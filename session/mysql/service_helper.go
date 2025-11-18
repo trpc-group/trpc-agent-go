@@ -153,10 +153,12 @@ func (s *Service) getSession(
 		key.AppName, key.UserID, sessState.ID,
 		session.WithSessionState(sessState.State),
 		session.WithSessionEvents(events),
-		session.WithSessionSummaries(summaries),
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	if len(events) > 0 {
+		sess.Summaries = summaries
+	}
 
 	return mergeState(appState, userState, sess), nil
 }
