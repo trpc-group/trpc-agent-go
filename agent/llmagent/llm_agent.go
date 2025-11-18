@@ -531,9 +531,10 @@ func New(name string, opts ...Option) *LLMAgent {
 	var options Options = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
 		EndInvocationAfterTransfer: true,
-		// Default to preserving same-branch lineage so assistant/tool roles
-		// from parent/child branches are retained for downstream agents.
-		PreserveSameBranch: true,
+		// Default to rewriting same-branch lineage into user context so that
+		// downstream agents see a consolidated user stream unless explicitly
+		// opted into preserving assistant/tool roles.
+		PreserveSameBranch: false,
 	}
 
 	// Apply function options.
