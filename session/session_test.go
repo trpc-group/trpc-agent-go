@@ -758,7 +758,6 @@ func TestApplyEventFiltering(t *testing.T) {
 			}, nil),
 			options: []Option{WithEventTime(baseTime.Add(4 * time.Minute))},
 			expectedEvents: []event.Event{
-				*createTestEvent(model.RoleAssistant, "newer msg", baseTime.Add(5*time.Minute), nil),
 				*createTestEvent(model.RoleUser, "newest msg", baseTime.Add(8*time.Minute), nil),
 			},
 			description: "Should keep events after specified time",
@@ -769,9 +768,21 @@ func TestApplyEventFiltering(t *testing.T) {
 				*createTestEvent(model.RoleUser, "old msg 1", baseTime, nil),
 				*createTestEvent(model.RoleAssistant, "old msg 2", baseTime.Add(time.Minute), nil),
 			}, nil),
+			options: []Option{WithEventTime(baseTime.Add(10 * time.Minute))},
+			expectedEvents: []event.Event{
+				*createTestEvent(model.RoleUser, "old msg 1", baseTime, nil),
+			},
+			description: "Should clear all events when none match time filter",
+		},
+		{
+			name: "not user message",
+			inputSession: createTestSession([]event.Event{
+				*createTestEvent(model.RoleAssistant, "old msg 1", baseTime, nil),
+				*createTestEvent(model.RoleAssistant, "old msg 2", baseTime.Add(time.Minute), nil),
+			}, nil),
 			options:        []Option{WithEventTime(baseTime.Add(10 * time.Minute))},
 			expectedEvents: []event.Event{},
-			description:    "Should clear all events when none match time filter",
+			description:    "Should clear all events when none match user message",
 		},
 		{
 			name: "both number and time filters",
