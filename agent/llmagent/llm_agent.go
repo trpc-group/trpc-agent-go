@@ -338,7 +338,7 @@ func WithMaxHistoryRuns(maxRuns int) Option {
 // WithPreserveSameBranch controls whether messages from the same invocation
 // branch lineage (ancestor/descendant) should preserve their original roles
 // instead of being rewritten into user context when used as history.
-// Default is true.
+// Default is false.
 func WithPreserveSameBranch(preserve bool) Option {
 	return func(opts *Options) {
 		opts.PreserveSameBranch = preserve

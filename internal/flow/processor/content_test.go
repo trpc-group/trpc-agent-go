@@ -1127,7 +1127,7 @@ func TestNewContentRequestProcessor(t *testing.T) {
 	defaultWant := &ContentRequestProcessor{
 		BranchFilterMode:   "prefix",
 		AddContextPrefix:   true,
-		PreserveSameBranch: true,
+		PreserveSameBranch: false,
 		TimelineFilterMode: "all",
 		AddSessionSummary:  false,
 		MaxHistoryRuns:     0,
@@ -1217,11 +1217,78 @@ func TestNewContentRequestProcessor(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.want.BranchFilterMode, got.BranchFilterMode, "IncludeContentFilterMode mismatch")
-			assert.Equal(t, tt.want.AddContextPrefix, got.AddContextPrefix, "AddContextPrefix mismatch")
-			assert.Equal(t, tt.want.PreserveSameBranch, got.PreserveSameBranch, "PreserveSameBranch mismatch")
-			assert.Equal(t, tt.want.TimelineFilterMode, got.TimelineFilterMode, "TimelineFilterMode mismatch")
-			assert.Equal(t, tt.want.AddSessionSummary, got.AddSessionSummary, "AddSessionSummary mismatch")
-			assert.Equal(t, tt.want.MaxHistoryRuns, got.MaxHistoryRuns, "MaxHistoryRuns mismatch")
+			assert.Equal(t, tt.want.AddContextPrefix, got.AddContextPrefix,
+				"AddContextPrefix mismatch")
+			assert.Equal(t, tt.want.PreserveSameBranch,
+				got.PreserveSameBranch,
+				"PreserveSameBranch mismatch")
+			assert.Equal(t, tt.want.TimelineFilterMode,
+				got.TimelineFilterMode, "TimelineFilterMode mismatch")
+			assert.Equal(t, tt.want.AddSessionSummary,
+				got.AddSessionSummary, "AddSessionSummary mismatch")
+			assert.Equal(t, tt.want.MaxHistoryRuns, got.MaxHistoryRuns,
+				"MaxHistoryRuns mismatch")
+		})
+	}
+}
+
+func TestContentRequestProcessor_mergeUserMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []model.Message
+		want     []model.Message
+	}{
+		{
+			name:     "empty slice",
+			messages: nil,
+			want:     nil,
+		},
+		{
+			name: "single user message",
+			messages: []model.Message{
+				model.NewUserMessage("hello"),
+			},
+			want: []model.Message{
+				model.NewUserMessage("hello"),
+			},
+		},
+		{
+			name: "mixed roles unchanged",
+			messages: []model.Message{
+				model.NewUserMessage("hello"),
+				model.NewAssistantMessage("hi"),
+				model.NewUserMessage("there"),
+			},
+			want: []model.Message{
+				model.NewUserMessage("hello"),
+				model.NewAssistantMessage("hi"),
+				model.NewUserMessage("there"),
+			},
+		},
+		{
+			name: "merge consecutive context users",
+			messages: []model.Message{
+				model.NewUserMessage(contextPrefix + " A"),
+				model.NewUserMessage(contextPrefix + " B"),
+				model.NewAssistantMessage("keep"),
+			},
+			want: []model.Message{
+				model.NewUserMessage(
+					contextPrefix + " A" + mergedUserSeparator +
+						contextPrefix + " B",
+				),
+				model.NewAssistantMessage("keep"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &ContentRequestProcessor{
+				AddContextPrefix: true,
+			}
+			got := p.mergeUserMessages(tt.messages)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
