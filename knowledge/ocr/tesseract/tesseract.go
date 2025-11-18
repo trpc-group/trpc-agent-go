@@ -6,6 +6,9 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+//go:build tesseract
+// +build tesseract
+
 // Package tesseract provides Tesseract OCR engine implementation.
 package tesseract
 
