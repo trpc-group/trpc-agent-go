@@ -26,10 +26,11 @@ import (
 
 // CodeExecutor that executes code on the local host (unsafe).
 type CodeExecutor struct {
-	WorkDir        string
-	Timeout        time.Duration
-	CleanTempFiles bool
-	ws             *Runtime
+	WorkDir            string
+	Timeout            time.Duration
+	CleanTempFiles     bool
+	codeBlockDelimiter codeexecutor.CodeBlockDelimiter
+	ws                 *Runtime
 }
 
 // CodeExecutorOption configures CodeExecutor.
@@ -51,11 +52,19 @@ func WithCleanTempFiles(clean bool) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.CleanTempFiles = clean }
 }
 
+// WithCodeBlockDelimiter sets the code block delimiter.
+func WithCodeBlockDelimiter(delimiter codeexecutor.CodeBlockDelimiter) CodeExecutorOption {
+	return func(l *CodeExecutor) { l.codeBlockDelimiter = delimiter }
+}
+
+var defaultCodeBlockDelimiter = codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+
 // New creates a local CodeExecutor.
 func New(options ...CodeExecutorOption) *CodeExecutor {
 	executor := &CodeExecutor{
-		Timeout:        1 * time.Second,
-		CleanTempFiles: true,
+		Timeout:            1 * time.Second,
+		CleanTempFiles:     true,
+		codeBlockDelimiter: defaultCodeBlockDelimiter,
 	}
 	for _, option := range options {
 		option(executor)
@@ -211,7 +220,7 @@ func (e *CodeExecutor) executeCommand(
 
 // CodeBlockDelimiter returns the code block delimiter used by the local executor.
 func (e *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
-	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+	return e.codeBlockDelimiter
 }
 
 // Workspace methods

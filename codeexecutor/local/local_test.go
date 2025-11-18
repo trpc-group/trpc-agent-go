@@ -317,6 +317,65 @@ func TestLocalCodeExecutor_CodeBlockDelimiter(t *testing.T) {
 	assert.Equal(t, "```", delimiter.End)
 }
 
+func TestLocalCodeExecutor_WithCodeBlockDelimiter(t *testing.T) {
+	tests := []struct {
+		name          string
+		delimiter     codeexecutor.CodeBlockDelimiter
+		expectedStart string
+		expectedEnd   string
+	}{
+		{
+			name: "custom delimiter with go markers",
+			delimiter: codeexecutor.CodeBlockDelimiter{
+				Start: "```go",
+				End:   "```go",
+			},
+			expectedStart: "```go",
+			expectedEnd:   "```go",
+		},
+		{
+			name: "custom delimiter with xml-style tags",
+			delimiter: codeexecutor.CodeBlockDelimiter{
+				Start: "<code>",
+				End:   "</code>",
+			},
+			expectedStart: "<code>",
+			expectedEnd:   "</code>",
+		},
+		{
+			name: "custom delimiter with triple backticks and language",
+			delimiter: codeexecutor.CodeBlockDelimiter{
+				Start: "```python",
+				End:   "```",
+			},
+			expectedStart: "```python",
+			expectedEnd:   "```",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor := local.New(
+				local.WithCodeBlockDelimiter(tt.delimiter),
+			)
+
+			delimiter := executor.CodeBlockDelimiter()
+
+			assert.Equal(t, tt.expectedStart, delimiter.Start)
+			assert.Equal(t, tt.expectedEnd, delimiter.End)
+		})
+	}
+}
+
+func TestLocalCodeExecutor_DefaultCodeBlockDelimiter(t *testing.T) {
+	// Test that default delimiter is used when WithCodeBlockDelimiter is not called
+	executor := local.New()
+	delimiter := executor.CodeBlockDelimiter()
+
+	assert.Equal(t, "```", delimiter.Start)
+	assert.Equal(t, "```", delimiter.End)
+}
+
 func TestLocalCodeExecutor_ExecuteCode_InvalidWorkDir(t *testing.T) {
 	// Use a path that cannot be created (e.g., under a file instead of directory)
 	tempFile, err := os.CreateTemp("", "test-file-")
