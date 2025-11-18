@@ -1,0 +1,150 @@
+{
+  "version": "1.0",
+  "name": "vars_demo",
+  "description": "Graph for /vars testing with LLMAgent (structured + plain), Transform, SetState-like behavior via state fields, and End.",
+  "nodes": [
+    {
+      "id": "start",
+      "data": {
+        "label": "Start",
+        "engine": {
+          "label": "Start",
+          "node_type": "builtin.start",
+          "config": {}
+        }
+      }
+    },
+    {
+      "id": "classifier",
+      "data": {
+        "label": "Classifier",
+        "engine": {
+          "label": "Classifier",
+          "node_type": "builtin.llmagent",
+          "config": {
+            "model_name": "deepseek-chat",
+            "instruction": "Classify how complex the user's question is (short / detailed) and provide a short summary.",
+            "structured_output": {
+              "type": "object",
+              "properties": {
+                "classification": {
+                  "type": "string",
+                  "enum": ["short", "detailed"],
+                  "description": "How complex the answer should be."
+                },
+                "summary": {
+                  "type": "string",
+                  "description": "Short natural-language summary of the user request."
+                }
+              },
+              "required": ["classification", "summary"],
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "agent_plain",
+      "data": {
+        "label": "Plain agent",
+        "engine": {
+          "label": "Plain agent",
+          "node_type": "builtin.llmagent",
+          "config": {
+            "model_name": "deepseek-chat",
+            "instruction": "Answer the user's question briefly in one or two sentences."
+          }
+        }
+      }
+    },
+    {
+      "id": "transform",
+      "data": {
+        "label": "Transform",
+        "engine": {
+          "label": "Transform",
+          "node_type": "builtin.transform",
+          "config": {
+            "expr": {
+              "expression": "{ \"k1\": state.user_input, \"k2\": 42 }",
+              "format": "cel"
+            },
+            "output_schema": {
+              "type": "object",
+              "properties": {
+                "k1": {
+                  "type": "string",
+                  "description": "Echo of workflow input."
+                },
+                "k2": {
+                  "type": "number",
+                  "description": "Static numeric value used for testing."
+                }
+              },
+              "required": ["k1"],
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "end",
+      "data": {
+        "label": "End",
+        "engine": {
+          "label": "End",
+          "node_type": "builtin.end",
+          "config": {
+            "expr": {
+              "expression": "{ \"message\": \"vars_demo finished\", \"echo\": state.result }",
+              "format": "cel"
+            },
+            "output_schema": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string",
+                  "description": "Status message."
+                },
+                "echo": {
+                  "type": "object",
+                  "description": "Echo of transform result.",
+                  "additionalProperties": true
+                }
+              },
+              "required": ["message"],
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_start_classifier",
+      "source": "start",
+      "target": "classifier"
+    },
+    {
+      "id": "edge_classifier_agent_plain",
+      "source": "classifier",
+      "target": "agent_plain"
+    },
+    {
+      "id": "edge_agent_plain_transform",
+      "source": "agent_plain",
+      "target": "transform"
+    },
+    {
+      "id": "edge_transform_end",
+      "source": "transform",
+      "target": "end"
+    }
+  ],
+  "conditional_edges": [],
+  "start_node_id": "start",
+  "metadata": {}
+}
