@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
@@ -27,6 +28,11 @@ import (
 )
 
 var _ memory.Service = (*Service)(nil)
+
+const (
+	// defaultDBInitTimeout is the default timeout for database initialization.
+	defaultDBInitTimeout = 30 * time.Second
+)
 
 // Service is the postgres memory service.
 // Storage structure:
@@ -63,14 +69,24 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
+	var db storage.Client
+	var err error
 	builder := storage.GetClientBuilder()
-	var (
-		db  storage.Client
-		err error
-	)
 
-	// If instance name set, and connString not set, use instance name to create postgres client.
-	if opts.connString == "" && opts.instanceName != "" {
+	// Priority: direct connection settings > instance name
+	// If direct connection settings are provided, use them.
+	if opts.host != "" {
+		connString := buildConnString(opts)
+		db, err = builder(
+			context.Background(),
+			storage.WithClientConnString(connString),
+			storage.WithExtraOptions(opts.extraOptions...),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create postgres client from connection settings failed: %w", err)
+		}
+	} else if opts.instanceName != "" {
+		// Otherwise, use instance name if provided.
 		builderOpts, ok := storage.GetPostgresInstance(opts.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("postgres instance %s not found", opts.instanceName)
@@ -80,52 +96,63 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
 		}
 	} else {
-		db, err = builder(
-			context.Background(),
-			storage.WithClientConnString(opts.connString),
-			storage.WithExtraOptions(opts.extraOptions...),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create postgres client from connection string failed: %w", err)
-		}
+		return nil, fmt.Errorf("either connection settings (host, port, etc.) or instance name must be provided")
 	}
+
+	// Build full table name with schema.
+	fullTableName := sqldb.BuildTableNameWithSchema(opts.schema, "", opts.tableName)
 
 	s := &Service{
 		opts:        opts,
 		db:          db,
-		tableName:   opts.tableName,
+		tableName:   fullTableName,
 		cachedTools: make(map[string]tool.Tool),
 	}
 
-	// Always initialize table.
-	if err := s.initTable(context.Background()); err != nil {
-		panic(fmt.Sprintf("failed to initialize table: %v", err))
+	// Initialize database schema unless skipped.
+	if !opts.skipDBInit {
+		ctx, cancel := context.WithTimeout(context.Background(), defaultDBInitTimeout)
+		defer cancel()
+		if err := s.initDB(ctx); err != nil {
+			return nil, fmt.Errorf("init database failed: %w", err)
+		}
 	}
 
 	return s, nil
 }
 
-// initTable creates the memories table if it doesn't exist.
-func (s *Service) initTable(ctx context.Context) error {
-	// Table name is validated in WithTableName.
-	// #nosec G201
-	query := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-			memory_id TEXT PRIMARY KEY,
-			app_name TEXT NOT NULL,
-			user_id TEXT NOT NULL,
-			memory_data JSONB NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			deleted_at TIMESTAMP NULL DEFAULT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_%s_app_user ON %s(app_name, user_id);
-		CREATE INDEX IF NOT EXISTS idx_%s_updated_at ON %s(updated_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_%s_deleted_at ON %s(deleted_at);
-	`, s.tableName, s.tableName, s.tableName, s.tableName, s.tableName, s.tableName, s.tableName)
+// buildConnString builds a PostgreSQL connection string from options.
+func buildConnString(opts ServiceOpts) string {
+	// Default values.
+	host := opts.host
+	if host == "" {
+		host = defaultHost
+	}
+	port := opts.port
+	if port == 0 {
+		port = defaultPort
+	}
+	database := opts.database
+	if database == "" {
+		database = defaultDatabase
+	}
+	sslMode := opts.sslMode
+	if sslMode == "" {
+		sslMode = defaultSSLMode
+	}
 
-	_, err := s.db.ExecContext(ctx, query)
-	return err
+	// Build connection string.
+	connString := fmt.Sprintf("host=%s port=%d dbname=%s sslmode=%s",
+		host, port, database, sslMode)
+
+	if opts.user != "" {
+		connString += fmt.Sprintf(" user=%s", opts.user)
+	}
+	if opts.password != "" {
+		connString += fmt.Sprintf(" password=%s", opts.password)
+	}
+
+	return connString
 }
 
 // AddMemory adds a new memory for a user.
@@ -134,10 +161,8 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return err
 	}
 
-	// Enforce memory limit.
+	// Enforce memory limit if set.
 	if s.opts.memoryLimit > 0 {
-		// Table name is validated in WithTableName.
-		// #nosec G201
 		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = $1 AND user_id = $2", s.tableName)
 		if s.opts.softDelete {
 			countQuery += " AND deleted_at IS NULL"
@@ -178,8 +203,6 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return fmt.Errorf("marshal memory entry failed: %w", err)
 	}
 
-	// Table name is validated in WithTableName.
-	// #nosec G201
 	insertQuery := fmt.Sprintf(
 		"INSERT INTO %s (memory_id, app_name, user_id, memory_data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
 		s.tableName,
@@ -198,9 +221,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		return err
 	}
 
-	// Get existing entry.
-	// Table name is validated in WithTableName.
-	// #nosec G201
+	// Get existing entry if exists.
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
 		s.tableName,
@@ -238,8 +259,6 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		return fmt.Errorf("marshal updated memory entry failed: %w", err)
 	}
 
-	// Table name is validated in WithTableName.
-	// #nosec G201
 	updateQuery := fmt.Sprintf(
 		"UPDATE %s SET memory_data = $1, updated_at = $2 WHERE memory_id = $3 AND app_name = $4 AND user_id = $5",
 		s.tableName,
@@ -261,8 +280,7 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 		return err
 	}
 
-	// Table name is validated in WithTableName.
-	// #nosec G201
+	// Delete memory entry.
 	var (
 		query string
 		args  []any
@@ -295,8 +313,7 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 		return err
 	}
 
-	// Table name is validated in WithTableName.
-	// #nosec G201
+	// Clear memories.
 	var err error
 	if s.opts.softDelete {
 		now := time.Now()
@@ -325,8 +342,6 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		return nil, err
 	}
 
-	// Table name is validated in WithTableName.
-	// #nosec G201
 	query := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,
@@ -369,9 +384,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, err
 	}
 
-	// Get all memories for the user.
-	// Table name is validated in WithTableName.
-	// #nosec G201
+	// Get all memories for the user if exists.
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,

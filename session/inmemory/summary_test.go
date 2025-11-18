@@ -505,8 +505,9 @@ func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
 }
 
 func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
+	// Use blocking summarizer to ensure queue stays full.
 	service := NewSessionService(
-		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+		WithSummarizer(&fakeBlockingSummarizer{}),
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
 	)
@@ -517,26 +518,35 @@ func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
 	sess, err := service.CreateSession(ctx, key, session.StateMap{})
 	require.NoError(t, err)
 
-	// Fill the queue first
+	// Calculate the worker index for this session to ensure we use the same worker.
+	idx := sess.Hash % len(service.summaryJobChans)
+
+	// Fill the queue first with a blocking job.
 	job1 := &summaryJob{
 		filterKey: "",
 		force:     false,
 		session:   sess,
 	}
 
-	// First job should succeed
-	assert.True(t, service.tryEnqueueJob(ctx, job1))
+	select {
+	case service.summaryJobChans[idx] <- job1:
+		// Queue is now full.
+	default:
+		// Queue was already full.
+	}
 
-	// Create a cancelled context
+	// Create a cancelled context.
 	cancelledCtx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	// Second job with cancelled context should fail
+	// Use the same session to ensure it hashes to the same worker (queue is full).
 	job2 := &summaryJob{
 		filterKey: "",
 		force:     false,
 		session:   sess,
 	}
+
+	// Should return false when context is cancelled (even if queue is full).
 	assert.False(t, service.tryEnqueueJob(cancelledCtx, job2))
 }
 

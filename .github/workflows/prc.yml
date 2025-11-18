@@ -17,9 +17,96 @@ jobs:
         go-version: '1.21'
     - name: Build
       run: go build -v ./...
-    - name: Test All Modules
+  discover-go-modules:
+    name: discover go modules
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    - uses: actions/checkout@v3
+    - id: set-matrix
       shell: bash
-      run: bash .github/scripts/run-go-tests.sh
+      run: |
+        set -euo pipefail
+        mapfile -t modules < <(find . -name go.mod \
+          -not -path "./.resource/*" \
+          -not -path "./docs/*" \
+          -not -path "./examples/*" | sort)
+        if [ "${#modules[@]}" -eq 0 ]; then
+          echo "matrix={\"module\":[]}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        matrix=$(printf '%s\n' "${modules[@]}" | sed 's|^\./||' | jq -R -s -c 'split("\n") | map(select(length>0))')
+        echo "matrix={\"module\":${matrix}}" >> "$GITHUB_OUTPUT"
+  test-go-modules:
+    name: go test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    needs: discover-go-modules
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-go-modules.outputs.matrix) }}
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+    - name: Prepare module metadata
+      id: module-info
+      shell: bash
+      run: |
+        set -euo pipefail
+        module='${{ matrix.module }}'
+        if [ -z "${module}" ]; then
+          echo "empty module path" >&2
+          exit 1
+        fi
+        rel="${module#./}"
+        if [ "${rel}" = "go.mod" ]; then
+          readable="root"
+        else
+          readable="${rel%/go.mod}"
+        fi
+        safe="${readable//\//_}"
+        safe="${safe//./_}"
+        if [ -z "${safe}" ]; then
+          safe="root"
+        fi
+        echo "safe_name=${safe}" >> "$GITHUB_OUTPUT"
+    - name: Test module
+      shell: bash
+      run: bash .github/scripts/run-go-tests.sh --module "${{ matrix.module }}"
+    - name: Prepare coverage artifact
+      shell: bash
+      run: mv coverage.out "coverage-${{ steps.module-info.outputs.safe_name }}.out"
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-${{ steps.module-info.outputs.safe_name }}
+        path: coverage-${{ steps.module-info.outputs.safe_name }}.out
+        if-no-files-found: error
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    needs: test-go-modules
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: coverage-*
+        merge-multiple: true
+    - name: Combine coverage reports
+      shell: bash
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        files=(coverage-*.out)
+        if [ "${#files[@]}" -eq 0 ]; then
+          echo "no coverage files found" >&2
+          exit 1
+        fi
+        cp "${files[0]}" coverage.out
+        for file in "${files[@]:1}"; do
+          tail -n +2 "${file}" >> coverage.out
+        done
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v5
       with:
