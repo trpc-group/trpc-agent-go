@@ -7,7 +7,7 @@
 //
 //
 
-package hugging_face
+package huggingface
 
 import (
 	"context"

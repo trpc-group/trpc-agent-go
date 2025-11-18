@@ -7,7 +7,7 @@
 //
 //
 
-// Package hugging_face provides hugging_face-compatible model implementations.
+// Package huggingface provides huggingface-compatible model implementations.
 // Text-Embeddings-Inference API: https://github.com/huggingface/text-embeddings-inference
 //
 // Hugging Face Text-Embeddings-Inference (TEI) is a high-performance, production-ready
@@ -29,7 +29,7 @@
 // - Normalize: Whether to normalize embeddings
 // - Truncate: Text truncation behavior
 // - Embed Route: Choose between /embed and /embed_all endpoints
-package hugging_face
+package huggingface
 
 import (
 	"bytes"

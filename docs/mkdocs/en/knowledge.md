@@ -583,7 +583,7 @@ kb := knowledge.New(
 - Other OpenAI API compatible embedding services
 - Gemini embedding model (via `knowledge/embedder/gemini`)
 - Ollama embedding model (via `knowledge/embedder/ollama`)
-- hugging_face text_embedding_interface model (via `knowledge/embedder/hugging_face`）
+- huggingface text_embedding_interface model (via `knowledge/embedder/huggingface`）
 
 > **Note**:
 >
@@ -1192,7 +1192,7 @@ import (
     geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
     openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	ollamaembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama"
-	huggingfaceembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/hugging_face"
+	huggingfaceembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface"
 
     // Source.
     "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -1210,7 +1210,7 @@ import (
 
 func main() {
     var (
-        embedderType    = flag.String("embedder", "openai", "embedder type (openai, gemini, ollama, hugging_face)")
+        embedderType    = flag.String("embedder", "openai", "embedder type (openai, gemini, ollama, huggingface)")
         vectorStoreType = flag.String("vectorstore", "inmemory", "vector store type (inmemory, pgvector, tcvector)")
         modelName       = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
     )
@@ -1234,7 +1234,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to create ollama embedder: %v", err)
 		}
-	case "hugging_face":
+	case "huggingface":
 		embedder = huggingfaceembedder.New()
     default: // openai.
         embedder = openaiembedder.New(
@@ -1459,7 +1459,7 @@ go run main.go -embedder openai -vectorstore tcvector
 go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
 
 # Parameter description:
-# -embedder: Select embedder type (openai, gemini, ollama, hugging_face), default is openai.
+# -embedder: Select embedder type (openai, gemini, ollama, huggingface), default is openai.
 # -vectorstore: Select vector store type (inmemory, pgvector, tcvector, elasticsearch), default is inmemory.
 # -es-version: Elasticsearch version (v7, v8, v9), only when vectorstore=elasticsearch.
 ```

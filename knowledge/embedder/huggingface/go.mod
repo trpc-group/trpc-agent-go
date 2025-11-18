@@ -1,4 +1,4 @@
-module trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/hugging_face
+module trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface
 
 go 1.21
 
