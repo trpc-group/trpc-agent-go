@@ -514,7 +514,8 @@ combinedToolSet := mcp.NewMCPToolSet(
 
 ### 运行时工具过滤
 
-运行时工具过滤允许在每次 `runner.Run` 调用时动态控制工具可用性，无需修改 Agent 配置。这是一个"软约束"机制，用于优化 token 消耗和实现基于角色的工具访问控制。
+- 方式一：运行时工具过滤允许在每次 `runner.Run` 调用时动态控制工具可用性，无需修改 Agent 配置。这是一个"软约束"机制，用于优化 token 消耗和实现基于角色的工具访问控制。针对所有agent生效
+- 方式二：通过`llmagent.WithToolFilter`配置运行时过滤function, 只对当前agent生效
 
 **核心特性：**
 
@@ -544,10 +545,24 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 使用白名单方式只允许指定的工具：
 
 ```go
+// 方式一：
 // 只允许使用计算器和时间工具
 filter := tool.NewIncludeToolNamesFilter("calculator", "time_tool")
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithToolFilter(filter),
+)
+
+// 方式二：
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("你是一个有帮助的AI助手，可以使用多种工具协助用户"),
+    // 添加单个工具（Tool 接口）
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    // 添加工具集（ToolSet 接口）
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolFilter(filter),
 )
 ```
 
@@ -556,6 +571,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 实现自定义过滤函数以支持复杂的过滤逻辑：
 
 ```go
+// 方式一：
 // 自定义过滤函数：只允许名称以 "safe_" 开头的工具
 filter := func(ctx context.Context, t tool.Tool) bool {
     declaration := t.Declaration()
@@ -567,6 +583,19 @@ filter := func(ctx context.Context, t tool.Tool) bool {
 
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithToolFilter(filter),
+)
+
+// 方式二：
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("你是一个有帮助的AI助手，可以使用多种工具协助用户"),
+    // 添加单个工具（Tool 接口）
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    // 添加工具集（ToolSet 接口）
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolFilter(filter),
 )
 ```
 
