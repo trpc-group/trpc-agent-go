@@ -775,7 +775,7 @@ import "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 
 // 默认配置（最简）
 sessionService, err := mysql.NewService(
-    mysql.WithMySQLClientDSN("mysql://user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
 )
 // 效果：
 // - 连接 localhost:3306，数据库 trpc_sessions
@@ -786,7 +786,7 @@ sessionService, err := mysql.NewService(
 // 生产环境完整配置
 sessionService, err := mysql.NewService(
     // 连接配置
-    mysql.WithMySQLClientDSN("mysql://user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     
     // 会话配置
     mysql.WithSessionEventLimit(1000),
@@ -839,7 +839,7 @@ MySQL 支持表前缀配置，适用于多应用共享数据库的场景：
 ```go
 // 使用表前缀
 sessionService, err := mysql.NewService(
-    mysql.WithMySQLClientDSN("mysql://user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithTablePrefix("app1_"),  // 表名：app1_session_states
 )
 ```
@@ -851,13 +851,13 @@ sessionService, err := mysql.NewService(
 ```go
 // 启用软删除（默认）
 sessionService, err := mysql.NewService(
-    mysql.WithMySQLClientDSN("mysql://user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSoftDelete(true),
 )
 
 // 禁用软删除（物理删除）
 sessionService, err := mysql.NewService(
-    mysql.WithMySQLClientDSN("mysql://user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSoftDelete(false),
 )
 ```
@@ -873,7 +873,7 @@ sessionService, err := mysql.NewService(
 
 ```go
 sessionService, err := mysql.NewService(
-    mysql.WithMySQLClientDSN("mysql://user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSessionTTL(30*time.Minute),      // 会话 30 分钟后过期
     mysql.WithAppStateTTL(24*time.Hour),       // 应用状态 24 小时后过期
     mysql.WithUserStateTTL(7*24*time.Hour),    // 用户状态 7 天后过期
@@ -890,7 +890,7 @@ sessionService, err := mysql.NewService(
 
 ```go
 sessionService, err := mysql.NewService(
-    mysql.WithMySQLClientDSN("mysql://user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSessionEventLimit(1000),
     mysql.WithSessionTTL(30*time.Minute),
     
@@ -1107,7 +1107,7 @@ sessionService, err := postgres.NewService(
 
 // MySQL 存储
 sessionService, err := mysql.NewService(
-    mysql.WithMySQLClientDSN("mysql://user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSummarizer(summarizer),
     mysql.WithAsyncSummaryNum(2),
     mysql.WithSummaryQueueSize(100),
