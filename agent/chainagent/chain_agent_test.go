@@ -273,7 +273,7 @@ func TestChainAgent_ChannelBufferSize(t *testing.T) {
 	chainAgent1 := New(
 		"test-chain-1",
 	)
-	require.Equal(t, defaultChannelBufferSize, chainAgent1.channelBufferSize)
+	require.Equal(t, agent.DefaultChannelBufferSize, chainAgent1.channelBufferSize)
 
 	// Test custom buffer size.
 	customSize := 100

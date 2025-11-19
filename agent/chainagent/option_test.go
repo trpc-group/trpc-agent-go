@@ -12,6 +12,7 @@ package chainagent
 import (
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/internal/testutil"
 )
 
@@ -26,6 +27,6 @@ func TestWithChannelBufferSize(t *testing.T) {
 			opt.(Option)(options)
 			return options.channelBufferSize
 		},
-		defaultChannelBufferSize,
+		agent.DefaultChannelBufferSize,
 	)
 }

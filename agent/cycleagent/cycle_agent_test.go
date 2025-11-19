@@ -393,7 +393,7 @@ func TestCycleAgent_ShouldEscalate(t *testing.T) {
 func TestCycleAgent_ChannelBufferSize(t *testing.T) {
 	// Test default.
 	agent1 := newFromLegacy(legacyOptions{Name: "test1"})
-	require.Equal(t, defaultChannelBufferSize, agent1.channelBufferSize)
+	require.Equal(t, agent.DefaultChannelBufferSize, agent1.channelBufferSize)
 
 	// Test custom.
 	agent2 := newFromLegacy(legacyOptions{Name: "test2", ChannelBufferSize: 100})

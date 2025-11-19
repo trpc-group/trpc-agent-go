@@ -19,8 +19,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const defaultChannelBufferSize = 256
-
 // EscalationFunc is a callback function that determines if an event should
 // trigger escalation (stop the cycle). Return true to stop the cycle.
 type EscalationFunc func(*event.Event) bool
@@ -71,7 +69,7 @@ func WithMaxIterations(max int) Option {
 func WithChannelBufferSize(size int) Option {
 	return func(o *Options) {
 		if size < 0 {
-			size = defaultChannelBufferSize
+			size = agent.DefaultChannelBufferSize
 		}
 		o.channelBufferSize = size
 	}
@@ -95,7 +93,7 @@ func WithEscalationFunc(f EscalationFunc) Option {
 // CycleAgent executes its sub-agents in a loop until an escalation condition
 // is met or the maximum number of iterations is reached.
 func New(name string, opts ...Option) *CycleAgent {
-	cfg := Options{channelBufferSize: defaultChannelBufferSize}
+	cfg := Options{channelBufferSize: agent.DefaultChannelBufferSize}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)

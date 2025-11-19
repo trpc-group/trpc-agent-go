@@ -22,8 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-var defaultChannelBufferSize = 256
-
 const (
 	// BranchFilterModePrefix Prefix matching pattern
 	BranchFilterModePrefix = processor.BranchFilterModePrefix
@@ -71,7 +69,7 @@ func WithInitialState(state graph.State) Option {
 func WithChannelBufferSize(size int) Option {
 	return func(opts *Options) {
 		if size < 0 {
-			size = defaultChannelBufferSize
+			size = agent.DefaultChannelBufferSize
 		}
 		opts.ChannelBufferSize = size
 	}
@@ -142,7 +140,7 @@ type GraphAgent struct {
 // New creates a new GraphAgent with the given graph and options.
 func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	// set default channel buffer size.
-	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
+	var options Options = Options{ChannelBufferSize: agent.DefaultChannelBufferSize}
 
 	// Apply function options.
 	for _, opt := range opts {

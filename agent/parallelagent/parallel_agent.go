@@ -22,8 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const defaultChannelBufferSize = 256
-
 // ParallelAgent is an agent that runs its sub-agents in parallel in isolated manner.
 // This approach is beneficial for scenarios requiring multiple perspectives or
 // attempts on a single task, such as:
@@ -61,7 +59,7 @@ func WithSubAgents(sub []agent.Agent) Option {
 func WithChannelBufferSize(size int) Option {
 	return func(o *Options) {
 		if size < 0 {
-			size = defaultChannelBufferSize
+			size = agent.DefaultChannelBufferSize
 		}
 		o.channelBufferSize = size
 	}
@@ -78,7 +76,7 @@ func WithAgentCallbacks(cb *agent.Callbacks) Option {
 // ParallelAgent executes all its sub-agents simultaneously and merges
 // their event streams into a single output channel.
 func New(name string, opts ...Option) *ParallelAgent {
-	cfg := Options{channelBufferSize: defaultChannelBufferSize}
+	cfg := Options{channelBufferSize: agent.DefaultChannelBufferSize}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)

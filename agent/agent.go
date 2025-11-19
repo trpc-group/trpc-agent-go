@@ -34,6 +34,11 @@ type Info struct {
 // ErrorTypeStopAgentError is the error type used to indicate that an agent should stop execution.
 const ErrorTypeStopAgentError = "stop_agent_error"
 
+// DefaultChannelBufferSize is the default buffer size for agent event channels.
+// This constant is used across multiple agent implementations to standardize
+// the channel buffer size.
+const DefaultChannelBufferSize = 256
+
 // StopError represents an error that signals the agent execution should be stopped.
 // When this error type is returned, it indicates the agent should stop processing.
 type StopError struct {

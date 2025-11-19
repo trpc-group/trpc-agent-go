@@ -11,45 +11,22 @@ package llmagent
 
 import (
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/internal/testutil"
 )
 
 func TestWithChannelBufferSize(t *testing.T) {
-	tests := []struct {
-		name        string
-		inputSize   int
-		wantBufSize int
-	}{
-		{
-			name:        "positive buffer size",
-			inputSize:   1024,
-			wantBufSize: 1024,
+	testutil.TestWithChannelBufferSizeHelper(
+		t,
+		func(size int) interface{} {
+			return WithChannelBufferSize(size)
 		},
-		{
-			name:        "zero buffer size",
-			inputSize:   0,
-			wantBufSize: 0,
-		},
-		{
-			name:        "negative size uses default",
-			inputSize:   -1,
-			wantBufSize: defaultChannelBufferSize,
-		},
-		{
-			name:        "large buffer size",
-			inputSize:   65536,
-			wantBufSize: 65536,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		func(opt interface{}) int {
 			options := &Options{}
-			option := WithChannelBufferSize(tt.inputSize)
-			option(options)
-
-			if options.ChannelBufferSize != tt.wantBufSize {
-				t.Errorf("got buf size %d, want %d", options.ChannelBufferSize, tt.wantBufSize)
-			}
-		})
-	}
+			opt.(Option)(options)
+			return options.ChannelBufferSize
+		},
+		agent.DefaultChannelBufferSize,
+	)
 }

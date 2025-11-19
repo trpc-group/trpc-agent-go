@@ -22,8 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
-const defaultChannelBufferSize = 256
-
 // ChainAgent is an agent that runs its sub-agents in sequence.
 type ChainAgent struct {
 	*agent.BaseSubAgentHolder
@@ -57,7 +55,7 @@ func WithSubAgents(subAgents []agent.Agent) Option {
 func WithChannelBufferSize(size int) Option {
 	return func(o *Options) {
 		if size < 0 {
-			size = defaultChannelBufferSize
+			size = agent.DefaultChannelBufferSize
 		}
 		o.channelBufferSize = size
 	}
@@ -76,7 +74,7 @@ func WithAgentCallbacks(cb *agent.Callbacks) Option {
 func New(name string, opts ...Option) *ChainAgent {
 	// Apply options
 	cfg := Options{
-		channelBufferSize: defaultChannelBufferSize,
+		channelBufferSize: agent.DefaultChannelBufferSize,
 	}
 	for _, opt := range opts {
 		if opt != nil {

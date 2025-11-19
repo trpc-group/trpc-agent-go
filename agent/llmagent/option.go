@@ -26,7 +26,6 @@ import (
 )
 
 const (
-	defaultChannelBufferSize = 256
 	// defaultModelName is the model name used when only WithModel is set
 	// without WithModels.
 	defaultModelName = "__default__"
@@ -51,7 +50,7 @@ const (
 
 var (
 	defaultOptions = Options{
-		ChannelBufferSize:          defaultChannelBufferSize,
+		ChannelBufferSize:          agent.DefaultChannelBufferSize,
 		EndInvocationAfterTransfer: true,
 		// Default to preserving same-branch lineage so assistant/tool roles
 		// from parent/child branches are retained for downstream agents.
@@ -222,7 +221,7 @@ func WithGenerationConfig(config model.GenerationConfig) Option {
 func WithChannelBufferSize(size int) Option {
 	return func(opts *Options) {
 		if size < 0 {
-			size = defaultChannelBufferSize
+			size = agent.DefaultChannelBufferSize
 		}
 		opts.ChannelBufferSize = size
 	}
