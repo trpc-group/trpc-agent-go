@@ -62,6 +62,17 @@ func (s State) Clone() State {
 	return clone
 }
 
+func (s State) safeClone() State {
+	clone := make(map[string]any, len(s))
+	for k, v := range s {
+		if isUnsafeStateKey(k) {
+			continue
+		}
+		clone[k] = v
+	}
+	return clone
+}
+
 func (s State) deepCopy(retainUnsafeKey bool, fields map[string]StateField) State {
 	isDisableDeepCopyKey := func(key string) bool {
 		if fields == nil {

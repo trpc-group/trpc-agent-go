@@ -22,15 +22,7 @@ func sanitizeForCacheKey(input any) any {
 	if !ok {
 		return input
 	}
-	out := make(map[string]any, len(st))
-	for k, v := range st {
-		// Reuse isUnsafeStateKey and additionally exclude current node id and parent agent.
-		if isUnsafeStateKey(k) {
-			continue
-		}
-		out[k] = v
-	}
-	return out
+	return st.safeClone()
 }
 
 // toCanonicalValue converts an arbitrary value into a form that produces
