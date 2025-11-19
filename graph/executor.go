@@ -603,7 +603,6 @@ func (e *Executor) createCheckpointAndSave(
 	pendingWrites := make([]PendingWrite, len(execCtx.pendingWrites))
 	copy(pendingWrites, execCtx.pendingWrites)
 	execCtx.pendingWrites = nil // Clear after copying.
-	execCtx.pendingMu.Unlock()
 
 	// Track new versions for channels that were updated.
 	newVersions := make(map[string]int64)
