@@ -518,8 +518,9 @@ combinedToolSet := mcp.NewMCPToolSet(
 
 ### Per-Run Tool Filtering
 
-Per-run tool filtering enables dynamic control of tool availability for each `runner.Run` invocation without modifying Agent configuration. This is a "soft constraint" mechanism for optimizing token consumption and implementing role-based tool access control.
-
+- Option one: Per-run tool filtering enables dynamic control of tool availability for each `runner.Run` invocation without modifying Agent configuration. This is a "soft constraint" mechanism for optimizing token consumption and implementing role-based tool access control.
+apply to all agents
+- Option two: Configure the runtime filtering function through 'llmagent. WhatToolFilter' to only apply to the current agent
 **Key Features:**
 
 - 🎯 **Per-Run Control**: Independent configuration per invocation, no Agent modification needed
@@ -536,10 +537,22 @@ Use blacklist approach to exclude unwanted tools:
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/tool"
 
+// Option 1:
 // Exclude text_tool and dangerous_tool, all other tools available
 filter := tool.NewExcludeToolNamesFilter("text_tool", "dangerous_tool")
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithToolFilter(filter),
+)
+
+// Option 2:
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("You are a helpful AI assistant that can use various tools to help users."),
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolFilter(filter),
 )
 ```
 
@@ -560,6 +573,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 Implement custom filter function for complex filtering logic:
 
 ```go
+// Option 1:
 // Custom filter: only allow tools with names starting with "safe_"
 filter := func(ctx context.Context, t tool.Tool) bool {
     declaration := t.Declaration()
@@ -572,6 +586,16 @@ filter := func(ctx context.Context, t tool.Tool) bool {
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithToolFilter(filter),
 )
+
+// Option 2:
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("You are a helpful AI assistant that can use various tools to help users."),
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolFilter(filter),
 ```
 
 **4. Per-Agent Filtering**
