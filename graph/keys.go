@@ -84,16 +84,14 @@ func isUnsafeStateKey(key string) bool {
 // sub-agents' RuntimeState. Keep this list in sync with graph executor/event
 // machinery.
 func isInternalStateKey(key string) bool {
+	if isUnsafeStateKey(key) {
+		return true
+	}
+
 	switch key {
 	// Graph metadata keys stored in state delta for instrumentation
 	case MetadataKeyNode, MetadataKeyPregel, MetadataKeyChannel,
-		MetadataKeyState, MetadataKeyCompletion,
-		// Graph execution internal wiring
-		StateKeyExecContext, StateKeyParentAgent,
-		StateKeyNodeCallbacks,
-		StateKeyToolCallbacks, StateKeyModelCallbacks,
-		StateKeyAgentCallbacks, StateKeyCurrentNodeID,
-		StateKeySession:
+		MetadataKeyState, MetadataKeyCompletion:
 		return true
 	default:
 		return false
