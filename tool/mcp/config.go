@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
@@ -87,7 +88,7 @@ type SessionReconnectConfig struct {
 // toolSetConfig holds internal configuration for ToolSet.
 type toolSetConfig struct {
 	connectionConfig       ConnectionConfig
-	toolFilter             ToolFilter
+	toolFilterFunc         tool.FilterFunc         // Tool filter function.
 	mcpOptions             []mcp.ClientOption      // MCP client options.
 	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration.
 	name                   string                  // ToolSet name for identification and conflict resolution.
@@ -96,10 +97,20 @@ type toolSetConfig struct {
 // ToolSetOption is a function type for configuring ToolSet.
 type ToolSetOption func(*toolSetConfig)
 
-// WithToolFilter configures tool filtering.
-func WithToolFilter(filter ToolFilter) ToolSetOption {
+// WithToolFilterFunc configures tool filtering.
+//
+// Example:
+//
+//	import "trpc.group/trpc-go/trpc-agent-go/tool"
+//
+//	// Include only specific tools
+//	mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add"))
+//
+//	// Exclude specific tools
+//	mcp.WithToolFilterFunc(tool.NewExcludeToolNamesFilter("deprecated_tool"))
+func WithToolFilterFunc(filterFunc tool.FilterFunc) ToolSetOption {
 	return func(c *toolSetConfig) {
-		c.toolFilter = filter
+		c.toolFilterFunc = filterFunc
 	}
 }
 

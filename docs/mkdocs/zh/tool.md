@@ -496,19 +496,22 @@ agent := llmagent.New("ai-assistant",
 
 ### MCP 工具过滤器
 
-MCP 工具集支持在创建时过滤工具：
+MCP 工具集支持在创建时过滤工具。推荐使用统一的 `tool.FilterFunc` 接口：
 
 ```go
-// 包含过滤器：只使用指定工具
-includeFilter := mcp.NewIncludeFilter("get_weather", "get_news", "calculator")
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
 
-// 排除过滤器：排除指定工具
-excludeFilter := mcp.NewExcludeFilter("deprecated_tool", "slow_tool")
+// ✅ 推荐：使用统一的过滤接口
+includeFilter := tool.NewIncludeToolNamesFilter("get_weather", "get_news", "calculator")
+excludeFilter := tool.NewExcludeToolNamesFilter("deprecated_tool", "slow_tool")
 
 // 应用过滤器
-combinedToolSet := mcp.NewMCPToolSet(
+toolSet := mcp.NewMCPToolSet(
     connectionConfig,
-    mcp.WithToolFilter(includeFilter),
+    mcp.WithToolFilterFunc(includeFilter),
 )
 ```
 
