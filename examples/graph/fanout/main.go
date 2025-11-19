@@ -524,12 +524,10 @@ func (w *fanoutWorkflow) processStreamingResponse(eventChan <-chan *event.Event)
 		if w.handleErrorEvent(event) {
 			continue
 		}
-		if event.Author == graph.AuthorGraphNode {
-			w.handleGraphNodeEvent(event, maxPreviewLen)
-		}
+		w.handleGraphNodeEvent(event, maxPreviewLen)
 		w.handleStreamingChoices(event, &workflowStarted)
 		w.trackStageProgress(event, &stageCount)
-		if event.Done {
+		if event.IsRunnerCompletion() {
 			completionEvent = event
 			break
 		}
