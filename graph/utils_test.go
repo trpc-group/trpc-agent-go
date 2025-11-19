@@ -338,9 +338,55 @@ func TestCopyTimeType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := copyTimeType(tt.input)
+			result := copyTime(tt.input)
 			tt.validate(t, result)
 		})
+	}
+}
+
+type deepCopoerStruct struct {
+	Name string
+	age  int
+}
+
+func (d deepCopoerStruct) DeepCopy() any {
+	return deepCopoerStruct{
+		Name: d.Name,
+		age:  d.age,
+	}
+}
+
+func TestDeepCopyAny_DeepCopier(t *testing.T) {
+	original := &deepCopoerStruct{
+		Name: "Alice",
+		age:  30,
+	}
+
+	copied := deepCopyAny(original).(deepCopoerStruct)
+
+	if !reflect.DeepEqual(copied, *original) {
+		t.Errorf("Copied value should be equal to original. Got %v, expected %v", copied, *original)
+	}
+
+	tests := map[string]any{
+		"simple": deepCopoerStruct{
+			Name: "Bob",
+			age:  25,
+		},
+		"list": []deepCopoerStruct{
+			{
+				Name: "Alice",
+				age:  30,
+			},
+			{
+				Name: "Bob",
+				age:  25,
+			},
+		},
+	}
+	copyMap := deepCopyAny(tests)
+	if !reflect.DeepEqual(copyMap, tests) {
+		t.Errorf("Copied value should be equal to original")
 	}
 }
 
