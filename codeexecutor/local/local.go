@@ -31,6 +31,8 @@ type CodeExecutor struct {
 	CleanTempFiles     bool
 	codeBlockDelimiter codeexecutor.CodeBlockDelimiter
 	ws                 *Runtime
+	inputsHostBase     string
+	autoInputs         bool
 }
 
 // CodeExecutorOption configures CodeExecutor.
@@ -52,6 +54,19 @@ func WithCleanTempFiles(clean bool) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.CleanTempFiles = clean }
 }
 
+// WithWorkspaceInputsHostBase sets the host inputs directory that
+// will be exposed under work/inputs when auto inputs are enabled.
+func WithWorkspaceInputsHostBase(host string) CodeExecutorOption {
+	return func(l *CodeExecutor) { l.inputsHostBase = host }
+}
+
+// WithWorkspaceAutoInputs enables or disables automatic mapping of
+// the host inputs directory (when configured) into work/inputs for
+// each workspace.
+func WithWorkspaceAutoInputs(enable bool) CodeExecutorOption {
+	return func(l *CodeExecutor) { l.autoInputs = enable }
+}
+
 // WithCodeBlockDelimiter sets the code block delimiter.
 func WithCodeBlockDelimiter(delimiter codeexecutor.CodeBlockDelimiter) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.codeBlockDelimiter = delimiter }
@@ -65,6 +80,7 @@ func New(options ...CodeExecutorOption) *CodeExecutor {
 		Timeout:            1 * time.Second,
 		CleanTempFiles:     true,
 		codeBlockDelimiter: defaultCodeBlockDelimiter,
+		autoInputs:         true,
 	}
 	for _, option := range options {
 		option(executor)
@@ -228,7 +244,16 @@ func (e *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 // CreateWorkspace creates a new workspace directory.
 func (e *CodeExecutor) ensureWS() *Runtime {
 	if e.ws == nil {
-		e.ws = NewRuntime("")
+		var opts []RuntimeOption
+		if e.inputsHostBase != "" {
+			opts = append(
+				opts, WithInputsHostBase(e.inputsHostBase),
+			)
+		}
+		if e.autoInputs {
+			opts = append(opts, WithAutoInputs(true))
+		}
+		e.ws = NewRuntimeWithOptions("", opts...)
 	}
 	return e.ws
 }
