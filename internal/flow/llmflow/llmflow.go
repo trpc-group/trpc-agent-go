@@ -329,6 +329,11 @@ type UserToolsProvider interface {
 	UserTools() []tool.Tool
 }
 
+// ToolFilterProvider is an optional interface that agents can implement to provide
+type ToolFilterProvider interface {
+	FilterTools(ctx context.Context) []tool.Tool
+}
+
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
 //
 // User tools (can be filtered):
@@ -343,6 +348,9 @@ type UserToolsProvider interface {
 func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocation) []tool.Tool {
 	// Get all tools from the agent.
 	allTools := invocation.Agent.Tools()
+	if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
+		allTools = provider.FilterTools(ctx)
+	}
 
 	// If no filter is specified, return all tools.
 	if invocation.RunOptions.ToolFilter == nil {
