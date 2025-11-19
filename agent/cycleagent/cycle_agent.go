@@ -17,7 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const defaultChannelBufferSize = 256
@@ -30,8 +29,8 @@ type EscalationFunc func(*event.Event) bool
 // When a sub-agent generates an event with escalation or max_iterations are
 // reached, the cycle agent will stop.
 type CycleAgent struct {
+	*agent.BaseSubAgentHolder
 	name              string
-	subAgents         []agent.Agent
 	maxIterations     *int // Optional maximum number of iterations
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
@@ -103,12 +102,12 @@ func New(name string, opts ...Option) *CycleAgent {
 		}
 	}
 	return &CycleAgent{
-		name:              name,
-		subAgents:         cfg.subAgents,
-		maxIterations:     cfg.maxIterations,
-		channelBufferSize: cfg.channelBufferSize,
-		agentCallbacks:    cfg.agentCallbacks,
-		escalationFunc:    cfg.escalationFunc,
+		BaseSubAgentHolder: agent.NewBaseSubAgentHolder(cfg.subAgents),
+		name:               name,
+		maxIterations:      cfg.maxIterations,
+		channelBufferSize:  cfg.channelBufferSize,
+		agentCallbacks:     cfg.agentCallbacks,
+		escalationFunc:     cfg.escalationFunc,
 	}
 }
 
@@ -260,7 +259,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) bool {
-	for _, subAgent := range a.subAgents {
+	for _, subAgent := range a.SubAgents() {
 		// Check if context was cancelled.
 		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return true
@@ -351,12 +350,6 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 	return eventChan, nil
 }
 
-// Tools implements the agent.Agent interface.
-// It returns the tools available to this agent.
-func (a *CycleAgent) Tools() []tool.Tool {
-	return []tool.Tool{}
-}
-
 // Info implements the agent.Agent interface.
 // It returns the basic information about this agent.
 func (a *CycleAgent) Info() agent.Info {
@@ -368,24 +361,7 @@ func (a *CycleAgent) Info() agent.Info {
 		Name: a.name,
 		Description: fmt.Sprintf(
 			"Cycle agent that runs %d sub-agents in a loop (max iterations: %s)",
-			len(a.subAgents), maxIterStr,
+			len(a.SubAgents()), maxIterStr,
 		),
 	}
-}
-
-// SubAgents implements the agent.Agent interface.
-// It returns the list of sub-agents available to this agent.
-func (a *CycleAgent) SubAgents() []agent.Agent {
-	return a.subAgents
-}
-
-// FindSubAgent implements the agent.Agent interface.
-// It finds a sub-agent by name and returns nil if not found.
-func (a *CycleAgent) FindSubAgent(name string) agent.Agent {
-	for _, subAgent := range a.subAgents {
-		if subAgent.Info().Name == name {
-			return subAgent
-		}
-	}
-	return nil
 }

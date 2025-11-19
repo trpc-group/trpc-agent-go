@@ -20,7 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const defaultChannelBufferSize = 256
@@ -31,8 +30,8 @@ const defaultChannelBufferSize = 256
 // - Running different algorithms simultaneously.
 // - Generating multiple responses for review by a subsequent evaluation agent.
 type ParallelAgent struct {
+	*agent.BaseSubAgentHolder
 	name              string
-	subAgents         []agent.Agent
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -86,10 +85,10 @@ func New(name string, opts ...Option) *ParallelAgent {
 		}
 	}
 	return &ParallelAgent{
-		name:              name,
-		subAgents:         cfg.subAgents,
-		channelBufferSize: cfg.channelBufferSize,
-		agentCallbacks:    cfg.agentCallbacks,
+		BaseSubAgentHolder: agent.NewBaseSubAgentHolder(cfg.subAgents),
+		name:               name,
+		channelBufferSize:  cfg.channelBufferSize,
+		agentCallbacks:     cfg.agentCallbacks,
 	}
 }
 
@@ -164,9 +163,9 @@ func (a *ParallelAgent) startSubAgents(
 ) []<-chan *event.Event {
 	// Start all sub-agents in parallel.
 	var wg sync.WaitGroup
-	eventChans := make([]<-chan *event.Event, len(a.subAgents))
+	eventChans := make([]<-chan *event.Event, len(a.SubAgents()))
 
-	for i, subAgent := range a.subAgents {
+	for i, subAgent := range a.SubAgents() {
 		wg.Add(1)
 		go func(idx int, sa agent.Agent) {
 			defer wg.Done()
@@ -322,34 +321,11 @@ func (a *ParallelAgent) mergeEventStreams(
 	wg.Wait()
 }
 
-// Tools implements the agent.Agent interface.
-// It returns the tools available to this agent.
-func (a *ParallelAgent) Tools() []tool.Tool {
-	return []tool.Tool{}
-}
-
 // Info implements the agent.Agent interface.
 // It returns the basic information about this agent.
 func (a *ParallelAgent) Info() agent.Info {
 	return agent.Info{
 		Name:        a.name,
-		Description: fmt.Sprintf("Parallel agent that runs %d sub-agents concurrently", len(a.subAgents)),
+		Description: fmt.Sprintf("Parallel agent that runs %d sub-agents concurrently", len(a.SubAgents())),
 	}
-}
-
-// SubAgents implements the agent.Agent interface.
-// It returns the list of sub-agents available to this agent.
-func (a *ParallelAgent) SubAgents() []agent.Agent {
-	return a.subAgents
-}
-
-// FindSubAgent implements the agent.Agent interface.
-// It finds a sub-agent by name and returns nil if not found.
-func (a *ParallelAgent) FindSubAgent(name string) agent.Agent {
-	for _, subAgent := range a.subAgents {
-		if subAgent.Info().Name == name {
-			return subAgent
-		}
-	}
-	return nil
 }

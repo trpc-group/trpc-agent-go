@@ -20,15 +20,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const defaultChannelBufferSize = 256
 
 // ChainAgent is an agent that runs its sub-agents in sequence.
 type ChainAgent struct {
+	*agent.BaseSubAgentHolder
 	name              string
-	subAgents         []agent.Agent
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -86,10 +85,10 @@ func New(name string, opts ...Option) *ChainAgent {
 	}
 
 	return &ChainAgent{
-		name:              name,
-		subAgents:         cfg.subAgents,
-		channelBufferSize: cfg.channelBufferSize,
-		agentCallbacks:    cfg.agentCallbacks,
+		BaseSubAgentHolder: agent.NewBaseSubAgentHolder(cfg.subAgents),
+		name:               name,
+		channelBufferSize:  cfg.channelBufferSize,
+		agentCallbacks:     cfg.agentCallbacks,
 	}
 }
 
@@ -196,7 +195,7 @@ func (a *ChainAgent) executeSubAgents(
 ) (*event.Event, *itelemetry.TokenUsage) {
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
-	for _, subAgent := range a.subAgents {
+	for _, subAgent := range a.SubAgents() {
 		// Create clean invocation for sub-agent - no shared state mutation.
 		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
@@ -278,34 +277,11 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	return evt
 }
 
-// Tools implements the agent.Agent interface.
-// It returns the tools available to this agent.
-func (a *ChainAgent) Tools() []tool.Tool {
-	return []tool.Tool{}
-}
-
 // Info implements the agent.Agent interface.
 // It returns the basic information about this agent.
 func (a *ChainAgent) Info() agent.Info {
 	return agent.Info{
 		Name:        a.name,
-		Description: fmt.Sprintf("Chain agent that runs %d sub-agents in sequence", len(a.subAgents)),
+		Description: fmt.Sprintf("Chain agent that runs %d sub-agents in sequence", len(a.SubAgents())),
 	}
-}
-
-// SubAgents implements the agent.Agent interface.
-// It returns the list of sub-agents available to this agent.
-func (a *ChainAgent) SubAgents() []agent.Agent {
-	return a.subAgents
-}
-
-// FindSubAgent implements the agent.Agent interface.
-// It finds a sub-agent by name and returns nil if not found.
-func (a *ChainAgent) FindSubAgent(name string) agent.Agent {
-	for _, subAgent := range a.subAgents {
-		if subAgent.Info().Name == name {
-			return subAgent
-		}
-	}
-	return nil
 }
