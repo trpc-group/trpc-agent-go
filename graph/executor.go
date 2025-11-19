@@ -540,9 +540,7 @@ func (e *Executor) buildCompletionEvent(
 	// Take a deep snapshot of the final state under read lock.
 	// IMPORTANT: Skip volatile/non-serializable keys (e.g., Session, callbacks, exec context)
 	// to avoid racing on their internal maps/slices managed by other goroutines.
-	execCtx.stateMutex.RLock()
-	finalStateCopy := execCtx.State.deepCopy(false, nil)
-	execCtx.stateMutex.RUnlock()
+	finalStateCopy := execCtx.State.deepCopy(false, e.graph.Schema().Fields)
 	completionEvent := NewGraphCompletionEvent(
 		WithCompletionEventInvocationID(execCtx.InvocationID),
 		WithCompletionEventFinalState(finalStateCopy),
@@ -1574,7 +1572,7 @@ func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State 
 		base = execCtx.State
 	}
 
-	stateCopy := base.deepCopy(true, e.graph.schema.Fields)
+	stateCopy := base.deepCopy(true, e.graph.Schema().Fields)
 
 	// Apply overlay if present to form the isolated input view.
 	if t.Overlay != nil && e.graph.Schema() != nil {
@@ -1777,7 +1775,7 @@ func (e *Executor) executeNodeFunction(
 
 	if input == nil {
 		execCtx.stateMutex.RLock()
-		tmp := execCtx.State.deepCopy(true, e.graph.schema.Fields)
+		tmp := execCtx.State.deepCopy(true, e.graph.Schema().Fields)
 		// Apply overlay if present to form the isolated input view.
 		if t.Overlay != nil && e.graph.Schema() != nil {
 			tmp = e.graph.Schema().ApplyUpdate(tmp, t.Overlay)
