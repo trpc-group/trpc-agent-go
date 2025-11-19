@@ -75,14 +75,10 @@ func (s State) safeClone() State {
 
 func (s State) deepCopy(retainUnsafeKey bool, fields map[string]StateField) State {
 	isDisableDeepCopyKey := func(key string) bool {
-		if fields == nil {
-			return false
+		if field, ok := fields[key]; ok {
+			return field.DisableDeepCopy
 		}
-		field, ok := fields[key]
-		if !ok {
-			return false
-		}
-		return field.DisableDeepCopy
+		return false
 	}
 
 	tmp := make(State, len(s))
