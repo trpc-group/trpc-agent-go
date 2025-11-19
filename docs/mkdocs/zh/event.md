@@ -148,6 +148,29 @@ type Usage struct {
 
     // 响应中使用的总 Token 数量.
     TotalTokens int `json:"total_tokens"`
+
+    // 时间统计信息（可选）
+    TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+type TimingInfo struct {
+    // TimeToFirstToken 是从请求开始到第一个 event（reasoning 或 content）的累积时长
+    //
+    // 返回时机：
+    // - 流式请求：在收到第一个 event 时立即计算并通过 partial event 返回
+    // - 非流式请求：在请求完成时返回
+    // - 多次 LLM 调用（如工具调用）：会累加每次调用的 TTFT
+    TimeToFirstToken time.Duration `json:"time_to_first_token,omitempty"`
+
+    // ReasoningDuration 是 reasoning 阶段的累积时长（仅 streaming 模式）
+    // 从第一个 reasoning event 到最后一个 reasoning event 的时间
+    //
+    // 返回时机：
+    // - 流式请求：在检测到 reasoning 结束时（即收到第一个非 reasoning 的 content/tool call）
+    //   立即计算并通过 partial event 返回
+    // - 非流式请求：无法精确测量，不会更新此字段
+    // - 多次 LLM 调用（如工具调用）：会累加每次调用的 reasoning 时长
+    ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 ```
 

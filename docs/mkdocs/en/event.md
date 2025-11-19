@@ -149,6 +149,29 @@ type Usage struct {
 
     // Total number of tokens used in response.
     TotalTokens int `json:"total_tokens"`
+
+    // Timing statistics (optional).
+    TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+type TimingInfo struct {
+    // TimeToFirstToken is the accumulated duration from request start to the first event (reasoning or content).
+    //
+    // Return timing:
+    // - Streaming requests: Calculated immediately when the first event is received and returned via partial event
+    // - Non-streaming requests: Returned when the request completes
+    // - Multiple LLM calls (e.g., tool calls): Accumulates the TTFT of each call
+    TimeToFirstToken time.Duration `json:"time_to_first_token,omitempty"`
+
+    // ReasoningDuration is the accumulated duration of reasoning phases (streaming only).
+    // Measured from the first reasoning event to the last reasoning event in each call.
+    //
+    // Return timing:
+    // - Streaming requests: Calculated immediately when reasoning ends (i.e., when the first non-reasoning
+    //   content/tool call is received) and returned via partial event
+    // - Non-streaming requests: Cannot be measured precisely, this field will not be updated
+    // - Multiple LLM calls (e.g., tool calls): Accumulates the reasoning duration of each call
+    ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 ```
 

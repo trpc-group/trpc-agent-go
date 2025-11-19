@@ -68,6 +68,18 @@ type Choice struct {
 	FinishReason *string `json:"finish_reason,omitempty"`
 }
 
+// TimingInfo represents timing information for token generation.
+// It accumulates durations across multiple LLM calls within a flow.
+type TimingInfo struct {
+	// TimeToFirstToken is the accumulated duration from request start to first event (reasoning or content).
+	// For multiple LLM calls in a flow, this sums up all TTFT durations.
+	TimeToFirstToken time.Duration `json:"time_to_first_token,omitempty"`
+
+	// ReasoningDuration is the accumulated duration of reasoning phases (streaming only).
+	// Measured from first reasoning event to last reasoning event in each call.
+	ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
+}
+
 // Usage represents token usage information.
 type Usage struct {
 	// PromptTokens is the number of tokens in the prompt.
@@ -81,6 +93,9 @@ type Usage struct {
 
 	// PromptTokensDetails is the details of the prompt tokens.
 	PromptTokensDetails PromptTokensDetails `json:"prompt_tokens_details"`
+
+	// TimingInfo contains detailed timing information for token generation.
+	TimingInfo *TimingInfo `json:"timing_info,omitempty"`
 }
 
 // PromptTokensDetails is the details of the prompt tokens.
@@ -154,9 +169,17 @@ func (rsp *Response) Clone() *Response {
 	copy(clone.Choices, rsp.Choices)
 	if rsp.Usage != nil {
 		clone.Usage = &Usage{
-			PromptTokens:     rsp.Usage.PromptTokens,
-			CompletionTokens: rsp.Usage.CompletionTokens,
-			TotalTokens:      rsp.Usage.TotalTokens,
+			PromptTokens:        rsp.Usage.PromptTokens,
+			CompletionTokens:    rsp.Usage.CompletionTokens,
+			TotalTokens:         rsp.Usage.TotalTokens,
+			PromptTokensDetails: rsp.Usage.PromptTokensDetails,
+		}
+		// Deep copy TimingInfo if present
+		if rsp.Usage.TimingInfo != nil {
+			clone.Usage.TimingInfo = &TimingInfo{
+				TimeToFirstToken:  rsp.Usage.TimingInfo.TimeToFirstToken,
+				ReasoningDuration: rsp.Usage.TimingInfo.ReasoningDuration,
+			}
 		}
 	}
 	// Deep copy Error if present.

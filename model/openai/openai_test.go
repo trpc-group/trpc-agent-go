@@ -26,7 +26,9 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/stretchr/testify/assert"
@@ -4194,4 +4196,193 @@ func TestModel_buildChatRequest(t *testing.T) {
 			assert.Equalf(t, len(tt.want1), len(got1), "buildChatRequest(%v)", tt.args.request)
 		})
 	}
+}
+
+// TestModel_TimingMetrics tests that timing information is correctly recorded in Usage.
+func TestModel_TimingMetrics(t *testing.T) {
+	t.Run("streaming_response_with_timing", func(t *testing.T) {
+		// Create a mock server that simulates streaming response
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+
+			// Simulate first chunk (first token)
+			time.Sleep(50 * time.Millisecond) // Simulate thinking time
+			fmt.Fprintf(w, "data: %s\n\n", `{"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}`)
+			w.(http.Flusher).Flush()
+
+			// Simulate second chunk
+			time.Sleep(30 * time.Millisecond)
+			fmt.Fprintf(w, "data: %s\n\n", `{"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`)
+			w.(http.Flusher).Flush()
+
+			// Final chunk with usage
+			time.Sleep(20 * time.Millisecond)
+			fmt.Fprintf(w, "data: %s\n\n", `{"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`)
+			w.(http.Flusher).Flush()
+
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+		}))
+		defer server.Close()
+
+		m := New("gpt-3.5-turbo", WithBaseURL(server.URL))
+
+		req := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: true,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(context.Background(), req)
+		require.NoError(t, err)
+
+		var finalResponse *model.Response
+		for resp := range responseChan {
+			if resp.Done {
+				finalResponse = resp
+			}
+		}
+
+		require.NotNil(t, finalResponse)
+		require.NotNil(t, finalResponse.Usage)
+		require.NotNil(t, finalResponse.Usage.TimingInfo, "TimingInfo should be present")
+
+		// Verify timing information is present
+		timing := finalResponse.Usage.TimingInfo
+		assert.Greater(t, timing.TimeToFirstToken, time.Duration(0), "TimeToFirstToken should be set")
+		assert.GreaterOrEqual(t, timing.TimeToFirstToken.Milliseconds(), int64(40),
+			"Time to first token should be at least 40ms (we simulated 50ms)")
+
+		t.Logf("Timing metrics - TimeToFirstToken: %v", timing.TimeToFirstToken)
+	})
+
+	t.Run("non_streaming_response_with_timing", func(t *testing.T) {
+		// Create a mock server that simulates non-streaming response
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Simulate processing time
+			time.Sleep(100 * time.Millisecond)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"id":"chatcmpl-123","object":"chat.completion","created":1234567890,"model":"gpt-3.5-turbo","choices":[{"index":0,"message":{"role":"assistant","content":"Hello world"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`)
+		}))
+		defer server.Close()
+
+		m := New("gpt-3.5-turbo", WithBaseURL(server.URL))
+
+		req := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: false,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(context.Background(), req)
+		require.NoError(t, err)
+
+		var finalResponse *model.Response
+		for resp := range responseChan {
+			finalResponse = resp
+		}
+
+		require.NotNil(t, finalResponse)
+		require.NotNil(t, finalResponse.Usage)
+		require.NotNil(t, finalResponse.Usage.TimingInfo, "TimingInfo should be present")
+
+		// Verify timing information is present
+		timing := finalResponse.Usage.TimingInfo
+		assert.Greater(t, timing.TimeToFirstToken, time.Duration(0), "TimeToFirstToken should be set")
+
+		// Verify timing is reasonable (should be at least 100ms)
+		assert.GreaterOrEqual(t, timing.TimeToFirstToken.Milliseconds(), int64(80),
+			"TimeToFirstToken should be at least 80ms (we simulated 100ms, with some tolerance)")
+
+		t.Logf("Timing metrics - TimeToFirstToken: %v", timing.TimeToFirstToken)
+	})
+}
+
+func TestTimingWithFlowInitialization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"id":"chatcmpl-test","object":"chat.completion","created":%d,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"Response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+			time.Now().Unix())
+	}))
+	defer server.Close()
+
+	m := New("gpt-4", WithBaseURL(server.URL))
+
+	sess := session.NewSession("test-app", "test-user", "test-session-123")
+	inv := &agent.Invocation{
+		InvocationID: "test-inv-123",
+		AgentName:    "test-agent",
+		Session:      sess,
+		Model:        m,
+	}
+
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	// First LLM call
+	req1 := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("First call"),
+		},
+	}
+
+	respChan1, err := m.GenerateContent(ctx, req1)
+	require.NoError(t, err)
+
+	var resp1 *model.Response
+	for r := range respChan1 {
+		resp1 = r
+	}
+	require.NotNil(t, resp1)
+	require.NotNil(t, resp1.Usage)
+	require.NotNil(t, resp1.Usage.TimingInfo)
+
+	timing1 := resp1.Usage.TimingInfo
+	ttft1 := timing1.TimeToFirstToken
+
+	// Verify first call has timing
+	assert.Greater(t, ttft1, time.Duration(0), "First call should have TTFT")
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Second LLM call
+	req2 := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("Second call"),
+		},
+	}
+
+	respChan2, err := m.GenerateContent(ctx, req2)
+	require.NoError(t, err)
+
+	var resp2 *model.Response
+	for r := range respChan2 {
+		resp2 = r
+	}
+	require.NotNil(t, resp2)
+	require.NotNil(t, resp2.Usage)
+	require.NotNil(t, resp2.Usage.TimingInfo)
+
+	timing2 := resp2.Usage.TimingInfo
+
+	// Key assertion: TTFT should accumulate across calls
+	assert.Greater(t, timing2.TimeToFirstToken, ttft1,
+		"Second call's TTFT should be greater (accumulated)")
+
+	// Verify invocation's TimingInfo is updated
+	assert.Equal(t, inv.TimingInfo.TimeToFirstToken, timing2.TimeToFirstToken,
+		"Invocation TimingInfo should have accumulated TTFT")
+
+	t.Logf("First call TTFT: %v", ttft1)
+	t.Logf("Second call accumulated TTFT: %v", timing2.TimeToFirstToken)
+	t.Logf("Invocation accumulated TTFT: %v", inv.TimingInfo.TimeToFirstToken)
 }
