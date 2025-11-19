@@ -2448,7 +2448,13 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 	// Convert state to channel values, ensuring we capture the latest state
 	// including any updates from nodes that haven't been written to channels yet.
 	// No deep copy is required here
-	channelValues := state.Clone()
+	channelValues := make(map[string]any, len(state))
+	for k, v := range state {
+		if isUnsafeStateKey(k) {
+			continue
+		}
+		channelValues[k] = v
+	}
 
 	// Create channel versions from current channel states
 	channelVersions := make(map[string]int64)
