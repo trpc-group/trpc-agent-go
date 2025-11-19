@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	isession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 )
 
 // CreateSessionSummary generates a summary for the session and stores it on the session object.
@@ -37,7 +37,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 
 	// Run summarization based on the provided session. Persistence path will
 	// validate app/session existence under lock.
-	updated, err := isession.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := summary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
