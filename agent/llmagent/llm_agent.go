@@ -338,7 +338,7 @@ func WithMaxHistoryRuns(maxRuns int) Option {
 // WithPreserveSameBranch controls whether messages from the same invocation
 // branch lineage (ancestor/descendant) should preserve their original roles
 // instead of being rewritten into user context when used as history.
-// Default is true.
+// Default is false.
 func WithPreserveSameBranch(preserve bool) Option {
 	return func(opts *Options) {
 		opts.PreserveSameBranch = preserve
@@ -531,9 +531,10 @@ func New(name string, opts ...Option) *LLMAgent {
 	var options Options = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
 		EndInvocationAfterTransfer: true,
-		// Default to preserving same-branch lineage so assistant/tool roles
-		// from parent/child branches are retained for downstream agents.
-		PreserveSameBranch: true,
+		// Default to rewriting same-branch lineage into user context so that
+		// downstream agents see a consolidated user stream unless explicitly
+		// opted into preserving assistant/tool roles.
+		PreserveSameBranch: false,
 	}
 
 	// Apply function options.
