@@ -740,11 +740,7 @@ Suitable for production environments and applications requiring complex queries,
 
 **Connection Configuration:**
 
-- **`WithHost(host string)`**: MySQL server address. Default is `localhost`.
-- **`WithPort(port int)`**: MySQL server port. Default is `3306`.
-- **`WithUser(user string)`**: Database username. Default is `root`.
-- **`WithPassword(password string)`**: Database password. Default is empty string.
-- **`WithDatabase(database string)`**: Database name. Default is `trpc_sessions`.
+- **`WithMySQLClientDSN(dsn string)`**：MySQL config
 - **`WithInstanceName(name string)`**: Use pre-configured MySQL instance.
 
 **Session Configuration:**

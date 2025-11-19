@@ -740,11 +740,7 @@ CREATE TABLE user_states (
 
 **连接配置：**
 
-- **`WithHost(host string)`**：MySQL 服务器地址。默认值为 `localhost`。
-- **`WithPort(port int)`**：MySQL 服务器端口。默认值为 `3306`。
-- **`WithUser(user string)`**：数据库用户名。默认值为 `root`。
-- **`WithPassword(password string)`**：数据库密码。默认值为空字符串。
-- **`WithDatabase(database string)`**：数据库名称。默认值为 `trpc_sessions`。
+- **`WithMySQLClientDSN(dsn string)`**：MySQL 链接配置
 - **`WithInstanceName(name string)`**：使用预配置的 MySQL 实例。
 
 **会话配置：**
