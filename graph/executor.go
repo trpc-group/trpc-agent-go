@@ -600,7 +600,6 @@ func (e *Executor) createCheckpointAndSave(
 	}
 
 	// Get pending writes atomically.
-	execCtx.pendingMu.Lock()
 	pendingWrites := make([]PendingWrite, len(execCtx.pendingWrites))
 	copy(pendingWrites, execCtx.pendingWrites)
 	execCtx.pendingWrites = nil // Clear after copying.
@@ -762,11 +761,7 @@ func (e *Executor) resumeFromCheckpoint(
 
 // initializeState initializes the execution state with schema defaults.
 func (e *Executor) initializeState(initialState State) State {
-	execState := make(State)
-	// Copy initial state.
-	for key, value := range initialState {
-		execState[key] = value
-	}
+	execState := initialState.Clone()
 	// Add schema defaults for missing fields.
 	if e.graph.Schema() != nil {
 		for key, field := range e.graph.Schema().Fields {
@@ -815,9 +810,7 @@ func (e *Executor) planStep(ctx context.Context, invocation *agent.Invocation,
 
 	// Check if we have nodes to execute from a resumed checkpoint stored in state
 	// This needs to be checked regardless of step number when resuming
-	execCtx.stateMutex.RLock()
 	nextNodesValue, hasNextNodes := execCtx.State[StateKeyNextNodes]
-	execCtx.stateMutex.RUnlock()
 
 	if hasNextNodes {
 		log.Debugf("planStep: step=%d, found %s in state", step, StateKeyNextNodes)
@@ -826,30 +819,22 @@ func (e *Executor) planStep(ctx context.Context, invocation *agent.Invocation,
 			log.Debugf("Using %s from state: %v", StateKeyNextNodes, nextNodes)
 			// Create tasks for the nodes stored in the state
 			for _, nodeID := range nextNodes {
-				execCtx.stateMutex.RLock()
-				stateCopy := execCtx.State.Clone()
-				execCtx.stateMutex.RUnlock()
-
-				task := e.createTask(nodeID, stateCopy, step)
+				task := e.createTask(nodeID, execCtx.State, step)
 				if task != nil {
 					tasks = append(tasks, task)
 				}
 			}
 			// Remove the special key from state after using it
-			execCtx.stateMutex.Lock()
 			delete(execCtx.State, StateKeyNextNodes)
-			execCtx.stateMutex.Unlock()
 			return tasks, nil
 		}
 	}
 
 	// If there are pending tasks produced by prior fan-out, schedule them first.
-	execCtx.tasksMutex.Lock()
 	if len(execCtx.pendingTasks) > 0 {
 		tasks = append(tasks, execCtx.pendingTasks...)
 		execCtx.pendingTasks = nil
 	}
-	execCtx.tasksMutex.Unlock()
 	if len(tasks) > 0 {
 		return tasks, nil
 	}
@@ -861,14 +846,7 @@ func (e *Executor) planStep(ctx context.Context, invocation *agent.Invocation,
 		if entryPoint == "" {
 			return nil, errors.New("no entry point defined")
 		}
-		// Planning step 0, entry point
-
-		// Acquire read lock to safely access state for task creation.
-		execCtx.stateMutex.RLock()
-		stateCopy := execCtx.State.Clone()
-		execCtx.stateMutex.RUnlock()
-
-		task := e.createTask(entryPoint, stateCopy, step)
+		task := e.createTask(entryPoint, execCtx.State, step)
 		if task != nil {
 			tasks = append(tasks, task)
 		} else if entryPoint != End {
