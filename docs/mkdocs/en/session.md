@@ -740,11 +740,7 @@ Suitable for production environments and applications requiring complex queries,
 
 **Connection Configuration:**
 
-- **`WithHost(host string)`**: MySQL server address. Default is `localhost`.
-- **`WithPort(port int)`**: MySQL server port. Default is `3306`.
-- **`WithUser(user string)`**: Database username. Default is `root`.
-- **`WithPassword(password string)`**: Database password. Default is empty string.
-- **`WithDatabase(database string)`**: Database name. Default is `trpc_sessions`.
+- **`WithMySQLClientDSN(dsn string)`**：MySQL config
 - **`WithInstanceName(name string)`**: Use pre-configured MySQL instance.
 
 **Session Configuration:**
@@ -779,8 +775,7 @@ import "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 
 // Default configuration (minimal)
 sessionService, err := mysql.NewService(
-    mysql.WithHost("localhost"),
-    mysql.WithPassword("your-password"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
 )
 // Effect:
 // - Connect to localhost:3306, database trpc_sessions
@@ -791,11 +786,7 @@ sessionService, err := mysql.NewService(
 // Complete production environment configuration
 sessionService, err := mysql.NewService(
     // Connection configuration
-    mysql.WithHost("localhost"),
-    mysql.WithPort(3306),
-    mysql.WithUser("root"),
-    mysql.WithPassword("your-password"),
-    mysql.WithDatabase("trpc_sessions"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     
     // Session configuration
     mysql.WithSessionEventLimit(1000),
@@ -848,7 +839,7 @@ MySQL supports table prefix configuration for multi-application shared database 
 ```go
 // Use table prefix
 sessionService, err := mysql.NewService(
-    mysql.WithHost("localhost"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithTablePrefix("app1_"),  // Table name: app1_session_states
 )
 ```
@@ -860,13 +851,13 @@ sessionService, err := mysql.NewService(
 ```go
 // Enable soft delete (default)
 sessionService, err := mysql.NewService(
-    mysql.WithHost("localhost"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSoftDelete(true),
 )
 
 // Disable soft delete (physical delete)
 sessionService, err := mysql.NewService(
-    mysql.WithHost("localhost"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSoftDelete(false),
 )
 ```
@@ -882,7 +873,7 @@ sessionService, err := mysql.NewService(
 
 ```go
 sessionService, err := mysql.NewService(
-    mysql.WithHost("localhost"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSessionTTL(30*time.Minute),      // Session expires after 30 minutes
     mysql.WithAppStateTTL(24*time.Hour),       // App state expires after 24 hours
     mysql.WithUserStateTTL(7*24*time.Hour),    // User state expires after 7 days
@@ -899,8 +890,7 @@ sessionService, err := mysql.NewService(
 
 ```go
 sessionService, err := mysql.NewService(
-    mysql.WithHost("localhost"),
-    mysql.WithPassword("your-password"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSessionEventLimit(1000),
     mysql.WithSessionTTL(30*time.Minute),
     
@@ -1117,8 +1107,7 @@ sessionService, err := postgres.NewService(
 
 // MySQL storage
 sessionService, err := mysql.NewService(
-    mysql.WithHost("localhost"),
-    mysql.WithPassword("your-password"),
+    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSummarizer(summarizer),
     mysql.WithAsyncSummaryNum(2),
     mysql.WithSummaryQueueSize(100),
