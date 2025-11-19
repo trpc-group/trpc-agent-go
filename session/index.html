@@ -3469,11 +3469,7 @@
 <h3 id="configuration-options_3">Configuration Options</h3>
 <p><strong>Connection Configuration:</strong></p>
 <ul>
-<li><strong><code>WithHost(host string)</code></strong>: MySQL server address. Default is <code>localhost</code>.</li>
-<li><strong><code>WithPort(port int)</code></strong>: MySQL server port. Default is <code>3306</code>.</li>
-<li><strong><code>WithUser(user string)</code></strong>: Database username. Default is <code>root</code>.</li>
-<li><strong><code>WithPassword(password string)</code></strong>: Database password. Default is empty string.</li>
-<li><strong><code>WithDatabase(database string)</code></strong>: Database name. Default is <code>trpc_sessions</code>.</li>
+<li><strong><code>WithMySQLClientDSN(dsn string)</code></strong>：MySQL config</li>
 <li><strong><code>WithInstanceName(name string)</code></strong>: Use pre-configured MySQL instance.</li>
 </ul>
 <p><strong>Session Configuration:</strong></p>
@@ -3536,51 +3532,41 @@
 <span class="normal"><a href="#__codelineno-18-32">32</a></span>
 <span class="normal"><a href="#__codelineno-18-33">33</a></span>
 <span class="normal"><a href="#__codelineno-18-34">34</a></span>
-<span class="normal"><a href="#__codelineno-18-35">35</a></span>
-<span class="normal"><a href="#__codelineno-18-36">36</a></span>
-<span class="normal"><a href="#__codelineno-18-37">37</a></span>
-<span class="normal"><a href="#__codelineno-18-38">38</a></span>
-<span class="normal"><a href="#__codelineno-18-39">39</a></span>
-<span class="normal"><a href="#__codelineno-18-40">40</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/mysql&quot;</span>
+<span class="normal"><a href="#__codelineno-18-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/mysql&quot;</span>
 </span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a>
 </span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a><span class="c1">// Default configuration (minimal)</span>
 </span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
-</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7"></a><span class="p">)</span>
-</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8"></a><span class="c1">// Effect:</span>
-</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9"></a><span class="c1">// - Connect to localhost:3306, database trpc_sessions</span>
-</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10"></a><span class="c1">// - Each session max 1000 events</span>
-</span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11"></a><span class="c1">// - Data never expires</span>
-</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12"></a><span class="c1">// - 2 async persistence workers</span>
-</span><span id="__span-18-13"><a id="__codelineno-18-13" name="__codelineno-18-13"></a>
-</span><span id="__span-18-14"><a id="__codelineno-18-14" name="__codelineno-18-14"></a><span class="c1">// Complete production environment configuration</span>
-</span><span id="__span-18-15"><a id="__codelineno-18-15" name="__codelineno-18-15"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-18-16"><a id="__codelineno-18-16" name="__codelineno-18-16"></a><span class="w">    </span><span class="c1">// Connection configuration</span>
-</span><span id="__span-18-17"><a id="__codelineno-18-17" name="__codelineno-18-17"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
-</span><span id="__span-18-18"><a id="__codelineno-18-18" name="__codelineno-18-18"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithPort</span><span class="p">(</span><span class="mi">3306</span><span class="p">),</span>
-</span><span id="__span-18-19"><a id="__codelineno-18-19" name="__codelineno-18-19"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithUser</span><span class="p">(</span><span class="s">&quot;root&quot;</span><span class="p">),</span>
-</span><span id="__span-18-20"><a id="__codelineno-18-20" name="__codelineno-18-20"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-18-21"><a id="__codelineno-18-21" name="__codelineno-18-21"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">&quot;trpc_sessions&quot;</span><span class="p">),</span>
-</span><span id="__span-18-22"><a id="__codelineno-18-22" name="__codelineno-18-22"></a>
-</span><span id="__span-18-23"><a id="__codelineno-18-23" name="__codelineno-18-23"></a><span class="w">    </span><span class="c1">// Session configuration</span>
-</span><span id="__span-18-24"><a id="__codelineno-18-24" name="__codelineno-18-24"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
-</span><span id="__span-18-25"><a id="__codelineno-18-25" name="__codelineno-18-25"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-18-26"><a id="__codelineno-18-26" name="__codelineno-18-26"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAppStateTTL</span><span class="p">(</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
-</span><span id="__span-18-27"><a id="__codelineno-18-27" name="__codelineno-18-27"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithUserStateTTL</span><span class="p">(</span><span class="mi">7</span><span class="o">*</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
-</span><span id="__span-18-28"><a id="__codelineno-18-28" name="__codelineno-18-28"></a>
-</span><span id="__span-18-29"><a id="__codelineno-18-29" name="__codelineno-18-29"></a><span class="w">    </span><span class="c1">// TTL cleanup configuration</span>
-</span><span id="__span-18-30"><a id="__codelineno-18-30" name="__codelineno-18-30"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithCleanupInterval</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-18-31"><a id="__codelineno-18-31" name="__codelineno-18-31"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSoftDelete</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">  </span><span class="c1">// Soft delete mode</span>
-</span><span id="__span-18-32"><a id="__codelineno-18-32" name="__codelineno-18-32"></a>
-</span><span id="__span-18-33"><a id="__codelineno-18-33" name="__codelineno-18-33"></a><span class="w">    </span><span class="c1">// Async persistence configuration</span>
-</span><span id="__span-18-34"><a id="__codelineno-18-34" name="__codelineno-18-34"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAsyncPersisterNum</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span>
-</span><span id="__span-18-35"><a id="__codelineno-18-35" name="__codelineno-18-35"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithPersistQueueSize</span><span class="p">(</span><span class="mi">2000</span><span class="p">),</span>
-</span><span id="__span-18-36"><a id="__codelineno-18-36" name="__codelineno-18-36"></a><span class="p">)</span>
-</span><span id="__span-18-37"><a id="__codelineno-18-37" name="__codelineno-18-37"></a><span class="c1">// Effect:</span>
-</span><span id="__span-18-38"><a id="__codelineno-18-38" name="__codelineno-18-38"></a><span class="c1">// - Session expires after 30 minutes of inactivity</span>
-</span><span id="__span-18-39"><a id="__codelineno-18-39" name="__codelineno-18-39"></a><span class="c1">// - Cleanup expired data every 10 minutes (soft delete)</span>
-</span><span id="__span-18-40"><a id="__codelineno-18-40" name="__codelineno-18-40"></a><span class="c1">// - 4 async workers for writes</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">&quot;user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local&quot;</span><span class="p">),</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6"></a><span class="p">)</span>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7"></a><span class="c1">// Effect:</span>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8"></a><span class="c1">// - Connect to localhost:3306, database trpc_sessions</span>
+</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9"></a><span class="c1">// - Each session max 1000 events</span>
+</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10"></a><span class="c1">// - Data never expires</span>
+</span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11"></a><span class="c1">// - 2 async persistence workers</span>
+</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12"></a>
+</span><span id="__span-18-13"><a id="__codelineno-18-13" name="__codelineno-18-13"></a><span class="c1">// Complete production environment configuration</span>
+</span><span id="__span-18-14"><a id="__codelineno-18-14" name="__codelineno-18-14"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-18-15"><a id="__codelineno-18-15" name="__codelineno-18-15"></a><span class="w">    </span><span class="c1">// Connection configuration</span>
+</span><span id="__span-18-16"><a id="__codelineno-18-16" name="__codelineno-18-16"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">&quot;user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local&quot;</span><span class="p">),</span>
+</span><span id="__span-18-17"><a id="__codelineno-18-17" name="__codelineno-18-17"></a>
+</span><span id="__span-18-18"><a id="__codelineno-18-18" name="__codelineno-18-18"></a><span class="w">    </span><span class="c1">// Session configuration</span>
+</span><span id="__span-18-19"><a id="__codelineno-18-19" name="__codelineno-18-19"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
+</span><span id="__span-18-20"><a id="__codelineno-18-20" name="__codelineno-18-20"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-18-21"><a id="__codelineno-18-21" name="__codelineno-18-21"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAppStateTTL</span><span class="p">(</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
+</span><span id="__span-18-22"><a id="__codelineno-18-22" name="__codelineno-18-22"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithUserStateTTL</span><span class="p">(</span><span class="mi">7</span><span class="o">*</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
+</span><span id="__span-18-23"><a id="__codelineno-18-23" name="__codelineno-18-23"></a>
+</span><span id="__span-18-24"><a id="__codelineno-18-24" name="__codelineno-18-24"></a><span class="w">    </span><span class="c1">// TTL cleanup configuration</span>
+</span><span id="__span-18-25"><a id="__codelineno-18-25" name="__codelineno-18-25"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithCleanupInterval</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-18-26"><a id="__codelineno-18-26" name="__codelineno-18-26"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSoftDelete</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">  </span><span class="c1">// Soft delete mode</span>
+</span><span id="__span-18-27"><a id="__codelineno-18-27" name="__codelineno-18-27"></a>
+</span><span id="__span-18-28"><a id="__codelineno-18-28" name="__codelineno-18-28"></a><span class="w">    </span><span class="c1">// Async persistence configuration</span>
+</span><span id="__span-18-29"><a id="__codelineno-18-29" name="__codelineno-18-29"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAsyncPersisterNum</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span>
+</span><span id="__span-18-30"><a id="__codelineno-18-30" name="__codelineno-18-30"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithPersistQueueSize</span><span class="p">(</span><span class="mi">2000</span><span class="p">),</span>
+</span><span id="__span-18-31"><a id="__codelineno-18-31" name="__codelineno-18-31"></a><span class="p">)</span>
+</span><span id="__span-18-32"><a id="__codelineno-18-32" name="__codelineno-18-32"></a><span class="c1">// Effect:</span>
+</span><span id="__span-18-33"><a id="__codelineno-18-33" name="__codelineno-18-33"></a><span class="c1">// - Session expires after 30 minutes of inactivity</span>
+</span><span id="__span-18-34"><a id="__codelineno-18-34" name="__codelineno-18-34"></a><span class="c1">// - Cleanup expired data every 10 minutes (soft delete)</span>
+</span><span id="__span-18-35"><a id="__codelineno-18-35" name="__codelineno-18-35"></a><span class="c1">// - 4 async workers for writes</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="configuration-reuse_2">Configuration Reuse</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1"> 1</a></span>
@@ -3629,7 +3615,7 @@
 <span class="normal"><a href="#__codelineno-20-4">4</a></span>
 <span class="normal"><a href="#__codelineno-20-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="c1">// Use table prefix</span>
 </span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">&quot;user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local&quot;</span><span class="p">),</span>
 </span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithTablePrefix</span><span class="p">(</span><span class="s">&quot;app1_&quot;</span><span class="p">),</span><span class="w">  </span><span class="c1">// Table name: app1_session_states</span>
 </span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
@@ -3647,13 +3633,13 @@
 <span class="normal"><a href="#__codelineno-21-10">10</a></span>
 <span class="normal"><a href="#__codelineno-21-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1"></a><span class="c1">// Enable soft delete (default)</span>
 </span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">&quot;user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local&quot;</span><span class="p">),</span>
 </span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSoftDelete</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a><span class="p">)</span>
 </span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6"></a>
 </span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a><span class="c1">// Disable soft delete (physical delete)</span>
 </span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
+</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">&quot;user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local&quot;</span><span class="p">),</span>
 </span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSoftDelete</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
 </span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
@@ -3695,7 +3681,7 @@
 <span class="normal"><a href="#__codelineno-22-10">10</a></span>
 <span class="normal"><a href="#__codelineno-22-11">11</a></span>
 <span class="normal"><a href="#__codelineno-22-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">&quot;user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local&quot;</span><span class="p">),</span>
 </span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span><span class="w">      </span><span class="c1">// Session expires after 30 minutes</span>
 </span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAppStateTTL</span><span class="p">(</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span><span class="w">       </span><span class="c1">// App state expires after 24 hours</span>
 </span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithUserStateTTL</span><span class="p">(</span><span class="mi">7</span><span class="o">*</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span><span class="w">    </span><span class="c1">// User state expires after 7 days</span>
@@ -3717,18 +3703,16 @@
 <span class="normal"><a href="#__codelineno-23-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-23-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-23-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-23-10">10</a></span>
-<span class="normal"><a href="#__codelineno-23-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
-</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
-</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a>
-</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="w">    </span><span class="c1">// Summary configuration</span>
-</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
-</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
-</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
-</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-23-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">&quot;user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local&quot;</span><span class="p">),</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="w">    </span><span class="c1">// Summary configuration</span>
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
+</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="storage-structure_2">Storage Structure</h3>
 <p>MySQL uses relational table structure with JSON data stored using JSON type:</p>
@@ -4028,8 +4012,7 @@
 <span class="normal"><a href="#__codelineno-29-29">29</a></span>
 <span class="normal"><a href="#__codelineno-29-30">30</a></span>
 <span class="normal"><a href="#__codelineno-29-31">31</a></span>
-<span class="normal"><a href="#__codelineno-29-32">32</a></span>
-<span class="normal"><a href="#__codelineno-29-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="c1">// Memory storage</span>
+<span class="normal"><a href="#__codelineno-29-32">32</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="c1">// Memory storage</span>
 </span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">(</span>
 </span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
 </span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
@@ -4056,12 +4039,11 @@
 </span><span id="__span-29-25"><a id="__codelineno-29-25" name="__codelineno-29-25"></a>
 </span><span id="__span-29-26"><a id="__codelineno-29-26" name="__codelineno-29-26"></a><span class="c1">// MySQL storage</span>
 </span><span id="__span-29-27"><a id="__codelineno-29-27" name="__codelineno-29-27"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-29-28"><a id="__codelineno-29-28" name="__codelineno-29-28"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">&quot;localhost&quot;</span><span class="p">),</span>
-</span><span id="__span-29-29"><a id="__codelineno-29-29" name="__codelineno-29-29"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-29-30"><a id="__codelineno-29-30" name="__codelineno-29-30"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
-</span><span id="__span-29-31"><a id="__codelineno-29-31" name="__codelineno-29-31"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
-</span><span id="__span-29-32"><a id="__codelineno-29-32" name="__codelineno-29-32"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
-</span><span id="__span-29-33"><a id="__codelineno-29-33" name="__codelineno-29-33"></a><span class="p">)</span>
+</span><span id="__span-29-28"><a id="__codelineno-29-28" name="__codelineno-29-28"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">&quot;user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local&quot;</span><span class="p">),</span>
+</span><span id="__span-29-29"><a id="__codelineno-29-29" name="__codelineno-29-29"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
+</span><span id="__span-29-30"><a id="__codelineno-29-30" name="__codelineno-29-30"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+</span><span id="__span-29-31"><a id="__codelineno-29-31" name="__codelineno-29-31"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
+</span><span id="__span-29-32"><a id="__codelineno-29-32" name="__codelineno-29-32"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="step-3-configure-agent-and-runner">Step 3: Configure Agent and Runner</h4>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-30-1"> 1</a></span>
@@ -4369,7 +4351,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 14, 2025 09:30:14 UTC">2025-11-14 09:30:14</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 19, 2025 08:32:17 UTC">2025-11-19 08:32:17</span>
   </span>
 
     
