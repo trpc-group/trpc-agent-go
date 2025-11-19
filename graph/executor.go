@@ -986,13 +986,13 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 	// Log key state values that we're interested in tracking
 	// State prepared for task
 
-	if stepCountVal, exists := state["step_count"]; exists {
+	if stepCountVal, exists := state[StateFieldStepCount]; exists {
 		log.Debugf("🔧 createTask: state contains step_count=%v (type: %T)", stepCountVal, stepCountVal)
 	}
 
 	// Special logging for final node to track the counter issue
 	if nodeID == "final" {
-		log.Debugf("🔧 createTask: FINAL NODE - counter=%v, step_count=%v", state["counter"], state["step_count"])
+		log.Debugf("🔧 createTask: FINAL NODE - counter=%v, step_count=%v", state[StateFieldCounter], state[StateFieldStepCount])
 	}
 
 	return &Task{
