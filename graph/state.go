@@ -63,7 +63,7 @@ func (s State) Clone() State {
 }
 
 func (s State) safeClone() State {
-	clone := make(map[string]any, len(s))
+	clone := make(State, len(s))
 	for k, v := range s {
 		if isUnsafeStateKey(k) {
 			continue
