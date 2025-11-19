@@ -2447,7 +2447,7 @@ func (e *Executor) handleInterrupt(
 func (e *Executor) createCheckpointFromState(state State, step int, execCtx *ExecutionContext) *Checkpoint {
 	// Convert state to channel values, ensuring we capture the latest state
 	// including any updates from nodes that haven't been written to channels yet.
-	// Maybe deep copies are not needed here
+	// No deep copy is required here
 	channelValues := state.Clone()
 
 	// Create channel versions from current channel states
