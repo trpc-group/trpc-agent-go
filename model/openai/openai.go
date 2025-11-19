@@ -1344,16 +1344,13 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 // that may return chunks with valid JSON fields but empty actual content.
 //
 // The order of checks matters:
-// 1. Check usage - if valid, don't skip
-// 2. Check reasoning content first - if present, don't skip
-// 3. Check content - if valid, don't skip (even if empty string)
-// 4. Check refusal - if valid, don't skip
-// 5. Check toolcalls - if valid but array is empty, skip (defensive against panic)
+// 1. Check reasoning content first - if present, don't skip
+// 2. Check content - if valid, don't skip (even if empty string)
+// 3. Check refusal - if valid, don't skip
+// 4. Check toolcalls - if valid but array is empty, skip (defensive against panic)
+// 5. Check usage - if valid, don't skip
 // 6. Otherwise, skip
 func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
-	if chunk.Usage.CompletionTokens > 0 || chunk.Usage.PromptTokens > 0 || chunk.Usage.TotalTokens > 0 {
-		return false
-	}
 	// No choices available, don't skip (let it be processed normally).
 	if len(chunk.Choices) == 0 {
 		return false
@@ -1375,6 +1372,10 @@ func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 	// Tool calls are only meaningful when the array is non-empty.
 	if delta.JSON.ToolCalls.Valid() {
 		return len(delta.ToolCalls) == 0
+	}
+
+	if chunk.Usage.CompletionTokens > 0 || chunk.Usage.PromptTokens > 0 || chunk.Usage.TotalTokens > 0 {
+		return false
 	}
 
 	// Otherwise there is no meaningful delta, skip the chunk.
