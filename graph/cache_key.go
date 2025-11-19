@@ -25,7 +25,7 @@ func sanitizeForCacheKey(input any) any {
 	out := make(map[string]any, len(st))
 	for k, v := range st {
 		// Reuse isUnsafeStateKey and additionally exclude current node id and parent agent.
-		if isUnsafeStateKey(k) || k == StateKeyCurrentNodeID {
+		if isUnsafeStateKey(k) {
 			continue
 		}
 		out[k] = v
