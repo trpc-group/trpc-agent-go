@@ -18,9 +18,19 @@ var (
 	timeType = reflect.TypeOf(time.Time{})
 )
 
+// DeepCopier defines an interface for types that can perform deep copies of themselves.
+type DeepCopier interface {
+	// DeepCopy performs a deep copy of the object and returns a new copy.
+	DeepCopy() any
+}
+
 // deepCopyAny performs a deep copy of common JSON-serializable Go types to
 // avoid sharing mutable references (maps/slices) across goroutines.
 func deepCopyAny(value any) any {
+	if copier, ok := value.(DeepCopier); ok {
+		return copier.DeepCopy()
+	}
+
 	visited := make(map[uintptr]any)
 	if out, ok := deepCopyFastPath(value); ok {
 		return out
@@ -90,6 +100,9 @@ func copyInterface(rv reflect.Value, visited map[uintptr]any) any {
 	if rv.IsNil() {
 		return nil
 	}
+	if copier, ok := rv.Interface().(DeepCopier); ok {
+		return copier.DeepCopy()
+	}
 	return deepCopyReflect(rv.Elem(), visited)
 }
 
@@ -100,6 +113,9 @@ func copyPointer(rv reflect.Value, visited map[uintptr]any) any {
 	ptr := rv.Pointer()
 	if cached, ok := visited[ptr]; ok {
 		return cached
+	}
+	if copier, ok := rv.Interface().(DeepCopier); ok {
+		return copier.DeepCopy()
 	}
 	elem := rv.Elem()
 	newPtr := reflect.New(elem.Type())
@@ -149,16 +165,18 @@ func copyArray(rv reflect.Value, visited map[uintptr]any) any {
 	l := rv.Len()
 	newArr := reflect.New(rv.Type()).Elem()
 	for i := 0; i < l; i++ {
-		newArr.Index(i).Set(
-			reflect.ValueOf(deepCopyReflect(rv.Index(i), visited)),
-		)
+		elem := rv.Index(i)
+		newArr.Index(i).Set(reflect.ValueOf(deepCopyReflect(elem, visited)))
 	}
 	return newArr.Interface()
 }
 
 func copyStruct(rv reflect.Value, visited map[uintptr]any) any {
+	if copier, ok := rv.Interface().(DeepCopier); ok {
+		return copier.DeepCopy()
+	}
 	if isTimeType(rv) {
-		return copyTimeType(rv)
+		return copyTime(rv)
 	}
 	newStruct := reflect.New(rv.Type()).Elem()
 	for i := 0; i < rv.NumField(); i++ {
@@ -201,11 +219,12 @@ func isTimeType(value reflect.Value) bool {
 	return false
 }
 
-func copyTimeType(value reflect.Value) any {
+func copyTime(value reflect.Value) any {
 	if value.Type().ConvertibleTo(timeType) {
-		timeVal := value.Convert(timeType).Interface().(time.Time)
-		return reflect.ValueOf(timeVal).Convert(value.Type()).Interface()
+		timeVal := value.Convert(timeType).Interface()
+		if t, ok := timeVal.(time.Time); ok {
+			return reflect.ValueOf(t).Convert(value.Type()).Interface()
+		}
 	}
-
 	return value.Interface()
 }
