@@ -67,7 +67,7 @@ func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, err
 		events = append(events, toolCallEvents...)
 	}
 	if rsp.IsToolResultResponse() {
-		toolResultEvents, err := t.toolResultEvent(rsp)
+		toolResultEvents, err := t.toolResultEvent(rsp, event.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +165,7 @@ func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, err
 }
 
 // toolResultEvent translates a tool result trpc-agent-go event to AG-UI events.
-func (t *translator) toolResultEvent(rsp *model.Response) ([]aguievents.Event, error) {
+func (t *translator) toolResultEvent(rsp *model.Response, messageID string) ([]aguievents.Event, error) {
 	if rsp == nil || len(rsp.Choices) == 0 {
 		return nil, nil
 	}
@@ -174,7 +174,7 @@ func (t *translator) toolResultEvent(rsp *model.Response) ([]aguievents.Event, e
 		// Tool call end event.
 		eventas = append(eventas, aguievents.NewToolCallEndEvent(choice.Message.ToolID))
 		// Tool call result event.
-		eventas = append(eventas, aguievents.NewToolCallResultEvent(t.lastMessageID,
+		eventas = append(eventas, aguievents.NewToolCallResultEvent(messageID,
 			choice.Message.ToolID, choice.Message.Content))
 	}
 	return eventas, nil

@@ -280,7 +280,7 @@ func TestToolCallAndResultEvents(t *testing.T) {
 			Message: model.Message{ToolID: "call-1", Content: "done"},
 		}},
 	}
-	resultEvents, err := translator.toolResultEvent(resultRsp)
+	resultEvents, err := translator.toolResultEvent(resultRsp, "event-tool-result")
 	assert.NoError(t, err)
 	assert.Len(t, resultEvents, 2)
 	end, ok := resultEvents[0].(*aguievents.ToolCallEndEvent)
@@ -288,7 +288,7 @@ func TestToolCallAndResultEvents(t *testing.T) {
 	assert.Equal(t, "call-1", end.ToolCallID)
 	res, ok := resultEvents[1].(*aguievents.ToolCallResultEvent)
 	assert.True(t, ok)
-	assert.Equal(t, "msg-tool", res.MessageID)
+	assert.Equal(t, "event-tool-result", res.MessageID)
 	assert.Equal(t, "call-1", res.ToolCallID)
 	assert.Equal(t, "done", res.Content)
 }
@@ -416,17 +416,20 @@ func TestTranslateToolResultResponse(t *testing.T) {
 	}})
 	assert.NoError(t, err)
 
-	events, err := translator.Translate(&agentevent.Event{Response: &model.Response{
-		Choices: []model.Choice{{
-			Message: model.Message{ToolID: "tool-1", Content: "done"},
-		}},
-	}})
+	events, err := translator.Translate(&agentevent.Event{
+		ID: "evt-tool-1",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{ToolID: "tool-1", Content: "done"},
+			}},
+		},
+	})
 	assert.NoError(t, err)
 	assert.Len(t, events, 2)
 	assert.IsType(t, (*aguievents.ToolCallEndEvent)(nil), events[0])
 	result, ok := events[1].(*aguievents.ToolCallResultEvent)
 	assert.True(t, ok)
-	assert.Equal(t, "msg-1", result.MessageID)
+	assert.Equal(t, "evt-tool-1", result.MessageID)
 	assert.Equal(t, "tool-1", result.ToolCallID)
 	assert.Equal(t, "done", result.Content)
 }
@@ -471,13 +474,13 @@ func TestTranslateSequentialEvents(t *testing.T) {
 			Message: model.Message{ToolID: "call-1", Content: "success"},
 		}},
 	}
-	events, err = translator.Translate(&agentevent.Event{Response: toolResultRsp})
+	events, err = translator.Translate(&agentevent.Event{ID: "evt-call-1-result", Response: toolResultRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 2)
 	assert.IsType(t, (*aguievents.ToolCallEndEvent)(nil), events[0])
 	res, ok := events[1].(*aguievents.ToolCallResultEvent)
 	assert.True(t, ok)
-	assert.Equal(t, "msg-1", res.MessageID)
+	assert.Equal(t, "evt-call-1-result", res.MessageID)
 	assert.Equal(t, "call-1", res.ToolCallID)
 
 	finalRsp := &model.Response{
@@ -545,7 +548,7 @@ func TestToolNilResponse(t *testing.T) {
 	events, err := translator.toolCallEvent(nil)
 	assert.Empty(t, events)
 	assert.NoError(t, err)
-	events, err = translator.toolResultEvent(nil)
+	events, err = translator.toolResultEvent(nil, "")
 	assert.Empty(t, events)
 	assert.NoError(t, err)
 }

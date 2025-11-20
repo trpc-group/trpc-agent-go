@@ -326,6 +326,26 @@ func TestConvertToMessagesSnapshotEventDeduplicatesUserMessages(t *testing.T) {
 	assert.Equal(t, "next", *snapshot.Messages[1].Content)
 }
 
+func TestConvertToMessagesSnapshotEventUsesResponseIDForAssistant(t *testing.T) {
+	r := &runner{}
+	assistantEvent := event.Event{
+		ID: "event-id",
+		Response: &model.Response{
+			ID:     "response-id",
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.Message{Role: model.RoleAssistant, Content: "reply"}},
+			},
+		},
+	}
+	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(), "user-id", []event.Event{assistantEvent})
+	assert.NoError(t, err)
+	assert.NotNil(t, snapshot)
+	if assert.Len(t, snapshot.Messages, 1) {
+		assert.Equal(t, "response-id", snapshot.Messages[0].ID)
+	}
+}
+
 func TestIgnoreEvent(t *testing.T) {
 	tests := []struct {
 		name string
