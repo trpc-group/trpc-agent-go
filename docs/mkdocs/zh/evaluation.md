@@ -6,6 +6,16 @@ Evaluation 提供完整的 Agent 评估框架，支持本地文件和内存两�
 
 本节介绍如何在本地文件系统 local 或内存 inmemory 模式下执行 Agent 评估流程。
 
+### Evaluation 搭配 Debug Server
+
+若需要在 ADK Web 中一边调试 Agent、一边把真实会话转成评估用例，可以直接复用 `examples/evaluation/debug` 示例：
+
+1. 通过 `debug.New` 启动调试服务器时，传入 `debug.WithEvalSetManager`、`debug.WithEvalResultManager`、`debug.WithMetricManager` 等选项，把评估集、指标以及评估结果落盘到指定目录。
+2. ADK Web 连接到该服务器后，聊天产生的 session 可在 UI 里使用 “Convert to Eval Case” 功能写入本地 `*.evalset.json`／`*.metrics.json`。
+3. UI 中的 Eval 标签页或 `run`/`run_eval` API 会自动读取这些配置，并在 `-output-dir` 写出 `*.evalset_result.json`，便于离线分析或版本管理。
+
+完整流程（含命令行参数示例与数据目录结构）见 [examples/evaluation/debug](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/debug)。
+
 ### 本地文件系统 local
 
 local 在本地文件系统上维护评估集、评估指标和评估结果。

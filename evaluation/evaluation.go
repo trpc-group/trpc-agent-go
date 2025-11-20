@@ -80,19 +80,19 @@ type agentEvaluator struct {
 
 // EvaluationResult contains the aggregated outcome of running an evaluation across multiple runs.
 type EvaluationResult struct {
-	AppName       string                  // AppName identifies the agent being evaluated.
-	EvalSetID     string                  // EvalSetID identifies the evaluation set used in this run.
-	OverallStatus status.EvalStatus       // OverallStatus summarizes the aggregated evaluation status across cases.
-	ExecutionTime time.Duration           // ExecutionTime records the total latency for the evaluation run.
-	EvalCases     []*EvaluationCaseResult // EvalCases contains aggregated results for each evaluation case.
+	AppName       string                  `json:"appName"`       // AppName identifies the agent being evaluated.
+	EvalSetID     string                  `json:"evalSetId"`     // EvalSetID identifies the evaluation set used in this run.
+	OverallStatus status.EvalStatus       `json:"overallStatus"` // OverallStatus summarizes the aggregated evaluation status across cases.
+	ExecutionTime time.Duration           `json:"executionTime"` // ExecutionTime records the total latency for the evaluation run.
+	EvalCases     []*EvaluationCaseResult `json:"evalCases"`     // EvalCases contains aggregated results for each evaluation case.
 }
 
 // EvaluationCaseResult aggregates the outcome of a single eval case across multiple runs.
 type EvaluationCaseResult struct {
-	EvalCaseID      string                         // EvalCaseID identifies the evaluation case.
-	OverallStatus   status.EvalStatus              // OverallStatus summarizes the overall status of case across runs.
-	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults stores the per-run results for this case.
-	MetricResults   []*evalresult.EvalMetricResult // MetricResults lists aggregated metric outcomes across runs.
+	EvalCaseID      string                         `json:"evalId"`          // EvalCaseID identifies the evaluation case.
+	OverallStatus   status.EvalStatus              `json:"overallStatus"`   // OverallStatus summarizes the overall status of case across runs.
+	EvalCaseResults []*evalresult.EvalCaseResult   `json:"evalCaseResults"` // EvalCaseResults stores the per-run results for this case.
+	MetricResults   []*evalresult.EvalMetricResult `json:"metricsResults"`  // MetricResults lists aggregated metric outcomes across runs.
 }
 
 // Evaluate evaluates agent against the specified eval set across multiple runs.

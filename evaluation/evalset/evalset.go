@@ -13,22 +13,22 @@ package evalset
 import (
 	"context"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 )
 
 // EvalSet represents a collection of evaluation cases.
-// It mirrors the schema used by ADK Web, with field names in snake_case to align with the JSON format.
+// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalSet struct {
 	// EvalSetID uniquely identifies this evaluation set.
-	EvalSetID string `json:"eval_set_id,omitempty"`
+	EvalSetID string `json:"evalSetId,omitempty"`
 	// Name of the evaluation set.
 	Name string `json:"name,omitempty"`
 	// Description of the evaluation set.
 	Description string `json:"description,omitempty"`
 	// EvalCases contains all the evaluation cases.
-	EvalCases []*EvalCase `json:"eval_cases,omitempty"`
+	EvalCases []*EvalCase `json:"evalCases,omitempty"`
 	// CreationTimestamp when this eval set was created.
-	CreationTimestamp *epochtime.EpochTime `json:"creation_timestamp,omitempty"`
+	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
 }
 
 // Manager defines the interface that an evaluation set manager must satisfy.

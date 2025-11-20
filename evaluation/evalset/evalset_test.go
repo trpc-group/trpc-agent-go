@@ -19,16 +19,16 @@ import (
 
 func TestEvalSetJSONRoundTrip(t *testing.T) {
 	jsonData := `{
-  "eval_set_id": "test-set",
+  "evalSetId": "test-set",
   "name": "Test Set",
   "description": "Complete eval set JSON for testing.",
-  "eval_cases": [
+  "evalCases": [
     {
-      "eval_id": "case-42",
+      "evalId": "case-42",
       "conversation": [
         {
-          "invocation_id": "invoke-1",
-          "user_content": {
+          "invocationId": "invoke-1",
+          "userContent": {
             "role": "user",
             "parts": [
               {
@@ -36,7 +36,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
               }
             ]
           },
-          "final_response": {
+          "finalResponse": {
             "role": "assistant",
             "parts": [
               {
@@ -44,8 +44,8 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
               }
             ]
           },
-          "intermediate_data": {
-            "tool_uses": [
+          "intermediateData": {
+            "toolUses": [
               {
                 "name": "calculator",
                 "args": {
@@ -55,7 +55,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
                 }
               }
             ],
-            "tool_responses": [
+            "toolResponses": [
               {
                 "name": "calculator",
                 "response": {
@@ -63,7 +63,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
                 }
               }
             ],
-            "intermediate_responses": [
+            "intermediateResponses": [
               [
                 "assistant",
                 [
@@ -74,21 +74,21 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
               ]
             ]
           },
-          "creation_timestamp": 1700000100
+          "creationTimestamp": 1700000100
         }
       ],
-      "session_input": {
-        "app_name": "demo-app",
-        "user_id": "user-42",
+      "sessionInput": {
+        "appName": "demo-app",
+        "userId": "user-42",
         "state": {
           "language": "en",
           "isPremium": true
         }
       },
-      "creation_timestamp": 1700000200
+      "creationTimestamp": 1700000200
     }
   ],
-  "creation_timestamp": 1700000000
+  "creationTimestamp": 1700000000
 }`
 
 	var evalSet EvalSet
