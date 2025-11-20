@@ -50,8 +50,8 @@ var (
 	pgHost     = getEnvOrDefault("PG_HOST", "localhost")
 	pgPort     = getEnvOrDefault("PG_PORT", "5432")
 	pgUser     = getEnvOrDefault("PG_USER", "postgres")
-	pgPassword = getEnvOrDefault("PG_PASSWORD", "my-secret-pw")
-	pgDatabase = getEnvOrDefault("PG_DATABASE", "postgres")
+	pgPassword = getEnvOrDefault("PG_PASSWORD", "")
+	pgDatabase = getEnvOrDefault("PG_DATABASE", "trpc-agent-go-pgmemory")
 
 	// MySQL.
 	mysqlHost     = getEnvOrDefault("MYSQL_HOST", "localhost")
