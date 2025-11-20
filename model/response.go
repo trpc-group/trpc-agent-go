@@ -71,12 +71,15 @@ type Choice struct {
 // TimingInfo represents timing information for token generation.
 // It accumulates durations across multiple LLM calls within a flow.
 type TimingInfo struct {
-	// TimeToFirstToken is the accumulated duration from request start to first event (reasoning or content).
-	// For multiple LLM calls in a flow, this sums up all TTFT durations.
-	TimeToFirstToken time.Duration `json:"time_to_first_token,omitempty"`
 
-	// ReasoningDuration is the accumulated duration of reasoning phases (streaming only).
-	// Measured from first reasoning event to last reasoning event in each call.
+	// FirstTokenDuration is the accumulated duration from request start to the first meaningful token.
+	// A "meaningful token" is defined as the first chunk containing reasoning content, regular content, or tool calls.
+	// Empty chunks are skipped. For multiple LLM calls (e.g., tool calls), this accumulates the duration of each call.
+	FirstTokenDuration time.Duration `json:"time_to_first_token,omitempty"`
+
+	// ReasoningDuration is the accumulated duration of reasoning phases (streaming mode only).
+	// Measured from the first reasoning chunk to the last reasoning chunk in each LLM call.
+	// For non-streaming requests, this field will remain 0 as reasoning duration cannot be measured precisely.
 	ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 
@@ -177,8 +180,8 @@ func (rsp *Response) Clone() *Response {
 		// Deep copy TimingInfo if present
 		if rsp.Usage.TimingInfo != nil {
 			clone.Usage.TimingInfo = &TimingInfo{
-				TimeToFirstToken:  rsp.Usage.TimingInfo.TimeToFirstToken,
-				ReasoningDuration: rsp.Usage.TimingInfo.ReasoningDuration,
+				FirstTokenDuration: rsp.Usage.TimingInfo.FirstTokenDuration,
+				ReasoningDuration:  rsp.Usage.TimingInfo.ReasoningDuration,
 			}
 		}
 	}

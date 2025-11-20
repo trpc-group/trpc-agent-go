@@ -471,8 +471,8 @@ func (c *multiTurnChat) printTimingInfo(event *event.Event) {
 	fmt.Printf("\n\n%s⏱️  Timing Info:%s\n", colorYellow, colorReset)
 
 	// Time to first token (accumulated across all LLM calls in this flow)
-	if timing.TimeToFirstToken > 0 {
-		fmt.Printf("%s   • Time to first token: %v%s\n", colorYellow, timing.TimeToFirstToken, colorReset)
+	if timing.FirstTokenDuration > 0 {
+		fmt.Printf("%s   • Time to first token: %v%s\n", colorYellow, timing.FirstTokenDuration, colorReset)
 	}
 
 	// Reasoning duration (accumulated across all LLM calls in this flow)

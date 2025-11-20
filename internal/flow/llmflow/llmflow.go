@@ -193,8 +193,14 @@ func (f *Flow) processStreamingResponses(
 	defer tracker.RecordMetrics()()
 
 	for response := range responseChan {
-		// Track response for telemetry
+		// Track response for telemetry (token usage and timing info)
 		tracker.TrackResponse(response)
+
+		// Attach timing info to response
+		if response.Usage == nil {
+			response.Usage = &model.Usage{}
+		}
+		response.Usage.TimingInfo = tracker.GetTimingInfo()
 		// Handle after model callbacks.
 		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
 		if err != nil {

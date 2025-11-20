@@ -30,7 +30,6 @@ import (
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -752,12 +751,10 @@ func (m *Model) GenerateContent(
 			m.chatRequestCallback(ctx, &chatRequest)
 		}
 
-		timingInfo := m.getTimingInfo(ctx)
-
 		if request.Stream {
-			m.handleStreamingResponse(ctx, chatRequest, responseChan, timingInfo, opts...)
+			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, timingInfo, opts...)
+			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
 		}
 	}()
 
@@ -1217,13 +1214,8 @@ func (m *Model) handleStreamingResponse(
 	ctx context.Context,
 	chatRequest openai.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
-	timingInfo *model.TimingInfo,
 	opts ...openaiopt.RequestOption,
 ) {
-	// Timing tracking for this call - record start time before creating stream
-	callStartTime := time.Now()
-	var firstEventTime, firstReasoningTime, lastReasoningTime time.Time
-
 	stream := m.client.Chat.Completions.NewStreaming(
 		ctx, chatRequest, opts...)
 	defer stream.Close()
@@ -1236,7 +1228,6 @@ func (m *Model) handleStreamingResponse(
 
 	for stream.Next() {
 		chunk := stream.Current()
-		now := time.Now()
 
 		// Skip empty chunks.
 		if m.shouldSkipEmptyChunk(chunk) {
@@ -1256,37 +1247,6 @@ func (m *Model) handleStreamingResponse(
 				usage = m.accumulateChunkUsage(usage, chunkUsage)
 				acc.Usage = modelUsageToCompletionUsage(usage)
 
-			}
-		}
-
-		// Track timing for different event types
-		if len(chunk.Choices) > 0 {
-			delta := chunk.Choices[0].Delta
-
-			// Track first event (already filtered by shouldSkipEmptyChunk)
-			if firstEventTime.IsZero() {
-				firstEventTime = now
-				// Update TTFT immediately when we get first event
-				if timingInfo != nil {
-					timingInfo.TimeToFirstToken += now.Sub(callStartTime)
-				}
-			}
-
-			// Track reasoning timing
-			if m.hasReasoningContent(delta) {
-				if firstReasoningTime.IsZero() {
-					firstReasoningTime = now
-				}
-				lastReasoningTime = now
-			} else if !firstReasoningTime.IsZero() && !lastReasoningTime.IsZero() {
-				// Detected end of reasoning phase (first non-reasoning content/tool call)
-				// Update reasoning duration once
-				if timingInfo != nil {
-					timingInfo.ReasoningDuration += lastReasoningTime.Sub(firstReasoningTime)
-				}
-				// Clear to avoid updating again
-				firstReasoningTime = time.Time{}
-				lastReasoningTime = time.Time{}
 			}
 		}
 
@@ -1312,9 +1272,6 @@ func (m *Model) handleStreamingResponse(
 
 		response := m.createPartialResponse(chunk)
 
-		// attach latest timing info to partial response
-		m.addTimingToUsage(response, timingInfo)
-
 		select {
 		case responseChan <- response:
 		case <-ctx.Done():
@@ -1323,7 +1280,7 @@ func (m *Model) handleStreamingResponse(
 	}
 
 	// Send final response with usage information if available.
-	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, reasoningBuf.String(), timingInfo, responseChan)
+	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, reasoningBuf.String(), responseChan)
 
 	// Call the stream complete callback after final response is sent
 	if m.chatStreamCompleteCallback != nil {
@@ -1519,7 +1476,6 @@ func (m *Model) sendFinalResponse(
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
 	aggregatedReasoning string,
-	timingInfo *model.TimingInfo,
 	responseChan chan<- *model.Response,
 ) {
 	if stream.Err() == nil {
@@ -1552,9 +1508,6 @@ func (m *Model) sendFinalResponse(
 					},
 				},
 			}
-			// Add timing information to usage
-			m.addTimingToUsage(finalResponse, timingInfo)
-
 			select {
 			case responseChan <- finalResponse:
 			case <-ctx.Done():
@@ -1563,9 +1516,6 @@ func (m *Model) sendFinalResponse(
 		}
 
 		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls, aggregatedReasoning)
-
-		// Add timing information to usage
-		m.addTimingToUsage(finalResponse, timingInfo)
 
 		select {
 		case responseChan <- finalResponse:
@@ -1683,10 +1633,8 @@ func (m *Model) handleNonStreamingResponse(
 	ctx context.Context,
 	chatRequest openai.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
-	timingInfo *model.TimingInfo,
 	opts ...openaiopt.RequestOption,
 ) {
-	callStartTime := time.Now()
 	chatCompletion, err := m.client.Chat.Completions.New(
 		ctx, chatRequest, opts...)
 	if err != nil {
@@ -1771,59 +1719,10 @@ func (m *Model) handleNonStreamingResponse(
 		response.SystemFingerprint = &chatCompletion.SystemFingerprint
 	}
 
-	// Add timing information (for non-streaming, we treat the entire call as one event)
-	if timingInfo != nil {
-		now := time.Now()
-		// TTFT is from call start to completion
-		timingInfo.TimeToFirstToken += now.Sub(callStartTime)
-
-		// For non-streaming, if there's reasoning content, we can't measure its duration precisely
-		// so we don't add to ReasoningDuration
-
-		m.addTimingToUsage(response, timingInfo)
-	}
-
 	select {
 	case responseChan <- response:
 	case <-ctx.Done():
 	}
-}
-
-// addTimingToUsage adds timing information to the response usage.
-// To avoid previously emitted events being affected by later timing updates,
-// this function attaches a snapshot copy of the current TimingInfo instead
-// of sharing the same pointer across all responses.
-func (m *Model) addTimingToUsage(
-	response *model.Response,
-	timingInfo *model.TimingInfo,
-) {
-	if response == nil || timingInfo == nil {
-		return
-	}
-
-	// Ensure usage is initialized
-	if response.Usage == nil {
-		response.Usage = &model.Usage{}
-	}
-
-	snapshot := *timingInfo
-	response.Usage.TimingInfo = &snapshot
-}
-
-func (m *Model) getTimingInfo(ctx context.Context) *model.TimingInfo {
-	inv, ok := agent.InvocationFromContext(ctx)
-	if ok && inv != nil {
-		if inv.TimingInfo != nil {
-			return inv.TimingInfo
-		}
-		// Invocation exists but has no TimingInfo yet: initialize one here
-		timing := &model.TimingInfo{}
-		inv.TimingInfo = timing
-		return timing
-	}
-
-	// No invocation: standalone timing for this call
-	return &model.TimingInfo{}
 }
 
 // FileOptions is the options for file operations.

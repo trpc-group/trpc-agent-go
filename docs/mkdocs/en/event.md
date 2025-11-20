@@ -155,22 +155,41 @@ type Usage struct {
 }
 
 type TimingInfo struct {
-    // TimeToFirstToken is the accumulated duration from request start to the first event (reasoning or content).
+    // FirstTokenDuration is the accumulated duration from request start to the first meaningful token.
+    // A "meaningful token" is defined as the first chunk containing reasoning content, regular content, or tool calls.
+    //
+    // Measurement details:
+    // - Starts timing when the LLM request is sent
+    // - Stops timing when the first chunk with meaningful content is received
+    // - Empty chunks (no reasoning/content/tool calls) are skipped
     //
     // Return timing:
-    // - Streaming requests: Calculated immediately when the first event is received and returned via partial event
-    // - Non-streaming requests: Returned when the request completes
-    // - Multiple LLM calls (e.g., tool calls): Accumulates the TTFT of each call
-    TimeToFirstToken time.Duration `json:"time_to_first_token,omitempty"`
+    // - Streaming requests: Calculated and returned immediately when the first meaningful chunk is received
+    // - Non-streaming requests: Calculated and returned when the complete response is received
+    // - Multiple LLM calls (e.g., tool calls): Accumulates the FirstTokenDuration of each call
+    //
+    // Example: In a tool call scenario with 2 LLM calls, if the first call takes 100ms and the second
+    // takes 80ms to first token, FirstTokenDuration will be 180ms.
+    FirstTokenDuration time.Duration `json:"time_to_first_token,omitempty"`
 
-    // ReasoningDuration is the accumulated duration of reasoning phases (streaming only).
-    // Measured from the first reasoning event to the last reasoning event in each call.
+    // ReasoningDuration is the accumulated duration of reasoning phases (streaming mode only).
+    // Measured from the first reasoning chunk to the last reasoning chunk in each LLM call.
+    //
+    // Measurement details:
+    // - Starts timing when the first chunk with reasoning content is received
+    // - Continues timing for all subsequent reasoning chunks
+    // - Stops timing when the first non-reasoning chunk (regular content or tool call) is received
+    // - The duration is accumulated immediately when reasoning phase ends
     //
     // Return timing:
-    // - Streaming requests: Calculated immediately when reasoning ends (i.e., when the first non-reasoning
-    //   content/tool call is received) and returned via partial event
-    // - Non-streaming requests: Cannot be measured precisely, this field will not be updated
+    // - Streaming requests: Calculated and returned immediately when reasoning ends (i.e., when the first
+    //   non-reasoning content/tool call chunk is received)
+    // - Non-streaming requests: Cannot be measured precisely, this field will remain 0
     // - Multiple LLM calls (e.g., tool calls): Accumulates the reasoning duration of each call
+    //
+    // Example: If a model thinks for 2 seconds before responding, ReasoningDuration will be ~2s.
+    // In a tool call scenario, if the first call has 1s reasoning and the second has 1.5s,
+    // ReasoningDuration will be 2.5s.
     ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 ```

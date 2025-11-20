@@ -84,9 +84,6 @@ type Invocation struct {
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
-	// TimingInfo tracks timing information across all LLM calls within this invocation.
-	TimingInfo *model.TimingInfo
-
 	// noticeChanMap is used to signal when events are written to the session.
 	noticeChanMap map[string]chan any
 	noticeMu      *sync.Mutex
