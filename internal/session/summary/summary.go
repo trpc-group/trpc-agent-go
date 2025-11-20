@@ -7,8 +7,8 @@
 //
 //
 
-// Package session provides internal session functionality.
-package session
+// Package summary provides internal session summary functionality.
+package summary
 
 import (
 	"context"

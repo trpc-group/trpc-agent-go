@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/arxivsearch
 
-go 1.25.0
+go 1.24.1
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..
