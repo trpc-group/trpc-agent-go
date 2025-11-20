@@ -128,6 +128,10 @@ func TestDeleteSessionState_HardDelete(t *testing.T) {
 	mock.ExpectExec("DELETE FROM session_events").
 		WithArgs("test-app", "test-user", "test-session").
 		WillReturnResult(sqlmock.NewResult(0, 5))
+	// Mock hard delete session tracks.
+	mock.ExpectExec("DELETE FROM session_track_events").
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 5))
 
 	mock.ExpectCommit()
 

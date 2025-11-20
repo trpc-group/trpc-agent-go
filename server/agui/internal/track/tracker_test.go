@@ -1,0 +1,313 @@
+package track
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func TestTrackerAppendCreatesSession(t *testing.T) {
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "thread",
+	}
+	err = tracker.AppendEvent(context.Background(), key, aguievents.NewTextMessageStartEvent("msg", aguievents.WithRole("user")))
+	require.NoError(t, err)
+
+	sess, err := svc.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.NotNil(t, trackEvents)
+	require.Len(t, trackEvents.Events, 1)
+}
+
+func TestTrackerNewRequiresTrackService(t *testing.T) {
+	tracker, err := New(&serviceWithoutTrack{})
+	require.Error(t, err)
+	require.Nil(t, tracker)
+}
+
+func TestTrackerAppendEventErrors(t *testing.T) {
+	ctx := context.Background()
+	validKey := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	t.Run("nil event", func(t *testing.T) {
+		tracker, err := New(inmemory.NewSessionService())
+		require.NoError(t, err)
+		err = tracker.AppendEvent(ctx, validKey, nil)
+		require.ErrorContains(t, err, "event is nil")
+	})
+	t.Run("invalid session key", func(t *testing.T) {
+		tracker, err := New(inmemory.NewSessionService())
+		require.NoError(t, err)
+		err = tracker.AppendEvent(ctx, session.Key{}, aguievents.NewRunStartedEvent("thread", "run"))
+		require.ErrorContains(t, err, "session key")
+	})
+	t.Run("marshal error", func(t *testing.T) {
+		tracker, err := New(inmemory.NewSessionService())
+		require.NoError(t, err)
+		err = tracker.AppendEvent(ctx, validKey, &failingEvent{})
+		require.ErrorContains(t, err, "marshal event")
+	})
+	t.Run("get session error", func(t *testing.T) {
+		svc := newHookSessionService()
+		svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+			return nil, errors.New("boom")
+		}
+		tracker, err := New(svc)
+		require.NoError(t, err)
+		err = tracker.AppendEvent(ctx, validKey, aguievents.NewRunStartedEvent("thread", "run"))
+		require.ErrorContains(t, err, "get session: boom")
+	})
+	t.Run("create session error", func(t *testing.T) {
+		svc := newHookSessionService()
+		svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+			return nil, nil
+		}
+		svc.createSessionFn = func(context.Context, session.Key, session.StateMap, ...session.Option) (*session.Session, error) {
+			return nil, errors.New("fail")
+		}
+		tracker, err := New(svc)
+		require.NoError(t, err)
+		err = tracker.AppendEvent(ctx, validKey, aguievents.NewRunStartedEvent("thread", "run"))
+		require.ErrorContains(t, err, "create session: fail")
+	})
+	t.Run("append track event error", func(t *testing.T) {
+		svc := newHookSessionService()
+		svc.appendTrackFn = func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error {
+			return errors.New("append broke")
+		}
+		tracker, err := New(svc)
+		require.NoError(t, err)
+		err = tracker.AppendEvent(ctx, validKey, aguievents.NewRunStartedEvent("thread", "run"))
+		require.ErrorContains(t, err, "append event: append broke")
+	})
+}
+
+func TestTrackerAppendEventUsesEventTimestamp(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	eventWithTs := aguievents.NewRunFinishedEvent("thread", "run")
+	ts := time.Now().Add(-time.Minute).UnixMilli()
+	eventWithTs.SetTimestamp(ts)
+	require.NoError(t, tracker.AppendEvent(ctx, key, eventWithTs))
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.NotNil(t, trackEvents)
+	require.Len(t, trackEvents.Events, 1)
+	require.Equal(t, time.UnixMilli(ts).UTC().Round(0), trackEvents.Events[0].Timestamp.UTC().Round(0))
+}
+
+func TestTrackerGetEventsErrors(t *testing.T) {
+	ctx := context.Background()
+	validKey := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+	tracker, err := New(inmemory.NewSessionService())
+	require.NoError(t, err)
+
+	_, err = tracker.GetEvents(ctx, session.Key{})
+	require.ErrorContains(t, err, "session key")
+
+	t.Run("get session error", func(t *testing.T) {
+		svc := newHookSessionService()
+		svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+			return nil, errors.New("nope")
+		}
+		tracker, err := New(svc)
+		require.NoError(t, err)
+		_, err = tracker.GetEvents(ctx, validKey)
+		require.ErrorContains(t, err, "get session: nope")
+	})
+
+	t.Run("session not found", func(t *testing.T) {
+		svc := newHookSessionService()
+		svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+			return nil, nil
+		}
+		tracker, err := New(svc)
+		require.NoError(t, err)
+		_, err = tracker.GetEvents(ctx, validKey)
+		require.ErrorContains(t, err, "session not found")
+	})
+
+	t.Run("track events error", func(t *testing.T) {
+		svc := newHookSessionService()
+		svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+			return &session.Session{
+				AppName: validKey.AppName,
+				UserID:  validKey.UserID,
+				ID:      validKey.SessionID,
+			}, nil
+		}
+		tracker, err := New(svc)
+		require.NoError(t, err)
+		_, err = tracker.GetEvents(ctx, validKey)
+		require.ErrorContains(t, err, "tracks is empty")
+	})
+}
+
+func TestTrackerGetEventsSuccess(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+	first := aguievents.NewTextMessageStartEvent("msg", aguievents.WithRole("user"))
+	require.NoError(t, tracker.AppendEvent(ctx, key, first))
+
+	events, err := tracker.GetEvents(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, events)
+	require.Len(t, events.Events, 1)
+	parsed, err := aguievents.EventFromJSON(events.Events[0].Payload)
+	require.NoError(t, err)
+	start, ok := parsed.(*aguievents.TextMessageStartEvent)
+	require.True(t, ok)
+	require.Equal(t, first.MessageID, start.MessageID)
+}
+
+type serviceWithoutTrack struct{}
+
+func (serviceWithoutTrack) CreateSession(ctx context.Context, key session.Key, state session.StateMap, opts ...session.Option) (*session.Session, error) {
+	return nil, nil
+}
+
+func (serviceWithoutTrack) GetSession(ctx context.Context, key session.Key, opts ...session.Option) (*session.Session, error) {
+	return nil, nil
+}
+
+func (serviceWithoutTrack) ListSessions(ctx context.Context, key session.UserKey, opts ...session.Option) ([]*session.Session, error) {
+	return nil, nil
+}
+
+func (serviceWithoutTrack) DeleteSession(ctx context.Context, key session.Key, opts ...session.Option) error {
+	return nil
+}
+
+func (serviceWithoutTrack) UpdateAppState(ctx context.Context, app string, state session.StateMap) error {
+	return nil
+}
+
+func (serviceWithoutTrack) DeleteAppState(ctx context.Context, app string, key string) error {
+	return nil
+}
+
+func (serviceWithoutTrack) ListAppStates(ctx context.Context, app string) (session.StateMap, error) {
+	return nil, nil
+}
+
+func (serviceWithoutTrack) UpdateUserState(ctx context.Context, key session.UserKey, state session.StateMap) error {
+	return nil
+}
+
+func (serviceWithoutTrack) ListUserStates(ctx context.Context, key session.UserKey) (session.StateMap, error) {
+	return nil, nil
+}
+
+func (serviceWithoutTrack) DeleteUserState(ctx context.Context, key session.UserKey, stateKey string) error {
+	return nil
+}
+
+func (serviceWithoutTrack) AppendEvent(ctx context.Context, sess *session.Session, evt *event.Event, opts ...session.Option) error {
+	return nil
+}
+
+func (serviceWithoutTrack) CreateSessionSummary(ctx context.Context, sess *session.Session, summary string, force bool) error {
+	return nil
+}
+
+func (serviceWithoutTrack) EnqueueSummaryJob(ctx context.Context, sess *session.Session, summary string, force bool) error {
+	return nil
+}
+
+func (serviceWithoutTrack) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	return "", false
+}
+
+func (serviceWithoutTrack) Close() error {
+	return nil
+}
+
+type hookSessionService struct {
+	*inmemory.SessionService
+	getSessionFn    func(context.Context, session.Key, ...session.Option) (*session.Session, error)
+	createSessionFn func(context.Context, session.Key, session.StateMap, ...session.Option) (*session.Session, error)
+	appendTrackFn   func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error
+}
+
+func newHookSessionService() *hookSessionService {
+	return &hookSessionService{SessionService: inmemory.NewSessionService()}
+}
+
+func (s *hookSessionService) GetSession(ctx context.Context, key session.Key, opts ...session.Option) (*session.Session, error) {
+	if s.getSessionFn != nil {
+		return s.getSessionFn(ctx, key, opts...)
+	}
+	return s.SessionService.GetSession(ctx, key, opts...)
+}
+
+func (s *hookSessionService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, opts ...session.Option) (*session.Session, error) {
+	if s.createSessionFn != nil {
+		return s.createSessionFn(ctx, key, state, opts...)
+	}
+	return s.SessionService.CreateSession(ctx, key, state, opts...)
+}
+
+func (s *hookSessionService) AppendTrackEvent(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+	if s.appendTrackFn != nil {
+		return s.appendTrackFn(ctx, sess, evt, opts...)
+	}
+	return s.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
+}
+
+type failingEvent struct {
+	base aguievents.BaseEvent
+}
+
+func (f *failingEvent) Type() aguievents.EventType {
+	return aguievents.EventType("failing")
+}
+
+func (f *failingEvent) Timestamp() *int64 {
+	return f.base.Timestamp()
+}
+
+func (f *failingEvent) SetTimestamp(ts int64) {
+	f.base.SetTimestamp(ts)
+}
+
+func (f *failingEvent) ThreadID() string { return "" }
+
+func (f *failingEvent) RunID() string { return "" }
+
+func (f *failingEvent) Validate() error { return nil }
+
+func (f *failingEvent) ToJSON() ([]byte, error) {
+	return nil, errors.New("fail to marshal")
+}
+
+func (f *failingEvent) GetBaseEvent() *aguievents.BaseEvent {
+	return &f.base
+}
