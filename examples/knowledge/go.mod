@@ -14,9 +14,10 @@ replace (
 
 require (
 	github.com/tencent/vectordatabase-sdk-go v1.8.0
-	trpc.group/trpc-go/trpc-agent-go v0.4.0
+	trpc.group/trpc-go/trpc-agent-go v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-20250917031858-f0ddbd5b2cb4
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-20250917031858-f0ddbd5b2cb4
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface v0.0.0-20251119113046-0cbdb93921df
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama v0.0.0-20251111070215-8fe58a4f2ffa
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
@@ -27,6 +28,7 @@ require (
 	cloud.google.com/go v0.116.0 // indirect
 	cloud.google.com/go/auth v0.9.3 // indirect
 	cloud.google.com/go/compute/metadata v0.6.0 // indirect
+	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.7.0 // indirect
