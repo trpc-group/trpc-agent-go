@@ -26,10 +26,12 @@ const (
 func TestBuildMessagesHappyPath(t *testing.T) {
 	events := []session.TrackEvent{
 		newTrackEvent(aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
-		newTrackEvent(aguievents.NewTextMessageContentEvent("user-1", "hello")),
+		newTrackEvent(aguievents.NewTextMessageContentEvent("user-1", "hello ")),
+		newTrackEvent(aguievents.NewTextMessageContentEvent("user-1", "world")),
 		newTrackEvent(aguievents.NewTextMessageEndEvent("user-1")),
 		newTrackEvent(aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
 		newTrackEvent(aguievents.NewTextMessageContentEvent("assistant-1", "thinking")),
+		newTrackEvent(aguievents.NewTextMessageContentEvent("assistant-1", "...done")),
 		newTrackEvent(aguievents.NewToolCallStartEvent("tool-call-1", "calc", aguievents.WithParentMessageID("assistant-1"))),
 		newTrackEvent(aguievents.NewToolCallArgsEvent("tool-call-1", "{\"a\":1}")),
 		newTrackEvent(aguievents.NewToolCallEndEvent("tool-call-1")),
@@ -44,20 +46,192 @@ func TestBuildMessagesHappyPath(t *testing.T) {
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(msgs))
 	}
-	if got := *msgs[0].Content; got != "hello" {
-		t.Fatalf("unexpected user content %q", got)
+
+	// User message assertions.
+	user := msgs[0]
+	if user.ID != "user-1" {
+		t.Fatalf("user id mismatch, got %s", user.ID)
 	}
-	if msgs[1].ToolCalls[0].Function.Arguments != "{\"a\":1}" {
-		t.Fatalf("unexpected tool call args: %s", msgs[1].ToolCalls[0].Function.Arguments)
+	if user.Role != "user" {
+		t.Fatalf("user role mismatch: %s", user.Role)
 	}
-	if *msgs[2].Content != "42" {
-		t.Fatalf("unexpected tool result content %q", *msgs[2].Content)
+	if user.Name == nil || *user.Name != testUserID {
+		t.Fatalf("expected user name %q, got %v", testUserID, user.Name)
 	}
-	if msgs[0].Name == nil || *msgs[0].Name != testUserID {
-		t.Fatalf("expected user name %q, got %v", testUserID, msgs[0].Name)
+	if user.Content == nil || *user.Content != "hello world" {
+		t.Fatalf("unexpected user content %v", user.Content)
 	}
-	if msgs[1].Name == nil || *msgs[1].Name != testAppName {
-		t.Fatalf("expected assistant name %q, got %v", testAppName, msgs[1].Name)
+	if len(user.ToolCalls) != 0 {
+		t.Fatalf("user message should not have tool calls")
+	}
+
+	// Assistant message assertions.
+	assistant := msgs[1]
+	if assistant.ID != "assistant-1" {
+		t.Fatalf("assistant id mismatch: %s", assistant.ID)
+	}
+	if assistant.Role != "assistant" {
+		t.Fatalf("assistant role mismatch: %s", assistant.Role)
+	}
+	if assistant.Name == nil || *assistant.Name != testAppName {
+		t.Fatalf("expected assistant name %q, got %v", testAppName, assistant.Name)
+	}
+	if assistant.Content == nil || *assistant.Content != "thinking...done" {
+		t.Fatalf("unexpected assistant content %v", assistant.Content)
+	}
+	if len(assistant.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(assistant.ToolCalls))
+	}
+	call := assistant.ToolCalls[0]
+	if call.ID != "tool-call-1" || call.Type != "function" {
+		t.Fatalf("unexpected tool call meta: %+v", call)
+	}
+	if call.Function.Name != "calc" {
+		t.Fatalf("unexpected tool name %s", call.Function.Name)
+	}
+	if call.Function.Arguments != "{\"a\":1}" {
+		t.Fatalf("unexpected tool args %s", call.Function.Arguments)
+	}
+
+	// Tool result assertions.
+	tool := msgs[2]
+	if tool.ID != "tool-msg-1" {
+		t.Fatalf("tool result id mismatch: %s", tool.ID)
+	}
+	if tool.Role != "tool" {
+		t.Fatalf("tool result role mismatch: %s", tool.Role)
+	}
+	if tool.Content == nil || *tool.Content != "42" {
+		t.Fatalf("unexpected tool result content %v", tool.Content)
+	}
+	if tool.ToolCallID == nil || *tool.ToolCallID != "tool-call-1" {
+		t.Fatalf("unexpected tool call reference %v", tool.ToolCallID)
+	}
+}
+
+func TestAssistantOnlyToolCall(t *testing.T) {
+	events := []session.TrackEvent{
+		newTrackEvent(aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
+		newTrackEvent(aguievents.NewToolCallStartEvent("tool-call-1", "search", aguievents.WithParentMessageID("assistant-1"))),
+		newTrackEvent(aguievents.NewToolCallArgsEvent("tool-call-1", "{}")),
+		newTrackEvent(aguievents.NewToolCallEndEvent("tool-call-1")),
+		newTrackEvent(aguievents.NewTextMessageEndEvent("assistant-1")),
+		newTrackEvent(aguievents.NewToolCallResultEvent("tool-msg-1", "tool-call-1", "reply")),
+	}
+
+	msgs, err := Reduce(testAppName, testUserID, events)
+	if err != nil {
+		t.Fatalf("Reduce err: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	assistant := msgs[0]
+	if len(assistant.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(assistant.ToolCalls))
+	}
+	call := assistant.ToolCalls[0]
+	if call.ID != "tool-call-1" || call.Function.Name != "search" {
+		t.Fatalf("unexpected tool call %+v", call)
+	}
+	if call.Function.Arguments != "{}" {
+		t.Fatalf("unexpected tool args: %s", call.Function.Arguments)
+	}
+	tool := msgs[1]
+	if tool.ToolCallID == nil || *tool.ToolCallID != "tool-call-1" {
+		t.Fatalf("unexpected tool call id %v", tool.ToolCallID)
+	}
+	if tool.Content == nil || *tool.Content != "reply" {
+		t.Fatalf("unexpected tool content %v", tool.Content)
+	}
+}
+
+func TestAssistantInterleavesTextAfterToolEnd(t *testing.T) {
+	events := []session.TrackEvent{
+		newTrackEvent(aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
+		newTrackEvent(aguievents.NewToolCallStartEvent("tool-call-1", "calc", aguievents.WithParentMessageID("assistant-1"))),
+		newTrackEvent(aguievents.NewToolCallArgsEvent("tool-call-1", "{\"x\":1}")),
+		newTrackEvent(aguievents.NewToolCallEndEvent("tool-call-1")),
+		newTrackEvent(aguievents.NewTextMessageContentEvent("assistant-1", "waiting")),
+		newTrackEvent(aguievents.NewTextMessageEndEvent("assistant-1")),
+		newTrackEvent(aguievents.NewToolCallResultEvent("tool-msg-1", "tool-call-1", "done")),
+	}
+
+	msgs, err := Reduce(testAppName, testUserID, events)
+	if err != nil {
+		t.Fatalf("Reduce err: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	assistant := msgs[0]
+	if assistant.Content == nil || *assistant.Content != "waiting" {
+		t.Fatalf("unexpected assistant content %v", assistant.Content)
+	}
+	if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Function.Arguments != "{\"x\":1}" {
+		t.Fatalf("unexpected tool calls %+v", assistant.ToolCalls)
+	}
+	tool := msgs[1]
+	if tool.Content == nil || *tool.Content != "done" {
+		t.Fatalf("unexpected tool content %v", tool.Content)
+	}
+	if tool.ToolCallID == nil || *tool.ToolCallID != "tool-call-1" {
+		t.Fatalf("unexpected tool call id %v", tool.ToolCallID)
+	}
+}
+
+func TestAssistantMultipleToolCalls(t *testing.T) {
+	events := []session.TrackEvent{
+		newTrackEvent(aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
+		newTrackEvent(aguievents.NewToolCallStartEvent("call-1", "alpha", aguievents.WithParentMessageID("assistant-1"))),
+		newTrackEvent(aguievents.NewToolCallArgsEvent("call-1", "{\"step\":1}")),
+		newTrackEvent(aguievents.NewToolCallEndEvent("call-1")),
+		newTrackEvent(aguievents.NewToolCallStartEvent("call-2", "beta", aguievents.WithParentMessageID("assistant-1"))),
+		newTrackEvent(aguievents.NewToolCallArgsEvent("call-2", "{\"step\":2}")),
+		newTrackEvent(aguievents.NewToolCallEndEvent("call-2")),
+		newTrackEvent(aguievents.NewTextMessageEndEvent("assistant-1")),
+		newTrackEvent(aguievents.NewToolCallResultEvent("tool-msg-1", "call-1", "first-result")),
+		newTrackEvent(aguievents.NewToolCallResultEvent("tool-msg-2", "call-2", "second-result")),
+	}
+
+	msgs, err := Reduce(testAppName, testUserID, events)
+	if err != nil {
+		t.Fatalf("Reduce err: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	assistant := msgs[0]
+	if len(assistant.ToolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(assistant.ToolCalls))
+	}
+	if assistant.ToolCalls[0].ID != "call-1" || assistant.ToolCalls[0].Function.Name != "alpha" {
+		t.Fatalf("unexpected first tool call: %+v", assistant.ToolCalls[0])
+	}
+	if assistant.ToolCalls[0].Function.Arguments != "{\"step\":1}" {
+		t.Fatalf("unexpected call-1 args: %s", assistant.ToolCalls[0].Function.Arguments)
+	}
+	if assistant.ToolCalls[1].ID != "call-2" || assistant.ToolCalls[1].Function.Name != "beta" {
+		t.Fatalf("unexpected second tool call: %+v", assistant.ToolCalls[1])
+	}
+	if assistant.ToolCalls[1].Function.Arguments != "{\"step\":2}" {
+		t.Fatalf("unexpected call-2 args: %s", assistant.ToolCalls[1].Function.Arguments)
+	}
+
+	first := msgs[1]
+	if first.ToolCallID == nil || *first.ToolCallID != "call-1" {
+		t.Fatalf("unexpected first result id %v", first.ToolCallID)
+	}
+	if first.Content == nil || *first.Content != "first-result" {
+		t.Fatalf("unexpected first result content %v", first.Content)
+	}
+	second := msgs[2]
+	if second.ToolCallID == nil || *second.ToolCallID != "call-2" {
+		t.Fatalf("unexpected second result id %v", second.ToolCallID)
+	}
+	if second.Content == nil || *second.Content != "second-result" {
+		t.Fatalf("unexpected second result content %v", second.Content)
 	}
 }
 
