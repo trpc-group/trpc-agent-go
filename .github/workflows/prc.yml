@@ -108,7 +108,7 @@ jobs:
         cp "${files[0]}" coverage.out
         for file in "${files[@]:1}"; do
           tail -n +2 "${file}" >> coverage.out
-        done
+        done 
     - name: Upload merged coverage artifact
       uses: actions/upload-artifact@v4
       with:
