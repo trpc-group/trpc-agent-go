@@ -174,7 +174,7 @@ func TestWorkspaceRuntime_CreateWorkspace_AutoMapsInputs(t *testing.T) {
 	ce := &CodeExecutor{
 		client:    cli,
 		container: &tcontainer.Summary{ID: testCID},
-		hostConfig: container.HostConfig{
+		hostConfig: tcontainer.HostConfig{
 			Binds: []string{
 				host + ":" + defaultInputsContainer + ":ro",
 			},
