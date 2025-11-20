@@ -250,9 +250,7 @@ func (e *CodeExecutor) ensureWS() *Runtime {
 				opts, WithInputsHostBase(e.inputsHostBase),
 			)
 		}
-		if e.autoInputs {
-			opts = append(opts, WithAutoInputs(true))
-		}
+		opts = append(opts, WithAutoInputs(e.autoInputs))
 		e.ws = NewRuntimeWithOptions("", opts...)
 	}
 	return e.ws
