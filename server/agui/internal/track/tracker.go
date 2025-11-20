@@ -5,7 +5,9 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
+// Package track implements the tracker for AG-UI events in the session.
 package track
 
 import (
