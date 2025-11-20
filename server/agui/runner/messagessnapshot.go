@@ -139,7 +139,7 @@ func (r *runner) convertToMessagesSnapshotEvent(ctx context.Context, userID stri
 					messages = append(messages, *r.convertToUserMessage(event.ID, userID, choice))
 				}
 			case model.RoleAssistant:
-				messages = append(messages, *r.convertToAssistantMessage(event.ID, choice))
+				messages = append(messages, *r.convertToAssistantMessage(event.Response.ID, choice))
 			case model.RoleTool:
 				messages = append(messages, *r.convertToToolMessage(event.ID, choice))
 			default:
