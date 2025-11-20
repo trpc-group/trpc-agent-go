@@ -60,9 +60,6 @@ func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguiev
 		return fmt.Errorf("marshal event: %w", err)
 	}
 	timestamp := time.Now()
-	if ts := event.Timestamp(); ts != nil {
-		timestamp = time.UnixMilli(*ts)
-	}
 	trackEvent := &session.TrackEvent{
 		Track:     TrackAGUI,
 		Payload:   json.RawMessage(append([]byte(nil), payload...)),
