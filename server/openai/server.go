@@ -90,7 +90,6 @@ func New(opts ...Option) (*Server, error) {
 	var ownedRunner bool
 	if options.runner != nil {
 		r = options.runner
-		ownedRunner = false
 	} else {
 		r = runner.NewRunner(options.appName, options.agent,
 			runner.WithSessionService(options.sessionService))

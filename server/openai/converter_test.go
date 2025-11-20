@@ -11,6 +11,8 @@ package openai
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -523,9 +525,9 @@ func TestConverter_convertModelMessageToOpenAI(t *testing.T) {
 		{
 			name: "tool response message",
 			msg: model.Message{
-				Role:    model.RoleTool,
-				Content: "result",
-				ToolID:  "call-123",
+				Role:     model.RoleTool,
+				Content:  "result",
+				ToolID:   "call-123",
 				ToolName: "test_function",
 			},
 			check: func(t *testing.T, openAIMsg *openAIMessage) {
@@ -649,6 +651,8 @@ func TestConverter_aggregateStreamingEvents(t *testing.T) {
 			check: func(t *testing.T, resp *openAIResponse) {
 				assert.NotNil(t, resp)
 				assert.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+				assert.NotNil(t, resp.Choices[0].FinishReason)
+				assert.Equal(t, "tool_calls", *resp.Choices[0].FinishReason)
 			},
 		},
 	}
@@ -676,8 +680,8 @@ func TestGenerateResponseID(t *testing.T) {
 	assert.NotEmpty(t, id1)
 	assert.NotEmpty(t, id2)
 	assert.NotEqual(t, id1, id2)
-	assert.Contains(t, id1, responseIDPrefix)
-	assert.Contains(t, id2, responseIDPrefix)
+	assert.Contains(t, id1, "chatcmpl-")
+	assert.Contains(t, id2, "chatcmpl-")
 }
 
 func TestFormatError(t *testing.T) {
@@ -863,3 +867,55 @@ func TestParseInt(t *testing.T) {
 	}
 }
 
+// parseFloat64 parses a float64 from interface{}.
+func parseFloat64(v any) (*float64, error) {
+	if v == nil {
+		return nil, nil
+	}
+	switch val := v.(type) {
+	case float64:
+		return &val, nil
+	case float32:
+		f := float64(val)
+		return &f, nil
+	case int:
+		f := float64(val)
+		return &f, nil
+	case int64:
+		f := float64(val)
+		return &f, nil
+	case string:
+		f, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return nil, err
+		}
+		return &f, nil
+	default:
+		return nil, fmt.Errorf("cannot convert %T to float64", v)
+	}
+}
+
+// parseInt parses an int from interface{}.
+func parseInt(v any) (*int, error) {
+	if v == nil {
+		return nil, nil
+	}
+	switch val := v.(type) {
+	case int:
+		return &val, nil
+	case int64:
+		i := int(val)
+		return &i, nil
+	case float64:
+		i := int(val)
+		return &i, nil
+	case string:
+		i, err := strconv.Atoi(val)
+		if err != nil {
+			return nil, err
+		}
+		return &i, nil
+	default:
+		return nil, fmt.Errorf("cannot convert %T to int", v)
+	}
+}

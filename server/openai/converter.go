@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,22 +22,37 @@ import (
 )
 
 const (
-	roleSystem                = "system"
-	roleUser                  = "user"
-	roleAssistant             = "assistant"
-	roleTool                  = "tool"
-	contentTypeText           = "text"
-	contentTypeImageURL       = "image_url"
+	// role constants
+	roleSystem    = "system"
+	roleUser      = "user"
+	roleAssistant = "assistant"
+	roleTool      = "tool"
+
+	// content type constants
+	contentTypeText     = "text"
+	contentTypeImageURL = "image_url"
+
+	// object type constants
 	objectChatCompletion      = "chat.completion"
 	objectChatCompletionChunk = "chat.completion.chunk"
-	finishReasonStop          = "stop"
-	errorTypeInvalidRequest   = "invalid_request_error"
-	errorTypeInternal         = "internal_error"
-	responseIDPrefix          = "chatcmpl-"
+
+	// finish reason constants
+	// According to OpenAI API spec, finish_reason can be:
+	// - "stop": model hit a natural stopping point
+	// - "length": model hit max_tokens limit or context length limit
+	// - "content_filter": content was omitted due to content filter
+	// - "tool_calls": model called a tool/function
+	// These values can also be obtained from model.Choice.FinishReason in events.
+	finishReasonStop      = "stop"
+	finishReasonToolCalls = "tool_calls"
+
+	// error type constants
+	errorTypeInvalidRequest = "invalid_request_error"
+	errorTypeInternal       = "internal_error"
 )
 
 // openAIRequest represents an OpenAI chat completion request.
-// Note: This is similar to github.com/openai/openai-go.ChatCompletionNewParams,
+// Note: This is similar to github.com/openai/openai-go's ChatCompletionNewParams,
 // but we define our own type because the SDK uses union types (e.g., Messages
 // is ChatCompletionMessageParamUnion) that don't work well for direct HTTP
 // JSON unmarshal. Our type uses simple types for better HTTP compatibility.
@@ -58,8 +72,12 @@ type openAIRequest struct {
 }
 
 // openAIMessage represents a message in OpenAI format.
-// Note: Similar to github.com/openai/openai-go.ChatCompletionMessageParamUnion,
+// Note: Similar to github.com/openai/openai-go's ChatCompletionMessageParamUnion,
 // but simplified for HTTP JSON serialization.
+// Content is defined as any because OpenAI API allows it to be either a string
+// (for text-only messages) or []contentPart (for multimodal messages with
+// text and/or images). Go doesn't support union types, so we use any and
+// handle both cases in convertMessage using type switches.
 type openAIMessage struct {
 	Role       string           `json:"role"`
 	Content    any              `json:"content"` // string or []contentPart
@@ -69,14 +87,14 @@ type openAIMessage struct {
 }
 
 // openAITool represents a tool definition.
-// Note: Similar to github.com/openai/openai-go.ChatCompletionToolParam.
+// Note: Similar to github.com/openai/openai-go's ChatCompletionToolParam.
 type openAITool struct {
 	Type     string         `json:"type"`
 	Function openAIFunction `json:"function"`
 }
 
 // openAIFunction represents a function definition.
-// Note: Similar to github.com/openai/openai-go.ChatCompletionToolFunction.
+// Note: Similar to github.com/openai/openai-go's ChatCompletionToolFunction.
 type openAIFunction struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
@@ -84,7 +102,7 @@ type openAIFunction struct {
 }
 
 // openAIToolCall represents a tool call in OpenAI format.
-// Note: Similar to github.com/openai/openai-go.ChatCompletionMessageToolCall.
+// Note: Similar to github.com/openai/openai-go's ChatCompletionMessageToolCall.
 type openAIToolCall struct {
 	ID       string                 `json:"id"`
 	Type     string                 `json:"type"`
@@ -92,7 +110,7 @@ type openAIToolCall struct {
 }
 
 // openAIToolCallFunction represents a function call.
-// Note: Similar to github.com/openai/openai-go.ChatCompletionMessageToolCallFunction.
+// Note: Similar to github.com/openai/openai-go's ChatCompletionMessageToolCallFunction.
 type openAIToolCallFunction struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -112,7 +130,7 @@ type imageURL struct {
 }
 
 // openAIResponse represents a non-streaming OpenAI response.
-// Note: This is similar to github.com/openai/openai-go.ChatCompletion,
+// Note: This is similar to github.com/openai/openai-go's ChatCompletion,
 // but we define our own type for HTTP JSON serialization compatibility.
 // The SDK's ChatCompletion uses constant types and union types that don't
 // work well for direct HTTP JSON marshal/unmarshal.
@@ -126,7 +144,7 @@ type openAIResponse struct {
 }
 
 // openAIChoice represents a choice in the response.
-// Note: Similar to github.com/openai/openai-go.ChatCompletionChoice,
+// Note: Similar to github.com/openai/openai-go's ChatCompletionChoice,
 // but with optional FinishReason for better compatibility.
 type openAIChoice struct {
 	Index        int           `json:"index"`
@@ -142,7 +160,7 @@ type openAIUsage struct {
 }
 
 // openAIChunk represents a streaming chunk.
-// Note: This is similar to github.com/openai/openai-go.ChatCompletionChunk,
+// Note: This is similar to github.com/openai/openai-go's ChatCompletionChunk,
 // but we define our own type for HTTP JSON serialization compatibility.
 type openAIChunk struct {
 	ID      string              `json:"id"`
@@ -153,7 +171,7 @@ type openAIChunk struct {
 }
 
 // openAIChunkChoice represents a choice in a streaming chunk.
-// Note: Similar to github.com/openai/openai-go.ChatCompletionChunkChoice,
+// Note: Similar to github.com/openai/openai-go's ChatCompletionChunkChoice,
 // but with optional FinishReason for better compatibility.
 type openAIChunkChoice struct {
 	Index        int           `json:"index"`
@@ -174,7 +192,7 @@ func newConverter(modelName string) *converter {
 }
 
 // convertRequest converts an OpenAI request to trpc-agent-go messages.
-func (c *converter) convertRequest(ctx context.Context, req *openAIRequest) ([]model.Message, error) {
+func (c *converter) convertRequest(_ context.Context, req *openAIRequest) ([]model.Message, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is nil")
 	}
@@ -209,27 +227,27 @@ func (c *converter) convertMessage(msg openAIMessage) (*model.Message, error) {
 		case []any:
 			// Multimodal content.
 			for _, part := range v {
-				partMap, ok := part.(map[string]any)
-				if !ok {
+				// Marshal part to JSON bytes, then unmarshal to contentPart struct.
+				partBytes, err := json.Marshal(part)
+				if err != nil {
 					continue
 				}
-				partType, _ := partMap["type"].(string)
-				switch partType {
+				var cp contentPart
+				if err := json.Unmarshal(partBytes, &cp); err != nil {
+					continue
+				}
+				switch cp.Type {
 				case contentTypeText:
-					if text, ok := partMap["text"].(string); ok {
+					if cp.Text != "" {
 						if result.Content == "" {
-							result.Content = text
+							result.Content = cp.Text
 						} else {
-							result.Content += "\n" + text
+							result.Content += "\n" + cp.Text
 						}
 					}
 				case contentTypeImageURL:
-					if imageURL, ok := partMap["image_url"].(map[string]any); ok {
-						url, _ := imageURL["url"].(string)
-						detail, _ := imageURL["detail"].(string)
-						if url != "" {
-							result.AddImageURL(url, detail)
-						}
+					if cp.ImageURL.URL != "" {
+						result.AddImageURL(cp.ImageURL.URL, cp.ImageURL.Detail)
 					}
 				}
 			}
@@ -275,20 +293,6 @@ func (c *converter) convertRole(role string) (model.Role, error) {
 	default:
 		return "", fmt.Errorf("invalid role: %s", role)
 	}
-}
-
-// convertEventToResponse converts an event to OpenAI response format.
-func (c *converter) convertEventToResponse(ctx context.Context, evt *event.Event, isStreaming bool) (any, error) {
-	if evt == nil || evt.Response == nil {
-		return nil, nil
-	}
-	if evt.Response.Error != nil {
-		return nil, fmt.Errorf("API error: %s", evt.Response.Error.Message)
-	}
-	if isStreaming {
-		return c.convertToChunk(evt)
-	}
-	return c.convertToResponse(evt)
 }
 
 // convertToResponse converts an event to a non-streaming response.
@@ -446,7 +450,11 @@ func (c *converter) aggregateStreamingEvents(events []*event.Event) (*openAIResp
 	if err != nil {
 		return nil, err
 	}
+	// Get finish_reason from framework first, then fallback to defaults.
 	finishReason := finishReasonStop
+	if len(toolCalls) > 0 {
+		finishReason = finishReasonToolCalls
+	}
 	if finalEvent.Response != nil && len(finalEvent.Response.Choices) > 0 {
 		if finalEvent.Response.Choices[0].FinishReason != nil {
 			finishReason = *finalEvent.Response.Choices[0].FinishReason
@@ -477,7 +485,7 @@ func (c *converter) aggregateStreamingEvents(events []*event.Event) (*openAIResp
 
 // generateResponseID generates a unique response ID.
 func generateResponseID() string {
-	return responseIDPrefix + uuid.New().String()
+	return "chatcmpl-" + uuid.New().String()
 }
 
 // openAIError represents an OpenAI error response.
@@ -501,58 +509,5 @@ func formatError(err error, errorType string) *openAIError {
 			Message: err.Error(),
 			Type:    errorType,
 		},
-	}
-}
-
-// parseFloat64 parses a float64 from interface{}.
-func parseFloat64(v any) (*float64, error) {
-	if v == nil {
-		return nil, nil
-	}
-	switch val := v.(type) {
-	case float64:
-		return &val, nil
-	case float32:
-		f := float64(val)
-		return &f, nil
-	case int:
-		f := float64(val)
-		return &f, nil
-	case int64:
-		f := float64(val)
-		return &f, nil
-	case string:
-		f, err := strconv.ParseFloat(val, 64)
-		if err != nil {
-			return nil, err
-		}
-		return &f, nil
-	default:
-		return nil, fmt.Errorf("cannot convert %T to float64", v)
-	}
-}
-
-// parseInt parses an int from interface{}.
-func parseInt(v any) (*int, error) {
-	if v == nil {
-		return nil, nil
-	}
-	switch val := v.(type) {
-	case int:
-		return &val, nil
-	case int64:
-		i := int(val)
-		return &i, nil
-	case float64:
-		i := int(val)
-		return &i, nil
-	case string:
-		i, err := strconv.Atoi(val)
-		if err != nil {
-			return nil, err
-		}
-		return &i, nil
-	default:
-		return nil, fmt.Errorf("cannot convert %T to int", v)
 	}
 }
