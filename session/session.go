@@ -380,6 +380,13 @@ type Service interface {
 	// DeleteUserState deletes the state by target scope and key.
 	DeleteUserState(ctx context.Context, userKey UserKey, key string) error
 
+	// UpdateSessionState updates the session-level state directly without appending an event.
+	// This is useful for state initialization, correction, or synchronization scenarios
+	// where event history is not needed.
+	// Keys with app: or user: prefixes are not allowed (use UpdateAppState/UpdateUserState instead).
+	// Keys with temp: prefix are allowed as they represent session-scoped ephemeral state.
+	UpdateSessionState(ctx context.Context, key Key, state StateMap) error
+
 	// AppendEvent appends an event to a session.
 	AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error
 
