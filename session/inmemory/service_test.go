@@ -1376,7 +1376,7 @@ func TestCopySessionTracks(t *testing.T) {
 		CreatedAt: now,
 	}
 
-	copied := copySession(original)
+	copied := original.Clone()
 	require.NotNil(t, copied)
 
 	require.NotSame(t, original, copied)
@@ -1409,7 +1409,7 @@ func TestCopySessionWithoutTracks(t *testing.T) {
 		},
 	}
 
-	copied := copySession(sess)
+	copied := sess.Clone()
 	require.NotNil(t, copied)
 	assert.Nil(t, copied.Tracks)
 	copied.State["foo"][0] = 'x'

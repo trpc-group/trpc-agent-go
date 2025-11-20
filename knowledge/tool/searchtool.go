@@ -26,7 +26,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-const defaultMaxResults = 10
+const (
+	defaultMaxResults = 10
+	defaultMinScore   = 0.0
+)
 
 // KnowledgeSearchRequest represents the input for the knowledge search tool.
 type KnowledgeSearchRequest struct {
@@ -55,6 +58,7 @@ type options struct {
 	staticFilter      map[string]any
 	conditionedFilter *searchfilter.UniversalFilterCondition
 	maxResults        int
+	minScore          float64
 }
 
 // WithToolName sets the name of the knowledge search tool.
@@ -97,12 +101,22 @@ func WithMaxResults(maxResults int) Option {
 	}
 }
 
+// WithMinScore sets the minimum relevance score threshold (0.0 to 1.0).
+// Documents with scores below this threshold will be filtered out.
+// Default is 0.0 if not specified.
+func WithMinScore(minScore float64) Option {
+	return func(opts *options) {
+		opts.minScore = minScore
+	}
+}
+
 // NewKnowledgeSearchTool creates a function tool for knowledge search using
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
 func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 	opt := &options{
 		maxResults: defaultMaxResults,
+		minScore:   defaultMinScore,
 	}
 	for _, o := range opts {
 		o(opt)
@@ -133,6 +147,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 				FilterCondition: finalFilter,
 			},
 			MaxResults: opt.maxResults,
+			MinScore:   opt.minScore,
 			// History, UserID, SessionID could be filled from agent context in the future.
 		}
 
@@ -180,6 +195,7 @@ func NewAgenticFilterSearchTool(
 ) tool.Tool {
 	opt := &options{
 		maxResults: defaultMaxResults,
+		minScore:   defaultMinScore,
 	}
 	for _, o := range opts {
 		o(opt)
@@ -210,6 +226,7 @@ func NewAgenticFilterSearchTool(
 				FilterCondition: finalFilter,
 			},
 			MaxResults: opt.maxResults,
+			MinScore:   opt.minScore,
 		}
 
 		// Set search mode based on whether query is provided

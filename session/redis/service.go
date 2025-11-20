@@ -34,10 +34,10 @@ var (
 )
 
 const (
-	defaultSessionEventLimit = 1000
-	defaultTimeout           = 2 * time.Second
-	defaultChanBufferSize    = 100
-	defaultAsyncPersisterNum = 10
+	defaultSessionEventLimit   = 1000
+	defaultAsyncPersistTimeout = 2 * time.Second
+	defaultChanBufferSize      = 100
+	defaultAsyncPersisterNum   = 10
 
 	defaultAsyncSummaryNum  = 3
 	defaultSummaryQueueSize = 100
@@ -83,10 +83,9 @@ type trackEventPair struct {
 
 // summaryJob represents a summary job to be processed asynchronously.
 type summaryJob struct {
-	sessionKey session.Key
-	filterKey  string
-	force      bool
-	session    *session.Session
+	filterKey string
+	force     bool
+	session   *session.Session
 }
 
 // NewService creates a new redis session service.
@@ -219,15 +218,12 @@ func (s *Service) CreateSession(
 	}
 
 	// Create session with merged states
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    []event.Event{},
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
-	}
+	sess := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -446,10 +442,7 @@ func (s *Service) AppendEvent(
 			}
 		}()
 
-		// TODO: Init hash index at session creation to prevent duplicate computation.
-		hKey := getEventKey(key)
-		n := len(s.eventPairChans)
-		index := int(murmur3.Sum32([]byte(hKey))) % n
+		index := sess.Hash % len(s.eventPairChans)
 		select {
 		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
 		case <-ctx.Done():
@@ -625,15 +618,13 @@ func (s *Service) getSession(
 	if len(events) == 0 {
 		events = make([][]event.Event, 1)
 	}
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    events[0],
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
-	}
+	sess := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionEvents(events[0]),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
 
 	trackEvents, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, limit, afterTime)
 	if err != nil {
@@ -660,9 +651,6 @@ func (s *Service) getSession(
 			}
 		}
 	}
-
-	// filter events to ensure they start with RoleUser
-	sess.EnsureEventStartWithUser()
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -728,15 +716,13 @@ func (s *Service) listSessions(
 	}
 
 	for i, sessState := range sessStates {
-		sess := &session.Session{
-			ID:        sessState.ID,
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			State:     sessState.State,
-			Events:    events[i],
-			UpdatedAt: sessState.UpdatedAt,
-			CreatedAt: sessState.CreatedAt,
-		}
+		sess := session.NewSession(
+			key.AppName, key.UserID, sessState.ID,
+			session.WithSessionState(sessState.State),
+			session.WithSessionEvents(events[i]),
+			session.WithSessionCreatedAt(sessState.CreatedAt),
+			session.WithSessionUpdatedAt(sessState.UpdatedAt),
+		)
 		if len(trackEvents[i]) > 0 {
 			sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEvents[i]))
 			for trackName, history := range trackEvents[i] {
@@ -747,8 +733,6 @@ func (s *Service) listSessions(
 			}
 		}
 
-		// filter events to ensure they start with RoleUser
-		sess.EnsureEventStartWithUser()
 		sessList = append(sessList, mergeState(appState, userState, sess))
 	}
 	return sessList, nil
@@ -1141,7 +1125,7 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			for eventPair := range eventPairChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:%s",
 					cap(eventPairChan), len(eventPairChan), getSessionStateKey(eventPair.key))
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
@@ -1155,7 +1139,7 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(trackEventChan chan *trackEventPair) {
 			defer s.persistWg.Done()
 			for trackEvent := range trackEventChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				log.Debugf("Session track persistence queue monitoring: channel capacity: %d, current length: %d, "+
 					"session key:%s, track key:%s", cap(trackEventChan), len(trackEventChan),
 					getSessionStateKey(trackEvent.key), getTrackKey(trackEvent.key, trackEvent.event.Track))

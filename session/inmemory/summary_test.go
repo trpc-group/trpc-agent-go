@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -240,15 +239,11 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 
 	// Fill up the target worker queue with a blocking job
 	blockingJob := &summaryJob{
-		sessionKey: key,
-		filterKey:  "blocking",
-		force:      true,
-		session:    sess,
+		filterKey: "blocking",
+		force:     true,
+		session:   sess,
 	}
-
-	// Choose the same worker index as tryEnqueueJob would select.
-	keyStr := key.AppName + ":" + key.UserID + ":" + key.SessionID
-	idx := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+	idx := sess.Hash % len(s.summaryJobChans)
 
 	// Send a job to fill that queue (this will block the worker)
 	select {
@@ -498,10 +493,9 @@ func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
 
 	// Process a job with no stored session - should trigger error but not panic.
 	job := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
+		filterKey: "",
+		force:     false,
+		session:   &session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID},
 	}
 
 	// This should not panic, just log error.
@@ -511,8 +505,9 @@ func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
 }
 
 func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
+	// Use blocking summarizer to ensure queue stays full.
 	service := NewSessionService(
-		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+		WithSummarizer(&fakeBlockingSummarizer{}),
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(1),
 	)
@@ -523,28 +518,35 @@ func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
 	sess, err := service.CreateSession(ctx, key, session.StateMap{})
 	require.NoError(t, err)
 
-	// Fill the queue first
+	// Calculate the worker index for this session to ensure we use the same worker.
+	idx := sess.Hash % len(service.summaryJobChans)
+
+	// Fill the queue first with a blocking job.
 	job1 := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    sess,
+		filterKey: "",
+		force:     false,
+		session:   sess,
 	}
 
-	// First job should succeed
-	assert.True(t, service.tryEnqueueJob(ctx, job1))
+	select {
+	case service.summaryJobChans[idx] <- job1:
+		// Queue is now full.
+	default:
+		// Queue was already full.
+	}
 
-	// Create a cancelled context
+	// Create a cancelled context.
 	cancelledCtx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	// Second job with cancelled context should fail
+	// Use the same session to ensure it hashes to the same worker (queue is full).
 	job2 := &summaryJob{
-		sessionKey: session.Key{AppName: "app", UserID: "u2", SessionID: "s2"},
-		filterKey:  "",
-		force:      false,
-		session:    sess,
+		filterKey: "",
+		force:     false,
+		session:   sess,
 	}
+
+	// Should return false when context is cancelled (even if queue is full).
 	assert.False(t, service.tryEnqueueJob(cancelledCtx, job2))
 }
 
@@ -704,10 +706,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: true, out: "test summary"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -731,10 +732,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: true, out: "branch summary"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "branch1",
-					force:      false,
-					session:    sess,
+					filterKey: "branch1",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -751,10 +751,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeSummarizer{allow: false, out: "no update"}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false,
@@ -771,10 +770,9 @@ func TestProcessSummaryJob(t *testing.T) {
 				service.opts.summarizer = &fakeErrorSummarizer{}
 
 				return &summaryJob{
-					sessionKey: key,
-					filterKey:  "",
-					force:      false,
-					session:    sess,
+					filterKey: "",
+					force:     false,
+					session:   sess,
 				}
 			},
 			expectError: false, // Should not panic or error, just log
@@ -833,17 +831,24 @@ func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
 	sess, err := service.CreateSession(ctx, key, session.StateMap{})
 	require.NoError(t, err)
 
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, service.AppendEvent(ctx, sess, e))
+
 	// Close the service to simulate shutdown and set channels to nil
 	service.Close()
 
-	job := &summaryJob{
-		sessionKey: key,
-		filterKey:  "",
-		force:      false,
-		session:    sess,
-	}
+	// EnqueueSummaryJob should fall back to sync processing when channels are nil
+	err = service.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
 
-	// Should return false when channels are nil (after close)
-	result := service.tryEnqueueJob(ctx, job)
-	assert.False(t, result)
+	// Verify summary was created through sync fallback
+	got, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	sum, ok := got.Summaries[""]
+	require.True(t, ok)
+	require.Equal(t, "test", sum.Summary)
 }

@@ -162,9 +162,9 @@ Example: For "3*4", call calculator with operation="multiply", a=3, b=4`,
 
 	// Add workflow edges - let tools return to analyze for result processing
 	stateGraph.AddEdge("parse_input", "analyze")
+	// AddToolsConditionalEdges handles routing: tool_calls → tools, otherwise → format_result
 	stateGraph.AddToolsConditionalEdges("analyze", "tools", "format_result")
-	stateGraph.AddEdge("tools", "analyze")         // Tools return to analyze to process results
-	stateGraph.AddEdge("analyze", "format_result") // Direct path when no tools needed or after tool processing
+	stateGraph.AddEdge("tools", "analyze") // Tools return to analyze to process results
 
 	// Build and compile the graph
 	workflowGraph, err := stateGraph.Compile()
@@ -293,7 +293,7 @@ func formatResultNode(ctx context.Context, state graph.State) (any, error) {
 
 	originalExpr, _ := state[stateKeyOriginalExpression].(string)
 
-	finalOutput := fmt.Sprintf("计算结果：%s = %s",
+	finalOutput := fmt.Sprintf("Calculation result: %s = %s",
 		originalExpr,
 		content)
 

@@ -571,7 +571,7 @@ func (w *customerSupportWorkflow) processStreamingResponse(eventChan <-chan *eve
 		if event.Done {
 			// If A2A streaming happened, avoid repeating the same content; show a concise completion mark.
 			if a2aStreamed {
-				fmt.Println("✅ A2A 完成")
+				fmt.Println("✅ A2A Completed")
 			} else {
 				// Print final response once: prefer formatted final_answer, otherwise fallback to completion response.
 				printed := false

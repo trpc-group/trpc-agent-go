@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
@@ -382,10 +383,10 @@ func TestNewMCPToolSet_WithMultipleOptions(t *testing.T) {
 		Args:      []string{"hello"},
 	}
 
-	filter := NewIncludeFilter("tool1", "tool2")
+	filterFunc := tool.NewIncludeToolNamesFilter("tool1", "tool2")
 	toolset := NewMCPToolSet(config,
 		WithName("test-toolset"),
-		WithToolFilter(filter),
+		WithToolFilterFunc(filterFunc),
 		WithSessionReconnect(3),
 	)
 
@@ -393,8 +394,8 @@ func TestNewMCPToolSet_WithMultipleOptions(t *testing.T) {
 		t.Errorf("Expected name 'test-toolset', got %q", toolset.Name())
 	}
 
-	if toolset.config.toolFilter == nil {
-		t.Error("Expected tool filter to be set")
+	if toolset.config.toolFilterFunc == nil {
+		t.Error("Expected tool filter func to be set")
 	}
 
 	if toolset.config.sessionReconnectConfig == nil {

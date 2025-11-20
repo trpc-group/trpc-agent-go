@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
@@ -34,8 +35,8 @@ const (
 	defaultSessionEventLimit     = 1000
 	defaultChanBufferSize        = 100
 	defaultAsyncPersisterNum     = 10
-	defaultCleanupIntervalSecond = 300 // 5 min
-	defaultTimeout               = 5 * time.Second
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
+	defaultAsyncPersistTimeout   = 5 * time.Second
 
 	defaultAsyncSummaryNum  = 3
 	defaultSummaryQueueSize = 100
@@ -92,36 +93,9 @@ type trackEventPair struct {
 
 // summaryJob represents a summary job to be processed asynchronously.
 type summaryJob struct {
-	sessionKey session.Key
-	filterKey  string
-	force      bool
-	session    *session.Session
-}
-
-// buildFullTableName builds a full table name with optional schema and prefix.
-// Examples:
-// - schema="", prefix="", table="session_states" -> "session_states"
-// - schema="myschema", prefix="", table="session_states" -> "myschema.session_states"
-// - schema="", prefix="trpc_", table="session_states" -> "trpc_session_states"
-// - schema="myschema", prefix="trpc_", table="session_states" -> "myschema.trpc_session_states"
-func buildFullTableName(schema, prefix, tableName string) string {
-	fullTableName := prefix + tableName
-	if schema != "" {
-		return schema + "." + fullTableName
-	}
-	return fullTableName
-}
-
-// parseTableName parses a full table name into schema and table components.
-// Examples:
-// - "session_states" -> ("public", "session_states")
-// - "myschema.session_states" -> ("myschema", "session_states")
-func parseTableName(fullTableName string) (schema, tableName string) {
-	parts := strings.Split(fullTableName, ".")
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return "public", fullTableName
+	filterKey string
+	force     bool
+	session   *session.Session
 }
 
 // buildConnString builds a PostgreSQL connection string from options.
@@ -180,7 +154,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Set default cleanup interval if any TTL is configured and auto cleanup is not disabled
 	if opts.cleanupInterval <= 0 {
 		if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
-			opts.cleanupInterval = defaultCleanupIntervalSecond * time.Second
+			opts.cleanupInterval = defaultCleanupIntervalSecond
 		}
 	}
 
@@ -222,13 +196,13 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL: opts.userStateTTL,
 		cleanupDone:  make(chan struct{}),
 
-		// Initialize table names with schema and prefix
-		tableSessionStates:    buildFullTableName(opts.schema, opts.tablePrefix, "session_states"),
-		tableSessionEvents:    buildFullTableName(opts.schema, opts.tablePrefix, "session_events"),
-		tableSessionTracks:    buildFullTableName(opts.schema, opts.tablePrefix, "session_track_events"),
-		tableSessionSummaries: buildFullTableName(opts.schema, opts.tablePrefix, "session_summaries"),
-		tableAppStates:        buildFullTableName(opts.schema, opts.tablePrefix, "app_states"),
-		tableUserStates:       buildFullTableName(opts.schema, opts.tablePrefix, "user_states"),
+		// Initialize table names with schema and prefix using internal/session/sqldb
+		tableSessionStates:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionStates),
+		tableSessionEvents:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionEvents),
+		tableSessionTracks:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionTrackEvents),
+		tableSessionSummaries: sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionSummaries),
+		tableAppStates:        sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameAppStates),
+		tableUserStates:       sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameUserStates),
 	}
 
 	// Initialize database schema unless skipped
@@ -338,16 +312,12 @@ func (s *Service) CreateSession(
 		return nil, fmt.Errorf("list user states failed: %w", err)
 	}
 
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    []event.Event{},
-		Summaries: make(map[string]*session.Summary),
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
-	}
+	sess := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -621,10 +591,7 @@ func (s *Service) AppendEvent(
 			}
 		}()
 
-		// TODO: Init hash index at session creation to prevent duplicate computation.
-		hKey := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-		n := len(s.eventPairChans)
-		index := int(murmur3.Sum32([]byte(hKey))) % n
+		index := sess.Hash % len(s.eventPairChans)
 		select {
 		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
 		case <-ctx.Done():
@@ -850,15 +817,15 @@ func (s *Service) getSession(
 		return nil, fmt.Errorf("get summaries failed: %w", err)
 	}
 
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     sessState.State,
-		Events:    events,
-		Summaries: summaries,
-		UpdatedAt: sessState.UpdatedAt,
-		CreatedAt: sessState.CreatedAt,
+	sess := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionEvents(events),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
+	if len(events) > 0 {
+		sess.Summaries = summaries
 	}
 	trackEventsList, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, limit, afterTime)
 	if err != nil {
@@ -963,18 +930,15 @@ func (s *Service) listSessions(
 
 	sessions := make([]*session.Session, 0, len(sessStates))
 	for i, sessState := range sessStates {
-		sess := &session.Session{
-			ID:        sessState.ID,
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			State:     sessState.State,
-			Events:    eventsList[i],
-			Summaries: summariesList[i],
-			UpdatedAt: sessState.UpdatedAt,
-			CreatedAt: sessState.CreatedAt,
-		}
+		sess := session.NewSession(
+			key.AppName, key.UserID, sessState.ID,
+			session.WithSessionState(sessState.State),
+			session.WithSessionEvents(eventsList[i]),
+			session.WithSessionSummaries(summariesList[i]),
+			session.WithSessionCreatedAt(sessState.CreatedAt),
+			session.WithSessionUpdatedAt(sessState.UpdatedAt),
+		)
 		if len(trackEvents[i]) > 0 {
-			log.Debugf("listSessions attaching %d tracks for session %s", len(trackEvents[i]), sessState.ID)
 			sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEvents[i]))
 			for trackName, history := range trackEvents[i] {
 				sess.Tracks[trackName] = &session.TrackEvents{
@@ -1347,7 +1311,7 @@ func (s *Service) startAsyncPersistWorker() {
 			for pair := range eventPairChan {
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:(app: %s, user: %s, session: %s)",
 					cap(eventPairChan), len(eventPairChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
-				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
 					log.Errorf("postgres session service async persist event failed: %v", err)
 				}
@@ -1362,7 +1326,7 @@ func (s *Service) startAsyncPersistWorker() {
 			for pair := range trackPairChan {
 				log.Debugf("Session track persistence queue monitoring: channel capacity: %d, current length: %d, session key:(app: %s, user: %s, session: %s)",
 					cap(trackPairChan), len(trackPairChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
-				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				if err := s.addTrackEvent(ctx, pair.key, pair.event); err != nil {
 					log.Errorf("postgres session service async persist track event failed: %v", err)
 				}
@@ -1660,111 +1624,106 @@ func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.Use
 func (s *Service) cleanupExpiredData(ctx context.Context, userKey *session.UserKey) {
 	now := time.Now()
 
-	// Define cleanup tasks: table name, TTL, and whether it's session-scoped
 	type cleanupTask struct {
-		tableName      string
-		ttl            time.Duration
-		isSessionScope bool // true for session-related tables, false for app/user states
+		tableName string
+		ttl       time.Duration
 	}
 
 	tasks := []cleanupTask{
-		{s.tableSessionStates, s.sessionTTL, true},
-		{s.tableSessionEvents, s.sessionTTL, true},
-		{s.tableSessionTracks, s.sessionTTL, true},
-		{s.tableSessionSummaries, s.sessionTTL, true},
-		{s.tableAppStates, s.appStateTTL, false},
-		{s.tableUserStates, s.userStateTTL, false},
+		{s.tableSessionStates, s.sessionTTL},
+		{s.tableSessionEvents, s.sessionTTL},
+		{s.tableSessionTracks, s.sessionTTL},
+		{s.tableSessionSummaries, s.sessionTTL},
+		{s.tableAppStates, s.appStateTTL},
+		{s.tableUserStates, s.userStateTTL},
 	}
 
+	validTasks := []cleanupTask{}
 	for _, task := range tasks {
-		// Skip if TTL is not set
 		if task.ttl <= 0 {
 			continue
 		}
-
-		// Skip app_states when cleaning up for a specific user (app states are global)
 		if userKey != nil && task.tableName == s.tableAppStates {
 			continue
 		}
+		validTasks = append(validTasks, task)
+	}
 
-		if s.opts.softDelete {
-			s.softDeleteExpiredTable(ctx, task.tableName, now, userKey, task.isSessionScope)
-		} else {
-			s.hardDeleteExpiredTable(ctx, task.tableName, now, userKey, task.isSessionScope)
+	if len(validTasks) > 0 {
+		err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+			for _, task := range validTasks {
+				if s.opts.softDelete {
+					if err := s.softDeleteExpiredTableInTx(ctx, tx, task.tableName, now, userKey); err != nil {
+						return err
+					}
+				} else {
+					if err := s.hardDeleteExpiredTableInTx(ctx, tx, task.tableName, now, userKey); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Errorf("cleanup expired tables failed: %v", err)
 		}
 	}
 }
 
-// softDeleteExpiredTable soft-deletes expired records from a specific table.
-func (s *Service) softDeleteExpiredTable(
+func (s *Service) softDeleteExpiredTableInTx(
 	ctx context.Context,
+	tx *sql.Tx,
 	tableName string,
 	now time.Time,
 	userKey *session.UserKey,
-	isSessionScope bool,
-) {
+) error {
 	var query string
 	var args []any
 
-	if userKey != nil && isSessionScope {
-		// User-scoped cleanup for session-related tables
-		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
-			WHERE app_name = $2 AND user_id = $3
-			AND expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
-		args = []any{now, userKey.AppName, userKey.UserID}
-	} else if userKey != nil && !isSessionScope {
-		// User-scoped cleanup for user_states table
+	if userKey != nil {
 		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			WHERE app_name = $2 AND user_id = $3
 			AND expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
 		args = []any{now, userKey.AppName, userKey.UserID}
 	} else {
-		// Global cleanup
 		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			WHERE expires_at IS NOT NULL AND expires_at <= $1 AND deleted_at IS NULL`, tableName)
 		args = []any{now}
 	}
 
-	_, err := s.pgClient.ExecContext(ctx, query, args...)
+	_, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		log.Errorf("soft delete expired %s failed: %v", tableName, err)
+		return fmt.Errorf("soft delete expired %s: %w", tableName, err)
 	}
+	return nil
 }
 
-// hardDeleteExpiredTable physically removes expired records from a specific table.
-func (s *Service) hardDeleteExpiredTable(
+func (s *Service) hardDeleteExpiredTableInTx(
 	ctx context.Context,
+	tx *sql.Tx,
 	tableName string,
 	now time.Time,
 	userKey *session.UserKey,
-	isSessionScope bool,
-) {
+) error {
 	var query string
 	var args []any
 
-	if userKey != nil && isSessionScope {
-		// User-scoped cleanup for session-related tables
-		query = fmt.Sprintf(`DELETE FROM %s
-			WHERE app_name = $1 AND user_id = $2
-			AND expires_at IS NOT NULL AND expires_at <= $3`, tableName)
-		args = []any{userKey.AppName, userKey.UserID, now}
-	} else if userKey != nil && !isSessionScope {
-		// User-scoped cleanup for user_states table
+	if userKey != nil {
 		query = fmt.Sprintf(`DELETE FROM %s
 			WHERE app_name = $1 AND user_id = $2
 			AND expires_at IS NOT NULL AND expires_at <= $3`, tableName)
 		args = []any{userKey.AppName, userKey.UserID, now}
 	} else {
-		// Global cleanup
 		query = fmt.Sprintf(`DELETE FROM %s
 			WHERE expires_at IS NOT NULL AND expires_at <= $1`, tableName)
 		args = []any{now}
 	}
 
-	_, err := s.pgClient.ExecContext(ctx, query, args...)
+	_, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		log.Errorf("hard delete expired %s failed: %v", tableName, err)
+		return fmt.Errorf("hard delete expired %s: %w", tableName, err)
 	}
+	return nil
 }
 
 // startCleanupRoutine starts the background cleanup routine.

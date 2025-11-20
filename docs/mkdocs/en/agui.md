@@ -359,3 +359,51 @@ if err != nil {
 ```
 
 In this case, the chat route will be `/agui/chat`, and the message snapshot route will be `/agui/history`.
+
+## Best Practices
+
+### Generating Documents
+
+If a long-form document is inserted directly into the main conversation, it can easily “flood” the dialogue, making it hard for users to distinguish between conversation content and document content. To solve this, it’s recommended to use a **document panel** to carry long documents. By defining a workflow in the AG-UI event stream — “open document panel → write document content → close document panel” — you can pull long documents out of the main conversation and avoid disturbing normal interactions. A sample approach is as follows.
+
+1. **Backend: Define tools and constrain call order**
+
+   Provide the Agent with two tools: **open document panel** and **close document panel**, and constrain the generation order in the prompt:
+   when entering the document generation flow, execute in the following order:
+
+   1. Call the “open document panel” tool first
+   2. Then output the document content
+   3. Finally call the “close document panel” tool
+
+   Converted into an AG-UI event stream, it looks roughly like this:
+
+   ```text
+   Open document panel tool
+     → ToolCallStart
+     → ToolCallArgs
+     → ToolCallEnd
+     → ToolCallResult
+
+   Document content
+     → TextMessageStart
+     → TextMessageContent
+     → TextMessageEnd
+
+   Close document panel tool
+     → ToolCallStart
+     → ToolCallArgs
+     → ToolCallEnd
+     → ToolCallResult
+   ```
+
+2. **Frontend: Listen for tool events and manage the document panel**
+
+   On the frontend, listen to the event stream:
+
+   * When an `open_report_document` tool event is captured: create a document panel and write all subsequent text message content into that panel.
+   * When a `close_report_document` tool event is captured: close the document panel (or mark it as completed).
+
+The effect is shown below. For a full example, refer to
+[examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report).
+
+![report](../assets/gif/agui/report.gif)

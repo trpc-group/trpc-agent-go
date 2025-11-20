@@ -24,7 +24,7 @@ import (
 
 const (
 	defaultSessionEventLimit     = 1000
-	defaultCleanupIntervalSecond = 300 // 5 min
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
 
 	defaultAsyncSummaryNum  = 3
 	defaultSummaryQueueSize = 100
@@ -108,10 +108,9 @@ type SessionService struct {
 
 // summaryJob represents a summary job to be processed asynchronously
 type summaryJob struct {
-	sessionKey session.Key
-	filterKey  string
-	force      bool
-	session    *session.Session
+	filterKey string
+	force     bool
+	session   *session.Session
 }
 
 // NewSessionService creates a new in-memory session service.
@@ -130,7 +129,7 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	// Set default cleanup interval if any TTL is configured and auto cleanup is not disabled
 	if opts.cleanupInterval <= 0 {
 		if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
-			opts.cleanupInterval = defaultCleanupIntervalSecond * time.Second
+			opts.cleanupInterval = defaultCleanupIntervalSecond
 		}
 	}
 
@@ -198,15 +197,7 @@ func (s *SessionService) CreateSession(
 	}
 
 	// Create the session with new State
-	sess := &session.Session{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     make(session.StateMap), // Initialize with provided state
-		Events:    []event.Event{},
-		UpdatedAt: time.Now(),
-		CreatedAt: time.Now(),
-	}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
 
 	// Set initial state if provided
 	for k, v := range state {
@@ -234,7 +225,7 @@ func (s *SessionService) CreateSession(
 	}
 
 	// Create a copy and merge state for return
-	copiedSess := copySession(sess)
+	copiedSess := sess.Clone()
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
 	if appState == nil {
@@ -279,12 +270,10 @@ func (s *SessionService) GetSession(
 	// Refresh TTL on access
 	sessWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 
-	copiedSess := copySession(sess)
+	copiedSess := sess.Clone()
 
 	// apply filtering options if provided
 	copiedSess.ApplyEventFiltering(opts...)
-	// filter events to ensure they start with RoleUser
-	copiedSess.EnsureEventStartWithUser()
 
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
@@ -325,10 +314,8 @@ func (s *SessionService) ListSessions(
 		if s == nil {
 			continue // Skip expired sessions
 		}
-		copiedSess := copySession(s)
+		copiedSess := s.Clone()
 		copiedSess.ApplyEventFiltering(opts...)
-		// filter events to ensure they start with RoleUser
-		copiedSess.EnsureEventStartWithUser()
 
 		appState := getValidState(app.appState)
 		userState := getValidState(app.userState[userKey.UserID])
@@ -744,66 +731,6 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 	sess.UpdatedAt = time.Now()
 	// Merge event state delta to session state.
 	sess.ApplyEventStateDelta(e)
-}
-
-// copySession creates a copy of a session.
-func copySession(sess *session.Session) *session.Session {
-	sess.EventMu.RLock()
-	copiedSess := &session.Session{
-		ID:        sess.ID,
-		AppName:   sess.AppName,
-		UserID:    sess.UserID,
-		State:     make(session.StateMap), // Create new state to avoid reference sharing.
-		Events:    make([]event.Event, len(sess.Events)),
-		UpdatedAt: sess.UpdatedAt,
-		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field.
-	}
-
-	// Copy events.
-	copy(copiedSess.Events, sess.Events)
-	sess.EventMu.RUnlock()
-
-	// Copy track events.
-	sess.TracksMu.RLock()
-	if len(sess.Tracks) > 0 {
-		copiedSess.Tracks = make(map[session.Track]*session.TrackEvents, len(sess.Tracks))
-		for track, events := range sess.Tracks {
-			history := &session.TrackEvents{
-				Track: events.Track,
-			}
-			if len(events.Events) > 0 {
-				history.Events = make([]session.TrackEvent, len(events.Events))
-				copy(history.Events, events.Events)
-			}
-			copiedSess.Tracks[track] = history
-		}
-	}
-	sess.TracksMu.RUnlock()
-
-	// Copy state.
-	if sess.State != nil {
-		for k, v := range sess.State {
-			copiedValue := make([]byte, len(v))
-			copy(copiedValue, v)
-			copiedSess.State[k] = copiedValue
-		}
-	}
-
-	// Copy summaries.
-	sess.SummariesMu.RLock()
-	if sess.Summaries != nil {
-		copiedSess.Summaries = make(map[string]*session.Summary, len(sess.Summaries))
-		for b, sum := range sess.Summaries {
-			if sum == nil {
-				continue
-			}
-			// Shallow copy is fine since Summary is immutable after write.
-			copied := *sum
-			copiedSess.Summaries[b] = &copied
-		}
-	}
-	sess.SummariesMu.RUnlock()
-	return copiedSess
 }
 
 // mergeState merges app-level and user-level state into the session state.
