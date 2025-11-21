@@ -90,24 +90,62 @@ func main() {
 
     // 6. 第一次对话
     userMsg1 := model.NewUserMessage("我叫张三")
-    eventChan, _ := r.Run(ctx, "user123", "session-001", userMsg1)
+    eventChan, err := r.Run(ctx, "user123", "session-001", userMsg1)
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
     fmt.Print("AI: ")
     for event := range eventChan {
+        if event == nil || event.Response == nil {
+            continue
+        }
+        if event.Response.Error != nil {
+            fmt.Printf("\nError: %s (type: %s)\n", event.Response.Error.Message, event.Response.Error.Type)
+            continue
+        }
         if len(event.Response.Choices) > 0 {
-            // 流式输出，使用 Delta.Content
-            fmt.Print(event.Response.Choices[0].Delta.Content)
+            choice := event.Response.Choices[0]
+            // 流式输出，优先使用 Delta.Content，否则使用 Message.Content
+            if choice.Delta.Content != "" {
+                fmt.Print(choice.Delta.Content)
+            } else if choice.Message.Content != "" {
+                fmt.Print(choice.Message.Content)
+            }
+        }
+        if event.IsFinalResponse() {
+            break
         }
     }
     fmt.Println()
 
     // 7. 第二次对话 - 自动加载历史，AI 能记住用户名字
     userMsg2 := model.NewUserMessage("我叫什么名字？")
-    eventChan, _ = r.Run(ctx, "user123", "session-001", userMsg2)
+    eventChan, err = r.Run(ctx, "user123", "session-001", userMsg2)
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
     fmt.Print("AI: ")
     for event := range eventChan {
+        if event == nil || event.Response == nil {
+            continue
+        }
+        if event.Response.Error != nil {
+            fmt.Printf("\nError: %s (type: %s)\n", event.Response.Error.Message, event.Response.Error.Type)
+            continue
+        }
         if len(event.Response.Choices) > 0 {
-            // 流式输出，使用 Delta.Content
-            fmt.Print(event.Response.Choices[0].Delta.Content)
+            choice := event.Response.Choices[0]
+            // 流式输出，优先使用 Delta.Content，否则使用 Message.Content
+            if choice.Delta.Content != "" {
+                fmt.Print(choice.Delta.Content)
+            } else if choice.Message.Content != "" {
+                fmt.Print(choice.Message.Content)
+            }
+        }
+        if event.IsFinalResponse() {
+            break
         }
     }
     fmt.Println() // 输出：你叫张三
@@ -231,12 +269,12 @@ sessionService := inmemory.NewSessionService(
 
 **推荐配置：**
 
-| 场景           | 推荐值     | 说明                           |
-| -------------- | ---------- | ------------------------------ |
-| 短期对话       | 100-200    | 客服咨询、单次任务             |
-| 中期会话       | 500-1000   | 日常助手、多轮协作             |
-| 长期会话       | 1000-2000  | 个人助理、持续项目（需配合摘要）|
-| 调试/测试      | 50-100     | 快速验证，减少干扰             |
+| 场景      | 推荐值    | 说明                             |
+| --------- | --------- | -------------------------------- |
+| 短期对话  | 100-200   | 客服咨询、单次任务               |
+| 中期会话  | 500-1000  | 日常助手、多轮协作               |
+| 长期会话  | 1000-2000 | 个人助理、持续项目（需配合摘要） |
+| 调试/测试 | 50-100    | 快速验证，减少干扰               |
 
 ### 4️⃣ TTL 管理（自动过期）
 
@@ -260,23 +298,23 @@ sessionService := inmemory.NewSessionService(
 
 **过期行为：**
 
-| 存储类型   | 过期机制                     | 自动清理 |
-| ---------- | ---------------------------- | -------- |
-| 内存存储   | 定期扫描 + 访问时检查        | 是       |
-| Redis 存储 | Redis 原生 TTL               | 是       |
-| PostgreSQL | 定期扫描（软删除或硬删除）    | 是       |
-| MySQL      | 定期扫描（软删除或硬删除）    | 是       |
+| 存储类型   | 过期机制                   | 自动清理 |
+| ---------- | -------------------------- | -------- |
+| 内存存储   | 定期扫描 + 访问时检查      | 是       |
+| Redis 存储 | Redis 原生 TTL             | 是       |
+| PostgreSQL | 定期扫描（软删除或硬删除） | 是       |
+| MySQL      | 定期扫描（软删除或硬删除） | 是       |
 
 ## 存储后端对比
 
 tRPC-Agent-Go 提供四种会话存储后端，满足不同场景需求：
 
-| 存储类型   | 适用场景           | 优势                           | 劣势                   |
-| ---------- | ------------------ | ------------------------------ | ---------------------- |
-| 内存存储   | 开发测试、小规模   | 简单快速、无需外部依赖         | 数据不持久、不支持分布式 |
-| Redis 存储 | 生产环境、分布式   | 高性能、支持分布式、自动过期   | 需要 Redis 服务        |
-| PostgreSQL | 生产环境、复杂查询 | 关系型数据库、支持复杂查询、JSONB | 相对较重、需要数据库   |
-| MySQL      | 生产环境、复杂查询 | 广泛使用、支持复杂查询、JSON   | 相对较重、需要数据库   |
+| 存储类型   | 适用场景           | 优势                              | 劣势                     |
+| ---------- | ------------------ | --------------------------------- | ------------------------ |
+| 内存存储   | 开发测试、小规模   | 简单快速、无需外部依赖            | 数据不持久、不支持分布式 |
+| Redis 存储 | 生产环境、分布式   | 高性能、支持分布式、自动过期      | 需要 Redis 服务          |
+| PostgreSQL | 生产环境、复杂查询 | 关系型数据库、支持复杂查询、JSONB | 相对较重、需要数据库     |
+| MySQL      | 生产环境、复杂查询 | 广泛使用、支持复杂查询、JSON      | 相对较重、需要数据库     |
 
 ## 内存存储（Memory）
 
@@ -404,7 +442,7 @@ import (
 
 // 注册 Redis 实例
 redisURL := "redis://127.0.0.1:6379"
-storage.RegisterRedisInstance("my-redis-instance", 
+storage.RegisterRedisInstance("my-redis-instance",
     storage.WithClientBuilderURL(redisURL))
 
 // 在会话服务中使用
@@ -421,7 +459,7 @@ sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://localhost:6379"),
     redis.WithSessionEventLimit(1000),
     redis.WithSessionTTL(30*time.Minute),
-    
+
     // 摘要配置
     redis.WithSummarizer(summarizer),
     redis.WithAsyncSummaryNum(4),
@@ -515,17 +553,17 @@ sessionService, err := postgres.NewService(
     postgres.WithPassword("your-password"),
     postgres.WithDatabase("trpc_sessions"),
     postgres.WithSSLMode("require"),
-    
+
     // 会话配置
     postgres.WithSessionEventLimit(1000),
     postgres.WithSessionTTL(30*time.Minute),
     postgres.WithAppStateTTL(24*time.Hour),
     postgres.WithUserStateTTL(7*24*time.Hour),
-    
+
     // TTL 清理配置
     postgres.WithCleanupInterval(10*time.Minute),
     postgres.WithSoftDelete(true),  // 软删除模式
-    
+
     // 异步持久化配置
     postgres.WithAsyncPersisterNum(4),
     postgres.WithPersistQueueSize(2000),
@@ -589,11 +627,11 @@ sessionService, err := postgres.NewService(
 
 **表命名规则：**
 
-| Schema | Prefix | 最终表名 |
-|--------|--------|---------|
-| （无） | （无） | `session_states` |
-| （无） | `app1_` | `app1_session_states` |
-| `my_schema` | （无） | `my_schema.session_states` |
+| Schema      | Prefix  | 最终表名                        |
+| ----------- | ------- | ------------------------------- |
+| （无）      | （无）  | `session_states`                |
+| （无）      | `app1_` | `app1_session_states`           |
+| `my_schema` | （无）  | `my_schema.session_states`      |
 | `my_schema` | `app1_` | `my_schema.app1_session_states` |
 
 ### 软删除与 TTL 清理
@@ -616,10 +654,10 @@ sessionService, err := postgres.NewService(
 
 **删除行为对比：**
 
-| 配置 | 删除操作 | 查询行为 | 数据恢复 |
-|------|---------|---------|---------|
-| `softDelete=true` | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复 |
-| `softDelete=false` | `DELETE FROM ...` | 查询所有记录 | 不可恢复 |
+| 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
+| ------------------ | ------------------------------- | ------------------------- | -------- |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复   |
+| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
 
 **TTL 自动清理：**
 
@@ -646,7 +684,7 @@ sessionService, err := postgres.NewService(
     postgres.WithPassword("your-password"),
     postgres.WithSessionEventLimit(1000),
     postgres.WithSessionTTL(30*time.Minute),
-    
+
     // 摘要配置
     postgres.WithSummarizer(summarizer),
     postgres.WithAsyncSummaryNum(2),
@@ -787,17 +825,17 @@ sessionService, err := mysql.NewService(
 sessionService, err := mysql.NewService(
     // 连接配置
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
-    
+
     // 会话配置
     mysql.WithSessionEventLimit(1000),
     mysql.WithSessionTTL(30*time.Minute),
     mysql.WithAppStateTTL(24*time.Hour),
     mysql.WithUserStateTTL(7*24*time.Hour),
-    
+
     // TTL 清理配置
     mysql.WithCleanupInterval(10*time.Minute),
     mysql.WithSoftDelete(true),  // 软删除模式
-    
+
     // 异步持久化配置
     mysql.WithAsyncPersisterNum(4),
     mysql.WithPersistQueueSize(2000),
@@ -864,10 +902,10 @@ sessionService, err := mysql.NewService(
 
 **删除行为对比：**
 
-| 配置 | 删除操作 | 查询行为 | 数据恢复 |
-|------|---------|---------|---------|
-| `softDelete=true` | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复 |
-| `softDelete=false` | `DELETE FROM ...` | 查询所有记录 | 不可恢复 |
+| 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
+| ------------------ | ------------------------------- | ------------------------- | -------- |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复   |
+| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
 
 **TTL 自动清理：**
 
@@ -893,7 +931,7 @@ sessionService, err := mysql.NewService(
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSessionEventLimit(1000),
     mysql.WithSessionTTL(30*time.Minute),
-    
+
     // 摘要配置
     mysql.WithSummarizer(summarizer),
     mysql.WithAsyncSummaryNum(2),
@@ -1200,19 +1238,19 @@ summarizer := summary.NewSummarizer(
     summary.WithEventThreshold(20),
     summary.WithTokenThreshold(4000),
     summary.WithTimeThreshold(5*time.Minute),
-    
+
     // 组合条件（任一满足）
     summary.WithChecksAny(
         summary.CheckEventThreshold(50),
         summary.CheckTimeThreshold(10*time.Minute),
     ),
-    
+
     // 组合条件（全部满足）
     summary.WithChecksAll(
         summary.CheckEventThreshold(10),
         summary.CheckTokenThreshold(2000),
     ),
-    
+
     // 摘要生成
     summary.WithMaxSummaryWords(200),
     summary.WithPrompt(customPrompt),
@@ -1240,10 +1278,14 @@ func main() {
     ctx := context.Background()
 
     // 创建 LLM 模型
-    llm, _ := openai.NewModel(
+    llm, err := openai.NewModel(
         openai.WithAPIKey("your-api-key"),
         openai.WithModelName("gpt-4"),
     )
+    if err != nil {
+        // 处理错误...
+        return
+    }
 
     // 创建摘要器
     summarizer := summary.NewSummarizer(
@@ -1277,11 +1319,32 @@ func main() {
 
     // 运行对话
     userMsg := model.NewUserMessage("跟我讲讲 AI")
-    eventChan, _ := r.Run(ctx, "user123", "session456", userMsg)
+    eventChan, err := r.Run(ctx, "user123", "session456", userMsg)
+    if err != nil {
+        // 处理错误...
+        return
+    }
 
     // 消费事件
     for event := range eventChan {
-        // 处理事件...
+        if event == nil || event.Response == nil {
+            continue
+        }
+        if event.Response.Error != nil {
+            // 处理错误事件...
+            continue
+        }
+        if len(event.Response.Choices) > 0 {
+            choice := event.Response.Choices[0]
+            if choice.Delta.Content != "" {
+                // 处理流式内容...
+            } else if choice.Message.Content != "" {
+                // 处理完整内容...
+            }
+        }
+        if event.IsFinalResponse() {
+            break
+        }
     }
 }
 ```
