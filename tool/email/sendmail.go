@@ -3,8 +3,9 @@ package email
 import (
 	"context"
 	"fmt"
-	"gopkg.in/gomail.v2"
 	"strings"
+
+	"gopkg.in/gomail.v2"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -33,7 +34,8 @@ type sendMailResponse struct {
 }
 
 // sendMail performs the send mail operation.
-func (e *emailToolSet) sendMail(ctx context.Context, req *sendMailRequest) (rsp *sendMailResponse, err error) {
+// go smtp not support context, one send one mail, can't stop
+func (e *emailToolSet) sendMail(_ context.Context, req *sendMailRequest) (rsp *sendMailResponse, err error) {
 	rsp = &sendMailResponse{}
 
 	mailBoxType, err := checkMailBoxType(req.Auth.Name)
@@ -63,8 +65,11 @@ func (e *emailToolSet) sendMail(ctx context.Context, req *sendMailRequest) (rsp 
 	s, err := dialer.Dial()
 	if err != nil {
 		rsp.Message = fmt.Sprintf("the address or password is incorrect,please check: %v", err)
-		return rsp, fmt.Errorf("the address or password is incorrect,please check: %w", err)
+		return rsp, nil
 	}
+	defer func() {
+		_ = s.Close()
+	}()
 
 	message := gomail.NewMessage()
 	for _, m := range req.MailList {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -41,7 +42,7 @@ func main() {
 	}
 
 	if err := chat.run(); err != nil {
-		log.Fatal("Chat failed: %v", err)
+		log.Fatalf("Chat failed: %s", err.Error())
 	}
 }
 
@@ -67,7 +68,7 @@ func (c *emailChat) run() error {
 }
 
 // setup creates the runner with LLM agent and send email tool.
-func (c *emailChat) setup(ctx context.Context) error {
+func (c *emailChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName)
 
