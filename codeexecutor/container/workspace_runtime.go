@@ -62,6 +62,7 @@ type runtimeConfig struct {
 	runContainerBase    string
 	inputsHostBase      string
 	inputsContainerBase string
+	autoMapInputs       bool
 }
 
 // newWorkspaceRuntime builds a runtime bound to the provided executor.
@@ -72,8 +73,8 @@ func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 		// Default inputs mount location inside container.
 		inputsContainerBase: defaultInputsContainer,
 	}
-	// Infer a host base that is bind-mounted at
-	// /opt/trpc-agent/skills when present.
+	// Infer host bases that are bind-mounted at the default skills
+	// and inputs locations when present.
 	if c != nil {
 		cfg.skillsHostBase = findBindSource(
 			c.hostConfig.Binds, defaultSkillsContainer,
@@ -81,6 +82,7 @@ func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 		cfg.inputsHostBase = findBindSource(
 			c.hostConfig.Binds, cfg.inputsContainerBase,
 		)
+		cfg.autoMapInputs = c.autoInputs
 	}
 	return &workspaceRuntime{ce: c, cfg: cfg}, nil
 }
@@ -126,7 +128,8 @@ func (r *workspaceRuntime) CreateWorkspace(
 	// Make workspace path unique to avoid collisions.
 	suf := time.Now().UnixNano()
 	wsPath := path.Join(
-		r.cfg.runContainerBase, fmt.Sprintf("ws_%s_%d", safe, suf),
+		r.cfg.runContainerBase,
+		fmt.Sprintf("ws_%s_%d", safe, suf),
 	)
 	// Create standard layout and metadata.json inside container.
 	var sb strings.Builder
@@ -155,7 +158,21 @@ func (r *workspaceRuntime) CreateWorkspace(
 		span.SetStatus(codes.Error, err.Error())
 		return codeexecutor.Workspace{}, err
 	}
-	return codeexecutor.Workspace{ID: execID, Path: wsPath}, nil
+	ws := codeexecutor.Workspace{ID: execID, Path: wsPath}
+	if r.cfg.autoMapInputs && r.cfg.inputsHostBase != "" {
+		specs := []codeexecutor.InputSpec{{
+			From: "host://" + r.cfg.inputsHostBase,
+			To: path.Join(
+				codeexecutor.DirWork, "inputs",
+			),
+			Mode: "link",
+		}}
+		if err := r.StageInputs(ctx, ws, specs); err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			return codeexecutor.Workspace{}, err
+		}
+	}
+	return ws, nil
 }
 
 // Cleanup removes the workspace directory.
@@ -449,6 +466,7 @@ func (r *workspaceRuntime) Collect(
 		codeexecutor.SpanWorkspaceCollect)
 	defer span.End()
 	// Use bash globstar to approximate doublestar semantics.
+	patterns = codeexecutor.NormalizeGlobs(patterns)
 	var cmd strings.Builder
 	cmd.WriteString("cd ")
 	cmd.WriteString(shellQuote(ws.Path))
@@ -622,12 +640,13 @@ func (r *workspaceRuntime) CollectOutputs(
 	spec codeexecutor.OutputSpec,
 ) (codeexecutor.OutputManifest, error) {
 	// Build bash to expand globstar and echo absolute file paths.
+	globs := codeexecutor.NormalizeGlobs(spec.Globs)
 	var cmd strings.Builder
 	cmd.WriteString("cd ")
 	cmd.WriteString(shellQuote(ws.Path))
 	cmd.WriteString(" && shopt -s globstar nullglob dotglob; ")
 	cmd.WriteString("for p in")
-	for _, g := range spec.Globs {
+	for _, g := range globs {
 		cmd.WriteString(" ")
 		cmd.WriteString(shellQuote(filepath.ToSlash(g)))
 	}

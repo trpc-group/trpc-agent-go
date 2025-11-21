@@ -43,10 +43,37 @@ func TestFSRepository_Path(t *testing.T) {
 
 	p, err := r.Path("alpha")
 	require.NoError(t, err)
-	require.Equal(t, sdir, p)
+	want, err := filepath.EvalSymlinks(sdir)
+	require.NoError(t, err)
+	got, err := filepath.EvalSymlinks(p)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 
 	_, err = r.Path("missing")
 	require.Error(t, err)
+}
+
+func TestFSRepository_Path_WithSymlinkRoot(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "real")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+	sdir := writeSkill(t, target, "alpha")
+
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	r, err := NewFSRepository(link)
+	require.NoError(t, err)
+
+	p, err := r.Path("alpha")
+	require.NoError(t, err)
+	want, err := filepath.EvalSymlinks(sdir)
+	require.NoError(t, err)
+	got, err := filepath.EvalSymlinks(p)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func TestFSRepository_Summaries_And_Get_WithDocs(t *testing.T) {

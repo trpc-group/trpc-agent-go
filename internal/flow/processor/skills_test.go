@@ -86,7 +86,7 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	sys := req.Messages[idx].Content
 	require.Contains(t, sys, "Available skills:")
 	require.Contains(t, sys, "- calc: math ops")
-	require.Contains(t, sys, "Tooling guidance:")
+	require.Contains(t, sys, "Tooling and workspace guidance:")
 	require.Contains(t, sys, "[Loaded] calc")
 	require.Contains(t, sys, "Calc body")
 	require.Contains(t, sys, "[Doc] USAGE.md")

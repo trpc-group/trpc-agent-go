@@ -628,6 +628,31 @@ func TestRunTool_stageSkill_EnsureLayoutError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRunTool_stageSkill_CreatesInputsDir(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+	eng := localexec.New().Engine()
+
+	ctx := context.Background()
+	ws, err := eng.Manager().CreateWorkspace(
+		ctx, "stage-inputs-dir", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	err = rt.stageSkill(ctx, eng, ws, dir, testSkillName)
+	require.NoError(t, err)
+
+	inputsPath := filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs",
+	)
+	info, err := os.Stat(inputsPath)
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+}
+
 func TestResolveCWD_AbsolutePath(t *testing.T) {
 	// Absolute cwd should be returned unchanged.
 	abs := "/"

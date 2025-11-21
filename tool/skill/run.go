@@ -294,6 +294,8 @@ func (t *RunTool) linkWorkspaceDirs(
 	var sb strings.Builder
 	sb.WriteString("set -e; cd ")
 	sb.WriteString(shellQuote(skillRoot))
+	sb.WriteString("; mkdir -p ")
+	sb.WriteString(shellQuote(toInputs))
 	sb.WriteString("; ln -sfn ")
 	sb.WriteString(shellQuote(toOut))
 	sb.WriteString(" out; ln -sfn ")

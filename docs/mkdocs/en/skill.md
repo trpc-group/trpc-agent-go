@@ -211,7 +211,9 @@ Input:
 - `command` (required, runs via `bash -lc`)
 - `cwd`, `env` (optional)
 - `output_files` (optional, legacy collection): glob patterns (e.g.,
-  `out/*.txt`).
+  `out/*.txt`). Patterns are workspace‑relative; env‑style prefixes
+  like `$OUTPUT_DIR/*.txt` are also accepted and normalized to
+  `out/*.txt`.
 - `inputs` (optional, declarative inputs): map external sources into
   the workspace. Each item supports:
   - `from` with schemes:
@@ -225,7 +227,8 @@ Input:
 
 - `outputs` (optional, declarative outputs): a manifest to collect
   results with limits and persistence:
-  - `globs` workspace‑relative patterns (supports `**`)
+  - `globs` workspace‑relative patterns (supports `**` and env‑style
+    prefixes like `$OUTPUT_DIR/**` mapping to `out/**`)
   - `inline` to inline file contents into the result
   - `save` to persist via the Artifact service
   - `name_template` prefix for artifact names (e.g., `pref/`)

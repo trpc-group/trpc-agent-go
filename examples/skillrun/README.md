@@ -14,6 +14,7 @@ tool calls and tool responses, and executes skill scripts via the
   stdout/stderr and output files
   (and optionally saving files as artifacts)
 - Clear visualization of tool calls and tool responses
+- Example `user-file-ops` skill to summarize user-provided text files
 
 ## Prerequisites
 
@@ -36,7 +37,7 @@ tool calls and tool responses, and executes skill scripts via the
 | `-stream`       | Stream responses                   | `true`           |
 | `-skills-root`  | Skills repository root directory   | `env or ./skills` |
 | `-executor`     | Workspace executor: local|container | `local`          |
-| `-inputs-host`  | Host dir bind-mounted to `/opt/trpc-agent/inputs` (container) | `` |
+| `-inputs-host`  | Host dir exposed as `inputs/` inside skill workspaces (local or container) | `` |
 | `-artifacts`    | Save files via artifact service     | `false`          |
 | `-omit-inline`  | Omit inline file contents           | `false`          |
 | `-artifact-prefix` | Artifact filename prefix (e.g., `user:`) | ``     |
@@ -68,6 +69,9 @@ Container zero-copy hint:
 - Bind a host folder as the inputs base so `host://` inputs under that
   folder become symlinks inside the container (no copy):
   `-executor container -inputs-host /path/to/datasets`
+- When `-inputs-host` is set (local or container), the host folder is
+  also available inside each skill workspace under `work/inputs`
+  (and `inputs/` from the skill root).
 
 ### Use with anthropics/skills
 
@@ -93,7 +97,7 @@ In chat:
 - Use natural language to run a command from the skill docs.
 - Example: "Use demo-skill to run the sample build command."
 - If you expect files, mention patterns to collect (for example,
-  `output_files: ["out/**"]`).
+  `output_files: ["out/**"]` or `output_files: ["$OUTPUT_DIR/**"]`).
 - For production, prefer `save_as_artifacts: true` and
   `omit_inline_content: true` to store files via the artifact
   service and reduce payload size.
@@ -124,6 +128,56 @@ go run . -skills-root /path/to/skills
 # Run with container workspace executor (requires Docker)
 go run . -executor container
 ```
+
+### User File Processing Example (`user-file-ops`)
+
+This example shows how to let the assistant summarize a text file that
+you already have on your machine, using the `user-file-ops` skill.
+
+1. Create a small sample file on your host:
+
+   ```bash
+   echo "hello from skillrun" > /tmp/skillrun-notes.txt
+   echo "this is another line" >> /tmp/skillrun-notes.txt
+   ```
+
+2. Start the interactive chat:
+
+   ```bash
+   cd examples/skillrun
+   go run .
+   ```
+
+3. In the chat, tell the assistant where your file is and what you want:
+
+   ```text
+   👤 You: I have a text file at /tmp/skillrun-notes.txt.
+   Please use the user-file-ops skill to summarize it, mapping it to
+   work/inputs/user-notes.txt and writing the summary to
+   out/user-notes-summary.txt.
+   ```
+
+   The assistant will typically:
+
+   - load the `user-file-ops` skill with `skill_load`
+   - run a command like:
+
+     ```bash
+     bash scripts/summarize_file.sh \
+       work/inputs/user-notes.txt \
+       out/user-notes-summary.txt
+     ```
+
+   The skill script computes simple statistics (lines, words, bytes)
+   and includes the first few non-empty lines of the file in the
+   summary.
+
+4. If artifacts are enabled (for example with `-artifacts`), the
+   summary file can be saved as an artifact and then:
+
+   - `/artifacts` will list files such as `out/user-notes-summary.txt`
+   - `/pull out/user-notes-summary.txt` will download it into the
+     local `downloads/` directory.
 
 ## Tips
 

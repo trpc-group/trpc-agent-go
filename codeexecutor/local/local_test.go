@@ -1021,3 +1021,43 @@ func TestLocal_EngineExposed(t *testing.T) {
 	require.NotNil(t, eng.FS())
 	require.NotNil(t, eng.Runner())
 }
+
+func TestLocalCodeExecutor_WorkspaceAutoInputsToggle(t *testing.T) {
+	ctx := context.Background()
+	host := t.TempDir()
+	const seedName = "seed.txt"
+	hfile := filepath.Join(host, seedName)
+	require.NoError(t, os.WriteFile(hfile, []byte("seed"), 0o644))
+
+	execOn := local.New(
+		local.WithWorkspaceInputsHostBase(host),
+	)
+	engOn := execOn.Engine()
+	ws1, err := engOn.Manager().CreateWorkspace(
+		ctx, "auto-on", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer engOn.Manager().Cleanup(ctx, ws1)
+
+	data, err := os.ReadFile(filepath.Join(
+		ws1.Path, codeexecutor.DirWork, "inputs", seedName,
+	))
+	require.NoError(t, err)
+	require.Equal(t, "seed", string(data))
+
+	execOff := local.New(
+		local.WithWorkspaceInputsHostBase(host),
+		local.WithWorkspaceAutoInputs(false),
+	)
+	engOff := execOff.Engine()
+	ws2, err := engOff.Manager().CreateWorkspace(
+		ctx, "auto-off", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer engOff.Manager().Cleanup(ctx, ws2)
+
+	_, err = os.Stat(filepath.Join(
+		ws2.Path, codeexecutor.DirWork, "inputs", seedName,
+	))
+	require.Error(t, err)
+}

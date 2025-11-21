@@ -179,8 +179,11 @@ func (e *stdEngine) Runner() ProgramRunner     { return e.r }
 func (e *stdEngine) Describe() Capabilities    { return e.c }
 
 // NewEngine constructs a simple Engine from its components.
-func NewEngine(m WorkspaceManager, f WorkspaceFS,
-	r ProgramRunner) Engine {
+func NewEngine(
+	m WorkspaceManager,
+	f WorkspaceFS,
+	r ProgramRunner,
+) Engine {
 	return &stdEngine{m: m, f: f, r: r}
 }
 
@@ -193,6 +196,19 @@ const (
 	// InlineSourceDir is the subdirectory where inline code blocks
 	// are written and executed as the current working directory.
 	InlineSourceDir = "src"
+
+	// normalizeGlobsVarPrefix and related constants avoid repeating
+	// common prefixes when normalizing glob patterns.
+	normalizeGlobsVarPrefix    = "$"
+	normalizeGlobsVarLBrace    = "${"
+	normalizeGlobsVarRBrace    = "}"
+	normalizeGlobsSlash        = "/"
+	normalizeGlobsBackslash    = "\\"
+	normalizeGlobsWorkspace    = "WORKSPACE_DIR"
+	normalizeGlobsSkills       = "SKILLS_DIR"
+	normalizeGlobsWork         = "WORK_DIR"
+	normalizeGlobsOut          = "OUTPUT_DIR"
+	normalizeGlobsWorkspaceDir = "."
 )
 
 // BuildBlockSpec maps a code block into a file name, mode, command,
@@ -214,4 +230,86 @@ func BuildBlockSpec(
 		return "", 0, "", nil,
 			fmt.Errorf("unsupported language: %s", b.Language)
 	}
+}
+
+// NormalizeGlobs rewrites glob patterns that use well-known
+// environment-style prefixes such as $OUTPUT_DIR into workspace-
+// relative paths like out/. It understands the variables injected by
+// workspace runtimes: WORKSPACE_DIR, SKILLS_DIR, WORK_DIR, OUTPUT_DIR.
+//
+// Examples:
+//
+//	$OUTPUT_DIR/a.txt   -> out/a.txt
+//	${WORK_DIR}/x/**    -> work/x/**
+//	$WORKSPACE_DIR/out  -> out
+//
+// Unknown variables and patterns without a prefix are returned as-is.
+func NormalizeGlobs(patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		s := strings.TrimSpace(p)
+		if s == "" {
+			continue
+		}
+		s = normalizeGlobPrefix(
+			s, normalizeGlobsWorkspace, normalizeGlobsWorkspaceDir,
+		)
+		s = normalizeGlobPrefix(s, normalizeGlobsSkills, DirSkills)
+		s = normalizeGlobPrefix(s, normalizeGlobsWork, DirWork)
+		s = normalizeGlobPrefix(s, normalizeGlobsOut, DirOut)
+		out = append(out, s)
+	}
+	return out
+}
+
+func normalizeGlobPrefix(s string, name string, dir string) string {
+	if strings.HasPrefix(s, normalizeGlobsVarLBrace+name+
+		normalizeGlobsVarRBrace) {
+		return normalizeGlobTail(
+			s[len(normalizeGlobsVarLBrace+name+
+				normalizeGlobsVarRBrace):],
+			dir,
+		)
+	}
+	if strings.HasPrefix(s, normalizeGlobsVarPrefix+name) {
+		return normalizeGlobTail(
+			s[len(normalizeGlobsVarPrefix+name):],
+			dir,
+		)
+	}
+	return s
+}
+
+func normalizeGlobTail(tail string, dir string) string {
+	if tail == "" {
+		if dir == normalizeGlobsWorkspaceDir {
+			return normalizeGlobsWorkspaceDir
+		}
+		return dir
+	}
+	r := trimGlobSeparator(tail)
+	if dir == normalizeGlobsWorkspaceDir {
+		if r == "" {
+			return normalizeGlobsWorkspaceDir
+		}
+		return r
+	}
+	if r == "" {
+		return dir
+	}
+	return dir + normalizeGlobsSlash + r
+}
+
+func trimGlobSeparator(s string) string {
+	if s == "" {
+		return s
+	}
+	if strings.HasPrefix(s, normalizeGlobsSlash) ||
+		strings.HasPrefix(s, normalizeGlobsBackslash) {
+		return s[1:]
+	}
+	return s
 }

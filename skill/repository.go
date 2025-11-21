@@ -89,8 +89,20 @@ func (r *FSRepository) Path(name string) (string, error) {
 }
 
 func (r *FSRepository) scan() error {
+	seen := map[string]struct{}{}
 	for _, root := range r.roots {
+		if root == "" {
+			continue
+		}
 		root = filepath.Clean(root)
+		if resolved, err := filepath.EvalSymlinks(root); err == nil &&
+			resolved != "" {
+			root = resolved
+		}
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
 		filepath.WalkDir(root, func(p string, d fs.DirEntry,
 			err error) error {
 			if err != nil {

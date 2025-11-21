@@ -44,12 +44,17 @@ const (
 type Runtime struct {
 	WorkRoot            string
 	ReadOnlyStagedSkill bool
+	InputsHostBase      string
+	AutoInputs          bool
 }
 
 // NewRuntime creates a new local Runtime. When workRoot is empty, a
 // temporary directory will be used per workspace.
 func NewRuntime(workRoot string) *Runtime {
-	return &Runtime{WorkRoot: workRoot}
+	return &Runtime{
+		WorkRoot:   workRoot,
+		AutoInputs: true,
+	}
 }
 
 // RuntimeOption customizes the local Runtime behavior.
@@ -60,11 +65,28 @@ func WithReadOnlyStagedSkill(readOnly bool) RuntimeOption {
 	return func(r *Runtime) { r.ReadOnlyStagedSkill = readOnly }
 }
 
+// WithInputsHostBase sets the host directory that will be exposed
+// under work/inputs inside each workspace when auto inputs are
+// enabled.
+func WithInputsHostBase(host string) RuntimeOption {
+	return func(r *Runtime) { r.InputsHostBase = host }
+}
+
+// WithAutoInputs enables or disables automatic mapping of the host
+// inputs directory (when configured) into work/inputs for each
+// workspace.
+func WithAutoInputs(enable bool) RuntimeOption {
+	return func(r *Runtime) { r.AutoInputs = enable }
+}
+
 // NewRuntimeWithOptions creates a Runtime with optional settings.
 func NewRuntimeWithOptions(
 	workRoot string, opts ...RuntimeOption,
 ) *Runtime {
-	r := &Runtime{WorkRoot: workRoot}
+	r := &Runtime{
+		WorkRoot:   workRoot,
+		AutoInputs: true,
+	}
 	for _, o := range opts {
 		o(r)
 	}
@@ -123,8 +145,21 @@ func (r *Runtime) CreateWorkspace(
 		span.SetStatus(codes.Error, err.Error())
 		return codeexecutor.Workspace{}, err
 	}
-
-	return codeexecutor.Workspace{ID: execID, Path: wsPath}, nil
+	ws := codeexecutor.Workspace{ID: execID, Path: wsPath}
+	if r.AutoInputs && r.InputsHostBase != "" {
+		specs := []codeexecutor.InputSpec{{
+			From: "host://" + r.InputsHostBase,
+			To: filepath.Join(
+				codeexecutor.DirWork, "inputs",
+			),
+			Mode: "link",
+		}}
+		if err := r.StageInputs(ctx, ws, specs); err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			return codeexecutor.Workspace{}, err
+		}
+	}
+	return ws, nil
 }
 
 // Cleanup removes workspace directory if it exists.
@@ -343,6 +378,7 @@ func (r *Runtime) Collect(
 	defer span.End()
 	var out []codeexecutor.File
 	root := ws.Path
+	patterns = codeexecutor.NormalizeGlobs(patterns)
 	// Canonicalize root to make prefix checks robust on platforms
 	// where different paths may refer to the same location.
 	realRoot, err := filepath.EvalSymlinks(root)
@@ -525,11 +561,12 @@ func (r *Runtime) CollectOutputs(
 		maxTotal = 64 * 1024 * 1024
 	}
 	leftTotal := maxTotal
+	globs := codeexecutor.NormalizeGlobs(spec.Globs)
 	out := codeexecutor.OutputManifest{}
 	var savedNames []string
 	var savedVers []int
 	count := 0
-	for _, g := range spec.Globs {
+	for _, g := range globs {
 		abs := filepath.Join(ws.Path, g)
 		pattern := strings.TrimPrefix(abs, "/")
 		matches, err := ds.Glob(os.DirFS("/"), pattern)

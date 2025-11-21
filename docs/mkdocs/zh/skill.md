@@ -217,7 +217,8 @@ https://github.com/anthropics/skills
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
 - `output_files`（可选，传统收集方式）：通配符列表
-  （如 `out/*.txt`）。
+  （如 `out/*.txt`）。通配符以工作区根目录为准，也支持
+  `$OUTPUT_DIR/*.txt` 这类写法，会自动归一化为 `out/*.txt`。
 - `inputs`（可选，声明式输入）：把外部资源映射进工作区，
   结构为对象数组，每项支持：
   
@@ -232,7 +233,8 @@ https://github.com/anthropics/skills
 
 - `outputs`（可选，声明式输出）：使用清单（manifest）收集输出。
   字段：
-  - `globs`：通配符数组（相对工作区，支持 `**`）。
+  - `globs`：通配符数组（相对工作区，支持 `**`，也支持
+    `$OUTPUT_DIR/**` 这类写法并归一化为 `out/**`）。
   - `inline`：是否把文件内容内联返回。
   - `save`：是否保存为制品（与制品服务协作）。
   - `name_template`：保存为制品时的文件名前缀（如 `pref/`）。
