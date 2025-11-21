@@ -59,7 +59,8 @@ func TestWebFetch(t *testing.T) {
 
 	for _, r := range resp.Results {
 		if r.RetrievedURL == ts.URL+"/page1" {
-			assert.Contains(t, r.Content, "Hello World")
+			assert.Contains(t, r.Content, "# Hello")
+			assert.Contains(t, r.Content, "World")
 			assert.Equal(t, http.StatusOK, r.StatusCode)
 			foundPage1 = true
 		}
@@ -165,7 +166,7 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	assert.Contains(t, resp.Results[0].Error, "unsupported content type: application/octet-stream")
 }
 
-func TestExtractTextFromHTML(t *testing.T) {
+func TestConvertHTMLToMarkdown(t *testing.T) {
 	htmlContent := `
 		<html>
 		<head>
@@ -174,20 +175,37 @@ func TestExtractTextFromHTML(t *testing.T) {
 		</head>
 		<body>
 			<h1>Header</h1>
+			<h2>Subheader</h2>
 			<script>console.log("ignore");</script>
 			<p>Paragraph text.</p>
-			<div>
-				<span>Nested</span>
-			</div>
+			<ul>
+				<li>Item 1</li>
+				<li>Item 2</li>
+			</ul>
+			<p>Check <a href="http://example.com">this link</a>.</p>
+			<p><b>Bold</b> and <i>Italic</i></p>
 		</body>
 		</html>
 	`
 	// Mock reader
-	result, err := extractTextFromHTML(strings.NewReader(htmlContent))
+	result, err := convertHTMLToMarkdown(strings.NewReader(htmlContent))
 	require.NoError(t, err)
 
-	// Check expected text content (ignoring style/script)
-	expectedParts := []string{"Header", "Paragraph text.", "Nested"}
+	// Debug output if test fails
+	t.Logf("Converted Markdown:\n%s", result)
+
+	// Check expected markdown content
+	expectedParts := []string{
+		"# Header",
+		"## Subheader",
+		"Paragraph text.",
+		"- Item 1",
+		"- Item 2",
+		"Check [this link](http://example.com).",
+		"**Bold**",
+		"*Italic*",
+	}
+
 	for _, part := range expectedParts {
 		assert.Contains(t, result, part)
 	}

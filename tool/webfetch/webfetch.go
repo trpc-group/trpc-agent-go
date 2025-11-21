@@ -19,7 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/html"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -165,7 +167,7 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) (string, int
 	mediaType = strings.TrimSpace(mediaType)
 
 	if mediaType == "text/html" {
-		content, err := extractTextFromHTML(resp.Body)
+		content, err := convertHTMLToMarkdown(resp.Body)
 		return content, resp.StatusCode, err
 	}
 
@@ -202,29 +204,23 @@ func readBodyAsString(r io.Reader) (string, error) {
 	return buf.String(), nil
 }
 
-func extractTextFromHTML(r io.Reader) (string, error) {
-	doc, err := html.Parse(r)
+func convertHTMLToMarkdown(r io.Reader) (string, error) {
+	conv := converter.NewConverter(
+		converter.WithPlugins(
+			base.NewBasePlugin(),
+			commonmark.NewCommonmarkPlugin(),
+		),
+	)
+
+	bodyBytes, err := io.ReadAll(r)
 	if err != nil {
 		return "", err
 	}
 
-	var buf strings.Builder
-	var f func(*html.Node)
-	f = func(n *html.Node) {
-		if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "noscript" || n.Data == "iframe") {
-			return
-		}
-		if n.Type == html.TextNode {
-			text := strings.TrimSpace(n.Data)
-			if text != "" {
-				buf.WriteString(text)
-				buf.WriteString(" ")
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			f(c)
-		}
+	markdown, err := conv.ConvertString(string(bodyBytes))
+	if err != nil {
+		return "", err
 	}
-	f(doc)
-	return strings.TrimSpace(buf.String()), nil
+
+	return markdown, nil
 }
