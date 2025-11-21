@@ -661,7 +661,7 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 
 	// Put a checkpoint in ns1
 	ck1 := graph.NewCheckpoint(map[string]any{"n": 1}, map[string]int64{"n": 1}, map[string]map[string]int64{})
-	cfgNS1 := graph.CreateCheckpointConfig(lineageID, "", "")
+	cfgNS1 := graph.CreateCheckpointConfig(lineageID, "", "ns1")
 	_, err = saver.Put(ctx, graph.PutRequest{Config: cfgNS1, Checkpoint: ck1, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0), NewVersions: map[string]int64{"n": 1}})
 	require.NoError(t, err)
 
@@ -670,7 +670,7 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 
 	// Put a checkpoint in ns2
 	ck2 := graph.NewCheckpoint(map[string]any{"n": 2}, map[string]int64{"n": 2}, map[string]map[string]int64{})
-	cfgNS2 := graph.CreateCheckpointConfig(lineageID, "", "")
+	cfgNS2 := graph.CreateCheckpointConfig(lineageID, "", "ns2")
 	_, err = saver.Put(ctx, graph.PutRequest{Config: cfgNS2, Checkpoint: ck2, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 1), NewVersions: map[string]int64{"n": 2}})
 	require.NoError(t, err)
 
@@ -681,7 +681,7 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 	require.NotNil(t, tuple)
 	// Should be the second one in ns2
 	assert.Equal(t, ck2.ID, tuple.Checkpoint.ID)
-	assert.Equal(t, "", graph.GetNamespace(tuple.Config))
+	assert.Equal(t, "ns2", graph.GetNamespace(tuple.Config))
 
 	// Cross-namespace by ID with empty ns but specific id
 	byIDCfg := graph.CreateCheckpointConfig(lineageID, ck1.ID, "")
@@ -689,7 +689,7 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, tuple2)
 	assert.Equal(t, ck1.ID, tuple2.Checkpoint.ID)
-	assert.Equal(t, "", graph.GetNamespace(tuple2.Config))
+	assert.Equal(t, "ns1", graph.GetNamespace(tuple2.Config))
 }
 
 func TestSQLite_Put_DefaultMetadataWhenNil(t *testing.T) {
