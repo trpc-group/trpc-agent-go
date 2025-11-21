@@ -40,10 +40,8 @@ func TestWebFetch(t *testing.T) {
 
 	tool := NewTool()
 
-	prompt := fmt.Sprintf("Please summarize %s/page1 and %s/page2 for me.", ts.URL, ts.URL)
-
 	// We call the tool via the interface
-	args := fmt.Sprintf(`{"prompt": "%s"}`, prompt)
+	args := fmt.Sprintf(`{"urls": ["%s/page1", "%s/page2"]}`, ts.URL, ts.URL)
 
 	res, err := tool.Call(context.Background(), []byte(args))
 	require.NoError(t, err)
@@ -75,8 +73,7 @@ func TestWebFetch(t *testing.T) {
 	assert.True(t, foundPage2, "Should have found page2")
 
 	// Test 404 case
-	prompt404 := fmt.Sprintf("Fetch this: %s/nonexistent", ts.URL)
-	args404 := fmt.Sprintf(`{"prompt": "%s"}`, prompt404)
+	args404 := fmt.Sprintf(`{"urls": ["%s/nonexistent"]}`, ts.URL)
 
 	res404, err404 := tool.Call(context.Background(), []byte(args404))
 	require.NoError(t, err404)
@@ -91,12 +88,12 @@ func TestWebFetch(t *testing.T) {
 
 func TestWebFetch_NoURLs(t *testing.T) {
 	tool := NewTool()
-	res, err := tool.Call(context.Background(), []byte(`{"prompt": "Just a random text"}`))
+	res, err := tool.Call(context.Background(), []byte(`{"urls": []}`))
 	require.NoError(t, err)
 
 	resp := res.(fetchResponse)
 	assert.Empty(t, resp.Results)
-	assert.Equal(t, "No URLs found in prompt", resp.Summary)
+	assert.Equal(t, "No URLs provided", resp.Summary)
 }
 
 func TestWebFetch_PlainText(t *testing.T) {
@@ -107,8 +104,7 @@ func TestWebFetch_PlainText(t *testing.T) {
 	defer ts.Close()
 
 	tool := NewTool()
-	prompt := fmt.Sprintf("Fetch this: %s", ts.URL)
-	args := fmt.Sprintf(`{"prompt": "%s"}`, prompt)
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
 
 	res, err := tool.Call(context.Background(), []byte(args))
 	require.NoError(t, err)
@@ -129,8 +125,7 @@ func TestWebFetch_JSON(t *testing.T) {
 	defer ts.Close()
 
 	tool := NewTool()
-	prompt := fmt.Sprintf("Fetch this JSON: %s", ts.URL)
-	args := fmt.Sprintf(`{"prompt": "%s"}`, prompt)
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
 
 	res, err := tool.Call(context.Background(), []byte(args))
 	require.NoError(t, err)
@@ -151,8 +146,7 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	defer ts.Close()
 
 	tool := NewTool()
-	prompt := fmt.Sprintf("Fetch this: %s", ts.URL)
-	args := fmt.Sprintf(`{"prompt": "%s"}`, prompt)
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
 
 	res, err := tool.Call(context.Background(), []byte(args))
 	require.NoError(t, err)

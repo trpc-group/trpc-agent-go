@@ -11,7 +11,6 @@ package webfetch_test
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,9 +20,8 @@ import (
 func TestWebFetch_1(t *testing.T) {
 	wft := webfetch.NewTool()
 
-	// The Call method expects JSON input with a "prompt" field
-	prompt := "summary web fetch feature from https://geminicli.com/docs/tools/web-fetch/"
-	args := fmt.Sprintf(`{"prompt": "%s"}`, prompt)
+	// The Call method expects JSON input with a "urls" field
+	args := `{"urls": ["https://geminicli.com/docs/tools/web-fetch/"]}`
 
 	res, err := wft.Call(context.Background(), []byte(args))
 	require.NoError(t, err)
@@ -36,9 +34,8 @@ func TestWebFetch_2(t *testing.T) {
 
 	wft := webfetch.NewTool()
 
-	// The Call method expects JSON input with a "prompt" field
-	prompt := "gemini-cli web_fetch feature is powered  by gemini api https://ai.google.dev/gemini-api/docs/url-context, figure out Supported and unsupported content types"
-	args := fmt.Sprintf(`{"prompt": "%s"}`, prompt)
+	// The Call method expects JSON input with a "urls" field
+	args := `{"urls": ["https://ai.google.dev/gemini-api/docs/url-context"]}`
 
 	res, err := wft.Call(context.Background(), []byte(args))
 	require.NoError(t, err)

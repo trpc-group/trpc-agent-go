@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +46,7 @@ func WithHTTPClient(c *http.Client) Option {
 
 // fetchRequest is the input for the tool.
 type fetchRequest struct {
-	Prompt string `json:"prompt" jsonschema:"description=The prompt containing URLs to fetch and instructions"`
+	URLS []string `json:"urls" jsonschema:"description=The list of URLs to fetch content from"`
 }
 
 // fetchResponse is the output.
@@ -79,7 +78,7 @@ func NewTool(opts ...Option) tool.CallableTool {
 	return function.NewFunctionTool(
 		t.fetch,
 		function.WithName("web_fetch"),
-		function.WithDescription("Fetches and extracts text content from URLs embedded in a prompt. "+
+		function.WithDescription("Fetches and extracts text content from a list of URLs. "+
 			"Supports up to 20 URLs. Useful for summarizing, comparing, or extracting information from web pages."),
 	)
 }
@@ -88,21 +87,19 @@ type webFetchTool struct {
 	client *http.Client
 }
 
-var urlRegex = regexp.MustCompile(`https?://[^\s"<>]+`)
-
 func (t *webFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchResponse, error) {
-	// Simple regex to find URLs. Might need refinement.
-	urls := urlRegex.FindAllString(req.Prompt, -1)
-	if len(urls) == 0 {
-		return fetchResponse{Summary: "No URLs found in prompt"}, nil
+	if len(req.URLS) == 0 {
+		return fetchResponse{Summary: "No URLs provided"}, nil
 	}
 
 	// Deduplicate URLs
 	uniqueURLs := make(map[string]struct{})
 	var targetURLs []string
-	for _, u := range urls {
-		// Remove potential trailing punctuation sometimes captured by regex
-		u = strings.TrimRight(u, ".,;:)")
+	for _, u := range req.URLS {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
 		if _, exists := uniqueURLs[u]; !exists {
 			uniqueURLs[u] = struct{}{}
 			targetURLs = append(targetURLs, u)
