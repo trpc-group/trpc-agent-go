@@ -75,13 +75,13 @@ type writeData struct {
 
 // Saver is the redis checkpoint service.
 type Saver struct {
-	opts   ServiceOpts
+	opts   Options
 	client redis.UniversalClient
 	once   sync.Once // ensure Close is called only once
 }
 
 // NewSaver creates a new saver.
-func NewSaver(options ...ServiceOpt) (*Saver, error) {
+func NewSaver(options ...Option) (*Saver, error) {
 	opts := defaultOptions
 	for _, option := range options {
 		option(&opts)
@@ -367,6 +367,7 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 		checkpointJSONKey, checkpointJSON,
 		metadataJSONKey, metadataJSON,
 	)
+	pipe.Expire(ctx, checkpointKey, s.opts.ttl)
 
 	tsKey := checkpointTSKey(lineageID, checkpointNS)
 	member := fmt.Sprintf("%s:%s", checkpointNS, checkpointID)
@@ -374,9 +375,11 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 		Score:  float64(ts),
 		Member: member,
 	})
+	pipe.Expire(ctx, tsKey, s.opts.ttl)
 
 	nsKey := lineageNSKey(lineageID)
 	pipe.SAdd(ctx, nsKey, checkpointNS)
+	pipe.Expire(ctx, nsKey, s.opts.ttl)
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, fmt.Errorf("redis transaction failed: %w", err)
@@ -465,6 +468,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		checkpointJSONKey, checkpointJSON,
 		metadataJSONKey, metadataJSON,
 	)
+	pipe.Expire(ctx, checkpointKey, s.opts.ttl)
 
 	tsKey := checkpointTSKey(lineageID, checkpointNS)
 	member := fmt.Sprintf("%s:%s", checkpointNS, checkpointID)
@@ -472,9 +476,11 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		Score:  float64(ts),
 		Member: member,
 	})
+	pipe.Expire(ctx, tsKey, s.opts.ttl)
 
 	nsKey := lineageNSKey(lineageID)
 	pipe.SAdd(ctx, nsKey, checkpointNS)
+	pipe.Expire(ctx, nsKey, s.opts.ttl)
 
 	writeKey := writesKey(lineageID, checkpointNS, checkpointID)
 	for idx, w := range req.PendingWrites {
@@ -504,6 +510,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		}
 		pipe.HSet(ctx, writeKey, field, writeJSON)
 	}
+	pipe.Expire(ctx, writeKey, s.opts.ttl)
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, fmt.Errorf("redis transaction failed: %w", err)
