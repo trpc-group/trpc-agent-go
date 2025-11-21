@@ -51,7 +51,7 @@ func main() {
 		}
 	}
 
-	if err := http.ListenAndServe(":80", handler); err != nil {
+	if err := http.ListenAndServe(":8080", handler); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
@@ -64,19 +64,21 @@ type MockServerHandler struct {
 func (h *MockServerHandler) setupRoutes() {
 	h.mux = http.NewServeMux()
 
+	const pathPrefix = "/api/v3"
 	// Setup routes for all paths in the OpenAPI spec
 	for path, pathItem := range h.doc.Paths.Map() {
+		absPath := pathPrefix + path
 		if pathItem.Get != nil {
-			h.mux.HandleFunc("GET "+path, h.createHandler(path, pathItem.Get))
+			h.mux.HandleFunc("GET "+absPath, h.createHandler(absPath, pathItem.Get))
 		}
 		if pathItem.Post != nil {
-			h.mux.HandleFunc("POST "+path, h.createHandler(path, pathItem.Post))
+			h.mux.HandleFunc("POST "+absPath, h.createHandler(absPath, pathItem.Post))
 		}
 		if pathItem.Put != nil {
-			h.mux.HandleFunc("PUT "+path, h.createHandler(path, pathItem.Put))
+			h.mux.HandleFunc("PUT "+absPath, h.createHandler(absPath, pathItem.Put))
 		}
 		if pathItem.Delete != nil {
-			h.mux.HandleFunc("DELETE "+path, h.createHandler(path, pathItem.Delete))
+			h.mux.HandleFunc("DELETE "+absPath, h.createHandler(absPath, pathItem.Delete))
 		}
 	}
 
@@ -88,6 +90,7 @@ func (h *MockServerHandler) setupRoutes() {
 }
 
 func (h *MockServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Handling %s %s", r.Method, r.URL.Path)
 	// Handle CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -153,9 +156,6 @@ func (h *MockServerHandler) createHandler(path string, operation *openapi3.Opera
 
 		// Set appropriate status code
 		statusCode := http.StatusOK
-		// if responseCode, err := strconv.Atoi(strings.Split(response.Description, " ")[0]); err == nil {
-		// 	statusCode = responseCode
-		// }
 
 		w.WriteHeader(statusCode)
 
@@ -178,21 +178,21 @@ func (h *MockServerHandler) generateMockData(response *openapi3.Response, path, 
 	// Simple mock data generation based on operation ID and path
 	switch operationID {
 	case "getPetById":
-		return map[string]interface{}{
+		return map[string]any{
 			"id":   123,
 			"name": "Mock Pet",
-			"category": map[string]interface{}{
+			"category": map[string]any{
 				"id":   1,
 				"name": "Dogs",
 			},
 			"photoUrls": []string{"http://example.com/photo1.jpg"},
-			"tags": []map[string]interface{}{
+			"tags": []map[string]any{
 				{"id": 1, "name": "friendly"},
 			},
 			"status": "available",
 		}
 	case "findPetsByStatus":
-		return []map[string]interface{}{
+		return []map[string]any{
 			{
 				"id":     1,
 				"name":   "Pet 1",
@@ -211,7 +211,7 @@ func (h *MockServerHandler) generateMockData(response *openapi3.Response, path, 
 			"sold":      3,
 		}
 	case "getOrderById":
-		return map[string]interface{}{
+		return map[string]any{
 			"id":       456,
 			"petId":    123,
 			"quantity": 1,
@@ -220,7 +220,7 @@ func (h *MockServerHandler) generateMockData(response *openapi3.Response, path, 
 			"complete": false,
 		}
 	case "getUserByName":
-		return map[string]interface{}{
+		return map[string]any{
 			"id":         789,
 			"username":   "mockuser",
 			"firstName":  "Mock",
@@ -230,7 +230,7 @@ func (h *MockServerHandler) generateMockData(response *openapi3.Response, path, 
 		}
 	default:
 		// Generic response for other operations
-		return map[string]interface{}{
+		return map[string]any{
 			"id":      uuid.New().String(),
 			"message": fmt.Sprintf("Mock response for %s", operationID),
 			"path":    path,

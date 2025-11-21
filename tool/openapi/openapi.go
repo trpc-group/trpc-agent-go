@@ -7,7 +7,7 @@
 //
 //
 
-// Package openapi provides a client for the openapi API.
+// Package openapi provides a toolset for a given openapi API specification.
 package openapi
 
 import (
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	openapi "github.com/getkin/kin-openapi/openapi3"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -36,6 +37,7 @@ type config struct {
 	userAgent string
 
 	specLoader SpecLoader
+	timeout    time.Duration
 	httpClient *http.Client
 }
 
@@ -60,7 +62,7 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	}
 }
 
-// WithName sets the name of the file toolset.
+// WithName sets the name of the openAPIToolSet.
 func WithName(name string) Option {
 	return func(c *config) {
 		c.name = name
@@ -107,6 +109,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	specCtx := context.Background()
 	specDoc, err := loadSpec(specCtx, c.specLoader)
 	if err != nil {
+		log.Debugf("load openAPI spec err: %v", err)
 		return nil, err
 	}
 	specProcessor := newSpecProcessor(specDoc)
