@@ -176,7 +176,11 @@ func (w *checkpointWorkflow) setup() error {
 	case "memory":
 		w.saver = checkpointinmemory.NewSaver()
 	case "redis":
-		w.saver = checkpointredis.NewSaver(redis.WithClientURL(w.redisClientURL))
+		saver, err := checkpointredis.NewSaver(checkpointredis.WithRedisClientURL(w.redisClientURL))
+		if err != nil {
+			return fmt.Errorf("failed to create Redis saver: %w", err)
+		}
+		w.saver = saver
 	default:
 		return fmt.Errorf("unsupported storage type: %s", w.storageType)
 	}
