@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	checkpointinmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
+	checkpointredis "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis"
 	checkpointsqlite "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -83,9 +84,11 @@ var (
 	modelName = flag.String("model", defaultModelName,
 		"Name of the model to use")
 	storage = flag.String("storage", "memory",
-		"Storage type: 'memory' or 'sqlite'")
+		"Storage type: 'memory' or 'sqlite' or 'redis'")
 	dbPath = flag.String("db", defaultDBPath,
 		"Path to SQLite database file (only used with -storage=sqlite)")
+	redisClientURL = flag.String("redis-url", "redis://localhost:6379",
+		"Redis client URL (only used with -storage=redis)")
 	verbose = flag.Bool("verbose", false,
 		"Enable verbose output")
 )
@@ -121,6 +124,7 @@ type checkpointWorkflow struct {
 	modelName        string
 	storageType      string
 	dbPath           string
+	redisClientURL   string
 	verbose          bool
 	logger           agentlog.Logger
 	runner           runner.Runner
@@ -171,6 +175,8 @@ func (w *checkpointWorkflow) setup() error {
 		w.saver = saver
 	case "memory":
 		w.saver = checkpointinmemory.NewSaver()
+	case "redis":
+		w.saver = checkpointredis.NewSaver(redis.WithClientURL(w.redisClientURL))
 	default:
 		return fmt.Errorf("unsupported storage type: %s", w.storageType)
 	}

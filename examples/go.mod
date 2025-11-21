@@ -6,6 +6,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container => ../codeexecutor/container
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter => ../codeexecutor/jupyter
+	trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis => ../graph/checkpoint/redis
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../memory/mysql
@@ -33,6 +34,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go v0.4.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.4.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
@@ -41,10 +43,12 @@ require (
 	github.com/Microsoft/go-winio v0.4.14 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/docker v28.4.0+incompatible // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
@@ -84,6 +88,7 @@ require (
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/redis/go-redis/v9 v9.17.0 // indirect
 	github.com/rs/cors v1.11.1 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
@@ -116,4 +121,5 @@ require (
 	google.golang.org/grpc v1.67.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.5.0 // indirect
 )
