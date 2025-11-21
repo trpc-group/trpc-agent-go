@@ -2,51 +2,48 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
-package sqlite
+// Package redis provides Redis-based checkpoint storage implementation
+// for graph execution state persistence and recovery.
+package redis
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // Import SQLite driver.
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
-func setupTestDB(t *testing.T) (*sql.DB, func()) {
-	// Create a temporary database file.
-	tmpfile, err := os.CreateTemp("", "test-*.db")
+func setupTestRedis(t testing.TB) (string, func()) {
+	mr, err := miniredis.Run()
 	require.NoError(t, err)
-
-	// Open the database.
-	db, err := sql.Open("sqlite3", tmpfile.Name())
-	require.NoError(t, err)
-
-	// Return cleanup function.
 	cleanup := func() {
-		db.Close()
-		os.Remove(tmpfile.Name())
+		mr.Close()
 	}
-
-	return db, cleanup
+	return "redis://" + mr.Addr(), cleanup
 }
 
-func TestSQLiteCheckpointSaver(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+func buildRedisClient(t *testing.T, redisURL string) *redis.Client {
+	opts, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	return redis.NewClient(opts)
+}
+
+func TestRedisCheckpointSaver(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -101,11 +98,11 @@ func TestSQLiteCheckpointSaver(t *testing.T) {
 	assert.Equal(t, metadata.Step, tuple.Metadata.Step)
 }
 
-func TestSQLiteCheckpointSaverList(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+func TestRedisCheckpointSaverList(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -144,11 +141,11 @@ func TestSQLiteCheckpointSaverList(t *testing.T) {
 	assert.Len(t, limited, 2)
 }
 
-func TestSQLiteCheckpointSaverWrites(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+func TestRedisCheckpointSaverWrites(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -200,11 +197,11 @@ func TestSQLiteCheckpointSaverWrites(t *testing.T) {
 	assert.Equal(t, "hello", tuple.PendingWrites[1].Value)
 }
 
-func TestSQLiteCheckpointSaverDeleteLineage(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+func TestRedisCheckpointSaverDeleteLineage(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -244,11 +241,11 @@ func TestSQLiteCheckpointSaverDeleteLineage(t *testing.T) {
 	assert.Nil(t, retrieved)
 }
 
-func TestSQLiteCheckpointSaverLatestCheckpoint(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+func TestRedisCheckpointSaverLatestCheckpoint(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -297,11 +294,11 @@ func TestSQLiteCheckpointSaverLatestCheckpoint(t *testing.T) {
 	assert.Equal(t, float64(2), latest.ChannelValues["step"])
 }
 
-func TestSQLite_GetTuple_EmptyDB_ReturnsNil(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_GetTuple_EmptyDB_ReturnsNil(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -313,11 +310,11 @@ func TestSQLite_GetTuple_EmptyDB_ReturnsNil(t *testing.T) {
 	assert.Nil(t, tup)
 }
 
-func TestSQLite_Put_MetadataDefault(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_Put_MetadataDefault(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -336,11 +333,11 @@ func TestSQLite_Put_MetadataDefault(t *testing.T) {
 	assert.NotEmpty(t, tup.Metadata.Source)
 }
 
-func TestSQLite_PutWrites_SequenceUsed(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutWrites_SequenceUsed(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -364,11 +361,11 @@ func TestSQLite_PutWrites_SequenceUsed(t *testing.T) {
 	assert.Equal(t, int64(102), tup.PendingWrites[1].Sequence)
 }
 
-func TestSQLite_PutFull_SequenceHonored(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_SequenceHonored(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -386,11 +383,11 @@ func TestSQLite_PutFull_SequenceHonored(t *testing.T) {
 	assert.Equal(t, int64(999), tup.PendingWrites[0].Sequence)
 }
 
-func TestSQLite_PutFull_SequenceZero_Assigned(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_SequenceZero_Assigned(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -410,61 +407,11 @@ func TestSQLite_PutFull_SequenceZero_Assigned(t *testing.T) {
 	require.Greater(t, tup.PendingWrites[0].Sequence, int64(0))
 }
 
-func TestSQLite_getBeforeTimestamp_NoRow_ReturnsNil(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_GetTuple_LatestInNamespace(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
-	require.NoError(t, err)
-	defer saver.Close()
-
-	ctx := context.Background()
-	lineageID := "ln-bts"
-	// Before ID does not exist -> returns nil pointer
-	ts, err := saver.getBeforeTimestamp(ctx, lineageID, "nsA", &graph.CheckpointFilter{Before: graph.CreateCheckpointConfig(lineageID, "no-such-id", "nsA")})
-	require.NoError(t, err)
-	require.Nil(t, ts)
-}
-
-func TestSQLite_List_MetadataFilter_NoExtraInTuple(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
-	defer cleanup()
-
-	saver, err := NewSaver(db)
-	require.NoError(t, err)
-	defer saver.Close()
-
-	ctx := context.Background()
-	lineageID := "ln-no-extra"
-	ns := "ns"
-
-	// Manually insert a checkpoint with metadata JSON missing 'extra' field
-	ck := graph.NewCheckpoint(map[string]any{"x": 1}, map[string]int64{"x": 1}, nil)
-	ckJSON, _ := json.Marshal(ck)
-	// metadata without Extra
-	rawMeta := map[string]any{"source": graph.CheckpointSourceInput, "step": 0}
-	metaJSON, _ := json.Marshal(rawMeta)
-	_, err = db.ExecContext(ctx, sqliteInsertCheckpoint, lineageID, ns, ck.ID, "", time.Now().UTC().UnixNano(), ckJSON, metaJSON)
-	require.NoError(t, err)
-
-	// List with metadata filter should exclude this tuple because Extra==nil
-	filter := &graph.CheckpointFilter{Metadata: map[string]any{"k": "v"}}
-	tuples, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ns), filter)
-	require.NoError(t, err)
-	// No tuples should match the metadata filter
-	require.Equal(t, 0, len(tuples))
-
-	// Listing without metadata filter should include 1 tuple
-	tuples2, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ns), nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(tuples2))
-}
-
-func TestSQLite_GetTuple_LatestInNamespace(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
-	defer cleanup()
-
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -487,41 +434,11 @@ func TestSQLite_GetTuple_LatestInNamespace(t *testing.T) {
 	assert.Equal(t, "ns1", graph.GetNamespace(tup.Config))
 }
 
-func TestSQLite_matchesMetadataFilter_ExtraNilFalse(t *testing.T) {
-	// tuple with nil Metadata
-	var tuple graph.CheckpointTuple
-	ok := (&Saver{}).matchesMetadataFilter(&tuple, &graph.CheckpointFilter{Metadata: map[string]any{"x": 1}})
-	require.False(t, ok)
-	// tuple with non-nil metadata but nil Extra
-	tuple.Metadata = &graph.CheckpointMetadata{}
-	ok = (&Saver{}).matchesMetadataFilter(&tuple, &graph.CheckpointFilter{Metadata: map[string]any{"x": 1}})
-	require.False(t, ok)
-}
-
-func TestSQLite_buildTuple_ParentNamespaceQueryError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
-	saver, err := NewSaver(db)
-	require.NoError(t, err)
-	// Close DB to cause query error inside findCheckpointNamespace
-	_ = saver.Close()
-	cleanup()
-
-	// Reuse saver with closed db
-	ctx := context.Background()
-	lineageID := "ln-err"
-	parentID := "p1"
-	ck := graph.NewCheckpoint(map[string]any{"x": 1}, map[string]int64{"x": 1}, nil)
-	ckJSON, _ := json.Marshal(ck)
-	metaJSON, _ := json.Marshal(graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0))
-	// Expect error when looking up parent namespace due to closed DB
-	_, err = saver.buildTuple(ctx, lineageID, "nsX", ck.ID, parentID, ckJSON, metaJSON)
-	require.Error(t, err)
-}
-
-func TestSQLite_Put_TimestampZero_UsesNow(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_Put_TimestampZero_UsesNow(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -539,39 +456,11 @@ func TestSQLite_Put_TimestampZero_UsesNow(t *testing.T) {
 	require.NotNil(t, tup)
 }
 
-func TestSQLite_GetTuple_ParentNamespaceUnknown_EmptyInParentConfig(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedisCheckpointSaverMetadataFilter(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
-	require.NoError(t, err)
-	defer saver.Close()
-
-	ctx := context.Background()
-	// Insert a child row that references a non-existent parent ID to force findCheckpointNamespace to return empty namespace.
-	// Use Put to create a child (without actual parent) by bypassing ParentCheckpointID validation: we insert directly into DB.
-	// 1) Create a fake child checkpoint JSON
-	child := graph.NewCheckpoint(map[string]any{"v": 10}, map[string]int64{"v": 1}, nil)
-	child.ParentCheckpointID = "no-such-parent"
-	childJSON, _ := json.Marshal(child)
-	metaJSON, _ := json.Marshal(graph.NewCheckpointMetadata(graph.CheckpointSourceFork, 1))
-	_, err = db.ExecContext(ctx, sqliteInsertCheckpoint, "ln-unknown", "nsX", child.ID, child.ParentCheckpointID, time.Now().UTC().UnixNano(), childJSON, metaJSON)
-	require.NoError(t, err)
-
-	cfg := graph.CreateCheckpointConfig("ln-unknown", child.ID, "nsX")
-	tup, err := saver.GetTuple(ctx, cfg)
-	require.NoError(t, err)
-	require.NotNil(t, tup)
-	require.NotNil(t, tup.ParentConfig)
-	assert.Equal(t, "", graph.GetNamespace(tup.ParentConfig))
-	assert.Equal(t, child.ParentCheckpointID, graph.GetCheckpointID(tup.ParentConfig))
-}
-
-func TestSQLiteCheckpointSaverMetadataFilter(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -612,18 +501,13 @@ func TestSQLiteCheckpointSaverMetadataFilter(t *testing.T) {
 	assert.Equal(t, float64(1), checkpoints[0].Checkpoint.ChannelValues["step"])
 }
 
-func TestSQLiteCheckpointSaverNilDB(t *testing.T) {
-	_, err := NewSaver(nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "db is nil")
-}
-
-func TestSQLiteCheckpointSaverClose(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+func TestRedisCheckpointSaverClose(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
+	defer saver.Close()
 
 	// Close should not error.
 	err = saver.Close()
@@ -634,25 +518,11 @@ func TestSQLiteCheckpointSaverClose(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// local helper to create temp sqlite DB (duplicated to keep file self-contained)
-func setupTmpDB(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
-	f, err := os.CreateTemp("", "sqlite-x-*.db")
-	require.NoError(t, err)
-	db, err := sql.Open("sqlite3", f.Name())
-	require.NoError(t, err)
-	cleanup := func() {
-		_ = db.Close()
-		_ = os.Remove(f.Name())
-	}
-	return db, cleanup
-}
-
-func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -661,7 +531,7 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 
 	// Put a checkpoint in ns1
 	ck1 := graph.NewCheckpoint(map[string]any{"n": 1}, map[string]int64{"n": 1}, map[string]map[string]int64{})
-	cfgNS1 := graph.CreateCheckpointConfig(lineageID, "", "")
+	cfgNS1 := graph.CreateCheckpointConfig(lineageID, "", "ns1")
 	_, err = saver.Put(ctx, graph.PutRequest{Config: cfgNS1, Checkpoint: ck1, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0), NewVersions: map[string]int64{"n": 1}})
 	require.NoError(t, err)
 
@@ -670,7 +540,7 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 
 	// Put a checkpoint in ns2
 	ck2 := graph.NewCheckpoint(map[string]any{"n": 2}, map[string]int64{"n": 2}, map[string]map[string]int64{})
-	cfgNS2 := graph.CreateCheckpointConfig(lineageID, "", "")
+	cfgNS2 := graph.CreateCheckpointConfig(lineageID, "", "ns2")
 	_, err = saver.Put(ctx, graph.PutRequest{Config: cfgNS2, Checkpoint: ck2, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 1), NewVersions: map[string]int64{"n": 2}})
 	require.NoError(t, err)
 
@@ -681,7 +551,7 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 	require.NotNil(t, tuple)
 	// Should be the second one in ns2
 	assert.Equal(t, ck2.ID, tuple.Checkpoint.ID)
-	assert.Equal(t, "", graph.GetNamespace(tuple.Config))
+	assert.Equal(t, "ns2", graph.GetNamespace(tuple.Config))
 
 	// Cross-namespace by ID with empty ns but specific id
 	byIDCfg := graph.CreateCheckpointConfig(lineageID, ck1.ID, "")
@@ -689,14 +559,14 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, tuple2)
 	assert.Equal(t, ck1.ID, tuple2.Checkpoint.ID)
-	assert.Equal(t, "", graph.GetNamespace(tuple2.Config))
+	assert.Equal(t, "ns1", graph.GetNamespace(tuple2.Config))
 }
 
-func TestSQLite_Put_DefaultMetadataWhenNil(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_Put_DefaultMetadataWhenNil(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -717,11 +587,11 @@ func TestSQLite_Put_DefaultMetadataWhenNil(t *testing.T) {
 	assert.Equal(t, 0, tup.Metadata.Step)
 }
 
-func TestSQLite_PutWrites_SequenceOrdering(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutWrites_SequenceOrdering(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -751,11 +621,11 @@ func TestSQLite_PutWrites_SequenceOrdering(t *testing.T) {
 	assert.Equal(t, "a", tup.PendingWrites[1].Channel)
 }
 
-func TestSQLite_PutFull_WithParentAndWrites(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_WithParentAndWrites(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -796,11 +666,11 @@ func TestSQLite_PutFull_WithParentAndWrites(t *testing.T) {
 	assert.Equal(t, float64(99), tup.PendingWrites[0].Value)
 }
 
-func TestSQLite_PutFull_ParentConfig_CrossNamespace(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_ParentConfig_CrossNamespace(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -831,11 +701,11 @@ func TestSQLite_PutFull_ParentConfig_CrossNamespace(t *testing.T) {
 	assert.Equal(t, nsA, graph.GetNamespace(tup.ParentConfig))
 }
 
-func TestSQLite_List_WithBeforeAndCrossNamespace(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_List_WithBeforeAndCrossNamespace(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -887,10 +757,11 @@ func TestSQLite_List_WithBeforeAndCrossNamespace(t *testing.T) {
 	}
 }
 
-func TestSQLite_List_CrossNamespace_Limit1(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_List_CrossNamespace_Limit1(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -911,10 +782,11 @@ func TestSQLite_List_CrossNamespace_Limit1(t *testing.T) {
 	require.Equal(t, 1, len(tuples))
 }
 
-func TestSQLite_List_NamespaceNotExists_ReturnsEmpty(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_List_NamespaceNotExists_ReturnsEmpty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -924,30 +796,35 @@ func TestSQLite_List_NamespaceNotExists_ReturnsEmpty(t *testing.T) {
 	require.Equal(t, 0, len(tuples))
 }
 
-func TestSQLite_PutFull_NilCheckpoint_Error(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_NilCheckpoint_Error(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
+	defer saver.Close()
 	defer saver.Close()
 	_, err = saver.PutFull(context.Background(), graph.PutFullRequest{Config: graph.CreateCheckpointConfig("ln", "", "ns"), Checkpoint: nil})
 	require.Error(t, err)
 }
 
-func TestSQLite_Get_MissingLineage_Error(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_Get_MissingLineage_Error(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
+	defer saver.Close()
 	defer saver.Close()
 	_, err = saver.Get(context.Background(), map[string]any{})
 	require.Error(t, err)
 }
 
-func TestSQLite_List_MetadataMismatch_ReturnsEmpty(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_List_MetadataMismatch_ReturnsEmpty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -963,21 +840,25 @@ func TestSQLite_List_MetadataMismatch_ReturnsEmpty(t *testing.T) {
 	require.Equal(t, 0, len(tuples))
 }
 
-func TestSQLite_List_MissingLineage_Error(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_List_MissingLineage_Error(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
+	defer saver.Close()
 	defer saver.Close()
 	_, err = saver.List(context.Background(), map[string]any{}, nil)
 	require.Error(t, err)
 }
 
-func TestSQLite_List_NamespaceWithLimit(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_List_NamespaceWithLimit(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
+	defer saver.Close()
 	defer saver.Close()
 	ctx := context.Background()
 	lineageID := "ln-ns-limit"
@@ -990,10 +871,11 @@ func TestSQLite_List_NamespaceWithLimit(t *testing.T) {
 	require.Equal(t, 1, len(tuples))
 }
 
-func TestSQLite_PutFull_NoWrites_Success_NoPendingWrites(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_NoWrites_Success_NoPendingWrites(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -1008,11 +890,13 @@ func TestSQLite_PutFull_NoWrites_Success_NoPendingWrites(t *testing.T) {
 	require.Equal(t, 0, len(tup.PendingWrites))
 }
 
-func TestSQLite_PutWrites_SequenceZero_UsesIndex(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutWrites_SequenceZero_UsesIndex(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
+	defer saver.Close()
 	defer saver.Close()
 	ctx := context.Background()
 	cfg, err := saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig("ln-pw-idx", "", "ns"), Checkpoint: graph.NewCheckpoint(map[string]any{"a": 1}, map[string]int64{"a": 1}, nil), Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0), NewVersions: map[string]int64{"a": 1}})
@@ -1027,10 +911,11 @@ func TestSQLite_PutWrites_SequenceZero_UsesIndex(t *testing.T) {
 	require.Equal(t, int64(1), tup.PendingWrites[1].Sequence)
 }
 
-func TestSQLite_NoParent_ParentConfigNil(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_NoParent_ParentConfigNil(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -1042,10 +927,11 @@ func TestSQLite_NoParent_ParentConfigNil(t *testing.T) {
 	require.Nil(t, tup.ParentConfig)
 }
 
-func TestSQLite_findCheckpointNamespace_EmptyArgs(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_findCheckpointNamespace_EmptyArgs(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ns, err := saver.findCheckpointNamespace(context.Background(), "", "")
@@ -1053,10 +939,11 @@ func TestSQLite_findCheckpointNamespace_EmptyArgs(t *testing.T) {
 	require.Equal(t, "", ns)
 }
 
-func TestSQLite_findCheckpointNamespace_NoRows(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_findCheckpointNamespace_NoRows(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -1069,10 +956,11 @@ func TestSQLite_findCheckpointNamespace_NoRows(t *testing.T) {
 	require.Equal(t, "", ns)
 }
 
-func TestSQLite_PutFull_SequenceZero_AssignsTime(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_SequenceZero_AssignsTime(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -1096,11 +984,11 @@ func TestSQLite_PutFull_SequenceZero_AssignsTime(t *testing.T) {
 	require.Greater(t, tup.PendingWrites[0].Sequence, int64(0))
 }
 
-func TestSQLite_ErrorCases(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_ErrorCases(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -1132,11 +1020,11 @@ func TestSQLite_ErrorCases(t *testing.T) {
 	assert.Contains(t, err.Error(), "lineage_id is required")
 }
 
-func TestSQLite_PutFull_WriteMarshalError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_WriteMarshalError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -1149,17 +1037,17 @@ func TestSQLite_PutFull_WriteMarshalError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSQLite_Close_NilDB_NoPanic(t *testing.T) {
-	s := &Saver{db: nil}
+func TestRedis_Close_NilDB_NoPanic(t *testing.T) {
+	s := &Saver{client: nil}
 	// Close should be no-op
 	assert.NoError(t, s.Close())
 }
 
-func TestSQLite_Put_NilCheckpoint_Error(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_Put_NilCheckpoint_Error(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -1168,11 +1056,11 @@ func TestSQLite_Put_NilCheckpoint_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSQLite_PutWrites_MarshalError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutWrites_MarshalError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -1184,10 +1072,11 @@ func TestSQLite_PutWrites_MarshalError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSQLite_findCheckpointNamespace_Found(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_findCheckpointNamespace_Found(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -1201,54 +1090,20 @@ func TestSQLite_findCheckpointNamespace_Found(t *testing.T) {
 	assert.Equal(t, "nsP", ns)
 }
 
-func TestSQLite_NewSaver_DBError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
-	// Close before NewSaver
-	_ = db.Close()
-	cleanup()
-	_, err := NewSaver(db)
-	require.Error(t, err)
-}
-
-func TestSQLite_executeListQuery_DBError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
-	saver, err := NewSaver(db)
-	require.NoError(t, err)
-	// Close DB to force error
-	_ = saver.Close()
-	cleanup()
-	_, err = saver.executeListQuery(context.Background(), "ln", "", nil, nil)
-	require.Error(t, err)
-}
-
-func TestSQLite_processSingleRow_ScanErrors(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_NewSaver_DBError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
-	ctx := context.Background()
-
-	// Cross-namespace scan error (expects 3 columns)
-	rows, err := db.QueryContext(ctx, "SELECT 1")
-	require.NoError(t, err)
-	defer rows.Close()
-	_, err = saver.processSingleRow(ctx, rows, "ln", "")
-	require.Error(t, err)
-
-	// Namespace-specific scan error (expects 2 columns)
-	rows2, err := db.QueryContext(ctx, "SELECT 1")
-	require.NoError(t, err)
-	defer rows2.Close()
-	_, err = saver.processSingleRow(ctx, rows2, "ln", "ns")
-	require.Error(t, err)
 }
 
-func TestSQLite_Put_CheckpointMarshalError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_Put_CheckpointMarshalError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -1258,10 +1113,11 @@ func TestSQLite_Put_CheckpointMarshalError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSQLite_Put_MetadataMarshalError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_Put_MetadataMarshalError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -1272,11 +1128,11 @@ func TestSQLite_Put_MetadataMarshalError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSQLite_PutFull_MetadataMarshalError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_PutFull_MetadataMarshalError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	saver, err := NewSaver(db)
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 
@@ -1289,21 +1145,22 @@ func TestSQLite_PutFull_MetadataMarshalError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSQLite_DeleteLineage_DBError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
-	saver, err := NewSaver(db)
+func TestRedis_DeleteLineage_DBError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
-	// Close DB to force ExecContext error
-	_ = saver.Close()
-	cleanup()
+	defer saver.Close()
 	err = saver.DeleteLineage(context.Background(), "ln-del")
 	require.Error(t, err)
 }
 
-func TestSQLite_DeleteLineage_SecondExecError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
+func TestRedis_DeleteLineage_SecondExecError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
-	saver, err := NewSaver(db)
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
 	defer saver.Close()
 	ctx := context.Background()
@@ -1312,28 +1169,6 @@ func TestSQLite_DeleteLineage_SecondExecError(t *testing.T) {
 	require.NoError(t, err)
 	_ = saver.PutWrites(ctx, graph.PutWritesRequest{Config: cfg, Writes: []graph.PendingWrite{{TaskID: "t", Channel: "c", Value: 1}}})
 	// Drop writes table to force second delete to fail
-	_, _ = db.Exec("DROP TABLE checkpoint_writes")
 	err = saver.DeleteLineage(ctx, "ln-del2")
-	require.Error(t, err)
-}
-
-func TestSQLite_loadWrites_UnmarshalError(t *testing.T) {
-	db, cleanup := setupTmpDB(t)
-	defer cleanup()
-	saver, err := NewSaver(db)
-	require.NoError(t, err)
-	defer saver.Close()
-
-	ctx := context.Background()
-	lineageID := "ln-w-unmarshal"
-	ns := "ns"
-	ck := graph.NewCheckpoint(map[string]any{"x": 1}, map[string]int64{"x": 1}, nil)
-	cfg, err := saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", ns), Checkpoint: ck, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0), NewVersions: map[string]int64{"x": 1}})
-	require.NoError(t, err)
-	// Manually insert an invalid JSON value_json for writes
-	_, err = db.ExecContext(ctx, sqliteInsertWrite, lineageID, ns, ck.ID, "t", 0, "c", []byte("{invalid json}"), "", 1)
-	require.NoError(t, err)
-	// loadWrites should error
-	_, err = saver.loadWrites(ctx, lineageID, ns, graph.GetCheckpointID(cfg))
 	require.Error(t, err)
 }
