@@ -107,7 +107,7 @@ func TestTrackerAppendEventErrors(t *testing.T) {
 	})
 }
 
-func TestTrackerAppendEventUsesEventTimestamp(t *testing.T) {
+func TestTrackerAppendEventUsesCurrentTimestamp(t *testing.T) {
 	ctx := context.Background()
 	svc := inmemory.NewSessionService()
 	tracker, err := New(svc)
@@ -115,9 +115,12 @@ func TestTrackerAppendEventUsesEventTimestamp(t *testing.T) {
 
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 	eventWithTs := aguievents.NewRunFinishedEvent("thread", "run")
-	ts := time.Now().Add(-time.Minute).UnixMilli()
-	eventWithTs.SetTimestamp(ts)
+	eventTimestamp := time.Now().Add(-time.Minute).UnixMilli()
+	eventWithTs.SetTimestamp(eventTimestamp)
+
+	before := time.Now()
 	require.NoError(t, tracker.AppendEvent(ctx, key, eventWithTs))
+	after := time.Now()
 
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
@@ -125,7 +128,11 @@ func TestTrackerAppendEventUsesEventTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, trackEvents)
 	require.Len(t, trackEvents.Events, 1)
-	require.Equal(t, time.UnixMilli(ts).UTC().Round(0), trackEvents.Events[0].Timestamp.UTC().Round(0))
+
+	recorded := trackEvents.Events[0].Timestamp
+	require.True(t, recorded.After(time.UnixMilli(eventTimestamp)))
+	require.WithinDuration(t, after, recorded, time.Second)
+	require.WithinDuration(t, before, recorded, time.Second*2)
 }
 
 func TestTrackerGetEventsErrors(t *testing.T) {
