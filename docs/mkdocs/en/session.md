@@ -90,24 +90,62 @@ func main() {
 
     // 6. First conversation
     userMsg1 := model.NewUserMessage("My name is Alice")
-    eventChan, _ := r.Run(ctx, "user123", "session-001", userMsg1)
+    eventChan, err := r.Run(ctx, "user123", "session-001", userMsg1)
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
     fmt.Print("AI: ")
     for event := range eventChan {
+        if event == nil || event.Response == nil {
+            continue
+        }
+        if event.Response.Error != nil {
+            fmt.Printf("\nError: %s (type: %s)\n", event.Response.Error.Message, event.Response.Error.Type)
+            continue
+        }
         if len(event.Response.Choices) > 0 {
-            // Streaming output, use Delta.Content
-            fmt.Print(event.Response.Choices[0].Delta.Content)
+            choice := event.Response.Choices[0]
+            // Streaming output, prefer Delta.Content, fallback to Message.Content
+            if choice.Delta.Content != "" {
+                fmt.Print(choice.Delta.Content)
+            } else if choice.Message.Content != "" {
+                fmt.Print(choice.Message.Content)
+            }
+        }
+        if event.IsFinalResponse() {
+            break
         }
     }
     fmt.Println()
 
     // 7. Second conversation - automatically load history, AI remembers user's name
     userMsg2 := model.NewUserMessage("What's my name?")
-    eventChan, _ = r.Run(ctx, "user123", "session-001", userMsg2)
+    eventChan, err = r.Run(ctx, "user123", "session-001", userMsg2)
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
     fmt.Print("AI: ")
     for event := range eventChan {
+        if event == nil || event.Response == nil {
+            continue
+        }
+        if event.Response.Error != nil {
+            fmt.Printf("\nError: %s (type: %s)\n", event.Response.Error.Message, event.Response.Error.Type)
+            continue
+        }
         if len(event.Response.Choices) > 0 {
-            // Streaming output, use Delta.Content
-            fmt.Print(event.Response.Choices[0].Delta.Content)
+            choice := event.Response.Choices[0]
+            // Streaming output, prefer Delta.Content, fallback to Message.Content
+            if choice.Delta.Content != "" {
+                fmt.Print(choice.Delta.Content)
+            } else if choice.Message.Content != "" {
+                fmt.Print(choice.Message.Content)
+            }
+        }
+        if event.IsFinalResponse() {
+            break
         }
     }
     fmt.Println() // Output: Your name is Alice
@@ -231,12 +269,12 @@ sessionService := inmemory.NewSessionService(
 
 **Recommended Configuration:**
 
-| Scenario | Recommended Value | Description |
-| -------- | ----------------- | ----------- |
-| Short-term conversations | 100-200 | Customer service, single tasks |
-| Medium-term sessions | 500-1000 | Daily assistant, multi-turn collaboration |
-| Long-term sessions | 1000-2000 | Personal assistant, ongoing projects (use with summary) |
-| Debug/testing | 50-100 | Quick validation, reduce noise |
+| Scenario                 | Recommended Value | Description                                             |
+| ------------------------ | ----------------- | ------------------------------------------------------- |
+| Short-term conversations | 100-200           | Customer service, single tasks                          |
+| Medium-term sessions     | 500-1000          | Daily assistant, multi-turn collaboration               |
+| Long-term sessions       | 1000-2000         | Personal assistant, ongoing projects (use with summary) |
+| Debug/testing            | 50-100            | Quick validation, reduce noise                          |
 
 ### 4️⃣ TTL Management (Auto-Expiration)
 
@@ -260,23 +298,23 @@ sessionService := inmemory.NewSessionService(
 
 **Expiration Behavior:**
 
-| Storage Type | Expiration Mechanism | Auto Cleanup |
-| ------------ | -------------------- | ------------ |
-| Memory | Periodic scanning + access-time checking | Yes |
-| Redis | Redis native TTL | Yes |
-| PostgreSQL | Periodic scanning (soft delete or hard delete) | Yes |
-| MySQL | Periodic scanning (soft delete or hard delete) | Yes |
+| Storage Type | Expiration Mechanism                           | Auto Cleanup |
+| ------------ | ---------------------------------------------- | ------------ |
+| Memory       | Periodic scanning + access-time checking       | Yes          |
+| Redis        | Redis native TTL                               | Yes          |
+| PostgreSQL   | Periodic scanning (soft delete or hard delete) | Yes          |
+| MySQL        | Periodic scanning (soft delete or hard delete) | Yes          |
 
 ## Storage Backend Comparison
 
 tRPC-Agent-Go provides four session storage backends to meet different scenario requirements:
 
-| Storage Type | Use Case | Advantages | Disadvantages |
-| ------------ | -------- | ---------- | ------------- |
-| Memory | Development/testing, small-scale | Simple and fast, no external dependencies | Data not persistent, no distributed support |
-| Redis | Production, distributed | High performance, distributed support, auto-expiration | Requires Redis service |
-| PostgreSQL | Production, complex queries | Relational database, supports complex queries, JSONB | Relatively heavy, requires database |
-| MySQL | Production, complex queries | Widely used, supports complex queries, JSON | Relatively heavy, requires database |
+| Storage Type | Use Case                         | Advantages                                             | Disadvantages                               |
+| ------------ | -------------------------------- | ------------------------------------------------------ | ------------------------------------------- |
+| Memory       | Development/testing, small-scale | Simple and fast, no external dependencies              | Data not persistent, no distributed support |
+| Redis        | Production, distributed          | High performance, distributed support, auto-expiration | Requires Redis service                      |
+| PostgreSQL   | Production, complex queries      | Relational database, supports complex queries, JSONB   | Relatively heavy, requires database         |
+| MySQL        | Production, complex queries      | Widely used, supports complex queries, JSON            | Relatively heavy, requires database         |
 
 ## Memory Storage
 
@@ -404,7 +442,7 @@ import (
 
 // Register Redis instance
 redisURL := "redis://127.0.0.1:6379"
-storage.RegisterRedisInstance("my-redis-instance", 
+storage.RegisterRedisInstance("my-redis-instance",
     storage.WithClientBuilderURL(redisURL))
 
 // Use in session service
@@ -421,7 +459,7 @@ sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://localhost:6379"),
     redis.WithSessionEventLimit(1000),
     redis.WithSessionTTL(30*time.Minute),
-    
+
     // Summary configuration
     redis.WithSummarizer(summarizer),
     redis.WithAsyncSummaryNum(4),
@@ -515,17 +553,17 @@ sessionService, err := postgres.NewService(
     postgres.WithPassword("your-password"),
     postgres.WithDatabase("trpc_sessions"),
     postgres.WithSSLMode("require"),
-    
+
     // Session configuration
     postgres.WithSessionEventLimit(1000),
     postgres.WithSessionTTL(30*time.Minute),
     postgres.WithAppStateTTL(24*time.Hour),
     postgres.WithUserStateTTL(7*24*time.Hour),
-    
+
     // TTL cleanup configuration
     postgres.WithCleanupInterval(10*time.Minute),
     postgres.WithSoftDelete(true),  // Soft delete mode
-    
+
     // Async persistence configuration
     postgres.WithAsyncPersisterNum(4),
     postgres.WithPersistQueueSize(2000),
@@ -589,11 +627,11 @@ sessionService, err := postgres.NewService(
 
 **Table Naming Rules:**
 
-| Schema | Prefix | Final Table Name |
-|--------|--------|------------------|
-| (none) | (none) | `session_states` |
-| (none) | `app1_` | `app1_session_states` |
-| `my_schema` | (none) | `my_schema.session_states` |
+| Schema      | Prefix  | Final Table Name                |
+| ----------- | ------- | ------------------------------- |
+| (none)      | (none)  | `session_states`                |
+| (none)      | `app1_` | `app1_session_states`           |
+| `my_schema` | (none)  | `my_schema.session_states`      |
 | `my_schema` | `app1_` | `my_schema.app1_session_states` |
 
 ### Soft Delete and TTL Cleanup
@@ -616,10 +654,10 @@ sessionService, err := postgres.NewService(
 
 **Delete Behavior Comparison:**
 
-| Configuration | Delete Operation | Query Behavior | Data Recovery |
-|---------------|------------------|----------------|---------------|
-| `softDelete=true` | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable |
-| `softDelete=false` | `DELETE FROM ...` | Query all records | Not recoverable |
+| Configuration      | Delete Operation                | Query Behavior              | Data Recovery   |
+| ------------------ | ------------------------------- | --------------------------- | --------------- |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable     |
+| `softDelete=false` | `DELETE FROM ...`               | Query all records           | Not recoverable |
 
 **TTL Auto Cleanup:**
 
@@ -646,7 +684,7 @@ sessionService, err := postgres.NewService(
     postgres.WithPassword("your-password"),
     postgres.WithSessionEventLimit(1000),
     postgres.WithSessionTTL(30*time.Minute),
-    
+
     // Summary configuration
     postgres.WithSummarizer(summarizer),
     postgres.WithAsyncSummaryNum(2),
@@ -787,17 +825,17 @@ sessionService, err := mysql.NewService(
 sessionService, err := mysql.NewService(
     // Connection configuration
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
-    
+
     // Session configuration
     mysql.WithSessionEventLimit(1000),
     mysql.WithSessionTTL(30*time.Minute),
     mysql.WithAppStateTTL(24*time.Hour),
     mysql.WithUserStateTTL(7*24*time.Hour),
-    
+
     // TTL cleanup configuration
     mysql.WithCleanupInterval(10*time.Minute),
     mysql.WithSoftDelete(true),  // Soft delete mode
-    
+
     // Async persistence configuration
     mysql.WithAsyncPersisterNum(4),
     mysql.WithPersistQueueSize(2000),
@@ -864,10 +902,10 @@ sessionService, err := mysql.NewService(
 
 **Delete Behavior Comparison:**
 
-| Configuration | Delete Operation | Query Behavior | Data Recovery |
-|---------------|------------------|----------------|---------------|
-| `softDelete=true` | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable |
-| `softDelete=false` | `DELETE FROM ...` | Query all records | Not recoverable |
+| Configuration      | Delete Operation                | Query Behavior              | Data Recovery   |
+| ------------------ | ------------------------------- | --------------------------- | --------------- |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable     |
+| `softDelete=false` | `DELETE FROM ...`               | Query all records           | Not recoverable |
 
 **TTL Auto Cleanup:**
 
@@ -893,7 +931,7 @@ sessionService, err := mysql.NewService(
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSessionEventLimit(1000),
     mysql.WithSessionTTL(30*time.Minute),
-    
+
     // Summary configuration
     mysql.WithSummarizer(summarizer),
     mysql.WithAsyncSummaryNum(2),
@@ -1200,19 +1238,19 @@ summarizer := summary.NewSummarizer(
     summary.WithEventThreshold(20),
     summary.WithTokenThreshold(4000),
     summary.WithTimeThreshold(5*time.Minute),
-    
+
     // Composite conditions (any met)
     summary.WithChecksAny(
         summary.CheckEventThreshold(50),
         summary.CheckTimeThreshold(10*time.Minute),
     ),
-    
+
     // Composite conditions (all met)
     summary.WithChecksAll(
         summary.CheckEventThreshold(10),
         summary.CheckTokenThreshold(2000),
     ),
-    
+
     // Summary generation
     summary.WithMaxSummaryWords(200),
     summary.WithPrompt(customPrompt),
@@ -1240,10 +1278,14 @@ func main() {
     ctx := context.Background()
 
     // Create LLM model
-    llm, _ := openai.NewModel(
+    llm, err := openai.NewModel(
         openai.WithAPIKey("your-api-key"),
         openai.WithModelName("gpt-4"),
     )
+    if err != nil {
+        // Handle error...
+        return
+    }
 
     // Create summarizer
     summarizer := summary.NewSummarizer(
@@ -1277,11 +1319,32 @@ func main() {
 
     // Run conversation
     userMsg := model.NewUserMessage("Tell me about AI")
-    eventChan, _ := r.Run(ctx, "user123", "session456", userMsg)
+    eventChan, err := r.Run(ctx, "user123", "session456", userMsg)
+    if err != nil {
+        // Handle error...
+        return
+    }
 
     // Consume events
     for event := range eventChan {
-        // Process events...
+        if event == nil || event.Response == nil {
+            continue
+        }
+        if event.Response.Error != nil {
+            // Handle error event...
+            continue
+        }
+        if len(event.Response.Choices) > 0 {
+            choice := event.Response.Choices[0]
+            if choice.Delta.Content != "" {
+                // Process streaming content...
+            } else if choice.Message.Content != "" {
+                // Process complete content...
+            }
+        }
+        if event.IsFinalResponse() {
+            break
+        }
     }
 }
 ```
