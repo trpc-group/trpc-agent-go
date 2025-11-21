@@ -160,6 +160,84 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	assert.Contains(t, resp.Results[0].Error, "unsupported content type: application/octet-stream")
 }
 
+func TestWebFetch_PerUrlLimit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "1234567890")
+	}))
+	defer ts.Close()
+
+	// Limit to 5 bytes
+	tool := NewTool(WithMaxContentLength(5))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok)
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "12345", resp.Results[0].Content)
+}
+
+func TestWebFetch_TotalLimit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "12345")
+	}))
+	defer ts.Close()
+
+	// Total limit 7. Fetch two URLs (5 bytes each).
+	// 1st: 5 bytes. Total 5. (OK)
+	// 2nd: 5 bytes. Total 10 > 7. Truncate 2nd to 2 bytes (7-5).
+	// Note: Order depends on concurrency, but results array is ordered by input.
+	// The implementation applies total limit strictly on result array order.
+
+	tool := NewTool(WithMaxTotalContentLength(7))
+	args := fmt.Sprintf(`{"urls": ["%s/1", "%s/2"]}`, ts.URL, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok)
+	assert.Len(t, resp.Results, 2)
+
+	// The implementation iterates results in order.
+	// Result 0: "12345" (len 5)
+	// Result 1: "12" (len 2) -> Total 7
+
+	assert.Equal(t, "12345", resp.Results[0].Content)
+	assert.Equal(t, "12", resp.Results[1].Content)
+}
+
+func TestWebFetch_TruncateUTF8(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		// "你好" is 6 bytes (3 per rune).
+		fmt.Fprint(w, "你好")
+	}))
+	defer ts.Close()
+
+	// Limit to 4 bytes.
+	// "你" is 3 bytes. "好" is 3 bytes.
+	// 4 bytes is not enough for "你好".
+	// truncateString iterates runes.
+	// Rune 1 '你': len 3. Current 3 <= 4. Keep.
+	// Rune 2 '好': len 3. Current 3+3=6 > 4. Stop.
+	// Result should be "你" (3 bytes).
+
+	tool := NewTool(WithMaxContentLength(4))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok)
+	assert.Equal(t, "你", resp.Results[0].Content)
+}
+
 func TestConvertHTMLToMarkdown(t *testing.T) {
 	htmlContent := `
 		<html>

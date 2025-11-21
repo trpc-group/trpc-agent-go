@@ -34,13 +34,31 @@ const (
 type Option func(*config)
 
 type config struct {
-	httpClient *http.Client
+	httpClient            *http.Client
+	maxContentLength      int
+	maxTotalContentLength int
 }
 
 // WithHTTPClient sets the HTTP client.
 func WithHTTPClient(c *http.Client) Option {
 	return func(cfg *config) {
 		cfg.httpClient = c
+	}
+}
+
+// WithMaxContentLength sets the maximum content length for a single URL.
+// 0 means unlimited.
+func WithMaxContentLength(limit int) Option {
+	return func(cfg *config) {
+		cfg.maxContentLength = limit
+	}
+}
+
+// WithMaxTotalContentLength sets the maximum total content length for all URLs.
+// 0 means unlimited.
+func WithMaxTotalContentLength(limit int) Option {
+	return func(cfg *config) {
+		cfg.maxTotalContentLength = limit
 	}
 }
 
@@ -72,7 +90,9 @@ func NewTool(opts ...Option) tool.CallableTool {
 	}
 
 	t := &webFetchTool{
-		client: cfg.httpClient,
+		client:                cfg.httpClient,
+		maxContentLength:      cfg.maxContentLength,
+		maxTotalContentLength: cfg.maxTotalContentLength,
 	}
 
 	return function.NewFunctionTool(
@@ -84,7 +104,9 @@ func NewTool(opts ...Option) tool.CallableTool {
 }
 
 type webFetchTool struct {
-	client *http.Client
+	client                *http.Client
+	maxContentLength      int
+	maxTotalContentLength int
 }
 
 func (t *webFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchResponse, error) {
@@ -135,6 +157,27 @@ func (t *webFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchRespon
 	}
 	wg.Wait()
 
+	// Apply total length limit
+	if t.maxTotalContentLength > 0 {
+		currentTotal := 0
+		for i := range results {
+			if results[i].Error != "" {
+				continue
+			}
+			contentLen := len(results[i].Content)
+			if currentTotal >= t.maxTotalContentLength {
+				results[i].Content = "" // Or maybe a note like "[Truncated due to total limit]"
+				results[i].Error = "Content truncated due to total length limit"
+			} else if currentTotal+contentLen > t.maxTotalContentLength {
+				allowed := t.maxTotalContentLength - currentTotal
+				results[i].Content = truncateString(results[i].Content, allowed)
+				currentTotal += len(results[i].Content)
+			} else {
+				currentTotal += contentLen
+			}
+		}
+	}
+
 	return fetchResponse{
 		Results: results,
 		Summary: fmt.Sprintf("Fetched %d URLs", len(targetURLs)),
@@ -158,22 +201,59 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) (string, int
 		return "", resp.StatusCode, fmt.Errorf("HTTP status %d", resp.StatusCode)
 	}
 
+	var content string
+	var processErr error
+
 	contentType := resp.Header.Get("Content-Type")
 	// Parse media type (ignore parameters like charset)
 	mediaType := strings.Split(contentType, ";")[0]
 	mediaType = strings.TrimSpace(mediaType)
 
 	if mediaType == "text/html" {
-		content, err := convertHTMLToMarkdown(resp.Body)
-		return content, resp.StatusCode, err
+		content, processErr = convertHTMLToMarkdown(resp.Body)
+	} else if isSupportedTextType(mediaType) {
+		content, processErr = readBodyAsString(resp.Body)
+	} else {
+		return "", resp.StatusCode, fmt.Errorf("unsupported content type: %s", mediaType)
 	}
 
-	if isSupportedTextType(mediaType) {
-		content, err := readBodyAsString(resp.Body)
-		return content, resp.StatusCode, err
+	if processErr != nil {
+		return "", resp.StatusCode, processErr
 	}
 
-	return "", resp.StatusCode, fmt.Errorf("unsupported content type: %s", mediaType)
+	// Apply per-URL limit
+	if t.maxContentLength > 0 && len(content) > t.maxContentLength {
+		content = truncateString(content, t.maxContentLength)
+	}
+
+	return content, resp.StatusCode, nil
+}
+
+// truncateString truncates a string to n bytes, ensuring valid UTF-8.
+func truncateString(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	// If we cut exactly at n, check if it's a valid boundary.
+	// Simple approach: convert to runes if we cared about rune count, but "length" usually implies bytes/storage.
+	// However, chopping bytes can split characters.
+	// Safe approach: iterate runes until byte count exceeds n.
+
+	if n <= 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	currentLen := 0
+	for _, r := range s {
+		rLen := len(string(r))
+		if currentLen+rLen > n {
+			break
+		}
+		sb.WriteRune(r)
+		currentLen += rLen
+	}
+	return sb.String()
 }
 
 func isSupportedTextType(mediaType string) bool {
