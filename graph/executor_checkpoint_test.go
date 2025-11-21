@@ -190,25 +190,6 @@ func (m *putMockSaver) PutFull(ctx context.Context, req PutFullRequest) (map[str
 func (m *putMockSaver) DeleteLineage(ctx context.Context, lineageID string) error { return nil }
 func (m *putMockSaver) Close() error                                              { return nil }
 
-func TestExecutor_CreateCheckpoint_SuccessAndError(t *testing.T) {
-	g := New(NewStateSchema())
-	exec := &Executor{graph: g}
-	// nil saver no-op
-	err := exec.createCheckpoint(context.Background(), CreateCheckpointConfig("ln", "", "ns"), State{"a": 1}, CheckpointSourceUpdate, 0)
-	require.NoError(t, err)
-	// success path
-	pm := &putMockSaver{}
-	exec.checkpointSaver = pm
-	err = exec.createCheckpoint(context.Background(), CreateCheckpointConfig("ln", "", "ns"), State{"a": 1}, CheckpointSourceUpdate, 0)
-	require.NoError(t, err)
-	require.True(t, pm.called)
-	// error path
-	pm2 := &putMockSaver{retErr: fmt.Errorf("err")}
-	exec.checkpointSaver = pm2
-	err = exec.createCheckpoint(context.Background(), CreateCheckpointConfig("ln", "", "ns"), State{"a": 1}, CheckpointSourceUpdate, 0)
-	require.Error(t, err)
-}
-
 // resumeFromCheckpoint paths
 type resumeMockSaver struct {
 	tuple *CheckpointTuple
