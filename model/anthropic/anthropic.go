@@ -210,6 +210,18 @@ func WithAnthropicClientOptions(opts ...option.RequestOption) Option {
 	}
 }
 
+// WithHeaders appends static HTTP headers to all Anthropic requests.
+func WithHeaders(headers map[string]string) Option {
+	return func(o *options) {
+		if len(headers) == 0 {
+			return
+		}
+		for k, v := range headers {
+			o.anthropicClientOptions = append(o.anthropicClientOptions, option.WithHeader(k, v))
+		}
+	}
+}
+
 // WithAnthropicRequestOptions appends per-request options for the Anthropic client.
 func WithAnthropicRequestOptions(opts ...option.RequestOption) Option {
 	return func(o *options) {
