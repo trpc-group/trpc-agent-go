@@ -139,17 +139,30 @@ The following memory tools are manually registered via `memoryService.Tools()`:
 | `OPENAI_API_KEY`  | API key for the model service (required) | ``                          |
 | `OPENAI_BASE_URL` | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
 
+### Memory Service Environment Variables
+
+| Variable         | Description              | Default Value    |
+| ---------------- | ------------------------ | ---------------- |
+| `REDIS_ADDR`     | Redis server address     | `localhost:6379` |
+| `PG_HOST`        | PostgreSQL host          | `localhost`      |
+| `PG_PORT`        | PostgreSQL port          | `5432`           |
+| `PG_USER`        | PostgreSQL user          | `postgres`       |
+| `PG_PASSWORD`    | PostgreSQL password      | `my-secret-pw`   |
+| `PG_DATABASE`    | PostgreSQL database name | `postgres`       |
+| `MYSQL_HOST`     | MySQL host               | `localhost`      |
+| `MYSQL_PORT`     | MySQL port               | `3306`           |
+| `MYSQL_USER`     | MySQL user               | `root`           |
+| `MYSQL_PASSWORD` | MySQL password           | ``               |
+| `MYSQL_DATABASE` | MySQL database name      | `trpc_agent_go`  |
+
 ## Command Line Arguments
 
-| Argument        | Description                                                 | Default Value    |
-| --------------- | ----------------------------------------------------------- | ---------------- |
-| `-model`        | Name of the model to use                                    | `deepseek-chat`  |
-| `-memory`       | Memory service: `inmemory`, `redis`, `mysql`, or `postgres` | `inmemory`       |
-| `-redis-addr`   | Redis server address (when using redis memory)              | `localhost:6379` |
-| `-mysql-dsn`    | MySQL DSN (when using mysql memory, required)               | ``               |
-| `-postgres-dsn` | PostgreSQL DSN (when using postgres memory, required)       | ``               |
-| `-soft-delete`  | Enable soft delete for MySQL/PostgreSQL memory service      | `false`          |
-| `-streaming`    | Enable streaming mode for responses                         | `true`           |
+| Argument       | Description                                                 | Default Value   |
+| -------------- | ----------------------------------------------------------- | --------------- |
+| `-model`       | Name of the model to use                                    | `deepseek-chat` |
+| `-memory`      | Memory service: `inmemory`, `redis`, `mysql`, or `postgres` | `inmemory`      |
+| `-soft-delete` | Enable soft delete for MySQL/PostgreSQL memory service      | `false`         |
+| `-streaming`   | Enable streaming mode for responses                         | `true`          |
 
 ## Usage
 
@@ -204,24 +217,34 @@ The example supports four memory service backends: in-memory, Redis, MySQL, and 
 # Default in-memory memory service
 go run .
 
-# Redis memory service
-go run . -memory redis -redis-addr localhost:6379
+# Redis memory service (using default or environment variable)
+go run . -memory redis
 
-# MySQL memory service (DSN required via command line)
-go run . -memory mysql -mysql-dsn "user:password@tcp(localhost:3306)/dbname?parseTime=true"
+# MySQL memory service (using environment variables)
+export MYSQL_HOST=localhost
+export MYSQL_PORT=3306
+export MYSQL_USER=root
+export MYSQL_PASSWORD=password
+export MYSQL_DATABASE=trpc_agent_go
+go run . -memory mysql
 
-# PostgreSQL memory service (DSN required via command line)
-go run . -memory postgres -postgres-dsn "postgres://user:password@localhost:5432/dbname"
+# PostgreSQL memory service (using environment variables)
+export PG_HOST=localhost
+export PG_PORT=5432
+export PG_USER=postgres
+export PG_PASSWORD=my-secret-pw
+export PG_DATABASE=postgres
+go run . -memory postgres
 ```
 
 **Available service combinations:**
 
-| Memory Service | Session Service | Status   | Description                                          |
-| -------------- | --------------- | -------- | ---------------------------------------------------- |
-| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration                                |
-| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session                     |
-| `mysql`        | `inmemory`      | ✅ Ready | MySQL memory + in-memory session (DSN required)      |
-| `postgres`     | `inmemory`      | ✅ Ready | PostgreSQL memory + in-memory session (DSN required) |
+| Memory Service | Session Service | Status   | Description                                               |
+| -------------- | --------------- | -------- | --------------------------------------------------------- |
+| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration                                     |
+| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session                          |
+| `mysql`        | `inmemory`      | ✅ Ready | MySQL memory + in-memory session (env vars required)      |
+| `postgres`     | `inmemory`      | ✅ Ready | PostgreSQL memory + in-memory session (env vars required) |
 
 ### Help and Available Options
 
@@ -239,17 +262,13 @@ Usage of ./memory_example:
         Name of the memory service to use inmemory / redis / mysql / postgres (default "inmemory")
   -model string
         Name of the model to use (default "deepseek-chat")
-  -mysql-dsn string
-        MySQL DSN (e.g. user:password@tcp(localhost:3306)/dbname?parseTime=true)
-  -postgres-dsn string
-        PostgreSQL DSN (e.g. postgres://user:password@localhost:5432/dbname)
-  -redis-addr string
-        Redis address (default "localhost:6379")
   -soft-delete
         Enable soft delete for MySQL/PostgreSQL memory service (default false)
   -streaming
         Enable streaming mode for responses (default true)
 ```
+
+**Note**: Database connection parameters (host, port, user, password, database) are configured via environment variables. See the Environment Variables section above for details.
 
 ## Memory Tool Configuration
 
@@ -650,14 +669,16 @@ docker run -d --name redis-memory -p 6379:6379 redis:7-alpine
 **Usage examples:**
 
 ```bash
-# Connect to default Redis port (6379)
+# Connect to default Redis (localhost:6379)
 go run . -memory redis
 
-# Connect to custom Redis port
-go run . -memory redis -redis-addr localhost:6380
+# Connect to custom Redis address via environment variable
+export REDIS_ADDR=localhost:6380
+go run . -memory redis
 
-# Connect to Redis with authentication
-go run . -memory redis -redis-addr redis://username:password@localhost:6379
+# Connect to Redis with authentication via environment variable
+export REDIS_ADDR=redis://username:password@localhost:6379
+go run . -memory redis
 ```
 
 ## MySQL Memory Service
@@ -668,8 +689,9 @@ The example supports MySQL-based memory service for persistent relational storag
 
 ```go
 // MySQL memory service
+// DSN is built from environment variables: MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 memoryService, err := memorymysql.NewService(
-    memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
     memorymysql.WithToolEnabled(memory.DeleteToolName, false),
     memorymysql.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
@@ -706,28 +728,42 @@ docker exec mysql-memory mysqladmin ping -h localhost -u root -ppassword
 **Usage examples:**
 
 ```bash
-# Connect to MySQL with DSN
-go run . -memory mysql -mysql-dsn "root:password@tcp(localhost:3306)/memory_db?parseTime=true"
+# Minimal setup (using defaults)
+export MYSQL_PASSWORD=password
+go run . -memory mysql
 
-# Connect to custom MySQL port
-go run . -memory mysql -mysql-dsn "root:password@tcp(localhost:3307)/memory_db?parseTime=true"
+# Custom configuration
+export MYSQL_HOST=localhost
+export MYSQL_PORT=3306
+export MYSQL_USER=root
+export MYSQL_PASSWORD=password
+export MYSQL_DATABASE=memory_db
+go run . -memory mysql
+
+# Using environment variables
+export MYSQL_HOST=localhost
+export MYSQL_PORT=3307
+export MYSQL_USER=root
+export MYSQL_PASSWORD=password
+export MYSQL_DATABASE=memory_db
+go run . -memory mysql
 
 # Connect with custom table name (via code configuration)
 # See memorymysql.WithTableName() option in the code
 ```
 
-**DSN Format:**
+**Connection String:**
+
+The MySQL connection string is automatically built from environment variables:
 
 ```
-[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
+[username[:password]@][protocol[(address)]]/dbname?parseTime=true&charset=utf8mb4
 ```
 
-**Common DSN parameters:**
+**Common connection parameters:**
 
 - `parseTime=true` - Parse DATE and DATETIME to time.Time (required)
 - `charset=utf8mb4` - Character set
-- `loc=Local` - Location for time.Time values
-- `timeout=10s` - Connection timeout
 
 **Table Schema:**
 
@@ -756,7 +792,11 @@ The example supports PostgreSQL-based memory service for persistent relational s
 ```go
 // PostgreSQL memory service
 memoryService, err := memorypostgres.NewService(
-    memorypostgres.WithPostgresConnString("postgres://user:password@localhost:5432/dbname"),
+    memorypostgres.WithHost("localhost"),
+    memorypostgres.WithPort(5432),
+    memorypostgres.WithUser("postgres"),
+    memorypostgres.WithPassword("password"),
+    memorypostgres.WithDatabase("dbname"),
     memorypostgres.WithSoftDelete(true),
     memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
     memorypostgres.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
@@ -796,30 +836,50 @@ docker exec postgres-memory pg_isready -U postgres
 **Usage examples:**
 
 ```bash
-# Connect to PostgreSQL with DSN
-go run . -memory postgres -postgres-dsn "postgres://postgres:password@localhost:5432/memory_db"
+# Minimal setup (using defaults)
+export PG_PASSWORD=password
+go run . -memory postgres
 
-# Connect to custom PostgreSQL port
-go run . -memory postgres -postgres-dsn "postgres://postgres:password@localhost:5433/memory_db"
+# Custom configuration
+export PG_HOST=localhost
+export PG_PORT=5432
+export PG_USER=postgres
+export PG_PASSWORD=password
+export PG_DATABASE=memory_db
+go run . -memory postgres
+
+# Using environment variables
+export PG_HOST=localhost
+export PG_PORT=5433
+export PG_USER=postgres
+export PG_PASSWORD=password
+export PG_DATABASE=memory_db
+go run . -memory postgres
 
 # Connect with soft delete enabled
-go run . -memory postgres -postgres-dsn "postgres://postgres:password@localhost:5432/memory_db" -soft-delete
+export PG_HOST=localhost
+export PG_PORT=5432
+export PG_USER=postgres
+export PG_PASSWORD=password
+export PG_DATABASE=memory_db
+go run . -memory postgres -soft-delete
 
 # Connect with custom table name (via code configuration)
 # See memorypostgres.WithTableName() option in the code
 ```
 
-**DSN Format:**
+**Connection String:**
+
+The PostgreSQL connection string is automatically built from environment variables:
 
 ```
-postgres://[user[:password]@][netloc][:port][/dbname][?param1=value1&...]
+host=localhost port=5432 dbname=memory_db sslmode=disable user=postgres password=password
 ```
 
-**Common DSN parameters:**
+**Common connection parameters:**
 
-- `sslmode=disable` - Disable SSL (for local development)
+- `sslmode=disable` - Disable SSL (for local development, default)
 - `sslmode=require` - Require SSL connection
-- `connect_timeout=10` - Connection timeout in seconds
 
 **Table Schema:**
 

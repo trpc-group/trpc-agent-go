@@ -77,12 +77,15 @@ func main() {
 		parallelStatus = "enabled (parallel execution)"
 	}
 	fmt.Printf("Parallel Tools: %s\n", parallelStatus)
-	if *sessServiceName == "redis" {
+	switch *sessServiceName {
+	case "redis":
 		fmt.Printf("Redis: %s\n", redisAddr)
-	} else if *sessServiceName == "pgsql" {
+	case "pgsql":
 		fmt.Printf("PostgreSQL: %s:%s/%s\n", pgHost, pgPort, pgDatabase)
-	} else if *sessServiceName == "mysql" {
+	case "mysql":
 		fmt.Printf("MySQL: %s:%s/%s\n", mysqlHost, mysqlPort, mysqlDatabase)
+	default:
+		fmt.Printf("In-memory\n")
 	}
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time\n")
