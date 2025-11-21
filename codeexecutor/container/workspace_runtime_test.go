@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -131,6 +132,71 @@ func TestWorkspaceRuntime_CreateAndCleanup(t *testing.T) {
 	require.True(t, strings.HasPrefix(ws.Path, testRunBase))
 
 	require.NoError(t, rt.Cleanup(context.Background(), ws))
+}
+
+func TestWorkspaceRuntime_CreateWorkspace_AutoMapsInputs(t *testing.T) {
+	host := t.TempDir()
+	var cmds [][]string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			var payload struct {
+				Cmd []string `json:"Cmd"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			cmds = append(cmds, payload.Cmd)
+			id := fmt.Sprintf("e%d", len(cmds))
+			w.Header().Set("Content-Type",
+				"application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + id + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path, "/exec/") &&
+			strings.Contains(r.URL.Path, "/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path, "/exec/") &&
+			strings.Contains(r.URL.Path, "/json"):
+			w.Header().Set("Content-Type",
+				"application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	ce := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: testCID},
+		hostConfig: tcontainer.HostConfig{
+			Binds: []string{
+				host + ":" + defaultInputsContainer + ":ro",
+			},
+		},
+		autoInputs: true,
+	}
+	rt, err := newWorkspaceRuntime(ce)
+	require.NoError(t, err)
+
+	ws, err := rt.CreateWorkspace(
+		context.Background(), "auto-map",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, ws.Path)
+	require.GreaterOrEqual(t, len(cmds), 2)
+	linkCmd := strings.Join(cmds[1], " ")
+	require.Contains(t, linkCmd, "ln -sfn")
+	require.Contains(t, linkCmd, defaultInputsContainer)
+	require.Contains(t, linkCmd, path.Join(
+		codeexecutor.DirWork, "inputs",
+	))
 }
 
 func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {

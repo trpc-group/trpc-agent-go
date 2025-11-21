@@ -43,3 +43,31 @@ func TestBuildBlockSpec_Unsupported(t *testing.T) {
 	)
 	require.Error(t, err)
 }
+
+func TestNormalizeGlobs_EnvPrefixes(t *testing.T) {
+	out := NormalizeGlobs([]string{
+		"$OUTPUT_DIR/a.txt",
+		"${WORK_DIR}/x/**",
+		"$SKILLS_DIR/tool",
+		"$WORKSPACE_DIR/out/b.txt",
+	})
+	require.Equal(t, []string{
+		"out/a.txt",
+		"work/x/**",
+		"skills/tool",
+		"out/b.txt",
+	}, out)
+}
+
+func TestNormalizeGlobs_EmptyAndUnknown(t *testing.T) {
+	out := NormalizeGlobs([]string{
+		"",
+		"  ",
+		"out/c.txt",
+		"$UNKNOWN_DIR/d.txt",
+	})
+	require.Equal(t, []string{
+		"out/c.txt",
+		"$UNKNOWN_DIR/d.txt",
+	}, out)
+}
