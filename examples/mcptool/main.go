@@ -104,7 +104,10 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		},
 		mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter("echo", "add")),
 	)
-	fmt.Println("STDIO MCP Toolset created successfully")
+	if err := stdioToolSet.Init(ctx); err != nil {
+		return fmt.Errorf("failed to initialize STDIO MCP toolset: %w", err)
+	}
+	fmt.Println("STDIO MCP Toolset initialized successfully")
 
 	// Create Streamable MCP tools.
 	streamableToolSet := mcp.NewMCPToolSet(
@@ -128,7 +131,10 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			// }),
 		),
 	)
-	fmt.Println("Streamable MCP Toolset created successfully")
+	if err := streamableToolSet.Init(ctx); err != nil {
+		return fmt.Errorf("failed to initialize Streamable MCP toolset: %w", err)
+	}
+	fmt.Println("Streamable MCP Toolset initialized successfully")
 
 	// Create SSE MCP tools with session reconnection.
 	sseToolSet := mcp.NewMCPToolSet(
@@ -154,6 +160,9 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			}),
 		),
 	)
+	if err := sseToolSet.Init(ctx); err != nil {
+		return fmt.Errorf("failed to initialize SSE MCP toolset: %w", err)
+	}
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
