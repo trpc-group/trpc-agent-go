@@ -572,6 +572,10 @@ func (s *testSessionService) DeleteUserState(ctx context.Context, key session.Us
 	return nil
 }
 
+func (s *testSessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	return nil
+}
+
 func (s *testSessionService) AppendEvent(ctx context.Context, sess *session.Session, evt *event.Event,
 	opts ...session.Option) error {
 	return nil
