@@ -98,6 +98,9 @@ type Invocation struct {
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
 	state   map[string]any
 	stateMu sync.RWMutex
+
+	// timingInfo stores timing information for the first LLM call in this invocation.
+	timingInfo *model.TimingInfo
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -536,6 +539,19 @@ func (inv *Invocation) GetState(key string) (any, bool) {
 	}
 	value, ok := inv.state[key]
 	return value, ok
+}
+
+// GetOrCreateTimingInfo gets or creates timing info for this invocation.
+// Only the first LLM call will create and populate timing info; subsequent calls reuse it.
+// This ensures timing metrics only reflect the first LLM call in scenarios with multiple calls (e.g., tool calls).
+func (inv *Invocation) GetOrCreateTimingInfo() *model.TimingInfo {
+	if inv == nil {
+		return nil
+	}
+	if inv.timingInfo == nil {
+		inv.timingInfo = &model.TimingInfo{}
+	}
+	return inv.timingInfo
 }
 
 // DeleteState removes a value from the invocation state.

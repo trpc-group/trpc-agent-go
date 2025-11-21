@@ -188,8 +188,11 @@ func (f *Flow) processStreamingResponses(
 	eventChan chan<- *event.Event,
 	span oteltrace.Span,
 ) (lastEvent *event.Event, err error) {
+	// Get or create timing info from invocation (only record first LLM call)
+	timingInfo := invocation.GetOrCreateTimingInfo()
+
 	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, &err)
 	defer tracker.RecordMetrics()()
 
 	for response := range responseChan {
@@ -200,7 +203,9 @@ func (f *Flow) processStreamingResponses(
 		if response.Usage == nil {
 			response.Usage = &model.Usage{}
 		}
-		response.Usage.TimingInfo = tracker.GetTimingInfo()
+		// set timing info to response
+		response.Usage.TimingInfo = timingInfo
+
 		// Handle after model callbacks.
 		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
 		if err != nil {

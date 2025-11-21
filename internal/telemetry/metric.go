@@ -112,10 +112,13 @@ type ChatMetricsTracker struct {
 }
 
 // NewChatMetricsTracker creates a new telemetry tracker.
+// The timingInfo parameter should be obtained from invocation state to ensure
+// only the first LLM call records timing information.
 func NewChatMetricsTracker(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
+	timingInfo *model.TimingInfo,
 	err *error,
 ) *ChatMetricsTracker {
 	return &ChatMetricsTracker{
@@ -125,7 +128,7 @@ func NewChatMetricsTracker(
 		invocation:   invocation,
 		llmRequest:   llmRequest,
 		err:          err,
-		timingInfo:   &model.TimingInfo{},
+		timingInfo:   timingInfo,
 	}
 }
 
@@ -145,17 +148,10 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 		t.firstTokenTimeDuration = time.Since(t.start)
 		t.isFirstToken = false
 
-		// Update FirstTokenDuration in TimingInfo only if we have meaningful content
+		// Update FirstTokenDuration in TimingInfo only if not already recorded (first LLM call only)
 		// Meaningful content = reasoning content, regular content, or tool calls
-		if t.timingInfo != nil && len(response.Choices) > 0 {
-			choice := response.Choices[0]
-			hasReasoningContent := choice.Delta.ReasoningContent != "" || choice.Message.ReasoningContent != ""
-			hasRegularContent := choice.Delta.Content != "" || choice.Message.Content != ""
-			hasToolCalls := len(choice.Delta.ToolCalls) > 0
-
-			if hasReasoningContent || hasRegularContent || hasToolCalls {
-				t.timingInfo.FirstTokenDuration += now.Sub(t.start)
-			}
+		if t.timingInfo != nil && t.timingInfo.FirstTokenDuration == 0 && len(response.Choices) > 0 {
+			t.timingInfo.FirstTokenDuration = now.Sub(t.start)
 		}
 
 		if response.Usage != nil {
@@ -169,9 +165,13 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 		t.totalCompletionTokens = response.Usage.CompletionTokens
 	}
 
-	// Track reasoning duration (streaming mode only)
+	// Track reasoning duration (streaming mode only, first LLM call only)
 	// Measures from first reasoning chunk to last reasoning chunk
-	if t.llmRequest != nil && t.llmRequest.Stream && t.timingInfo != nil && len(response.Choices) > 0 {
+	if t.llmRequest != nil &&
+		t.llmRequest.Stream &&
+		t.timingInfo != nil &&
+		t.timingInfo.ReasoningDuration == 0 &&
+		len(response.Choices) > 0 {
 		choice := response.Choices[0]
 		hasReasoningContent := choice.Delta.ReasoningContent != "" || choice.Message.ReasoningContent != ""
 
@@ -182,10 +182,8 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 			}
 			t.lastReasoningTime = now
 		} else if !t.firstReasoningTime.IsZero() && !t.lastReasoningTime.IsZero() {
-			// Reasoning phase ended (first non-reasoning chunk received), accumulate duration
-			t.timingInfo.ReasoningDuration += t.lastReasoningTime.Sub(t.firstReasoningTime)
-			t.firstReasoningTime = time.Time{}
-			t.lastReasoningTime = time.Time{}
+			// Reasoning phase ended (first non-reasoning chunk received), record duration
+			t.timingInfo.ReasoningDuration = t.lastReasoningTime.Sub(t.firstReasoningTime)
 		}
 	}
 }
