@@ -1778,7 +1778,8 @@ https://github.com/anthropics/skills</p>
 - <code>cwd</code>（可选）：相对技能根目录的工作路径
 - <code>env</code>（可选）：环境变量映射
 - <code>output_files</code>（可选，传统收集方式）：通配符列表
-  （如 <code>out/*.txt</code>）。
+  （如 <code>out/*.txt</code>）。通配符以工作区根目录为准，也支持
+  <code>$OUTPUT_DIR/*.txt</code> 这类写法，会自动归一化为 <code>out/*.txt</code>。
 - <code>inputs</code>（可选，声明式输入）：把外部资源映射进工作区，
   结构为对象数组，每项支持：</p>
 <p>- <code>from</code>：来源，支持四类方案（scheme）：
@@ -1792,7 +1793,8 @@ https://github.com/anthropics/skills</p>
 <ul>
 <li><code>outputs</code>（可选，声明式输出）：使用清单（manifest）收集输出。
   字段：<ul>
-<li><code>globs</code>：通配符数组（相对工作区，支持 <code>**</code>）。</li>
+<li><code>globs</code>：通配符数组（相对工作区，支持 <code>**</code>，也支持
+  <code>$OUTPUT_DIR/**</code> 这类写法并归一化为 <code>out/**</code>）。</li>
 <li><code>inline</code>：是否把文件内容内联返回。</li>
 <li><code>save</code>：是否保存为制品（与制品服务协作）。</li>
 <li><code>name_template</code>：保存为制品时的文件名前缀（如 <code>pref/</code>）。</li>
@@ -1913,7 +1915,7 @@ https://github.com/anthropics/skills</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月17日 02:11:46 UTC">2025-11-17 02:11:46</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月21日 02:53:35 UTC">2025-11-21 02:53:35</span>
   </span>
 
     
