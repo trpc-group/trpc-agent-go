@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -145,7 +144,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		return nil, errors.New("lineage_id is required")
 	}
 
-	checkpointID, ns, err := s.findCheckpointID(ctx, lineageID, checkpointNS, checkpointID)
+	checkpointID, err := s.findCheckpointID(ctx, lineageID, checkpointNS, checkpointID)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +152,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		return nil, nil
 	}
 
-	checkpointData, err := s.client.HGetAll(ctx, checkpointKey(lineageID, ns, checkpointID)).Result()
+	checkpointData, err := s.client.HGetAll(ctx, checkpointKey(lineageID, checkpointNS, checkpointID)).Result()
 	if err != nil {
 		return nil, fmt.Errorf("get checkpoint data: %w", err)
 	}
@@ -177,7 +176,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		return nil, fmt.Errorf("parse timestamp: %w", err)
 	}
 
-	writes, err := s.loadWrites(ctx, lineageID, ns, checkpointID)
+	writes, err := s.loadWrites(ctx, lineageID, checkpointNS, checkpointID)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +190,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		parentCfg = graph.CreateCheckpointConfig(lineageID, parentID, parentNS)
 	}
 
-	returnCfg := graph.CreateCheckpointConfig(lineageID, checkpointID, ns)
+	returnCfg := graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS)
 	if ts > 0 {
 		ckpt.Timestamp = time.Unix(0, ts)
 	}
@@ -205,24 +204,20 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 	}, nil
 }
 
-func (s *Saver) findCheckpointID(ctx context.Context, lineageID, checkpointNS, checkpointID string) (string, string, error) {
+func (s *Saver) findCheckpointID(ctx context.Context, lineageID, checkpointNS, checkpointID string) (string, error) {
 	if checkpointID != "" {
-		return checkpointID, checkpointNS, nil
+		return checkpointID, nil
 	}
 	// Find a latest checkpoint in the namespace.
 	key := checkpointTSKey(lineageID, checkpointNS)
 	members, err := s.client.ZRevRange(ctx, key, 0, 0).Result()
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	if len(members) == 0 {
-		return "", "", nil
+		return "", nil
 	}
-	parts := strings.Split(members[0], ":")
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("invalid checkpoint member format: %s", members[0])
-	}
-	return parts[1], parts[0], nil
+	return members[0], nil
 }
 
 // List returns checkpoints for the lineage/namespace, with optional filters.
@@ -302,13 +297,12 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 	}
 
 	var checkpointIDs []string
-	for _, member := range members {
-		parts := strings.Split(member, ":")
-		if len(parts) != 2 {
-			log.Warnf("invalid checkpoint member format: %s", member)
+	for _, id := range members {
+		if id == "" {
+			log.Warnf("invalid checkpoint id format: %s", id)
 			continue
 		}
-		checkpointIDs = append(checkpointIDs, parts[1])
+		checkpointIDs = append(checkpointIDs, id)
 	}
 
 	return checkpointIDs, nil
@@ -316,8 +310,7 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 
 func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS, checkpointID string) (int64, error) {
 	key := checkpointTSKey(lineageID, checkpointNS)
-	member := fmt.Sprintf("%s:%s", checkpointNS, checkpointID)
-	score, err := s.client.ZScore(ctx, key, member).Result()
+	score, err := s.client.ZScore(ctx, key, checkpointID).Result()
 	if err != nil {
 		return 0, err
 	}
@@ -370,10 +363,9 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	pipe.Expire(ctx, checkpointKey, s.opts.ttl)
 
 	tsKey := checkpointTSKey(lineageID, checkpointNS)
-	member := fmt.Sprintf("%s:%s", checkpointNS, checkpointID)
 	pipe.ZAdd(ctx, tsKey, redis.Z{
 		Score:  float64(ts),
-		Member: member,
+		Member: checkpointID,
 	})
 	pipe.Expire(ctx, tsKey, s.opts.ttl)
 
@@ -471,10 +463,9 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	pipe.Expire(ctx, checkpointKey, s.opts.ttl)
 
 	tsKey := checkpointTSKey(lineageID, checkpointNS)
-	member := fmt.Sprintf("%s:%s", checkpointNS, checkpointID)
 	pipe.ZAdd(ctx, tsKey, redis.Z{
 		Score:  float64(ts),
-		Member: member,
+		Member: checkpointID,
 	})
 	pipe.Expire(ctx, tsKey, s.opts.ttl)
 
@@ -541,13 +532,6 @@ func (s *Saver) DeleteLineage(ctx context.Context, lineageID string) error {
 
 		for _, member := range members {
 			checkpointID := member
-			if ns == "" {
-				parts := strings.Split(member, ":")
-				if len(parts) != 2 {
-					continue
-				}
-				checkpointID = parts[1]
-			}
 
 			ckptKey := checkpointKey(lineageID, ns, checkpointID)
 			pipe.Del(ctx, ckptKey)

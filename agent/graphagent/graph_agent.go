@@ -268,6 +268,10 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 	// Add parent agent to state so agent nodes can access sub-agents.
 	initialState[graph.StateKeyParentAgent] = ga
+	// Set checkpoint namespace if not already set.
+	if ns, ok := initialState[graph.CfgKeyCheckpointNS]; !ok || ns == "" {
+		initialState[graph.CfgKeyCheckpointNS] = ga.name
+	}
 
 	return initialState
 }
