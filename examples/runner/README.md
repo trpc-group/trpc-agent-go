@@ -37,14 +37,13 @@ This implementation showcases the essential features for building conversational
 
 ## Command Line Arguments
 
-| Argument            | Description                                         | Default Value    |
-| ------------------- | --------------------------------------------------- | ---------------- |
-| `-provider`         | Provider of the model to use                        | `openai`         |
-| `-model`            | Name of the model to use                            | `deepseek-chat`  |
-| `-session`          | Session service: `inmemory` or `redis`              | `inmemory`       |
-| `-streaming`        | Enable streaming mode for responses                 | `true`           |
-| `-enable-parallel`  | Enable parallel tool execution (faster performance) | `false`          |
-| `-enable-thinking`  | Enable thinking mode for supported models           | `false`          |
+| Argument           | Description                                         | Default Value    |
+| ------------------ | --------------------------------------------------- | ---------------- |
+| `-provider`        | Provider of the model to use                        | `openai`         |
+| `-model`           | Name of the model to use                            | `deepseek-chat`  |
+| `-session`         | Session service: `inmemory` or `redis`              | `inmemory`       |
+| `-streaming`       | Enable streaming mode for responses                 | `true`           |
+| `-enable-parallel` | Enable parallel tool execution (faster performance) | `false`          |
 
 ## Usage
 
@@ -155,45 +154,6 @@ go run . -enable-parallel=true
   - ⚡ **faster performance** when multiple tools are called
   - ✅ Best for independent tools (calculator + time, weather + population)
   - ✅ Tools execute simultaneously using goroutines
-
-### Thinking Mode (Reasoning Models)
-
-Enable thinking mode for models that support reasoning (like DeepSeek-R1, o1, etc.):
-
-```bash
-# Enable thinking mode with DeepSeek Reasoner
-export OPENAI_API_KEY="your-deepseek-api-key"
-go run . -model deepseek-reasoner -enable-thinking=true
-
-# Or with OpenAI o1
-export OPENAI_API_KEY="your-openai-api-key"
-go run . -model o1-preview -enable-thinking=true
-```
-
-**Features:**
-
-- 🧠 **Thinking Content**: Displays the model's reasoning process in cyan color
-- 💬 **Response Content**: Shows the final answer in green color
-- ⏱️ **Timing Metrics**: Displays thinking time and total duration
-- 📊 **Token Usage**: Shows prompt, completion, and total tokens used
-
-**Example Output:**
-
-```
-👤 You: What is 123 * 456?
-
-🧠 Thinking:
-Let me calculate this step by step...
-First, I'll break down the multiplication...
-
-🤖 Response:
-The result of 123 × 456 is 56,088.
-
-⏱️  Timing Info:
-   • Thinking time: 1250ms
-   • Total duration: 1580ms
-   • Tokens used: 245 (prompt: 45, completion: 200)
-```
 
 ### Help and Available Options
 

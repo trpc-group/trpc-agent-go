@@ -43,15 +43,6 @@ var (
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	enableParallel  = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
 	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan/ deepseek / qwen")
-	enableThinking  = flag.Bool("enable-thinking", false, "Enable thinking mode for supported models (deepseek-reasoner, o1, etc.)")
-)
-
-// ANSI color codes for terminal output
-const (
-	colorReset  = "\033[0m"
-	colorCyan   = "\033[36m" // For thinking content
-	colorGreen  = "\033[32m" // For assistant response
-	colorYellow = "\033[33m" // For timing info
 )
 
 // Environment variables for session services.
@@ -211,13 +202,6 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		Stream:      c.streaming,
 	}
 
-	// Enable thinking mode if requested
-	if *enableThinking {
-		genConfig.ThinkingEnabled = boolPtr(true)
-		genConfig.ThinkingTokens = intPtr(2048)
-		fmt.Printf("🧠 Thinking mode enabled\n")
-	}
-
 	appName := "multi-turn-chat"
 	agentName := "chat-assistant"
 	llmAgent := llmagent.New(
@@ -312,23 +296,22 @@ func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) 
 
 // processResponse handles both streaming and non-streaming responses with tool call visualization.
 func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
+	fmt.Print("🤖 Assistant: ")
+
 	var (
-		toolCallsDetected  bool
-		assistantStarted   bool
-		thinkingStarted    bool
-		hasThinkingContent bool
+		fullContent       string
+		toolCallsDetected bool
+		assistantStarted  bool
 	)
 
 	for event := range eventChan {
-		if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &thinkingStarted, &hasThinkingContent); err != nil {
+		if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
 			return err
 		}
 
 		// Check if this is the final event.
 		// Do not break on tool response events (Done=true but not final assistant response).
 		if event.IsFinalResponse() {
-			// Print timing information at the end
-			c.printTimingInfo(event)
 			fmt.Printf("\n")
 			break
 		}
@@ -342,8 +325,7 @@ func (c *multiTurnChat) handleEvent(
 	event *event.Event,
 	toolCallsDetected *bool,
 	assistantStarted *bool,
-	thinkingStarted *bool,
-	hasThinkingContent *bool,
+	fullContent *string,
 ) error {
 	// Handle errors.
 	if event.Error != nil {
@@ -352,7 +334,7 @@ func (c *multiTurnChat) handleEvent(
 	}
 
 	// Handle tool calls.
-	if c.handleToolCalls(event, toolCallsDetected) {
+	if c.handleToolCalls(event, toolCallsDetected, assistantStarted) {
 		return nil
 	}
 
@@ -361,17 +343,24 @@ func (c *multiTurnChat) handleEvent(
 		return nil
 	}
 
-	// Handle content (both thinking and regular content).
-	c.handleContent(event, toolCallsDetected, assistantStarted, thinkingStarted, hasThinkingContent)
+	// Handle content.
+	c.handleContent(event, toolCallsDetected, assistantStarted, fullContent)
 
 	return nil
 }
 
 // handleToolCalls detects and displays tool calls.
-func (c *multiTurnChat) handleToolCalls(event *event.Event, toolCallsDetected *bool) bool {
+func (c *multiTurnChat) handleToolCalls(
+	event *event.Event,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+) bool {
 	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsDetected = true
-		fmt.Printf("🔧 Tool calls initiated:\n")
+		if *assistantStarted {
+			fmt.Printf("\n")
+		}
+		fmt.Printf("🔧 CallableTool calls initiated:\n")
 		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 			if len(toolCall.Function.Arguments) > 0 {
@@ -390,7 +379,7 @@ func (c *multiTurnChat) handleToolResponses(event *event.Event) bool {
 		hasToolResponse := false
 		for _, choice := range event.Response.Choices {
 			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-				fmt.Printf("✅ Tool response (ID: %s): %s\n",
+				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
 					choice.Message.ToolID,
 					strings.TrimSpace(choice.Message.Content))
 				hasToolResponse = true
@@ -403,40 +392,19 @@ func (c *multiTurnChat) handleToolResponses(event *event.Event) bool {
 	return false
 }
 
-// handleContent processes and displays content (both thinking and regular content).
+// handleContent processes and displays content.
 func (c *multiTurnChat) handleContent(
 	event *event.Event,
 	toolCallsDetected *bool,
 	assistantStarted *bool,
-	thinkingStarted *bool,
-	hasThinkingContent *bool,
+	fullContent *string,
 ) {
 	if len(event.Response.Choices) > 0 {
 		choice := event.Response.Choices[0]
-
-		// Handle thinking content (reasoning) - extract from Delta or Message based on streaming mode
-		thinkingContent := c.extractReasoningContent(choice)
-		if thinkingContent != "" {
-			*hasThinkingContent = true
-			if !*thinkingStarted {
-				fmt.Printf("%s🧠 Thinking:%s\n", colorCyan, colorReset)
-				*thinkingStarted = true
-			}
-			fmt.Printf("%s%s%s", colorCyan, thinkingContent, colorReset)
-		}
-
-		// Handle regular content
 		content := c.extractContent(choice)
-		if content != "" {
-			// If we were showing thinking content, add a separator
-			if *thinkingStarted && !*assistantStarted {
-				fmt.Printf("\n\n%s🤖 Response:%s\n", colorGreen, colorReset)
-			} else if !*assistantStarted && !*thinkingStarted {
-				fmt.Printf("%s🤖 Assistant:%s ", colorGreen, colorReset)
-			}
 
-			*assistantStarted = true
-			fmt.Printf("%s%s%s", colorGreen, content, colorReset)
+		if content != "" {
+			c.displayContent(content, toolCallsDetected, assistantStarted, fullContent)
 		}
 	}
 }
@@ -451,42 +419,21 @@ func (c *multiTurnChat) extractContent(choice model.Choice) string {
 	return choice.Message.Content
 }
 
-// extractReasoningContent extracts reasoning content based on streaming mode.
-func (c *multiTurnChat) extractReasoningContent(choice model.Choice) string {
-	if c.streaming {
-		// Streaming mode: use delta reasoning content.
-		return choice.Delta.ReasoningContent
+// displayContent prints content to console.
+func (c *multiTurnChat) displayContent(
+	content string,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	fullContent *string,
+) {
+	if !*assistantStarted {
+		if *toolCallsDetected {
+			fmt.Printf("\n🤖 Assistant: ")
+		}
+		*assistantStarted = true
 	}
-	// Non-streaming mode: use full message reasoning content.
-	return choice.Message.ReasoningContent
-}
-
-// printTimingInfo displays timing information from the final event.
-func (c *multiTurnChat) printTimingInfo(event *event.Event) {
-	if event.Response == nil || event.Response.Usage == nil || event.Response.Usage.TimingInfo == nil {
-		return
-	}
-
-	timing := event.Response.Usage.TimingInfo
-	fmt.Printf("\n\n%s⏱️  Timing Info:%s\n", colorYellow, colorReset)
-
-	// Time to first token (accumulated across all LLM calls in this flow)
-	if timing.FirstTokenDuration > 0 {
-		fmt.Printf("%s   • Time to first token: %v%s\n", colorYellow, timing.FirstTokenDuration, colorReset)
-	}
-
-	// Reasoning duration (accumulated across all LLM calls in this flow)
-	if timing.ReasoningDuration > 0 {
-		fmt.Printf("%s   • Reasoning: %v%s\n", colorYellow, timing.ReasoningDuration, colorReset)
-	}
-
-	// Token usage
-	if event.Response.Usage.TotalTokens > 0 {
-		fmt.Printf("   • Tokens: %d (prompt: %d, completion: %d)\n",
-			event.Response.Usage.TotalTokens,
-			event.Response.Usage.PromptTokens,
-			event.Response.Usage.CompletionTokens)
-	}
+	fmt.Print(content)
+	*fullContent += content
 }
 
 // startNewSession creates a new session ID.
