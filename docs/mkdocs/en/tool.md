@@ -239,6 +239,7 @@ MCP (Model Context Protocol) is an open protocol that standardizes how applicati
 **MCP ToolSet Features:**
 
 - 🔗 Unified interface: All MCP tools are created via `mcp.NewMCPToolSet()`.
+- ✅ Explicit initialization: `(*mcp.ToolSet).Init(ctx)` lets you fail fast on MCP connection / tool loading errors during startup.
 - 🚀 Multiple transports: Supports STDIO, SSE, and Streamable HTTP.
 - 🔧 Tool filters: Supports including/excluding specific tools.
 
@@ -257,6 +258,11 @@ mcpToolSet := mcp.NewMCPToolSet(
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // Optional: tool filter.
 )
+
+// (Optional but recommended) Explicitly initialize MCP: connect + initialize + list tools.
+if err := mcpToolSet.Init(ctx); err != nil {
+    log.Fatalf("failed to initialize MCP toolset: %v", err)
+}
 
 // Integrate into an Agent.
 agent := llmagent.New("mcp-assistant",
@@ -468,6 +474,9 @@ stdioToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := stdioToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to initialize stdio MCP toolset: %w", err)
+}
 
 sseToolSet := mcp.NewMCPToolSet(
     mcp.ConnectionConfig{
@@ -476,6 +485,9 @@ sseToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := sseToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to initialize sse MCP toolset: %w", err)
+}
 
 streamableToolSet := mcp.NewMCPToolSet(
     mcp.ConnectionConfig{
@@ -484,6 +496,9 @@ streamableToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := streamableToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to initialize streamable MCP toolset: %w", err)
+}
 
 // Create an Agent and integrate all tools.
 agent := llmagent.New("ai-assistant",
@@ -517,6 +532,11 @@ toolSet := mcp.NewMCPToolSet(
     connectionConfig,
     mcp.WithToolFilterFunc(includeFilter),
 )
+
+// Optional: initialize once at startup to catch MCP connection / tool loading errors early.
+if err := toolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to initialize MCP toolset: %w", err)
+}
 ```
 
 ### Per-Run Tool Filtering

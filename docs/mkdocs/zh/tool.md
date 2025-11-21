@@ -240,6 +240,7 @@ MCP（Model Context Protocol）是一个开放协议，标准化了应用程序�
 - 🔗 **统一接口**：所有 MCP 工具都通过 `mcp.NewMCPToolSet()` 创建
 - 🚀 **多种传输**：支持 STDIO、SSE、Streamable HTTP 三种传输方式
 - 🔧 **工具过滤**：支持包含/排除特定工具
+- ✅ **显式初始化**：通过 `(*mcp.ToolSet).Init(ctx)`，可以在应用启动阶段提前发现 MCP 连接/工具加载错误并快速失败
 
 ### 基本用法
 
@@ -256,6 +257,11 @@ mcpToolSet := mcp.NewMCPToolSet(
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // 可选：工具过滤
 )
+
+// （可选但推荐）显式初始化 MCP：建立连接 + 初始化会话 + 列工具
+if err := mcpToolSet.Init(ctx); err != nil {
+    log.Fatalf("初始化 MCP 工具集失败: %v", err)
+}
 
 // 集成到 Agent
 agent := llmagent.New("mcp-assistant",
@@ -280,6 +286,9 @@ mcpToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 STDIO MCP 工具集失败: %w", err)
+}
 ```
 
 #### 2. SSE 传输
@@ -297,6 +306,9 @@ mcpToolSet := mcp.NewMCPToolSet(
         },
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 SSE MCP 工具集失败: %w", err)
+}
 ```
 
 #### 3. Streamable HTTP 传输
@@ -310,6 +322,9 @@ mcpToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 Streamable MCP 工具集失败: %w", err)
+}
 ```
 
 ### 会话重连支持
