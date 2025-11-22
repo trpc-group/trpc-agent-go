@@ -1462,8 +1462,10 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	}
 
 	var lastEvent *event.Event
+	// Get or create timing info from invocation (only record first LLM call)
+	timingInfo := invocation.GetOrCreateTimingInfo()
 	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, timingInfo, &err)
 	defer tracker.RecordMetrics()()
 
 	// Process response.
@@ -1472,6 +1474,13 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	for response := range responseChan {
 		// Track response for telemetry
 		tracker.TrackResponse(response)
+
+		// set timing info to response
+		if response.Usage == nil {
+			response.Usage = &model.Usage{}
+		}
+		response.Usage.TimingInfo = timingInfo
+
 		lastEvent, err = processModelResponse(ctx, modelResponseConfig{
 			Response:       response,
 			ModelCallbacks: config.ModelCallbacks,
