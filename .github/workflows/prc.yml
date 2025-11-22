@@ -89,16 +89,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: test-go-modules
     steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/checkout@v3
+    - name: Download coverage artifacts
+      uses: actions/download-artifact@v4
       with:
         pattern: coverage-*
         merge-multiple: true
+        path: coverage-artifacts
     - name: Combine coverage reports
       shell: bash
       run: |
         set -euo pipefail
-        shopt -s nullglob
-        files=(coverage-*.out)
+        mapfile -t files < <(find coverage-artifacts -maxdepth 1 -type f -name 'coverage-*.out' | sort)
         if [ "${#files[@]}" -eq 0 ]; then
           echo "no coverage files found" >&2
           exit 1
@@ -107,6 +109,11 @@ jobs:
         for file in "${files[@]:1}"; do
           tail -n +2 "${file}" >> coverage.out
         done
+    - name: Upload merged coverage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-merged
+        path: coverage.out
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v5
       with:
