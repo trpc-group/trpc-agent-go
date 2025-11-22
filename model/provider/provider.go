@@ -82,6 +82,9 @@ func openaiProvider(opts *Options) (model.Model, error) {
 	if len(httpOpts) > 0 {
 		res = append(res, openai.WithHTTPClientOptions(httpOpts...))
 	}
+	if len(opts.Headers) > 0 {
+		res = append(res, openai.WithHeaders(opts.Headers))
+	}
 	if cb := opts.Callbacks; cb != nil {
 		if cb.OpenAIChatRequest != nil {
 			res = append(res, openai.WithChatRequestCallback(cb.OpenAIChatRequest))
@@ -139,6 +142,9 @@ func anthropicProvider(opts *Options) (model.Model, error) {
 	}
 	if len(httpOpts) > 0 {
 		res = append(res, anthropic.WithHTTPClientOptions(httpOpts...))
+	}
+	if len(opts.Headers) > 0 {
+		res = append(res, anthropic.WithHeaders(opts.Headers))
 	}
 	if cb := opts.Callbacks; cb != nil {
 		if cb.AnthropicChatRequest != nil {

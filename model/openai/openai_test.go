@@ -1276,6 +1276,23 @@ func TestWithOpenAIOptions_CombinedOptions(t *testing.T) {
 	assert.NotNil(t, m.chatChunkCallback, "expected chat chunk callback to be set")
 }
 
+func TestWithHeaders_AppendsOptions(t *testing.T) {
+	opts := &options{}
+	source := map[string]string{
+		"X-Custom":   "a",
+		"X-Request":  "req-1",
+		"User-Agent": "ua",
+	}
+
+	WithHeaders(source)(opts)
+	assert.Len(t, opts.OpenAIOptions, 3, "expected headers to expand into OpenAI options")
+
+	// Mutation after application should not affect already captured values.
+	source["X-Custom"] = "changed"
+	WithHeaders(map[string]string{"X-Another": "extra"})(opts)
+	assert.Len(t, opts.OpenAIOptions, 4, "expected additional headers to append")
+}
+
 func TestConvertSystemMessageContent(t *testing.T) {
 	// Test converting message with text content parts
 	textPart := model.ContentPart{
