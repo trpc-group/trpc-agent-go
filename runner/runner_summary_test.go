@@ -332,6 +332,10 @@ func (m *mockSessionService) DeleteUserState(ctx context.Context, userKey sessio
 	return nil
 }
 
+func (m *mockSessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	return nil
+}
+
 func (m *mockSessionService) AppendEvent(ctx context.Context, session *session.Session, event *event.Event, options ...session.Option) error {
 	m.appendEventCalls = append(m.appendEventCalls, appendEventCall{session, event, options})
 	return nil
