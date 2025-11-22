@@ -158,10 +158,41 @@ r := runner.NewRunner("my-app", agent,
 ```go
 // 执行单次对话
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
-
-// 带运行选项（当前 RunOptions 为空结构体，留作未来扩展）
-eventChan, err := r.Run(ctx, userID, sessionID, message, agent.WithRequestID("request-ID"))
 ```
+
+#### 中断恢复（工具优先继续执行）
+
+在真实业务里，用户可能在 Agent 还处于“工具调用阶段”时中断：
+
+- 会话里的最后一条消息是带 `tool_calls` 的 assistant 消息；
+- 但对应的工具结果（tool result）还没来得及写回 Session。
+
+之后如果你想在同一个 `sessionID` 上“继续上次的任务”，可以开启
+`WithResume(true)`，让 Runner 先把上次未完成的工具调用执行完，再进入
+下一轮 LLM 调用：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.Message{},          // 没有新的用户输入
+    agent.WithResume(true),   // 开启恢复模式
+)
+```
+
+开启 `WithResume(true)` 时，Runner 会：
+
+- 读取当前 Session 中最新的一条事件；
+- 如果最后一条是「带 `tool_calls` 的 assistant 回复」，且之后没有对应的
+  工具结果事件：
+  - 使用当前 Agent 注册的工具集合和回调，执行这些“未完成的工具调用”；
+  - 把工具执行结果写入 Session（作为 tool 消息事件）；
+- 工具执行结束后，再按正常流程发起新一轮 LLM 调用，此时模型能看到
+  “上一次的 tool_calls + 对应的工具结果”，不会重复要求调用同一工具。
+
+如果最后一条事件是 user / tool 消息，或者是普通的 assistant 文本回复，
+则 `WithResume(true)` 不会做任何额外处理，行为等同于普通的 `Run` 调用。
 
 #### 传入对话历史（auto-seed + 复用 Session）
 

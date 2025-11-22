@@ -159,10 +159,39 @@ r := runner.NewRunner("my-app", agent,
 ```go
 // Execute a single conversation.
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
-
-// With run options (currently RunOptions is an empty struct, reserved for future use).
-eventChan, err := r.Run(ctx, userID, sessionID, message)
 ```
+
+#### Resume Interrupted Runs (tools-first resume)
+
+In long-running conversations, users may interrupt the agent while it is still
+in a tool-calling phase (for example, the last message in the session is an
+assistant message with `tool_calls`, but no tool result has been written yet).
+When you later reuse the same `sessionID`, you can ask the Runner to *resume*
+from that point instead of asking the model to repeat the tool calls:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.Message{},                // no new user message
+    agent.WithResume(true),         // enable resume mode
+)
+```
+
+When `WithResume(true)` is set:
+
+- Runner inspects the latest persisted session event.
+- If the last event is an assistant response that contains `tool_calls` and
+  there is no later tool result, Runner will execute those pending tools first
+  (using the same tool set and callbacks as a normal step) and persist the
+  tool results into the session.
+- After tools finish, the normal LLM cycle continues using the updated session
+  history, so the model sees both the original tool calls and their results.
+
+If the last event is a user or tool message (or a plain assistant reply
+without `tool_calls`), `WithResume(true)` is a no-op and the flow behaves like
+today’s `Run` call.
 
 #### Provide Conversation History (auto-seed + session reuse)
 
