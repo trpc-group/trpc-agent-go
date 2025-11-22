@@ -199,11 +199,45 @@ func (c *thinkingChat) processResponse(eventChan <-chan *event.Event) error {
 			}
 		}
 		if e.IsFinalResponse() {
+			// Print timing information at the end
+			c.printTimingInfo(e)
 			fmt.Printf("\n")
 			break
 		}
 	}
 	return nil
+}
+
+// printTimingInfo displays timing information from the final event.
+func (c *thinkingChat) printTimingInfo(event *event.Event) {
+	colorReset := "\033[0m"
+	colorYellow := "\033[33m" // For timing info
+	if event.Response == nil || event.Response.Usage == nil || event.Response.Usage.TimingInfo == nil {
+		return
+	}
+
+	timing := event.Response.Usage.TimingInfo
+	fmt.Printf("\n\n%s⏱️  Timing Info:%s\n", colorYellow, colorReset)
+
+	// Time to first token
+	if timing.FirstTokenDuration > 0 {
+		fmt.Printf("%s   • Time to first token: %v%s\n", colorYellow, timing.FirstTokenDuration, colorReset)
+	}
+
+	// Reasoning duration
+	if timing.ReasoningDuration > 0 {
+		fmt.Printf("%s   • Reasoning: %v%s\n", colorYellow, timing.ReasoningDuration, colorReset)
+	}
+
+	// Token usage
+	if event.Response.Usage.TotalTokens > 0 {
+		fmt.Printf("%s   • Tokens: %d (prompt: %d, completion: %d%s)\n",
+			colorYellow,
+			event.Response.Usage.TotalTokens,
+			event.Response.Usage.PromptTokens,
+			event.Response.Usage.CompletionTokens,
+			colorReset)
+	}
 }
 
 func (c *thinkingChat) extractContent(choice model.Choice) string {
