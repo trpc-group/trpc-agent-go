@@ -22,6 +22,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -90,6 +93,30 @@ func TestNewMessagesSnapshotRequiresSessionService(t *testing.T) {
 	srv, err := New(r, WithMessagesSnapshotEnabled(true), WithAppName("demo"))
 	assert.Nil(t, srv)
 	assert.Error(t, err)
+}
+
+func TestNewServiceRequiresServiceFactory(t *testing.T) {
+	opts := &options{serviceFactory: nil}
+	svc, err := newService(runner.NewRunner("demo", &mockAgent{info: agent.Info{Name: "demo"}}), opts)
+	assert.Nil(t, svc)
+	assert.EqualError(t, err, "agui: serviceFactory must not be nil")
+}
+
+func TestNewServiceRequiresTrackService(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	opts := &options{
+		basePath:                "/",
+		path:                    "/chat",
+		serviceFactory:          func(aguirunner.Runner, ...service.Option) service.Service { return dummyAGUIService{} },
+		messagesSnapshotEnabled: true,
+		messagesSnapshotPath:    "/history",
+		appName:                 "demo",
+		sessionService:          &fakeSessionService{},
+	}
+	svc, err := newService(r, opts)
+	assert.Nil(t, svc)
+	assert.EqualError(t, err, "agui: session service must implement TrackService")
 }
 
 func TestNewMessagesSnapshotEnabledSuccess(t *testing.T) {
@@ -192,3 +219,67 @@ func (a *mockAgent) SubAgents() []agent.Agent {
 func (a *mockAgent) FindSubAgent(string) agent.Agent {
 	return nil
 }
+
+type dummyAGUIService struct{}
+
+func (dummyAGUIService) Handler() http.Handler { return http.NewServeMux() }
+
+type fakeSessionService struct{}
+
+func (fakeSessionService) CreateSession(context.Context, session.Key, session.StateMap, ...session.Option) (*session.Session, error) {
+	return nil, nil
+}
+
+func (fakeSessionService) GetSession(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+	return nil, nil
+}
+
+func (fakeSessionService) ListSessions(context.Context, session.UserKey, ...session.Option) ([]*session.Session, error) {
+	return nil, nil
+}
+
+func (fakeSessionService) DeleteSession(context.Context, session.Key, ...session.Option) error {
+	return nil
+}
+
+func (fakeSessionService) UpdateAppState(context.Context, string, session.StateMap) error {
+	return nil
+}
+
+func (fakeSessionService) DeleteAppState(context.Context, string, string) error {
+	return nil
+}
+
+func (fakeSessionService) ListAppStates(context.Context, string) (session.StateMap, error) {
+	return nil, nil
+}
+
+func (fakeSessionService) UpdateUserState(context.Context, session.UserKey, session.StateMap) error {
+	return nil
+}
+
+func (fakeSessionService) ListUserStates(context.Context, session.UserKey) (session.StateMap, error) {
+	return nil, nil
+}
+
+func (fakeSessionService) DeleteUserState(context.Context, session.UserKey, string) error {
+	return nil
+}
+
+func (fakeSessionService) AppendEvent(context.Context, *session.Session, *event.Event, ...session.Option) error {
+	return nil
+}
+
+func (fakeSessionService) CreateSessionSummary(context.Context, *session.Session, string, bool) error {
+	return nil
+}
+
+func (fakeSessionService) EnqueueSummaryJob(context.Context, *session.Session, string, bool) error {
+	return nil
+}
+
+func (fakeSessionService) GetSessionSummaryText(context.Context, *session.Session) (string, bool) {
+	return "", false
+}
+
+func (fakeSessionService) Close() error { return nil }

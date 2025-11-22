@@ -72,6 +72,9 @@ func newService(runner runner.Runner, opts *options) (service.Service, error) {
 		if opts.sessionService == nil {
 			return nil, errors.New("agui: session service is required when messages snapshot is enabled")
 		}
+		if _, ok := opts.sessionService.(session.TrackService); !ok {
+			return nil, errors.New("agui: session service must implement TrackService")
+		}
 		messagesSnapshotPath, err := joinURLPath(opts.basePath, opts.messagesSnapshotPath)
 		if err != nil {
 			return nil, fmt.Errorf("agui: url join messages snapshot path: %w", err)
