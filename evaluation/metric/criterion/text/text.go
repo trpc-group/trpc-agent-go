@@ -10,12 +10,6 @@
 // Package text defines text comparison criteria.
 package text
 
-import (
-	"fmt"
-	"regexp"
-	"strings"
-)
-
 // TextCriterion governs how two strings should be compared.
 type TextCriterion struct {
 	// Ignore skips comparison when true.
@@ -39,40 +33,3 @@ const (
 	// TextMatchStrategyRegex matches strings that match the regex.
 	TextMatchStrategyRegex TextMatchStrategy = "regex"
 )
-
-// Match compares source and target using the configured strategy.
-func (t *TextCriterion) Match(source, target string) error {
-	if t.Compare != nil {
-		return t.Compare(source, target)
-	}
-	if t.Ignore {
-		return nil
-	}
-	if t.CaseInsensitive {
-		source = strings.ToLower(source)
-		target = strings.ToLower(target)
-	}
-	switch t.MatchStrategy {
-	case TextMatchStrategyExact:
-		if source == target {
-			return nil
-		}
-		return fmt.Errorf("source %s and target %s do not match", source, target)
-	case TextMatchStrategyContains:
-		if strings.Contains(source, target) {
-			return nil
-		}
-		return fmt.Errorf("source %s does not contain target %s", source, target)
-	case TextMatchStrategyRegex:
-		re, err := regexp.Compile(target)
-		if err != nil {
-			return fmt.Errorf("invalid regex %s: %w", target, err)
-		}
-		if re.MatchString(source) {
-			return nil
-		}
-		return fmt.Errorf("source %s does not match regex %s", source, target)
-	default:
-		return fmt.Errorf("invalid match strategy %s", t.MatchStrategy)
-	}
-}

@@ -13,7 +13,8 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltraject
 
 // options aggregates configurable parts of Criterion.
 type options struct {
-	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion // ToolTrajectory sets the default tool trajectory criterion.
+	// ToolTrajectory sets the default tool trajectory criterion.
+	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion
 }
 
 // newOptions creates a Options with the provided options.

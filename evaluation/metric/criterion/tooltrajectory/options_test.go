@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	imaptext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/internal/maptext"
 )
 
 func TestNewOptionsDefaults(t *testing.T) {
@@ -57,13 +58,13 @@ func TestWithCompare(t *testing.T) {
 }
 
 func TestDefaultToolTrajectoryStrategyDeepEqualMismatch(t *testing.T) {
-	errArgs := defaultToolTrajectoryStrategy.Arguments.Match(
+	errArgs := imaptext.Match(defaultToolTrajectoryStrategy.Arguments,
 		map[string]any{"a": 1},
 		map[string]any{"a": 2},
 	)
 	assert.Error(t, errArgs)
 
-	errResp := defaultToolTrajectoryStrategy.Response.Match(
+	errResp := imaptext.Match(defaultToolTrajectoryStrategy.Response,
 		map[string]any{"r": 1},
 		map[string]any{"r": 3},
 	)

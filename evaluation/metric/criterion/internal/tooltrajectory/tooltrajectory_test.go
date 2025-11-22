@@ -15,8 +15,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	imaptext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/internal/maptext"
+	itext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/internal/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/maptext"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 )
 
 func TestToolTrajectoryCriterionMatchOrderInsensitive(t *testing.T) {
@@ -33,8 +36,10 @@ func TestToolTrajectoryCriterionMatchOrderInsensitive(t *testing.T) {
 		},
 	)
 
-	criterion := New(WithOrderInsensitive(true))
-	err := criterion.Match(actual, expected)
+	criterion := &tooltrajectory.ToolTrajectoryCriterion{
+		OrderInsensitive: true,
+	}
+	err := Match(criterion, actual, expected)
 	assert.NoError(t, err)
 }
 
@@ -57,8 +62,8 @@ func TestToolTrajectoryCriterionMissingResponse(t *testing.T) {
 			},
 		},
 	}
-	criterion := New()
-	err := criterion.Match(actual, expected)
+	criterion := &tooltrajectory.ToolTrajectoryCriterion{}
+	err := Match(criterion, actual, expected)
 	assert.Error(t, err)
 }
 
@@ -73,13 +78,15 @@ func TestToolTrajectoryCriterionCustomStrategy(t *testing.T) {
 			{id: "call-1", name: "custom", args: map[string]any{"k": "v"}, response: map[string]any{"r": "x"}},
 		},
 	)
-	customStrategy := &ToolTrajectoryStrategy{
+	customStrategy := &tooltrajectory.ToolTrajectoryStrategy{
 		Name: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
 	}
-	criterion := New(WithTool(map[string]*ToolTrajectoryStrategy{
-		"custom": customStrategy,
-	}))
-	err := criterion.Match(actual, expected)
+	criterion := &tooltrajectory.ToolTrajectoryCriterion{
+		ToolStrategy: map[string]*tooltrajectory.ToolTrajectoryStrategy{
+			"custom": customStrategy,
+		},
+	}
+	err := Match(criterion, actual, expected)
 	assert.NoError(t, err)
 }
 
@@ -134,20 +141,20 @@ func TestToolTrajectoryCriterionIDMismatch(t *testing.T) {
 			},
 		},
 	}
-	criterion := New()
-	err := criterion.Match(actual, expected)
+	criterion := tooltrajectory.New()
+	err := Match(criterion, actual, expected)
 	assert.Error(t, err)
 }
 
 func TestToolTrajectoryCriterionNilInvocation(t *testing.T) {
-	criterion := New()
-	err := criterion.Match(nil, makeInvocation(nil))
+	criterion := tooltrajectory.New()
+	err := Match(criterion, nil, makeInvocation(nil))
 	assert.Error(t, err)
 }
 
 func TestToolTrajectoryCriterionNilIntermediate(t *testing.T) {
-	criterion := New()
-	err := criterion.Match(&evalset.Invocation{}, &evalset.Invocation{IntermediateData: &evalset.IntermediateData{}})
+	criterion := tooltrajectory.New()
+	err := Match(criterion, &evalset.Invocation{}, &evalset.Invocation{IntermediateData: &evalset.IntermediateData{}})
 	assert.Error(t, err)
 }
 
@@ -172,7 +179,7 @@ func TestToolTrajectoryCriterionEmptyToolUseID(t *testing.T) {
 			},
 		},
 	}
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -185,7 +192,7 @@ func TestToolTrajectoryCriterionDuplicateResponseID(t *testing.T) {
 		Name:     "tool",
 		Response: map[string]any{"r": 2},
 	})
-	err := New().Match(actual, makeInvocation([]toolData{
+	err := Match(tooltrajectory.New(), actual, makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	}))
 	assert.Error(t, err)
@@ -193,13 +200,13 @@ func TestToolTrajectoryCriterionDuplicateResponseID(t *testing.T) {
 
 func TestToolTrajectoryCriterionCustomCompare(t *testing.T) {
 	var called bool
-	criterion := &ToolTrajectoryCriterion{
+	criterion := &tooltrajectory.ToolTrajectoryCriterion{
 		Compare: func(actual, expected *evalset.Invocation) error {
 			called = true
 			return nil
 		},
 	}
-	err := criterion.Match(&evalset.Invocation{}, &evalset.Invocation{})
+	err := Match(criterion, &evalset.Invocation{}, &evalset.Invocation{})
 	assert.NoError(t, err)
 	assert.True(t, called)
 }
@@ -216,7 +223,7 @@ func TestToolTrajectoryCriterionExpectedResponseCountMismatch(t *testing.T) {
 			ToolResponses: []*genai.FunctionResponse{},
 		},
 	}
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -228,14 +235,14 @@ func TestToolTrajectoryCriterionToolUsesCountMismatch(t *testing.T) {
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 		{id: "call-2", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
 	})
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
 func TestToolTrajectoryCriterionZeroTools(t *testing.T) {
 	actual := &evalset.Invocation{IntermediateData: &evalset.IntermediateData{}}
 	expected := &evalset.Invocation{IntermediateData: &evalset.IntermediateData{}}
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.NoError(t, err)
 }
 
@@ -253,7 +260,7 @@ func TestToolTrajectoryCriterionExpectedInvalidID(t *testing.T) {
 			},
 		},
 	}
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -264,11 +271,11 @@ func TestToolTrajectoryCriterionStrategyMismatch(t *testing.T) {
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "tool-B", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
-	strategy := &ToolTrajectoryStrategy{
+	strategy := &tooltrajectory.ToolTrajectoryStrategy{
 		Name: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
 	}
-	criterion := New(WithTool(map[string]*ToolTrajectoryStrategy{"tool-A": strategy}))
-	err := criterion.Match(actual, expected)
+	criterion := tooltrajectory.New(tooltrajectory.WithTool(map[string]*tooltrajectory.ToolTrajectoryStrategy{"tool-A": strategy}))
+	err := Match(criterion, actual, expected)
 	assert.Error(t, err)
 }
 
@@ -289,7 +296,7 @@ func TestToolTrajectoryCriterionDuplicateToolUseID(t *testing.T) {
 		{id: "dup", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 		{id: "dup2", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
 	})
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -310,7 +317,7 @@ func TestToolTrajectoryCriterionDuplicateToolResponseID(t *testing.T) {
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 		{id: "call-2", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 2}},
 	})
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -328,7 +335,7 @@ func TestToolTrajectoryCriterionMissingResponseID(t *testing.T) {
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -346,7 +353,7 @@ func TestToolComparerOrderInsensitiveMarshalError(t *testing.T) {
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{}, response: map[string]any{"r": 1}},
 	})
-	err := New(WithOrderInsensitive(true)).Match(actual, expected)
+	err := Match(tooltrajectory.New(tooltrajectory.WithOrderInsensitive(true)), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -364,7 +371,7 @@ func TestToolComparerOrderInsensitiveMarshalResponseError(t *testing.T) {
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
-	err := New(WithOrderInsensitive(true)).Match(actual, expected)
+	err := Match(tooltrajectory.New(tooltrajectory.WithOrderInsensitive(true)), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -383,21 +390,20 @@ func TestToolComparerLessThanBranches(t *testing.T) {
 }
 
 func TestToolTrajectoryStrategyArgumentAndResponseMismatch(t *testing.T) {
-	strategy := &ToolTrajectoryStrategy{
+	strategy := &tooltrajectory.ToolTrajectoryStrategy{
 		Arguments: &maptext.MapTextCriterion{},
 		Response:  &maptext.MapTextCriterion{},
 	}
-	actual := &toolComparer{
-		name:     "tool",
-		args:     map[string]any{"a": 1},
-		response: map[string]any{"r": 1},
-	}
-	expected := &toolComparer{
-		name:     "tool",
-		args:     map[string]any{"a": 2},
-		response: map[string]any{"r": 3},
-	}
-	err := strategy.Match(actual, expected)
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 2}, response: map[string]any{"r": 3}},
+	})
+	criterion := tooltrajectory.New(tooltrajectory.WithTool(map[string]*tooltrajectory.ToolTrajectoryStrategy{
+		"tool": strategy,
+	}))
+	err := Match(criterion, actual, expected)
 	assert.Error(t, err)
 }
 
@@ -429,7 +435,7 @@ func TestToolTrajectoryCriterionMissingResponseSet(t *testing.T) {
 			},
 		},
 	}
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -440,11 +446,11 @@ func TestToolTrajectoryCriterionFallbackDefault(t *testing.T) {
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
-	criterion := &ToolTrajectoryCriterion{
+	criterion := &tooltrajectory.ToolTrajectoryCriterion{
 		DefaultStrategy: nil,
 		ToolStrategy:    nil,
 	}
-	err := criterion.Match(actual, expected)
+	err := Match(criterion, actual, expected)
 	assert.NoError(t, err)
 }
 
@@ -455,11 +461,11 @@ func TestToolTrajectoryCriterionFallbackDefaultStrategy(t *testing.T) {
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
-	criterion := &ToolTrajectoryCriterion{
+	criterion := &tooltrajectory.ToolTrajectoryCriterion{
 		DefaultStrategy: nil,
 		ToolStrategy:    nil,
 	}
-	err := criterion.Match(actual, expected)
+	err := Match(criterion, actual, expected)
 	assert.NoError(t, err)
 }
 
@@ -477,7 +483,7 @@ func TestToolTrajectoryCriterionEmptyToolResponseID(t *testing.T) {
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "tool", args: map[string]any{}, response: map[string]any{}},
 	})
-	err := New().Match(actual, expected)
+	err := Match(tooltrajectory.New(), actual, expected)
 	assert.Error(t, err)
 }
 
@@ -488,30 +494,29 @@ func TestToolTrajectoryCriterionStrategyLookupByExpectedName(t *testing.T) {
 	expected := makeInvocation([]toolData{
 		{id: "call-1", name: "custom", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
 	})
-	customStrategy := &ToolTrajectoryStrategy{}
-	criterion := New(WithTool(map[string]*ToolTrajectoryStrategy{
+	customStrategy := &tooltrajectory.ToolTrajectoryStrategy{}
+	criterion := tooltrajectory.New(tooltrajectory.WithTool(map[string]*tooltrajectory.ToolTrajectoryStrategy{
 		"custom": customStrategy,
 	}))
-	err := criterion.Match(actual, expected)
+	err := Match(criterion, actual, expected)
 	assert.NoError(t, err)
 }
 
 func TestToolTrajectoryStrategyResponseMismatchOnly(t *testing.T) {
-	strategy := &ToolTrajectoryStrategy{
+	strategy := &tooltrajectory.ToolTrajectoryStrategy{
 		Arguments: &maptext.MapTextCriterion{},
 		Response:  &maptext.MapTextCriterion{},
 	}
-	actual := &toolComparer{
-		name:     "tool",
-		args:     map[string]any{"a": 1},
-		response: map[string]any{"r": 1},
-	}
-	expected := &toolComparer{
-		name:     "tool",
-		args:     map[string]any{"a": 1},
-		response: map[string]any{"r": 2},
-	}
-	err := strategy.Match(actual, expected)
+	actual := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 1}},
+	})
+	expected := makeInvocation([]toolData{
+		{id: "call-1", name: "tool", args: map[string]any{"a": 1}, response: map[string]any{"r": 2}},
+	})
+	criterion := tooltrajectory.New(tooltrajectory.WithTool(map[string]*tooltrajectory.ToolTrajectoryStrategy{
+		"tool": strategy,
+	}))
+	err := Match(criterion, actual, expected)
 	assert.Error(t, err)
 }
 
@@ -519,4 +524,14 @@ func TestToolComparerLessThanEqual(t *testing.T) {
 	left := &toolComparer{name: "same", argsOrder: "1", responseOrder: "1"}
 	right := &toolComparer{name: "same", argsOrder: "1", responseOrder: "1"}
 	assert.False(t, left.lessThan(right))
+}
+
+func TestInternalTextAndMapWrappers(t *testing.T) {
+	txt := &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact}
+	err := itext.Match(txt, "same", "same")
+	assert.NoError(t, err)
+
+	crit := &maptext.MapTextCriterion{}
+	err = imaptext.Match(crit, map[string]any{"a": 1}, map[string]any{"a": 1})
+	assert.NoError(t, err)
 }
