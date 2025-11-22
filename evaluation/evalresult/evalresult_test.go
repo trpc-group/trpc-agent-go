@@ -20,30 +20,30 @@ import (
 
 func TestEvalSetResultJSONRoundTrip(t *testing.T) {
 	const raw = `{
-  "eval_set_result_id": "result-1",
-  "eval_set_result_name": "result-name",
-  "eval_set_id": "greeting-set",
-  "eval_case_results": [
+  "evalSetResultId": "result-1",
+  "evalSetResultName": "result-name",
+  "evalSetId": "greeting-set",
+  "evalCaseResults": [
     {
-      "eval_set_id": "greeting-set",
-      "eval_id": "case-1",
-      "final_eval_status": 1,
-      "overall_eval_metric_results": [
+      "evalSetId": "greeting-set",
+      "evalId": "case-1",
+      "finalEvalStatus": 1,
+      "overallEvalMetricResults": [
         {
-          "metric_name": "tool_trajectory_avg_score",
+          "metricName": "tool_trajectory_avg_score",
           "score": 0.9,
-          "eval_status": 1,
+          "evalStatus": 1,
           "threshold": 0.8,
           "details": {
             "comment": "trajectory matched"
           }
         }
       ],
-      "eval_metric_result_per_invocation": [
+      "evalMetricResultPerInvocation": [
         {
-          "actual_invocation": {
-            "invocation_id": "invocation-actual",
-            "user_content": {
+          "actualInvocation": {
+            "invocationId": "invocation-actual",
+            "userContent": {
               "role": "user",
               "parts": [
                 {
@@ -51,7 +51,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                 }
               ]
             },
-            "final_response": {
+            "finalResponse": {
               "role": "assistant",
               "parts": [
                 {
@@ -59,8 +59,8 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                 }
               ]
             },
-            "intermediate_data": {
-              "tool_uses": [
+            "intermediateData": {
+              "toolUses": [
                 {
                   "id": "tool-call-1",
                   "name": "calculator",
@@ -71,7 +71,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                   }
                 }
               ],
-              "intermediate_responses": [
+              "intermediateResponses": [
                 [
                   "assistant",
                   [
@@ -82,11 +82,11 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                 ]
               ]
             },
-            "creation_timestamp": 1700000000
+            "creationTimestamp": 1700000000
           },
-          "expected_invocation": {
-            "invocation_id": "invocation-expected",
-            "user_content": {
+          "expectedInvocation": {
+            "invocationId": "invocation-expected",
+            "userContent": {
               "role": "user",
               "parts": [
                 {
@@ -94,7 +94,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                 }
               ]
             },
-            "final_response": {
+            "finalResponse": {
               "role": "assistant",
               "parts": [
                 {
@@ -102,8 +102,8 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                 }
               ]
             },
-            "intermediate_data": {
-              "tool_uses": [
+            "intermediateData": {
+              "toolUses": [
                 {
                   "name": "calculator",
                   "args": {
@@ -113,7 +113,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                   }
                 }
               ],
-              "intermediate_responses": [
+              "intermediateResponses": [
                 [
                   "assistant",
                   [
@@ -124,13 +124,13 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
                 ]
               ]
             },
-            "creation_timestamp": 1700000000
+            "creationTimestamp": 1700000000
           },
-          "eval_metric_results": [
+          "evalMetricResults": [
             {
-              "metric_name": "tool_trajectory_avg_score",
+              "metricName": "tool_trajectory_avg_score",
               "score": 0.9,
-              "eval_status": 1,
+              "evalStatus": 1,
               "threshold": 0.8,
               "details": {
                 "comment": "per invocation matched"
@@ -139,11 +139,11 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
           ]
         }
       ],
-      "session_id": "session-1",
-      "user_id": "user-1"
+      "sessionId": "session-1",
+      "userId": "user-1"
     }
   ],
-  "creation_timestamp": 1700000000
+  "creationTimestamp": 1700000000
 }`
 
 	var result EvalSetResult

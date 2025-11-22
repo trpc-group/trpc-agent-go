@@ -200,6 +200,228 @@
           }
         }
       }
+    },
+    "/apps/{appName}/eval-sets": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" }
+      ],
+      "post": {
+        "summary": "Create a new eval set.",
+        "operationId": "createEvalSet",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateEvalSetRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The created eval set.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EvalSet" }
+              }
+            }
+          },
+          "400": { "description": "Failed to create the eval set." }
+        }
+      },
+      "get": {
+        "summary": "List eval set IDs for the app.",
+        "operationId": "listEvalSets",
+        "responses": {
+          "200": {
+            "description": "Eval set IDs.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListEvalSetsResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/{appName}/eval-sets/{evalSetId}/add-session": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" },
+        { "$ref": "#/components/parameters/evalSetId" }
+      ],
+      "post": {
+        "summary": "Convert a recorded session into an eval case and append it to the eval set.",
+        "operationId": "addSessionToEvalSet",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AddSessionToEvalSetRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Eval case added." },
+          "400": { "description": "Request invalid or session not found." }
+        }
+      }
+    },
+    "/apps/{appName}/eval-sets/{evalSetId}/evals": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" },
+        { "$ref": "#/components/parameters/evalSetId" }
+      ],
+      "get": {
+        "summary": "List eval case IDs in the eval set.",
+        "operationId": "listEvalCases",
+        "responses": {
+          "200": {
+            "description": "Eval case IDs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          },
+          "400": { "description": "Eval set not found." }
+        }
+      }
+    },
+    "/apps/{appName}/eval-sets/{evalSetId}/eval-cases/{evalCaseId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" },
+        { "$ref": "#/components/parameters/evalSetId" },
+        { "$ref": "#/components/parameters/evalCaseId" }
+      ],
+      "get": {
+        "summary": "Get a single eval case.",
+        "operationId": "getEvalCase",
+        "responses": {
+          "200": {
+            "description": "Eval case details.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EvalCase" }
+              }
+            }
+          },
+          "404": { "description": "Eval case not found." }
+        }
+      },
+      "put": {
+        "summary": "Update an eval case.",
+        "operationId": "updateEvalCase",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EvalCase" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Eval case updated." },
+          "404": { "description": "Eval case not found." }
+        }
+      },
+      "delete": {
+        "summary": "Delete an eval case.",
+        "operationId": "deleteEvalCase",
+        "responses": {
+          "200": { "description": "Eval case deleted." },
+          "404": { "description": "Eval case not found." }
+        }
+      }
+    },
+    "/apps/{appName}/eval-sets/{evalSetId}/run": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" },
+        { "$ref": "#/components/parameters/evalSetId" }
+      ],
+      "post": {
+        "summary": "Run evaluation for an eval set.",
+        "operationId": "runEval",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RunEvalRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-case evaluation results.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RunEvalResponse" }
+              }
+            }
+          },
+          "400": { "description": "Evaluation failed." }
+        }
+      }
+    },
+    "/apps/{appName}/eval-results": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" }
+      ],
+      "get": {
+        "summary": "List saved evaluation result IDs for the app.",
+        "operationId": "listEvalResults",
+        "responses": {
+          "200": {
+            "description": "Eval result IDs.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListEvalResultsResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/{appName}/eval-results/{evalResultId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" },
+        { "$ref": "#/components/parameters/evalResultId" }
+      ],
+      "get": {
+        "summary": "Fetch a full evaluation result by ID.",
+        "operationId": "getEvalResult",
+        "responses": {
+          "200": {
+            "description": "Evaluation result.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EvalSetResult" }
+              }
+            }
+          },
+          "404": { "description": "Evaluation result not found." }
+        }
+      }
+    },
+    "/apps/{appName}/metrics-info": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" }
+      ],
+      "get": {
+        "summary": "List registered evaluation metrics and metadata.",
+        "operationId": "listMetricsInfo",
+        "responses": {
+          "200": {
+            "description": "Metric metadata.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListMetricsInfoResponse" }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -223,6 +445,27 @@
         "in": "path",
         "required": true,
         "description": "Session identifier.",
+        "schema": { "type": "string" }
+      },
+      "evalSetId": {
+        "name": "evalSetId",
+        "in": "path",
+        "required": true,
+        "description": "Eval set identifier.",
+        "schema": { "type": "string" }
+      },
+      "evalCaseId": {
+        "name": "evalCaseId",
+        "in": "path",
+        "required": true,
+        "description": "Eval case identifier.",
+        "schema": { "type": "string" }
+      },
+      "evalResultId": {
+        "name": "evalResultId",
+        "in": "path",
+        "required": true,
+        "description": "Eval result identifier.",
         "schema": { "type": "string" }
       }
     },
@@ -345,7 +588,256 @@
         "description": "Generic event envelope returned by the agent. The exact shape is loosely typed to avoid coupling the API spec to internal implementation details.",
         "type": "object",
         "additionalProperties": true
+      },
+      "EvalSet": {
+        "type": "object",
+        "properties": {
+          "evalSetId": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "evalCases": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvalCase" }
+          },
+          "creationTimestamp": {
+            "type": "number",
+            "format": "double",
+            "description": "Unix seconds."
+          }
+        }
+      },
+      "EvalCase": {
+        "type": "object",
+        "properties": {
+          "evalId": { "type": "string" },
+          "conversation": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Invocation" }
+          },
+          "sessionInput": { "$ref": "#/components/schemas/SessionInput" },
+          "creationTimestamp": {
+            "type": "number",
+            "format": "double",
+            "description": "Unix seconds."
+          }
+        }
+      },
+      "Invocation": {
+        "type": "object",
+        "properties": {
+          "invocationId": { "type": "string" },
+          "userContent": { "$ref": "#/components/schemas/Content" },
+          "finalResponse": { "$ref": "#/components/schemas/Content" },
+          "intermediateData": { "$ref": "#/components/schemas/IntermediateData" },
+          "creationTimestamp": {
+            "type": "number",
+            "format": "double",
+            "description": "Unix seconds."
+          }
+        }
+      },
+      "IntermediateData": {
+        "type": "object",
+        "properties": {
+          "toolUses": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/FunctionCall" }
+          },
+          "toolResponses": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/FunctionResponse" }
+          },
+          "intermediateResponses": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {}
+            }
+          }
+        }
+      },
+      "SessionInput": {
+        "type": "object",
+        "properties": {
+          "appName": { "type": "string" },
+          "userId": { "type": "string" },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "EvalMetric": {
+        "type": "object",
+        "properties": {
+          "metricName": { "type": "string" },
+          "threshold": { "type": "number", "format": "double" }
+        }
+      },
+      "RunEvalRequest": {
+        "type": "object",
+        "properties": {
+          "evalCaseIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "evalMetrics": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvalMetric" }
+          }
+        }
+      },
+      "EvalMetricResult": {
+        "type": "object",
+        "properties": {
+          "metricName": { "type": "string" },
+          "score": { "type": "number", "format": "double" },
+          "evalStatus": { "type": "integer", "format": "int32" },
+          "threshold": { "type": "number", "format": "double" },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "EvalMetricResultPerInvocation": {
+        "type": "object",
+        "properties": {
+          "actualInvocation": { "$ref": "#/components/schemas/Invocation" },
+          "expectedInvocation": { "$ref": "#/components/schemas/Invocation" },
+          "evalMetricResults": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvalMetricResult" }
+          }
+        }
+      },
+      "RunEvalResult": {
+        "type": "object",
+        "properties": {
+          "evalSetFile": { "type": "string" },
+          "evalSetId": { "type": "string" },
+          "evalId": { "type": "string" },
+          "finalEvalStatus": { "type": "integer", "format": "int32" },
+          "overallEvalMetricResults": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvalMetricResult" }
+          },
+          "evalMetricResultPerInvocation": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvalMetricResultPerInvocation" }
+          },
+          "userId": { "type": "string" },
+          "sessionId": { "type": "string" }
+        }
+      },
+      "RunEvalResponse": {
+        "type": "object",
+        "properties": {
+          "runEvalResults": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/RunEvalResult" }
+          }
+        }
+      },
+      "EvalCaseResult": {
+        "type": "object",
+        "properties": {
+          "evalSetId": { "type": "string" },
+          "evalId": { "type": "string" },
+          "finalEvalStatus": { "type": "integer", "format": "int32" },
+          "overallEvalMetricResults": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvalMetricResult" }
+          },
+          "evalMetricResultPerInvocation": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvalMetricResultPerInvocation" }
+          },
+          "sessionId": { "type": "string" },
+          "userId": { "type": "string" }
+        }
+      },
+      "EvalSetResult": {
+        "type": "object",
+        "properties": {
+          "evalSetResultId": { "type": "string" },
+          "evalSetResultName": { "type": "string" },
+          "evalSetId": { "type": "string" },
+          "evalCaseResults": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvalCaseResult" }
+          },
+          "creationTimestamp": {
+            "type": "number",
+            "format": "double",
+            "description": "Unix seconds."
+          }
+        }
+      },
+      "ListEvalSetsResponse": {
+        "type": "object",
+        "properties": {
+          "evalSetIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "CreateEvalSetRequest": {
+        "type": "object",
+        "properties": {
+          "evalSet": { "$ref": "#/components/schemas/EvalSet" }
+        }
+      },
+      "AddSessionToEvalSetRequest": {
+        "type": "object",
+        "properties": {
+          "evalId": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "userId": { "type": "string" }
+        }
+      },
+      "ListEvalResultsResponse": {
+        "type": "object",
+        "properties": {
+          "evalResultIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "MetricInterval": {
+        "type": "object",
+        "properties": {
+          "minValue": { "type": "number", "format": "double" },
+          "openAtMin": { "type": "boolean" },
+          "maxValue": { "type": "number", "format": "double" },
+          "openAtMax": { "type": "boolean" }
+        }
+      },
+      "MetricValueInfo": {
+        "type": "object",
+        "properties": {
+          "interval": { "$ref": "#/components/schemas/MetricInterval" }
+        }
+      },
+      "MetricInfo": {
+        "type": "object",
+        "properties": {
+          "metricName": { "type": "string" },
+          "description": { "type": "string" },
+          "metricValueInfo": { "$ref": "#/components/schemas/MetricValueInfo" }
+        }
+      },
+      "ListMetricsInfoResponse": {
+        "type": "object",
+        "properties": {
+          "metricsInfo": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/MetricInfo" }
+          }
+        }
       }
     }
   }
-} 
+}

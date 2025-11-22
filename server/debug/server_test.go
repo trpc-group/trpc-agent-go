@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,12 +23,18 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -352,6 +359,348 @@ func TestConvertSessionToADKFormat(t *testing.T) {
 	assert.NotZero(t, adkSession.LastUpdateTime, "expected non-zero LastUpdateTime")
 
 	assert.Equal(t, 1, len(adkSession.State), "expected 1 state entry, got %d", len(adkSession.State))
+}
+
+func TestServer_convertSessionToEvalInvocations(t *testing.T) {
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		*newUserMessageEvent("invocation-1", "calc add 1 2"),
+		*newToolCallEvent("invocation-1"),
+		*newAssistantFinalEvent("invocation-1", "calc result: 3"),
+	)
+
+	srv := &Server{}
+	invocations := srv.convertSessionToEvalInvocations(sess)
+
+	require.Len(t, invocations, 1)
+	inv := invocations[0]
+	require.NotNil(t, inv.UserContent)
+	require.NotNil(t, inv.FinalResponse)
+	assert.Equal(t, "invocation-1", inv.InvocationID)
+	assert.Equal(t, "calc add 1 2", inv.UserContent.Parts[0].Text)
+	assert.Equal(t, "calc result: 3", inv.FinalResponse.Parts[0].Text)
+	require.NotNil(t, inv.IntermediateData)
+	require.Len(t, inv.IntermediateData.ToolUses, 1)
+	assert.Equal(t, "calculator", inv.IntermediateData.ToolUses[0].Name)
+	assert.Equal(t, "add", inv.IntermediateData.ToolUses[0].Args["operation"])
+}
+
+func TestServer_handleAddSessionToEvalSet(t *testing.T) {
+	appName := "assistant"
+	srv := New(map[string]agent.Agent{
+		appName: &mockAgent{name: appName},
+	})
+
+	ctx := context.Background()
+	_, err := srv.evalSetManager.Create(ctx, appName, "eval-1")
+	require.NoError(t, err)
+
+	sess := recordEvalSession(t, srv, appName, "user-1", "session-1")
+
+	body := schema.AddSessionToEvalSetRequest{
+		EvalId:    "case-1",
+		SessionId: sess.ID,
+		UserId:    sess.UserID,
+	}
+	payload, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/apps/assistant/eval-sets/eval-1/add-session", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req = mux.SetURLVars(req, map[string]string{
+		"appName":   appName,
+		"evalSetId": "eval-1",
+	})
+	w := httptest.NewRecorder()
+
+	srv.handleAddSessionToEvalSet(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	evalCase, err := srv.evalSetManager.GetCase(ctx, appName, "eval-1", "case-1")
+	require.NoError(t, err)
+	require.NotNil(t, evalCase)
+	require.Len(t, evalCase.Conversation, 1)
+	assert.Equal(t, "calc add 1 2", evalCase.Conversation[0].UserContent.Parts[0].Text)
+	assert.Equal(t, "calc result: 3", evalCase.Conversation[0].FinalResponse.Parts[0].Text)
+	require.NotNil(t, evalCase.Conversation[0].IntermediateData)
+	require.Len(t, evalCase.Conversation[0].IntermediateData.ToolUses, 1)
+	assert.Equal(t, "tool-call-1", evalCase.Conversation[0].IntermediateData.ToolUses[0].ID)
+	assert.Equal(t, "user-1", evalCase.SessionInput.UserID)
+}
+
+func TestServer_EvaluationEndpoints(t *testing.T) {
+	appName := "assistant"
+	srv := New(map[string]agent.Agent{
+		appName: &mockAgent{name: appName},
+	})
+	require.NoError(t, srv.metricRegistry.Register("fake_metric", &fakeEvaluatorImpl{name: "fake_metric"}))
+	srv.runners[appName] = &fakeEvalRunner{events: []*event.Event{
+		newRunnerToolCallEvent("eval-run-1"),
+		newRunnerFinalEvent("eval-run-1", "calc result: 3"),
+	}}
+
+	sessionObj := recordEvalSession(t, srv, appName, "user-http", "session-http")
+
+	newSetBody := map[string]any{
+		"evalSet": map[string]any{
+			"evalSetId": "eval-http",
+		},
+	}
+	resp := performJSONRequest(t, srv.Handler(), http.MethodPost, "/apps/assistant/eval-sets", newSetBody)
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodPost, "/apps/assistant/eval_sets/eval-legacy", nil)
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval-sets", nil)
+	var listResp schema.ListEvalSetsResponse
+	decodeBody(t, resp.Body, &listResp)
+	assert.ElementsMatch(t, []string{"eval-http", "eval-legacy"}, listResp.EvalSetIds)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval_sets", nil)
+	var legacyList []string
+	decodeBody(t, resp.Body, &legacyList)
+	assert.ElementsMatch(t, []string{"eval-http", "eval-legacy"}, legacyList)
+
+	addBody := schema.AddSessionToEvalSetRequest{
+		EvalId:    "case-http",
+		SessionId: sessionObj.ID,
+		UserId:    sessionObj.UserID,
+	}
+	resp = performJSONRequest(t, srv.Handler(), http.MethodPost, "/apps/assistant/eval-sets/eval-http/add-session", addBody)
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval_sets/eval-http/evals", nil)
+	var caseIDs []string
+	decodeBody(t, resp.Body, &caseIDs)
+	assert.Equal(t, []string{"case-http"}, caseIDs)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval-sets/eval-http/eval-cases/case-http", nil)
+	var fetchedCase evalset.EvalCase
+	decodeBody(t, resp.Body, &fetchedCase)
+	assert.Equal(t, "case-http", fetchedCase.EvalID)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval_sets/eval-http/evals/case-http", nil)
+	var legacyFetched evalset.EvalCase
+	decodeBody(t, resp.Body, &legacyFetched)
+	assert.Equal(t, "case-http", legacyFetched.EvalID)
+
+	fetchedCase.SessionInput.State = map[string]any{"channel": "test"}
+	updateBody, err := json.Marshal(fetchedCase)
+	require.NoError(t, err)
+	resp = performRequest(t, srv.Handler(), http.MethodPut, "/apps/assistant/eval-sets/eval-http/eval-cases/case-http", bytes.NewReader(updateBody))
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/metrics-info", nil)
+	var metricsInfo schema.ListMetricsInfoResponse
+	decodeBody(t, resp.Body, &metricsInfo)
+	assert.NotEmpty(t, metricsInfo.MetricsInfo)
+
+	runReq := schema.RunEvalRequest{
+		EvalCaseIds: []string{"case-http"},
+		EvalMetrics: []metric.EvalMetric{{MetricName: "fake_metric", Threshold: 0.5}},
+	}
+	resp = performJSONRequest(t, srv.Handler(), http.MethodPost, "/apps/assistant/eval-sets/eval-http/run", runReq)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	var runResp schema.RunEvalResponse
+	decodeBody(t, resp.Body, &runResp)
+	require.Len(t, runResp.RunEvalResults, 1)
+	assert.Equal(t, "case-http", runResp.RunEvalResults[0].EvalId)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodPost, "/apps/assistant/eval_sets/eval-http/run_eval", runReq)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	var legacyRun []*schema.RunEvalResult
+	decodeBody(t, resp.Body, &legacyRun)
+	require.Len(t, legacyRun, 1)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval-results", nil)
+	var evalResultIDs struct {
+		EvalResultIds []string `json:"evalResultIds"`
+	}
+	decodeBody(t, resp.Body, &evalResultIDs)
+	require.NotEmpty(t, evalResultIDs.EvalResultIds)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval_results", nil)
+	var legacyResultIDs []string
+	decodeBody(t, resp.Body, &legacyResultIDs)
+	require.NotEmpty(t, legacyResultIDs)
+
+	targetID := evalResultIDs.EvalResultIds[0]
+	path := "/apps/assistant/eval-results/" + targetID
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, path, nil)
+	var evalResult evalresult.EvalSetResult
+	decodeBody(t, resp.Body, &evalResult)
+	assert.Equal(t, targetID, evalResult.EvalSetResultID)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval_results/"+targetID, nil)
+	var legacyEvalResult evalresult.EvalSetResult
+	decodeBody(t, resp.Body, &legacyEvalResult)
+	assert.Equal(t, targetID, legacyEvalResult.EvalSetResultID)
+
+	resp = performRequest(t, srv.Handler(), http.MethodDelete, "/apps/assistant/eval-sets/eval-http/eval-cases/case-http", nil)
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	resp = performJSONRequest(t, srv.Handler(), http.MethodGet, "/apps/assistant/eval_sets/eval-http/evals", nil)
+	decodeBody(t, resp.Body, &caseIDs)
+	assert.Empty(t, caseIDs)
+}
+
+func recordEvalSession(t *testing.T, srv *Server, appName, userID, sessionID string) *session.Session {
+	ctx := context.Background()
+	sess, err := srv.sessionSvc.CreateSession(ctx, session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	}, session.StateMap{})
+	require.NoError(t, err)
+
+	require.NoError(t, srv.sessionSvc.AppendEvent(ctx, sess, newUserMessageEvent("invocation-1", "calc add 1 2")))
+	require.NoError(t, srv.sessionSvc.AppendEvent(ctx, sess, newToolCallEvent("invocation-1")))
+	require.NoError(t, srv.sessionSvc.AppendEvent(ctx, sess, newAssistantFinalEvent("invocation-1", "calc result: 3")))
+	return sess
+}
+
+func newUserMessageEvent(invocationID, content string) *event.Event {
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: content,
+			},
+		}},
+		Done: true,
+	}
+	return event.NewResponseEvent(invocationID, string(model.RoleUser), rsp)
+}
+
+func newToolCallEvent(invocationID string) *event.Event {
+	args := json.RawMessage(`{"operation":"add","a":1,"b":2}`)
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "tool-call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "calculator",
+							Arguments: args,
+						},
+					},
+				},
+			},
+		}},
+	}
+	return event.NewResponseEvent(invocationID, string(model.RoleAssistant), rsp)
+}
+
+func newAssistantFinalEvent(invocationID, content string) *event.Event {
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: content,
+			},
+		}},
+		Done: true,
+	}
+	return event.NewResponseEvent(invocationID, string(model.RoleAssistant), rsp)
+}
+
+type fakeEvalRunner struct {
+	events []*event.Event
+}
+
+func (f *fakeEvalRunner) Run(ctx context.Context, userID, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, len(f.events))
+	for _, evt := range f.events {
+		e := *evt
+		ch <- &e
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (f *fakeEvalRunner) Close() error {
+	return nil
+}
+
+type fakeEvaluatorImpl struct {
+	name string
+}
+
+func (f *fakeEvaluatorImpl) Name() string        { return f.name }
+func (f *fakeEvaluatorImpl) Description() string { return "fake evaluator" }
+func (f *fakeEvaluatorImpl) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
+	result := &evaluator.EvaluateResult{
+		OverallScore:         1,
+		OverallStatus:        status.EvalStatusPassed,
+		PerInvocationResults: make([]evaluator.PerInvocationResult, len(actuals)),
+	}
+	for i := range actuals {
+		result.PerInvocationResults[i] = evaluator.PerInvocationResult{
+			ActualInvocation:   actuals[i],
+			ExpectedInvocation: expecteds[i],
+			Score:              1,
+			Status:             status.EvalStatusPassed,
+		}
+	}
+	return result, nil
+}
+
+func performJSONRequest(t *testing.T, handler http.Handler, method, path string, payload any) *httptest.ResponseRecorder {
+	var body io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		body = bytes.NewReader(data)
+	}
+	return performRequest(t, handler, method, path, body)
+}
+
+func performRequest(t *testing.T, handler http.Handler, method, path string, body io.Reader) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, body)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	return resp
+}
+
+func decodeBody(t *testing.T, r io.Reader, v any) {
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, v))
+}
+
+func newRunnerToolCallEvent(invocationID string) *event.Event {
+	args := json.RawMessage(`{"operation":"add","a":1,"b":2}`)
+	resp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:       "runner-tool",
+					Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: args},
+				}},
+			},
+		}},
+	}
+	return &event.Event{Response: resp, InvocationID: invocationID}
+}
+
+func newRunnerFinalEvent(invocationID, content string) *event.Event {
+	resp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: content,
+			},
+		}},
+	}
+	return &event.Event{Response: resp, InvocationID: invocationID}
 }
 
 // mockSessionService is a simple mock session service for testing.

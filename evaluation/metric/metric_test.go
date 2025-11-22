@@ -24,7 +24,7 @@ func TestEvalMetricJSONMarshalling(t *testing.T) {
 
 	data, err := json.Marshal(metric)
 	assert.NoError(t, err)
-	assert.JSONEq(t, `{"metric_name":"accuracy","threshold":0.8}`, string(data))
+	assert.JSONEq(t, `{"metricName":"accuracy","threshold":0.8}`, string(data))
 
 	var decoded EvalMetric
 	err = json.Unmarshal(data, &decoded)

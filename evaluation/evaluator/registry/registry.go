@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
@@ -26,6 +27,8 @@ type Registry interface {
 	Register(name string, e evaluator.Evaluator) error
 	// Get retrieves an evaluator by name.
 	Get(name string) (evaluator.Evaluator, error)
+	// List returns the names of all registered evaluators.
+	List() []string
 }
 
 // registry is the default implementation of Registry.
@@ -71,4 +74,16 @@ func (r *registry) Get(name string) (evaluator.Evaluator, error) {
 		return e, nil
 	}
 	return nil, fmt.Errorf("get evaluator %s: %w", name, os.ErrNotExist)
+}
+
+// List returns the names of all registered evaluators sorted lexicographically.
+func (r *registry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.evaluators))
+	for name := range r.evaluators {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

@@ -30,52 +30,52 @@ type Service interface {
 }
 
 // InferenceRequest represents a request for running the agent inference on an eval set.
-// It mirrors the schema used by ADK Web, with field names in snake_case to align with the JSON format.
+// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type InferenceRequest struct {
 	// AppName is the name of the app.
-	AppName string `json:"app_name,omitempty"`
+	AppName string `json:"appName,omitempty"`
 	// EvalSetID is the ID of the eval set.
-	EvalSetID string `json:"eval_set_id,omitempty"`
+	EvalSetID string `json:"evalSetId,omitempty"`
 	// EvalCaseIDs are the IDs of eval cases to process.
 	// If not specified, all eval cases in the eval set will be processed.
-	EvalCaseIDs []string `json:"eval_case_ids,omitempty"`
+	EvalCaseIDs []string `json:"evalCaseIds,omitempty"`
 }
 
 // InferenceResult contains the inference results for a single eval case.
-// It mirrors the schema used by ADK Web, with field names in snake_case to align with the JSON format.
+// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type InferenceResult struct {
 	// AppName is the name of the app.
-	AppName string `json:"app_name,omitempty"`
+	AppName string `json:"appName,omitempty"`
 	// EvalSetID is the ID of the eval set.
-	EvalSetID string `json:"eval_set_id,omitempty"`
+	EvalSetID string `json:"evalSetId,omitempty"`
 	// EvalCaseID is the ID of the eval case.
-	EvalCaseID string `json:"eval_case_id,omitempty"`
+	EvalCaseID string `json:"evalCaseId,omitempty"`
 	// Inferences are the inference results.
 	Inferences []*evalset.Invocation `json:"inferences,omitempty"`
 	// SessionID is the ID of the inference session.
-	SessionID string `json:"session_id,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
 	// Status is the status of the inference.
 	Status status.EvalStatus `json:"status,omitempty"`
 	// ErrorMessage contains the error message if inference failed.
-	ErrorMessage string `json:"error_message,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 // EvaluateRequest represents a request for running the evaluation on the inference results.
-// It mirrors the schema used by ADK Web, with field names in snake_case to align with the JSON format.
+// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvaluateRequest struct {
 	// AppName is the name of the app.
-	AppName string `json:"app_name,omitempty"`
+	AppName string `json:"appName,omitempty"`
 	// EvalSetID is the ID of the eval set.
-	EvalSetID string `json:"eval_set_id,omitempty"`
+	EvalSetID string `json:"evalSetId,omitempty"`
 	// InferenceResults are the inference results to be evaluated.
-	InferenceResults []*InferenceResult `json:"inference_results,omitempty"`
+	InferenceResults []*InferenceResult `json:"inferenceResults,omitempty"`
 	// EvaluateConfig contains the evaluation configuration used during evaluation.
-	EvaluateConfig *EvaluateConfig `json:"evaluate_config,omitempty"`
+	EvaluateConfig *EvaluateConfig `json:"evaluateConfig,omitempty"`
 }
 
 // EvaluateConfig contains evaluation configuration used during evaluation.
-// It mirrors the schema used by ADK Web, with field names in snake_case to align with the JSON format.
+// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvaluateConfig struct {
 	// EvalMetrics contains the metrics to be evaluated.
-	EvalMetrics []*metric.EvalMetric `json:"eval_metrics,omitempty"`
+	EvalMetrics []*metric.EvalMetric `json:"evalMetrics,omitempty"`
 }

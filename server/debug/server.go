@@ -13,18 +13,32 @@ package debug
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace/noop"
-
+	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	evalservice "trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -49,6 +63,11 @@ type Server struct {
 	sessionSvc session.Service
 	runnerOpts []runner.Option // Extra options applied when creating a runner.
 
+	evalSetManager    evalset.Manager    // evalSetManager is the manager for evaluation sets.
+	evalResultManager evalresult.Manager // evalResultManager is the manager for evaluation results.
+	metricManager     metric.Manager     // metricManager persists configured eval metrics per eval set.
+	metricRegistry    registry.Registry  // metricRegistry exposes the available evaluation metrics.
+
 	traces         map[string]attribute.Set // key: event_id
 	memoryExporter *inMemoryExporter
 }
@@ -68,16 +87,61 @@ func WithRunnerOptions(opts ...runner.Option) Option {
 	return func(s *Server) { s.runnerOpts = append(s.runnerOpts, opts...) }
 }
 
+// WithEvalSetManager overrides the default eval set manager.
+func WithEvalSetManager(m evalset.Manager) Option {
+	return func(s *Server) {
+		if m != nil {
+			s.evalSetManager = m
+		}
+	}
+}
+
+// WithEvalResultManager overrides the default eval result manager.
+func WithEvalResultManager(m evalresult.Manager) Option {
+	return func(s *Server) {
+		if m != nil {
+			s.evalResultManager = m
+		}
+	}
+}
+
+// WithMetricManager overrides the default eval metric manager used for persistence.
+func WithMetricManager(m metric.Manager) Option {
+	return func(s *Server) {
+		if m != nil {
+			s.metricManager = m
+		}
+	}
+}
+
+// WithMetricRegistry overrides the default evaluator registry used to describe metrics.
+func WithMetricRegistry(reg registry.Registry) Option {
+	return func(s *Server) {
+		if reg != nil {
+			s.metricRegistry = reg
+		}
+	}
+}
+
+// WithEvaluatorRegistry is kept for backward compatibility. Use WithMetricRegistry instead.
+func WithEvaluatorRegistry(reg registry.Registry) Option {
+	return WithMetricRegistry(reg)
+}
+
 // New creates a new CLI HTTP server with explicit agent registration. The
 // behaviour can be tweaked via functional options.
 func New(agents map[string]agent.Agent, opts ...Option) *Server {
 	s := &Server{
-		agents:         agents,
-		router:         mux.NewRouter(),
-		runners:        make(map[string]runner.Runner),
-		traces:         make(map[string]attribute.Set),
-		memoryExporter: newInMemoryExporter(),
-		sessionSvc:     sessioninmemory.NewSessionService(),
+		agents:            agents,
+		router:            mux.NewRouter(),
+		runners:           make(map[string]runner.Runner),
+		traces:            make(map[string]attribute.Set),
+		memoryExporter:    newInMemoryExporter(),
+		sessionSvc:        sessioninmemory.NewSessionService(),
+		evalSetManager:    evalsetinmemory.New(),
+		evalResultManager: evalresultinmemory.New(),
+		metricManager:     metricinmemory.New(),
+		metricRegistry:    registry.New(),
 	}
 
 	// Apply user-provided options.
@@ -89,7 +153,7 @@ func New(agents map[string]agent.Agent, opts ...Option) *Server {
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowCredentials: true,
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
 		ExposedHeaders:   []string{"Content-Length", "Content-Type"},
 	})
@@ -229,6 +293,37 @@ func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/apps/{appName}/users/{userId}/sessions/{sessionId}",
 		s.handleGetSession).Methods(http.MethodGet)
 
+	// Evaluation APIs.
+	s.router.HandleFunc("/apps/{appName}/eval-sets", s.handleCreateEvalSet).Methods(http.MethodPost)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}", s.handleCreateEvalSetLegacy).Methods(http.MethodPost)
+	s.router.HandleFunc("/apps/{appName}/eval-sets", s.handleListEvalSets).Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/eval_sets", s.handleListEvalSetsLegacy).Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/eval-sets/{evalSetId}/add-session", s.handleAddSessionToEvalSet).
+		Methods(http.MethodPost)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}/add_session", s.handleAddSessionToEvalSet).
+		Methods(http.MethodPost)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}/evals", s.handleListEvalsInSet).
+		Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/eval-sets/{evalSetId}/eval-cases/{evalCaseId}", s.handleGetEvalCase).
+		Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}/evals/{evalCaseId}", s.handleGetEvalCase).
+		Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/eval-sets/{evalSetId}/eval-cases/{evalCaseId}", s.handleUpdateEvalCase).
+		Methods(http.MethodPut)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}/evals/{evalCaseId}", s.handleUpdateEvalCase).
+		Methods(http.MethodPut)
+	s.router.HandleFunc("/apps/{appName}/eval-sets/{evalSetId}/eval-cases/{evalCaseId}", s.handleDeleteEvalCase).
+		Methods(http.MethodDelete)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}/evals/{evalCaseId}", s.handleDeleteEvalCase).
+		Methods(http.MethodDelete)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}/run_eval", s.handleRunEvalLegacy).Methods(http.MethodPost)
+	s.router.HandleFunc("/apps/{appName}/eval-sets/{evalSetId}/run", s.handleRunEval).Methods(http.MethodPost)
+	s.router.HandleFunc("/apps/{appName}/eval_results/{evalResultId}", s.handleGetEvalResultLegacy).Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/eval-results/{evalResultId}", s.handleGetEvalResult).Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/eval_results", s.handleListEvalResultsLegacy).Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/eval-results", s.handleListEvalResults).Methods(http.MethodGet)
+	s.router.HandleFunc("/apps/{appName}/metrics-info", s.handleListMetricsInfo).Methods(http.MethodGet)
+
 	// Debug APIs
 	s.router.HandleFunc("/debug/trace/{event_id}",
 		s.handleEventTrace).Methods(http.MethodGet)
@@ -245,6 +340,11 @@ func (s *Server) registerRoutes() {
 	}
 	s.router.HandleFunc("/run", preflight).Methods(http.MethodOptions)
 	s.router.HandleFunc("/run_sse", preflight).Methods(http.MethodOptions)
+	s.router.HandleFunc("/apps/{appName}/eval-sets", preflight).Methods(http.MethodOptions)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}", preflight).Methods(http.MethodOptions)
+	s.router.HandleFunc("/apps/{appName}/eval-sets/{evalSetId}/add-session", preflight).Methods(http.MethodOptions)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}/add_session", preflight).Methods(http.MethodOptions)
+	s.router.HandleFunc("/apps/{appName}/eval_sets/{evalSetId}/run_eval", preflight).Methods(http.MethodOptions)
 }
 
 // ---- Handlers -----------------------------------------------------------
@@ -555,6 +655,513 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Infof("handleRunSSE finished for session %s", req.SessionID)
+}
+
+// handleCreateEvalSet creates an eval set.
+func (s *Server) handleCreateEvalSet(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleCreateEvalSet called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	var req schema.CreateEvalSetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+	evalset, err := s.evalSetManager.Create(r.Context(), appName, req.EvalSet.EvalSetID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.writeJSON(w, evalset)
+}
+
+// handleCreateEvalSetLegacy creates an eval set.
+func (s *Server) handleCreateEvalSetLegacy(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleCreateEvalSetLegacy called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalSetID := vars["evalSetId"]
+	evalset, err := s.evalSetManager.Create(r.Context(), appName, evalSetID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.writeJSON(w, evalset)
+}
+
+// handleListEvalSetsLegacy lists all eval sets.
+func (s *Server) handleListEvalSetsLegacy(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleListEvalSets called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	ids, err := s.evalSetManager.List(r.Context(), appName)
+	if err != nil {
+		ids = []string{}
+	}
+	s.writeJSON(w, ids)
+}
+
+// handleListEvalSets lists all eval sets.
+func (s *Server) handleListEvalSets(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleListEvalSets called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	ids, err := s.evalSetManager.List(r.Context(), appName)
+	if err != nil {
+		ids = []string{}
+	}
+	s.writeJSON(w, &schema.ListEvalSetsResponse{EvalSetIds: ids})
+}
+
+// handleAddSessionToEvalSet adds a session to an eval set.
+func (s *Server) handleAddSessionToEvalSet(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleAddSessionToEvalSet called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalSetID := vars["evalSetId"]
+
+	var req schema.AddSessionToEvalSetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	// Fetch session.
+	sess, err := s.sessionSvc.GetSession(r.Context(), session.Key{AppName: appName, UserID: req.UserId, SessionID: req.SessionId})
+	if err != nil || sess == nil {
+		http.Error(w, "Session not found.", http.StatusBadRequest)
+		return
+	}
+	// Convert to eval invocations.
+	invocations := s.convertSessionToEvalInvocations(sess)
+	initialState := map[string]any{}
+	newCase := &evalset.EvalCase{
+		EvalID:            req.EvalId,
+		Conversation:      invocations,
+		SessionInput:      &evalset.SessionInput{AppName: appName, UserID: req.UserId, State: initialState},
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
+	}
+	if err := s.evalSetManager.AddCase(r.Context(), appName, evalSetID, newCase); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleListEvalsInSet lists all eval cases in an eval set.
+func (s *Server) handleListEvalsInSet(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleListEvalsInSet called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalSetID := vars["evalSetId"]
+
+	evalSet, err := s.evalSetManager.Get(r.Context(), appName, evalSetID)
+	if err != nil || evalSet == nil {
+		http.Error(w, fmt.Sprintf("Eval set `%s` not found.", evalSetID), http.StatusBadRequest)
+		return
+	}
+	ids := make([]string, 0, len(evalSet.EvalCases))
+	for _, c := range evalSet.EvalCases {
+		ids = append(ids, c.EvalID)
+	}
+	sort.Strings(ids)
+	s.writeJSON(w, ids)
+}
+
+// handleGetEvalCase gets a single eval case.
+func (s *Server) handleGetEvalCase(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleGetEvalCase called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalSetID := vars["evalSetId"]
+	evalCaseID := vars["evalCaseId"]
+
+	evalCase, err := s.evalSetManager.GetCase(r.Context(), appName, evalSetID, evalCaseID)
+	if err != nil || evalCase == nil {
+		http.Error(w, fmt.Sprintf("Eval set `%s` or Eval `%s` not found.", evalSetID, evalCaseID), http.StatusNotFound)
+		return
+	}
+	s.writeJSON(w, evalCase)
+}
+
+// handleUpdateEvalCase updates a stored eval case.
+func (s *Server) handleUpdateEvalCase(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleUpdateEvalCase called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalSetID := vars["evalSetId"]
+	evalCaseID := vars["evalCaseId"]
+
+	var evalCase evalset.EvalCase
+	if err := json.NewDecoder(r.Body).Decode(&evalCase); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	if evalCase.EvalID != "" && evalCase.EvalID != evalCaseID {
+		http.Error(w, "Eval id in payload must match path parameter.", http.StatusBadRequest)
+		return
+	}
+	evalCase.EvalID = evalCaseID
+	if err := s.evalSetManager.UpdateCase(r.Context(), appName, evalSetID, &evalCase); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleDeleteEvalCase deletes an eval case.
+func (s *Server) handleDeleteEvalCase(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleDeleteEvalCase called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalSetID := vars["evalSetId"]
+	evalCaseID := vars["evalCaseId"]
+	if err := s.evalSetManager.DeleteCase(r.Context(), appName, evalSetID, evalCaseID); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleRunEvalLegacy runs an eval given the details in the eval request.
+func (s *Server) handleRunEvalLegacy(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleRunEvalLegacy called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalSetID := vars["evalSetId"]
+
+	var req schema.RunEvalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	caseIDs := req.EvalCaseIds
+	metricConfigs := req.EvalMetrics
+
+	runner, err := s.getRunner(appName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	serviceOpts := []service.Option{
+		service.WithEvalSetManager(s.evalSetManager),
+		service.WithEvalResultManager(s.evalResultManager),
+		service.WithRegistry(s.metricRegistry),
+	}
+	evalService, err := evalservice.New(runner, serviceOpts...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	inferenceRequest := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID, EvalCaseIDs: caseIDs}
+	inferenceResults, err := evalService.Inference(r.Context(), inferenceRequest)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	metrics, err := s.resolveEvalMetrics(r.Context(), appName, evalSetID, metricConfigs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	evaluateRequest := &service.EvaluateRequest{AppName: appName, EvalSetID: evalSetID, InferenceResults: inferenceResults, EvaluateConfig: &service.EvaluateConfig{EvalMetrics: metrics}}
+	evalSetResult, err := evalService.Evaluate(r.Context(), evaluateRequest)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	runEvalResults := make([]*schema.RunEvalResult, 0, len(evalSetResult.EvalCaseResults))
+	for _, result := range evalSetResult.EvalCaseResults {
+		runEvalResults = append(runEvalResults, &schema.RunEvalResult{
+			EvalSetFile:                   evalSetID,
+			EvalSetId:                     evalSetID,
+			EvalId:                        result.EvalID,
+			FinalEvalStatus:               int(result.FinalEvalStatus),
+			OverallEvalMetricResults:      result.OverallEvalMetricResults,
+			EvalMetricResultPerInvocation: result.EvalMetricResultPerInvocation,
+			UserId:                        result.UserID,
+			SessionId:                     result.SessionID,
+		})
+	}
+	s.writeJSON(w, runEvalResults)
+}
+
+// handleRunEval runs an eval given the details in the eval request.
+func (s *Server) handleRunEval(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleRunEval called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalSetID := vars["evalSetId"]
+
+	var req schema.RunEvalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	caseIDs := req.EvalCaseIds
+	metricConfigs := req.EvalMetrics
+
+	runner, err := s.getRunner(appName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	serviceOpts := []service.Option{
+		service.WithEvalSetManager(s.evalSetManager),
+		service.WithEvalResultManager(s.evalResultManager),
+		service.WithRegistry(s.metricRegistry),
+	}
+	evalService, err := evalservice.New(runner, serviceOpts...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	inferenceRequest := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID, EvalCaseIDs: caseIDs}
+	inferenceResults, err := evalService.Inference(r.Context(), inferenceRequest)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	metrics, err := s.resolveEvalMetrics(r.Context(), appName, evalSetID, metricConfigs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	evaluateRequest := &service.EvaluateRequest{AppName: appName, EvalSetID: evalSetID, InferenceResults: inferenceResults, EvaluateConfig: &service.EvaluateConfig{EvalMetrics: metrics}}
+	evalSetResult, err := evalService.Evaluate(r.Context(), evaluateRequest)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	runEvalResults := make([]*schema.RunEvalResult, 0, len(evalSetResult.EvalCaseResults))
+	for _, result := range evalSetResult.EvalCaseResults {
+		runEvalResults = append(runEvalResults, &schema.RunEvalResult{
+			EvalSetFile:                   evalSetID,
+			EvalSetId:                     evalSetID,
+			EvalId:                        result.EvalID,
+			FinalEvalStatus:               int(result.FinalEvalStatus),
+			OverallEvalMetricResults:      result.OverallEvalMetricResults,
+			EvalMetricResultPerInvocation: result.EvalMetricResultPerInvocation,
+			UserId:                        result.UserID,
+			SessionId:                     result.SessionID,
+		})
+	}
+	s.writeJSON(w, &schema.RunEvalResponse{RunEvalResults: runEvalResults})
+}
+
+// handleGetEvalResultLegacy gets a full eval set result.
+func (s *Server) handleGetEvalResultLegacy(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleGetEvalResultLegacy called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalResultID := vars["evalResultId"]
+
+	evalResult, err := s.evalResultManager.Get(r.Context(), appName, evalResultID)
+	if err != nil || evalResult == nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	s.writeJSON(w, evalResult)
+}
+
+// handleGetEvalResult gets a full eval set result.
+func (s *Server) handleGetEvalResult(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleGetEvalResult called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	evalResultID := vars["evalResultId"]
+
+	evalResult, err := s.evalResultManager.Get(r.Context(), appName, evalResultID)
+	if err != nil || evalResult == nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	s.writeJSON(w, evalResult)
+}
+
+// handleListEvalResultsLegacy lists all eval result IDs for an app.
+func (s *Server) handleListEvalResultsLegacy(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleListEvalResults called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	ids, err := s.evalResultManager.List(r.Context(), appName)
+	if err != nil {
+		ids = []string{}
+	}
+	s.writeJSON(w, ids)
+}
+
+// handleListEvalResults lists all eval results for an app.
+func (s *Server) handleListEvalResults(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleListEvalResults called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	appName := vars["appName"]
+	ids, err := s.evalResultManager.List(r.Context(), appName)
+	if err != nil {
+		ids = []string{}
+	}
+	s.writeJSON(w, &schema.ListEvalResultsResponse{EvalResultIds: ids})
+}
+
+// handleListMetricsInfo lists metadata for the registered evaluation metrics.
+func (s *Server) handleListMetricsInfo(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleListMetricsInfo called: path=%s", r.URL.Path)
+	response := &schema.ListMetricsInfoResponse{MetricsInfo: s.buildMetricInfos()}
+	s.writeJSON(w, response)
+}
+
+// buildMetricInfos collects metadata for the current evaluator registry.
+func (s *Server) buildMetricInfos() []*schema.MetricInfo {
+	if s.metricRegistry == nil {
+		return []*schema.MetricInfo{}
+	}
+	names := s.metricRegistry.List()
+	infos := make([]*schema.MetricInfo, 0, len(names))
+	for _, name := range names {
+		evaluator, err := s.metricRegistry.Get(name)
+		if err != nil {
+			log.Errorf("get evaluator %s: %v", name, err)
+			continue
+		}
+		info := &schema.MetricInfo{
+			MetricName:  evaluator.Name(),
+			Description: evaluator.Description(),
+			MetricValueInfo: &schema.MetricValueInfo{
+				Interval: &schema.MetricInterval{
+					MinValue:  0,
+					OpenAtMin: false,
+					MaxValue:  1,
+					OpenAtMax: false,
+				},
+			},
+		}
+		infos = append(infos, info)
+	}
+	return infos
+}
+
+// resolveEvalMetrics returns the metric configuration for a run, optionally
+// persisting values via the configured metric manager.
+func (s *Server) resolveEvalMetrics(ctx context.Context, appName, evalSetID string,
+	configs []metric.EvalMetric) ([]*metric.EvalMetric, error) {
+	if len(configs) > 0 {
+		metrics := make([]*metric.EvalMetric, 0, len(configs))
+		for _, cfg := range configs {
+			metricCopy := cfg
+			metrics = append(metrics, &metricCopy)
+			if s.metricManager == nil {
+				continue
+			}
+			if err := s.metricManager.Update(ctx, appName, evalSetID, &metricCopy); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					if err := s.metricManager.Add(ctx, appName, evalSetID, &metricCopy); err != nil {
+						return nil, fmt.Errorf("store metric %s.%s.%s: %w", appName, evalSetID,
+							metricCopy.MetricName, err)
+					}
+					continue
+				}
+				return nil, fmt.Errorf("store metric %s.%s.%s: %w", appName, evalSetID,
+					metricCopy.MetricName, err)
+			}
+		}
+		return metrics, nil
+	}
+	if s.metricManager == nil {
+		return nil, errors.New("eval metrics not provided")
+	}
+	names, err := s.metricManager.List(ctx, appName, evalSetID)
+	if err != nil {
+		return nil, fmt.Errorf("list metrics for %s.%s: %w", appName, evalSetID, err)
+	}
+	if len(names) == 0 {
+		return nil, errors.New("no eval metrics configured for this eval set")
+	}
+	metrics := make([]*metric.EvalMetric, 0, len(names))
+	for _, name := range names {
+		m, err := s.metricManager.Get(ctx, appName, evalSetID, name)
+		if err != nil {
+			return nil, fmt.Errorf("get metric %s for %s.%s: %w", name, appName, evalSetID, err)
+		}
+		metrics = append(metrics, m)
+	}
+	return metrics, nil
+}
+
+// convertSessionToEvalInvocations builds eval invocations from a session's events.
+func (s *Server) convertSessionToEvalInvocations(sess *session.Session) []*evalset.Invocation {
+	var invocations []*evalset.Invocation
+	if sess == nil {
+		return invocations
+	}
+	events := sess.GetEvents()
+	if len(events) == 0 {
+		return invocations
+	}
+	var cur *evalset.Invocation
+	for _, e := range events {
+		if e.Response == nil || len(e.Response.Choices) == 0 {
+			continue
+		}
+		// Start a new invocation on user message.
+		msg := e.Response.Choices[0].Message
+		if msg.Role == model.RoleUser {
+			// Flush previous.
+			if cur != nil {
+				invocations = append(invocations, cur)
+			}
+			cur = &evalset.Invocation{
+				InvocationID: e.InvocationID,
+				UserContent: &genai.Content{
+					Role:  string(model.RoleUser),
+					Parts: []*genai.Part{{Text: msg.Content}},
+				},
+				CreationTimestamp: &epochtime.EpochTime{Time: e.Timestamp},
+				IntermediateData:  &evalset.IntermediateData{},
+			}
+			continue
+		}
+		// If this is a final response, set finalResponse.
+		if e.IsFinalResponse() && cur != nil {
+			if msg.Content != "" {
+				cur.FinalResponse = &genai.Content{Role: string(msg.Role), Parts: []*genai.Part{{Text: msg.Content}}}
+			}
+			continue
+		}
+		// Capture tool calls as tool uses.
+		if e.IsToolCallResponse() && cur != nil {
+			for _, tc := range msg.ToolCalls {
+				if use := convertToolCallToFunctionCall(&tc); use != nil {
+					cur.IntermediateData.ToolUses = append(cur.IntermediateData.ToolUses, use)
+				}
+			}
+		}
+	}
+	if cur != nil {
+		invocations = append(invocations, cur)
+	}
+	return invocations
+}
+
+// convertToolCallToFunctionCall converts model.ToolCall to genai.FunctionCall.
+func convertToolCallToFunctionCall(tc *model.ToolCall) *genai.FunctionCall {
+	if tc == nil || tc.Function.Name == "" {
+		return nil
+	}
+	var args map[string]any
+	if len(tc.Function.Arguments) > 0 {
+		if err := json.Unmarshal(tc.Function.Arguments, &args); err != nil {
+			args = map[string]any{"raw": string(tc.Function.Arguments)}
+		}
+	}
+	return &genai.FunctionCall{ID: tc.ID, Name: tc.Function.Name, Args: args}
 }
 
 // convertSessionToADKFormat converts an internal session object to the

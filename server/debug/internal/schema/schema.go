@@ -12,6 +12,12 @@
 // packages. They only exist to facilitate request/response marshalling.
 package schema
 
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+)
+
 // ADKSession mirrors the structure expected by ADK Web UI for a session.
 // Field names follow the camel-case convention required by the UI.
 type ADKSession struct {
@@ -86,4 +92,74 @@ type AgentRunRequest struct {
 // TraceLLMRequest represents a trace request for LLM operations.
 type TraceLLMRequest struct {
 	Contents []Content `json:"contents"`
+}
+
+// ListEvalSetsResponse wraps eval set IDs for object-style endpoints.
+type ListEvalSetsResponse struct {
+	EvalSetIds []string `json:"evalSetIds"`
+}
+
+// CreateEvalSetRequest is the request to create an eval set by JSON body.
+type CreateEvalSetRequest struct {
+	EvalSet evalset.EvalSet `json:"evalSet"`
+}
+
+// AddSessionToEvalSetRequest is the request to add a session as an eval case.
+type AddSessionToEvalSetRequest struct {
+	EvalId    string `json:"evalId"`
+	SessionId string `json:"sessionId"`
+	UserId    string `json:"userId"`
+}
+
+// RunEvalRequest is the request to run evaluation for an eval set.
+type RunEvalRequest struct {
+	EvalCaseIds []string            `json:"evalCaseIds"`
+	EvalMetrics []metric.EvalMetric `json:"evalMetrics"`
+}
+
+// RunEvalResult is a per-case result for run_eval endpoints.
+type RunEvalResult struct {
+	EvalSetFile                   string                                      `json:"evalSetFile,omitempty"`
+	EvalSetId                     string                                      `json:"evalSetId"`
+	EvalId                        string                                      `json:"evalId"`
+	FinalEvalStatus               int                                         `json:"finalEvalStatus"`
+	OverallEvalMetricResults      []*evalresult.EvalMetricResult              `json:"overallEvalMetricResults"`
+	EvalMetricResultPerInvocation []*evalresult.EvalMetricResultPerInvocation `json:"evalMetricResultPerInvocation"`
+	UserId                        string                                      `json:"userId"`
+	SessionId                     string                                      `json:"sessionId"`
+}
+
+// RunEvalResponse wraps run eval results for object-style endpoints.
+type RunEvalResponse struct {
+	RunEvalResults []*RunEvalResult `json:"runEvalResults"`
+}
+
+// ListEvalResultsResponse wraps eval result IDs for object-style endpoints.
+type ListEvalResultsResponse struct {
+	EvalResultIds []string `json:"evalResultIds"`
+}
+
+// MetricInterval describes a numeric interval allowed for metric values.
+type MetricInterval struct {
+	MinValue  float64 `json:"minValue"`
+	OpenAtMin bool    `json:"openAtMin"`
+	MaxValue  float64 `json:"maxValue"`
+	OpenAtMax bool    `json:"openAtMax"`
+}
+
+// MetricValueInfo provides metadata about the metric value type.
+type MetricValueInfo struct {
+	Interval *MetricInterval `json:"interval,omitempty"`
+}
+
+// MetricInfo describes a registered metric.
+type MetricInfo struct {
+	MetricName      string           `json:"metricName"`
+	Description     string           `json:"description,omitempty"`
+	MetricValueInfo *MetricValueInfo `json:"metricValueInfo,omitempty"`
+}
+
+// ListMetricsInfoResponse wraps metric metadata for object-style responses.
+type ListMetricsInfoResponse struct {
+	MetricsInfo []*MetricInfo `json:"metricsInfo"`
 }
