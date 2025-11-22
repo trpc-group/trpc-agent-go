@@ -1,0 +1,616 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package openai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// mockAgent is a simple mock agent for testing.
+type mockAgent struct {
+	name        string
+	description string
+	response    string
+	streaming   bool
+}
+
+func (m *mockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: m.description,
+	}
+}
+
+func (m *mockAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *mockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *mockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	if m.streaming {
+		// Send streaming events
+		go func() {
+			defer close(ch)
+			words := []string{"Hello", " ", "world", "!"}
+			for _, word := range words {
+				select {
+				case <-ctx.Done():
+					return
+				case ch <- &event.Event{
+					ID: "test-event-id",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Delta: model.Message{
+									Role:    model.RoleAssistant,
+									Content: word,
+								},
+							},
+						},
+						Created: time.Now().Unix(),
+					},
+				}:
+				}
+			}
+			// Send final event
+			finishReason := "stop"
+			ch <- &event.Event{
+				ID: "test-event-id-final",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{
+								Role:    model.RoleAssistant,
+								Content: "",
+							},
+							FinishReason: &finishReason,
+						},
+					},
+					Done:    true,
+					Created: time.Now().Unix(),
+					Usage: &model.Usage{
+						PromptTokens:     10,
+						CompletionTokens: 5,
+						TotalTokens:      15,
+					},
+				},
+			}
+		}()
+	} else {
+		// Send non-streaming event
+		finishReason := "stop"
+		ch <- &event.Event{
+			ID: "test-event-id",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: m.response,
+						},
+						FinishReason: &finishReason,
+					},
+				},
+				Done:    true,
+				Created: time.Now().Unix(),
+				Usage: &model.Usage{
+					PromptTokens:     10,
+					CompletionTokens: 5,
+					TotalTokens:      15,
+				},
+			},
+		}
+		close(ch)
+	}
+	return ch, nil
+}
+
+// mockRunner is a mock runner for testing.
+type mockRunner struct {
+	events chan *event.Event
+	err    error
+}
+
+func (m *mockRunner) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.events, nil
+}
+
+func (m *mockRunner) Close() error {
+	if m.events != nil {
+		close(m.events)
+	}
+	return nil
+}
+
+func TestNew(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      []Option
+		wantErr   bool
+		errMsg    string
+		checkFunc func(t *testing.T, s *Server)
+	}{
+		{
+			name: "valid with agent",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent", description: "test"}),
+			},
+			wantErr: false,
+			checkFunc: func(t *testing.T, s *Server) {
+				assert.NotNil(t, s)
+				assert.Equal(t, defaultBasePath, s.basePath)
+				assert.Equal(t, defaultModelName, s.modelName)
+				assert.NotNil(t, s.handler)
+			},
+		},
+		{
+			name: "valid with runner",
+			opts: []Option{
+				WithRunner(&mockRunner{events: make(chan *event.Event)}),
+			},
+			wantErr: false,
+			checkFunc: func(t *testing.T, s *Server) {
+				assert.NotNil(t, s)
+				assert.NotNil(t, s.runner)
+			},
+		},
+		{
+			name: "with custom base path",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithBasePath("/api/v1"),
+			},
+			wantErr: false,
+			checkFunc: func(t *testing.T, s *Server) {
+				assert.Equal(t, "/api/v1", s.basePath)
+			},
+		},
+		{
+			name: "with custom model name",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithModelName("gpt-4"),
+			},
+			wantErr: false,
+			checkFunc: func(t *testing.T, s *Server) {
+				assert.Equal(t, "gpt-4", s.modelName)
+			},
+		},
+		{
+			name: "with custom session service",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithSessionService(inmemory.NewSessionService()),
+			},
+			wantErr: false,
+			checkFunc: func(t *testing.T, s *Server) {
+				assert.NotNil(t, s.sessionService)
+			},
+		},
+		{
+			name:    "missing agent and runner",
+			opts:    []Option{},
+			wantErr: true,
+			errMsg:  "either agent or runner must be provided",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := New(tt.opts...)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				assert.Nil(t, s)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, s)
+				if tt.checkFunc != nil {
+					tt.checkFunc(t, s)
+				}
+			}
+		})
+	}
+}
+
+func TestServer_Handler(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	handler := s.Handler()
+	assert.NotNil(t, handler)
+}
+
+func TestServer_Close(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupServer func() *Server
+		checkClose  func(t *testing.T, s *Server)
+	}{
+		{
+			name: "close server with owned runner",
+			setupServer: func() *Server {
+				s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+				require.NoError(t, err)
+				return s
+			},
+			checkClose: func(t *testing.T, s *Server) {
+				err := s.Close()
+				assert.NoError(t, err)
+				// Close again should be safe.
+				err = s.Close()
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name: "close server with provided runner",
+			setupServer: func() *Server {
+				mockRunner := &mockRunner{events: make(chan *event.Event)}
+				s, err := New(WithRunner(mockRunner))
+				require.NoError(t, err)
+				return s
+			},
+			checkClose: func(t *testing.T, s *Server) {
+				// Server should not close runner provided by user.
+				err := s.Close()
+				assert.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := tt.setupServer()
+			require.NotNil(t, s)
+			tt.checkClose(t, s)
+		})
+	}
+}
+
+func TestServer_handleCORS(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodOptions, "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+
+	s.handleCORS(w, req)
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, "*", w.Header().Get(headerAccessControlOrigin))
+	assert.Equal(t, http.MethodPost, w.Header().Get(headerAccessControlMethods))
+}
+
+func TestServer_handleChatCompletions_MethodNotAllowed(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+	assert.Equal(t, http.MethodPost, w.Header().Get(headerAllow))
+}
+
+func TestServer_handleChatCompletions_InvalidJSON(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte("invalid json")))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, contentTypeJSON, w.Header().Get(headerContentType))
+
+	var errorResp openAIError
+	err = json.NewDecoder(w.Body).Decode(&errorResp)
+	require.NoError(t, err)
+	assert.Equal(t, errorTypeInvalidRequest, errorResp.Error.Type)
+}
+
+func TestServer_handleNonStreaming(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{
+		name:      "test-agent",
+		response:  "Hello, world!",
+		streaming: false,
+	}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, contentTypeJSON, w.Header().Get(headerContentType))
+
+	var response openAIResponse
+	err = json.NewDecoder(w.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, objectChatCompletion, response.Object)
+	assert.NotEmpty(t, response.ID)
+	assert.Len(t, response.Choices, 1)
+	assert.Equal(t, "Hello, world!", response.Choices[0].Message.Content)
+	assert.NotNil(t, response.Usage)
+}
+
+func TestServer_handleNonStreaming_EmptyMessages(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model:    "gpt-3.5-turbo",
+		Messages: []openAIMessage{},
+		Stream:   false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestServer_handleStreaming(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{
+		name:      "test-agent",
+		streaming: true,
+	}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, contentTypeEventStream, w.Header().Get(headerContentType))
+	assert.Equal(t, cacheControlNoCache, w.Header().Get(headerCacheControl))
+	assert.Equal(t, connectionKeepAlive, w.Header().Get(headerConnection))
+
+	body := w.Body.String()
+	assert.Contains(t, body, sseDataPrefix)
+	assert.Contains(t, body, sseDoneMarker)
+}
+
+func TestServer_handleStreaming_NoFlusher(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := &mockResponseWriter{ResponseWriter: httptest.NewRecorder()}
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestServer_writeJSON(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	data := map[string]string{"message": "test"}
+
+	s.writeJSON(w, data)
+
+	assert.Equal(t, contentTypeJSON, w.Header().Get(headerContentType))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var result map[string]string
+	err = json.NewDecoder(w.Body).Decode(&result)
+	require.NoError(t, err)
+	assert.Equal(t, "test", result["message"])
+}
+
+func TestServer_writeError(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	testErr := errors.New("test error")
+
+	s.writeError(w, testErr, errorTypeInvalidRequest, http.StatusBadRequest)
+
+	assert.Equal(t, contentTypeJSON, w.Header().Get(headerContentType))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var errorResp openAIError
+	err = json.NewDecoder(w.Body).Decode(&errorResp)
+	require.NoError(t, err)
+	assert.Equal(t, errorTypeInvalidRequest, errorResp.Error.Type)
+	assert.Equal(t, "test error", errorResp.Error.Message)
+}
+
+func TestServer_shouldSendChunk(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		chunk *openAIChunk
+		want  bool
+	}{
+		{
+			name: "chunk with content",
+			chunk: &openAIChunk{
+				Choices: []openAIChunkChoice{
+					{
+						Delta: openAIMessage{
+							Content: "Hello",
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "chunk with finish reason",
+			chunk: &openAIChunk{
+				Choices: []openAIChunkChoice{
+					{
+						FinishReason: stringPtr("stop"),
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "empty chunk",
+			chunk: &openAIChunk{
+				Choices: []openAIChunkChoice{
+					{
+						Delta: openAIMessage{
+							Role:    "", // Explicitly empty
+							Content: "",
+						},
+						FinishReason: nil,
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "no choices",
+			chunk: &openAIChunk{
+				Choices: []openAIChunkChoice{},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := s.shouldSendChunk(tt.chunk)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}
+
+func TestServer_writeChunk(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	flusher := &mockFlusher{ResponseWriter: w}
+	chunk := &openAIChunk{
+		ID:      "test-id",
+		Object:  objectChatCompletionChunk,
+		Created: time.Now().Unix(),
+		Model:   "gpt-3.5-turbo",
+		Choices: []openAIChunkChoice{
+			{
+				Delta: openAIMessage{
+					Content: "Hello",
+				},
+			},
+		},
+	}
+
+	result := s.writeChunk(w, flusher, chunk)
+
+	assert.True(t, result)
+	assert.True(t, flusher.flushed)
+	body := w.Body.String()
+	assert.Contains(t, body, sseDataPrefix)
+	assert.Contains(t, body, "Hello")
+}
+
+// mockResponseWriter is a mock http.ResponseWriter that doesn't implement http.Flusher.
+type mockResponseWriter struct {
+	http.ResponseWriter
+	Code int
+}
+
+func (m *mockResponseWriter) WriteHeader(code int) {
+	m.Code = code
+	m.ResponseWriter.WriteHeader(code)
+}
+
+// mockFlusher is a mock http.Flusher for testing.
+type mockFlusher struct {
+	http.ResponseWriter
+	flushed bool
+}
+
+func (m *mockFlusher) Flush() {
+	m.flushed = true
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
