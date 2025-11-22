@@ -34,6 +34,7 @@ func TestOptionsSetters(t *testing.T) {
 	WithHTTPClientName("client")(opts)
 	WithHTTPClientTransport(http.DefaultTransport)(opts)
 	WithChannelBufferSize(128)(opts)
+	WithHeaders(map[string]string{"X-Trace": "id"})(opts)
 	WithEnableTokenTailoring(true)(opts)
 	WithMaxInputTokens(512)(opts)
 	WithTokenCounter(counter)(opts)
@@ -45,6 +46,7 @@ func TestOptionsSetters(t *testing.T) {
 	assert.Equal(t, http.DefaultTransport, opts.HTTPClientTransport)
 	assert.NotNil(t, opts.ChannelBufferSize)
 	assert.Equal(t, 128, *opts.ChannelBufferSize)
+	assert.Equal(t, "id", opts.Headers["X-Trace"])
 	assert.NotNil(t, opts.EnableTokenTailoring)
 	assert.True(t, *opts.EnableTokenTailoring)
 	assert.NotNil(t, opts.MaxInputTokens)
@@ -64,6 +66,19 @@ func TestWithExtraFieldsMergesAndCopies(t *testing.T) {
 	WithExtraFields(map[string]any{"tenant": "internal"})(opts)
 	assert.Equal(t, "internal", opts.ExtraFields["tenant"])
 	assert.Equal(t, 2, len(opts.ExtraFields))
+}
+
+func TestWithHeadersMergesAndCopies(t *testing.T) {
+	opts := &Options{}
+	source := map[string]string{"X-Trace": "id"}
+	WithHeaders(source)(opts)
+	source["X-Trace"] = "changed"
+
+	assert.Equal(t, "id", opts.Headers["X-Trace"])
+
+	WithHeaders(map[string]string{"User-Agent": "agent"})(opts)
+	assert.Equal(t, "agent", opts.Headers["User-Agent"])
+	assert.Equal(t, 2, len(opts.Headers))
 }
 
 func TestWithCallbacksAllocatesAndOverwrites(t *testing.T) {

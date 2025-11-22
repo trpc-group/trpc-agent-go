@@ -448,6 +448,18 @@ func WithOpenAIOptions(openaiOpts ...openaiopt.RequestOption) Option {
 	}
 }
 
+// WithHeaders appends static HTTP headers to all OpenAI requests.
+func WithHeaders(headers map[string]string) Option {
+	return func(opts *options) {
+		if len(headers) == 0 {
+			return
+		}
+		for k, v := range headers {
+			opts.OpenAIOptions = append(opts.OpenAIOptions, openaiopt.WithHeader(k, v))
+		}
+	}
+}
+
 // WithExtraFields sets extra fields to be added to the HTTP request body.
 // These fields will be included in every chat completion request.
 // E.g.:

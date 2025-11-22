@@ -30,6 +30,7 @@ type Options struct {
 	HTTPClientTransport  http.RoundTripper           // HTTPClientTransport allows customizing the HTTP transport.
 	Callbacks            *Callbacks                  // Callbacks captures provider-specific callback hooks.
 	ChannelBufferSize    *int                        // ChannelBufferSize is the response channel buffer size.
+	Headers              map[string]string           // Headers are appended to outbound provider requests.
 	ExtraFields          map[string]any              // ExtraFields are serialized into provider-specific request payloads.
 	EnableTokenTailoring *bool                       // EnableTokenTailoring toggles automatic token tailoring.
 	MaxInputTokens       *int                        // MaxInputTokens sets the maximum input tokens for token tailoring.
@@ -85,6 +86,18 @@ func WithHTTPClientName(name string) Option {
 func WithHTTPClientTransport(transport http.RoundTripper) Option {
 	return func(o *Options) {
 		o.HTTPClientTransport = transport
+	}
+}
+
+// WithHeaders appends static HTTP headers for supported providers.
+func WithHeaders(headers map[string]string) Option {
+	return func(o *Options) {
+		if o.Headers == nil {
+			o.Headers = make(map[string]string)
+		}
+		for k, v := range headers {
+			o.Headers[k] = v
+		}
 	}
 }
 

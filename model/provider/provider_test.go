@@ -11,8 +11,10 @@ package provider
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -139,6 +141,91 @@ func TestAnthropicFactoryAppliesOptions(t *testing.T) {
 	assert.NotNil(t, readInterfaceField(anthropicModel, "chatChunkCallback"))
 	assert.NotNil(t, readInterfaceField(anthropicModel, "chatStreamCompleteCallback"))
 	assert.Equal(t, 1, readSliceLen(anthropicModel, "anthropicRequestOptions"))
+}
+
+func TestOpenAIFactoryWithHeaders(t *testing.T) {
+	var captured http.Header
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		captured = r.Header.Clone()
+		body := `{
+			"id":"chatcmpl-1",
+			"object":"chat.completion",
+			"created":0,
+			"model":"gpt-4o-mini",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+
+	opts := &Options{ModelName: "gpt-4o-mini"}
+	WithAPIKey("test-key")(opts)
+	WithHeaders(map[string]string{
+		"X-Custom": "value",
+		"X-Tenant": "t1",
+	})(opts)
+	WithHTTPClientTransport(rt)(opts)
+
+	m, err := openaiProvider(opts)
+	assert.NoError(t, err)
+
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+	})
+	assert.NoError(t, err)
+	resp := <-ch
+	assert.NotNil(t, resp)
+	assert.True(t, resp.Done)
+	assert.Equal(t, "value", captured.Get("X-Custom"))
+	assert.Equal(t, "t1", captured.Get("X-Tenant"))
+	assert.Equal(t, "Bearer test-key", captured.Get("Authorization"))
+}
+
+func TestAnthropicFactoryWithHeaders(t *testing.T) {
+	var captured http.Header
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		captured = r.Header.Clone()
+		body := `{
+			"id":"msg_1",
+			"type":"message",
+			"role":"assistant",
+			"content":[{"type":"text","text":"hello"}],
+			"model":"claude-3-5-sonnet-latest",
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":1,"output_tokens":2}
+		}`
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+
+	opts := &Options{ModelName: "claude-3-5-sonnet-latest"}
+	WithAPIKey("anthropic-key")(opts)
+	WithHeaders(map[string]string{
+		"X-Trace-ID": "trace-1",
+		"X-Tenant":   "buyer",
+	})(opts)
+	WithHTTPClientTransport(rt)(opts)
+
+	m, err := anthropicProvider(opts)
+	assert.NoError(t, err)
+
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	})
+	assert.NoError(t, err)
+	resp := <-ch
+	assert.NotNil(t, resp)
+	assert.True(t, resp.Done)
+	assert.Equal(t, "trace-1", captured.Get("X-Trace-ID"))
+	assert.Equal(t, "buyer", captured.Get("X-Tenant"))
+	assert.Equal(t, "anthropic-key", captured.Get("x-api-key"))
 }
 
 func TestWithOpenAIOptionOverwrites(t *testing.T) {
@@ -319,6 +406,12 @@ func getField(obj any, name string) reflect.Value {
 		panic("field " + name + " not found")
 	}
 	return reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem()
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 type testModel struct{}
