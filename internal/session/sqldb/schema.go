@@ -19,6 +19,9 @@ const (
 	// TableNameSessionEvents is the name of the session events table
 	TableNameSessionEvents = "session_events"
 
+	// TableNameSessionTrackEvents is the name of the session track events table
+	TableNameSessionTrackEvents = "session_track_events"
+
 	// TableNameSessionSummaries is the name of the session summaries table
 	TableNameSessionSummaries = "session_summaries"
 
