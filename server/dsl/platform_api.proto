@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package dsl_platform;
+
+// HTTP / frontend facing API schema for the DSL platform.
+// This file assumes the engine-level DSL types are defined in dsl/engine_dsl.proto
+// and only defines the RPC surface and view-layer workflow wrapper.
+
+import "dsl/engine_dsl.proto";
+
+// ============================================================================
+// Shared messages
+// ============================================================================
+
+message Empty {}
+
+// View-layer workflow used by HTTP APIs and frontends.
+// It wraps the engine-level Workflow nodes with UI information.
+message ViewWorkflow {
+  string version = 1;
+  string name = 2;
+  string description = 3;
+
+  repeated ViewNode nodes = 4;
+  repeated engine_dsl.Edge edges = 5;
+  repeated engine_dsl.ConditionalEdge conditional_edges = 6;
+
+  string entry_point = 7;
+  string finish_point = 8;
+
+  // Arbitrary workflow-level metadata.
+  engine_dsl.StructValue metadata = 9;
+}
+
+message ViewNode {
+  string id = 1;
+  string type = 2;             // UI-only type (e.g., "custom").
+  ViewPosition position = 3;   // UI-only position.
+  ViewNodeData data = 4;       // UI metadata + engine node.
+}
+
+message ViewPosition {
+  double x = 1;
+  double y = 2;
+}
+
+message ViewNodeData {
+  string label = 1;                          // UI-only label.
+  string icon = 2;                           // UI-only icon.
+  engine_dsl.EngineNode engine = 3;          // Engine-level node definition.
+}
+
+// Simple model info placeholder. Actual fields depend on ModelRegistry usage.
+message ModelInfo {
+  string name = 1;
+  string provider = 2;
+  string description = 3;
+}
+
+message ToolInfo {
+  string name = 1;
+  string description = 2;
+  // Optional input schema for the tool, represented as a generic struct.
+  engine_dsl.StructValue input_schema = 3;
+}
+
+message ToolSetInfo {
+  string name = 1;
+}
+
+// ============================================================================
+// Component registry RPCs
+// ============================================================================
+
+message ListComponentsRequest {
+  string category = 1;  // Optional category filter.
+  string search = 2;    // Optional search query.
+}
+
+message ListComponentsResponse {
+  repeated engine_dsl.ComponentMetadata components = 1;
+}
+
+message GetComponentRequest {
+  string name = 1;
+}
+
+// ============================================================================
+// Model / tool registry RPCs
+// ============================================================================
+
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+message ListToolsResponse {
+  repeated ToolInfo tools = 1;
+}
+
+message ListToolSetsResponse {
+  repeated ToolSetInfo toolsets = 1;
+}
+
+// ============================================================================
+// Workflow CRUD RPCs
+// ============================================================================
+
+message ListWorkflowsRequest {
+  int32 page = 1;
+  int32 limit = 2;
+}
+
+message WorkflowResponse {
+  string id = 1;
+  ViewWorkflow workflow = 2;
+  string created_at = 3;
+  string updated_at = 4;
+}
+
+message WorkflowList {
+  repeated WorkflowResponse workflows = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+message CreateWorkflowRequest {
+  ViewWorkflow workflow = 1;
+}
+
+message UpdateWorkflowRequest {
+  string id = 1;
+  ViewWorkflow workflow = 2;
+}
+
+message GetWorkflowRequest {
+  string id = 1;
+}
+
+message DeleteWorkflowRequest {
+  string id = 1;
+}
+
+// ============================================================================
+// Validation / schema RPCs
+// ============================================================================
+
+message ValidateWorkflowRequest {
+  ViewWorkflow workflow = 1;
+}
+
+message ValidationResult {
+  bool valid = 1;
+  repeated ValidationError errors = 2;
+}
+
+message ValidationError {
+  string field = 1;
+  string message = 2;
+}
+
+message WorkflowSchemaRequest {
+  ViewWorkflow workflow = 1;
+}
+
+// Uses engine_dsl.WorkflowSchemaResponse for the payload.
+
+message WorkflowVarsRequest {
+  ViewWorkflow workflow = 1;
+}
+
+// Uses engine_dsl.WorkflowVarsResponse for the payload.
+
+// ============================================================================
+// Execution RPCs
+// ============================================================================
+
+message ExecutionConfig {
+  int32 max_iterations = 1;
+  int32 timeout_seconds = 2;
+}
+
+message ExecuteWorkflowRequest {
+  string id = 1;
+  engine_dsl.StructValue input = 2;
+  ExecutionConfig config = 3;
+}
+
+message ExecutionEvent {
+  string type = 1;
+  string timestamp = 2;
+  string node_id = 3;
+  engine_dsl.StructValue data = 4;
+}
+
+message ExecutionResult {
+  string execution_id = 1;
+  string status = 2;                       // "success" | "error" | "timeout".
+  engine_dsl.StructValue final_state = 3;  // Final workflow state.
+  repeated ExecutionEvent events = 4;      // All events (non-streaming).
+  string error = 5;                        // Optional error message.
+}
+
+// ============================================================================
+// Service definition
+// ============================================================================
+
+service DSLPlatformService {
+  // Component registry
+  rpc ListComponents(ListComponentsRequest) returns (ListComponentsResponse);
+  rpc GetComponent(GetComponentRequest) returns (engine_dsl.ComponentMetadata);
+
+  // Model / tool registry
+  rpc ListModels(Empty) returns (ListModelsResponse);
+  rpc ListTools(Empty) returns (ListToolsResponse);
+  rpc ListToolSets(Empty) returns (ListToolSetsResponse);
+
+  // Workflow CRUD
+  rpc ListWorkflows(ListWorkflowsRequest) returns (WorkflowList);
+  rpc CreateWorkflow(CreateWorkflowRequest) returns (WorkflowResponse);
+  rpc GetWorkflow(GetWorkflowRequest) returns (WorkflowResponse);
+  rpc UpdateWorkflow(UpdateWorkflowRequest) returns (WorkflowResponse);
+  rpc DeleteWorkflow(DeleteWorkflowRequest) returns (Empty);
+
+  // Validation / schema
+  rpc ValidateWorkflow(ValidateWorkflowRequest) returns (ValidationResult);
+  rpc GetWorkflowSchema(WorkflowSchemaRequest) returns (engine_dsl.WorkflowSchemaResponse);
+  rpc GetWorkflowVars(WorkflowVarsRequest) returns (engine_dsl.WorkflowVarsResponse);
+
+  // Execution
+  rpc ExecuteWorkflow(ExecuteWorkflowRequest) returns (ExecutionResult);
+  rpc ExecuteWorkflowStream(ExecuteWorkflowRequest) returns (stream ExecutionEvent);
+}
+

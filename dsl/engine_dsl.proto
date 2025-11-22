@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package engine_dsl;
+
+// Engine DSL core types for the trpc-agent-go DSL engine.
+// This file intentionally does NOT define any HTTP routes. It only captures the
+// data model so that other services (e.g., HTTP layer, frontends) can define
+// their own APIs or transports on top of a consistent schema.
+
+// Workflow represents a complete workflow definition in the engine DSL.
+message Workflow {
+  string version = 1;            // Optional DSL version, e.g. "1.0".
+  string name = 2;               // Workflow name (meta).
+  string description = 3;        // Optional description (meta).
+
+  repeated Node nodes = 4;       // Executable nodes.
+  repeated Edge edges = 5;       // Direct edges.
+  repeated ConditionalEdge conditional_edges = 6; // Conditional routing edges.
+
+  string entry_point = 7;        // ID of starting node.
+  string finish_point = 8;       // Optional finish node ID.
+
+  map<string, Value> metadata = 9; // Optional workflow-level metadata.
+}
+
+// Node represents an executable node in the engine DSL.
+message Node {
+  string id = 1;           // Unique node identifier.
+  EngineNode engine = 2;   // Engine-level node definition.
+}
+
+// EngineNode contains execution semantics for a node.
+message EngineNode {
+  string name = 1;                       // Optional internal name (meta).
+  ComponentRef component = 2;            // Component reference.
+  map<string, Value> config = 3;         // Component-specific configuration.
+  repeated NodeIO inputs = 4;            // Optional explicit input mapping.
+  repeated NodeIO outputs = 5;           // Optional explicit output mapping.
+  string description = 6;                // Optional description (meta).
+}
+
+// ComponentRef references a registered component.
+message ComponentRef {
+  string type = 1;      // "component" or "code".
+  string ref = 2;       // Component name in registry (for type="component").
+  string version = 3;   // Optional component version.
+  CodeConfig code = 4;  // Inline code configuration (only for type="code").
+}
+
+// CodeConfig defines inline code execution configuration.
+message CodeConfig {
+  string language = 1;              // e.g., "python", "javascript".
+  string code = 2;                  // Source code.
+  repeated string inputs = 3;       // Input variable names from state.
+  repeated string outputs = 4;      // Output variable names to write to state.
+}
+
+// Edge represents a direct connection between two nodes.
+message Edge {
+  string id = 1;        // Optional edge identifier (meta).
+  string source = 2;    // Source node ID or "__start__".
+  string target = 3;    // Target node ID or "__end__".
+  string label = 4;     // Optional label (meta).
+}
+
+// ConditionalEdge represents a conditional routing decision.
+message ConditionalEdge {
+  string id = 1;         // Optional identifier (meta).
+  string from = 2;       // Source node ID where condition is evaluated.
+  Condition condition = 3;
+}
+
+// Condition defines the routing logic for conditional edges.
+message Condition {
+  string type = 1;                 // "builtin" | "function" | "tool_routing" | "expression".
+  string expression = 2;           // Optional expression string.
+
+  // Builtin structured condition configuration (when type="builtin").
+  BuiltinCondition builtin = 3;
+
+  // Function-based routing (when type="function").
+  string function = 4;
+
+  // Tool routing configuration (when type="tool_routing").
+  string tools_node = 5;
+  string next = 6;
+
+  // Routes map condition results to target node IDs.
+  map<string, string> routes = 7;
+
+  // Default route if no condition matches.
+  string default_route = 8;
+}
+
+// BuiltinCondition groups multiple rules with a logical operator.
+message BuiltinCondition {
+  repeated ConditionRule conditions = 1;
+  string logical_operator = 2; // "and" | "or", default "and".
+}
+
+// ConditionRule compares a variable from state against a value.
+message ConditionRule {
+  string variable = 1;   // E.g., "output_parsed.classification".
+  string operator = 2;   // E.g., "==", ">", "<", "contains", etc.
+  Value value = 3;       // Right-hand side value.
+}
+
+// NodeIO defines an input or output parameter mapping for a node.
+message NodeIO {
+  string name = 1;
+  string type = 2;       // Historical Go type string (optional).
+  string type_id = 3;    // DSL-level type identifier (optional).
+  string kind = 4;       // "string" | "number" | "boolean" | "object" | "array" | "opaque".
+  map<string, Value> json_schema = 5; // Optional JSON Schema for structured objects.
+  bool required = 6;
+  string description = 7;
+  IOSource source = 8;   // Optional input source mapping.
+  IOTarget target = 9;   // Optional output target mapping.
+  Value default_value = 10;
+  string reducer = 11;   // Optional reducer function name for outputs.
+}
+
+// IOSource specifies where to read input data from.
+message IOSource {
+  string type = 1;   // "state" | "node" | "constant".
+  string field = 2;  // State field name (when type="state").
+  string node = 3;   // Source node ID (when type="node").
+  string output = 4; // Output parameter name from source node (when type="node").
+  Value value = 5;   // Constant value (when type="constant").
+}
+
+// IOTarget specifies where to write output data to.
+message IOTarget {
+  string type = 1;   // "state" | "output".
+  string field = 2;  // State field name (when type="state").
+}
+
+// ComponentMetadata describes a component's interface and capabilities.
+message ComponentMetadata {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  string category = 4;
+  string version = 5;
+  repeated ParameterSchema inputs = 6;
+  repeated ParameterSchema outputs = 7;
+  repeated ParameterSchema config_schema = 8;
+  // Optional engine-agnostic metadata for higher layers (e.g., editors).
+  map<string, Value> meta = 9;
+}
+
+// ParameterSchema defines the schema for an input, output, or config parameter.
+message ParameterSchema {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  string type = 4;        // Go type string, e.g., "string", "int", "[]model.Message".
+  string type_id = 5;     // Logical DSL type identifier, e.g., "string", "graph.messages".
+  string kind = 6;        // "string" | "number" | "boolean" | "object" | "array" | "opaque".
+  bool required = 7;
+  Value default_value = 8;
+  repeated Value enum_values = 9;
+  string placeholder = 10;
+  ValidationRules validation = 11;
+  map<string, Value> json_schema = 12; // Optional JSON Schema when structured.
+}
+
+// ValidationRules defines validation constraints for a parameter.
+message ValidationRules {
+  double min = 1;
+  double max = 2;
+  string pattern = 3;
+}
+
+// Value is a simple tagged union to represent arbitrary JSON values.
+message Value {
+  oneof kind {
+    string string_value = 1;
+    double number_value = 2;
+    bool bool_value = 3;
+    ListValue list_value = 4;
+    StructValue struct_value = 5;
+    NullValue null_value = 6;
+  }
+}
+
+message ListValue {
+  repeated Value values = 1;
+}
+
+message StructValue {
+  map<string, Value> fields = 1;
+}
+
+enum NullValue {
+  NULL_VALUE_UNSPECIFIED = 0;
+}

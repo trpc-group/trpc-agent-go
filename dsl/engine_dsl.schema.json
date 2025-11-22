@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/engine_dsl.schema.json",
+  "title": "Engine DSL Schema",
+  "description": "JSON Schema for the trpc-agent-go engine DSL (Workflow/Node/Edge/etc.).",
+  "type": "object",
+  "$defs": {
+    "Workflow": {
+      "type": "object",
+      "required": ["name", "nodes", "edges", "entry_point"],
+      "properties": {
+        "version": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Node" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Edge" }
+        },
+        "conditional_edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConditionalEdge" }
+        },
+        "entry_point": { "type": "string" },
+        "finish_point": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "Node": {
+      "type": "object",
+      "required": ["id", "component"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "component": { "$ref": "#/$defs/ComponentRef" },
+        "config": {
+          "type": "object",
+          "description": "Component-specific configuration.",
+          "additionalProperties": true
+        },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NodeIO" }
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NodeIO" }
+        },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentRef": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["component", "code"]
+        },
+        "ref": {
+          "type": "string",
+          "description": "Component name for type=\"component\"."
+        },
+        "version": { "type": "string" },
+        "code": { "$ref": "#/$defs/CodeConfig" }
+      },
+      "additionalProperties": false
+    },
+    "CodeConfig": {
+      "type": "object",
+      "required": ["language", "code"],
+      "properties": {
+        "language": { "type": "string" },
+        "code": { "type": "string" },
+        "inputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Edge": {
+      "type": "object",
+      "required": ["source", "target"],
+      "properties": {
+        "id": { "type": "string" },
+        "source": { "type": "string" },
+        "target": { "type": "string" },
+        "label": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ConditionalEdge": {
+      "type": "object",
+      "required": ["from", "condition"],
+      "properties": {
+        "id": { "type": "string" },
+        "from": { "type": "string" },
+        "condition": { "$ref": "#/$defs/Condition" }
+      },
+      "additionalProperties": false
+    },
+    "Condition": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["builtin", "function", "tool_routing", "expression"]
+        },
+        "expression": { "type": "string" },
+        "builtin": { "$ref": "#/$defs/BuiltinCondition" },
+        "function": { "type": "string" },
+        "tools_node": { "type": "string" },
+        "next": { "type": "string" },
+        "routes": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "default": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "BuiltinCondition": {
+      "type": "object",
+      "required": ["conditions"],
+      "properties": {
+        "conditions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConditionRule" }
+        },
+        "logical_operator": {
+          "type": "string",
+          "enum": ["and", "or"],
+          "default": "and"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConditionRule": {
+      "type": "object",
+      "required": ["variable", "operator"],
+      "properties": {
+        "variable": { "type": "string" },
+        "operator": { "type": "string" },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "NodeIO": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "type_id": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["string", "number", "boolean", "object", "array", "opaque"]
+        },
+        "json_schema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "required": { "type": "boolean" },
+        "description": { "type": "string" },
+        "source": { "$ref": "#/$defs/IOSource" },
+        "target": { "$ref": "#/$defs/IOTarget" },
+        "default": {},
+        "reducer": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "IOSource": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["state", "node", "constant"] },
+        "field": { "type": "string" },
+        "node": { "type": "string" },
+        "output": { "type": "string" },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "IOTarget": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["state", "output"] },
+        "field": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentMetadata": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "display_name": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "version": { "type": "string" },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ParameterSchema" }
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ParameterSchema" }
+        },
+        "config_schema": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ParameterSchema" }
+        },
+        "meta": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParameterSchema": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "display_name": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string" },
+        "type_id": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["string", "number", "boolean", "object", "array", "opaque"]
+        },
+        "required": { "type": "boolean" },
+        "default": {},
+        "enum": {
+          "type": "array",
+          "items": {}
+        },
+        "placeholder": { "type": "string" },
+        "json_schema": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "workflow": { "$ref": "#/$defs/Workflow" }
+  }
+}

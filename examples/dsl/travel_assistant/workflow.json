@@ -1,0 +1,116 @@
+{
+  "name": "travel_assistant",
+  "description": "Travel assistant with classifier routing to flight or itinerary agents",
+  "nodes": [
+    {
+      "id": "classifier",
+      "name": "classifier",
+      "component": {
+        "type": "component",
+        "ref": "builtin.llmagent"
+      },
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a travel intent classifier.\nAnalyze the user's request and decide if they are asking about:\n- flight_info: Flight bookings, flight status, airline information, schedules, or prices\n- itinerary: Planning a trip, creating an itinerary, destination suggestions, what to do, number of days, etc.\n\nClassification rules (IMPORTANT):\n- If the user asks to plan a trip, mentions an itinerary, or mentions a number of days (e.g. \"5-day trip\"), ALWAYS classify as \"itinerary\".\n- Only classify as \"flight_info\" when the focus is clearly on one or more specific flights (booking, status, schedule, price).\n- If you are unsure, prefer \"itinerary\".\n\nReturn your decision strictly via the structured_output schema.",
+        "description": "Travel intent classification agent",
+        "structured_output": {
+          "type": "object",
+          "properties": {
+            "classification": {
+              "type": "string",
+              "enum": ["flight_info", "itinerary"],
+              "description": "The classified intent category"
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Confidence score between 0 and 1"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Brief explanation of the classification"
+            }
+          },
+          "required": ["classification", "confidence", "reasoning"]
+        },
+        "temperature": 0.1
+      }
+    },
+    {
+      "id": "flight_agent",
+      "name": "flight_agent",
+      "component": {
+        "type": "component",
+        "ref": "builtin.llmagent"
+      },
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a flight information assistant. Your job is to help users with:\n- Flight bookings and reservations\n- Flight status and schedules\n- Airline information and policies\n- Airport information\n\nYou have access to the following tools:\n- search_flights: Search for available flights between cities\n- check_flight_status: Check real-time flight status\n- duckduckgo_search: Search for airline information, airport details, or travel policies\n\n⚠️ ABSOLUTE TOOL USAGE RULES (MUST FOLLOW, NO EXCEPTIONS):\n1. When the user asks to book a flight between two cities on a specific date (e.g. \"book a flight from Beijing to Shanghai next Monday\"), you MUST call search_flights with the departure city, destination city, and date BEFORE you provide ANY recommendations or natural language answer. You are NOT allowed to simply say \"use Ctrip/Qunar\" without calling search_flights.\n2. When the user asks about the status of a specific flight number (e.g. \"What is the status of flight CA1234?\"), you MUST call check_flight_status with that flight number BEFORE you answer. You are NOT allowed to answer directly based only on prior knowledge.\n3. Whenever search_flights or check_flight_status could reasonably help answer the question, you MUST attempt to call the tool. Only if the tool fails or clearly cannot provide the needed information may you fall back to generic advice.\n4. You MUST NOT give a final natural language answer about flights BEFORE at least one relevant tool call has been made in this conversation. If you find yourself about to answer without any tool call, STOP and instead call the appropriate tool first.\n\nAfter using the tools, summarize the tool results for the user in a clear, concise way. If a tool truly cannot help (for example, no matching flight found), explicitly explain that the tool could not find the requested information and then provide general guidance (such as using airline websites or booking platforms).",
+        "description": "Flight information agent with search tools",
+        "tools": ["search_flights", "check_flight_status", "duckduckgo_search"],
+        "stream": true,
+        "temperature": 0.7,
+        "max_tokens": 800
+      }
+    },
+    {
+      "id": "itinerary_agent",
+      "name": "itinerary_agent",
+      "component": {
+        "type": "component",
+        "ref": "builtin.llmagent"
+      },
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a travel assistant specializing in itinerary planning for multi-day trips.\nYour main goal is to produce a clear, day-by-day schedule.\n\nCapabilities:\n- Creating detailed travel itineraries\n- Suggesting destinations and activities\n- Planning multi-day trips\n- Providing travel tips and recommendations\n\nTool usage protocol (VERY IMPORTANT, MUST FOLLOW):\n1. When the user asks to plan a trip for N days (e.g. \"5-day trip to Japan\"), you MUST:\n   a) First call get_destination_info for the main destination.\n   b) Then call suggest_activities with:\n      - destination = main destination name (e.g. \"Japan\")\n      - days = the number of days requested by the user (e.g. 5)\n      - interests = a short phrase summarising the user's interests (if mentioned).\n2. You are NOT allowed to give the final itinerary before BOTH tools have been called at least once in this conversation.\n3. After get_destination_info returns, if suggest_activities has not been called yet, you MUST call suggest_activities next instead of answering directly.\n4. Do NOT try to invent all activities purely from your own knowledge when suggest_activities is available; always use its activities list as the primary structure.\n\nWhen the user input clearly specifies the destination and number of days (e.g., \"plan a 5-day trip to Japan\"), you MUST treat those as authoritative values. You MUST NOT overwrite them arbitrarily. Later in the conversation you may see other examples or unrelated countries; those are for illustration only.\n\nFinal answer format:\n- Synthesize the tool results into a structured itinerary.\n- Present the trip as a day-by-day plan (Day 1 ... Day N).\n- For each day include time blocks, activity name, short description, and location.\n- Mention key highlights from get_destination_info where relevant.\n\nBe helpful and concrete. Do NOT just give generic advice; always output a concrete day-by-day plan.",
+        "description": "Itinerary planning agent with destination tools",
+        "tools": ["get_destination_info", "suggest_activities"],
+        "stream": true,
+        "temperature": 0.8,
+        "max_tokens": 1200
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_start_classifier",
+      "source": "__start__",
+      "target": "classifier"
+    },
+    {
+      "id": "edge_flight_agent_end",
+      "source": "flight_agent",
+      "target": "__end__"
+    },
+    {
+      "id": "edge_itinerary_agent_end",
+      "source": "itinerary_agent",
+      "target": "__end__"
+    }
+  ],
+  "conditional_edges": [
+    {
+      "id": "route_by_classification",
+      "from": "classifier",
+      "condition": {
+        "type": "builtin",
+        "builtin": {
+          "conditions": [
+            {
+              "variable": "output_parsed.classification",
+              "operator": "==",
+              "value": "flight_info"
+            }
+          ]
+        },
+        "routes": {
+          "true": "flight_agent",
+          "false": "itinerary_agent"
+        }
+      }
+    }
+  ],
+  "entry_point": "classifier",
+  "finish_point": "__end__"
+}

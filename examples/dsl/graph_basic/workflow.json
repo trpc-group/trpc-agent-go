@@ -1,0 +1,136 @@
+{
+  "version": "1.0",
+  "name": "document_processing_workflow",
+  "description": "Document processing workflow with complexity-based routing",
+  "nodes": [
+    {
+      "id": "preprocess",
+      "name": "Preprocess Document",
+      "component": {
+        "type": "component",
+        "ref": "builtin.function"
+      },
+      "config": {
+        "function": "custom.preprocess_document"
+      }
+    },
+    {
+      "id": "analyze",
+      "name": "Analyze Document",
+      "component": {
+        "type": "component",
+        "ref": "builtin.llm"
+      },
+      "config": {
+        "model_name": "deepseek-chat",
+        "tools": [
+          "analyze_complexity"
+        ],
+        "instruction": "You are a document analysis expert. You MUST use the analyze_complexity tool to analyze the provided document.\n\nIMPORTANT: You are REQUIRED to call the analyze_complexity tool with the document text as input. Do not provide your own analysis without using the tool first.\n\nSteps:\n1. Call the analyze_complexity tool with the document text\n2. Based on the tool's analysis, provide your final complexity assessment\n3. Respond with only the complexity level: \"simple\", \"moderate\", or \"complex\"\n\nYou MUST use the tool - this is not optional."
+      }
+    },
+    {
+      "id": "tools",
+      "name": "Execute Tools",
+      "component": {
+        "type": "component",
+        "ref": "builtin.tools"
+      },
+      "config": {}
+    },
+    {
+      "id": "route_complexity",
+      "name": "Route by Complexity",
+      "component": {
+        "type": "component",
+        "ref": "builtin.function"
+      },
+      "config": {
+        "function": "custom.route_complexity"
+      }
+    },
+    {
+      "id": "summarize",
+      "name": "Summarize Complex Document",
+      "component": {
+        "type": "component",
+        "ref": "builtin.llm"
+      },
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a document summarization expert. Create a comprehensive yet concise summary of the provided document.\nFocus on:\n1. Key points and main arguments\n2. Important details and insights\n3. Logical structure and flow\n4. Conclusions and implications\nProvide a well-structured summary that preserves the essential information.\nRemember: only output the final result itself, no other text."
+      }
+    },
+    {
+      "id": "enhance",
+      "name": "Enhance Simple Document",
+      "component": {
+        "type": "component",
+        "ref": "builtin.llm"
+      },
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a content enhancement expert. Improve the provided content by:\n1. Enhancing clarity and readability\n2. Improving structure and organization\n3. Adding relevant details where appropriate\n4. Ensuring consistency and coherence\nFocus on making the content more engaging and professional while preserving the original meaning.\nRemember: only output the final result itself, no other text."
+      }
+    },
+    {
+      "id": "format_output",
+      "name": "Format Output",
+      "component": {
+        "type": "component",
+        "ref": "builtin.function"
+      },
+      "config": {
+        "function": "custom.format_output"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_preprocess_analyze",
+      "source": "preprocess",
+      "target": "analyze"
+    },
+    {
+      "id": "edge_tools_analyze",
+      "source": "tools",
+      "target": "analyze"
+    },
+    {
+      "id": "edge_enhance_format_output",
+      "source": "enhance",
+      "target": "format_output"
+    },
+    {
+      "id": "edge_summarize_format_output",
+      "source": "summarize",
+      "target": "format_output"
+    }
+  ],
+  "conditional_edges": [
+    {
+      "id": "analyze_routing",
+      "from": "analyze",
+      "condition": {
+        "type": "tool_routing",
+        "tools_node": "tools",
+        "next": "route_complexity"
+      }
+    },
+    {
+      "id": "complexity_routing",
+      "from": "route_complexity",
+      "condition": {
+        "type": "function",
+        "function": "custom.complexity_condition",
+        "routes": {
+          "simple": "enhance",
+          "moderate": "enhance",
+          "complex": "summarize"
+        }
+      }
+    }
+  ],
+  "entry_point": "preprocess",
+  "finish_point": "format_output"
+}

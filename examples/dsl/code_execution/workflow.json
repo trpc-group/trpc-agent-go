@@ -1,0 +1,82 @@
+{
+  "id": "code_execution_workflow",
+  "name": "Code Execution Workflow",
+  "description": "Demonstrates using builtin.code component to execute Python, JavaScript, and Bash code",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "id": "python_analysis",
+      "name": "Python Data Analysis",
+      "component": {
+        "type": "component",
+        "ref": "builtin.code"
+      },
+      "config": {
+        "code": "import statistics\nimport json\n\n# Sample data\ndata = [5, 12, 8, 15, 7, 9, 11]\n\n# Calculate statistics\nresults = {\n    'count': len(data),\n    'min': min(data),\n    'max': max(data),\n    'mean': round(statistics.mean(data), 2),\n    'median': statistics.median(data),\n    'stdev': round(statistics.stdev(data), 2)\n}\n\n# Print results\nprint('=== Python Data Analysis ===')\nfor key, value in results.items():\n    print(f'{key}: {value}')\nprint(json.dumps(results, indent=2))",
+        "language": "python",
+        "executor_type": "local",
+        "timeout": 30
+      },
+      "outputs": [
+        {
+          "name": "output",
+          "type": "string",
+          "target": {
+            "type": "state",
+            "field": "python_output"
+          }
+        }
+      ],
+      "description": "Analyzes sample data using Python statistics"
+    },
+    {
+      "id": "bash_system_info",
+      "name": "Bash System Info",
+      "component": {
+        "type": "component",
+        "ref": "builtin.code"
+      },
+      "config": {
+        "code": "echo '=== System Information ==='\necho \"Date: $(date)\"\necho \"User: $(whoami)\"\necho \"Working Directory: $(pwd)\"\necho \"Python Version: $(python3 --version 2>&1)\"\necho \"Bash Version: $BASH_VERSION\"",
+        "language": "bash",
+        "executor_type": "local",
+        "timeout": 10
+      },
+      "outputs": [
+        {
+          "name": "output",
+          "type": "string",
+          "target": {
+            "type": "state",
+            "field": "bash_output"
+          }
+        }
+      ],
+      "description": "Collects system information using Bash"
+    },
+    {
+      "id": "format_results",
+      "name": "Format Results",
+      "component": {
+        "type": "component",
+        "ref": "custom.format_results"
+      },
+      "config": {},
+      "description": "Formats the final results from all code executions"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_1",
+      "source": "python_analysis",
+      "target": "bash_system_info"
+    },
+    {
+      "id": "edge_2",
+      "source": "bash_system_info",
+      "target": "format_results"
+    }
+  ],
+  "entry_point": "python_analysis",
+  "finish_point": "format_results"
+}

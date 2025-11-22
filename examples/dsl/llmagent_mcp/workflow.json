@@ -1,0 +1,40 @@
+{
+  "name": "llmagent_mcp_example",
+  "description": "Example workflow demonstrating LLMAgent with MCP tools via stdio",
+  "version": "1.0.0",
+  "entry_point": "mcp_agent",
+  "finish_point": "__end__",
+  "nodes": [
+    {
+      "id": "mcp_agent",
+      "name": "mcp_agent",
+      "component": {
+        "type": "builtin",
+        "ref": "builtin.llmagent"
+      },
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a helpful assistant with access to echo and add tools via MCP. Use the available tools to help users with their queries. The echo tool can repeat messages with a prefix, and the add tool can add two numbers.",
+        "temperature": 0.7,
+        "max_tokens": 2000,
+        "tools": ["calculator"],
+        "mcp_tools": [
+          {
+            "name": "stdio_tools",
+            "transport": "stdio",
+            "command": "go",
+            "args": ["run", "../../../examples/mcptool/stdioserver/main.go"],
+            "timeout": 30,
+            "tool_filter": ["echo", "add"]
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "mcp_agent",
+      "target": "__end__"
+    }
+  ]
+}
