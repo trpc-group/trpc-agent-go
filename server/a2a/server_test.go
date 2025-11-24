@@ -1214,7 +1214,7 @@ func TestProcessAgentStreamingEvents_SendFailure(t *testing.T) {
 		},
 	}
 
-	proc.processAgentStreamingEvents(ctx, "task", msg, events, sub, handler)
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, handler)
 	assert.True(t, handlerCalled)
 	assert.True(t, cleaned)
 }
@@ -1242,7 +1242,7 @@ func TestProcessAgentStreamingEvents_ConverterError(t *testing.T) {
 		return &res, nil
 	}
 
-	proc.processAgentStreamingEvents(ctx, "task", msg, events, &mockTaskSubscriber{}, &mockTaskHandler{})
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, &mockTaskSubscriber{}, &mockTaskHandler{})
 	assert.True(t, handlerCalled)
 }
 
@@ -1266,7 +1266,7 @@ func TestProcessAgentStreamingEvents_Success(t *testing.T) {
 	processor := createTestMessageProcessor()
 	processor.debugLogging = true
 	ch := sub.Channel()
-	processor.processAgentStreamingEvents(ctx, "task", msg, events, sub, handler)
+	processor.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, handler)
 
 	count := 0
 	for evt := range ch {
