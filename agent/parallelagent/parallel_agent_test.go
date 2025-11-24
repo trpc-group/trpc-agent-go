@@ -540,3 +540,54 @@ func TestParallelAgent_ToolsAndSubAgents(t *testing.T) {
 	notFound := pa.FindSubAgent("nonexistent")
 	require.Nil(t, notFound)
 }
+
+// TestParallelAgent_CallbackContextPropagation tests that context values set in
+// BeforeAgent callback can be retrieved in AfterAgent callback.
+func TestParallelAgent_CallbackContextPropagation(t *testing.T) {
+	type contextKey string
+	const testKey contextKey = "test-key"
+	const testValue = "test-value-from-before"
+
+	// Create callbacks that set and read context values.
+	callbacks := agent.NewCallbacks()
+	var capturedValue any
+
+	// BeforeAgent callback sets a context value.
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		ctxWithValue := context.WithValue(ctx, testKey, testValue)
+		return &agent.BeforeAgentResult{
+			Context: ctxWithValue,
+		}, nil
+	})
+
+	// AfterAgent callback reads the context value.
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		capturedValue = ctx.Value(testKey)
+		return nil, nil
+	})
+
+	// Create parallel agent with callbacks.
+	subAgent := &silentAgent{name: "child"}
+	parallelAgent := newFromLegacy(legacyOptions{
+		Name:           "test-parallel",
+		SubAgents:      []agent.Agent{subAgent},
+		AgentCallbacks: callbacks,
+	})
+
+	// Run the agent.
+	ctx := context.Background()
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-parallel",
+	}
+
+	events, err := parallelAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	// Consume all events to ensure callbacks are executed.
+	for range events {
+	}
+
+	// Verify that the context value was captured in AfterAgent callback.
+	require.Equal(t, testValue, capturedValue, "context value should be propagated from BeforeAgent to AfterAgent")
+}

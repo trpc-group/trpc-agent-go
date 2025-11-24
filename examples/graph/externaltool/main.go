@@ -628,12 +628,10 @@ func (c *externalCoordinator) callbacks() *tool.Callbacks {
 // the client to submit the tool result.
 func (c *externalCoordinator) before(
 	ctx context.Context,
-	toolName string,
-	decl *tool.Declaration,
-	jsonArgs *[]byte,
-) (any, error) {
+	args *tool.BeforeToolArgs,
+) (*tool.BeforeToolResult, error) {
 	// Only intercept the external extract tool; others run normally.
-	if toolName != toolNameFetch {
+	if args.ToolName != toolNameFetch {
 		return nil, nil
 	}
 	_, _ = tool.ToolCallIDFromContext(ctx)
@@ -643,7 +641,7 @@ func (c *externalCoordinator) before(
 	}
 	prompt := map[string]any{
 		"message": "Run extract externally and return content.",
-		"tool":    toolName,
+		"tool":    args.ToolName,
 	}
 	resume, err := graph.Interrupt(
 		ctx, state, interruptKeyTool, prompt,
@@ -653,7 +651,9 @@ func (c *externalCoordinator) before(
 	}
 	// Convert a simple string into {"content": string} object.
 	parsed := parseExternalResult(resume)
-	return parsed, nil
+	return &tool.BeforeToolResult{
+		CustomResult: parsed,
+	}, nil
 }
 
 func (c *externalCoordinator) getState() graph.State {

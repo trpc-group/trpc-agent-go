@@ -1108,7 +1108,7 @@ ga, err := graphagent.New(
     graphagent.WithChannelBufferSize(512),
     graphagent.WithCheckpointSaver(saver),
     graphagent.WithSubAgents([]agent.Agent{subAgent}),
-    graphagent.WithAgentCallbacks(agent.NewCallbacks()),
+    graphagent.WithAgentCallbacks(agent.NewCallbacks()), // 注意：结构化回调 API 需要 trpc-agent-go >= 0.6.0
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
     // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
     // 时间维度过滤条件
@@ -2713,12 +2713,13 @@ import (
 )
 
 // 方式一：构造回调并注册（推荐）
+// 注意：结构化回调 API 需要 trpc-agent-go >= 0.6.0
 cb := agent.NewCallbacks().
-    RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-        // 返回非空 *model.Response 可直接短路此轮执行
+    RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+        // 返回非空 CustomResponse 可直接短路此轮执行
         return nil, nil
     }).
-    RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+    RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
         // 可对最终响应做统一修改/替换
         return nil, nil
     })

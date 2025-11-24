@@ -69,23 +69,23 @@ llmAgent := llmagent.New(
     llmagent.WithDescription("A helpful AI assistant for demonstrations"),              // 设置描述
     llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // 设置指令
     llmagent.WithGenerationConfig(genConfig),                                           // 设置生成参数
-    
+
     // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
     // 时间维度过滤条件
     // 默认值: llmagent.TimelineFilterAll
-    // 可选值: 
+    // 可选值:
     //  - llmagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
     //  - llmagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
     //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
     llmagent.WithMessageTimelineFilterMode(llmagent.BranchFilterModeAll),
     // 分支维度过滤条件
     // 默认值: llmagent.BranchFilterModePrefix
-    // 可选值: 
+    // 可选值:
     //  - llmagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
     //  - llmagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
     //  - llmagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
     llmagent.WithMessageBranchFilterMode(llmagent.TimelineFilterAll),
-    
+
 )
 ```
 
@@ -343,23 +343,28 @@ inv.DeleteState(key string)
 
 **使用示例：**
 
+> **版本要求**  
+> 结构化回调 API（推荐）需要 **trpc-agent-go >= 0.6.0**。
+
 ```go
 // 在 BeforeAgentCallback 中存储数据
-func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-    inv.SetState("agent:start_time", time.Now())
-    inv.SetState("custom:request_id", "req-123")
+// 注意：结构化回调 API 需要 trpc-agent-go >= 0.6.0
+callbacks := agent.NewCallbacks()
+callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    args.Invocation.SetState("agent:start_time", time.Now())
+    args.Invocation.SetState("custom:request_id", "req-123")
     return nil, nil
-}
+})
 
 // 在 AfterAgentCallback 中读取数据
-func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-    if startTime, ok := inv.GetState("agent:start_time"); ok {
+callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if startTime, ok := args.Invocation.GetState("agent:start_time"); ok {
         duration := time.Since(startTime.(time.Time))
         log.Printf("Execution took: %v", duration)
-        inv.DeleteState("agent:start_time")
+        args.Invocation.DeleteState("agent:start_time")
     }
     return nil, nil
-}
+})
 ```
 
 **推荐的键名约定：**
@@ -433,6 +438,9 @@ type Agent interface {
 
 Callbacks 提供了丰富的回调机制，让你能够在 Agent 执行的关键节点注入自定义逻辑。
 
+> **版本要求**  
+> 结构化回调 API（推荐）需要 **trpc-agent-go >= 0.6.0**。
+
 ### 回调类型
 
 框架提供了三种类型的回调：
@@ -440,54 +448,44 @@ Callbacks 提供了丰富的回调机制，让你能够在 Agent 执行的关键
 **Agent Callbacks**：在 Agent 执行前后触发
 
 ```go
-type AgentCallbacks struct {
-    BeforeAgent []BeforeAgentCallback  // Agent 运行前的回调
-    AfterAgent  []AfterAgentCallback   // Agent 运行后的回调
-}
+// 使用 agent.NewCallbacks() 创建回调
+callbacks := agent.NewCallbacks()
 ```
 
 **Model Callbacks**：在模型调用前后触发
 
 ```go
-type ModelCallbacks struct {
-    BeforeModel []BeforeModelCallback  // 模型调用前的回调
-    AfterModel  []AfterModelCallback   // 模型调用后的回调
-}
+// 使用 model.NewCallbacks() 创建回调
+callbacks := model.NewCallbacks()
 ```
 
 **Tool Callbacks**：在工具调用前后触发
 
 ```go
-type ToolCallbacks struct {
-	BeforeTool []BeforeToolCallback  // 工具调用前的回调
-	AfterTool []AfterToolCallback    // 工具调用后的回调
-}
+// 使用 tool.NewCallbacks() 创建回调
+callbacks := tool.NewCallbacks()
 ```
 
 ### 使用示例
 
 ```go
-// 创建 Agent 回调
-callbacks := &agent.AgentCallbacks{
-    BeforeAgent: []agent.BeforeAgentCallback{
-        func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-            log.Printf("Agent %s 开始执行", invocation.AgentName)
-            return nil, nil
-        },
-    },
-    AfterAgent: []agent.AfterAgentCallback{
-        func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-            if runErr != nil {
-                log.Printf("Agent %s 执行出错: %v", invocation.AgentName, runErr)
-            } else {
-                log.Printf("Agent %s 执行完成", invocation.AgentName)
-            }
-            return nil, nil
-        },
-    },
-}
+// 创建 Agent 回调（使用结构化 API）
+// 注意：结构化回调 API 需要 trpc-agent-go >= 0.6.0
+callbacks := agent.NewCallbacks()
+callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    log.Printf("Agent %s 开始执行", args.Invocation.AgentName)
+    return nil, nil
+})
+callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if args.Error != nil {
+        log.Printf("Agent %s 执行出错: %v", args.Invocation.AgentName, args.Error)
+    } else {
+        log.Printf("Agent %s 执行完成", args.Invocation.AgentName)
+    }
+    return nil, nil
+})
 
-// 在 llmAgent中使用回掉
+// 在 llmAgent 中使用回调
 llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 ```
 
@@ -598,24 +596,27 @@ _, _ = run.Run(context.Background(), user, sid, model.NewUserMessage("Hi!"))
 
 示例：通过前置回调注入本轮临时值（temp）
 
+> **版本要求**  
+> 结构化回调 API（推荐）需要 **trpc-agent-go >= 0.6.0**。
+
 ```go
-callbacks := &agent.AgentCallbacks{
-  BeforeAgent: []agent.BeforeAgentCallback{
-    func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-      if inv != nil && inv.Session != nil {
-        if inv.Session.State == nil { inv.Session.State = make(map[string][]byte) }
-        // 为“本轮”临时指定指令
-        inv.Session.State["temp:sys"] = []byte("Translate to French.")
-      }
-      return nil, nil
-    },
-  },
-}
+// 注意：结构化回调 API 需要 trpc-agent-go >= 0.6.0
+callbacks := agent.NewCallbacks()
+callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+  if args.Invocation != nil && args.Invocation.Session != nil {
+    if args.Invocation.Session.State == nil {
+      args.Invocation.Session.State = make(map[string][]byte)
+    }
+    // 为"本轮"临时指定指令
+    args.Invocation.Session.State["temp:sys"] = []byte("Translate to French.")
+  }
+  return nil, nil
+})
 
 llm := llmagent.New(
   "temp-agent",
   llmagent.WithInstruction("{temp:sys}"),
-  llmagent.WithAgentCallbacks(callbacks),
+  llmagent.WithAgentCallbacks(callbacks), // 需要 trpc-agent-go >= 0.6.0
 )
 ```
 
