@@ -134,16 +134,6 @@ modelCallbacks := model.NewCallbacks().
 > **⚠️ Deprecated**  
 > Legacy callbacks are deprecated. Use structured callbacks for new code.
 
-- BeforeModelCallback: Runs before a model inference.
-- AfterModelCallback: Runs after the model finishes (or per streaming phase).
-
-Signatures:
-
-```go
-type BeforeModelCallback func(ctx context.Context, req *model.Request) (*model.Response, error)
-type AfterModelCallback  func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error)
-```
-
 ---
 
 ## ToolCallbacks
@@ -274,31 +264,6 @@ Telemetry and events:
 > **⚠️ Deprecated**  
 > Legacy callbacks are deprecated. Use structured callbacks for new code.
 
-- BeforeToolCallback: Runs before each tool invocation.
-- AfterToolCallback: Runs after each tool invocation.
-
-Signatures:
-
-```go
-// Before: can short-circuit with a custom result and can mutate arguments via pointer.
-type BeforeToolCallback func(
-  ctx context.Context,
-  toolName string,
-  toolDeclaration *tool.Declaration,
-  jsonArgs *[]byte, // pointer: mutations are visible to the caller
-) (any, error)
-
-// After: can override the result.
-type AfterToolCallback func(
-  ctx context.Context,
-  toolName string,
-  toolDeclaration *tool.Declaration,
-  jsonArgs []byte,
-  result any,
-  runErr error,
-) (any, error)
-```
-
 ---
 
 ## AgentCallbacks
@@ -418,16 +383,6 @@ agentCallbacks := agent.NewCallbacks().
 
 > **⚠️ Deprecated**  
 > Legacy callbacks are deprecated. Use structured callbacks for new code.
-
-- BeforeAgentCallback: Runs before agent execution.
-- AfterAgentCallback: Runs after agent execution.
-
-Signatures:
-
-```go
-type BeforeAgentCallback func(ctx context.Context, inv *agent.Invocation) (*model.Response, error)
-type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error)
-```
 
 ---
 

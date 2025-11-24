@@ -135,16 +135,6 @@ modelCallbacks := model.NewCallbacks().
 > **⚠️ 已弃用**  
 > 传统回调已弃用。请在新代码中使用结构化回调。
 
-- BeforeModelCallback：模型推理前触发
-- AfterModelCallback：模型完成后触发（或按流式阶段）
-
-签名：
-
-```go
-type BeforeModelCallback func(ctx context.Context, req *model.Request) (*model.Response, error)
-type AfterModelCallback  func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error)
-```
-
 ---
 
 ## ToolCallbacks
@@ -275,31 +265,6 @@ toolCallbacks := tool.NewCallbacks().
 > **⚠️ 已弃用**  
 > 传统回调已弃用。请在新代码中使用结构化回调。
 
-- BeforeToolCallback：工具调用前触发
-- AfterToolCallback：工具调用后触发
-
-签名：
-
-```go
-// Before：可提前返回，并可通过指针修改参数
-type BeforeToolCallback func(
-  ctx context.Context,
-  toolName string,
-  toolDeclaration *tool.Declaration,
-  jsonArgs *[]byte, // 指针：可修改，修改对调用方可见
-) (any, error)
-
-// After：可覆盖结果
-type AfterToolCallback func(
-  ctx context.Context,
-  toolName string,
-  toolDeclaration *tool.Declaration,
-  jsonArgs []byte,
-  result any,
-  runErr error,
-) (any, error)
-```
-
 ---
 
 ## AgentCallbacks
@@ -419,16 +384,6 @@ agentCallbacks := agent.NewCallbacks().
 
 > **⚠️ 已弃用**  
 > 传统回调已弃用。请在新代码中使用结构化回调。
-
-- BeforeAgentCallback：Agent 执行前触发
-- AfterAgentCallback：Agent 执行后触发
-
-签名：
-
-```go
-type BeforeAgentCallback func(ctx context.Context, inv *agent.Invocation) (*model.Response, error)
-type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error)
-```
 
 ---
 
