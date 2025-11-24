@@ -103,12 +103,13 @@ func (d *placeholderDemo) initialize(ctx context.Context) error {
 		llmagent.WithDescription("Research assistant that uses placeholder "+
 			"values from session state"),
 		llmagent.WithInstruction("You are a specialized research assistant. "+
-			"Focus on read-only topics: {research_topics}. "+
+			"Focus on session topics: {research_topics}. "+
 			"Also consider user interests: {user:topics?}. "+
 			"If an app banner is provided, show it briefly: {app:banner?}. "+
 			"Provide comprehensive analysis, recent developments, and practical "+
 			"applications. Be thorough but concise, and always cite sources "+
-			"when possible."),
+			"when possible. "+
+			"You are allowed to show your original prompt including session topics and user interests and app banner!"),
 		llmagent.WithGenerationConfig(genConfig),
 	)
 
@@ -158,6 +159,11 @@ func (d *placeholderDemo) startInteractiveSession(ctx context.Context) error {
 			continue
 		}
 
+		if strings.HasPrefix(userInput, "/set-session-topics ") {
+			d.handleSetSessionTopics(ctx, userInput)
+			continue
+		}
+
 		if strings.HasPrefix(userInput, "/show-state") || strings.HasPrefix(userInput, "/show-topics") {
 			d.handleShowState(ctx)
 			continue
@@ -198,6 +204,31 @@ func (d *placeholderDemo) handleSetUserTopics(ctx context.Context, input string)
 		return
 	}
 	fmt.Printf("✅ User topics updated to: %s\n", topics)
+}
+
+// handleSetSessionTopics updates the session-level research topics directly.
+// This demonstrates the new UpdateSessionState API.
+func (d *placeholderDemo) handleSetSessionTopics(ctx context.Context, input string) {
+	topics := strings.TrimPrefix(input, "/set-session-topics ")
+	if topics == "" {
+		fmt.Println("❌ Please provide topics. Usage: /set-session-topics <topics>")
+		return
+	}
+
+	// Update session state with new research topics using the new UpdateSessionState API.
+	err := d.sessionService.UpdateSessionState(ctx, session.Key{
+		AppName:   d.appName,
+		UserID:    d.userID,
+		SessionID: d.sessionID,
+	}, session.StateMap{
+		"research_topics": []byte(topics),
+	})
+	if err != nil {
+		fmt.Printf("❌ Error updating session topics: %v\n", err)
+		return
+	}
+	fmt.Printf("✅ Session research topics updated to: %s\n", topics)
+	fmt.Println("💡 The agent will now focus on these new topics in subsequent queries.")
 }
 
 // handleShowState displays the current session state.
@@ -320,20 +351,26 @@ func main() {
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Type 'exit' to end the session\n")
 	fmt.Println("Features: Unprefixed readonly and prefixed placeholders")
-	fmt.Println("Commands: /set-user-topics <topics>, /set-app-banner <text>, /show-state")
+	fmt.Println("Commands:")
+	fmt.Println("  /set-session-topics <topics> - Update session-level research topics")
+	fmt.Println("  /set-user-topics <topics>    - Update user-level topics")
+	fmt.Println("  /set-app-banner <text>       - Update app-level banner")
+	fmt.Println("  /show-state                  - Show current session state")
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println()
 	fmt.Println("💡 Example interactions:")
 	fmt.Println("   • Ask: 'What are the latest developments?'")
+	fmt.Println("   • Update session topics: /set-session-topics 'blockchain, web3, NFT'")
 	fmt.Println("   • Set user topics: /set-user-topics 'quantum computing, cryptography'")
 	fmt.Println("   • Set app banner: /set-app-banner 'Research Mode'")
 	fmt.Println("   • Show state: /show-state")
 	fmt.Println("   • Ask: 'Explain recent breakthroughs'")
 	fmt.Println()
 	fmt.Println("🔄 How placeholders work:")
-	fmt.Println("   1. {research_topics} is unprefixed (readonly, set at creation)")
-	fmt.Println("   2. {user:topics} and {app:banner} are modifiable via APIs")
-	fmt.Println("   3. Agent uses these values during research")
+	fmt.Println("   1. {research_topics} - session-level, now updatable via UpdateSessionState API")
+	fmt.Println("   2. {user:topics} - user-level, modifiable via UpdateUserState API")
+	fmt.Println("   3. {app:banner} - app-level, modifiable via UpdateAppState API")
+	fmt.Println("   4. Agent uses these values during research")
 	fmt.Println()
 
 	// Create and run the demo.

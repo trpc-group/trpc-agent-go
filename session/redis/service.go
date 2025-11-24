@@ -388,6 +388,76 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 	return userStateMap, nil
 }
 
+// UpdateSessionState updates the session-level state directly without appending an event.
+// This is useful for state initialization, correction, or synchronization scenarios
+// where event history is not needed.
+// Keys with app: or user: prefixes are not allowed (use UpdateAppState/UpdateUserState instead).
+// Keys with temp: prefix are allowed as they represent session-scoped ephemeral state.
+func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+
+	// Validate: disallow app: and user: prefixes
+	for k := range state {
+		if strings.HasPrefix(k, session.StateAppPrefix) {
+			return fmt.Errorf("redis session service update session state failed: %s is not allowed, use UpdateAppState instead", k)
+		}
+		if strings.HasPrefix(k, session.StateUserPrefix) {
+			return fmt.Errorf("redis session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
+		}
+	}
+
+	// Get current session state
+	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	if err == redis.Nil {
+		return fmt.Errorf("redis session service update session state failed: session not found")
+	}
+	if err != nil {
+		return fmt.Errorf("redis session service update session state failed: get session state: %w", err)
+	}
+
+	// Unmarshal current state
+	sessState := &SessionState{}
+	if err := json.Unmarshal(stateBytes, sessState); err != nil {
+		return fmt.Errorf("redis session service update session state failed: unmarshal state: %w", err)
+	}
+
+	// Initialize state map if nil
+	if sessState.State == nil {
+		sessState.State = make(session.StateMap)
+	}
+
+	// Merge new state into current state (allow temp: prefix and unprefixed keys)
+	for k, v := range state {
+		sessState.State[k] = v
+	}
+
+	// Update timestamp
+	sessState.UpdatedAt = time.Now()
+
+	// Marshal updated state
+	updatedStateBytes, err := json.Marshal(sessState)
+	if err != nil {
+		return fmt.Errorf("redis session service update session state failed: marshal state: %w", err)
+	}
+
+	// Update session state in Redis
+	pipe := s.redisClient.TxPipeline()
+	pipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
+
+	// Refresh TTL if configured
+	if s.sessionTTL > 0 {
+		pipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("redis session service update session state failed: %w", err)
+	}
+
+	return nil
+}
+
 // DeleteUserState deletes the state by target scope and key.
 func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	if err := userKey.CheckUserKey(); err != nil {

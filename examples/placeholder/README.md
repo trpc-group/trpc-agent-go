@@ -1,31 +1,28 @@
 # Placeholder Demo - Session State Integration
 
 This example demonstrates how to use placeholders in agent instructions with
-session service integration. It covers two kinds of placeholders:
+session service integration. It covers three levels of state management:
 
-- Unprefixed placeholder (readonly): `{research_topics}`. Initialized when the
-  session is created and intended not to be modified at runtime.
-- Prefixed placeholders (modifiable): `{user:topics}` and `{app:banner}`.
-  These are backed by user/app state and can be updated via the session
-  service APIs.
+- **Session-level state**: `{research_topics}` - Session-specific, updatable via `UpdateSessionState` API
+- **User-level state**: `{user:topics}` - Shared across all sessions for a user, updatable via `UpdateUserState` API
+- **App-level state**: `{app:banner}` - Shared across all users, updatable via `UpdateAppState` API
 
 ## Overview
 
 The demo implements an interactive command-line application that:
-1. **Unprefixed Placeholder (Readonly)**: `{research_topics}` is set at session
-   creation and is not meant to be mutated.
-2. **Prefixed Placeholders (Mutable)**: `{user:topics}` and `{app:banner}` can be
-   updated using the session service.
-3. **Dynamic Updates**: Changes to user/app state affect future responses.
-4. **Interactive Commands**: Command-line interface for managing session state
+1. **Session-level State**: `{research_topics}` can be updated via `UpdateSessionState` API
+2. **User-level State**: `{user:topics}` can be updated via `UpdateUserState` API
+3. **App-level State**: `{app:banner}` can be updated via `UpdateAppState` API
+4. **Dynamic Updates**: Changes to any state level affect future responses immediately
+5. **Interactive Commands**: Command-line interface for managing all three state levels
 
 ## Key Features
 
-- **Placeholder Replacement**: `{research_topics}`, `{user:topics}`,
-  `{app:banner}` are resolved from session state.
-- **Session State Management**: In-memory session service stores app/user state.
-- **Interactive Commands**: `/set-user-topics`, `/set-app-banner`, `/show-state`.
-- **Real-time Updates**: Changes to session state immediately affect agent behavior
+- **Placeholder Replacement**: `{research_topics}`, `{user:topics}`, `{app:banner}` are resolved from session state
+- **Three-tier State Management**: Session-level, user-level, and app-level state with different scopes
+- **Interactive Commands**: `/set-session-topics`, `/set-user-topics`, `/set-app-banner`, `/show-state`
+- **Real-time Updates**: Changes to any state level immediately affect agent behavior
+- **New UpdateSessionState API**: Demonstrates direct session state updates without creating events
 
 ## Architecture
 
@@ -60,11 +57,11 @@ type placeholderDemo struct {
 
 ### Research Agent
 
-- **Purpose**: Specialized research assistant using placeholder values.
-- **Instructions**: Contains `{research_topics}` (readonly), `{user:topics?}`
-  and `{app:banner?}`.
+- **Purpose**: Specialized research assistant using placeholder values from three state levels
+- **Instructions**: Contains `{research_topics}` (session-level), `{user:topics?}` (user-level),
+  and `{app:banner?}` (app-level)
 - **Behavior**: Adapts based on session state; optional markers `?` allow the
-  instruction to render even when a value is absent.
+  instruction to render even when a value is absent
 
 ## Usage
 
@@ -85,24 +82,32 @@ go build -o placeholder-demo main.go
 
 The demo supports several interactive commands:
 
-- Set user topics (user state):
+- **Set session topics** (session-level state):
+  ```bash
+  /set-session-topics blockchain, web3, NFT, DeFi
+  ```
+  Updates `{research_topics}` via `UpdateSessionState` API. This is session-specific
+  and only affects the current conversation.
+
+- **Set user topics** (user-level state):
   ```bash
   /set-user-topics quantum computing, cryptography
   ```
-  Updates `{user:topics}` via `UpdateUserState`.
+  Updates `{user:topics}` via `UpdateUserState` API. This is shared across all
+  sessions for the same user.
 
-- Set app banner (app state):
+- **Set app banner** (app-level state):
   ```bash
   /set-app-banner Research Mode
   ```
-  Updates `{app:banner}` via `UpdateAppState`.
+  Updates `{app:banner}` via `UpdateAppState` API. This is shared across all users.
 
-- Show current state snapshot:
+- **Show current state** snapshot:
   ```bash
   /show-state
   ```
-  Prints the current merged session state so you can see the keys:
-  `research_topics`, `user:topics`, `app:banner`.
+  Prints the current merged session state showing all three levels:
+  `research_topics` (session), `user:topics` (user), `app:banner` (app).
 
 #### Regular Queries
 ```bash
@@ -122,53 +127,68 @@ Ends the interactive session.
 🔑 Placeholder Demo - Session State Integration
 Model: deepseek-chat
 Type 'exit' to end the session
-Features: Dynamic placeholder replacement with session state
-Commands: /set-user-topics <topics>, /set-app-banner <text>, /show-state
+Features: Unprefixed readonly and prefixed placeholders
+Commands:
+  /set-session-topics <topics> - Update session-level research topics
+  /set-user-topics <topics>    - Update user-level topics
+  /set-app-banner <text>       - Update app-level banner
+  /show-state                  - Show current session state
 ============================================================
 
 💡 Example interactions:
    • Ask: 'What are the latest developments?'
+   • Update session topics: /set-session-topics 'blockchain, web3, NFT'
    • Set user topics: /set-user-topics 'quantum computing, cryptography'
    • Set app banner: /set-app-banner 'Research Mode'
    • Show state: /show-state
    • Ask: 'Explain recent breakthroughs'
 
-👤 You: /show-topics
-📋 Current research topics: artificial intelligence, machine learning, deep learning, neural networks
+👤 You: /show-state
+📋 Current Session State:
+   - research_topics: artificial intelligence, machine learning, deep learning, neural networks
+   - user:topics: quantum computing, cryptography
+   - app:banner: Research Mode
 
-👤 You: /set-topics quantum computing, cryptography
-✅ Research topics updated to: quantum computing, cryptography
+👤 You: /set-session-topics blockchain, web3, NFT, DeFi
+✅ Session research topics updated to: blockchain, web3, NFT, DeFi
+💡 The agent will now focus on these new topics in subsequent queries.
 
 👤 You: What are the latest developments?
-🔬 Research Agent: Based on the current research focus on quantum computing and cryptography, here are the latest developments...
+🔬 Research Agent: Based on the current research focus on blockchain, web3, NFT, and DeFi, here are the latest developments...
 ```
 
 ## Implementation Details
 
 ### Placeholder Mechanism
 
-1. **Initial Setup**: Session is created with an unprefixed
-   `research_topics` value used by `{research_topics}` (readonly).
-2. **Prefixed Placeholders**: `{user:topics}` and `{app:banner}` resolve to
-   user/app state; they are populated by `UpdateUserState` and
-   `UpdateAppState`.
-3. **Optional Suffix**: `{...?...}` returns empty string if the variable is not
-   present.
+1. **Session-level State**: `{research_topics}` is session-specific and can be updated
+   via `UpdateSessionState` API. Changes only affect the current session.
+2. **User-level State**: `{user:topics}` resolves to user state and can be updated
+   via `UpdateUserState` API. Changes affect all sessions for that user.
+3. **App-level State**: `{app:banner}` resolves to app state and can be updated
+   via `UpdateAppState` API. Changes affect all users.
+4. **Optional Suffix**: `{...?}` returns empty string if the variable is not present.
 
 ### Session State Management
 
 The demo uses in-memory session service for simplicity:
 
-- **User State**: `topics` stored at user level (referenced as `{user:topics}`).
-- **Session Persistence**: State maintained throughout session
-- **Real-time Updates**: Changes immediately available to agent
+- **Session State**: `research_topics` stored at session level (referenced as `{research_topics}`)
+- **User State**: `topics` stored at user level (referenced as `{user:topics}`)
+- **App State**: `banner` stored at app level (referenced as `{app:banner}`)
+- **State Persistence**: All three levels maintained throughout session
+- **Real-time Updates**: Changes at any level immediately available to agent
+- **State Isolation**: Each level has its own scope and lifetime
 
 ### Command Processing
 
 The interactive interface processes commands through pattern matching:
 
-- **State Commands**: `/set-user-topics`, `/set-app-banner`, `/show-state` for
-  session management
+- **State Commands**:
+  - `/set-session-topics` - Updates session-level state via `UpdateSessionState`
+  - `/set-user-topics` - Updates user-level state via `UpdateUserState`
+  - `/set-app-banner` - Updates app-level state via `UpdateAppState`
+  - `/show-state` - Displays merged state from all three levels
 - **Regular Input**: Passed directly to agent for processing
 - **Error Handling**: Graceful handling of invalid commands and state errors
 
