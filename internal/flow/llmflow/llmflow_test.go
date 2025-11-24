@@ -515,7 +515,7 @@ func TestRunAfterModelCallbacks_ErrorPassing(t *testing.T) {
 				modelCallbacks: callbacks,
 			}
 
-			_, err := flow.runAfterModelCallbacks(context.Background(), &model.Request{}, tt.response)
+			_, _, err := flow.runAfterModelCallbacks(context.Background(), &model.Request{}, tt.response)
 			require.NoError(t, err)
 
 			if tt.wantErr {

@@ -1169,7 +1169,7 @@ func TestProcessModelResponse_ErrorPassing(t *testing.T) {
 
 			dummyModel := &mockModel{name: "test-model"}
 
-			_, err := processModelResponse(context.Background(), modelResponseConfig{
+			_, _, err := processModelResponse(context.Background(), modelResponseConfig{
 				Response:       tt.response,
 				ModelCallbacks: cbs,
 				EventChan:      make(chan *event.Event, 1),
