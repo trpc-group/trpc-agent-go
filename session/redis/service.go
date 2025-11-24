@@ -746,15 +746,7 @@ func (s *Service) getEventsList(
 ) ([][]event.Event, error) {
 	pipe := s.redisClient.Pipeline()
 	for _, key := range sessionKeys {
-		zrangeBy := &redis.ZRangeBy{
-			Min: fmt.Sprintf("%d", afterTime.UnixNano()),
-			Max: fmt.Sprintf("%d", time.Now().UnixNano()),
-		}
-		if limit > 0 {
-			zrangeBy.Offset = 0
-			zrangeBy.Count = int64(limit)
-		}
-		pipe.ZRevRangeByScore(ctx, getEventKey(key), zrangeBy)
+		pipe.ZRange(ctx, getEventKey(key), 0, -1)
 	}
 	cmds, err := pipe.Exec(ctx)
 	if err != nil && err != redis.Nil {
@@ -771,14 +763,14 @@ func (s *Service) getEventsList(
 		if err != nil {
 			return nil, fmt.Errorf("process event cmd failed: %w", err)
 		}
-
-		// reverse events to get chronological order (oldest first)
-		if len(events) > 1 {
-			for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-				events[i], events[j] = events[j], events[i]
-			}
+		sess := &session.Session{
+			Events: events,
 		}
-		sessEventsList = append(sessEventsList, events)
+		if limit <= 0 {
+			limit = s.opts.sessionEventLimit
+		}
+		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+		sessEventsList = append(sessEventsList, sess.Events)
 	}
 	return sessEventsList, nil
 }
@@ -1001,9 +993,6 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			Score:  float64(event.Timestamp.UnixNano()),
 			Member: eventBytes,
 		})
-		if s.opts.sessionEventLimit > 0 {
-			txPipe.ZRemRangeByRank(ctx, getEventKey(key), 0, -(int64(s.opts.sessionEventLimit) + 1))
-		}
 		// Set TTL for session state and event list if configured
 		if s.sessionTTL > 0 {
 			txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)
