@@ -1156,13 +1156,17 @@ func convertToInt(value any) (int, bool) {
 	}
 }
 
-// generateDocumentID generates a unique document ID based on source name, content, chunk index and source metadata.
+// generateDocumentID generates a unique document ID based on source name, URI, content, chunk index and source metadata.
 // Uses SHA256 hash to ensure uniqueness and avoid collisions.
 func generateDocumentID(sourceName, uri, content string, chunkIndex int, sourceMetadata map[string]any) string {
 	hasher := sha256.New()
 
 	// Write source name
 	hasher.Write([]byte(sourceName))
+	hasher.Write([]byte(":"))
+
+	// Write URI
+	hasher.Write([]byte(uri))
 	hasher.Write([]byte(":"))
 
 	// Write content
