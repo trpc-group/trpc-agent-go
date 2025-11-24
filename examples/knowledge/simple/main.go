@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	
+
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -34,7 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	
+
 	// Embedder.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
@@ -42,21 +42,21 @@ import (
 	huggingfaceembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface"
 	ollamaembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
-	
+
 	// Source.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
-	
+
 	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
-	
+
 	// Import PDF reader to register it (optional - comment out if PDF support is not needed).
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 )
@@ -152,7 +152,7 @@ func (c *knowledgeChat) run() error {
 	if err := c.setup(ctx); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
-	
+
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer c.runner.Close()
 
