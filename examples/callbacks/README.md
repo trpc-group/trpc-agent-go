@@ -179,13 +179,15 @@ You can short-circuit (skip) the default execution of a model, tool, or agent by
 **Example: Using original request in AfterModelCallback**
 
 ```go
-modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
     // Access the original request for content restoration
-    if req != nil && len(req.Messages) > 0 {
-        originalText := req.Messages[len(req.Messages)-1].Content
+    if args.Request != nil && len(args.Request.Messages) > 0 {
+        originalText := args.Request.Messages[len(args.Request.Messages)-1].Content
         // Process response with original context
         if strings.Contains(originalText, "restore") {
-            return restoreFormatting(resp, originalText), nil
+            return &model.AfterModelResult{
+                CustomResponse: restoreFormatting(args.Response, originalText),
+            }, nil
         }
     }
     return nil, nil
@@ -195,10 +197,12 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 **Example: Mocking a tool result in BeforeToolCallback**
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    if toolName == "calculator" && jsonArgs != nil && strings.Contains(string(*jsonArgs), "42") {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if args.ToolName == "calculator" && args.Arguments != nil && strings.Contains(string(args.Arguments), "42") {
         // Return a mock result and skip actual tool execution.
-        return calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242}, nil
+        return &tool.BeforeToolResult{
+            CustomResult: calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242},
+        }, nil
     }
     return nil, nil
 })
@@ -207,13 +211,13 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, tool
 **Example: Modifying tool arguments in BeforeToolCallback**
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    if jsonArgs != nil && toolName == "calculator" {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if args.Arguments != nil && args.ToolName == "calculator" {
         // Add timestamp to arguments for logging purposes
-        originalArgs := string(*jsonArgs)
+        originalArgs := string(args.Arguments)
         modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-        *jsonArgs = []byte(modifiedArgs)
-        fmt.Printf("Modified args for %s: %s\n", toolName, modifiedArgs)
+        args.Arguments = []byte(modifiedArgs)
+        fmt.Printf("Modified args for %s: %s\n", args.ToolName, modifiedArgs)
     }
     return nil, nil
 })
@@ -222,11 +226,13 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, tool
 **Example: Blocking a model call in BeforeModelCallback**
 
 ```go
-modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-    if strings.Contains(req.Messages[len(req.Messages)-1].Content, "block me") {
-        return &model.Response{Choices: []model.Choice{{
-            Message: model.Message{Role: model.RoleAssistant, Content: "This request was blocked by a callback."},
-        }}}, nil
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+    if strings.Contains(args.Request.Messages[len(args.Request.Messages)-1].Content, "block me") {
+        return &model.BeforeModelResult{
+            CustomResponse: &model.Response{Choices: []model.Choice{{
+                Message: model.Message{Role: model.RoleAssistant, Content: "This request was blocked by a callback."},
+            }}},
+        }, nil
     }
     return nil, nil
 })
