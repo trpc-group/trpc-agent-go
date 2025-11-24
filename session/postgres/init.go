@@ -48,6 +48,20 @@ const (
 			deleted_at TIMESTAMP DEFAULT NULL
 		)`
 
+	sqlCreateSessionTrackEventsTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGSERIAL PRIMARY KEY,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
+			track VARCHAR(255) NOT NULL,
+			event JSONB NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at TIMESTAMP DEFAULT NULL,
+			deleted_at TIMESTAMP DEFAULT NULL
+		)`
+
 	sqlCreateSessionSummariesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGSERIAL PRIMARY KEY,
@@ -105,6 +119,16 @@ const (
 
 	// session_events: TTL index on (expires_at) - partial index for non-null values
 	sqlCreateSessionEventsExpiresIndex = `
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
+
+	// session_track_events: lookup index on (app_name, user_id, session_id, track, created_at).
+	sqlCreateSessionTracksIndex = `
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, track, created_at)`
+
+	// session_track_events: TTL index on (expires_at).
+	sqlCreateSessionTracksExpiresIndex = `
 		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
 
@@ -195,6 +219,24 @@ var expectedSchema = map[string]struct {
 			{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}},
 		},
 	},
+	sqldb.TableNameSessionTrackEvents: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"app_name", "character varying", false},
+			{"user_id", "character varying", false},
+			{"session_id", "character varying", false},
+			{"track", "character varying", false},
+			{"event", "jsonb", false},
+			{"created_at", "timestamp without time zone", false},
+			{"updated_at", "timestamp without time zone", false},
+			{"expires_at", "timestamp without time zone", true},
+			{"deleted_at", "timestamp without time zone", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, []string{"app_name", "user_id", "session_id", "track", "created_at"}},
+			{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
 	sqldb.TableNameSessionSummaries: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
@@ -264,6 +306,7 @@ type tableDefinition struct {
 var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, sqlCreateSessionStatesTable},
 	{sqldb.TableNameSessionEvents, sqlCreateSessionEventsTable},
+	{sqldb.TableNameSessionTrackEvents, sqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
 	{sqldb.TableNameAppStates, sqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates, sqlCreateUserStatesTable},
@@ -278,9 +321,11 @@ var indexDefs = []indexDefinition{
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
 	// Lookup indexes (only session_events needs a separate lookup index)
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, sqlCreateSessionEventsIndex},
+	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, sqlCreateSessionTracksIndex},
 	// TTL indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
+	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, sqlCreateAppStatesExpiresIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, sqlCreateUserStatesExpiresIndex},

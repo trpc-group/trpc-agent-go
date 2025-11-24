@@ -66,13 +66,8 @@ func TestRunNoMessages(t *testing.T) {
 
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
 	eventsCh, err := r.Run(context.Background(), input)
-	assert.NoError(t, err)
-
-	evts := collectEvents(t, eventsCh)
-	assert.Len(t, evts, 2)
-	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
-	_, ok := evts[1].(*aguievents.RunErrorEvent)
-	assert.True(t, ok)
+	assert.Nil(t, eventsCh)
+	assert.EqualError(t, err, "no messages provided")
 	assert.Equal(t, 0, underlying.calls)
 }
 
@@ -94,11 +89,9 @@ func TestRunUserIDResolverError(t *testing.T) {
 		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
 	}
 	eventsCh, err := r.Run(context.Background(), input)
-	assert.NoError(t, err)
-	evts := collectEvents(t, eventsCh)
-	assert.Len(t, evts, 2)
-	_, ok := evts[1].(*aguievents.RunErrorEvent)
-	assert.True(t, ok)
+	assert.Nil(t, eventsCh)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve user ID")
 	assert.Equal(t, 0, underlying.calls)
 }
 
@@ -118,12 +111,8 @@ func TestRunLastMessageNotUser(t *testing.T) {
 		Messages: []model.Message{{Role: model.RoleAssistant, Content: "bot"}},
 	}
 	eventsCh, err := r.Run(context.Background(), input)
-	assert.NoError(t, err)
-
-	evts := collectEvents(t, eventsCh)
-	assert.Len(t, evts, 2)
-	_, ok := evts[1].(*aguievents.RunErrorEvent)
-	assert.True(t, ok)
+	assert.Nil(t, eventsCh)
+	assert.EqualError(t, err, "last message is not a user message")
 	assert.Equal(t, 0, underlying.calls)
 }
 
@@ -175,12 +164,9 @@ func TestRunRunOptionResolverError(t *testing.T) {
 	}
 
 	eventsCh, err := r.Run(context.Background(), input)
-	assert.NoError(t, err)
-	evts := collectEvents(t, eventsCh)
-	assert.Len(t, evts, 2)
-	runErr, ok := evts[1].(*aguievents.RunErrorEvent)
-	assert.True(t, ok)
-	assert.Contains(t, runErr.Message, "resolve run options")
+	assert.Nil(t, eventsCh)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve run option")
 	assert.Equal(t, 0, underlying.calls)
 }
 

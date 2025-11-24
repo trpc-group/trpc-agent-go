@@ -74,7 +74,16 @@ When a task may need tools, first ask to list skills or suggest one.
 Load a skill only when needed, then run commands from its docs exactly.
 Prefer safe defaults; ask clarifying questions if anything is ambiguous.
 When running, include output_files patterns if files are expected.
-Summarize results, note saved files, and propose next steps briefly.`
+Summarize results, note saved files, and propose next steps briefly.
+
+Inside a skill workspace, treat inputs/ and work/inputs/ as read-only
+views of host files unless skill docs say they are writable. Do not
+create, move, or modify files under inputs/ or work/inputs/.
+
+When chaining multiple skills, read previous results directly from
+out/ (or $OUTPUT_DIR) and write new files back to out/. Prefer using
+skill_run inputs/outputs fields to map files instead of shell commands
+like cp or mv where possible.`
 
 func main() {
 	flag.Parse()
@@ -142,6 +151,11 @@ func (c *skillChat) setup(_ context.Context) error {
 			containerexec.WithBindMount(
 				c.skillsRoot, "/opt/trpc-agent/skills", "ro",
 			),
+			// When an inputs-host directory is provided and bound
+			// into the container, automatically expose it under
+			// work/inputs (and thus inputs/) inside each workspace
+			// so skills can read host files via inputs/ paths.
+			containerexec.WithAutoInputs(true),
 		}
 		// Optional: bind a host directory for zero-copy inputs.
 		if *flagInputsHost != "" {
@@ -156,7 +170,15 @@ func (c *skillChat) setup(_ context.Context) error {
 			return fmt.Errorf("container executor: %w", e)
 		}
 	default:
-		we = localexec.New()
+		var lopts []localexec.CodeExecutorOption
+		if *flagInputsHost != "" {
+			lopts = append(
+				lopts, localexec.WithWorkspaceInputsHostBase(
+					*flagInputsHost,
+				),
+			)
+		}
+		we = localexec.New(lopts...)
 	}
 	c.executor = execUsed
 
@@ -223,6 +245,12 @@ func (c *skillChat) setup(_ context.Context) error {
 	)
 	fmt.Println(" - /artifacts lists saved artifact keys.")
 	fmt.Println(" - /pull <name> [version] downloads an artifact.")
+	fmt.Println(
+		" - Try skill 'user-file-ops' to summarize a user text file.",
+	)
+	fmt.Println(
+		"   Place it under work/inputs/ and write summaries to out/.",
+	)
 	fmt.Println(" - Type /exit to quit.")
 	fmt.Println()
 	return nil
