@@ -89,7 +89,7 @@ func run() error {
 		llmAgent,
 		runner.WithSessionService(inmemory.NewSessionService()),
 	)
-	
+
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer r.Close()
 
