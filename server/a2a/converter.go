@@ -285,10 +285,11 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 		return nil, nil
 	}
 
-	choice := event.Response.Choices[0]
 	var parts []protocol.Part
 
 	// Handle tool call requests (assistant making function calls)
+	// OpenAI returns tool calls in a single choice with multiple ToolCalls
+	choice := event.Response.Choices[0]
 	if len(choice.Message.ToolCalls) > 0 {
 		for _, toolCall := range choice.Message.ToolCalls {
 			// Convert ToolCall to map for DataPart
@@ -309,25 +310,28 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 	}
 
 	// Handle tool call responses (tool returning results)
-	if choice.Message.Role == model.RoleTool || choice.Message.ToolID != "" {
-		// Convert tool response to DataPart
-		toolResponseData := map[string]any{
-			ia2a.ToolCallFieldName: choice.Message.ToolName,
-			ia2a.ToolCallFieldID:   choice.Message.ToolID,
-		}
+	// OpenAI returns each tool response in a separate choice
+	for _, choice := range event.Response.Choices {
+		if choice.Message.Role == model.RoleTool || choice.Message.ToolID != "" {
+			// Convert tool response to DataPart
+			toolResponseData := map[string]any{
+				ia2a.ToolCallFieldName: choice.Message.ToolName,
+				ia2a.ToolCallFieldID:   choice.Message.ToolID,
+			}
 
-		// Pass content as-is without parsing
-		// Client will receive the raw response string and display it directly
-		if choice.Message.Content != "" {
-			toolResponseData[ia2a.ToolCallFieldResponse] = choice.Message.Content
-		}
+			// Pass content as-is without parsing
+			// Client will receive the raw response string and display it directly
+			if choice.Message.Content != "" {
+				toolResponseData[ia2a.ToolCallFieldResponse] = choice.Message.Content
+			}
 
-		// Create DataPart with metadata indicating this is a function response
-		dataPart := protocol.NewDataPart(toolResponseData)
-		dataPart.Metadata = map[string]any{
-			ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
+			// Create DataPart with metadata indicating this is a function response
+			dataPart := protocol.NewDataPart(toolResponseData)
+			dataPart.Metadata = map[string]any{
+				ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
+			}
+			parts = append(parts, dataPart)
 		}
-		parts = append(parts, dataPart)
 	}
 
 	if len(parts) == 0 {
