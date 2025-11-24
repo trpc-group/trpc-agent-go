@@ -13,10 +13,10 @@ package metric
 import "context"
 
 // EvalMetric represents a metric used to evaluate a particular aspect of an eval case.
-// It mirrors the schema used by ADK Web, with field names in snake_case to align with the JSON format.
+// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalMetric struct {
 	// MetricName identifies the metric.
-	MetricName string `json:"metric_name,omitempty"`
+	MetricName string `json:"metricName,omitempty"`
 	// Threshold value for this metric.
 	Threshold float64 `json:"threshold,omitempty"`
 }

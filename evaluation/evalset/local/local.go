@@ -20,9 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 const (

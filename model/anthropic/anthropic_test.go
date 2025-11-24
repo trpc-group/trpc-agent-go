@@ -43,6 +43,21 @@ func Test_Model_Info(t *testing.T) {
 	assert.Equal(t, "claude-3-5-sonnet-latest", info.Name)
 }
 
+func TestWithHeaders_AppendsOptions(t *testing.T) {
+	o := &options{}
+	headers := map[string]string{
+		"X-Custom":  "custom-value",
+		"X-TraceID": "trace-123",
+	}
+
+	WithHeaders(headers)(o)
+	assert.Len(t, o.anthropicClientOptions, 2, "expected headers to expand into options")
+
+	headers["X-Custom"] = "changed"
+	WithHeaders(map[string]string{"User-Agent": "test-agent"})(o)
+	assert.Len(t, o.anthropicClientOptions, 3, "expected additional headers to append")
+}
+
 func Test_Model_GenerateContent_NilRequest(t *testing.T) {
 	m := New("claude-3-5-sonnet-latest")
 	ctx := context.Background()
