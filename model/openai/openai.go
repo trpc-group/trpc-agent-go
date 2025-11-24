@@ -1363,6 +1363,14 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 // 5. Check usage - if valid, don't skip
 // 6. Otherwise, skip
 func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
+	// Chunks that carry a finish reason are meaningful and should not be
+	// skipped, even if they have no content or usage. This ensures that
+	// streaming clients can observe termination semantics.
+	if len(chunk.Choices) > 0 &&
+		chunk.Choices[0].FinishReason != "" {
+		return false
+	}
+
 	// No choices available, don't skip (let it be processed normally).
 	if len(chunk.Choices) == 0 {
 		return false
@@ -1639,6 +1647,14 @@ func (m *Model) createFinalResponse(
 		// If there are tool calls, add them to the final response.
 		if hasToolCall && i == 0 { // Usually only the first choice contains tool calls.
 			finalResponse.Choices[i].Message.ToolCalls = accumulatedToolCalls
+		}
+
+		// Propagate finish reason from the accumulated choice so that the final
+		// aggregated response exposes the same termination semantics as the
+		// underlying provider.
+		if choice.FinishReason != "" {
+			finishReason := choice.FinishReason
+			finalResponse.Choices[i].FinishReason = &finishReason
 		}
 	}
 
