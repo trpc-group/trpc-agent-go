@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
 func setupTestRedis(t testing.TB) (string, func()) {
@@ -38,6 +39,48 @@ func buildRedisClient(t *testing.T, redisURL string) *redis.Client {
 	opts, err := redis.ParseURL(redisURL)
 	require.NoError(t, err)
 	return redis.NewClient(opts)
+}
+
+func TestNewSaverWithRedisInstance_buildSuccess(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	const (
+		name = "test-instance"
+	)
+
+	defer cleanup()
+
+	storage.RegisterRedisInstance(name, storage.WithClientBuilderURL(redisURL))
+	opts, ok := storage.GetRedisInstance(name)
+	require.True(t, ok, "expected instance to exist")
+	require.NotEmpty(t, opts, "expected at least one option")
+
+	saver, err := NewSaver(WithRedisInstance(name))
+	require.NoError(t, err)
+	defer saver.Close()
+}
+
+func TestNewSaverWithRedisInstance_buildFailed(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	const (
+		name = "test-instance"
+	)
+
+	defer cleanup()
+
+	storage.RegisterRedisInstance(name, storage.WithClientBuilderURL(redisURL))
+	opts, ok := storage.GetRedisInstance(name)
+	require.True(t, ok, "expected instance to exist")
+	require.NotEmpty(t, opts, "expected at least one option")
+
+	saver, err := NewSaver(WithRedisInstance("no-instance"))
+	require.Error(t, err)
+	require.Nil(t, saver)
+}
+
+func TestNewSaverWithRedisOption_Error(t *testing.T) {
+	saver, err := NewSaver(WithRedisClientURL(""))
+	require.Error(t, err)
+	require.Nil(t, saver)
 }
 
 func TestRedisCheckpointSaver(t *testing.T) {

@@ -109,11 +109,12 @@ func main() {
 
 	// Create and run the workflow.
 	workflow := &checkpointWorkflow{
-		modelName:      *modelName,
-		storageType:    *storage,
-		dbPath:         *dbPath,
-		verbose:        *verbose,
-		redisClientURL: *redisClientURL,
+		modelName:        *modelName,
+		storageType:      *storage,
+		dbPath:           *dbPath,
+		verbose:          *verbose,
+		redisClientURL:   *redisClientURL,
+		currentNamespace: "checkpoint-demo",
 	}
 	if err := workflow.run(); err != nil {
 		log.Fatalf("Workflow failed: %v", err)
@@ -564,7 +565,6 @@ func (w *checkpointWorkflow) startInteractiveMode(ctx context.Context) error {
 func (w *checkpointWorkflow) runWorkflow(ctx context.Context, lineageID string) error {
 	startTime := time.Now()
 	w.currentLineageID = lineageID
-	w.currentNamespace = "" // Use empty namespace to align with LangGraph's design
 
 	w.logger.Infof("Starting workflow execution: lineage_id=%s, namespace=%s", lineageID, w.currentNamespace)
 
