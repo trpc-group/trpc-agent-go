@@ -76,6 +76,7 @@ type fetchResponse struct {
 type resultItem struct {
 	RetrievedURL string `json:"retrieved_url"`
 	StatusCode   int    `json:"status_code,omitempty"`
+	ContentType  string `json:"content_type,omitempty"`
 	Content      string `json:"content,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
@@ -139,20 +140,8 @@ func (t *webFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchRespon
 		wg.Add(1)
 		go func(index int, urlStr string) {
 			defer wg.Done()
-			content, statusCode, err := t.fetchOne(ctx, urlStr)
-			if err != nil {
-				results[index] = resultItem{
-					RetrievedURL: urlStr,
-					StatusCode:   statusCode,
-					Error:        err.Error(),
-				}
-			} else {
-				results[index] = resultItem{
-					RetrievedURL: urlStr,
-					StatusCode:   statusCode,
-					Content:      content,
-				}
-			}
+			item := t.fetchOne(ctx, urlStr)
+			results[index] = item
 		}(i, u)
 	}
 	wg.Wait()
@@ -184,41 +173,50 @@ func (t *webFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchRespon
 	}, nil
 }
 
-func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) (string, int, error) {
+func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
+	item := resultItem{
+		RetrievedURL: urlStr,
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
-		return "", 0, err
+		return item
 	}
 	req.Header.Set("User-Agent", "trpc-agent-go/web-fetch")
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return "", 0, err
+		item.Error = err.Error()
+		return item
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", resp.StatusCode, fmt.Errorf("HTTP status %d", resp.StatusCode)
+	contentType := resp.Header.Get("Content-Type")
+	// Parse media type (ignore parameters like charset)
+	item.ContentType = strings.Split(contentType, ";")[0]
+	item.ContentType = strings.TrimSpace(item.ContentType)
+	item.StatusCode = resp.StatusCode
+
+	if item.StatusCode < 200 || item.StatusCode >= 300 {
+		item.Error = fmt.Sprintf("HTTP status %d", item.StatusCode)
+		return item
 	}
 
 	var content string
 	var processErr error
 
-	contentType := resp.Header.Get("Content-Type")
-	// Parse media type (ignore parameters like charset)
-	mediaType := strings.Split(contentType, ";")[0]
-	mediaType = strings.TrimSpace(mediaType)
-
-	if mediaType == "text/html" {
+	if item.ContentType == "text/html" {
 		content, processErr = convertHTMLToMarkdown(resp.Body)
-	} else if isSupportedTextType(mediaType) {
+	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
 	} else {
-		return "", resp.StatusCode, fmt.Errorf("unsupported content type: %s", mediaType)
+		item.Error = fmt.Errorf("unsupported content type: %s", item.ContentType).Error()
+		return item
 	}
 
 	if processErr != nil {
-		return "", resp.StatusCode, processErr
+		item.Error = processErr.Error()
+		return item
 	}
 
 	// Apply per-URL limit
@@ -226,7 +224,8 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) (string, int
 		content = truncateString(content, t.maxContentLength)
 	}
 
-	return content, resp.StatusCode, nil
+	item.Content = content
+	return item
 }
 
 // truncateString truncates a string to n bytes, ensuring valid UTF-8.

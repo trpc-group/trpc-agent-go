@@ -60,11 +60,13 @@ func TestWebFetch(t *testing.T) {
 			assert.Contains(t, r.Content, "# Hello")
 			assert.Contains(t, r.Content, "World")
 			assert.Equal(t, http.StatusOK, r.StatusCode)
+			assert.Equal(t, "text/html", r.ContentType)
 			foundPage1 = true
 		}
 		if r.RetrievedURL == ts.URL+"/page2" {
 			assert.Contains(t, r.Content, "Foo Bar")
 			assert.Equal(t, http.StatusOK, r.StatusCode)
+			assert.Equal(t, "text/html", r.ContentType)
 			foundPage2 = true
 		}
 	}
@@ -83,6 +85,7 @@ func TestWebFetch(t *testing.T) {
 	assert.Len(t, resp404.Results, 1)
 	assert.Equal(t, ts.URL+"/nonexistent", resp404.Results[0].RetrievedURL)
 	assert.Equal(t, http.StatusNotFound, resp404.Results[0].StatusCode)
+	assert.Equal(t, "", resp404.Results[0].ContentType) // 404 response might not have a content type
 	assert.Contains(t, resp404.Results[0].Error, "HTTP status 404")
 }
 
@@ -114,6 +117,7 @@ func TestWebFetch_PlainText(t *testing.T) {
 	assert.Len(t, resp.Results, 1)
 	assert.Equal(t, ts.URL, resp.Results[0].RetrievedURL)
 	assert.Equal(t, http.StatusOK, resp.Results[0].StatusCode)
+	assert.Equal(t, "text/plain", resp.Results[0].ContentType)
 	assert.Equal(t, "This is plain text content.", resp.Results[0].Content)
 }
 
@@ -135,6 +139,7 @@ func TestWebFetch_JSON(t *testing.T) {
 	assert.Len(t, resp.Results, 1)
 	assert.Equal(t, ts.URL, resp.Results[0].RetrievedURL)
 	assert.Equal(t, http.StatusOK, resp.Results[0].StatusCode)
+	assert.Equal(t, "application/json", resp.Results[0].ContentType)
 	assert.Equal(t, `{"key": "value", "number": 123}`, resp.Results[0].Content)
 }
 
@@ -155,7 +160,8 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	require.True(t, ok, "Response should be of type fetchResponse")
 	assert.Len(t, resp.Results, 1)
 	assert.Equal(t, ts.URL, resp.Results[0].RetrievedURL)
-	assert.Equal(t, http.StatusOK, resp.Results[0].StatusCode) // HTTP status is 200 even if content type is unsupported
+	assert.Equal(t, http.StatusOK, resp.Results[0].StatusCode)
+	assert.Equal(t, "application/octet-stream", resp.Results[0].ContentType)
 	assert.Empty(t, resp.Results[0].Content)
 	assert.Contains(t, resp.Results[0].Error, "unsupported content type: application/octet-stream")
 }
@@ -178,6 +184,7 @@ func TestWebFetch_PerUrlLimit(t *testing.T) {
 	require.True(t, ok)
 	assert.Len(t, resp.Results, 1)
 	assert.Equal(t, "12345", resp.Results[0].Content)
+	assert.Equal(t, "text/plain", resp.Results[0].ContentType)
 }
 
 func TestWebFetch_TotalLimit(t *testing.T) {
@@ -208,7 +215,9 @@ func TestWebFetch_TotalLimit(t *testing.T) {
 	// Result 1: "12" (len 2) -> Total 7
 
 	assert.Equal(t, "12345", resp.Results[0].Content)
+	assert.Equal(t, "text/plain", resp.Results[0].ContentType)
 	assert.Equal(t, "12", resp.Results[1].Content)
+	assert.Equal(t, "text/plain", resp.Results[1].ContentType)
 }
 
 func TestWebFetch_TruncateUTF8(t *testing.T) {
@@ -236,6 +245,7 @@ func TestWebFetch_TruncateUTF8(t *testing.T) {
 	resp, ok := res.(fetchResponse)
 	require.True(t, ok)
 	assert.Equal(t, "你", resp.Results[0].Content)
+	assert.Equal(t, "text/plain", resp.Results[0].ContentType)
 }
 
 func TestConvertHTMLToMarkdown(t *testing.T) {
