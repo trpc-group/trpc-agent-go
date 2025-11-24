@@ -23,7 +23,7 @@ func TestTopKReranker(t *testing.T) {
 	}
 
 	rk := NewTopKReranker(WithK(2))
-	out, err := rk.Rerank(nil, results)
+	out, err := rk.Rerank(nil, nil, results)
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}
@@ -36,7 +36,7 @@ func TestTopKReranker(t *testing.T) {
 
 	// K greater than len.
 	rk2 := NewTopKReranker(WithK(10))
-	out2, _ := rk2.Rerank(nil, results)
+	out2, _ := rk2.Rerank(nil, nil, results)
 	if len(out2) != 3 {
 		t.Fatalf("expected all results")
 	}

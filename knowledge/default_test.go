@@ -734,7 +734,7 @@ func TestAddDocument_EmptyEmbedding(t *testing.T) {
 
 	// Create a vector store that tracks the embedding it receives
 	vs := &trackingVectorStore{}
-	
+
 	kb := &BuiltinKnowledge{
 		embedder:    nil, // No embedder - should pass empty embedding
 		vectorStore: vs,
@@ -810,7 +810,7 @@ func (m *mockQueryEnhancer) EnhanceQuery(ctx context.Context, req *query.Request
 
 type mockReranker struct{}
 
-func (m *mockReranker) Rerank(ctx context.Context, results []*reranker.Result) ([]*reranker.Result, error) {
+func (m *mockReranker) Rerank(ctx context.Context, query *reranker.Query, results []*reranker.Result) ([]*reranker.Result, error) {
 	return results, nil
 }
 
