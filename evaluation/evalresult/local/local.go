@@ -123,14 +123,21 @@ func (m *manager) evalSetResultPath(appName, evalSetResultID string) string {
 // load loads the EvalSetResult from the file system.
 func (m *manager) load(appName, evalSetResultID string) (*evalresult.EvalSetResult, error) {
 	path := m.evalSetResultPath(appName, evalSetResultID)
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open file %s: %w", path, err)
 	}
-	defer f.Close()
 	var res evalresult.EvalSetResult
-	if err := json.NewDecoder(f).Decode(&res); err != nil {
+	if err := json.Unmarshal(data, &res); err == nil {
+		return &res, nil
+	}
+	// Keep backward compatibility with legacy string-wrapped results.
+	var legacy string
+	if err := json.Unmarshal(data, &legacy); err != nil {
 		return nil, fmt.Errorf("decode file %s: %w", path, err)
+	}
+	if err := json.Unmarshal([]byte(legacy), &res); err != nil {
+		return nil, fmt.Errorf("decode legacy content in file %s: %w", path, err)
 	}
 	return &res, nil
 }

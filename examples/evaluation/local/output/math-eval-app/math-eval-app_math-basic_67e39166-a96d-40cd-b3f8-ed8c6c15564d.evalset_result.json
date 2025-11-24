@@ -1,17 +1,16 @@
 {
-  "evalSetResultId": "math-eval-app_math-basic_c95c08af-c85c-43c4-ac7b-ee12870fa973",
-  "evalSetResultName": "math-eval-app_math-basic_c95c08af-c85c-43c4-ac7b-ee12870fa973",
+  "evalSetResultId": "math-eval-app_math-basic_67e39166-a96d-40cd-b3f8-ed8c6c15564d",
+  "evalSetResultName": "math-eval-app_math-basic_67e39166-a96d-40cd-b3f8-ed8c6c15564d",
   "evalSetId": "math-basic",
   "evalCaseResults": [
     {
       "evalSetId": "math-basic",
       "evalId": "calc_add",
-      "finalEvalStatus": 1,
+      "finalEvalStatus": 2,
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
-          "score": 1,
-          "evalStatus": 1,
+          "evalStatus": 2,
           "threshold": 1,
           "criterion": {
             "toolTrajectory": {
@@ -37,7 +36,7 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "49ff84cf-ad89-42ab-be07-1fffc4dc78f2",
+            "invocationId": "585658a1-c131-4dcf-beb4-0245dc6e1941",
             "userContent": {
               "parts": [
                 {
@@ -57,7 +56,7 @@
             "intermediateData": {
               "toolUses": [
                 {
-                  "id": "call_00_pCwL67NPbNQAJEvZjvxuthX6",
+                  "id": "call_00_EHcJm9ANKdFk42iLG5yXqquP",
                   "args": {
                     "a": 2,
                     "b": 3,
@@ -68,7 +67,7 @@
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_pCwL67NPbNQAJEvZjvxuthX6",
+                  "id": "call_00_EHcJm9ANKdFk42iLG5yXqquP",
                   "name": "calculator",
                   "response": {
                     "a": 2,
@@ -101,6 +100,7 @@
             "intermediateData": {
               "toolUses": [
                 {
+                  "id": "tool_use_1",
                   "args": {
                     "a": 2,
                     "b": 3,
@@ -111,9 +111,10 @@
               ],
               "toolResponses": [
                 {
+                  "id": "tool_use_1",
                   "name": "calculator",
                   "response": {
-                    "result": 42
+                    "result": 5
                   }
                 }
               ]
@@ -122,8 +123,7 @@
           "evalMetricResults": [
             {
               "metricName": "tool_trajectory_avg_score",
-              "score": 1,
-              "evalStatus": 1,
+              "evalStatus": 2,
               "threshold": 1,
               "criterion": {
                 "toolTrajectory": {
@@ -148,18 +148,17 @@
           ]
         }
       ],
-      "sessionId": "007a49f9-5a2c-49ba-a6ae-b0657d50aafb",
+      "sessionId": "fad87330-e5f2-487a-95ac-3a5d458790bf",
       "userId": "user"
     },
     {
       "evalSetId": "math-basic",
       "evalId": "calc_multiply",
-      "finalEvalStatus": 1,
+      "finalEvalStatus": 2,
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
-          "score": 1,
-          "evalStatus": 1,
+          "evalStatus": 2,
           "threshold": 1,
           "criterion": {
             "toolTrajectory": {
@@ -185,7 +184,7 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "353274d3-694d-4de4-8dd8-e2cdde2ad5f5",
+            "invocationId": "6c66b8cc-a8e0-4f52-b40a-9cf97df72dc7",
             "userContent": {
               "parts": [
                 {
@@ -205,7 +204,7 @@
             "intermediateData": {
               "toolUses": [
                 {
-                  "id": "call_00_sgCNfRj0X4wDh6PqfuUUu5NC",
+                  "id": "call_00_8PwymQ0Vgw7hhmqgpy4jJ2Pl",
                   "args": {
                     "a": 6,
                     "b": 7,
@@ -216,7 +215,7 @@
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_sgCNfRj0X4wDh6PqfuUUu5NC",
+                  "id": "call_00_8PwymQ0Vgw7hhmqgpy4jJ2Pl",
                   "name": "calculator",
                   "response": {
                     "a": 6,
@@ -249,6 +248,7 @@
             "intermediateData": {
               "toolUses": [
                 {
+                  "id": "tool_use_2",
                   "args": {
                     "a": 6,
                     "b": 7,
@@ -259,9 +259,10 @@
               ],
               "toolResponses": [
                 {
+                  "id": "tool_use_2",
                   "name": "calculator",
                   "response": {
-                    "result": 42
+                    "result": 5
                   }
                 }
               ]
@@ -270,8 +271,7 @@
           "evalMetricResults": [
             {
               "metricName": "tool_trajectory_avg_score",
-              "score": 1,
-              "evalStatus": 1,
+              "evalStatus": 2,
               "threshold": 1,
               "criterion": {
                 "toolTrajectory": {
@@ -296,9 +296,9 @@
           ]
         }
       ],
-      "sessionId": "a47948ed-4bb0-4c2b-a1a0-05d101dfe3e1",
+      "sessionId": "a8434547-2943-4779-9199-221005869965",
       "userId": "user"
     }
   ],
-  "creationTimestamp": 1763960812.6226852
+  "creationTimestamp": 1763994917.7690995
 }

@@ -14,7 +14,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	imaptext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/internal/maptext"
 )
 
 func TestNewOptionsDefaults(t *testing.T) {
@@ -46,27 +45,30 @@ func TestWithOrderInsensitive(t *testing.T) {
 
 func TestWithCompare(t *testing.T) {
 	var called bool
-	compare := func(actual, expected *evalset.Invocation) error {
+	compare := func(actual, expected *evalset.Invocation) (bool, error) {
 		called = true
-		return nil
+		return true, nil
 	}
 	opts := newOptions(WithCompare(compare))
 	assert.NotNil(t, opts.compare)
-	err := opts.compare(nil, nil)
+	ok, err := opts.compare(nil, nil)
+	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.True(t, called)
 }
 
 func TestDefaultToolTrajectoryStrategyDeepEqualMismatch(t *testing.T) {
-	errArgs := imaptext.Match(defaultToolTrajectoryStrategy.Arguments,
+	ok, errArgs := defaultToolTrajectoryStrategy.Arguments.Match(
 		map[string]any{"a": 1},
 		map[string]any{"a": 2},
 	)
+	assert.False(t, ok)
 	assert.Error(t, errArgs)
 
-	errResp := imaptext.Match(defaultToolTrajectoryStrategy.Response,
+	ok, errResp := defaultToolTrajectoryStrategy.Response.Match(
 		map[string]any{"r": 1},
 		map[string]any{"r": 3},
 	)
+	assert.False(t, ok)
 	assert.Error(t, errResp)
 }

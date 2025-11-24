@@ -10,35 +10,16 @@
 package tooltrajectory
 
 import (
-	"fmt"
-	"reflect"
-
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/maptext"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
 // defaultToolTrajectoryStrategy is used when no user strategy is supplied.
 var defaultToolTrajectoryStrategy = &ToolTrajectoryStrategy{
-	Name: &text.TextCriterion{
-		MatchStrategy: text.TextMatchStrategyExact,
-	},
-	Arguments: &maptext.MapTextCriterion{
-		Compare: func(actual, expected map[string]any) error {
-			if !reflect.DeepEqual(actual, expected) {
-				return fmt.Errorf("actual %v and expected %v do not match", actual, expected)
-			}
-			return nil
-		},
-	},
-	Response: &maptext.MapTextCriterion{
-		Compare: func(actual, expected map[string]any) error {
-			if !reflect.DeepEqual(actual, expected) {
-				return fmt.Errorf("actual %v and expected %v do not match", actual, expected)
-			}
-			return nil
-		},
-	},
+	Name:      &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact},
+	Arguments: &json.JSONCriterion{MatchStrategy: json.JSONMatchStrategyExact},
+	Response:  &json.JSONCriterion{MatchStrategy: json.JSONMatchStrategyExact},
 }
 
 // options configures ToolTrajectoryCriterion.
@@ -50,7 +31,7 @@ type options struct {
 	// orderInsensitive toggles order-agnostic comparison for args and responses.
 	orderInsensitive bool
 	// compare allows overriding comparison logic entirely.
-	compare func(actual, expected *evalset.Invocation) error
+	compare func(actual, expected *evalset.Invocation) (bool, error)
 }
 
 // newOptions applies provided options for ToolTrajectoryCriterion.
@@ -92,7 +73,7 @@ func WithOrderInsensitive(orderInsensitive bool) Option {
 }
 
 // WithCompare sets the tool trajectory comparison logic.
-func WithCompare(compare func(actual, expected *evalset.Invocation) error) Option {
+func WithCompare(compare func(actual, expected *evalset.Invocation) (bool, error)) Option {
 	return func(o *options) {
 		o.compare = compare
 	}

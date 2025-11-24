@@ -150,6 +150,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 					IntermediateData: &evalset.IntermediateData{
 						ToolUses: []*genai.FunctionCall{
 							{
+								ID:   "tool_use_1",
 								Name: "calculator",
 								Args: map[string]interface{}{
 									"operation": "add",
@@ -160,6 +161,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 						},
 						ToolResponses: []*genai.FunctionResponse{
 							{
+								ID:   "tool_use_1",
 								Name: "calculator",
 								Response: map[string]interface{}{
 									"result": 5.0,
@@ -198,6 +200,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 					IntermediateData: &evalset.IntermediateData{
 						ToolUses: []*genai.FunctionCall{
 							{
+								ID:   "tool_use_2",
 								Name: "calculator",
 								Args: map[string]interface{}{
 									"operation": "multiply",
@@ -208,6 +211,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 						},
 						ToolResponses: []*genai.FunctionResponse{
 							{
+								ID:   "tool_use_2",
 								Name: "calculator",
 								Response: map[string]interface{}{
 									"result": 5.0,
