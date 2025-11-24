@@ -33,9 +33,6 @@ func checkURL(validators []urlValidator, urlStr string) error {
 	}
 	return nil
 }
-
-// NewBlockPatternFilter creates a filter that returns false (blocked) if the URL matches the pattern.
-// Invalid URLs are treated as blocked for security.
 func newBlockPatternFilter(pattern string) URLFilter {
 	return func(urlStr string) bool {
 		u, err := url.Parse(urlStr)
@@ -47,7 +44,6 @@ func newBlockPatternFilter(pattern string) URLFilter {
 	}
 }
 
-// NewAllowPatternsFilter creates a filter that returns true (allowed) if the URL matches ANY of the patterns.
 func newAllowPatternsFilter(patterns []string) URLFilter {
 	return func(urlStr string) bool {
 		u, err := url.Parse(urlStr)
