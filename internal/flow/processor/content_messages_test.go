@@ -115,7 +115,9 @@ func TestProcessRequest_PreserveSameBranchKeepsRoles(t *testing.T) {
 	makeInvocation := func(sess *session.Session) *agent.Invocation {
 		inv := agent.NewInvocation(
 			agent.WithInvocationSession(sess),
-			agent.WithInvocationMessage(model.NewUserMessage("latest request")),
+			agent.WithInvocationMessage(
+				model.NewUserMessage("latest request"),
+			),
 			agent.WithInvocationEventFilterKey("graph-agent"),
 		)
 		inv.AgentName = "graph-agent"
@@ -131,17 +133,7 @@ func TestProcessRequest_PreserveSameBranchKeepsRoles(t *testing.T) {
 	)
 
 	// Default behavior now preserves same-branch assistant/tool roles.
-	defaultReq := &model.Request{}
-	defaultProc := NewContentRequestProcessor()
-	defaultProc.ProcessRequest(
-		context.Background(), makeInvocation(sess), defaultReq, nil,
-	)
-	require.Equal(t, 2, len(defaultReq.Messages))
-	require.Equal(t, model.RoleUser, defaultReq.Messages[0].Role)
-	require.Equal(t, model.RoleAssistant, defaultReq.Messages[1].Role)
-	require.Equal(t, assistantMsg.Content, defaultReq.Messages[1].Content)
-
-	// Explicitly enabling preserve matches the default behavior.
+	// Explicitly enabling preserve keeps assistant role.
 	preserveReq := &model.Request{}
 	preserveProc := NewContentRequestProcessor(
 		WithPreserveSameBranch(true),
@@ -169,7 +161,7 @@ func TestProcessRequest_PreserveSameBranchKeepsRoles(t *testing.T) {
 }
 
 // When the historical event branch is an ancestor or descendant of the current
-// branch, PreserveSameBranch (default: true) should keep assistant roles.
+// branch, PreserveSameBranch=true should keep assistant roles.
 func TestProcessRequest_PreserveSameBranch_AncestorDescendant(t *testing.T) {
 	makeInvocation := func(sess *session.Session) *agent.Invocation {
 		inv := agent.NewInvocation(
@@ -201,7 +193,7 @@ func TestProcessRequest_PreserveSameBranch_AncestorDescendant(t *testing.T) {
 	)
 
 	req := &model.Request{}
-	p := NewContentRequestProcessor() // preserve=true by default
+	p := NewContentRequestProcessor(WithPreserveSameBranch(true))
 	p.ProcessRequest(context.Background(), makeInvocation(sess), req, nil)
 
 	require.Equal(t, 2, len(req.Messages))
@@ -234,7 +226,7 @@ func TestProcessRequest_CrossBranch_RewritesToUser(t *testing.T) {
 	inv.Session = sess
 
 	req := &model.Request{}
-	p := NewContentRequestProcessor() // preserve=true by default
+	p := NewContentRequestProcessor(WithPreserveSameBranch(true))
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
 	require.Equal(t, 1, len(req.Messages))

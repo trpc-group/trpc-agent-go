@@ -3722,6 +3722,18 @@ func TestEmptyChunkHandling(t *testing.T) {
 		assert.True(t, m.shouldSkipEmptyChunk(chunk))
 	})
 
+	t.Run("shouldSkipEmptyChunk with finish reason", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					FinishReason: "stop",
+				},
+			},
+		}
+		// Should not skip chunks that only carry a finish reason.
+		assert.False(t, m.shouldSkipEmptyChunk(chunk))
+	})
+
 	t.Run("shouldSuppressChunk with empty delta", func(t *testing.T) {
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -3797,6 +3809,37 @@ func TestEmptyChunkHandling(t *testing.T) {
 		assert.Equal(t, "{\"content\":\"partial\"}",
 			string(tc.Function.Arguments))
 	})
+}
+
+// TestCreateFinalResponseFinishReason verifies that finish reasons from the
+// accumulated choices are propagated to the final aggregated response.
+func TestCreateFinalResponseFinishReason(t *testing.T) {
+	m := &Model{}
+
+	var acc openai.ChatCompletionAccumulator
+	chunk := openai.ChatCompletionChunk{
+		ID:    "acc-id",
+		Model: "test-model",
+		Choices: []openai.ChatCompletionChunkChoice{
+			{
+				Index: 0,
+				Delta: openai.ChatCompletionChunkChoiceDelta{
+					Content: "Hello",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	acc.AddChunk(chunk)
+
+	finalResponse := m.createFinalResponse(
+		acc, false, nil, "")
+	require.NotNil(t, finalResponse)
+	require.Len(t, finalResponse.Choices, 1)
+	require.NotNil(t, finalResponse.Choices[0].FinishReason)
+	assert.Equal(t, "stop",
+		*finalResponse.Choices[0].FinishReason)
 }
 
 // TestToolCallIndexMapping tests the tool call index mapping functionality.

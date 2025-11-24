@@ -171,7 +171,7 @@ func buildGraphAndSubAgent(modelName, baseURL, apiKey string) (*graph.Graph, age
 	)
 
 	// 2) Sub‑agent model callbacks – inject scene knowledge (English, tool-friendly)
-	modelCbs := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+	modelCbs := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
 		inv, _ := agent.InvocationFromContext(ctx)
 		if inv == nil || inv.RunOptions.RuntimeState == nil {
 			return nil, nil
@@ -181,12 +181,12 @@ func buildGraphAndSubAgent(modelName, baseURL, apiKey string) (*graph.Graph, age
 			// Prepend a system message carrying scene knowledge and guidance.
 			// Always keep it English and tool-friendly to avoid suppressing tool calls.
 			sys := sceneInfo + `\n\nGuidance:\n- Always respond in English.\n- If the user asks to schedule a meeting, CALL the schedule_meeting tool.\n- Use parsed_time from runtime state when present. If time is missing/ambiguous, ask a clarifying question.\n- Derive a concise meeting title from the user request.`
-			req.Messages = append([]model.Message{model.NewSystemMessage(sys)}, req.Messages...)
+			args.Request.Messages = append([]model.Message{model.NewSystemMessage(sys)}, args.Request.Messages...)
 		}
 		return nil, nil
 	})
 
-	toolCbs := (&tool.Callbacks{}).RegisterBeforeTool(func(ctx context.Context, toolName string, decl *tool.Declaration, args *[]byte) (any, error) {
+	toolCbs := (&tool.Callbacks{}).RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
 		// Demonstrate we can read parsed_time from runtime state inside sub‑agent callback
 		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.RunOptions.RuntimeState != nil {
 			if v, ok2 := inv.RunOptions.RuntimeState["parsed_time"].(string); ok2 && v != "" {

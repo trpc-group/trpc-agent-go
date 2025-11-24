@@ -125,16 +125,21 @@ func WithPreserveSameBranch(preserve bool) ContentOption {
 	}
 }
 
+const (
+	mergedUserSeparator = "\n\n"
+	contextPrefix       = "For context:"
+)
+
 // NewContentRequestProcessor creates a new content request processor.
 func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
 	processor := &ContentRequestProcessor{
-		BranchFilterMode: BranchFilterModePrefix, // Default only to include filtered contents.
-		AddContextPrefix: true,                   // Default to add context prefix.
-		// Default to preserving roles for same-branch lineage so that
-		// downstream subagents keep assistant/tool roles from their parent
-		// agent's history. This produces interleaved user/assistant/tool,
-		// which is the expected default behavior for end users.
-		PreserveSameBranch: true,
+		BranchFilterMode: BranchFilterModePrefix, // Default only to include
+		// filtered contents.
+		AddContextPrefix: true, // Default to add context prefix.
+		// Default to rewriting same-branch lineage events to user context so
+		// that downstream subagents see a single consolidated user message
+		// stream unless explicitly opted back into preserving roles.
+		PreserveSameBranch: false,
 		// Default to append history message.
 		TimelineFilterMode: TimelineFilterAll,
 	}
@@ -274,12 +279,69 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		}
 	}
 
-	// Apply MaxHistoryRuns limit if set MaxHistoryRuns and AddSessionSummary is false.
-	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 && len(messages) > p.MaxHistoryRuns {
+	messages = p.mergeUserMessages(messages)
+
+	// Apply MaxHistoryRuns limit if set MaxHistoryRuns and
+	// AddSessionSummary is false.
+	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 &&
+		len(messages) > p.MaxHistoryRuns {
 		startIdx := len(messages) - p.MaxHistoryRuns
 		messages = messages[startIdx:]
 	}
 	return messages
+}
+
+func (p *ContentRequestProcessor) mergeUserMessages(
+	messages []model.Message,
+) []model.Message {
+	if len(messages) <= 1 {
+		return messages
+	}
+	if !p.AddContextPrefix {
+		return messages
+	}
+	var merged []model.Message
+	var current *model.Message
+	appendCurrent := func() {
+		if current == nil {
+			return
+		}
+		merged = append(merged, *current)
+		current = nil
+	}
+	for i := range messages {
+		msg := messages[i]
+		if msg.Role != model.RoleUser ||
+			!strings.HasPrefix(msg.Content, contextPrefix) {
+			appendCurrent()
+			merged = append(merged, msg)
+			continue
+		}
+		if current == nil {
+			cloned := msg
+			current = &cloned
+			continue
+		}
+		if msg.Content != "" {
+			if current.Content == "" {
+				current.Content = msg.Content
+			} else {
+				current.Content = current.Content + mergedUserSeparator +
+					msg.Content
+			}
+		}
+		if len(msg.ContentParts) > 0 {
+			current.ContentParts = append(
+				current.ContentParts,
+				msg.ContentParts...,
+			)
+		}
+	}
+	appendCurrent()
+	if len(merged) == 0 {
+		return messages
+	}
+	return merged
 }
 
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
@@ -365,7 +427,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 	// Build content parts for context.
 	var contentParts []string
 	if p.AddContextPrefix {
-		contentParts = append(contentParts, "For context:")
+		contentParts = append(contentParts, contextPrefix)
 	}
 
 	for _, choice := range evt.Choices {

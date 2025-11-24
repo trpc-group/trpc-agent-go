@@ -112,7 +112,7 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 		},
 	}
 
-	choice, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choice, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, choice)
 
@@ -153,7 +153,7 @@ func TestExecuteToolCall(t *testing.T) {
 		},
 	}
 
-	choice, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choice, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	res, _ := json.Marshal("Tokyo'weather is good")
 	require.NoError(t, err)
 	require.NotNil(t, choice)
@@ -602,7 +602,7 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 		},
 	}
 
-	choice, _, shouldIgnoreError, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
+	_, choice, _, shouldIgnoreError, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
 	require.True(t, shouldIgnoreError)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
 	require.Nil(t, choice)
@@ -836,7 +836,7 @@ func TestExecuteToolCall_MarshalError_IsIgnorable(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"bad": &badResultTool{dec: &tool.Declaration{Name: "bad"}},
 	}
-	choice, _, ignorable, err := p.executeToolCall(
+	_, choice, _, ignorable, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
 	require.Error(t, err)
@@ -1055,7 +1055,7 @@ func TestExecuteToolCall_MarshalErrorIgnored(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
-	choice, _, ign, err := p.executeToolCall(
+	_, choice, _, ign, err := p.executeToolCall(
 		ctx, inv, tc, tools, 0, nil,
 	)
 	require.True(t, ign)
@@ -1811,7 +1811,7 @@ func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"v": 1})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
@@ -1828,7 +1828,7 @@ func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	_, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, _, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.Error(t, err)
 }
 
@@ -1843,7 +1843,7 @@ func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"ok": true})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
@@ -1856,7 +1856,7 @@ func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
 	})
 	inv2 := &agent.Invocation{}
 	p.toolCallbacks = cb
-	_, _, err = p.executeToolWithCallbacks(ctx, inv2, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, _, _, err = p.executeToolWithCallbacks(ctx, inv2, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.Error(t, err)
 }
 
@@ -1903,7 +1903,7 @@ func TestExecuteTool_NamedTool(t *testing.T) {
 	require.Len(t, namedTools, 1)
 	nameTool := namedTools[0]
 	require.IsType(t, &itool.NamedTool{}, nameTool)
-	res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, nameTool, nil)
+	_, res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, nameTool, nil)
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"k": "v"})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
