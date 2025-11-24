@@ -263,8 +263,8 @@ func TestBuildChunkingStrategy_DefaultBuilder(t *testing.T) {
 		t.Errorf("defaultBuilder called with overlap = %d, expected 20", capturedOverlap)
 	}
 
-	mockStrat, ok := result.(*mockChunkingStrategy)
-	if !ok || mockStrat.name != "default" {
+	mockStrategy, ok := result.(*mockChunkingStrategy)
+	if !ok || mockStrategy.name != "default" {
 		t.Errorf("BuildChunkingStrategy() did not call default builder correctly")
 	}
 }

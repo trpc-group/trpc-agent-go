@@ -340,15 +340,15 @@ func TestReader_ErrorHandling(t *testing.T) {
 			wantErr: "failed to open PDF file",
 		},
 		{
-			name: "invalid URL",
+			name: "unsupported URL scheme (empty)",
 			fn: func(r reader.Reader) error {
 				_, err := r.ReadFromURL("invalid-url")
 				return err
 			},
-			wantErr: "invalid URL",
+			wantErr: "unsupported URL scheme",
 		},
 		{
-			name: "unsupported URL scheme",
+			name: "unsupported URL scheme (ftp)",
 			fn: func(r reader.Reader) error {
 				_, err := r.ReadFromURL("ftp://example.com/file.pdf")
 				return err
