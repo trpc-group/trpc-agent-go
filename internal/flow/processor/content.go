@@ -169,18 +169,44 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// Check if include_contents is set to "none" in runtime state.
-	// When set to "none", skip session history and only add invocation message.
+	// Determine effective filter modes, allowing runtime override via RuntimeState.
+	timelineFilterMode := p.TimelineFilterMode
+	branchFilterMode := p.BranchFilterMode
+
 	if invocation.RunOptions.RuntimeState != nil {
-		if includeContents, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents]; ok {
-			if includeContentsStr, ok := includeContents.(string); ok && includeContentsStr == graph.IncludeContentsNone {
-				// Skip session history, only add invocation message.
-				if invocation.Message.Content != "" {
-					req.Messages = append(req.Messages, invocation.Message)
-					log.Debugf("Content request processor: include_contents=none, added invocation message only")
-				}
-				return
+		// Check for runtime override of timeline filter mode.
+		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyMessageTimelineFilterMode]; ok {
+			if modeStr, ok := mode.(string); ok && modeStr != "" {
+				timelineFilterMode = modeStr
 			}
+		}
+		// Check for runtime override of branch filter mode.
+		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyMessageBranchFilterMode]; ok {
+			if modeStr, ok := mode.(string); ok && modeStr != "" {
+				branchFilterMode = modeStr
+			}
+		}
+	}
+
+	// If timeline filter mode is set to "request", only include messages from current request.
+	// This achieves isolation without global pollution.
+	if timelineFilterMode == TimelineFilterCurrentRequest && invocation.Session != nil {
+		// Check if there are any messages from the current request in the session.
+		// If not, we can skip session history and only add the invocation message.
+		hasCurrentRequestMessages := false
+		for _, evt := range invocation.Session.Events {
+			if evt.RequestID == invocation.RunOptions.RequestID && evt.IsValidContent() && !evt.IsPartial {
+				hasCurrentRequestMessages = true
+				break
+			}
+		}
+		// If no messages from current request, skip session history (equivalent to isolation).
+		if !hasCurrentRequestMessages {
+			if invocation.Message.Content != "" {
+				req.Messages = append(req.Messages, invocation.Message)
+				log.Debugf("Content request processor: TimelineFilterCurrentRequest with no current request messages, added invocation message only")
+			}
+			return
 		}
 	}
 
@@ -189,7 +215,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	if invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
-		if p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
+		if p.AddSessionSummary && timelineFilterMode == TimelineFilterAll {
 			// Prepend session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
@@ -198,7 +224,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 				summaryUpdatedAt = updatedAt
 			}
 		}
-		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+		messages = p.getIncrementMessages(invocation, summaryUpdatedAt, timelineFilterMode, branchFilterMode)
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = summaryUpdatedAt.IsZero() && len(messages) == 0
 	}
@@ -245,7 +271,7 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 
 // getHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
 // This method is used when AddSessionSummary is false to get recent history messages.
-func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, since time.Time) []model.Message {
+func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, since time.Time, timelineFilterMode, branchFilterMode string) []model.Message {
 	if inv.Session == nil {
 		return nil
 	}
@@ -255,7 +281,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
-		if !p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since) {
+		if !p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since, timelineFilterMode, branchFilterMode) {
 			continue
 		}
 		events = append(events, evt)
@@ -345,7 +371,7 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 }
 
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
-	isZeroTime bool, since time.Time) bool {
+	isZeroTime bool, since time.Time, timelineFilterMode, branchFilterMode string) bool {
 	if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
 		return false
 	}
@@ -355,7 +381,7 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	}
 
 	// Check timeline filter
-	switch p.TimelineFilterMode {
+	switch timelineFilterMode {
 	case TimelineFilterCurrentRequest:
 		if inv.RunOptions.RequestID != evt.RequestID {
 			return false
@@ -375,7 +401,7 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	}
 
 	// Check branch filter
-	switch p.BranchFilterMode {
+	switch branchFilterMode {
 	case BranchFilterModeExact:
 		if evt.FilterKey != filter {
 			return false

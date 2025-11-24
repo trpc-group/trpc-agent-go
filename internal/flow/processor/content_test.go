@@ -529,7 +529,7 @@ func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing
 				agent.WithInvocationEventFilterKey("test-filter"),
 			)
 
-			messages := p.getIncrementMessages(inv, tt.summaryUpdatedAt)
+			messages := p.getIncrementMessages(inv, tt.summaryUpdatedAt, p.TimelineFilterMode, p.BranchFilterMode)
 
 			assert.Len(t, messages, tt.expectedCount)
 
@@ -678,7 +678,7 @@ func TestContentRequestProcessor_ConcurrentFilterIncrementalMessages(t *testing.
 	)
 
 	// Test single call
-	messages := p.getIncrementMessages(inv, time.Time{})
+	messages := p.getIncrementMessages(inv, time.Time{}, p.TimelineFilterMode, p.BranchFilterMode)
 	assert.Len(t, messages, 1, "Should get one message")
 	assert.Equal(t, "test message", messages[0].Content)
 
@@ -690,7 +690,7 @@ func TestContentRequestProcessor_ConcurrentFilterIncrementalMessages(t *testing.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			messages := p.getIncrementMessages(inv, time.Time{})
+			messages := p.getIncrementMessages(inv, time.Time{}, p.TimelineFilterMode, p.BranchFilterMode)
 			results <- len(messages)
 		}()
 	}
@@ -873,7 +873,7 @@ func TestContentRequestProcessor_getFilterHistoryMessages(t *testing.T) {
 				agent.WithInvocationEventFilterKey("test-filter"),
 			)
 
-			messages := tt.processor.getIncrementMessages(inv, time.Time{})
+			messages := tt.processor.getIncrementMessages(inv, time.Time{}, tt.processor.TimelineFilterMode, tt.processor.BranchFilterMode)
 
 			assert.Equal(t, tt.expectedCount, len(messages))
 			for i, expectedContent := range tt.expectedContent {
@@ -2039,7 +2039,7 @@ func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
 				WithTimelineFilterMode(tt.timelineFilterMode),
 			)
 
-			messages := p.getIncrementMessages(inv, tt.summaryUpdatedAt)
+			messages := p.getIncrementMessages(inv, tt.summaryUpdatedAt, p.TimelineFilterMode, p.BranchFilterMode)
 
 			assert.Len(t, messages, tt.expectedCount)
 
@@ -2440,7 +2440,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, evt, inv, filter, isZeroTime, since := tt.setup()
-			result := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
+			result := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since, p.TimelineFilterMode, p.BranchFilterMode)
 			if result != tt.expected {
 				t.Errorf("shouldIncludeEvent() = %v, want %v", result, tt.expected)
 			}

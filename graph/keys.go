@@ -18,21 +18,20 @@ const (
 	CfgKeyResumeMap    = "resume_map"
 	// CfgKeyIncludeContents allows callers to control how the GraphAgent
 	// seeds model request messages from the session history for a run.
-	// Accepted values: IncludeContentsNone, IncludeContentsFiltered, IncludeContentsAll. See
+	// Accepted values: "none", "filtered", "all". See
 	// internal/flow/processor.ContentRequestProcessor.IncludeContents.
 	CfgKeyIncludeContents = "include_contents"
-)
+	// CfgKeyMessageTimelineFilterMode allows callers to override the timeline filter mode
+	// at runtime via RuntimeState.
+	// Accepted values: processor.TimelineFilterAll, processor.TimelineFilterCurrentRequest,
+	// processor.TimelineFilterCurrentInvocation.
+	CfgKeyMessageTimelineFilterMode = "message_timeline_filter_mode"
 
-// IncludeContents values for CfgKeyIncludeContents.
-const (
-	// IncludeContentsNone does not include any session history messages.
-	// Only the current invocation message is added to the request.
-	IncludeContentsNone = "none"
-	// IncludeContentsFiltered includes filtered session history messages
-	// based on BranchFilterMode and TimelineFilterMode.
-	IncludeContentsFiltered = "filtered"
-	// IncludeContentsAll includes all session history messages.
-	IncludeContentsAll = "all"
+	// CfgKeyMessageBranchFilterMode allows callers to override the branch filter mode
+	// at runtime via RuntimeState.
+	// Accepted values: processor.BranchFilterModePrefix, processor.BranchFilterModeAll,
+	// processor.BranchFilterModeExact.
+	CfgKeyMessageBranchFilterMode = "message_branch_filter_mode"
 )
 
 // State map keys (stored into execution state)

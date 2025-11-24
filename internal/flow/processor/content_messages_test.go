@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -259,107 +258,4 @@ func newSessionEventWithBranch(author, filterKey, branch string, msg model.Messa
 		Branch:    branch,
 		Version:   event.CurrentVersion,
 	}
-}
-
-// TestProcessRequest_IncludeContentsNone_SkipsSessionHistory tests that when
-// include_contents is set to "none" in runtime state, the processor skips
-// session history and only adds the invocation message.
-func TestProcessRequest_IncludeContentsNone_SkipsSessionHistory(t *testing.T) {
-	// Create a session with historical messages.
-	sess := &session.Session{}
-	sess.Events = append(sess.Events,
-		newSessionEvent("user", model.NewUserMessage("historical user message")),
-		newSessionEvent("test-agent", model.NewAssistantMessage("historical assistant message")),
-	)
-
-	// Create invocation with include_contents=none in runtime state.
-	inv := agent.NewInvocation(
-		agent.WithInvocationSession(sess),
-		agent.WithInvocationMessage(model.NewUserMessage("current invocation message")),
-		agent.WithInvocationEventFilterKey("test-agent"),
-		agent.WithInvocationRunOptions(agent.RunOptions{
-			RuntimeState: map[string]any{
-				graph.CfgKeyIncludeContents: graph.IncludeContentsNone,
-			},
-		}),
-	)
-	inv.AgentName = "test-agent"
-
-	req := &model.Request{}
-	ch := make(chan *event.Event, 1)
-	p := NewContentRequestProcessor()
-
-	p.ProcessRequest(context.Background(), inv, req, ch)
-
-	// Should only contain the invocation message, not session history.
-	require.Equal(t, 1, len(req.Messages))
-	require.True(t, model.MessagesEqual(model.NewUserMessage("current invocation message"), req.Messages[0]))
-}
-
-// TestProcessRequest_IncludeContentsNone_EmptyInvocationMessage tests that when
-// include_contents is set to "none" but invocation message is empty, no messages
-// are added to the request.
-func TestProcessRequest_IncludeContentsNone_EmptyInvocationMessage(t *testing.T) {
-	// Create a session with historical messages.
-	sess := &session.Session{}
-	sess.Events = append(sess.Events,
-		newSessionEvent("user", model.NewUserMessage("historical message")),
-	)
-
-	// Create invocation with empty message and include_contents=none.
-	inv := agent.NewInvocation(
-		agent.WithInvocationSession(sess),
-		agent.WithInvocationMessage(model.NewUserMessage("")),
-		agent.WithInvocationRunOptions(agent.RunOptions{
-			RuntimeState: map[string]any{
-				graph.CfgKeyIncludeContents: graph.IncludeContentsNone,
-			},
-		}),
-	)
-
-	req := &model.Request{}
-	ch := make(chan *event.Event, 1)
-	p := NewContentRequestProcessor()
-
-	p.ProcessRequest(context.Background(), inv, req, ch)
-
-	// Should have no messages since invocation message is empty.
-	require.Equal(t, 0, len(req.Messages))
-}
-
-// TestProcessRequest_IncludeContentsNone_WithoutRuntimeState tests that when
-// runtime state is nil or doesn't contain include_contents, normal processing
-// should occur (session history is included).
-func TestProcessRequest_IncludeContentsNone_WithoutRuntimeState(t *testing.T) {
-	// Create a session with historical messages.
-	sess := &session.Session{}
-	sess.Events = append(sess.Events,
-		newSessionEvent("user", model.NewUserMessage("historical message")),
-	)
-
-	// Create invocation without include_contents in runtime state.
-	inv := agent.NewInvocation(
-		agent.WithInvocationSession(sess),
-		agent.WithInvocationMessage(model.NewUserMessage("current message")),
-		agent.WithInvocationEventFilterKey("test-agent"),
-	)
-	inv.AgentName = "test-agent"
-
-	req := &model.Request{}
-	ch := make(chan *event.Event, 1)
-	p := NewContentRequestProcessor()
-
-	p.ProcessRequest(context.Background(), inv, req, ch)
-
-	// Should include session history since include_contents is not set to "none".
-	require.GreaterOrEqual(t, len(req.Messages), 1)
-	// Should contain the historical message.
-	foundHistorical := false
-	for _, msg := range req.Messages {
-		if msg.Content == "historical message" {
-			foundHistorical = true
-			break
-		}
-	}
-	require.True(t, foundHistorical, "should include session history when include_contents is not set to 'none'")
 }

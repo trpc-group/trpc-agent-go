@@ -317,10 +317,11 @@ func WithSubgraphOutputMapper(f SubgraphOutputMapper) Option {
 }
 
 // WithSubgraphIsolatedMessages toggles seeding of session messages to the child.
-// When true, the child GraphAgent runs with include_contents=none.
-// Docs note: This effectively sets CfgKeyIncludeContents=IncludeContentsNone in the child
-// runtime state so the child does not inject session history and only sees the
-// projected input from the parent.
+// When true, the child agent will not include session history in its request.
+//
+// Implementation note: This sets CfgKeyMessageTimelineFilterMode="request" in the child's
+// runtime state to achieve isolation. This allows dynamic control when the child agent
+// is created elsewhere and cannot be reconfigured at creation time.
 func WithSubgraphIsolatedMessages(isolate bool) Option {
 	return func(node *Node) {
 		node.agentIsolatedMessages = isolate
@@ -1143,11 +1144,12 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			childState = copyRuntimeStateFiltered(state)
 		}
 		if isolated {
-			// Instruct child GraphAgent to not include session contents in its request.
+			// Instruct child agent to not include session contents in its request.
+			// Set TimelineFilterCurrentRequest to achieve isolation.
 			if childState == nil {
 				childState = State{}
 			}
-			childState[CfgKeyIncludeContents] = IncludeContentsNone
+			childState[CfgKeyMessageTimelineFilterMode] = "request" // processor.TimelineFilterCurrentRequest
 		}
 
 		// Optionally map parent's last_response to user_input for this agent node.
