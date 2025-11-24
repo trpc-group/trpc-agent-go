@@ -425,7 +425,9 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
 
-	finalArtifact := protocol.NewTaskArtifactUpdateEvent(taskID, *a2aMsg.ContextID, protocol.Artifact{}, true)
+	finalArtifact := protocol.NewTaskArtifactUpdateEvent(taskID, *a2aMsg.ContextID, protocol.Artifact{
+		Parts: []protocol.Part{},
+	}, true)
 	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &finalArtifact}); err != nil {
 		log.Errorf("failed to send final artifact message: %v", err)
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
