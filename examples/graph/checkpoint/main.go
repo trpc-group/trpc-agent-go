@@ -109,10 +109,11 @@ func main() {
 
 	// Create and run the workflow.
 	workflow := &checkpointWorkflow{
-		modelName:   *modelName,
-		storageType: *storage,
-		dbPath:      *dbPath,
-		verbose:     *verbose,
+		modelName:      *modelName,
+		storageType:    *storage,
+		dbPath:         *dbPath,
+		verbose:        *verbose,
+		redisClientURL: *redisClientURL,
 	}
 	if err := workflow.run(); err != nil {
 		log.Fatalf("Workflow failed: %v", err)
@@ -907,6 +908,7 @@ func (w *checkpointWorkflow) listCheckpoints(ctx context.Context, lineageID stri
 
 	// Create config for the lineage.
 	config := graph.NewCheckpointConfig(lineageID)
+	config.Namespace = "checkpoint-demo"
 
 	// List checkpoints with a filter.
 	manager := w.graphAgent.Executor().CheckpointManager()
