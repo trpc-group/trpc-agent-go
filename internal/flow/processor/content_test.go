@@ -1237,11 +1237,13 @@ func TestContentRequestProcessor_mergeUserMessages(t *testing.T) {
 		name     string
 		messages []model.Message
 		want     []model.Message
+		desc     string
 	}{
 		{
 			name:     "empty slice",
 			messages: nil,
 			want:     nil,
+			desc:     "nil input should return nil",
 		},
 		{
 			name: "single user message",
@@ -1251,6 +1253,7 @@ func TestContentRequestProcessor_mergeUserMessages(t *testing.T) {
 			want: []model.Message{
 				model.NewUserMessage("hello"),
 			},
+			desc: "single message should be unchanged",
 		},
 		{
 			name: "mixed roles unchanged",
@@ -1264,6 +1267,7 @@ func TestContentRequestProcessor_mergeUserMessages(t *testing.T) {
 				model.NewAssistantMessage("hi"),
 				model.NewUserMessage("there"),
 			},
+			desc: "non-context user and assistant messages stay as-is",
 		},
 		{
 			name: "merge consecutive context users",
@@ -1279,6 +1283,63 @@ func TestContentRequestProcessor_mergeUserMessages(t *testing.T) {
 				),
 				model.NewAssistantMessage("keep"),
 			},
+			desc: "context user messages are merged into one",
+		},
+		{
+			name: "merge context users with content parts",
+			messages: []model.Message{
+				{
+					Role:    model.RoleUser,
+					Content: contextPrefix + " A",
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: func() *string {
+								text := "part A"
+								return &text
+							}(),
+						},
+					},
+				},
+				{
+					Role:    model.RoleUser,
+					Content: contextPrefix + " B",
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: func() *string {
+								text := "part B"
+								return &text
+							}(),
+						},
+					},
+				},
+			},
+			want: []model.Message{
+				{
+					Role: model.RoleUser,
+					Content: contextPrefix + " A" +
+						mergedUserSeparator +
+						contextPrefix + " B",
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: func() *string {
+								text := "part A"
+								return &text
+							}(),
+						},
+						{
+							Type: model.ContentTypeText,
+							Text: func() *string {
+								text := "part B"
+								return &text
+							}(),
+						},
+					},
+				},
+			},
+			desc: "content parts from context users are merged",
 		},
 	}
 
@@ -1288,9 +1349,24 @@ func TestContentRequestProcessor_mergeUserMessages(t *testing.T) {
 				AddContextPrefix: true,
 			}
 			got := p.mergeUserMessages(tt.messages)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, got, tt.desc)
 		})
 	}
+}
+
+func TestContentRequestProcessor_mergeUserMessages_NoPrefix(t *testing.T) {
+	p := &ContentRequestProcessor{
+		AddContextPrefix: false,
+	}
+	messages := []model.Message{
+		model.NewUserMessage(contextPrefix + " one"),
+		model.NewUserMessage(contextPrefix + " two"),
+	}
+
+	got := p.mergeUserMessages(messages)
+
+	assert.Equal(t, messages, got,
+		"when AddContextPrefix is false messages should be unchanged")
 }
 
 func TestContentRequestProcessor_mergeFunctionResponseEvents(t *testing.T) {
