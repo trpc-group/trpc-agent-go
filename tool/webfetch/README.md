@@ -22,4 +22,8 @@ The LLM provider handles fetching; you just configure and enable the tool.
 - You only provide configuration (domain filters, limits, etc.)
 - Content fetching happens on the provider's side, reducing latency
 
-**Implementations:** `claudefetch/`, `geminifetch/` (reserved for future use)
+**Implementations:** 
+- `geminifetch/`
+- `claudefetch/` - Reserved for future use
+
+
