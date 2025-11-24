@@ -21,7 +21,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -488,9 +487,7 @@ func (s *Service) AppendTrackEvent(
 				panic(r)
 			}
 		}()
-		trackKey := getTrackKey(key, trackEvent.Track)
-		n := len(s.trackEventChans)
-		index := int(murmur3.Sum32([]byte(trackKey))) % n
+		index := sess.Hash % len(s.trackEventChans)
 		select {
 		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
 		case <-ctx.Done():
