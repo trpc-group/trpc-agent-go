@@ -31,7 +31,10 @@ const (
 	LevelFatal = "fatal"
 )
 
-var zapLevel = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+var (
+	zapLevel     = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+	traceEnabled = false
+)
 
 // Default borrows logging utilities from zap.
 // You may replace it with whatever logger you like as long as it implements log.Logger interface.
@@ -155,7 +158,13 @@ func Fatalf(format string, args ...any) {
 
 // Tracef logs a message at the trace level with formatting.
 func Tracef(format string, args ...any) {
-	// Trace is more detailed than debug, so we'll log it at debug level
-	// until we have proper trace level support in the underlying logger
+	if !traceEnabled {
+		return
+	}
 	Default.Debugf("[TRACE] "+format, args...)
+}
+
+// SetTraceEnabled sets the trace enabled flag.
+func SetTraceEnabled(enabled bool) {
+	traceEnabled = enabled
 }
