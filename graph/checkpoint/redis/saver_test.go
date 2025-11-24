@@ -13,6 +13,7 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -501,6 +502,59 @@ func TestRedisCheckpointSaverMetadataFilter(t *testing.T) {
 	assert.Equal(t, float64(1), checkpoints[0].Checkpoint.ChannelValues["step"])
 }
 
+func TestRedis_List_MetadataFilter_NoExtraInTuple(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "ln-no-extra"
+	ns := "ns"
+
+	// Manually insert a checkpoint with metadata JSON missing 'extra' field
+	ck := graph.NewCheckpoint(map[string]any{"x": 1}, map[string]int64{"x": 1}, nil)
+	ckJSON, _ := json.Marshal(ck)
+	// metadata without Extra
+	rawMeta := map[string]any{"source": graph.CheckpointSourceInput, "step": 0}
+	metaJSON, _ := json.Marshal(rawMeta)
+	db := buildRedisClient(t, redisURL)
+	pipe := db.TxPipeline()
+	checkpointKey := checkpointKey(lineageID, ns, ck.ID)
+	pipe.HSet(ctx, checkpointKey,
+		lingeageIDKey, lineageID,
+		checkpointNSKey, ns,
+		checkpointIDKey, ck.ID,
+		tsKey, time.Now().UTC().UnixNano(),
+		checkpointJSONKey, ckJSON,
+		metadataJSONKey, metaJSON,
+	)
+	tsKey := checkpointTSKey(lineageID, ns)
+	pipe.ZAdd(ctx, tsKey, redis.Z{
+		Score:  float64(time.Now().UTC().UnixNano()),
+		Member: ck.ID,
+	})
+	nsKey := lineageNSKey(lineageID)
+	pipe.SAdd(ctx, nsKey, ns)
+	_, err = pipe.Exec(ctx)
+	// _, err = db.ExecContext(ctx, sqliteInsertCheckpoint, lineageID, ns, ck.ID, "", time.Now().UTC().UnixNano(), ckJSON, metaJSON)
+	require.NoError(t, err)
+
+	// List with metadata filter should exclude this tuple because Extra==nil
+	filter := &graph.CheckpointFilter{Metadata: map[string]any{"k": "v"}}
+	tuples, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ns), filter)
+	require.NoError(t, err)
+	// No tuples should match the metadata filter
+	require.Equal(t, 0, len(tuples))
+
+	// Listing without metadata filter should include 1 tuple
+	tuples2, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ns), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(tuples2))
+}
+
 func TestRedisCheckpointSaverClose(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
@@ -516,6 +570,55 @@ func TestRedisCheckpointSaverClose(t *testing.T) {
 	// Close again should not error.
 	err = saver.Close()
 	assert.NoError(t, err)
+}
+
+func TestSQLite_GetTuple_ParentNamespaceUnknown_EmptyInParentConfig(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	// Insert a child row that references a non-existent parent ID to force findCheckpointNamespace to return empty namespace.
+	// Use Put to create a child (without actual parent) by bypassing ParentCheckpointID validation: we insert directly into DB.
+	// 1) Create a fake child checkpoint JSON
+	child := graph.NewCheckpoint(map[string]any{"v": 10}, map[string]int64{"v": 1}, nil)
+	child.ParentCheckpointID = "no-such-parent"
+	childJSON, _ := json.Marshal(child)
+	metaJSON, _ := json.Marshal(graph.NewCheckpointMetadata(graph.CheckpointSourceFork, 1))
+	db := buildRedisClient(t, redisURL)
+	pipe := db.TxPipeline()
+	lineageID := "ln-unknown"
+	ns := "nsX"
+	checkpointKey := checkpointKey(lineageID, ns, child.ID)
+	pipe.HSet(ctx, checkpointKey,
+		lingeageIDKey, lineageID,
+		checkpointNSKey, ns,
+		checkpointIDKey, child.ID,
+		parentCheckpointIDKey, child.ParentCheckpointID,
+		tsKey, time.Now().UTC().UnixNano(),
+		checkpointJSONKey, childJSON,
+		metadataJSONKey, metaJSON,
+	)
+	tsKey := checkpointTSKey(lineageID, ns)
+	pipe.ZAdd(ctx, tsKey, redis.Z{
+		Score:  float64(time.Now().UTC().UnixNano()),
+		Member: child.ID,
+	})
+	nsKey := lineageNSKey(lineageID)
+	pipe.SAdd(ctx, nsKey, ns)
+	_, err = pipe.Exec(ctx)
+	require.NoError(t, err)
+
+	cfg := graph.CreateCheckpointConfig("ln-unknown", child.ID, "nsX")
+	tup, err := saver.GetTuple(ctx, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, tup)
+	require.NotNil(t, tup.ParentConfig)
+	assert.Equal(t, "", graph.GetNamespace(tup.ParentConfig))
+	assert.Equal(t, child.ParentCheckpointID, graph.GetCheckpointID(tup.ParentConfig))
 }
 
 func TestRedis_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
