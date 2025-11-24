@@ -346,7 +346,7 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 
 	checkpointID := req.Checkpoint.ID
 	ts := req.Checkpoint.Timestamp.UnixNano()
-	if ts == 0 {
+	if ts <= 0 {
 		ts = time.Now().UTC().UnixNano()
 	}
 
@@ -446,7 +446,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 
 	checkpointID := req.Checkpoint.ID
 	ts := req.Checkpoint.Timestamp.UnixNano()
-	if ts == 0 {
+	if ts <= 0 {
 		ts = time.Now().UTC().UnixNano()
 	}
 
