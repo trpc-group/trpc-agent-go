@@ -18,9 +18,21 @@ const (
 	CfgKeyResumeMap    = "resume_map"
 	// CfgKeyIncludeContents allows callers to control how the GraphAgent
 	// seeds model request messages from the session history for a run.
-	// Accepted values: "none", "filtered", "all". See
+	// Accepted values: IncludeContentsNone, IncludeContentsFiltered, IncludeContentsAll. See
 	// internal/flow/processor.ContentRequestProcessor.IncludeContents.
 	CfgKeyIncludeContents = "include_contents"
+)
+
+// IncludeContents values for CfgKeyIncludeContents.
+const (
+	// IncludeContentsNone does not include any session history messages.
+	// Only the current invocation message is added to the request.
+	IncludeContentsNone = "none"
+	// IncludeContentsFiltered includes filtered session history messages
+	// based on BranchFilterMode and TimelineFilterMode.
+	IncludeContentsFiltered = "filtered"
+	// IncludeContentsAll includes all session history messages.
+	IncludeContentsAll = "all"
 )
 
 // State map keys (stored into execution state)

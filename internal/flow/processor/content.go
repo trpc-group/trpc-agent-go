@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -163,7 +164,22 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// 2) Append per-filter messages from session events when allowed.
+	// Check if include_contents is set to "none" in runtime state.
+	// When set to "none", skip session history and only add invocation message.
+	if invocation.RunOptions.RuntimeState != nil {
+		if includeContents, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents]; ok {
+			if includeContentsStr, ok := includeContents.(string); ok && includeContentsStr == graph.IncludeContentsNone {
+				// Skip session history, only add invocation message.
+				if invocation.Message.Content != "" {
+					req.Messages = append(req.Messages, invocation.Message)
+					log.Debugf("Content request processor: include_contents=none, added invocation message only")
+				}
+				return
+			}
+		}
+	}
+
+	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
 	if invocation.Session != nil {
 		var messages []model.Message
