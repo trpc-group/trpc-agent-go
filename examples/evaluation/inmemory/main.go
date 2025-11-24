@@ -35,10 +35,10 @@ func main() {
 	ctx := context.Background()
 	// New runner.
 	run := runner.NewRunner(appName, newCalculatorAgent(*modelName, *streaming))
-	
+
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer run.Close()
-	
+
 	// New manager and registry for evaluation.
 	evalSetManager := evalsetinmemory.New()
 	metricManager := metricinmemory.New()

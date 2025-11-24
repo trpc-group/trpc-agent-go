@@ -246,6 +246,8 @@ func calculator(ctx context.Context, req calculatorReq) (calculatorRsp, error) {
         result = req.A * req.B
     case "div", "/":
         result = req.A / req.B
+	default:
+		return calculatorRsp{}, fmt.Errorf("invalid operation: %s", req.Op)
     }
     return calculatorRsp{Result: result}, nil
 }
