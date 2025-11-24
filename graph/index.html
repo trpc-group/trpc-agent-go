@@ -2944,16 +2944,20 @@
 
 <h1 id="graph-package-guide">Graph Package Guide</h1>
 <h2 id="overview">Overview</h2>
-<p>Graph combines controllable workflow orchestration with extensible agent capabilities. It is suitable for:
-- Type-safe state management and predictable routing.
-- LLM decision making, tool-calling loops, and optional Human in the Loop (HITL).
-- Reusable components that can run standalone or be composed as sub‑agents.</p>
-<p>Highlights:
-- Schema‑driven State and Reducers to avoid data races when concurrent branches write the same field.
-- Deterministic parallelism with BSP style (Plan / Execute / Update).
-- Built‑in node types wrap LLM, Tools, and Agent to reduce boilerplate.
-- Streaming events, checkpoints, and interrupts for observability and recovery.
-- Node‑level retry/backoff with exponential delay and jitter, plus executor‑level defaults and rich retry metadata in events.</p>
+<p>Graph combines controllable workflow orchestration with extensible agent capabilities. It is suitable for:</p>
+<ul>
+<li>Type-safe state management and predictable routing.</li>
+<li>LLM decision making, tool-calling loops, and optional Human in the Loop (HITL).</li>
+<li>Reusable components that can run standalone or be composed as sub‑agents.</li>
+</ul>
+<p>Highlights:</p>
+<ul>
+<li>Schema‑driven State and Reducers to avoid data races when concurrent branches write the same field.</li>
+<li>Deterministic parallelism with BSP style (Plan / Execute / Update).</li>
+<li>Built‑in node types wrap LLM, Tools, and Agent to reduce boilerplate.</li>
+<li>Streaming events, checkpoints, and interrupts for observability and recovery.</li>
+<li>Node‑level retry/backoff with exponential delay and jitter, plus executor‑level defaults and rich retry metadata in events.</li>
+</ul>
 <h2 id="quick-start">Quick Start</h2>
 <h3 id="minimal-workflow">Minimal Workflow</h3>
 <p>Below is a classic “prepare → ask LLM → optionally call tools” loop using <code>graph.MessagesStateSchema()</code> (predefines <code>graph.StateKeyMessages</code>, <code>graph.StateKeyUserInput</code>, <code>graph.StateKeyLastResponse</code>, etc.).</p>
@@ -3157,7 +3161,9 @@
 <h3 id="node-io-conventions">Node I/O Conventions</h3>
 <p>Nodes communicate exclusively through the shared state. Each node returns a state delta which is merged into the graph state using the schema’s reducers. Downstream nodes read whatever upstream nodes wrote.</p>
 <ul>
-<li>Common built‑in keys (user‑facing)<ul>
+<li>
+<p>Common built‑in keys (user‑facing)</p>
+<ul>
 <li><code>user_input</code>: One‑shot input for the next LLM/Agent node. Cleared after consumption.</li>
 <li><code>one_shot_messages</code>: Full message override for the next LLM call. Cleared after consumption.</li>
 <li><code>messages</code>: Durable conversation history (LLM/Tools append here). Supports MessageOp patches.</li>
@@ -3167,14 +3173,18 @@
 </li>
 </ul>
 <ul>
-<li>Function node<ul>
+<li>
+<p>Function node</p>
+<ul>
 <li>Input: the entire state</li>
 <li>Output: return a <code>graph.State</code> delta with custom keys (declare them in the schema), e.g. <code>{"parsed_time": "..."}</code></li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>LLM node<ul>
+<li>
+<p>LLM node</p>
+<ul>
 <li>Input priority: <code>one_shot_messages</code> → <code>user_input</code> → <code>messages</code></li>
 <li>Output:<ul>
 <li>Appends assistant message to <code>messages</code></li>
@@ -3186,7 +3196,9 @@
 </li>
 </ul>
 <ul>
-<li>Tools node<ul>
+<li>
+<p>Tools node</p>
+<ul>
 <li>Input: scans <code>messages</code> for the latest assistant message with <code>tool_calls</code></li>
 <li>Output: appends tool responses to <code>messages</code></li>
 </ul>
@@ -3225,7 +3237,9 @@
 <li>Defined in: <code>graph/state.go</code></li>
 </ul>
 <ul>
-<li>User‑facing keys<ul>
+<li>
+<p>User‑facing keys</p>
+<ul>
 <li><code>user_input</code> → <code>graph.StateKeyUserInput</code></li>
 <li><code>one_shot_messages</code> → <code>graph.StateKeyOneShotMessages</code></li>
 <li><code>messages</code> → <code>graph.StateKeyMessages</code></li>
@@ -3754,11 +3768,13 @@ aligned with <code>subAgent.Info().Name == "assistant"</code>.</p>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="41-named-ends-pernode-ends">4.1 Named Ends (Per‑node Ends)</h3>
 <p>When a node produces business outcomes (e.g., <code>approve</code>/<code>reject</code>/<code>manual_review</code>) and you want to route by those semantic labels, declare node‑local Named Ends (Ends).</p>
-<p>Why this helps:
-- Central, declarative mapping from labels to concrete targets at the node site.
-- Compile‑time validation: <code>Compile()</code> verifies every end target exists (or is the special <code>graph.End</code>).
-- Unified routing: reused by both <code>Command.GoTo</code> and conditional edges.
-- Decoupling: nodes express outcomes in business terms; the mapping ties outcomes to graph structure.</p>
+<p>Why this helps:</p>
+<ul>
+<li>Central, declarative mapping from labels to concrete targets at the node site.</li>
+<li>Compile‑time validation: <code>Compile()</code> verifies every end target exists (or is the special <code>graph.End</code>).</li>
+<li>Unified routing: reused by both <code>Command.GoTo</code> and conditional edges.</li>
+<li>Decoupling: nodes express outcomes in business terms; the mapping ties outcomes to graph structure.</li>
+</ul>
 <p>API:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
@@ -3806,16 +3822,22 @@ aligned with <code>subAgent.Info().Name == "assistant"</code>.</p>
 </span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Conditional edges can reuse Ends: when <code>AddConditionalEdges(from, condition, pathMap)</code> receives a <code>nil</code> <code>pathMap</code> or no match is found, the executor tries the node’s Ends; if still no match, the return string is treated as a concrete node ID.</p>
-<p>Resolution precedence:
-1. Explicit mapping in the conditional edge’s <code>pathMap</code>.
-2. The node’s Ends mapping (label → concrete target).
-3. Treat the return string as a node ID.</p>
-<p>Compile‑time checks:
-- <code>WithEndsMap/WithEnds</code> targets are validated in <code>Compile()</code>.
-- Targets must exist in the graph or be the special constant <code>graph.End</code>.</p>
-<p>Notes:
-- Use the constant <code>graph.End</code> to terminate; do not use the string "END".
-- With <code>Command.GoTo</code>, you don’t need to add a static <code>AddEdge(from, to)</code> for the target; ensure the target exists and set <code>SetFinishPoint(target)</code> if it should end the graph.</p>
+<p>Resolution precedence:</p>
+<ol>
+<li>Explicit mapping in the conditional edge’s <code>pathMap</code>.</li>
+<li>The node’s Ends mapping (label → concrete target).</li>
+<li>Treat the return string as a node ID.</li>
+</ol>
+<p>Compile‑time checks:</p>
+<ul>
+<li><code>WithEndsMap/WithEnds</code> targets are validated in <code>Compile()</code>.</li>
+<li>Targets must exist in the graph or be the special constant <code>graph.End</code>.</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li>Use the constant <code>graph.End</code> to terminate; do not use the string "END".</li>
+<li>With <code>Command.GoTo</code>, you don’t need to add a static <code>AddEdge(from, to)</code> for the target; ensure the target exists and set <code>SetFinishPoint(target)</code> if it should end the graph.</li>
+</ul>
 <p>Runnable example: <code>examples/graph/multiends</code>.</p>
 <h3 id="42-multiconditional-fanout">4.2 Multi‑conditional Fan‑out</h3>
 <p>Sometimes a single decision needs to spawn multiple branches in parallel
@@ -3845,13 +3867,17 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11"></a><span class="w">    </span><span class="p">},</span>
 </span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Notes:
-- Results are de‑duplicated before triggering; repeated keys do not trigger a
-  target more than once in the same step.
-- Resolution precedence for each branch key mirrors single‑conditional routing:
-  1) explicit <code>pathMap</code>; 2) node’s Ends; 3) treat as node ID.
-- Visualization: when <code>pathMap</code> is omitted, DOT falls back to the node’s Ends
-  mapping to render dashed conditional edges.</p>
+<p>Notes:</p>
+<ul>
+<li>Results are de‑duplicated before triggering; repeated keys do not trigger a
+  target more than once in the same step.</li>
+<li>Resolution precedence for each branch key mirrors single‑conditional routing:<ol>
+<li>explicit <code>pathMap</code>; 2) node’s Ends; 3) treat as node ID.</li>
+</ol>
+</li>
+<li>Visualization: when <code>pathMap</code> is omitted, DOT falls back to the node’s Ends
+  mapping to render dashed conditional edges.</li>
+</ul>
 <h3 id="5-tool-node-integration">5. Tool Node Integration</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-15-2"> 2</a></span>
@@ -4023,10 +4049,12 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 <span class="normal"><a href="#__codelineno-20-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="nx">exec</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewExecutor</span><span class="p">(</span><span class="nx">compiled</span><span class="p">,</span>
 </span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithDefaultRetryPolicy</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithSimpleRetry</span><span class="p">(</span><span class="mi">2</span><span class="p">)))</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Notes
-- Interrupts are never retried.
-- Backoff delay is clamped by the current step deadline when set (<code>WithStepTimeout</code>).
-- Events carry retry metadata so UIs/CLIs can display progress:</p>
+<p>Notes</p>
+<ul>
+<li>Interrupts are never retried.</li>
+<li>Backoff delay is clamped by the current step deadline when set (<code>WithStepTimeout</code>).</li>
+<li>Events carry retry metadata so UIs/CLIs can display progress:</li>
+</ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1">1</a></span>
 <span class="normal"><a href="#__codelineno-21-2">2</a></span>
 <span class="normal"><a href="#__codelineno-21-3">3</a></span>
@@ -4478,9 +4506,11 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">app</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;hi&quot;</span><span class="p">))</span>
 </span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6"></a><span class="k">for</span><span class="w"> </span><span class="nx">ev</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* handle events */</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Session backends:
-- In-memory: <code>session/inmemory</code> (used by examples)
-- Redis: <code>session/redis</code> (more common in production)</p>
+<p>Session backends:</p>
+<ul>
+<li>In-memory: <code>session/inmemory</code> (used by examples)</li>
+<li>Redis: <code>session/redis</code> (more common in production)</li>
+</ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1">1</a></span>
 <span class="normal"><a href="#__codelineno-29-2">2</a></span>
 <span class="normal"><a href="#__codelineno-29-3">3</a></span>
@@ -4527,7 +4557,7 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span>
 </span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithCheckpointSaver</span><span class="p">(</span><span class="nx">saver</span><span class="p">),</span>
 </span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithSubAgents</span><span class="p">([]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span><span class="nx">subAgent</span><span class="p">}),</span>
-</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">()),</span>
+</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">()),</span><span class="w"> </span><span class="c1">// Note: Structured callback API requires trpc-agent-go &gt;= 0.6.0</span>
 </span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10"></a><span class="w">    </span><span class="c1">// Set the filter mode for messages passed to the model. The final messages passed to the model must satisfy both WithMessageTimelineFilterMode and WithMessageBranchFilterMode conditions.</span>
 </span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11"></a><span class="w">    </span><span class="c1">// Timeline dimension filter conditions</span>
 </span><span id="__span-30-12"><a id="__codelineno-30-12" name="__codelineno-30-12"></a><span class="w">    </span><span class="c1">// Default: graphagent.TimelineFilterAll</span>
@@ -4716,15 +4746,21 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 <li>Node-level override: <code>WithNodeCachePolicy(policy *CachePolicy)</code></li>
 <li>Clear by nodes: <code>ClearCache(nodes ...string)</code></li>
 </ul>
-<p>References:
-- Graph accessors and setters: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/graph.go">graph/graph.go</a>
-- Defaults and in-memory backend:
-  - Interface/policy + canonical JSON + SHA‑256: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache.go">graph/cache.go</a>
-  - In-memory cache with read-write lock and deep copy: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache.go">graph/cache.go</a>
-- Executor:
-  - Try Get before executing a node; on hit, skip the node function and only run callbacks + writes: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go">graph/executor.go</a>
-  - Persist Set after successful execution: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go">graph/executor.go</a>
-  - Attach <code>_cache_hit</code> flag on node.complete events: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go">graph/executor.go</a></p>
+<p>References:</p>
+<ul>
+<li>Graph accessors and setters: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/graph.go">graph/graph.go</a></li>
+<li>Defaults and in-memory backend:<ul>
+<li>Interface/policy + canonical JSON + SHA‑256: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache.go">graph/cache.go</a></li>
+<li>In-memory cache with read-write lock and deep copy: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache.go">graph/cache.go</a></li>
+</ul>
+</li>
+<li>Executor:<ul>
+<li>Try Get before executing a node; on hit, skip the node function and only run callbacks + writes: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go">graph/executor.go</a></li>
+<li>Persist Set after successful execution: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go">graph/executor.go</a></li>
+<li>Attach <code>_cache_hit</code> flag on node.complete events: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go">graph/executor.go</a></li>
+</ul>
+</li>
+</ul>
 <p>Minimal usage:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-35-2"> 2</a></span>
@@ -4748,8 +4784,10 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span><span id="__span-35-10"><a id="__codelineno-35-10" name="__codelineno-35-10"></a>
 </span><span id="__span-35-11"><a id="__codelineno-35-11" name="__codelineno-35-11"></a><span class="nx">compiled</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Advanced usage:
-- Field-based keys (recommended)</p>
+<p>Advanced usage:</p>
+<ul>
+<li>Field-based keys (recommended)</li>
+</ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-36-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-36-3"> 3</a></span>
@@ -4979,7 +5017,7 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 <ul>
 <li>Read cache-hit marker (<code>_cache_hit</code>)</li>
 </ul>
-<p><div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1"> 1</a></span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-41-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-41-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-41-4"> 4</a></span>
@@ -5033,15 +5071,19 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span><span id="__span-41-26"><a id="__codelineno-41-26" name="__codelineno-41-26"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 </span><span id="__span-41-27"><a id="__codelineno-41-27" name="__codelineno-41-27"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-Advanced usage:
-- Field-based keys (recommended): declare <code>WithCacheKeyFields("n", "user_id")</code> on a node; internally this maps the sanitized input to <code>{n, user_id}</code> before default canonicalization and hashing.
-- Custom selector: <code>WithCacheKeySelector(func(m map[string]any) any { return map[string]any{"n": m["n"], "uid": m["uid"]} })</code>
-- Versioned namespace: <code>WithGraphVersion("v2025.03")</code> expands the namespace to <code>__writes__:&lt;version&gt;:&lt;node&gt;</code>, reducing stale cache collisions across code changes.</p>
-<p>Notes:
-- Prefer caching only pure functions (no side effects)
-- TTL=0 means no expiration; consider a persistent backend (Redis/SQLite) in production
-- Key function sanitizes input to avoid volatile/non-serializable fields being part of the key: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache_key.go">graph/cache_key.go</a>
-- Call <code>ClearCache("nodeID")</code> after code changes or include a function identifier/version in the key</p>
+<p>Advanced usage:</p>
+<ul>
+<li>Field-based keys (recommended): declare <code>WithCacheKeyFields("n", "user_id")</code> on a node; internally this maps the sanitized input to <code>{n, user_id}</code> before default canonicalization and hashing.</li>
+<li>Custom selector: <code>WithCacheKeySelector(func(m map[string]any) any { return map[string]any{"n": m["n"], "uid": m["uid"]} })</code></li>
+<li>Versioned namespace: <code>WithGraphVersion("v2025.03")</code> expands the namespace to <code>__writes__:&lt;version&gt;:&lt;node&gt;</code>, reducing stale cache collisions across code changes.</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li>Prefer caching only pure functions (no side effects)</li>
+<li>TTL=0 means no expiration; consider a persistent backend (Redis/SQLite) in production</li>
+<li>Key function sanitizes input to avoid volatile/non-serializable fields being part of the key: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/cache_key.go">graph/cache_key.go</a></li>
+<li>Call <code>ClearCache("nodeID")</code> after code changes or include a function identifier/version in the key</li>
+</ul>
 <p>Runner + GraphAgent usage example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-42-2"> 2</a></span>
@@ -5179,8 +5221,10 @@ Advanced usage:
 </span><span id="__span-42-67"><a id="__codelineno-42-67" name="__codelineno-42-67"></a>
 </span><span id="__span-42-68"><a id="__codelineno-42-68" name="__codelineno-42-68"></a><span class="kd">func</span><span class="w"> </span><span class="nx">atoi</span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kd">var</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="kt">int</span><span class="p">;</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sscanf</span><span class="p">(</span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;%d&quot;</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">n</span><span class="p">);</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Example:
-- Interactive + Runner + GraphAgent: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/examples/graph/nodecache/main.go">examples/graph/nodecache/main.go</a></p>
+<p>Example:</p>
+<ul>
+<li>Interactive + Runner + GraphAgent: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/examples/graph/nodecache/main.go">examples/graph/nodecache/main.go</a></li>
+</ul>
 <h4 id="tools-node">Tools Node</h4>
 <p>Executes tool calls in sequence:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1"> 1</a></span>
@@ -5269,7 +5313,7 @@ Advanced usage:
 </span><span id="__span-44-30"><a id="__codelineno-44-30" name="__codelineno-44-30"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyToolResults</span><span class="p">:</span><span class="w"> </span><span class="nx">results</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
 </span><span id="__span-44-31"><a id="__codelineno-44-31" name="__codelineno-44-31"></a><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Reference example: <code>examples/graph/io_conventions_tools</code>.
+<p>Reference example: <code>examples/graph/io_conventions_tools</code>.</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-45-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-45-3"> 3</a></span>
@@ -5311,7 +5355,7 @@ Advanced usage:
 </span><span id="__span-45-19"><a id="__codelineno-45-19" name="__codelineno-45-19"></a>analyzer := createAnalyzer()  // internal agent name must be &quot;analyzer&quot;
 </span><span id="__span-45-20"><a id="__codelineno-45-20" name="__codelineno-45-20"></a>graphAgent, _ := graphagent.New(graphAgentNameMain, g,
 </span><span id="__span-45-21"><a id="__codelineno-45-21" name="__codelineno-45-21"></a>    graphagent.WithSubAgents([]agent.Agent{analyzer}))
-</span></code></pre></div></td></tr></table></div></p>
+</span></code></pre></div></td></tr></table></div>
 <h3 id="edges-and-routing">Edges and Routing</h3>
 <p>Edges define control flow between nodes:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1"> 1</a></span>
@@ -5392,7 +5436,7 @@ Advanced usage:
 </span><span id="__span-46-24"><a id="__codelineno-46-24" name="__codelineno-46-24"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodePathA</span><span class="p">,</span><span class="w"> </span><span class="nx">handlerA</span><span class="p">)</span>
 </span><span id="__span-46-25"><a id="__codelineno-46-25" name="__codelineno-46-25"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodePathB</span><span class="p">,</span><span class="w"> </span><span class="nx">handlerB</span><span class="p">)</span>
 </span><span id="__span-46-26"><a id="__codelineno-46-26" name="__codelineno-46-26"></a><span class="c1">// Then add conditional routing</span>
-</span><span id="__span-46-27"><a id="__codelineno-46-27" name="__codelineno-46-27"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeDecision</span><span class="p">,</span><span class="w"> </span>
+</span><span id="__span-46-27"><a id="__codelineno-46-27" name="__codelineno-46-27"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeDecision</span><span class="p">,</span>
 </span><span id="__span-46-28"><a id="__codelineno-46-28" name="__codelineno-46-28"></a><span class="w">    </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-46-29"><a id="__codelineno-46-29" name="__codelineno-46-29"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyFlag</span><span class="p">].(</span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-46-30"><a id="__codelineno-46-30" name="__codelineno-46-30"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeToPathA</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
@@ -5420,10 +5464,12 @@ Advanced usage:
 </span><span id="__span-46-52"><a id="__codelineno-46-52" name="__codelineno-46-52"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddEdge</span><span class="p">(</span><span class="nx">nodeSplit</span><span class="p">,</span><span class="w"> </span><span class="nx">nodeBranch1</span><span class="p">)</span>
 </span><span id="__span-46-53"><a id="__codelineno-46-53" name="__codelineno-46-53"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddEdge</span><span class="p">(</span><span class="nx">nodeSplit</span><span class="p">,</span><span class="w"> </span><span class="nx">nodeBranch2</span><span class="p">)</span><span class="w">  </span><span class="c1">// branch1 and branch2 execute in parallel</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:
-- <code>SetEntryPoint("first")</code> is equivalent to Start → first.
-- <code>SetFinishPoint("last")</code> is equivalent to last → End.
-There’s no need to add these two edges explicitly.</p>
+<p>Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:</p>
+<ul>
+<li><code>SetEntryPoint("first")</code> is equivalent to Start → first.</li>
+<li><code>SetFinishPoint("last")</code> is equivalent to last → End.
+  There’s no need to add these two edges explicitly.</li>
+</ul>
 <p>Constants: <code>graph.Start == "__start__"</code>, <code>graph.End == "__end__"</code>.</p>
 <h3 id="command-mode-dynamic-routing-fanout">Command Mode (Dynamic Routing / Fan‑out)</h3>
 <p>Nodes can return <code>graph.State</code>, or <code>*graph.Command</code> / <code>[]*graph.Command</code> to update state and direct the next hop:</p>
@@ -5666,7 +5712,9 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span></code></pre></div></td></tr></table></div>
 <h3 id="defaults-and-notes">Defaults and Notes</h3>
 <ul>
-<li>Defaults (Executor)<ul>
+<li>
+<p>Defaults (Executor)</p>
+<ul>
 <li><code>ChannelBufferSize = 256</code>, <code>MaxSteps = 100</code>, <code>CheckpointSaveTimeout = 10s</code></li>
 <li>Per‑step/node timeouts are available on <code>Executor</code> via <code>WithStepTimeout</code> / <code>WithNodeTimeout</code> (not exposed by <code>GraphAgent</code> options yet)</li>
 </ul>
@@ -5680,19 +5728,25 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <li>Runner seeds multi‑turn <code>graph.StateKeyMessages</code> from session events automatically</li>
 </ul>
 <ul>
-<li>Checkpoints<ul>
+<li>
+<p>Checkpoints</p>
+<ul>
 <li>Use stable <code>namespace</code> names (e.g., <code>svc:prod:flowX</code>); audit and clean up by lineage via <code>CheckpointManager</code></li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>Events/backpressure<ul>
+<li>
+<p>Events/backpressure</p>
+<ul>
 <li>Tune <code>WithChannelBufferSize</code>; filter events by <code>author</code>/<code>object</code> to reduce noise</li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>Naming and keys<ul>
+<li>
+<p>Naming and keys</p>
+<ul>
 <li>Use constants for node IDs, route labels, and state keys; define reducers for non‑trivial merges</li>
 </ul>
 </li>
@@ -5788,11 +5842,13 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
     classDef process fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
     classDef human fill:#e8f5e9,stroke:#43a047,stroke-width:2px
     classDef terminal fill:#ffebee,stroke:#e53935,stroke-width:2px</code></pre>
-<p>Highlights:
-- <code>where_to_go</code> can be LLM‑decided or function‑driven (conditional edges).
-- Fanout Pipeline uses Command GoTo at runtime, then aggregates.
-- Optional human review follows aggregation to gate critical output.
-- Single checkpoint display at Compose balances clarity and recoverability.</p>
+<p>Highlights:</p>
+<ul>
+<li><code>where_to_go</code> can be LLM‑decided or function‑driven (conditional edges).</li>
+<li>Fanout Pipeline uses Command GoTo at runtime, then aggregates.</li>
+<li>Optional human review follows aggregation to gate critical output.</li>
+<li>Single checkpoint display at Compose balances clarity and recoverability.</li>
+</ul>
 <h3 id="embedding-agents-in-a-graph">Embedding Agents in a Graph</h3>
 <p>Inside a graph, you can call existing sub‑agents as nodes. The example below shows how to create sub‑agents, declare the corresponding nodes, and inject them when constructing the GraphAgent.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-50-1"> 1</a></span>
@@ -6006,11 +6062,13 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </ul>
 <p>Constants live in <code>graph/state.go</code> and <code>graph/keys.go</code>. Prefer referencing constants over hard‑coding strings.</p>
 <h4 id="nodelevel-callbacks-generation-parameters">Node‑level Callbacks &amp; Generation Parameters</h4>
-<p>Per‑node options (see <code>graph/state_graph.go</code>):
-- <code>graph.WithPreNodeCallback</code> / <code>graph.WithPostNodeCallback</code> / <code>graph.WithNodeErrorCallback</code>
-- LLM nodes: <code>graph.WithGenerationConfig</code>, <code>graph.WithModelCallbacks</code>
-- Tooling: <code>graph.WithToolCallbacks</code>, <code>graph.WithToolSets</code> (supply ToolSets in addition to <code>tools []tool.Tool</code>)
-- Agent nodes: <code>graph.WithAgentNodeEventCallback</code></p>
+<p>Per‑node options (see <code>graph/state_graph.go</code>):</p>
+<ul>
+<li><code>graph.WithPreNodeCallback</code> / <code>graph.WithPostNodeCallback</code> / <code>graph.WithNodeErrorCallback</code></li>
+<li>LLM nodes: <code>graph.WithGenerationConfig</code>, <code>graph.WithModelCallbacks</code></li>
+<li>Tooling: <code>graph.WithToolCallbacks</code>, <code>graph.WithToolSets</code> (supply ToolSets in addition to <code>tools []tool.Tool</code>)</li>
+<li>Agent nodes: <code>graph.WithAgentNodeEventCallback</code></li>
+</ul>
 <p>Additionally, <code>graph.WithName</code>/<code>graph.WithDescription</code> add friendly labels; <code>graph.WithDestinations</code> declares potential dynamic destinations (for static checks/visualization only).</p>
 <h3 id="llm-input-rules-threestage-design">LLM Input Rules: Three‑Stage Design</h3>
 <p>The LLM input pipeline looks simple but solves common context‑management problems in AI apps.</p>
@@ -6125,9 +6183,11 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-56-14"><a id="__codelineno-56-14" name="__codelineno-56-14"></a><span class="c1">// On returning to nodeAsk (or a downstream LLM) graph.StateKeyUserInput is empty, so it follows the messages‑only path</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="instruction-placeholder-injection">Instruction Placeholder Injection</h4>
-<p><code>AddLLMNode</code>’s <code>instruction</code> supports placeholders, same syntax as <code>llmagent</code>:
-- <code>{key}</code> / <code>{key?}</code>: read from <code>session.State</code>; optional <code>?</code> yields empty when missing.
-- <code>{user:subkey}</code>, <code>{app:subkey}</code>, <code>{temp:subkey}</code>: read by namespace.</p>
+<p><code>AddLLMNode</code>’s <code>instruction</code> supports placeholders, same syntax as <code>llmagent</code>:</p>
+<ul>
+<li><code>{key}</code> / <code>{key?}</code>: read from <code>session.State</code>; optional <code>?</code> yields empty when missing.</li>
+<li><code>{user:subkey}</code>, <code>{app:subkey}</code>, <code>{temp:subkey}</code>: read by namespace.</li>
+</ul>
 <p>GraphAgent stores the current <code>*session.Session</code> into state (<code>graph.StateKeySession</code>) and expands placeholders before the LLM call.</p>
 <p>Tip: GraphAgent seeds <code>graph.StateKeyMessages</code> from prior session events for multi‑turn continuity. When resuming from a checkpoint, a plain "resume" message is not injected as <code>graph.StateKeyUserInput</code>, preserving the recovered state.</p>
 <h3 id="concurrency-and-state-safety">Concurrency and State Safety</h3>
@@ -6149,30 +6209,36 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-57-5"><a id="__codelineno-57-5" name="__codelineno-57-5"></a><span class="c1">// This graph structure executes in parallel automatically</span>
 </span><span id="__span-57-6"><a id="__codelineno-57-6" name="__codelineno-57-6"></a><span class="nx">stateGraph</span><span class="p">.</span>
 </span><span id="__span-57-7"><a id="__codelineno-57-7" name="__codelineno-57-7"></a><span class="w">    </span><span class="nx">AddNode</span><span class="p">(</span><span class="s">&quot;analyze&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">analyzeData</span><span class="p">).</span>
-</span><span id="__span-57-8"><a id="__codelineno-57-8" name="__codelineno-57-8"></a><span class="w">    </span><span class="nx">AddNode</span><span class="p">(</span><span class="s">&quot;generate_report&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">generateReport</span><span class="p">).</span><span class="w"> </span>
+</span><span id="__span-57-8"><a id="__codelineno-57-8" name="__codelineno-57-8"></a><span class="w">    </span><span class="nx">AddNode</span><span class="p">(</span><span class="s">&quot;generate_report&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">generateReport</span><span class="p">).</span>
 </span><span id="__span-57-9"><a id="__codelineno-57-9" name="__codelineno-57-9"></a><span class="w">    </span><span class="nx">AddNode</span><span class="p">(</span><span class="s">&quot;call_external_api&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">callAPI</span><span class="p">).</span>
 </span><span id="__span-57-10"><a id="__codelineno-57-10" name="__codelineno-57-10"></a><span class="w">    </span><span class="nx">AddEdge</span><span class="p">(</span><span class="s">&quot;analyze&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;generate_report&quot;</span><span class="p">).</span><span class="w">    </span><span class="c1">// these two run in parallel</span>
-</span><span id="__span-57-11"><a id="__codelineno-57-11" name="__codelineno-57-11"></a><span class="w">    </span><span class="nx">AddEdge</span><span class="p">(</span><span class="s">&quot;analyze&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;call_external_api&quot;</span><span class="p">)</span><span class="w">   </span><span class="c1">// </span>
+</span><span id="__span-57-11"><a id="__codelineno-57-11" name="__codelineno-57-11"></a><span class="w">    </span><span class="nx">AddEdge</span><span class="p">(</span><span class="s">&quot;analyze&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;call_external_api&quot;</span><span class="p">)</span><span class="w">   </span><span class="c1">//</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Internally, the executor constructs shallow copies (maps.Copy) per task and merges under a lock, with reducers ensuring safe concurrent updates.</p>
 <h3 id="node-io-conventions_1">Node I/O Conventions</h3>
 <p>Nodes communicate only via the shared <code>State</code>. Each node returns a state delta that merges via the Schema’s reducers.</p>
 <ul>
-<li>Function nodes<ul>
+<li>
+<p>Function nodes</p>
+<ul>
 <li>Input: full <code>State</code> (read keys declared in your schema)</li>
 <li>Output: write business keys only (e.g., <code>{"parsed_time":"..."}</code>); avoid internal keys</li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>LLM nodes<ul>
+<li>
+<p>LLM nodes</p>
+<ul>
 <li>Input priority: <code>graph.StateKeyOneShotMessages</code> → <code>graph.StateKeyUserInput</code> → <code>graph.StateKeyMessages</code></li>
 <li>Output: append to <code>graph.StateKeyMessages</code> atomically, set <code>graph.StateKeyLastResponse</code>, set <code>graph.StateKeyNodeResponses[&lt;llm_node_id&gt;]</code></li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>Tools nodes<ul>
+<li>
+<p>Tools nodes</p>
+<ul>
 <li>Read the latest assistant message with <code>tool_calls</code> for the current round and append tool responses to <code>graph.StateKeyMessages</code></li>
 <li>Multiple tools execute in the order returned by the LLM</li>
 </ul>
@@ -6185,13 +6251,17 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </ul>
 </li>
 </ul>
-<p>Good practice:
-- Sequential reads: consume the immediate upstream text from <code>graph.StateKeyLastResponse</code>.
-- Parallel/merge reads: read specific node outputs from <code>graph.StateKeyNodeResponses[&lt;nodeID&gt;]</code>.
-- Declare business keys in your schema with suitable reducers to avoid data races.</p>
+<p>Good practice:</p>
+<ul>
+<li>Sequential reads: consume the immediate upstream text from <code>graph.StateKeyLastResponse</code>.</li>
+<li>Parallel/merge reads: read specific node outputs from <code>graph.StateKeyNodeResponses[&lt;nodeID&gt;]</code>.</li>
+<li>Declare business keys in your schema with suitable reducers to avoid data races.</li>
+</ul>
 <h3 id="api-cheat-sheet">API Cheat Sheet</h3>
 <ul>
-<li>Build graph<ul>
+<li>
+<p>Build graph</p>
+<ul>
 <li><code>graph.NewStateGraph(schema)</code> → builder</li>
 <li><code>AddNode(id, func, ...opts)</code> / <code>AddLLMNode(id, model, instruction, tools, ...opts)</code></li>
 <li><code>AddToolsNode(id, tools, ...opts)</code> / <code>AddAgentNode(id, ...opts)</code></li>
@@ -6202,13 +6272,17 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </li>
 </ul>
 <ul>
-<li>State keys (user‑visible)<ul>
+<li>
+<p>State keys (user‑visible)</p>
+<ul>
 <li><code>graph.StateKeyUserInput</code>, <code>graph.StateKeyOneShotMessages</code>, <code>graph.StateKeyMessages</code>, <code>graph.StateKeyLastResponse</code>, <code>graph.StateKeyNodeResponses</code>, <code>graph.StateKeyMetadata</code></li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>Per‑node options<ul>
+<li>
+<p>Per‑node options</p>
+<ul>
 <li><code>graph.WithGenerationConfig</code>, <code>graph.WithModelCallbacks</code>, <code>graph.WithToolCallbacks</code>, <code>graph.WithToolSets</code></li>
 <li><code>graph.WithPreNodeCallback</code>, <code>graph.WithPostNodeCallback</code>, <code>graph.WithNodeErrorCallback</code></li>
 </ul>
@@ -6357,7 +6431,9 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <p>Use a stable business identifier for <code>namespace</code> in production (e.g., <code>svc:prod:flowX</code>) for clear auditing.</p>
 <h3 id="events-at-a-glance">Events at a Glance</h3>
 <ul>
-<li>Authors<ul>
+<li>
+<p>Authors</p>
+<ul>
 <li>Node-level: node ID (fallback <code>graph.AuthorGraphNode</code>)</li>
 <li>Pregel phases: <code>graph.AuthorGraphPregel</code></li>
 <li>Executor/system: <code>graph.AuthorGraphExecutor</code></li>
@@ -6629,11 +6705,13 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <h4 id="emit-selected-values-from-node-callbacks">Emit selected values from node callbacks</h4>
 <p>By default, mid‑run events like <code>graph.state.update</code> report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final <code>graph.execution</code> event’s <code>StateDelta</code> carries the serialized final snapshot of allowed keys (see implementations in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go#L2001">graph/executor.go:2001</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1276">graph/events.go:1276</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1330">graph/events.go:1330</a>).</p>
 <p>If you only need to surface a few values from the result of a specific node right after it completes, register an After‑node callback and emit a small custom event containing just those values:</p>
-<p>Steps:
-- Register <code>WithPostNodeCallback</code> on the target node.
-- In the callback, read <code>result any</code>; when the node returns <code>graph.State</code>, this is the node’s state delta.
-- Pick the needed keys, serialize to JSON, attach to a new event’s <code>StateDelta</code>.
-- Send via <code>agent.EmitEvent</code>.</p>
+<p>Steps:</p>
+<ul>
+<li>Register <code>WithPostNodeCallback</code> on the target node.</li>
+<li>In the callback, read <code>result any</code>; when the node returns <code>graph.State</code>, this is the node’s state delta.</li>
+<li>Pick the needed keys, serialize to JSON, attach to a new event’s <code>StateDelta</code>.</li>
+<li>Send via <code>agent.EmitEvent</code>.</li>
+</ul>
 <p>Example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-67-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-67-2"> 2</a></span>
@@ -6739,10 +6817,12 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-67-51"><a id="__codelineno-67-51" name="__codelineno-67-51"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
 </span><span id="__span-67-52"><a id="__codelineno-67-52" name="__codelineno-67-52"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Recommendations:
-- Emit only necessary keys to control bandwidth and avoid leaking sensitive data.
-- Internal/volatile keys are filtered from final snapshots and should not be emitted (see <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16">graph/internal_keys.go:16</a>).
-- For textual intermediate outputs, prefer existing model streaming events (<code>choice.Delta.Content</code>).</p>
+<p>Recommendations:</p>
+<ul>
+<li>Emit only necessary keys to control bandwidth and avoid leaking sensitive data.</li>
+<li>Internal/volatile keys are filtered from final snapshots and should not be emitted (see <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16">graph/internal_keys.go:16</a>).</li>
+<li>For textual intermediate outputs, prefer existing model streaming events (<code>choice.Delta.Content</code>).</li>
+</ul>
 <p>You can also configure agent‑level callbacks:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-68-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-68-2"> 2</a></span>
@@ -6762,41 +6842,49 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <span class="normal"><a href="#__codelineno-68-16">16</a></span>
 <span class="normal"><a href="#__codelineno-68-17">17</a></span>
 <span class="normal"><a href="#__codelineno-68-18">18</a></span>
-<span class="normal"><a href="#__codelineno-68-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-68-19">19</a></span>
+<span class="normal"><a href="#__codelineno-68-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
 </span><span id="__span-68-3"><a id="__codelineno-68-3" name="__codelineno-68-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-68-4"><a id="__codelineno-68-4" name="__codelineno-68-4"></a><span class="p">)</span>
 </span><span id="__span-68-5"><a id="__codelineno-68-5" name="__codelineno-68-5"></a>
 </span><span id="__span-68-6"><a id="__codelineno-68-6" name="__codelineno-68-6"></a><span class="c1">// Construct and register callbacks (recommended)</span>
-</span><span id="__span-68-7"><a id="__codelineno-68-7" name="__codelineno-68-7"></a><span class="nx">cb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span>
-</span><span id="__span-68-8"><a id="__codelineno-68-8" name="__codelineno-68-8"></a><span class="w">    </span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-68-9"><a id="__codelineno-68-9" name="__codelineno-68-9"></a><span class="w">        </span><span class="c1">// Return a non‑nil *model.Response to short‑circuit this turn</span>
-</span><span id="__span-68-10"><a id="__codelineno-68-10" name="__codelineno-68-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-68-11"><a id="__codelineno-68-11" name="__codelineno-68-11"></a><span class="w">    </span><span class="p">}).</span>
-</span><span id="__span-68-12"><a id="__codelineno-68-12" name="__codelineno-68-12"></a><span class="w">    </span><span class="nx">RegisterAfterAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span><span class="w"> </span><span class="nx">runErr</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-68-13"><a id="__codelineno-68-13" name="__codelineno-68-13"></a><span class="w">        </span><span class="c1">// Modify/replace the final response</span>
-</span><span id="__span-68-14"><a id="__codelineno-68-14" name="__codelineno-68-14"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-68-15"><a id="__codelineno-68-15" name="__codelineno-68-15"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-68-16"><a id="__codelineno-68-16" name="__codelineno-68-16"></a>
-</span><span id="__span-68-17"><a id="__codelineno-68-17" name="__codelineno-68-17"></a><span class="nx">graphAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;workflow&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">g</span><span class="p">,</span>
-</span><span id="__span-68-18"><a id="__codelineno-68-18" name="__codelineno-68-18"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">cb</span><span class="p">),</span>
-</span><span id="__span-68-19"><a id="__codelineno-68-19" name="__codelineno-68-19"></a><span class="p">)</span>
+</span><span id="__span-68-7"><a id="__codelineno-68-7" name="__codelineno-68-7"></a><span class="c1">// Note: Structured callback API requires trpc-agent-go &gt;= 0.6.0</span>
+</span><span id="__span-68-8"><a id="__codelineno-68-8" name="__codelineno-68-8"></a><span class="nx">cb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span>
+</span><span id="__span-68-9"><a id="__codelineno-68-9" name="__codelineno-68-9"></a><span class="w">    </span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-68-10"><a id="__codelineno-68-10" name="__codelineno-68-10"></a><span class="w">        </span><span class="c1">// Return a non-nil CustomResponse to short-circuit this turn</span>
+</span><span id="__span-68-11"><a id="__codelineno-68-11" name="__codelineno-68-11"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-68-12"><a id="__codelineno-68-12" name="__codelineno-68-12"></a><span class="w">    </span><span class="p">}).</span>
+</span><span id="__span-68-13"><a id="__codelineno-68-13" name="__codelineno-68-13"></a><span class="w">    </span><span class="nx">RegisterAfterAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-68-14"><a id="__codelineno-68-14" name="__codelineno-68-14"></a><span class="w">        </span><span class="c1">// Modify/replace the final response</span>
+</span><span id="__span-68-15"><a id="__codelineno-68-15" name="__codelineno-68-15"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-68-16"><a id="__codelineno-68-16" name="__codelineno-68-16"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-68-17"><a id="__codelineno-68-17" name="__codelineno-68-17"></a>
+</span><span id="__span-68-18"><a id="__codelineno-68-18" name="__codelineno-68-18"></a><span class="nx">graphAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;workflow&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">g</span><span class="p">,</span>
+</span><span id="__span-68-19"><a id="__codelineno-68-19" name="__codelineno-68-19"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">cb</span><span class="p">),</span>
+</span><span id="__span-68-20"><a id="__codelineno-68-20" name="__codelineno-68-20"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="troubleshooting">Troubleshooting</h2>
 <ul>
-<li>Graph has no entry point<ul>
+<li>
+<p>Graph has no entry point</p>
+<ul>
 <li>Error: "graph must have an entry point". Call <code>SetEntryPoint()</code> and ensure the node exists.</li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>Edge target/source does not exist<ul>
+<li>
+<p>Edge target/source does not exist</p>
+<ul>
 <li>Error mentions missing node. Define nodes before wiring edges/condition maps.</li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>Tools don’t run after LLM<ul>
+<li>
+<p>Tools don’t run after LLM</p>
+<ul>
 <li>Ensure the LLM actually returned <code>tool_calls</code> and you used <code>AddToolsConditionalEdges(ask, tools, fallback)</code>.</li>
 <li>Check that tool names in your map match the model’s declared tool names.</li>
 <li>Pairing walks from the latest assistant(tool_calls) until a new user; verify messages ordering.</li>
@@ -6804,14 +6892,18 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </li>
 </ul>
 <ul>
-<li>No streaming events observed<ul>
+<li>
+<p>No streaming events observed</p>
+<ul>
 <li>Increase <code>WithChannelBufferSize</code> and filter by <code>Author</code>/object types.</li>
 <li>Verify you’re consuming events from <code>Runner.Run(...)</code> and not from direct <code>Executor</code> calls.</li>
 </ul>
 </li>
 </ul>
 <ul>
-<li>Resume did not continue where expected<ul>
+<li>
+<p>Resume did not continue where expected</p>
+<ul>
 <li>Pass <code>agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })</code>.</li>
 <li>Provide <code>ResumeMap</code> for HITL continuation when needed. A plain "resume" message is not added to <code>graph.StateKeyUserInput</code>.</li>
 </ul>
@@ -7023,7 +7115,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 12, 2025 02:44:05 UTC">2025-11-12 02:44:05</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 24, 2025 09:09:40 UTC">2025-11-24 09:09:40</span>
   </span>
 
     
