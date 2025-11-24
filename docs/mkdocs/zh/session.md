@@ -7,7 +7,7 @@ tRPC-Agent-Go 框架提供了强大的会话（Session）管理功能，用于�
 ### 🎯 核心特性
 
 - **上下文管理**：自动加载历史对话，实现真正的多轮对话
-- **会话摘要**：使用 LLM 自动压缩长对话历史，在保留关键上下文的同时显著降低 token 消耗
+- **会话摘要**：使用 LLM 自动压缩长对话历史，支持 Prompt 占位符、增量处理、级联摘要
 - **事件限制**：控制每个会话存储的最大事件数量，防止内存溢出
 - **TTL 管理**：支持会话数据的自动过期清理
 - **多存储后端**：支持内存、Redis、PostgreSQL、MySQL 存储
@@ -79,6 +79,8 @@ func main() {
         llmagent.WithModel(llm),
         llmagent.WithSystemPrompt("你是一个智能助手"),
         llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文
+        // 注意：WithAddSessionSummary(true) 时会忽略 WithMaxHistoryRuns 配置
+        // 摘要会包含所有历史，增量事件会完整保留
     )
 
     // 5. 创建 Runner 并注入 Session Service
@@ -234,17 +236,19 @@ r := runner.NewRunner("my-agent", llmAgent,
 
 ```
 ┌─────────────────────────────────────────┐
-│ System Prompt                           │
+│ 系统提示词                               │
 ├─────────────────────────────────────────┤
-│ Session Summary (system message)        │ ← Compressed history
+│ 会话摘要（system message）               │ ← 历史对话的浓缩版本
 ├─────────────────────────────────────────┤
-│ Event 1 (after summary)                 │ ┐
-│ Event 2                                 │ │
-│ Event 3                                 │ │ New events
-│ ...                                     │ │ (fully retained)
-│ Event N (current message)               │ ┘
+│ 事件 1（摘要时间点之后）                  │ ┐
+│ 事件 2                                  │ │
+│ 事件 3                                  │ │ 摘要后的所有新对话
+│ ...                                     │ │ （完整保留，不截断）
+│ 事件 N（当前消息）                        │ ┘
 └─────────────────────────────────────────┘
 ```
+
+**重要提示：** 启用 `WithAddSessionSummary(true)` 时，`WithMaxHistoryRuns` 参数将被忽略，摘要后的所有事件都会完整保留。
 
 详细配置和高级用法请参见 [会话摘要](#会话摘要) 章节。
 
@@ -1180,35 +1184,83 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 ### 摘要触发机制
 
-**自动触发（推荐）：** Runner 在每次对话完成后自动检查触发条件，满足条件时在后台异步生成摘要。
+#### 自动触发（推荐）
 
-**手动触发：**
+**Runner 自动触发：** 在每次对话完成后，Runner 会自动检查触发条件，满足条件时在后台异步生成摘要，无需手动干预。
+
+**触发时机：**
+
+- 事件数量达到阈值（`WithEventThreshold`）
+- Token 数量达到阈值（`WithTokenThreshold`）
+- 距上次事件超过指定时间（`WithTimeThreshold`）
+- 满足自定义组合条件（`WithChecksAny` / `WithChecksAll`）
+
+#### 手动触发
+
+某些场景下，你可能需要手动触发摘要：
 
 ```go
 // 异步摘要（推荐）- 后台处理，不阻塞
 err := sessionService.EnqueueSummaryJob(
     ctx,
     sess,
-    session.SummaryFilterKeyAllContents,
-    false, // force=false，遵守触发条件
+    session.SummaryFilterKeyAllContents, // 对完整会话生成摘要
+    false,                               // force=false，遵守触发条件
 )
 
-// 同步摘要 - 立即处理，会阻塞
+// 同步摘要 - 立即处理，会阻塞当前操作
 err := sessionService.CreateSessionSummary(
     ctx,
     sess,
     session.SummaryFilterKeyAllContents,
-    false,
+    false, // force=false，遵守触发条件
 )
 
-// 强制摘要 - 忽略触发条件
+// 异步强制摘要 - 忽略触发条件，强制生成
 err := sessionService.EnqueueSummaryJob(
     ctx,
     sess,
     session.SummaryFilterKeyAllContents,
-    true, // force=true，绕过触发条件
+    true, // force=true，绕过所有触发条件检查
+)
+
+// 同步强制摘要 - 立即强制生成
+err := sessionService.CreateSessionSummary(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents,
+    true, // force=true，绕过所有触发条件检查
 )
 ```
+
+**API 说明：**
+
+- **`EnqueueSummaryJob`**：异步摘要（推荐）
+  - 后台处理，不阻塞当前操作
+  - 失败时自动回退到同步处理
+  - 适合生产环境
+
+- **`CreateSessionSummary`**：同步摘要
+  - 立即处理，会阻塞当前操作
+  - 直接返回处理结果
+  - 适合调试或需要立即获取结果的场景
+
+**参数说明：**
+
+- **filterKey**：`session.SummaryFilterKeyAllContents` 表示对完整会话生成摘要
+- **force 参数**：
+  - `false`：遵守配置的触发条件（事件数、token 数、时间阈值等），只有满足条件才生成摘要
+  - `true`：强制生成摘要，完全忽略所有触发条件检查，无论会话状态如何都会执行
+
+**使用场景：**
+
+| 场景 | API | force | 说明 |
+|------|-----|-------|------|
+| 正常自动摘要 | 由 Runner 自动调用 | `false` | 满足触发条件时自动生成 |
+| 会话结束 | `EnqueueSummaryJob` | `true` | 强制生成最终完整摘要 |
+| 用户请求查看 | `CreateSessionSummary` | `true` | 立即生成并返回 |
+| 定时批量处理 | `EnqueueSummaryJob` | `false` | 批量检查并处理符合条件的会话 |
+| 调试测试 | `CreateSessionSummary` | `true` | 立即执行，方便验证 |
 
 ### 上下文注入机制
 
@@ -1221,6 +1273,28 @@ llmagent.WithAddSessionSummary(true)
 - 摘要作为系统消息自动前置到 LLM 输入
 - 包含摘要时间点之后的所有增量事件
 - 保证完整上下文：浓缩历史 + 完整新对话
+- **重要**：此模式下会忽略 `WithMaxHistoryRuns` 配置
+
+**上下文结构示例：**
+
+```
+┌─────────────────────────────────────────┐
+│ System Prompt                           │
+├─────────────────────────────────────────┤
+│ Session Summary (system message)        │ ← Compressed history
+│ - Updated at: 2024-01-10 14:30          │   (events before updated_at)
+│ - Includes: Event1 ~ Event20            │
+├─────────────────────────────────────────┤
+│ Event 21 (user message)                 │ ┐
+│ Event 22 (assistant response)           │ │
+│ Event 23 (user message)                 │ │ Incremental events
+│ Event 24 (assistant response)           │ │ (events after updated_at)
+│ ...                                     │ │ (fully retained)
+│ Event N (current message)               │ ┘
+└─────────────────────────────────────────┘
+```
+
+**适用场景：** 长期运行的会话，需要保持完整历史上下文同时控制 token 消耗。
 
 **模式 2：不使用摘要**
 
@@ -1229,35 +1303,289 @@ llmagent.WithAddSessionSummary(false)
 llmagent.WithMaxHistoryRuns(10)  // 只包含最近 10 轮对话
 ```
 
-### 摘要器高级选项
+- 不注入摘要，直接使用原始事件
+- 受 `WithMaxHistoryRuns` 限制
+- 适用于短期对话或上下文窗口足够大的场景
+
+**上下文结构：**
+
+```
+┌─────────────────────────────────────────┐
+│ System Prompt                           │
+├─────────────────────────────────────────┤
+│ Event N-k+1                             │ ┐
+│ Event N-k+2                             │ │ Last k runs
+│ ...                                     │ │ (MaxHistoryRuns=k)
+│ Event N (current message)               │ ┘
+└─────────────────────────────────────────┘
+```
+
+**适用场景：** 短会话、测试环境，或需要精确控制上下文窗口大小。
+
+
+**模式选择建议：**
+
+| 场景 | 推荐配置 | 说明 |
+|------|---------|------|
+| 长期会话（客服、助手） | `AddSessionSummary=true` | 保持完整上下文，优化 token |
+| 短期会话（单次咨询） | `AddSessionSummary=false`<br>`MaxHistoryRuns=10` | 简单直接，无需摘要开销 |
+| 调试测试 | `AddSessionSummary=false`<br>`MaxHistoryRuns=5` | 快速验证，减少干扰 |
+| 高并发场景 | `AddSessionSummary=true`<br>增加 worker 数量 | 异步处理，不影响响应速度 |
+
+
+### 高级选项
+
+#### 摘要器选项
+
+摘要器支持自定义 Prompt，使用占位符系统动态替换对话内容和字数限制：
+
+**支持的占位符：**
+
+| 占位符 | 说明 | 是否必需 | 替换规则 |
+|--------|------|---------|---------|
+| `{conversation_text}` | 对话内容占位符 | **是** | 替换为格式化的对话历史（`Author: Content` 格式） |
+| `{max_summary_words}` | 字数限制占位符 | 否 | 如果配置了 `WithMaxSummaryWords(n)`，替换为数字 `n`；否则替换为空字符串 |
+
+**Prompt 使用规则：**
+
+1. **必需占位符**：自定义 Prompt 必须包含 `{conversation_text}`，否则无法生成摘要
+2. **默认 Prompt**：如果不提供自定义 Prompt，使用内置默认 Prompt
+3. **动态调整**：`{max_summary_words}` 根据配置自动调整（有值则替换，无值则移除）
+
+
+
+#### 触发条件配置
+
+使用以下选项配置摘要器行为：
+
+**触发条件：**
+
+- **`WithEventThreshold(eventCount int)`**：当事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在 20 个事件后触发。
+- **`WithTokenThreshold(tokenCount int)`**：当总 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在 4000 个 token 后触发。
+- **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
+
+**组合条件：**
+
+- **`WithChecksAll(checks ...Checker)`**：要求所有条件都满足（AND 逻辑）。使用 `Check*` 函数（不是 `With*`）。示例：
+  ```go
+  summary.WithChecksAll(
+      summary.CheckEventThreshold(10),
+      summary.CheckTokenThreshold(2000),
+  )
+  ```
+- **`WithChecksAny(checks ...Checker)`**：任何条件满足即触发（OR 逻辑）。使用 `Check*` 函数（不是 `With*`）。示例：
+  ```go
+  summary.WithChecksAny(
+      summary.CheckEventThreshold(50),
+      summary.CheckTimeThreshold(10*time.Minute),
+  )
+  ```
+
+**注意：** 在 `WithChecksAll` 和 `WithChecksAny` 中使用 `Check*` 函数（如 `CheckEventThreshold`）。将 `With*` 函数（如 `WithEventThreshold`）作为 `NewSummarizer` 的直接选项使用。`Check*` 函数创建检查器实例，而 `With*` 函数是选项设置器。
+
+**摘要生成：**
+
+- **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
+- **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
+
+**自定义提示词示例：**
+
+```go
+customPrompt := `分析以下对话并提供简洁的摘要，重点关注关键决策、行动项和重要上下文。
+请控制在 {max_summary_words} 字以内。
+
+<conversation>
+{conversation_text}
+</conversation>
+
+摘要：`
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPrompt(customPrompt),
+    summary.WithMaxSummaryWords(100),
+    summary.WithEventThreshold(15),
+)
+```
+
+**完整配置示例：**
 
 ```go
 summarizer := summary.NewSummarizer(
     summaryModel,
-    // 触发条件
+    // 单一触发条件（作为 NewSummarizer 的直接选项）
     summary.WithEventThreshold(20),
     summary.WithTokenThreshold(4000),
     summary.WithTimeThreshold(5*time.Minute),
-
-    // 组合条件（任一满足）
+    
+    // 组合条件（任一满足 - OR 逻辑）
     summary.WithChecksAny(
-        summary.CheckEventThreshold(50),
+        summary.CheckEventThreshold(50),     // 使用 Check* 函数
         summary.CheckTimeThreshold(10*time.Minute),
     ),
-
-    // 组合条件（全部满足）
+    
+    // 组合条件（全部满足 - AND 逻辑）
     summary.WithChecksAll(
-        summary.CheckEventThreshold(10),
+        summary.CheckEventThreshold(10),     // 使用 Check* 函数
         summary.CheckTokenThreshold(2000),
     ),
-
-    // 摘要生成
+    
+    // 摘要生成配置
     summary.WithMaxSummaryWords(200),
     summary.WithPrompt(customPrompt),
 )
 ```
 
-### 完整示例
+**触发条件详解：**
+
+| 配置方法 | 触发逻辑 | 说明 |
+|---------|---------|------|
+| `WithEventThreshold(n)` | 事件数量 **严格大于** n | `n=20` 时需要 21 个事件才触发 |
+| `WithTokenThreshold(n)` | Token 总数 **严格大于** n（按 InvocationID 去重） | `n=4000` 时需要 4001 个 token 才触发 |
+| `WithTimeThreshold(d)` | 距离上次更新时间 **严格大于** d | `d=5min` 时需要 5 分 1 秒才触发 |
+| `WithChecksAny(...)` | 任一子条件满足即触发 | OR 逻辑 |
+| `WithChecksAll(...)` | 全部子条件满足才触发 | AND 逻辑 |
+
+**默认行为：** 如果不配置任何触发条件，摘要功能不会自动触发（需要手动强制调用）。
+
+
+#### 增量摘要工作原理
+
+摘要系统采用增量处理机制，避免重复计算已摘要的历史事件：
+
+**处理流程：**
+
+1. **首次摘要**：处理所有历史事件
+   ```
+   Input: [Event1, Event2, Event3, ..., Event20]
+   Output: Summary1 (updated_at = Event20.timestamp)
+   ```
+
+2. **增量摘要**：只处理新增事件，上次摘要作为上下文
+   ```
+   Input: [
+       SystemEvent(content=Summary1),  // 上次摘要作为系统消息
+       Event21,                        // 新增事件
+       Event22,
+       ...,
+       Event40
+   ]
+   Output: Summary2 (updated_at = Event40.timestamp)
+   ```
+
+3. **时间过滤**：使用 `updated_at` 时间戳避免重复处理
+   ```go
+   // 只选择时间戳严格大于上次摘要时间的事件
+   func computeDeltaSince(sess *session.Session, since time.Time, filterKey string) ([]event.Event, time.Time) {
+       for _, e := range sess.Events {
+           if !since.IsZero() && !e.Timestamp.After(since) {
+               continue  // 跳过已摘要的事件
+           }
+           // ...
+       }
+   }
+   ```
+
+**核心优势：**
+
+- **高效处理**：只计算增量，避免重复分析相同内容
+- **上下文保留**：上次摘要前置确保连贯性
+- **精确时间戳**：`updated_at` 记录最后一个被摘要的事件时间
+
+#### 级联摘要机制
+
+当处理分支摘要（filterKey 非空）时，框架会自动触发完整会话摘要：
+
+```go
+// 伪代码示例
+if filterKey != "" {
+    // 1. 处理分支摘要
+    SummarizeSession(ctx, summarizer, sess, filterKey, force)
+    
+    // 2. 自动触发完整会话摘要
+    SummarizeSession(ctx, summarizer, sess, "", force)
+}
+```
+
+**适用场景：**
+
+- **多 Agent 系统**：每个 Agent 维护自己的分支摘要（filterKey = agentName）
+- **统一视图**：完整会话摘要（filterKey = ""）提供全局上下文
+
+#### 摘要获取优先级
+
+框架提供智能的摘要获取策略：
+
+```go
+// Priority 1: 完整会话摘要（filterKey=""）
+summary := sess.Summaries[""]
+
+// Priority 2: 降级到任意非空分支摘要
+if summary == nil {
+    for key, s := range sess.Summaries {
+        if s != nil && s.Summary != "" {
+            summary = s
+            break
+        }
+    }
+}
+```
+
+
+#### 会话服务选项
+
+在会话服务中配置异步摘要处理：
+
+- **`WithSummarizer(s summary.SessionSummarizer)`**：将摘要器注入到会话服务中。
+- **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 2。更多 worker 允许更高并发但消耗更多资源。
+- **`WithSummaryQueueSize(size int)`**：设置摘要任务队列的大小。默认为 100。更大的队列允许更多待处理任务但消耗更多内存。
+- **`WithSummaryJobTimeout(timeout time.Duration)`** _（仅内存模式）_：设置处理单个摘要任务的超时时间。默认为 30 秒。
+
+#### 获取摘要
+
+从会话中获取最新的摘要文本：
+
+```go
+summaryText, found := sessionService.GetSessionSummaryText(ctx, sess)
+if found {
+    fmt.Printf("摘要：%s\n", summaryText)
+}
+```
+
+#### 工作原理
+
+1. **增量处理**：摘要器跟踪每个会话的上次摘要时间。在后续运行中，它只处理上次摘要后发生的事件。
+
+2. **增量摘要**：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。
+
+3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
+
+4. **异步 Worker**：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。
+
+5. **回退机制**：如果异步入队失败（队列已满、上下文取消或 worker 未初始化），系统会自动回退到同步处理。
+
+#### 最佳实践
+
+1. **选择合适的阈值**：根据 LLM 的上下文窗口和对话模式设置事件/token 阈值。对于 GPT-4（8K 上下文），考虑使用 `WithTokenThreshold(4000)` 为响应留出空间。
+
+2. **使用异步处理**：在生产环境中始终使用 `EnqueueSummaryJob` 而不是 `CreateSessionSummary`，以避免阻塞对话流程。
+
+3. **监控队列大小**：如果频繁看到"queue is full"警告，请增加 `WithSummaryQueueSize` 或 `WithAsyncSummaryNum`。
+
+4. **自定义提示词**：根据应用需求定制摘要提示词。例如，如果你正在构建客户支持 Agent，应关注关键问题和解决方案。
+
+5. **平衡字数限制**：设置 `WithMaxSummaryWords` 以在保留上下文和减少 token 使用之间取得平衡。典型值范围为 100-300 字。
+
+6. **测试触发条件**：尝试不同的 `WithChecksAny` 和 `WithChecksAll` 组合，找到摘要频率和成本之间的最佳平衡。
+
+#### 性能考虑
+
+- **LLM 成本**：每次摘要生成都会调用 LLM。监控触发条件以平衡成本和上下文保留。
+- **内存使用**：摘要与事件一起存储。配置适当的 TTL 以管理长时间运行会话中的内存。
+- **异步 Worker**：更多 worker 会提高吞吐量但消耗更多资源。从 2-4 个 worker 开始，根据负载进行扩展。
+- **队列容量**：根据预期的并发量和摘要生成时间调整队列大小。
+
+### 完整代码示例
 
 ```go
 package main
@@ -1354,4 +1682,4 @@ func main() {
 - [会话示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 - [摘要示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 
-通过合理使用会话管理功能，结合会话摘要机制，你可以构建有状态的智能 Agent，在保持对话上下文的同时高效管理内存，为用户提供连续、个性化的交互体验。
+通过合理使用会话管理功能，结合会话摘要机制，你可以构建有状态的智能 Agent，在保持对话上下文的同时高效管理内存，为用户提供连续、个性化的交互体验，同时确保系统长期运行的可持续性。
