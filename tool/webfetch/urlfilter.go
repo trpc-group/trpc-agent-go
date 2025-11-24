@@ -37,7 +37,7 @@ func newBlockPatternFilter(pattern string) URLFilter {
 	return func(urlStr string) bool {
 		u, err := url.Parse(urlStr)
 		if err != nil {
-			// Fail-safe: treat unparseable URLs as blocked
+			// Fail-safe: treat unparsable URLs as blocked
 			return false
 		}
 		return !matchPattern(u, pattern)

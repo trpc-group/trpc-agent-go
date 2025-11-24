@@ -295,3 +295,20 @@ func TestConvertHTMLToMarkdown(t *testing.T) {
 	assert.NotContains(t, result, "console.log")
 	assert.NotContains(t, result, "color: red")
 }
+
+func TestWebFetch_WithHTTPClient(t *testing.T) {
+	client := &http.Client{Timeout: defaultTimeout}
+	tool := NewTool(WithHTTPClient(client))
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "OK")
+	}))
+	defer ts.Close()
+
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "OK", resp.Results[0].Content)
+}
