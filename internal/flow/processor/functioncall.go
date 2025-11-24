@@ -542,6 +542,15 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 	return mergedEvent
 }
 
+func toolJsonContent(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, id string, result any) (tool.Message, error) {
+	body, err := json.Marshal(result)
+	return model.Message{
+		Role:    model.RoleTool,
+		Content: string(body),
+		ToolID:  id,
+	}, err
+}
+
 // executeToolCall executes a single tool call and returns the choice.
 // Parameters:
 //   - ctx: context for cancellation and tracing
@@ -602,27 +611,24 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		}
 	}
 
-	// Marshal the result to JSON.
-	resultBytes, err := json.Marshal(result)
+	format := toolJsonContent
+	if p.toolCallbacks.ToolFormatMessage != nil {
+		format = p.toolCallbacks.ToolFormatMessage
+	}
+
+	msg, err := format(ctx, toolCall.Function.Name, tl.Declaration(), toolCall.Function.Arguments, toolCall.ID, result)
 	if err != nil {
-		// Marshal failures (for example, NaN in floats) do not
-		// affect the overall flow. Downgrade to warning to avoid
-		// noisy alerts while still surfacing the issue.
-		log.Warnf("Failed to marshal tool result for %s: %v",
+		log.Warnf("Failed to format tool result for %s: %v",
 			toolCall.Function.Name, err)
 		return nil, modifiedArgs, true,
 			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
 
-	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
+	log.Debugf("CallableTool %s executed successfully, result: %s %v", toolCall.Function.Name, msg)
 
 	return &model.Choice{
-		Index: index,
-		Message: model.Message{
-			Role:    model.RoleTool,
-			Content: string(resultBytes),
-			ToolID:  toolCall.ID,
-		},
+		Index:   index,
+		Message: msg.(model.Message),
 	}, modifiedArgs, true, nil
 }
 

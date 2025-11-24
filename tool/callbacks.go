@@ -26,12 +26,19 @@ type BeforeToolCallback func(ctx context.Context, toolName string, toolDeclarati
 // - error: if not nil, this error will be returned.
 type AfterToolCallback func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte, result any, runErr error) (any, error)
 
+type Message any // should be model.Message, avoid cycle import
+
+// ToolFormatMessage is called to format the tool result.
+type ToolFormatMessage func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte, id string, result any) (Message, error)
+
 // Callbacks holds callbacks for tool operations.
 type Callbacks struct {
 	// BeforeTool is a list of callbacks that are called before the tool is executed.
 	BeforeTool []BeforeToolCallback
 	// AfterTool is a list of callbacks that are called after the tool is executed.
 	AfterTool []AfterToolCallback
+
+	ToolFormatMessage ToolFormatMessage
 }
 
 // NewCallbacks creates a new Callbacks instance for tool.
