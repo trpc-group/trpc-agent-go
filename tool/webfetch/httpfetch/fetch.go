@@ -7,6 +7,7 @@
 //
 //
 
+// Package httpfetch provides the HTTP webfetch tool.
 package httpfetch
 
 import (

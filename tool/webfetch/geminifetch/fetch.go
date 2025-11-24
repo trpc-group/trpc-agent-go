@@ -7,6 +7,7 @@
 //
 //
 
+// Package geminifetch provides a Gemini webfetch tool.
 package geminifetch
 
 import (
