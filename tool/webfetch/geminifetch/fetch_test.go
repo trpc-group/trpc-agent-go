@@ -20,7 +20,7 @@ import (
 
 func TestNewTool(t *testing.T) {
 	// This test just ensures the tool can be created
-	tool, err := NewTool("gemini-2.0-flash-exp")
+	tool, err := NewTool("gemini-2.5-flash")
 	require.NoError(t, err)
 	assert.NotNil(t, tool)
 }
@@ -35,7 +35,7 @@ func TestNewTool_EmptyModel(t *testing.T) {
 
 func TestNewTool_WithOptions(t *testing.T) {
 	tool, err := NewTool(
-		"gemini-2.0-flash-exp",
+		"gemini-2.5-flash",
 		WithAPIKey("test-key"),
 	)
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestGeminiFetch_NoPrompt(t *testing.T) {
 		t.Skip("GEMINI_API_KEY not set")
 	}
 
-	tool, err := NewTool("gemini-2.0-flash-exp")
+	tool, err := NewTool("gemini-2.5-flash")
 	require.NoError(t, err)
 
 	res, err := tool.Call(context.Background(), []byte(`{"prompt": ""}`))
