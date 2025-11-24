@@ -128,12 +128,23 @@ func TestMultipleRunOptions(t *testing.T) {
 	WithMessages(msgs)(&ro)
 	WithRuntimeState(state)(&ro)
 	WithKnowledgeFilter(filter)(&ro)
+	WithResume(true)(&ro)
 	WithRequestID("multi-req-123")(&ro)
 	WithA2ARequestOptions("opt1", "opt2")(&ro)
 
 	require.Equal(t, msgs, ro.Messages)
 	require.Equal(t, state, ro.RuntimeState)
 	require.Equal(t, filter, ro.KnowledgeFilter)
+	require.True(t, ro.Resume)
 	require.Equal(t, "multi-req-123", ro.RequestID)
 	require.Equal(t, 2, len(ro.A2ARequestOptions))
+}
+
+func TestWithResume(t *testing.T) {
+	var ro RunOptions
+	WithResume(true)(&ro)
+	require.True(t, ro.Resume)
+
+	WithResume(false)(&ro)
+	require.False(t, ro.Resume)
 }

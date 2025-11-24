@@ -15,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 func TestNewMCPToolSet(t *testing.T) {
@@ -47,10 +50,10 @@ func TestNewMCPToolSet_WithOptions(t *testing.T) {
 		Args:      []string{"hello"},
 	}
 
-	filter := NewIncludeFilter("tool1", "tool2")
+	filterFunc := tool.NewIncludeToolNamesFilter("tool1", "tool2")
 	toolset := NewMCPToolSet(config,
 		WithName("test-toolset"),
-		WithToolFilter(filter),
+		WithToolFilterFunc(filterFunc),
 		WithSessionReconnect(3),
 	)
 
@@ -69,14 +72,27 @@ func TestNewMCPToolSet_WithOptions(t *testing.T) {
 }
 
 // getTestTools returns a slice of test tools for testing filters.
-func getTestTools() []ToolInfo {
-	return []ToolInfo{
-		{Name: "echo", Description: "Echoes the input message"},
-		{Name: "calculate", Description: "Performs mathematical calculations"},
-		{Name: "time_current", Description: "Gets the current time"},
-		{Name: "file_read", Description: "Reads a file from the system"},
-		{Name: "system_info", Description: "Gets system information"},
-		{Name: "basic_math", Description: "Basic math operations"},
+func getTestTools() []tool.Tool {
+	// Use function tools for testing
+	echoFunc := func(ctx context.Context, msg string) (string, error) { return msg, nil }
+	calcFunc := func(ctx context.Context, args struct {
+		A float64 `json:"a"`
+		B float64 `json:"b"`
+	}) (float64, error) {
+		return args.A + args.B, nil
+	}
+	timeFunc := func(ctx context.Context, args struct{}) (string, error) { return "now", nil }
+	fileFunc := func(ctx context.Context, path string) (string, error) { return "", nil }
+	sysFunc := func(ctx context.Context, args struct{}) (string, error) { return "", nil }
+	mathFunc := func(ctx context.Context, x float64) (float64, error) { return x * 2, nil }
+
+	return []tool.Tool{
+		function.NewFunctionTool(echoFunc, function.WithName("echo"), function.WithDescription("Echoes the input message")),
+		function.NewFunctionTool(calcFunc, function.WithName("calculate"), function.WithDescription("Performs mathematical calculations")),
+		function.NewFunctionTool(timeFunc, function.WithName("time_current"), function.WithDescription("Gets the current time")),
+		function.NewFunctionTool(fileFunc, function.WithName("file_read"), function.WithDescription("Reads a file from the system")),
+		function.NewFunctionTool(sysFunc, function.WithName("system_info"), function.WithDescription("Gets system information")),
+		function.NewFunctionTool(mathFunc, function.WithName("basic_math"), function.WithDescription("Basic math operations")),
 	}
 }
 
@@ -84,16 +100,19 @@ func TestIncludeFilter(t *testing.T) {
 	ctx := context.Background()
 	testTools := getTestTools()
 
-	filter := NewIncludeFilter("echo", "calculate")
-	filtered := filter.Filter(ctx, testTools)
+	filterFunc := tool.NewIncludeToolNamesFilter("echo", "calculate")
+	filtered := tool.FilterTools(ctx, testTools, filterFunc)
 
 	if len(filtered) != 2 {
 		t.Errorf("Expected 2 tools, got %d", len(filtered))
 	}
 
 	names := make(map[string]bool)
-	for _, tool := range filtered {
-		names[tool.Name] = true
+	for _, tl := range filtered {
+		decl := tl.Declaration()
+		if decl != nil {
+			names[decl.Name] = true
+		}
 	}
 
 	if !names["echo"] || !names["calculate"] {
@@ -105,15 +124,16 @@ func TestExcludeFilter(t *testing.T) {
 	ctx := context.Background()
 	testTools := getTestTools()
 
-	filter := NewExcludeFilter("file_read", "system_info")
-	filtered := filter.Filter(ctx, testTools)
+	filterFunc := tool.NewExcludeToolNamesFilter("file_read", "system_info")
+	filtered := tool.FilterTools(ctx, testTools, filterFunc)
 
 	if len(filtered) != 4 {
 		t.Errorf("Expected 4 tools, got %d", len(filtered))
 	}
 
-	for _, tool := range filtered {
-		if tool.Name == "file_read" || tool.Name == "system_info" {
+	for _, tl := range filtered {
+		decl := tl.Declaration()
+		if decl != nil && (decl.Name == "file_read" || decl.Name == "system_info") {
 			t.Error("file_read and system_info should be excluded")
 		}
 	}
@@ -123,8 +143,18 @@ func TestPatternIncludeFilter(t *testing.T) {
 	ctx := context.Background()
 	testTools := getTestTools()
 
-	filter := NewPatternIncludeFilter("^(echo|calc|time).*")
-	filtered := filter.Filter(ctx, testTools)
+	// Custom filter func for pattern matching
+	filterFunc := func(ctx context.Context, t tool.Tool) bool {
+		decl := t.Declaration()
+		if decl == nil {
+			return false
+		}
+		// Match: echo, calculate (calc*), time_current (time*)
+		return strings.HasPrefix(decl.Name, "echo") ||
+			strings.HasPrefix(decl.Name, "calc") ||
+			strings.HasPrefix(decl.Name, "time")
+	}
+	filtered := tool.FilterTools(ctx, testTools, filterFunc)
 
 	// Should match: echo, calculate, time_current
 	if len(filtered) != 3 {
@@ -132,8 +162,11 @@ func TestPatternIncludeFilter(t *testing.T) {
 	}
 
 	names := make(map[string]bool)
-	for _, tool := range filtered {
-		names[tool.Name] = true
+	for _, tl := range filtered {
+		decl := tl.Declaration()
+		if decl != nil {
+			names[decl.Name] = true
+		}
 	}
 
 	expected := []string{"echo", "calculate", "time_current"}
@@ -148,112 +181,65 @@ func TestPatternExcludeFilter(t *testing.T) {
 	ctx := context.Background()
 	testTools := getTestTools()
 
-	filter := NewPatternExcludeFilter("^(file|system).*")
-	filtered := filter.Filter(ctx, testTools)
+	// Custom filter func for pattern exclusion
+	filterFunc := func(ctx context.Context, t tool.Tool) bool {
+		decl := t.Declaration()
+		if decl == nil {
+			return false
+		}
+		// Exclude: file*, system*
+		return !strings.HasPrefix(decl.Name, "file") &&
+			!strings.HasPrefix(decl.Name, "system")
+	}
+	filtered := tool.FilterTools(ctx, testTools, filterFunc)
 
 	// Should exclude: file_read, system_info
 	if len(filtered) != 4 {
 		t.Errorf("Expected 4 tools, got %d", len(filtered))
 	}
 
-	for _, tool := range filtered {
-		if strings.HasPrefix(tool.Name, "file") || strings.HasPrefix(tool.Name, "system") {
-			t.Errorf("Tool %s should be excluded", tool.Name)
+	for _, tl := range filtered {
+		decl := tl.Declaration()
+		if decl != nil && (strings.HasPrefix(decl.Name, "file") || strings.HasPrefix(decl.Name, "system")) {
+			t.Errorf("Tool %s should be excluded", decl.Name)
 		}
 	}
 }
 
-func TestDescriptionFilter(t *testing.T) {
+func TestCustomFilterFunc(t *testing.T) {
 	ctx := context.Background()
 	testTools := getTestTools()
 
-	filter := NewDescriptionFilter(".*math.*")
-	filtered := filter.Filter(ctx, testTools)
-
-	// Should match: calculate, basic_math (both have "math" in description)
-	if len(filtered) != 2 {
-		t.Errorf("Expected 2 tools, got %d", len(filtered))
-	}
-
-	names := make(map[string]bool)
-	for _, tool := range filtered {
-		names[tool.Name] = true
-	}
-
-	if !names["calculate"] || !names["basic_math"] {
-		t.Error("Expected calculate and basic_math tools to be included")
-	}
-}
-
-func TestCompositeFilterWithPattern(t *testing.T) {
-	ctx := context.Background()
-	testTools := getTestTools()
-
-	// Combine: include pattern + exclude specific tools
-	includeFilter := NewPatternIncludeFilter(".*") // Include all
-	excludeFilter := NewExcludeFilter("file_read", "system_info")
-
-	composite := NewCompositeFilter(includeFilter, excludeFilter)
-	filtered := composite.Filter(ctx, testTools)
-
-	if len(filtered) != 4 {
-		t.Errorf("Expected 4 tools, got %d", len(filtered))
-	}
-
-	for _, tool := range filtered {
-		if tool.Name == "file_read" || tool.Name == "system_info" {
-			t.Error("file_read and system_info should be excluded by composite filter")
+	// Custom filter function: only tools with names shorter than 8 characters
+	filterFunc := func(ctx context.Context, t tool.Tool) bool {
+		decl := t.Declaration()
+		if decl == nil {
+			return false
 		}
+		return len(decl.Name) < 8
 	}
-}
 
-func TestFuncFilter(t *testing.T) {
-	ctx := context.Background()
-	testTools := getTestTools()
+	filtered := tool.FilterTools(ctx, testTools, filterFunc)
 
-	// Custom function filter: only tools with names shorter than 8 characters
-	filter := NewFuncFilter(func(ctx context.Context, tools []ToolInfo) []ToolInfo {
-		var filtered []ToolInfo
-		for _, tool := range tools {
-			if len(tool.Name) < 8 {
-				filtered = append(filtered, tool)
-			}
-		}
-		return filtered
-	})
-
-	filtered := filter.Filter(ctx, testTools)
-
-	// Should match: echo (4), file_read (9 - excluded)
-	// calculate (9 - excluded), time_current (12 - excluded), system_info (11 - excluded), basic_math (10 - excluded)
+	// Should match: echo (4)
 	expectedNames := []string{"echo"}
 	if len(filtered) != len(expectedNames) {
 		t.Errorf("Expected %d tools, got %d", len(expectedNames), len(filtered))
 	}
 
-	for _, tool := range filtered {
-		if tool.Name != "echo" {
-			t.Errorf("Only echo should pass the length filter, got %s", tool.Name)
+	for _, tl := range filtered {
+		decl := tl.Declaration()
+		if decl != nil && decl.Name != "echo" {
+			t.Errorf("Only echo should pass the length filter, got %s", decl.Name)
 		}
-	}
-}
-
-func TestNoFilter(t *testing.T) {
-	ctx := context.Background()
-	testTools := getTestTools()
-
-	filtered := NoFilter.Filter(ctx, testTools)
-
-	if len(filtered) != len(testTools) {
-		t.Errorf("NoFilter should return all tools. Expected %d, got %d", len(testTools), len(filtered))
 	}
 }
 
 func TestEmptyToolList(t *testing.T) {
 	ctx := context.Background()
 
-	filter := NewIncludeFilter("echo")
-	filtered := filter.Filter(ctx, []ToolInfo{})
+	filterFunc := tool.NewIncludeToolNamesFilter("echo")
+	filtered := tool.FilterTools(ctx, []tool.Tool{}, filterFunc)
 
 	if len(filtered) != 0 {
 		t.Errorf("Filter on empty list should return empty list, got %d tools", len(filtered))
@@ -264,11 +250,15 @@ func TestEmptyFilterList(t *testing.T) {
 	ctx := context.Background()
 	testTools := getTestTools()
 
-	filter := NewIncludeFilter() // No tools specified
-	filtered := filter.Filter(ctx, testTools)
+	// When no filter is specified, FilterTools should return all tools
+	// Note: NewIncludeToolNamesFilter() with no args creates an empty allowlist,
+	// which filters out everything. This is the expected behavior.
+	filterFunc := tool.NewIncludeToolNamesFilter() // No tools specified - empty allowlist
+	filtered := tool.FilterTools(ctx, testTools, filterFunc)
 
-	if len(filtered) != len(testTools) {
-		t.Errorf("Empty include filter should return all tools. Expected %d, got %d", len(testTools), len(filtered))
+	// Empty include filter (no allowed names) should return no tools
+	if len(filtered) != 0 {
+		t.Errorf("Empty include filter should return no tools. Expected 0, got %d", len(filtered))
 	}
 }
 

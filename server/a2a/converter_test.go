@@ -246,15 +246,18 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 			name: "event with tool calls",
 			event: &event.Event{
 				Response: &model.Response{
+					ID: "resp-tc1",
 					Choices: []model.Choice{
 						{
 							Message: model.Message{
 								Content: "Calling tool",
 								ToolCalls: []model.ToolCall{
 									{
+										ID:   "call-1",
 										Type: "function",
 										Function: model.FunctionDefinitionParam{
-											Name: "test_tool",
+											Name:      "test_tool",
+											Arguments: []byte(`{"arg":"value"}`),
 										},
 									},
 								},
@@ -263,42 +266,82 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 					},
 				},
 			},
-			expected: nil,
-			wantErr:  false,
+			expected: func() protocol.UnaryMessageResult {
+				dataPart := protocol.NewDataPart(map[string]any{
+					"id":   "call-1",
+					"type": "function",
+					"name": "test_tool",
+					"args": `{"arg":"value"}`,
+				})
+				dataPart.Metadata = map[string]any{
+					"type": "function_call",
+				}
+				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{dataPart})
+				return &msg
+			}(),
+			wantErr: false,
 		},
 		{
 			name: "event with tool role",
 			event: &event.Event{
 				Response: &model.Response{
+					ID: "resp-tr1",
 					Choices: []model.Choice{
 						{
 							Message: model.Message{
-								Role:    model.RoleTool,
-								Content: "Tool response",
+								Role:     model.RoleTool,
+								ToolID:   "call-1",
+								ToolName: "test_tool",
+								Content:  "Tool response content",
 							},
 						},
 					},
 				},
 			},
-			expected: nil,
-			wantErr:  false,
+			expected: func() protocol.UnaryMessageResult {
+				// Tool responses should be converted to DataPart with function_response metadata
+				dataPart := protocol.NewDataPart(map[string]any{
+					"name":     "test_tool",
+					"id":       "call-1",
+					"response": "Tool response content",
+				})
+				dataPart.Metadata = map[string]any{
+					"type": "function_response",
+				}
+				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{dataPart})
+				return &msg
+			}(),
+			wantErr: false,
 		},
 		{
 			name: "event with tool ID",
 			event: &event.Event{
 				Response: &model.Response{
+					ID: "resp-tid1",
 					Choices: []model.Choice{
 						{
 							Message: model.Message{
-								Content: "Tool response",
-								ToolID:  "tool123",
+								ToolID:   "tool123",
+								ToolName: "tool_func",
+								Content:  "Tool response",
 							},
 						},
 					},
 				},
 			},
-			expected: nil,
-			wantErr:  false,
+			expected: func() protocol.UnaryMessageResult {
+				dataPart := protocol.NewDataPart(map[string]any{
+					"name":     "tool_func",
+					"id":       "tool123",
+					"response": "Tool response",
+				})
+				dataPart.Metadata = map[string]any{
+					"type": "function_response",
+				}
+				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{dataPart})
+				return &msg
+			}(),
+			wantErr: false,
 		},
 		{
 			name: "event with no choices",
@@ -357,15 +400,17 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 				},
 			},
 			expected: func() protocol.StreamingMessageResult {
-				parts := []protocol.Part{protocol.NewTextPart("Hello")}
+				isLastChunk := false
 				taskEvent := protocol.NewTaskArtifactUpdateEvent(
 					"test-task-id",
 					"test-ctx-id",
 					protocol.Artifact{
 						ArtifactID: "resp-123",
-						Parts:      parts,
+						Parts: []protocol.Part{
+							protocol.NewTextPart("Hello"),
+						},
 					},
-					false,
+					isLastChunk,
 				)
 				return &taskEvent
 			}(),
@@ -404,12 +449,18 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			name: "streaming event with tool calls",
 			event: &event.Event{
 				Response: &model.Response{
+					ID: "resp-stc1",
 					Choices: []model.Choice{
 						{
 							Message: model.Message{
 								ToolCalls: []model.ToolCall{
 									{
+										ID:   "call-1",
 										Type: "function",
+										Function: model.FunctionDefinitionParam{
+											Name:      "test_tool",
+											Arguments: []byte(`{"key":"value"}`),
+										},
 									},
 								},
 							},
@@ -420,8 +471,28 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 					},
 				},
 			},
-			expected: nil,
-			wantErr:  false,
+			expected: func() protocol.StreamingMessageResult {
+				dataPart := protocol.NewDataPart(map[string]any{
+					"id":   "call-1",
+					"type": "function",
+					"name": "test_tool",
+					"args": `{"key":"value"}`,
+				})
+				dataPart.Metadata = map[string]any{
+					"type": "function_call",
+				}
+				taskEvent := protocol.NewTaskArtifactUpdateEvent(
+					"test-task-id",
+					"test-ctx-id",
+					protocol.Artifact{
+						ArtifactID: "resp-stc1",
+						Parts:      []protocol.Part{dataPart},
+					},
+					false,
+				)
+				return &taskEvent
+			}(),
+			wantErr: false,
 		},
 		{
 			name: "streaming event with no choices",
@@ -648,12 +719,40 @@ func compareProtocolMessages(a, b *protocol.Message) bool {
 
 	for i, partA := range a.Parts {
 		partB := b.Parts[i]
-		if !reflect.DeepEqual(partA, partB) {
+		if !compareProtocolParts(partA, partB) {
 			return false
 		}
 	}
 
 	return true
+}
+
+func compareProtocolParts(a, b protocol.Part) bool {
+	// Handle nil cases
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Check if both are DataParts
+	dataParta, okA := a.(*protocol.DataPart)
+	dataPartb, okB := b.(*protocol.DataPart)
+	if okA && okB {
+		// Compare DataParts by value, not by pointer
+		// Note: We don't compare Kind field as it's auto-set by NewDataPart
+		if !reflect.DeepEqual(dataParta.Data, dataPartb.Data) {
+			return false
+		}
+		if !reflect.DeepEqual(dataParta.Metadata, dataPartb.Metadata) {
+			return false
+		}
+		return true
+	}
+
+	// For other types, use deep equal
+	return reflect.DeepEqual(a, b)
 }
 
 func compareStreamingMessageResults(a, b protocol.StreamingMessageResult) bool {
@@ -688,15 +787,122 @@ func compareTaskArtifactUpdateEvents(a, b *protocol.TaskArtifactUpdateEvent) boo
 		return false
 	}
 
-	// Compare LastChunk if both are set
-	if a.LastChunk != nil && b.LastChunk != nil {
-		if *a.LastChunk != *b.LastChunk {
-			return false
-		}
-	} else if a.LastChunk != b.LastChunk {
+	// Compare LastChunk - handle both nil and non-nil cases
+	aLastChunk := false
+	if a.LastChunk != nil {
+		aLastChunk = *a.LastChunk
+	}
+	bLastChunk := false
+	if b.LastChunk != nil {
+		bLastChunk = *b.LastChunk
+	}
+	if aLastChunk != bLastChunk {
 		return false
 	}
 
 	// Compare artifacts
 	return reflect.DeepEqual(a.Artifact, b.Artifact)
+}
+
+func TestConvertToolCallToA2AMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    *event.Event
+		wantPart bool
+		wantErr  bool
+	}{
+		{
+			name: "tool call request",
+			event: &event.Event{
+				Response: &model.Response{
+					ID: "resp-123",
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolCalls: []model.ToolCall{
+									{
+										ID:   "call-1",
+										Type: "function",
+										Function: model.FunctionDefinitionParam{
+											Name:      "get_weather",
+											Arguments: []byte(`{"location":"Beijing"}`),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantPart: true,
+			wantErr:  false,
+		},
+		{
+			name: "tool response",
+			event: &event.Event{
+				Response: &model.Response{
+					ID: "resp-124",
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:     model.RoleTool,
+								ToolID:   "call-1",
+								ToolName: "get_weather",
+								Content:  `{"temperature": 25}`,
+							},
+						},
+					},
+				},
+			},
+			wantPart: true,
+			wantErr:  false,
+		},
+		{
+			name: "empty choices",
+			event: &event.Event{
+				Response: &model.Response{
+					Choices: []model.Choice{},
+				},
+			},
+			wantPart: false,
+			wantErr:  false,
+		},
+	}
+
+	converter := &defaultEventToA2AMessage{}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := converter.convertToolCallToA2AMessage(tt.event)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("convertToolCallToA2AMessage() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantPart {
+				if result == nil {
+					t.Error("convertToolCallToA2AMessage() returned nil, expected result")
+					return
+				}
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					t.Error("convertToolCallToA2AMessage() result is not a Message")
+					return
+				}
+				if len(msg.Parts) == 0 {
+					t.Error("convertToolCallToA2AMessage() returned message with no parts")
+				}
+				// Check that all parts are DataParts
+				for _, part := range msg.Parts {
+					if part.GetKind() != protocol.KindData {
+						t.Errorf("Expected DataPart, got %s", part.GetKind())
+					}
+				}
+			} else {
+				if result != nil {
+					t.Error("convertToolCallToA2AMessage() returned result, expected nil")
+				}
+			}
+		})
+	}
 }

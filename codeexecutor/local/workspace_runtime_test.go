@@ -451,6 +451,31 @@ func TestRuntime_Collect_DedupOverlappingGlobs(t *testing.T) {
 	require.Equal(t, 1, countA)
 }
 
+func TestRuntime_Collect_EnvPrefixes(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-env", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	const name = "env.txt"
+	require.NoError(t, rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    filepath.Join(codeexecutor.DirOut, name),
+		Content: []byte("v"),
+		Mode:    0o644,
+	}}))
+
+	files, err := rt.Collect(
+		ctx, ws, []string{"$OUTPUT_DIR/" + name},
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, filepath.Join(codeexecutor.DirOut, name),
+		files[0].Name)
+}
+
 func TestRuntime_PutFiles_EmptyPathError(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()
@@ -588,6 +613,28 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 	require.Equal(t, "W", string(b))
 }
 
+func TestRuntime_CreateWorkspace_AutoInputsHost(t *testing.T) {
+	host := t.TempDir()
+	hfile := filepath.Join(host, "auto.txt")
+	require.NoError(t, os.WriteFile(hfile, []byte("V"), 0o644))
+
+	rt := local.NewRuntimeWithOptions(
+		"", local.WithInputsHostBase(host),
+	)
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-auto-inputs", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	data, err := os.ReadFile(filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "auto.txt",
+	))
+	require.NoError(t, err)
+	require.Equal(t, "V", string(data))
+}
+
 func TestRuntime_StageInputs_InvalidScheme_Error(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()
@@ -652,6 +699,33 @@ func TestRuntime_CollectOutputs_SaveAndInline(t *testing.T) {
 	}
 	require.True(t, sawSmall)
 	require.True(t, mf.LimitsHit)
+}
+
+func TestRuntime_CollectOutputs_EnvPrefixes(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-env-out", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(ws.Path, codeexecutor.DirOut), 0o755,
+	))
+	target := filepath.Join(ws.Path, codeexecutor.DirOut, "x.txt")
+	require.NoError(t, os.WriteFile(target, []byte("ok"), 0o644))
+
+	mf, err := rt.CollectOutputs(
+		ctx, ws, codeexecutor.OutputSpec{
+			Globs:  []string{"$OUTPUT_DIR/x.txt"},
+			Inline: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, mf.Files, 1)
+	require.Equal(t, "out/x.txt", mf.Files[0].Name)
+	require.Equal(t, "ok", mf.Files[0].Content)
 }
 
 func TestRuntime_StageInputs_HostCopy(t *testing.T) {

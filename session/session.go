@@ -20,7 +20,6 @@ import (
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // StateMap is a map of state key-value pairs.
@@ -41,12 +40,14 @@ const SummaryFilterKeyAllContents = ""
 
 // Session is the interface that all sessions must implement.
 type Session struct {
-	ID      string        `json:"id"`      // ID is the session id.
-	AppName string        `json:"appName"` // AppName is the app name.
-	UserID  string        `json:"userID"`  // UserID is the user id.
-	State   StateMap      `json:"state"`   // State is the session state with delta support.
-	Events  []event.Event `json:"events"`  // Events is the session events.
-	EventMu sync.RWMutex  `json:"-"`
+	ID       string                 `json:"id"`      // ID is the session id.
+	AppName  string                 `json:"appName"` // AppName is the app name.
+	UserID   string                 `json:"userID"`  // UserID is the user id.
+	State    StateMap               `json:"state"`   // State is the session state with delta support.
+	Events   []event.Event          `json:"events"`  // Events is the session events.
+	EventMu  sync.RWMutex           `json:"-"`
+	Tracks   map[Track]*TrackEvents `json:"tracks,omitempty"` // Tracks stores track events.
+	TracksMu sync.RWMutex           `json:"-"`
 	// Summaries holds filter-aware summaries. The key is the event filter key.
 	SummariesMu sync.RWMutex        `json:"-"`                   // SummariesMu is the read-write mutex for Summaries.
 	Summaries   map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
@@ -73,8 +74,26 @@ func (sess *Session) Clone() *Session {
 		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field.
 		Hash:      sess.Hash,
 	}
+	// Copy events.
 	copy(copiedSess.Events, sess.Events)
 	sess.EventMu.RUnlock()
+
+	// Copy track events.
+	sess.TracksMu.RLock()
+	if len(sess.Tracks) > 0 {
+		copiedSess.Tracks = make(map[Track]*TrackEvents, len(sess.Tracks))
+		for track, events := range sess.Tracks {
+			history := &TrackEvents{
+				Track: events.Track,
+			}
+			if len(events.Events) > 0 {
+				history.Events = make([]TrackEvent, len(events.Events))
+				copy(history.Events, events.Events)
+			}
+			copiedSess.Tracks[track] = history
+		}
+	}
+	sess.TracksMu.RUnlock()
 
 	// Copy state.
 	if sess.State != nil {
@@ -183,6 +202,54 @@ func (sess *Session) GetEventCount() int {
 	return len(sess.Events)
 }
 
+// AppendTrackEvent appends a track event to the session.
+func (sess *Session) AppendTrackEvent(event *TrackEvent, opts ...Option) error {
+	if sess == nil {
+		return fmt.Errorf("session is nil")
+	}
+	if event == nil {
+		return fmt.Errorf("track event is nil")
+	}
+	if sess.State == nil {
+		sess.State = make(StateMap)
+	}
+	if err := ensureTrackExists(sess.State, event.Track); err != nil {
+		return fmt.Errorf("ensure track indexed: %w", err)
+	}
+	sess.TracksMu.Lock()
+	defer sess.TracksMu.Unlock()
+	if sess.Tracks == nil {
+		sess.Tracks = make(map[Track]*TrackEvents)
+	}
+	trackEvents, ok := sess.Tracks[event.Track]
+	if !ok || trackEvents == nil {
+		trackEvents = &TrackEvents{Track: event.Track}
+		sess.Tracks[event.Track] = trackEvents
+	}
+	trackEvents.Events = append(trackEvents.Events, *event)
+	sess.UpdatedAt = time.Now()
+	return nil
+}
+
+// GetTrackEvents returns the track events snapshot.
+func (sess *Session) GetTrackEvents(track Track) (*TrackEvents, error) {
+	sess.TracksMu.RLock()
+	defer sess.TracksMu.RUnlock()
+	if sess.Tracks == nil {
+		return nil, fmt.Errorf("tracks is empty")
+	}
+	trackEvents, ok := sess.Tracks[track]
+	if !ok || trackEvents == nil {
+		return nil, fmt.Errorf("track events not found: %s", track)
+	}
+	copied := &TrackEvents{Track: trackEvents.Track}
+	if len(trackEvents.Events) > 0 {
+		copied.Events = make([]TrackEvent, len(trackEvents.Events))
+		copy(copied.Events, trackEvents.Events)
+	}
+	return copied, nil
+}
+
 // EnsureEventStartWithUser filters events to ensure they start with RoleUser.
 // It removes events from the beginning until it finds the first event from RoleUser.
 func (sess *Session) EnsureEventStartWithUser() {
@@ -193,11 +260,9 @@ func (sess *Session) EnsureEventStartWithUser() {
 	// Find the first event that starts with RoleUser
 	startIndex := -1
 	for i, event := range sess.Events {
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			if event.Response.Choices[0].Message.Role == model.RoleUser {
-				startIndex = i
-				break
-			}
+		if event.Response != nil && event.IsUserMessage() {
+			startIndex = i
+			break
 		}
 		// If event has no response or choices, continue to next event
 	}
@@ -226,8 +291,6 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 
 		// Apply filtering options
 		sess.ApplyEventFiltering(opts...)
-		// Ensure events start with RoleUser after filtering
-		sess.EnsureEventStartWithUser()
 		sess.EventMu.Unlock()
 	}
 
@@ -239,16 +302,14 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 }
 
 // ApplyEventFiltering applies event number and time filtering to session events
+// It ensures that the filtered events still contain at least one user message.
 func (sess *Session) ApplyEventFiltering(opts ...Option) {
 	if sess == nil {
 		log.Info("session is nil")
 		return
 	}
+	originalEvents := sess.Events
 	opt := applyOptions(opts...)
-	// Apply event number limit
-	if opt.EventNum > 0 && len(sess.Events) > opt.EventNum {
-		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
-	}
 
 	// Apply event time filter - keep events after the specified time
 	if !opt.EventTime.IsZero() {
@@ -266,6 +327,28 @@ func (sess *Session) ApplyEventFiltering(opts ...Option) {
 			sess.Events = []event.Event{}
 		}
 	}
+
+	// Apply event number limit
+	if opt.EventNum > 0 && len(sess.Events) > opt.EventNum {
+		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
+	}
+
+	// check if has user message
+	for i := 0; i < len(sess.Events); i++ {
+		if sess.Events[i].IsUserMessage() {
+			sess.Events = sess.Events[i:]
+			return
+		}
+	}
+	// find the last user message from original events
+	for i := len(originalEvents) - 1; i >= 0; i-- {
+		if originalEvents[i].IsUserMessage() {
+			sess.Events = append([]event.Event{originalEvents[i]}, sess.Events...)
+			return
+		}
+	}
+
+	sess.Events = []event.Event{}
 }
 
 // ApplyEventStateDelta merges the state delta of the event into the session state.

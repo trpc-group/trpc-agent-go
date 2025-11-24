@@ -1276,6 +1276,23 @@ func TestWithOpenAIOptions_CombinedOptions(t *testing.T) {
 	assert.NotNil(t, m.chatChunkCallback, "expected chat chunk callback to be set")
 }
 
+func TestWithHeaders_AppendsOptions(t *testing.T) {
+	opts := &options{}
+	source := map[string]string{
+		"X-Custom":   "a",
+		"X-Request":  "req-1",
+		"User-Agent": "ua",
+	}
+
+	WithHeaders(source)(opts)
+	assert.Len(t, opts.OpenAIOptions, 3, "expected headers to expand into OpenAI options")
+
+	// Mutation after application should not affect already captured values.
+	source["X-Custom"] = "changed"
+	WithHeaders(map[string]string{"X-Another": "extra"})(opts)
+	assert.Len(t, opts.OpenAIOptions, 4, "expected additional headers to append")
+}
+
 func TestConvertSystemMessageContent(t *testing.T) {
 	// Test converting message with text content parts
 	textPart := model.ContentPart{
@@ -2821,6 +2838,219 @@ func TestWithChatStreamCompleteCallback_OptionSetting(t *testing.T) {
 	assert.NotNil(t, opts.ChatStreamCompleteCallback, "expected ChatStreamCompleteCallback to be set")
 }
 
+// TestWithAccumulateChunkTokenUsage tests that the accumulate chunk usage function is properly set.
+func TestWithAccumulateChunkTokenUsage(t *testing.T) {
+	t.Run("custom accumulate function is set", func(t *testing.T) {
+		customAccumulateFunc := func(u model.Usage, delta model.Usage) model.Usage {
+			return model.Usage{
+				PromptTokens:     u.PromptTokens + delta.PromptTokens,
+				CompletionTokens: u.CompletionTokens + delta.CompletionTokens,
+				TotalTokens:      u.TotalTokens + delta.TotalTokens,
+			}
+		}
+
+		opts := &options{}
+		WithAccumulateChunkTokenUsage(customAccumulateFunc)(opts)
+
+		assert.NotNil(t, opts.accumulateChunkUsage, "expected accumulateChunkUsage to be set")
+	})
+
+	t.Run("accumulate function works correctly", func(t *testing.T) {
+		customAccumulateFunc := func(u model.Usage, delta model.Usage) model.Usage {
+			return model.Usage{
+				PromptTokens:     u.PromptTokens + delta.PromptTokens*2,
+				CompletionTokens: u.CompletionTokens + delta.CompletionTokens*2,
+				TotalTokens:      u.TotalTokens + delta.TotalTokens*2,
+			}
+		}
+
+		opts := &options{}
+		WithAccumulateChunkTokenUsage(customAccumulateFunc)(opts)
+
+		// Test the function behavior
+		currentUsage := model.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 20,
+			TotalTokens:      30,
+		}
+		delta := model.Usage{
+			PromptTokens:     5,
+			CompletionTokens: 10,
+			TotalTokens:      15,
+		}
+
+		result := opts.accumulateChunkUsage(currentUsage, delta)
+		assert.Equal(t, 20, result.PromptTokens, "expected prompt tokens to be 20 (10 + 5*2)")
+		assert.Equal(t, 40, result.CompletionTokens, "expected completion tokens to be 40 (20 + 10*2)")
+		assert.Equal(t, 60, result.TotalTokens, "expected total tokens to be 60 (30 + 15*2)")
+	})
+
+	t.Run("nil function is set", func(t *testing.T) {
+		opts := &options{}
+		WithAccumulateChunkTokenUsage(nil)(opts)
+
+		assert.Nil(t, opts.accumulateChunkUsage, "expected accumulateChunkUsage to be nil")
+	})
+}
+
+// TestInverseOPENAISKDAddChunkUsage tests the inverse accumulation of chunk usage.
+func TestInverseOPENAISKDAddChunkUsage(t *testing.T) {
+	t.Run("subtracts delta from current usage", func(t *testing.T) {
+		currentUsage := model.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+		}
+		delta := model.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		}
+
+		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+
+		assert.Equal(t, 90, result.PromptTokens, "expected prompt tokens to be 90 (100 - 10)")
+		assert.Equal(t, 45, result.CompletionTokens, "expected completion tokens to be 45 (50 - 5)")
+		assert.Equal(t, 135, result.TotalTokens, "expected total tokens to be 135 (150 - 15)")
+	})
+
+	t.Run("handles zero delta", func(t *testing.T) {
+		currentUsage := model.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+		}
+		delta := model.Usage{
+			PromptTokens:     0,
+			CompletionTokens: 0,
+			TotalTokens:      0,
+		}
+
+		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+
+		assert.Equal(t, 100, result.PromptTokens, "expected prompt tokens to remain 100")
+		assert.Equal(t, 50, result.CompletionTokens, "expected completion tokens to remain 50")
+		assert.Equal(t, 150, result.TotalTokens, "expected total tokens to remain 150")
+	})
+
+	t.Run("handles negative result", func(t *testing.T) {
+		currentUsage := model.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		}
+		delta := model.Usage{
+			PromptTokens:     20,
+			CompletionTokens: 10,
+			TotalTokens:      30,
+		}
+
+		result := inverseOPENAISKDAddChunkUsage(currentUsage, delta)
+
+		assert.Equal(t, -10, result.PromptTokens, "expected prompt tokens to be -10 (10 - 20)")
+		assert.Equal(t, -5, result.CompletionTokens, "expected completion tokens to be -5 (5 - 10)")
+		assert.Equal(t, -15, result.TotalTokens, "expected total tokens to be -15 (15 - 30)")
+	})
+}
+
+// TestModelUsageToCompletionUsage tests conversion from model.Usage to openai.CompletionUsage.
+func TestModelUsageToCompletionUsage(t *testing.T) {
+	t.Run("converts all fields correctly", func(t *testing.T) {
+		modelUsage := model.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: 20,
+			},
+		}
+
+		result := modelUsageToCompletionUsage(modelUsage)
+
+		assert.Equal(t, int64(100), result.PromptTokens, "expected prompt tokens to be 100")
+		assert.Equal(t, int64(50), result.CompletionTokens, "expected completion tokens to be 50")
+		assert.Equal(t, int64(150), result.TotalTokens, "expected total tokens to be 150")
+		assert.Equal(t, int64(20), result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 20")
+	})
+
+	t.Run("converts zero values", func(t *testing.T) {
+		modelUsage := model.Usage{
+			PromptTokens:     0,
+			CompletionTokens: 0,
+			TotalTokens:      0,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: 0,
+			},
+		}
+
+		result := modelUsageToCompletionUsage(modelUsage)
+
+		assert.Equal(t, int64(0), result.PromptTokens, "expected prompt tokens to be 0")
+		assert.Equal(t, int64(0), result.CompletionTokens, "expected completion tokens to be 0")
+		assert.Equal(t, int64(0), result.TotalTokens, "expected total tokens to be 0")
+		assert.Equal(t, int64(0), result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
+	})
+
+	t.Run("roundtrip conversion", func(t *testing.T) {
+		originalUsage := model.Usage{
+			PromptTokens:     123,
+			CompletionTokens: 456,
+			TotalTokens:      579,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: 78,
+			},
+		}
+
+		// Convert to OpenAI format and back
+		openaiUsage := modelUsageToCompletionUsage(originalUsage)
+		backToModel := completionUsageToModelUsage(openaiUsage)
+
+		assert.Equal(t, originalUsage.PromptTokens, backToModel.PromptTokens, "expected prompt tokens to match after roundtrip")
+		assert.Equal(t, originalUsage.CompletionTokens, backToModel.CompletionTokens, "expected completion tokens to match after roundtrip")
+		assert.Equal(t, originalUsage.TotalTokens, backToModel.TotalTokens, "expected total tokens to match after roundtrip")
+		assert.Equal(t, originalUsage.PromptTokensDetails.CachedTokens, backToModel.PromptTokensDetails.CachedTokens, "expected cached tokens to match after roundtrip")
+	})
+}
+
+// TestCompletionUsageToModelUsage tests conversion from openai.CompletionUsage to model.Usage.
+func TestCompletionUsageToModelUsage(t *testing.T) {
+	t.Run("converts all fields correctly", func(t *testing.T) {
+		openaiUsage := openai.CompletionUsage{
+			PromptTokens:     int64(200),
+			CompletionTokens: int64(75),
+			TotalTokens:      int64(275),
+			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
+				CachedTokens: int64(30),
+			},
+		}
+
+		result := completionUsageToModelUsage(openaiUsage)
+
+		assert.Equal(t, 200, result.PromptTokens, "expected prompt tokens to be 200")
+		assert.Equal(t, 75, result.CompletionTokens, "expected completion tokens to be 75")
+		assert.Equal(t, 275, result.TotalTokens, "expected total tokens to be 275")
+		assert.Equal(t, 30, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 30")
+	})
+
+	t.Run("converts zero values", func(t *testing.T) {
+		openaiUsage := openai.CompletionUsage{
+			PromptTokens:     int64(0),
+			CompletionTokens: int64(0),
+			TotalTokens:      int64(0),
+			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
+				CachedTokens: int64(0),
+			},
+		}
+
+		result := completionUsageToModelUsage(openaiUsage)
+
+		assert.Equal(t, 0, result.PromptTokens, "expected prompt tokens to be 0")
+		assert.Equal(t, 0, result.CompletionTokens, "expected completion tokens to be 0")
+		assert.Equal(t, 0, result.TotalTokens, "expected total tokens to be 0")
+		assert.Equal(t, 0, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
+	})
+}
+
 // TestWithChannelBufferSize_EdgeCases tests WithChannelBufferSize with edge cases.
 func TestWithChannelBufferSize_EdgeCases(t *testing.T) {
 	t.Run("zero size should use default", func(t *testing.T) {
@@ -3147,11 +3377,19 @@ func TestWithEnableTokenTailoring_SafetyMarginAndRatioLimit(t *testing.T) {
 func TestHasReasoningContent(t *testing.T) {
 	m := &Model{}
 
-	// Test with nil ExtraFields.
-	delta1 := openai.ChatCompletionChunkChoiceDelta{}
+	// Test with empty choices.
+	choices := []openai.ChatCompletionChunkChoice{}
 	// Since we can't easily construct the JSON field in tests,
-	// we'll test the method doesn't panic with empty delta.
-	assert.False(t, m.hasReasoningContent(delta1))
+	// we'll test the method doesn't panic with empty choices.
+	assert.False(t, m.hasReasoningContent(choices))
+
+	// Test with a choice that has an empty delta.
+	choicesWithDelta := []openai.ChatCompletionChunkChoice{
+		{
+			Delta: openai.ChatCompletionChunkChoiceDelta{},
+		},
+	}
+	assert.False(t, m.hasReasoningContent(choicesWithDelta))
 
 	// Note: Testing with actual reasoning content would require
 	// integration tests with real API responses, as the JSON field
@@ -3416,9 +3654,13 @@ func TestReasoningContentIntegration(t *testing.T) {
 func TestReasoningContentChunkHandling(t *testing.T) {
 	m := &Model{}
 
-	t.Run("hasReasoningContent returns false for empty delta", func(t *testing.T) {
-		delta := openai.ChatCompletionChunkChoiceDelta{}
-		assert.False(t, m.hasReasoningContent(delta))
+	t.Run("hasReasoningContent returns false for empty choices", func(t *testing.T) {
+		choices := []openai.ChatCompletionChunkChoice{
+			{
+				Delta: openai.ChatCompletionChunkChoiceDelta{},
+			},
+		}
+		assert.False(t, m.hasReasoningContent(choices))
 	})
 
 	t.Run("shouldSkipEmptyChunk handles chunks without choices", func(t *testing.T) {
@@ -3504,9 +3746,13 @@ func TestEmptyChunkHandling(t *testing.T) {
 		assert.False(t, m.shouldSuppressChunk(chunk))
 	})
 
-	t.Run("hasReasoningContent returns false for empty delta", func(t *testing.T) {
-		delta := openai.ChatCompletionChunkChoiceDelta{}
-		assert.False(t, m.hasReasoningContent(delta))
+	t.Run("hasReasoningContent returns false for empty choices", func(t *testing.T) {
+		choices := []openai.ChatCompletionChunkChoice{
+			{
+				Delta: openai.ChatCompletionChunkChoiceDelta{},
+			},
+		}
+		assert.False(t, m.hasReasoningContent(choices))
 	})
 
 	t.Run("createPartialResponse includes tool calls when enabled", func(t *testing.T) {

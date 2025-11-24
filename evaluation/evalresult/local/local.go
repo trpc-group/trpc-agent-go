@@ -21,9 +21,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 const (
