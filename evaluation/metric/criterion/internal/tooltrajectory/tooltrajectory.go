@@ -1,3 +1,13 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package tooltrajectory defines tool trajectory comparison criteria.
 package tooltrajectory
 
 import (
@@ -45,7 +55,7 @@ func Match(t *tooltrajectory.ToolTrajectoryCriterion, actual, expected *evalset.
 	if len(actual.IntermediateData.ToolUses) == 0 {
 		return nil
 	}
-	actualTools, err := getToolComparers(t,
+	actualTools, err := getToolComparers(
 		actual.IntermediateData.ToolUses,
 		actual.IntermediateData.ToolResponses,
 		t.OrderInsensitive,
@@ -53,7 +63,7 @@ func Match(t *tooltrajectory.ToolTrajectoryCriterion, actual, expected *evalset.
 	if err != nil {
 		return fmt.Errorf("get actual tools: %w", err)
 	}
-	expectedTools, err := getToolComparers(t,
+	expectedTools, err := getToolComparers(
 		expected.IntermediateData.ToolUses,
 		expected.IntermediateData.ToolResponses,
 		t.OrderInsensitive,
@@ -79,8 +89,8 @@ func Match(t *tooltrajectory.ToolTrajectoryCriterion, actual, expected *evalset.
 }
 
 // getToolComparers aligns tool uses with their responses and builds toolComparer.
-func getToolComparers(t *tooltrajectory.ToolTrajectoryCriterion, toolUses []*genai.FunctionCall,
-	toolResponses []*genai.FunctionResponse, orderInsensitive bool) ([]*toolComparer, error) {
+func getToolComparers(toolUses []*genai.FunctionCall, toolResponses []*genai.FunctionResponse,
+	orderInsensitive bool) ([]*toolComparer, error) {
 	// toolCallIDs ensures every tool use can be matched by ID.
 	// Map from tool call id to index.
 	toolCallIDs := make(map[string]int)
@@ -126,7 +136,8 @@ func getToolComparers(t *tooltrajectory.ToolTrajectoryCriterion, toolUses []*gen
 }
 
 // getStrategy picks the comparison strategy for a specific tool pair.
-func getStrategy(t *tooltrajectory.ToolTrajectoryCriterion, actualTool, expectedTool *toolComparer) *tooltrajectory.ToolTrajectoryStrategy {
+func getStrategy(t *tooltrajectory.ToolTrajectoryCriterion, actualTool,
+	expectedTool *toolComparer) *tooltrajectory.ToolTrajectoryStrategy {
 	if t.ToolStrategy != nil {
 		strategy, ok := t.ToolStrategy[actualTool.name]
 		if ok {

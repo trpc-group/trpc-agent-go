@@ -58,15 +58,15 @@ if err != nil {
 
 ```json
 {
-  "eval_set_id": "math-basic",
+  "evalSetId": "math-basic",
   "name": "math-basic",
-  "eval_cases": [
+  "evalCases": [
     {
-      "eval_id": "calc_add",
+      "evalId": "calc_add",
       "conversation": [
         {
-          "invocation_id": "calc_add-1",
-          "user_content": {
+          "invocationId": "calc_add-1",
+          "userContent": {
             "parts": [
               {
                 "text": "calc add 2 3"
@@ -74,7 +74,7 @@ if err != nil {
             ],
             "role": "user"
           },
-          "final_response": {
+          "finalResponse": {
             "parts": [
               {
                 "text": "calc result: 5"
@@ -82,8 +82,8 @@ if err != nil {
             ],
             "role": "assistant"
           },
-          "intermediate_data": {
-            "tool_uses": [
+          "intermediateData": {
+            "toolUses": [
               {
                 "args": {
                   "a": 2,
@@ -92,19 +92,25 @@ if err != nil {
                 },
                 "name": "calculator"
               }
+            ],
+            "toolResponses": [
+              {
+                "name": "calculator",
+                "response": {
+                  "result": 5
+                }
+              }
             ]
-          },
-          "creation_timestamp": 1761134484.981062
+          }
         }
       ],
-      "session_input": {
-        "app_name": "math-eval-app",
-        "user_id": "user"
-      },
-      "creation_timestamp": 1761134484.981062
-    },
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
+      }
+    }
   ],
-  "creation_timestamp": 1761134484.9804401
+  "creationTimestamp": 1761134484.9804401
 }
 ```
 
@@ -113,8 +119,27 @@ if err != nil {
 ```json
 [
   {
-    "metric_name": "tool_trajectory_avg_score",
-    "threshold": 1
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "textCriterion": {
+              "matchStrategy": "exact"
+            }
+          },
+          "response": {
+            "textCriterion": {
+              "matchStrategy": "contains"
+            }
+          }
+        }
+      }
+    }
   }
 ]
 ```
@@ -122,7 +147,162 @@ if err != nil {
 #### 评估结果 EvalResult 文件示例
 
 ```json
-"{\"eval_set_result_id\":\"math-eval-app_math-basic_76798060-dcc3-41e9-b20e-06f23aa3cdbc\",\"eval_set_result_name\":\"math-eval-app_math-basic_76798060-dcc3-41e9-b20e-06f23aa3cdbc\",\"eval_set_id\":\"math-basic\",\"eval_case_results\":[{\"eval_set_id\":\"math-basic\",\"eval_id\":\"calc_add\",\"final_eval_status\":1,\"overall_eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}],\"eval_metric_result_per_invocation\":[{\"actual_invocation\":{\"invocation_id\":\"8b205b3f-682e-409a-b751-89ef805d0221\",\"user_content\":{\"parts\":[{\"text\":\"calc add 2 3\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"The result of adding 2 and 3 is **5**.\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"id\":\"call_00_j75SIh8A9xSlG61OrC1ARIab\",\"args\":{\"a\":2,\"b\":3,\"operation\":\"add\"},\"name\":\"calculator\"}]}},\"expected_invocation\":{\"invocation_id\":\"calc_add-1\",\"user_content\":{\"parts\":[{\"text\":\"calc add 2 3\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"calc result: 5\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"args\":{\"a\":2,\"b\":3,\"operation\":\"add\"},\"name\":\"calculator\"}]},\"creation_timestamp\":1761134484.981062},\"eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}]}],\"session_id\":\"74252944-b1a7-4c17-8f39-4a5809395d1d\",\"user_id\":\"user\"},{\"eval_set_id\":\"math-basic\",\"eval_id\":\"calc_multiply\",\"final_eval_status\":1,\"overall_eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}],\"eval_metric_result_per_invocation\":[{\"actual_invocation\":{\"invocation_id\":\"65226930-d45c-43ae-ab88-9c35f3abce70\",\"user_content\":{\"parts\":[{\"text\":\"calc multiply 6 7\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"6 × 7 = 42\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"id\":\"call_00_b3Gj4Y3fJu9Blkbl6H0MLquO\",\"args\":{\"a\":6,\"b\":7,\"operation\":\"multiply\"},\"name\":\"calculator\"}]}},\"expected_invocation\":{\"invocation_id\":\"calc_multiply-1\",\"user_content\":{\"parts\":[{\"text\":\"calc multiply 6 7\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"calc result: 42\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"args\":{\"a\":6,\"b\":7,\"operation\":\"multiply\"},\"name\":\"calculator\"}]},\"creation_timestamp\":1761134484.9812014},\"eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}]}],\"session_id\":\"6393fabd-ab50-49b7-8656-59fcb0a29758\",\"user_id\":\"user\"}],\"creation_timestamp\":1761134849.3572516}"
+{
+  "evalSetResultId": "math-eval-app_math-basic_c95c08af-c85c-43c4-ac7b-ee12870fa973",
+  "evalSetResultName": "math-eval-app_math-basic_c95c08af-c85c-43c4-ac7b-ee12870fa973",
+  "evalSetId": "math-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "math-basic",
+      "evalId": "calc_add",
+      "finalEvalStatus": 1,
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": 1,
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "textCriterion": {
+                    "matchStrategy": "exact"
+                  }
+                },
+                "response": {
+                  "textCriterion": {
+                    "matchStrategy": "contains"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "49ff84cf-ad89-42ab-be07-1fffc4dc78f2",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "calc add 2 3"
+                }
+              ],
+              "role": "user"
+            },
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "The result of 2 + 3 is **5**."
+                }
+              ],
+              "role": "assistant"
+            },
+            "intermediateData": {
+              "toolUses": [
+                {
+                  "id": "call_00_pCwL67NPbNQAJEvZjvxuthX6",
+                  "args": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add"
+                  },
+                  "name": "calculator"
+                }
+              ],
+              "toolResponses": [
+                {
+                  "id": "call_00_pCwL67NPbNQAJEvZjvxuthX6",
+                  "name": "calculator",
+                  "response": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add",
+                    "result": 5
+                  }
+                }
+              ]
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "calc_add-1",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "calc add 2 3"
+                }
+              ],
+              "role": "user"
+            },
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "calc result: 5"
+                }
+              ],
+              "role": "assistant"
+            },
+            "intermediateData": {
+              "toolUses": [
+                {
+                  "args": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add"
+                  },
+                  "name": "calculator"
+                }
+              ],
+              "toolResponses": [
+                {
+                  "name": "calculator",
+                  "response": {
+                    "result": 5
+                  }
+                }
+              ]
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": 1,
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "textCriterion": {
+                        "matchStrategy": "exact"
+                      }
+                    },
+                    "response": {
+                      "textCriterion": {
+                        "matchStrategy": "contains"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "007a49f9-5a2c-49ba-a6ae-b0657d50aafb",
+      "userId": "user"
+    }
+  ],
+  "creationTimestamp": 1763960812.6226852
+}
 ```
 
 ### 内存 inmemory
@@ -225,6 +405,14 @@ cases := []*evalset.EvalCase{
 							},
 						},
 					},
+					ToolResponses: []*genai.FunctionResponse{
+						{
+							Name: "calculator",
+							Response: map[string]interface{}{
+								"result": 5.0,
+							},
+						},
+					},
 				},
 			},
 		},
@@ -249,6 +437,29 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 evalMetric := &metric.EvalMetric{
 	MetricName: "tool_trajectory_avg_score",
 	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithToolTrajectory(
+			ctooltrajectory.New(
+				ctooltrajectory.WithDefault(
+					&ctooltrajectory.ToolTrajectoryStrategy{
+						Name: &text.TextCriterion{
+							MatchStrategy: text.TextMatchStrategyExact,
+						},
+						Arguments: &maptext.MapTextCriterion{
+							TextCriterion: &text.TextCriterion{
+								MatchStrategy: text.TextMatchStrategyExact,
+							},
+						},
+						Response: &maptext.MapTextCriterion{
+							TextCriterion: &text.TextCriterion{
+								MatchStrategy: text.TextMatchStrategyContains,
+							},
+						},
+					},
+				),
+			),
+		),
+	),
 }
 metricManager.Add(ctx, appName, evalSetID, evalMetric)
 ```

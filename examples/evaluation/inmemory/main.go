@@ -15,6 +15,10 @@ import (
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/maptext"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -35,10 +39,10 @@ func main() {
 	ctx := context.Background()
 	// New runner.
 	run := runner.NewRunner(appName, newCalculatorAgent(*modelName, *streaming))
-	
+
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer run.Close()
-	
+
 	// New manager and registry for evaluation.
 	evalSetManager := evalsetinmemory.New()
 	metricManager := metricinmemory.New()
@@ -154,6 +158,14 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 								},
 							},
 						},
+						ToolResponses: []*genai.FunctionResponse{
+							{
+								Name: "calculator",
+								Response: map[string]interface{}{
+									"result": 5.0,
+								},
+							},
+						},
 					},
 				},
 			},
@@ -194,6 +206,14 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 								},
 							},
 						},
+						ToolResponses: []*genai.FunctionResponse{
+							{
+								Name: "calculator",
+								Response: map[string]interface{}{
+									"result": 5.0,
+								},
+							},
+						},
 					},
 				},
 			},
@@ -204,6 +224,8 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 		},
 	}
 	for _, evalCase := range cases {
+		data, _ := json.MarshalIndent(evalCase, "", "  ")
+		fmt.Println(string(data))
 		if err := evalSetManager.AddCase(ctx, appName, evalSetID, evalCase); err != nil {
 			return err
 		}
@@ -215,6 +237,31 @@ func prepareMetric(ctx context.Context, metricManager metric.Manager) error {
 	evalMetric := &metric.EvalMetric{
 		MetricName: "tool_trajectory_avg_score",
 		Threshold:  1.0,
+		Criterion: criterion.New(
+			criterion.WithToolTrajectory(
+				ctooltrajectory.New(
+					ctooltrajectory.WithDefault(
+						&ctooltrajectory.ToolTrajectoryStrategy{
+							Name: &text.TextCriterion{
+								MatchStrategy: text.TextMatchStrategyExact,
+							},
+							Arguments: &maptext.MapTextCriterion{
+								TextCriterion: &text.TextCriterion{
+									MatchStrategy: text.TextMatchStrategyExact,
+								},
+							},
+							Response: &maptext.MapTextCriterion{
+								TextCriterion: &text.TextCriterion{
+									MatchStrategy: text.TextMatchStrategyContains,
+								},
+							},
+						},
+					),
+				),
+			),
+		),
 	}
+	data, _ := json.MarshalIndent(evalMetric, "", "  ")
+	fmt.Println(string(data))
 	return metricManager.Add(ctx, appName, evalSetID, evalMetric)
 }

@@ -202,6 +202,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		overallMetricResults = append(overallMetricResults, &evalresult.EvalMetricResult{
 			MetricName: evalMetric.MetricName,
 			Threshold:  evalMetric.Threshold,
+			Criterion:  evalMetric.Criterion,
 			Score:      result.OverallScore,
 			EvalStatus: result.OverallStatus,
 		})
@@ -214,6 +215,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 			evalMetricResult := &evalresult.EvalMetricResult{
 				MetricName: evalMetric.MetricName,
 				Threshold:  evalMetric.Threshold,
+				Criterion:  evalMetric.Criterion,
 				Score:      invocationResult.Score,
 				EvalStatus: invocationResult.Status,
 			}

@@ -1,13 +1,13 @@
 {
-  "eval_set_id": "math-basic",
+  "evalSetId": "math-basic",
   "name": "math-basic",
-  "eval_cases": [
+  "evalCases": [
     {
-      "eval_id": "calc_add",
+      "evalId": "calc_add",
       "conversation": [
         {
-          "invocation_id": "calc_add-1",
-          "user_content": {
+          "invocationId": "calc_add-1",
+          "userContent": {
             "parts": [
               {
                 "text": "calc add 2 3"
@@ -15,7 +15,7 @@
             ],
             "role": "user"
           },
-          "final_response": {
+          "finalResponse": {
             "parts": [
               {
                 "text": "calc result: 5"
@@ -23,8 +23,8 @@
             ],
             "role": "assistant"
           },
-          "intermediate_data": {
-            "tool_uses": [
+          "intermediateData": {
+            "toolUses": [
               {
                 "args": {
                   "a": 2,
@@ -33,23 +33,29 @@
                 },
                 "name": "calculator"
               }
+            ],
+            "toolResponses": [
+              {
+                "name": "calculator",
+                "response": {
+                  "result": 5
+                }
+              }
             ]
-          },
-          "creation_timestamp": 1761134484.981062
+          }
         }
       ],
-      "session_input": {
-        "app_name": "math-eval-app",
-        "user_id": "user"
-      },
-      "creation_timestamp": 1761134484.981062
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
+      }
     },
     {
-      "eval_id": "calc_multiply",
+      "evalId": "calc_multiply",
       "conversation": [
         {
-          "invocation_id": "calc_multiply-1",
-          "user_content": {
+          "invocationId": "calc_multiply-1",
+          "userContent": {
             "parts": [
               {
                 "text": "calc multiply 6 7"
@@ -57,7 +63,7 @@
             ],
             "role": "user"
           },
-          "final_response": {
+          "finalResponse": {
             "parts": [
               {
                 "text": "calc result: 42"
@@ -65,8 +71,8 @@
             ],
             "role": "assistant"
           },
-          "intermediate_data": {
-            "tool_uses": [
+          "intermediateData": {
+            "toolUses": [
               {
                 "args": {
                   "a": 6,
@@ -75,17 +81,23 @@
                 },
                 "name": "calculator"
               }
+            ],
+            "toolResponses": [
+              {
+                "name": "calculator",
+                "response": {
+                  "result": 5
+                }
+              }
             ]
-          },
-          "creation_timestamp": 1761134484.9812014
+          }
         }
       ],
-      "session_input": {
-        "app_name": "math-eval-app",
-        "user_id": "user"
-      },
-      "creation_timestamp": 1761134484.9812014
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
+      }
     }
   ],
-  "creation_timestamp": 1761134484.9804401
+  "creationTimestamp": 1761134484.9804401
 }
