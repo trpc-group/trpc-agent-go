@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"

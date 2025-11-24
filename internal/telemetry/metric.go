@@ -98,6 +98,13 @@ type ChatMetricsTracker struct {
 	totalPromptTokens      int
 	lastEvent              *event.Event
 
+	// Timing tracking for streaming reasoning phases
+	firstReasoningTime time.Time
+	lastReasoningTime  time.Time
+
+	// TimingInfo is response timing info that will be recorded in session and attached to events
+	timingInfo *model.TimingInfo
+
 	// Configuration
 	invocation *agent.Invocation
 	llmRequest *model.Request
@@ -105,10 +112,13 @@ type ChatMetricsTracker struct {
 }
 
 // NewChatMetricsTracker creates a new telemetry tracker.
+// The timingInfo parameter should be obtained from invocation state to ensure
+// only the first LLM call records timing information.
 func NewChatMetricsTracker(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
+	timingInfo *model.TimingInfo,
 	err *error,
 ) *ChatMetricsTracker {
 	return &ChatMetricsTracker{
@@ -118,22 +128,63 @@ func NewChatMetricsTracker(
 		invocation:   invocation,
 		llmRequest:   llmRequest,
 		err:          err,
+		timingInfo:   timingInfo,
 	}
 }
 
-// TrackResponse updates telemetry state for a streaming response.
+// TrackResponse updates telemetry state and timing info for each response chunk.
+// This method tracks both token usage metrics and timing information (FirstTokenDuration and ReasoningDuration).
 // Call this for each response received from the LLM.
 func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
+	if response == nil {
+		return
+	}
+
+	now := time.Now()
+
+	// Track first token timing (for both metrics and timing info)
 	if t.isFirstToken {
+		// Always record firstTokenTimeDuration for metrics (even if no content)
 		t.firstTokenTimeDuration = time.Since(t.start)
 		t.isFirstToken = false
+
+		// Update FirstTokenDuration in TimingInfo only if not already recorded (first LLM call only)
+		// Meaningful content = reasoning content, regular content, or tool calls
+		if t.timingInfo != nil && t.timingInfo.FirstTokenDuration == 0 && len(response.Choices) > 0 {
+			t.timingInfo.FirstTokenDuration = now.Sub(t.start)
+		}
+
 		if response.Usage != nil {
 			t.firstCompleteToken = response.Usage.CompletionTokens
 		}
 	}
+
+	// Track token usage
 	if response.Usage != nil {
 		t.totalPromptTokens = response.Usage.PromptTokens
 		t.totalCompletionTokens = response.Usage.CompletionTokens
+	}
+
+	// Track reasoning duration (streaming mode only, first LLM call only)
+	// Measures from first reasoning chunk to last reasoning chunk
+	if t.llmRequest != nil &&
+		t.llmRequest.Stream &&
+		t.timingInfo != nil &&
+		t.timingInfo.ReasoningDuration == 0 &&
+		len(response.Choices) > 0 {
+		choice := response.Choices[0]
+		hasReasoningContent := choice.Delta.ReasoningContent != "" || choice.Message.ReasoningContent != ""
+
+		if hasReasoningContent {
+			// Track reasoning phase start and continuation
+			if t.firstReasoningTime.IsZero() {
+				t.firstReasoningTime = now
+			}
+			t.lastReasoningTime = now
+		} else if !t.firstReasoningTime.IsZero() && !t.lastReasoningTime.IsZero() {
+			// Reasoning phase ended (first non-reasoning chunk received), record duration
+			t.timingInfo.ReasoningDuration = t.lastReasoningTime.Sub(t.firstReasoningTime)
+		}
 	}
 }
 
@@ -145,6 +196,11 @@ func (t *ChatMetricsTracker) SetLastEvent(evt *event.Event) {
 // FirstTokenTimeDuration returns the time to first token duration.
 func (t *ChatMetricsTracker) FirstTokenTimeDuration() time.Duration {
 	return t.firstTokenTimeDuration
+}
+
+// GetTimingInfo returns the current TimingInfo for attaching to responses.
+func (t *ChatMetricsTracker) GetTimingInfo() *model.TimingInfo {
+	return t.timingInfo
 }
 
 // RecordMetrics returns a defer function that records all telemetry metrics.

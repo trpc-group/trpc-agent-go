@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.10.0
 	google.golang.org/genai v1.29.0
-	trpc.group/trpc-go/trpc-agent-go v0.2.2
+	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
 )
 
 require (
