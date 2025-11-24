@@ -1225,6 +1225,30 @@ func TestRedis_PutFull_checkpoint_ts_isEmpty(t *testing.T) {
 	assert.Equal(t, ck.ID, cb[graph.CfgKeyConfigurable].(map[string]any)[graph.CfgKeyCheckpointID])
 }
 
+func TestRedis_Put_checkpoint_ts_isEmpty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "ln-marshal"
+	ns := "ns"
+	ck := &graph.Checkpoint{
+		Version:         1,
+		ID:              uuid.New().String(),
+		ChannelValues:   map[string]any{"v": 1},
+		ChannelVersions: map[string]int64{"v": 1},
+		VersionsSeen:    map[string]map[string]int64{},
+	}
+	// Use a non-JSON-marshalable value (channel) to force error
+	cb, err := saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", ns), Checkpoint: ck, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceUpdate, 0), NewVersions: map[string]int64{"v": 1}})
+	require.NoError(t, err)
+	assert.Equal(t, ck.ID, cb[graph.CfgKeyConfigurable].(map[string]any)[graph.CfgKeyCheckpointID])
+}
+
 func TestRedis_Close_NilDB_NoPanic(t *testing.T) {
 	s := &Saver{client: nil}
 	// Close should be no-op
