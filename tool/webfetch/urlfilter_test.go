@@ -68,14 +68,6 @@ func TestWebFetch_DomainFiltering(t *testing.T) {
 	t.Run("AllowedDomains_Subpath", func(t *testing.T) {
 		// ts.URL + "/docs" allowed
 		// ts.URL + "/admin" not allowed
-		// Since ts.URL contains "127.0.0.1:port", we construct pattern "127.0.0.1:port/docs" ?
-		// Wait, matchHost logic ignores port in hostname, but matchPattern splits by first slash.
-		// If pattern is "example.com/foo", host="example.com".
-		// u.Hostname() returns hostname without port.
-		// matchHost compares hostname only.
-		// So if pattern="127.0.0.1/docs", it matches host "127.0.0.1".
-		// The URL "http://127.0.0.1:port/docs" has host "127.0.0.1".
-		// Path is "/docs". matchPattern checks path "/docs" against pattern path "/docs". Match.
 
 		tool := NewTool(WithAllowedDomains([]string{"127.0.0.1/docs"}))
 
@@ -196,4 +188,17 @@ func TestMatchPattern(t *testing.T) {
 		got := matchPattern(u, tt.pattern)
 		assert.Equal(t, tt.want, got, "matchPattern(%q, %q)", tt.urlStr, tt.pattern)
 	}
+}
+
+// Tests moved from webfetch_coverage_test.go that relate to urlfilter logic
+func TestNewBlockPatternFilter_InvalidURL(t *testing.T) {
+	filter := newBlockPatternFilter("example.com")
+	// Pass an invalid URL string that url.Parse fails on.
+	// Control character in URL path
+	assert.False(t, filter("http://example.com/"))
+}
+
+func TestNewAllowPatternsFilter_InvalidURL(t *testing.T) {
+	filter := newAllowPatternsFilter([]string{"example.com"})
+	assert.False(t, filter("http://example.com/"))
 }

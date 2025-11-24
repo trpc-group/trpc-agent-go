@@ -11,6 +11,7 @@ package webfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,8 +25,6 @@ import (
 func TestWebFetch(t *testing.T) {
 	// Mock server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Ensure explicit content-type for HTML, otherwise defaults might kick in differently or not match strict "text/html" logic if strict match was implemented (though I implemented strict check for text/html in code)
-		// Actually, my code logic: `if mediaType == "text/html"` so I should set it.
 		if r.URL.Path == "/page1" {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, `<html><body><h1>Hello</h1><p>World</p></body></html>`)
@@ -274,7 +273,7 @@ func TestConvertHTMLToMarkdown(t *testing.T) {
 	require.NoError(t, err)
 
 	// Debug output if test fails
-	t.Logf("Converted Markdown:\n%s", result)
+	t.Logf("Converted Markdown:%s", result)
 
 	// Check expected markdown content
 	expectedParts := []string{
@@ -311,4 +310,101 @@ func TestWebFetch_WithHTTPClient(t *testing.T) {
 	resp := res.(fetchResponse)
 	assert.Len(t, resp.Results, 1)
 	assert.Equal(t, "OK", resp.Results[0].Content)
+}
+
+// failReader is an io.Reader that returns an error on Read.
+type failReader struct{}
+
+func (f *failReader) Read(p []byte) (n int, err error) {
+	return 0, errors.New("simulated read error")
+}
+
+func TestReadBodyAsString_Error(t *testing.T) {
+	_, err := readBodyAsString(&failReader{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read response body")
+}
+
+func TestConvertHTMLToMarkdown_ReadError(t *testing.T) {
+	_, err := convertHTMLToMarkdown(&failReader{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated read error")
+}
+
+func TestTruncateString_EdgeCases(t *testing.T) {
+	assert.Equal(t, "", truncateString("hello", 0))
+	assert.Equal(t, "", truncateString("hello", -1))
+	assert.Equal(t, "h", truncateString("hello", 1))
+	// Test UTF-8 splitting
+	// "你好" -> bytes: [e4 bd a0 e5 a5 bd]
+	// limit 4. "你" is 3 bytes. "好" is 3 bytes. 3 <= 4. Result "你"
+	assert.Equal(t, "你", truncateString("你好", 4))
+	// limit 2. "你" is 3 bytes. 0+3 > 2. Result ""
+	assert.Equal(t, "", truncateString("你好", 2))
+}
+
+func TestWebFetch_InvalidURL(t *testing.T) {
+	// Test http.NewRequestWithContext error
+	// URL with control character should fail parsing/request creation
+	tool := NewTool()
+	// A URL with a space is invalid for NewRequest
+	args := `{"urls": ["http://example.com/ foo"]}`
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 1)
+	assert.NotEmpty(t, resp.Results[0].Error)
+}
+
+func TestWebFetch_ClientDoError(t *testing.T) {
+	// Simulate a client error (e.g., connection refused)
+	// We can use a closed server URL or invalid port
+	tool := NewTool()
+	args := `{"urls": ["http://127.0.0.1:0"]}` // Invalid port 0 usually fails immediately or connection refused
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 1)
+	assert.NotEmpty(t, resp.Results[0].Error)
+}
+
+func TestFetch_TotalLimitExact(t *testing.T) {
+	// Test exact limit match
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "abc")
+	}))
+	defer ts.Close()
+
+	tool := NewTool(WithMaxTotalContentLength(3))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+	resp := res.(fetchResponse)
+	assert.Equal(t, "abc", resp.Results[0].Content)
+}
+
+func TestFetch_TotalLimitExceeded(t *testing.T) {
+	// Test limit exceeded where next item is skipped entirely?
+	// Code:
+	// if currentTotal >= t.maxTotalContentLength { results[i].Content = ""; Error = "..." }
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "abc")
+	}))
+	defer ts.Close()
+
+	// Limit 2. Fetch "abc". Should be truncated to "ab". Next should be skipped.
+	tool := NewTool(WithMaxTotalContentLength(2))
+	args := fmt.Sprintf(`{"urls": ["%s/1", "%s/2"]}`, ts.URL, ts.URL)
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+	resp := res.(fetchResponse)
+
+	assert.Equal(t, "ab", resp.Results[0].Content)
+
+	// The second one should be marked as truncated/skipped
+	// In loop: currentTotal becomes 2.
+	// Next iter: currentTotal (2) >= limit (2).
+	assert.Empty(t, resp.Results[1].Content)
+	assert.Contains(t, resp.Results[1].Error, "truncated due to total length limit")
 }
