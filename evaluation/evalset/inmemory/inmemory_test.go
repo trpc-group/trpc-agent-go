@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/epochtime"
 )
 
 func TestManager(t *testing.T) {

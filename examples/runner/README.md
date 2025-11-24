@@ -1,6 +1,6 @@
-# Multi-turn Chat with Runner + Tools
+# Runner Quickstart: Multi-turn Chat with Tools
 
-This example demonstrates a clean multi-turn chat interface using the `Runner` orchestration component with streaming output, session management, and actual tool calling functionality.
+This example demonstrates a minimal multi-turn chat interface using the `Runner` orchestration component. It focuses on core functionality with an in-memory session backend, making it easy to understand and run.
 
 ## What is Multi-turn Chat?
 
@@ -39,9 +39,8 @@ This implementation showcases the essential features for building conversational
 
 | Argument           | Description                                         | Default Value    |
 | ------------------ | --------------------------------------------------- | ---------------- |
-| `-provider`        | Provider of the model to use                        | `openai`         |
 | `-model`           | Name of the model to use                            | `deepseek-chat`  |
-| `-session`         | Session service: `inmemory` or `redis`              | `inmemory`       |
+| `-variant`         | Variant to use when calling the OpenAI provider     | `openai`         |
 | `-streaming`       | Enable streaming mode for responses                 | `true`           |
 | `-enable-parallel` | Enable parallel tool execution (faster performance) | `false`          |
 
@@ -62,54 +61,11 @@ export OPENAI_API_KEY="your-api-key"
 go run . -model gpt-4o
 ```
 
-### Custom Model Provider
+### Custom Variant
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
-go run . -provider anthropic
-```
-
-### With Redis Session
-
-```bash
-export OPENAI_API_KEY="your-api-key"
-go run . -session redis -redis-addr localhost:6379
-```
-
-### With PostgreSQL Session
-
-**Minimal setup** (using defaults):
-
-```bash
-export OPENAI_API_KEY="your-api-key"
-export PG_PASSWORD="your-password"
-go run . -session pgsql
-```
-
-**Custom configuration**:
-
-```bash
-export OPENAI_API_KEY="your-api-key"
-go run . -session pgsql -pg-host localhost -pg-user postgres -pg-password your-password -pg-database trpc_sessions
-```
-
-**Using environment variables**:
-
-```bash
-export OPENAI_API_KEY="your-api-key"
-export PG_HOST="localhost"
-export PG_USER="postgres"
-export PG_PASSWORD="your-password"
-export PG_DATABASE="trpc_sessions"
-go run . -session pgsql
-```
-
-### Using Environment Variable
-
-If you have `MODEL_NAME` set in your environment:
-
-```bash
-source ~/.bashrc && go run . -model "$MODEL_NAME"
+go run . -variant deepseek
 ```
 
 ### Response Modes
@@ -122,9 +78,6 @@ go run .
 
 # Non-streaming mode (complete response at once)
 go run . -streaming=false
-
-# Combined with other options
-go run . -model gpt-4o -streaming=false -session redis
 ```
 
 **When to use each mode:**
@@ -171,10 +124,8 @@ Usage of ./runner:
         Enable parallel tool execution (default: false, serial execution)
   -model string
         Name of the model to use (default "deepseek-chat")
-  -provider string
-        Name of the provider to use, openai or anthropic (default "openai")
-  -session string
-        Name of the session service to use: inmemory / redis / pgsql (default "inmemory")
+  -variant string
+        Name of the variant to use when calling the OpenAI provider (default "openai")
   -streaming
         Enable streaming mode for responses (default true)
 ```
@@ -217,15 +168,15 @@ When you ask for calculations or time information, you'll see:
 The interface is simple and intuitive:
 
 ```
-🚀 Multi-turn Chat with Runner + Tools
-Model: gpt-4o-mini
+🚀 Runner quickstart: multi-turn chat with tools
+Model: deepseek-chat
 Streaming: true
-Parallel Tools: disabled (serial execution)
-Session: inmemory
-Type 'exit' to end the conversation
+Parallel tools: false
+Session backend: in-memory (simple demo)
+Type '/exit' to end the conversation
 Available tools: calculator, current_time
 ==================================================
-✅ Chat ready! Session: chat-session-1703123456
+✅ Chat ready! Session: demo-session-1703123456
 
 👤 You: Hello! How are you today?
 🤖 Assistant: Hello! I'm doing well, thank you for asking. I'm here and ready to help you with whatever you need. How are you doing today?
@@ -237,52 +188,15 @@ Available tools: calculator, current_time
 👋 Goodbye!
 ```
 
-### Session Storage Options
+## Session Storage
 
-The runner supports three session storage backends:
+This example uses **in-memory session storage** for simplicity. This means:
+- ✅ Fast and no external dependencies
+- ✅ Perfect for development and testing
+- ⚠️ Session data is lost when the program exits
 
-#### In-Memory Session (Default)
-- **Usage**: `-session inmemory` (or omit the flag)
-- **Best for**: Development, testing, single-instance applications
-- **Pros**: Fast, no external dependencies
-- **Cons**: Data lost on restart, not suitable for distributed systems
-
-#### Redis Session
-- **Usage**: `-session redis`
-- **Best for**: Production, distributed applications
-- **Pros**: Persistent, supports multiple instances, automatic TTL
-- **Cons**: Requires Redis server
-
-#### PostgreSQL Session
-- **Usage**: `-session pgsql` (minimal) or with custom options
-- **Best for**: Production, complex queries, relational data needs
-- **Pros**:
-  - Relational database with ACID guarantees
-  - JSONB storage for efficient JSON operations
-  - Soft delete & TTL cleanup (automatic data management)
-  - Built-in indexing and query optimization
-- **Cons**: Requires PostgreSQL server
-
-**Key Features:**
-
-1. **JSONB Storage**: All session data stored as JSONB for efficient querying
-2. **Soft Delete**: Deleted data marked (not removed), can be recovered
-3. **TTL Cleanup**: Automatic cleanup of expired data (configurable interval)
-4. **Partial Unique Index**: Allows recreating sessions after soft delete
-
-**Default Configuration:**
-- Host: `localhost:5432`
-- Database: `test`
-- User: `root`
-- Soft delete: enabled
-- TTL cleanup: 5 minutes (when TTL configured)
-
-3. **Automatic Schema Management**: Tables and indexes created automatically on first run
-
-4. **TTL Support**: Automatic expiration of old sessions via `expires_at` column
-
-### Session Commands
-
-- `/history` - Ask the agent to show conversation history
-- `/new` - Start a new session (resets conversation context)
-- `/exit` - End the conversation
+**For production use with persistent session storage** (Redis, PostgreSQL, MySQL), see the `examples/session/` directory which demonstrates advanced session management features including:
+- Multiple session backends (Redis, PostgreSQL, MySQL)
+- Session switching with `/use <id>` command
+- Session listing with `/sessions` command
+- Creating new sessions with `/new` command

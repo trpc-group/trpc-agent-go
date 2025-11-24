@@ -83,6 +83,16 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	return toolSet
 }
 
+// Init establishes the MCP session and preloads tools by calling
+// Initialize and ListTools once. It returns any initialization error so
+// callers can fail fast during startup.
+func (ts *ToolSet) Init(ctx context.Context) error {
+	if err := ts.listTools(ctx); err != nil {
+		return fmt.Errorf("failed to initialize MCP tool set %q: %w", ts.name, err)
+	}
+	return nil
+}
+
 // Tools implements the ToolSet interface.
 func (ts *ToolSet) Tools(ctx context.Context) []tool.Tool {
 	if err := ts.listTools(ctx); err != nil {
@@ -152,33 +162,8 @@ func (ts *ToolSet) listTools(ctx context.Context) error {
 	}
 
 	// Apply tool filter if configured.
-	if ts.config.toolFilter != nil {
-		toolInfos := make([]ToolInfo, len(tools))
-		for i, tool := range tools {
-			decl := tool.Declaration()
-			toolInfos[i] = ToolInfo{
-				Name:        decl.Name,
-				Description: decl.Description,
-			}
-		}
-
-		filteredInfos := ts.config.toolFilter.Filter(ctx, toolInfos)
-		filteredTools := make([]tool.Tool, 0, len(filteredInfos))
-
-		// Build a map for quick lookup.
-		filteredNames := make(map[string]bool)
-		for _, info := range filteredInfos {
-			filteredNames[info.Name] = true
-		}
-
-		// Keep only filtered tools.
-		for _, tool := range tools {
-			if filteredNames[tool.Declaration().Name] {
-				filteredTools = append(filteredTools, tool)
-			}
-		}
-
-		tools = filteredTools
+	if ts.config.toolFilterFunc != nil {
+		tools = tool.FilterTools(ctx, tools, ts.config.toolFilterFunc)
 	}
 
 	// Update tools atomically.

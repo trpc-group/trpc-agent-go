@@ -1005,12 +1005,26 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 
 推荐顺序：
 
-- 通过 OpenAI RequestOption 设置全局 Header（简单、直观）
+- 通过 `openai.WithHeaders` 快速追加静态 Header（简便）
+- 通过 OpenAI RequestOption 设置全局 Header（灵活、可组合中间件）
 - 通过自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
 
-上述两种方式同样影响流式请求，因为底层使用的是同一个客户端。
+上述三种方式同样影响流式请求，因为底层使用的是同一个客户端。
 
-##### 1. 使用 OpenAI RequestOption 设置全局 Header
+##### 1. 使用 openai.WithHeaders 追加 Header
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai"
+
+llm := openai.New("deepseek-chat",
+    openai.WithHeaders(map[string]string{
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID":    "req-123",
+    }),
+)
+```
+
+##### 2. 使用 OpenAI RequestOption 设置全局 Header
 
 通过 `WithOpenAIOptions` 配合 `openaiopt.WithHeader` 或
 `openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的“每个请求”
@@ -1065,7 +1079,7 @@ llm := openai.New("deepseek-chat",
   `WithAPIKey`，改为使用
   `openaiopt.WithHeader("api-key", "<key>")`。
 
-##### 2. 使用自定义 http.RoundTripper（进阶）
+##### 3. 使用自定义 http.RoundTripper（进阶）
 
 在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等
 能力的场景。
@@ -1313,6 +1327,54 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
 )
 ```
+
+#### 8. 流式工具调用增量：ShowToolCallDelta
+
+默认情况下，OpenAI 适配层会**隐藏流式响应中的原始 `tool_calls` 分片**：
+
+- 含有 `tool_calls` 但没有可见文本内容的 chunk 会在适配层被过滤；
+- 工具调用会在内部累积，最终只在一次性汇总的响应中，通过
+  `Response.Choices[0].Message.ToolCalls` 对外暴露；
+- 这种行为适合只关心助手文本的普通聊天界面，避免在流中出现半截
+  JSON 片段。
+
+对于更高级的场景（例如：模型将文档正文写入工具入参的 JSON 字段，
+前端希望“边生成边预览”正文），可以通过 `WithShowToolCallDelta`
+打开原始工具调用增量：
+
+```go
+llm := openai.New(
+    "gpt-4.1",
+    openai.WithShowToolCallDelta(true), // 转发 tool_call 增量分片
+)
+```
+
+当启用 `WithShowToolCallDelta(true)` 时：
+
+- 含有 `tool_calls` 的流式 chunk 不再被适配层压制；
+- 每个 chunk 会被转换为部分响应 `model.Response`，其中：
+  - `Response.IsPartial == true`
+  - `Response.Choices[0].Delta.ToolCalls` 中包含来自提供方的原始
+    `tool_calls` 增量，并映射为 `model.ToolCall`：
+    - `Type` 来自底层的 `type` 字段（例如 `"function"`）；
+    - `Function.Name`、`Function.Arguments` 与原始工具名和
+      JSON 字符串参数保持一致；
+    - `ID`、`Index` 保留工具调用的唯一标识，方便调用方按 ID 合并分片；
+- 最终汇总响应仍然会把合并后的工具调用放在
+  `Response.Choices[0].Message.ToolCalls` 中，原有工具执行链路
+  （例如 `FunctionCallResponseProcessor`）可以无缝复用。
+
+典型的业务接入模式：
+
+1. 在每个部分响应中读取
+   `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments`；
+2. 按工具调用 `ID` 分组并追加 `Arguments` 字符串分片；
+3. 当累积字符串构成合法 JSON 后，将其反序列化为业务结构体
+   （例如 `{ "content": "..." }`），用于前端渐进式展示。
+
+如果不需要在流式阶段解析工具入参，只关心最终调用结果，建议保持
+`WithShowToolCallDelta` 的默认关闭状态，以避免处理部分 JSON 片段，
+并保留默认的“仅流式输出助手文本”的简洁行为。
 
 ## Anthropic Model
 
@@ -1726,12 +1788,26 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 
 推荐顺序：
 
-- 通过 Anthropic RequestOption 设置全局 Header（简单、直观）
+- 通过 `anthropic.WithHeaders` 快速追加静态 Header（简便）
+- 通过 Anthropic RequestOption 设置全局 Header（灵活、可组合中间件）
 - 通过自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
 
-上述两种方式同样影响流式请求，因为底层使用的是同一个客户端，
+上述三种方式同样影响流式请求，因为底层使用的是同一个客户端，
 
-##### 1. 使用 Anthropic RequestOption 设置全局 Header
+##### 1. 使用 anthropic.WithHeaders 追加 Header
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+
+llm := anthropic.New("claude-sonnet-4-0",
+    anthropic.WithHeaders(map[string]string{
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID":    "req-123",
+    }),
+)
+```
+
+##### 2. 使用 Anthropic RequestOption 设置全局 Header
 
 通过 `WithAnthropicClientOptions` 配合 `anthropicopt.WithHeader` 或 `anthropicopt.WithMiddleware`，可为底层 Anthropic 客户端发起的每个请求注入 Header。
 
@@ -1781,7 +1857,7 @@ llm := anthropic.New("claude-sonnet-4-0",
 )
 ```
 
-##### 2. 使用自定义 http.RoundTripper
+##### 3. 使用自定义 http.RoundTripper
 
 在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等能力的场景。
 
@@ -1857,6 +1933,7 @@ Provider 支持以下 `Option`：
 | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | `WithAPIKey` / `WithBaseURL`                                                                      | 设置模型的 API Key 和 Base URL                 |
 | `WithHTTPClientName` / `WithHTTPClientTransport`                                                  | 配置 HTTP 客户端属性                           |
+| `WithHeaders`                                                                                     | 追加 HTTP Header                     |
 | `WithChannelBufferSize`                                                                           | 调整响应 channel 缓冲区容量                    |
 | `WithCallbacks`                                                                                   | 配置 OpenAI / Anthropic 的请求、响应、流式回调 |
 | `WithExtraFields`                                                                                 | 配置请求体自定义字段                           |
@@ -1883,6 +1960,10 @@ modelInstance, err := provider.Model(
     provider.WithChannelBufferSize(c.channelBufferSize),
     provider.WithEnableTokenTailoring(c.tokenTailoring),
     provider.WithMaxInputTokens(c.maxInputTokens),
+    provider.WithHeaders(map[string]string{
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID":    "req-123",
+    }),
 )
 
 agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))

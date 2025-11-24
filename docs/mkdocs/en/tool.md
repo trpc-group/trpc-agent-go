@@ -239,6 +239,7 @@ MCP (Model Context Protocol) is an open protocol that standardizes how applicati
 **MCP ToolSet Features:**
 
 - 🔗 Unified interface: All MCP tools are created via `mcp.NewMCPToolSet()`.
+- ✅ Explicit initialization: `(*mcp.ToolSet).Init(ctx)` lets you fail fast on MCP connection / tool loading errors during startup.
 - 🚀 Multiple transports: Supports STDIO, SSE, and Streamable HTTP.
 - 🔧 Tool filters: Supports including/excluding specific tools.
 
@@ -257,6 +258,11 @@ mcpToolSet := mcp.NewMCPToolSet(
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // Optional: tool filter.
 )
+
+// (Optional but recommended) Explicitly initialize MCP: connect + initialize + list tools.
+if err := mcpToolSet.Init(ctx); err != nil {
+    log.Fatalf("failed to initialize MCP toolset: %v", err)
+}
 
 // Integrate into an Agent.
 agent := llmagent.New("mcp-assistant",
@@ -471,6 +477,9 @@ stdioToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := stdioToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to initialize stdio MCP toolset: %w", err)
+}
 
 sseToolSet := mcp.NewMCPToolSet(
     mcp.ConnectionConfig{
@@ -479,6 +488,9 @@ sseToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := sseToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to initialize sse MCP toolset: %w", err)
+}
 
 streamableToolSet := mcp.NewMCPToolSet(
     mcp.ConnectionConfig{
@@ -487,6 +499,9 @@ streamableToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := streamableToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to initialize streamable MCP toolset: %w", err)
+}
 
 // Create an Agent and integrate all tools.
 agent := llmagent.New("ai-assistant",
@@ -503,26 +518,35 @@ agent := llmagent.New("ai-assistant",
 
 ### MCP Tool Filters
 
-MCP ToolSets support filtering tools at creation time:
+MCP ToolSets support filtering tools at creation time. It's recommended to use the unified `tool.FilterFunc` interface:
 
 ```go
-// Include filter: only allow specified tools.
-includeFilter := mcp.NewIncludeFilter("get_weather", "get_news", "calculator")
-
-// Exclude filter: exclude specified tools.
-excludeFilter := mcp.NewExcludeFilter("deprecated_tool", "slow_tool")
-
-// Apply filter.
-combinedToolSet := mcp.NewMCPToolSet(
-    connectionConfig,
-    mcp.WithToolFilter(includeFilter),
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
+
+// ✅ Recommended: Use the unified filter interface
+includeFilter := tool.NewIncludeToolNamesFilter("get_weather", "get_news", "calculator")
+excludeFilter := tool.NewExcludeToolNamesFilter("deprecated_tool", "slow_tool")
+
+// Apply filter
+toolSet := mcp.NewMCPToolSet(
+    connectionConfig,
+    mcp.WithToolFilterFunc(includeFilter),
+)
+
+// Optional: initialize once at startup to catch MCP connection / tool loading errors early.
+if err := toolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to initialize MCP toolset: %w", err)
+}
 ```
 
 ### Per-Run Tool Filtering
 
-Per-run tool filtering enables dynamic control of tool availability for each `runner.Run` invocation without modifying Agent configuration. This is a "soft constraint" mechanism for optimizing token consumption and implementing role-based tool access control.
-
+- Option one: Per-run tool filtering enables dynamic control of tool availability for each `runner.Run` invocation without modifying Agent configuration. This is a "soft constraint" mechanism for optimizing token consumption and implementing role-based tool access control.
+apply to all agents
+- Option two: Configure the runtime filtering function through 'llmagent. WhatToolFilter' to only apply to the current agent
 **Key Features:**
 
 - 🎯 **Per-Run Control**: Independent configuration per invocation, no Agent modification needed
@@ -539,10 +563,22 @@ Use blacklist approach to exclude unwanted tools:
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/tool"
 
+// Option 1:
 // Exclude text_tool and dangerous_tool, all other tools available
 filter := tool.NewExcludeToolNamesFilter("text_tool", "dangerous_tool")
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithToolFilter(filter),
+)
+
+// Option 2:
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("You are a helpful AI assistant that can use various tools to help users."),
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolFilter(filter),
 )
 ```
 
@@ -563,6 +599,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 Implement custom filter function for complex filtering logic:
 
 ```go
+// Option 1:
 // Custom filter: only allow tools with names starting with "safe_"
 filter := func(ctx context.Context, t tool.Tool) bool {
     declaration := t.Declaration()
@@ -575,6 +612,16 @@ filter := func(ctx context.Context, t tool.Tool) bool {
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithToolFilter(filter),
 )
+
+// Option 2:
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("You are a helpful AI assistant that can use various tools to help users."),
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolFilter(filter),
 ```
 
 **4. Per-Agent Filtering**

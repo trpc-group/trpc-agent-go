@@ -16,9 +16,9 @@ import (
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	isession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 )
 
 // luaSummariesSetIfNewer atomically merges one filterKey summary into the stored
@@ -66,7 +66,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	updated, err := isession.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := summary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}

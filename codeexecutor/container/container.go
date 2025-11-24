@@ -50,6 +50,8 @@ type CodeExecutor struct {
 	containerConfig container.Config     // Configuration for the container
 	containerName   string               // Name of the Docker container which is created. If empty, will autogenerate a name.
 	ws              *workspaceRuntime    // workspace runtime
+	// autoInputs controls mapping of inputs-host into workspace.
+	autoInputs bool
 }
 
 // New creates a new CodeExecutor instance
@@ -67,6 +69,7 @@ func New(opts ...Option) (*CodeExecutor, error) {
 			Tty:        true,
 			OpenStdin:  true,
 		},
+		autoInputs: true,
 	}
 
 	// Apply options
@@ -159,6 +162,16 @@ func WithBindMount(src, dest, mode string) Option {
 			spec += ":" + mode
 		}
 		c.hostConfig.Binds = append(c.hostConfig.Binds, spec)
+	}
+}
+
+// WithAutoInputs enables or disables automatic mapping of the
+// inputs host directory into the workspace-level work/inputs
+// directory. When enabled and an inputs bind is present, each
+// created workspace will expose that directory under inputs/.
+func WithAutoInputs(enable bool) Option {
+	return func(c *CodeExecutor) {
+		c.autoInputs = enable
 	}
 }
 

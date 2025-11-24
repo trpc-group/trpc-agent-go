@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	isession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 )
 
 // CreateSessionSummary generates a summary for the session and stores it on the session object.
@@ -37,7 +37,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 
 	// Run summarization based on the provided session. Persistence path will
 	// validate app/session existence under lock.
-	updated, err := isession.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := summary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
@@ -145,22 +145,36 @@ func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) boo
 	// Select a channel using hash distribution.
 	index := job.session.Hash % len(s.summaryJobChans)
 
-	// Use a defer-recover pattern to handle potential panic from sending to closed channel.
+	// If context already cancelled, do not enqueue.
+	if err := ctx.Err(); err != nil {
+		log.Debugf(
+			"summary job context cancelled before enqueue: %v", err,
+		)
+		return false
+	}
+
+	// Use a defer-recover pattern to handle potential panic from
+	// sending to a closed channel.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Warnf("summary job channel may be closed, falling back to synchronous processing: %v", r)
+			log.Warnf(
+				"summary job channel may be closed, falling back to "+
+					"synchronous processing: %v",
+				r,
+			)
 		}
 	}()
 
+	// Non-blocking enqueue to avoid waiting when the queue is full.
 	select {
 	case s.summaryJobChans[index] <- job:
 		return true // Successfully enqueued.
-	case <-ctx.Done():
-		log.Debugf("summary job channel context cancelled, falling back to synchronous processing, error: %v", ctx.Err())
-		return false // Context cancelled.
 	default:
 		// Queue is full, fall back to synchronous processing.
-		log.Warnf("summary job queue is full, falling back to synchronous processing")
+		log.Warnf(
+			"summary job queue is full, falling back to synchronous " +
+				"processing",
+		)
 		return false
 	}
 }

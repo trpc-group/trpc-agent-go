@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -69,6 +70,11 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 
 	go func() {
 		defer close(eventChan)
+
+		// Optionally resume from pending tool calls before starting a new
+		// LLM cycle. This covers scenarios where the previous run stopped
+		// after an assistant tool_call response but before tools executed.
+		f.maybeResumePendingToolCalls(ctx, invocation, eventChan)
 
 		for {
 			// emit start event and wait for completion notice.
@@ -119,6 +125,54 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	}()
 
 	return eventChan, nil
+}
+
+// maybeResumePendingToolCalls inspects the latest session events and, when
+// RunOptions.Resume is enabled, executes any pending tool calls before the
+// next LLM request. A pending tool call is defined as the latest persisted
+// event being an assistant response that contains tool calls but no tool
+// results after it.
+func (f *Flow) maybeResumePendingToolCalls(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	if invocation == nil || !invocation.RunOptions.Resume {
+		return
+	}
+	if invocation.Session == nil {
+		return
+	}
+
+	invocation.Session.EventMu.RLock()
+	events := invocation.Session.Events
+	var lastResp *model.Response
+	if len(events) > 0 {
+		last := events[len(events)-1]
+		if last.Response != nil && !last.IsPartial &&
+			last.IsValidContent() && last.Response.IsToolCallResponse() {
+			lastResp = last.Response
+		}
+	}
+	invocation.Session.EventMu.RUnlock()
+
+	if lastResp == nil {
+		return
+	}
+
+	req := &model.Request{
+		Tools: make(map[string]tool.Tool),
+	}
+	for _, t := range f.getFilteredTools(ctx, invocation) {
+		req.Tools[t.Declaration().Name] = t
+	}
+
+	for _, rp := range f.responseProcessors {
+		if toolRP, ok := rp.(*processor.FunctionCallResponseProcessor); ok {
+			toolRP.ProcessResponse(ctx, invocation, req, lastResp, eventChan)
+			break
+		}
+	}
 }
 
 func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
@@ -188,13 +242,24 @@ func (f *Flow) processStreamingResponses(
 	eventChan chan<- *event.Event,
 	span oteltrace.Span,
 ) (lastEvent *event.Event, err error) {
+	// Get or create timing info from invocation (only record first LLM call)
+	timingInfo := invocation.GetOrCreateTimingInfo()
+
 	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, &err)
 	defer tracker.RecordMetrics()()
 
 	for response := range responseChan {
-		// Track response for telemetry
+		// Track response for telemetry (token usage and timing info)
 		tracker.TrackResponse(response)
+
+		// Attach timing info to response
+		if response.Usage == nil {
+			response.Usage = &model.Usage{}
+		}
+		// set timing info to response
+		response.Usage.TimingInfo = timingInfo
+
 		// Handle after model callbacks.
 		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
 		if err != nil {
@@ -344,6 +409,11 @@ type UserToolsProvider interface {
 	UserTools() []tool.Tool
 }
 
+// ToolFilterProvider is an optional interface that agents can implement to provide
+type ToolFilterProvider interface {
+	FilterTools(ctx context.Context) []tool.Tool
+}
+
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
 //
 // User tools (can be filtered):
@@ -358,6 +428,9 @@ type UserToolsProvider interface {
 func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocation) []tool.Tool {
 	// Get all tools from the agent.
 	allTools := invocation.Agent.Tools()
+	if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
+		allTools = provider.FilterTools(ctx)
+	}
 
 	// If no filter is specified, return all tools.
 	if invocation.RunOptions.ToolFilter == nil {

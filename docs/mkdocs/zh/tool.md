@@ -240,6 +240,7 @@ MCP（Model Context Protocol）是一个开放协议，标准化了应用程序�
 - 🔗 **统一接口**：所有 MCP 工具都通过 `mcp.NewMCPToolSet()` 创建
 - 🚀 **多种传输**：支持 STDIO、SSE、Streamable HTTP 三种传输方式
 - 🔧 **工具过滤**：支持包含/排除特定工具
+- ✅ **显式初始化**：通过 `(*mcp.ToolSet).Init(ctx)`，可以在应用启动阶段提前发现 MCP 连接/工具加载错误并快速失败
 
 ### 基本用法
 
@@ -256,6 +257,11 @@ mcpToolSet := mcp.NewMCPToolSet(
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // 可选：工具过滤
 )
+
+// （可选但推荐）显式初始化 MCP：建立连接 + 初始化会话 + 列工具
+if err := mcpToolSet.Init(ctx); err != nil {
+    log.Fatalf("初始化 MCP 工具集失败: %v", err)
+}
 
 // 集成到 Agent
 agent := llmagent.New("mcp-assistant",
@@ -280,6 +286,9 @@ mcpToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 STDIO MCP 工具集失败: %w", err)
+}
 ```
 
 #### 2. SSE 传输
@@ -297,6 +306,9 @@ mcpToolSet := mcp.NewMCPToolSet(
         },
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 SSE MCP 工具集失败: %w", err)
+}
 ```
 
 #### 3. Streamable HTTP 传输
@@ -311,6 +323,9 @@ mcpToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 Streamable MCP 工具集失败: %w", err)
+}
 ```
 
 ### 会话重连支持
@@ -500,25 +515,29 @@ agent := llmagent.New("ai-assistant",
 
 ### MCP 工具过滤器
 
-MCP 工具集支持在创建时过滤工具：
+MCP 工具集支持在创建时过滤工具。推荐使用统一的 `tool.FilterFunc` 接口：
 
 ```go
-// 包含过滤器：只使用指定工具
-includeFilter := mcp.NewIncludeFilter("get_weather", "get_news", "calculator")
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
 
-// 排除过滤器：排除指定工具
-excludeFilter := mcp.NewExcludeFilter("deprecated_tool", "slow_tool")
+// ✅ 推荐：使用统一的过滤接口
+includeFilter := tool.NewIncludeToolNamesFilter("get_weather", "get_news", "calculator")
+excludeFilter := tool.NewExcludeToolNamesFilter("deprecated_tool", "slow_tool")
 
 // 应用过滤器
-combinedToolSet := mcp.NewMCPToolSet(
+toolSet := mcp.NewMCPToolSet(
     connectionConfig,
-    mcp.WithToolFilter(includeFilter),
+    mcp.WithToolFilterFunc(includeFilter),
 )
 ```
 
 ### 运行时工具过滤
 
-运行时工具过滤允许在每次 `runner.Run` 调用时动态控制工具可用性，无需修改 Agent 配置。这是一个"软约束"机制，用于优化 token 消耗和实现基于角色的工具访问控制。
+- 方式一：运行时工具过滤允许在每次 `runner.Run` 调用时动态控制工具可用性，无需修改 Agent 配置。这是一个"软约束"机制，用于优化 token 消耗和实现基于角色的工具访问控制。针对所有agent生效
+- 方式二：通过`llmagent.WithToolFilter`配置运行时过滤function, 只对当前agent生效
 
 **核心特性：**
 
@@ -548,10 +567,24 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 使用白名单方式只允许指定的工具：
 
 ```go
+// 方式一：
 // 只允许使用计算器和时间工具
 filter := tool.NewIncludeToolNamesFilter("calculator", "time_tool")
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithToolFilter(filter),
+)
+
+// 方式二：
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("你是一个有帮助的AI助手，可以使用多种工具协助用户"),
+    // 添加单个工具（Tool 接口）
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    // 添加工具集（ToolSet 接口）
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolFilter(filter),
 )
 ```
 
@@ -560,6 +593,7 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 实现自定义过滤函数以支持复杂的过滤逻辑：
 
 ```go
+// 方式一：
 // 自定义过滤函数：只允许名称以 "safe_" 开头的工具
 filter := func(ctx context.Context, t tool.Tool) bool {
     declaration := t.Declaration()
@@ -571,6 +605,19 @@ filter := func(ctx context.Context, t tool.Tool) bool {
 
 eventChan, err := runner.Run(ctx, userID, sessionID, message,
     agent.WithToolFilter(filter),
+)
+
+// 方式二：
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("你是一个有帮助的AI助手，可以使用多种工具协助用户"),
+    // 添加单个工具（Tool 接口）
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    // 添加工具集（ToolSet 接口）
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolFilter(filter),
 )
 ```
 

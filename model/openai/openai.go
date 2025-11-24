@@ -236,6 +236,7 @@ type Model struct {
 	name                       string
 	baseURL                    string
 	apiKey                     string
+	showToolCallDelta          bool
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
 	chatResponseCallback       ChatResponseCallbackFunc
@@ -260,6 +261,8 @@ type Model struct {
 	outputTokensFloor      int
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
+
+	accumulateChunkUsage AccumulateChunkUsage
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -331,6 +334,33 @@ type options struct {
 	MaxInputTokens int
 	// TokenTailoringConfig allows customization of token tailoring parameters.
 	TokenTailoringConfig *model.TokenTailoringConfig
+	// ShowToolCallDelta controls whether to expose tool call
+	// deltas in streaming responses. When true, raw tool_call
+	// chunks from the provider will be forwarded via
+	// Response.Choices[].Delta.ToolCalls instead of being
+	// suppressed until the final aggregated response.
+	ShowToolCallDelta    bool
+	accumulateChunkUsage AccumulateChunkUsage
+}
+
+// TokenTailoringConfig holds custom token tailoring budget parameters.
+type TokenTailoringConfig struct {
+	// ProtocolOverheadTokens is the number of tokens reserved for protocol
+	// overhead.
+	ProtocolOverheadTokens int
+	// ReserveOutputTokens is the number of tokens reserved for output
+	// generation.
+	ReserveOutputTokens int
+	// InputTokensFloor is the minimum number of input tokens.
+	InputTokensFloor int
+	// OutputTokensFloor is the minimum number of output tokens.
+	OutputTokensFloor int
+	// SafetyMarginRatio is the safety margin ratio for token counting
+	// inaccuracies.
+	SafetyMarginRatio float64
+	// MaxInputTokensRatio is the maximum input tokens ratio of the context
+	// window.
+	MaxInputTokensRatio float64
 }
 
 // Option is a function that configures an OpenAI model.
@@ -418,6 +448,18 @@ func WithOpenAIOptions(openaiOpts ...openaiopt.RequestOption) Option {
 	}
 }
 
+// WithHeaders appends static HTTP headers to all OpenAI requests.
+func WithHeaders(headers map[string]string) Option {
+	return func(opts *options) {
+		if len(headers) == 0 {
+			return
+		}
+		for k, v := range headers {
+			opts.OpenAIOptions = append(opts.OpenAIOptions, openaiopt.WithHeader(k, v))
+		}
+	}
+}
+
 // WithExtraFields sets extra fields to be added to the HTTP request body.
 // These fields will be included in every chat completion request.
 // E.g.:
@@ -490,6 +532,49 @@ func WithMaxInputTokens(limit int) Option {
 	}
 }
 
+// AccumulateChunkUsage is the function type for accumulating chunk usage.
+type AccumulateChunkUsage func(u model.Usage, delta model.Usage) model.Usage
+
+// WithAccumulateChunkTokenUsage sets the function to be called to accumulate chunk token usage.
+func WithAccumulateChunkTokenUsage(a AccumulateChunkUsage) Option {
+	return func(opts *options) {
+		opts.accumulateChunkUsage = a
+	}
+}
+
+// inverseOPENAISKDAddChunkUsage calculates the inverse of OPENAISKDAddChunkUsage, related to the current openai sdk version
+func inverseOPENAISKDAddChunkUsage(u model.Usage, delta model.Usage) model.Usage {
+	return model.Usage{
+		PromptTokens:     u.PromptTokens - delta.PromptTokens,
+		CompletionTokens: u.CompletionTokens - delta.CompletionTokens,
+		TotalTokens:      u.TotalTokens - delta.TotalTokens,
+	}
+}
+
+// completionUsageToModelUsage converts openai.CompletionUsage to model.Usage.
+func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
+	return model.Usage{
+		PromptTokens:     int(usage.PromptTokens),
+		CompletionTokens: int(usage.CompletionTokens),
+		TotalTokens:      int(usage.TotalTokens),
+		PromptTokensDetails: model.PromptTokensDetails{
+			CachedTokens: int(usage.PromptTokensDetails.CachedTokens),
+		},
+	}
+}
+
+// modelUsageToCompletionUsage converts model.Usage to openai.CompletionUsage.
+func modelUsageToCompletionUsage(usage model.Usage) openai.CompletionUsage {
+	return openai.CompletionUsage{
+		PromptTokens:     int64(usage.PromptTokens),
+		CompletionTokens: int64(usage.CompletionTokens),
+		TotalTokens:      int64(usage.TotalTokens),
+		PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
+			CachedTokens: int64(usage.PromptTokensDetails.CachedTokens),
+		},
+	}
+}
+
 // WithTokenCounter sets the TokenCounter used for token tailoring.
 // If not provided and token limit is enabled, a SimpleTokenCounter will be used.
 func WithTokenCounter(counter model.TokenCounter) Option {
@@ -522,6 +607,16 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	return func(opts *options) {
 		opts.TokenTailoringConfig = config
+	}
+}
+
+// WithShowToolCallDelta controls whether to expose tool call
+// deltas in streaming responses. When enabled, the model will
+// forward provider tool_call chunks via Delta.ToolCalls so
+// callers can reconstruct arguments incrementally.
+func WithShowToolCallDelta(show bool) Option {
+	return func(opts *options) {
+		opts.ShowToolCallDelta = show
 	}
 }
 
@@ -612,6 +707,7 @@ func New(name string, opts ...Option) *Model {
 		name:                       name,
 		baseURL:                    o.BaseURL,
 		apiKey:                     o.APIKey,
+		showToolCallDelta:          o.ShowToolCallDelta,
 		channelBufferSize:          o.ChannelBufferSize,
 		chatRequestCallback:        o.ChatRequestCallback,
 		chatResponseCallback:       o.ChatResponseCallback,
@@ -633,6 +729,7 @@ func New(name string, opts ...Option) *Model {
 		outputTokensFloor:          outputFloor,
 		safetyMarginRatio:          safetyMargin,
 		maxInputTokensRatio:        maxInputRatio,
+		accumulateChunkUsage:       o.accumulateChunkUsage,
 	}
 }
 
@@ -1154,8 +1251,15 @@ func (m *Model) handleStreamingResponse(
 
 		// Always accumulate for correctness (tool call deltas are assembled later),
 		// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
-		if len(chunk.Choices) > 0 && !m.hasReasoningContent(chunk.Choices[0].Delta) {
+		if !m.hasReasoningContent(chunk.Choices) {
 			acc.AddChunk(chunk)
+			if m.accumulateChunkUsage != nil {
+				accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
+				usage := inverseOPENAISKDAddChunkUsage(accUsage, chunkUsage)
+				usage = m.accumulateChunkUsage(usage, chunkUsage)
+				acc.Usage = modelUsageToCompletionUsage(usage)
+
+			}
 		}
 
 		// Aggregate reasoning delta (if any) for final response fallback.
@@ -1169,7 +1273,7 @@ func (m *Model) handleStreamingResponse(
 		// tool_call deltas, which we'll surface only in the final response).
 		// Note: reasoning content chunks are not suppressed even if they have no other content.
 		if m.shouldSuppressChunk(chunk) {
-			if len(chunk.Choices) == 0 || !m.hasReasoningContent(chunk.Choices[0].Delta) {
+			if !m.hasReasoningContent(chunk.Choices) {
 				continue
 			}
 		}
@@ -1218,6 +1322,11 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	if len(chunk.Choices) == 0 {
 		return true
 	}
+	// Check for reasoning content - if present, don't suppress.
+	if m.hasReasoningContent(chunk.Choices) {
+		return false
+	}
+
 	choice := chunk.Choices[0]
 	delta := choice.Delta
 
@@ -1226,16 +1335,16 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 		return false
 	}
 
-	// Check for reasoning content - if present, don't suppress.
-	if m.hasReasoningContent(delta) {
-		return false
+	// If this chunk is a tool_calls delta, optionally suppress emission.
+	// By default we only expose tool calls in the final aggregated response
+	// to avoid noisy blank chunks. When showToolCallDelta is enabled, treat
+	// tool_call chunks as meaningful streaming payload.
+	hasToolCall := delta.JSON.ToolCalls.Valid() ||
+		len(delta.ToolCalls) > 0
+	if hasToolCall {
+		return !m.showToolCallDelta
 	}
 
-	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
-	// tool calls in the final aggregated response to avoid noisy blank chunks.
-	if delta.JSON.ToolCalls.Valid() {
-		return true
-	}
 	if choice.FinishReason != "" {
 		return false
 	}
@@ -1251,20 +1360,29 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 // 2. Check content - if valid, don't skip (even if empty string)
 // 3. Check refusal - if valid, don't skip
 // 4. Check toolcalls - if valid but array is empty, skip (defensive against panic)
-// 5. Otherwise, skip
+// 5. Check usage - if valid, don't skip
+// 6. Otherwise, skip
 func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
+	// Chunks that carry a finish reason are meaningful and should not be
+	// skipped, even if they have no content or usage. This ensures that
+	// streaming clients can observe termination semantics.
+	if len(chunk.Choices) > 0 &&
+		chunk.Choices[0].FinishReason != "" {
+		return false
+	}
+
 	// No choices available, don't skip (let it be processed normally).
 	if len(chunk.Choices) == 0 {
 		return false
 	}
 
-	// Extract delta for inspection.
-	delta := chunk.Choices[0].Delta
-
 	// Reasoning content is meaningful even if other fields are empty.
-	if m.hasReasoningContent(delta) {
+	if m.hasReasoningContent(chunk.Choices) {
 		return false
 	}
+
+	// Extract delta for inspection.
+	delta := chunk.Choices[0].Delta
 
 	// Content or refusal indicates meaningful output.
 	if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
@@ -1276,13 +1394,20 @@ func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 		return len(delta.ToolCalls) == 0
 	}
 
+	if chunk.Usage.CompletionTokens > 0 || chunk.Usage.PromptTokens > 0 || chunk.Usage.TotalTokens > 0 {
+		return false
+	}
+
 	// Otherwise there is no meaningful delta, skip the chunk.
 	return true
 }
 
-// hasReasoningContent checks if the delta contains reasoning content.
-func (m *Model) hasReasoningContent(delta openai.ChatCompletionChunkChoiceDelta) bool {
-	return extractReasoningContent(delta.JSON.ExtraFields) != ""
+// hasReasoningContent checks if the choices contains reasoning content.
+func (m *Model) hasReasoningContent(choices []openai.ChatCompletionChunkChoice) bool {
+	if len(choices) == 0 {
+		return false
+	}
+	return extractReasoningContent(choices[0].Delta.JSON.ExtraFields) != ""
 }
 
 // extractReasoningContent extracts reasoning content from ExtraFields.
@@ -1326,12 +1451,37 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 			response.Choices = make([]model.Choice, 1)
 		}
 
-		reasoningContent := extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields)
+		reasoningContent := extractReasoningContent(
+			chunk.Choices[0].Delta.JSON.ExtraFields)
+		var toolCalls []model.ToolCall
+		if m.showToolCallDelta &&
+			len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			toolCalls = make(
+				[]model.ToolCall, 0,
+				len(chunk.Choices[0].Delta.ToolCalls))
+			for _, toolCall := range chunk.Choices[0].Delta.ToolCalls {
+				var indexPtr *int
+				if toolCall.Index != 0 {
+					index := int(toolCall.Index)
+					indexPtr = &index
+				}
+				toolCalls = append(toolCalls, model.ToolCall{
+					Type: string(toolCall.Type),
+					Function: model.FunctionDefinitionParam{
+						Name:      toolCall.Function.Name,
+						Arguments: []byte(toolCall.Function.Arguments),
+					},
+					ID:    toolCall.ID,
+					Index: indexPtr,
+				})
+			}
+		}
 
 		response.Choices[0].Delta = model.Message{
 			Role:             model.RoleAssistant,
 			Content:          chunk.Choices[0].Delta.Content,
 			ReasoningContent: reasoningContent,
+			ToolCalls:        toolCalls,
 		}
 
 		// Handle finish reason - FinishReason is a plain string.
@@ -1464,20 +1614,14 @@ func (m *Model) createFinalResponse(
 	accumulatedToolCalls []model.ToolCall,
 	aggregatedReasoning string,
 ) *model.Response {
+	usage := completionUsageToModelUsage(acc.Usage)
 	finalResponse := &model.Response{
-		Object:  model.ObjectTypeChatCompletion,
-		ID:      acc.ID,
-		Created: acc.Created,
-		Model:   acc.Model,
-		Choices: make([]model.Choice, len(acc.Choices)),
-		Usage: &model.Usage{
-			PromptTokens:     int(acc.Usage.PromptTokens),
-			CompletionTokens: int(acc.Usage.CompletionTokens),
-			TotalTokens:      int(acc.Usage.TotalTokens),
-			PromptTokensDetails: model.PromptTokensDetails{
-				CachedTokens: int(acc.Usage.PromptTokensDetails.CachedTokens),
-			},
-		},
+		Object:    model.ObjectTypeChatCompletion,
+		ID:        acc.ID,
+		Created:   acc.Created,
+		Model:     acc.Model,
+		Choices:   make([]model.Choice, len(acc.Choices)),
+		Usage:     &usage,
 		Timestamp: time.Now(),
 		Done:      !hasToolCall,
 		IsPartial: false,
@@ -1503,6 +1647,14 @@ func (m *Model) createFinalResponse(
 		// If there are tool calls, add them to the final response.
 		if hasToolCall && i == 0 { // Usually only the first choice contains tool calls.
 			finalResponse.Choices[i].Message.ToolCalls = accumulatedToolCalls
+		}
+
+		// Propagate finish reason from the accumulated choice so that the final
+		// aggregated response exposes the same termination semantics as the
+		// underlying provider.
+		if choice.FinishReason != "" {
+			finishReason := choice.FinishReason
+			finalResponse.Choices[i].FinishReason = &finishReason
 		}
 	}
 
@@ -1591,14 +1743,8 @@ func (m *Model) handleNonStreamingResponse(
 
 	// Convert usage information.
 	if chatCompletion.Usage.PromptTokens > 0 || chatCompletion.Usage.CompletionTokens > 0 {
-		response.Usage = &model.Usage{
-			PromptTokens:     int(chatCompletion.Usage.PromptTokens),
-			CompletionTokens: int(chatCompletion.Usage.CompletionTokens),
-			TotalTokens:      int(chatCompletion.Usage.TotalTokens),
-			PromptTokensDetails: model.PromptTokensDetails{
-				CachedTokens: int(chatCompletion.Usage.PromptTokensDetails.CachedTokens),
-			},
-		}
+		usage := completionUsageToModelUsage(chatCompletion.Usage)
+		response.Usage = &usage
 	}
 
 	// Set system fingerprint if available.

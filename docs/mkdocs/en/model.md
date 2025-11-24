@@ -1003,18 +1003,32 @@ For a complete interactive example, see [examples/model/retry](https://github.co
 In some enterprise or proxy scenarios, the model provider requires
 additional HTTP headers (for example, organization ID, tenant routing,
 or custom authentication). The Model module supports setting headers in
-two reliable ways that apply to all model requests, including
+three reliable ways that apply to all model requests, including
 non-streaming, streaming, file upload, and batch APIs.
 
 Recommended order:
 
-- Global header via OpenAI RequestOption (simple, built-in)
+- Global header via `openai.WithHeaders` (simplest for static headers)
+- Global header via OpenAI RequestOption (flexible, middleware-friendly)
 - Custom `http.RoundTripper` (advanced, cross-cutting)
 
-Both methods affect streaming too because the same client is used for
+All methods affect streaming too because the same client is used for
 `New` and `NewStreaming` calls.
 
-##### 1. Global headers using OpenAI RequestOption
+##### 1. Using openai.WithHeaders for headers
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai"
+
+llm := openai.New("deepseek-chat",
+    openai.WithHeaders(map[string]string{
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID":    "req-123",
+    }),
+)
+```
+
+##### 2. Global headers using OpenAI RequestOption
 
 Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
 `openaiopt.WithMiddleware` to inject headers for every request created
@@ -1069,7 +1083,7 @@ Notes for authentication variants:
 - Azure/OpenAI‑compatible that use `api-key`: omit `WithAPIKey` and set
   `openaiopt.WithHeader("api-key", "<key>")` instead.
 
-##### 2. Custom http.RoundTripper (advanced)
+##### 3. Custom http.RoundTripper (advanced)
 
 Inject headers across all requests at the HTTP layer by wrapping the
 transport. This is useful when you also need custom proxy, TLS, or
@@ -1318,6 +1332,55 @@ model := openai.New("deepseek-chat",
     openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY
 )
 ```
+
+#### 8. Streaming Tool Call Deltas: ShowToolCallDelta
+
+By default, the OpenAI adapter suppresses raw `tool_calls` chunks in streaming
+responses. Tool calls are accumulated internally and only exposed once in the
+final aggregated response via `Response.Choices[0].Message.ToolCalls`. This
+keeps the stream clean for typical chat UIs that only render assistant text.
+
+For advanced use cases (for example, when the model streams document content
+inside tool arguments and you need to display it incrementally), you can turn
+on raw tool call deltas with `WithShowToolCallDelta`:
+
+```go
+llm := openai.New(
+    "gpt-4.1",
+    openai.WithShowToolCallDelta(true), // Forward tool_call deltas.
+)
+```
+
+When `WithShowToolCallDelta(true)` is enabled:
+
+- Streaming chunks that contain `tool_calls` are no longer suppressed by the
+  adapter.
+- Each chunk is converted into a partial `model.Response` where:
+  - `Response.IsPartial == true`
+  - `Response.Choices[0].Delta.ToolCalls` contains the provider’s raw
+    `tool_calls` delta mapped to `model.ToolCall`:
+    - `Type` comes from the provider `type` field (for example, `"function"`).
+    - `Function.Name` and `Function.Arguments` mirror the original tool name
+      and JSON-encoded arguments string.
+    - `ID` and `Index` preserve the tool call identity so callers can stitch
+      fragments together.
+- The final aggregated response still exposes the merged tool calls in
+  `Response.Choices[0].Message.ToolCalls`, so existing tool execution logic
+  (for example, `FunctionCallResponseProcessor`) continues to work unchanged.
+
+Typical integration pattern when this flag is enabled:
+
+1. Read `Response.Choices[0].Delta.ToolCalls[*].Function.Arguments` on each
+   partial response.
+2. Group chunks by tool call `ID` and append the `Arguments` fragments in
+   order.
+3. Once the accumulated string forms valid JSON, unmarshal it into your
+   business struct (for example, `{ "content": "..." }`) and use it for
+   progressive UI rendering.
+
+If you do not need to inspect tool arguments during streaming, keep
+`WithShowToolCallDelta` disabled to avoid handling partial JSON fragments and
+to preserve the default clean text-streaming behavior.
 
 ## Anthropic Model
 
@@ -1727,16 +1790,30 @@ For a complete interactive example, see [examples/model/switch](https://github.c
 
 #### 3. Custom HTTP Headers
 
-In environments like gateways, proprietary platforms, or proxy setups, model API requests often require additional HTTP headers (e.g., organization/tenant identifiers, grayscale routing, custom authentication, etc.). The Model module provides two reliable ways to add headers for "all model requests," including standard requests, streaming, file uploads, batch processing, etc.
+In environments like gateways, proprietary platforms, or proxy setups, model API requests often require additional HTTP headers (e.g., organization/tenant identifiers, grayscale routing, custom authentication, etc.). The Model module provides three reliable ways to add headers for "all model requests," including standard requests, streaming, file uploads, batch processing, etc.
 
 Recommended order:
 
-- Use **Anthropic RequestOption** to set global headers (simple and intuitive)
+- Global header via `anthropic.WithHeaders` (simplest for static headers)
+- Use **Anthropic RequestOption** to set global headers (flexible, middleware-friendly)
 - Use a custom `http.RoundTripper` injection (advanced, more cross-cutting capabilities)
 
-Both methods affect streaming requests, as they use the same underlying client.
+All methods affect streaming requests, as they use the same underlying client.
 
-##### 1. Using Anthropic RequestOption to Set Global Headers
+##### 1. Using anthropic.WithHeaders for headers
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+
+llm := anthropic.New("claude-sonnet-4-0",
+    anthropic.WithHeaders(map[string]string{
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID":    "req-123",
+    }),
+)
+```
+
+##### 2. Using Anthropic RequestOption to Set Global Headers
 
 By using `WithAnthropicClientOptions` combined with `anthropicopt.WithHeader` or `anthropicopt.WithMiddleware`, you can inject headers into every request made by the underlying Anthropic client.
 
@@ -1765,9 +1842,9 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 )
 
-llm := anthropic.New("claude-sonnet-4-0",
-    anthropic.WithAnthropicClientOptions(
-        anthropicopt.WithMiddleware(
+	llm := anthropic.New("claude-sonnet-4-0",
+	    anthropic.WithAnthropicClientOptions(
+	        anthropicopt.WithMiddleware(
             func(r *http.Request, next anthropicopt.MiddlewareNext) (*http.Response, error) {
                 // Example: Set "per-request" headers based on context value
                 if v := r.Context().Value("x-request-id"); v != nil {
@@ -1782,11 +1859,11 @@ llm := anthropic.New("claude-sonnet-4-0",
                 return next(r)
             },
         ),
-    ),
-)
-```
-
-##### 2. Using Custom `http.RoundTripper`
+	    ),
+	)
+	```
+	
+##### 3. Using Custom `http.RoundTripper`
 
 For injecting headers at the HTTP transport layer, ideal for scenarios requiring proxying, TLS, custom monitoring, and other capabilities.
 
@@ -1862,6 +1939,7 @@ The Provider supports the following `Option`:
 | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `WithAPIKey` / `WithBaseURL`                                                                      | Set the API Key and Base URL for the model                              |
 | `WithHTTPClientName` / `WithHTTPClientTransport`                                                  | Configure HTTP client properties                                        |
+| `WithHeaders`                                                                                     | Append static HTTP headers across requests                              |
 | `WithChannelBufferSize`                                                                           | Adjust the response channel buffer size                                 |
 | `WithCallbacks`                                                                                   | Configure OpenAI / Anthropic request, response, and streaming callbacks |
 | `WithExtraFields`                                                                                 | Configure custom fields in the request body                             |
