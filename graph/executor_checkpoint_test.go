@@ -533,6 +533,6 @@ func TestRunModel_BeforeModelError(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
 		return nil, fmt.Errorf("boom")
 	})
-	_, err := runModel(context.Background(), cbs, &dummyModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
+	_, _, err := runModel(context.Background(), cbs, &dummyModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.Error(t, err)
 }
