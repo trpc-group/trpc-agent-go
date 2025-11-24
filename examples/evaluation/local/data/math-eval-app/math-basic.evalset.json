@@ -40,6 +40,9 @@
                   "id": "tool_use_1",
                   "name": "calculator",
                   "response": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add",
                     "result": 5
                   }
                 }
@@ -90,6 +93,9 @@
                   "id": "tool_use_2",
                   "name": "calculator",
                   "response": {
+                    "a": 6,
+                    "b": 7,
+                    "operation": "multiply",
                     "result": 42
                   }
                 }

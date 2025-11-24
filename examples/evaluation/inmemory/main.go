@@ -16,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/maptext"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
@@ -164,7 +164,10 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 								ID:   "tool_use_1",
 								Name: "calculator",
 								Response: map[string]interface{}{
-									"result": 5.0,
+									"a":         2.0,
+									"b":         3.0,
+									"operation": "add",
+									"result":    5.0,
 								},
 							},
 						},
@@ -214,7 +217,10 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 								ID:   "tool_use_2",
 								Name: "calculator",
 								Response: map[string]interface{}{
-									"result": 5.0,
+									"a":         6.0,
+									"b":         7.0,
+									"operation": "multiply",
+									"result":    42.0,
 								},
 							},
 						},
@@ -228,8 +234,6 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 		},
 	}
 	for _, evalCase := range cases {
-		data, _ := json.MarshalIndent(evalCase, "", "  ")
-		fmt.Println(string(data))
 		if err := evalSetManager.AddCase(ctx, appName, evalSetID, evalCase); err != nil {
 			return err
 		}
@@ -249,15 +253,11 @@ func prepareMetric(ctx context.Context, metricManager metric.Manager) error {
 							Name: &text.TextCriterion{
 								MatchStrategy: text.TextMatchStrategyExact,
 							},
-							Arguments: &maptext.MapTextCriterion{
-								TextCriterion: &text.TextCriterion{
-									MatchStrategy: text.TextMatchStrategyExact,
-								},
+							Arguments: &cjson.JSONCriterion{
+								MatchStrategy: cjson.JSONMatchStrategyExact,
 							},
-							Response: &maptext.MapTextCriterion{
-								TextCriterion: &text.TextCriterion{
-									MatchStrategy: text.TextMatchStrategyContains,
-								},
+							Response: &cjson.JSONCriterion{
+								MatchStrategy: cjson.JSONMatchStrategyExact,
 							},
 						},
 					),
@@ -265,7 +265,5 @@ func prepareMetric(ctx context.Context, metricManager metric.Manager) error {
 			),
 		),
 	}
-	data, _ := json.MarshalIndent(evalMetric, "", "  ")
-	fmt.Println(string(data))
 	return metricManager.Add(ctx, appName, evalSetID, evalMetric)
 }

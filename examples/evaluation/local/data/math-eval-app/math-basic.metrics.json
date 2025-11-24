@@ -9,14 +9,10 @@
             "matchStrategy": "exact"
           },
           "arguments": {
-            "textCriterion": {
-              "matchStrategy": "exact"
-            }
+            "matchStrategy": "exact"
           },
           "response": {
-            "textCriterion": {
-              "matchStrategy": "contains"
-            }
+            "matchStrategy": "exact"
           }
         }
       }

@@ -1,16 +1,17 @@
 {
-  "evalSetResultId": "math-eval-app_math-basic_cd3fd79f-898b-44d3-babe-035491901899",
-  "evalSetResultName": "math-eval-app_math-basic_cd3fd79f-898b-44d3-babe-035491901899",
+  "evalSetResultId": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
+  "evalSetResultName": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
   "evalSetId": "math-basic",
   "evalCaseResults": [
     {
       "evalSetId": "math-basic",
       "evalId": "calc_add",
-      "finalEvalStatus": 2,
+      "finalEvalStatus": 1,
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
-          "evalStatus": 2,
+          "score": 1,
+          "evalStatus": 1,
           "threshold": 1,
           "criterion": {
             "toolTrajectory": {
@@ -19,14 +20,10 @@
                   "matchStrategy": "exact"
                 },
                 "arguments": {
-                  "textCriterion": {
-                    "matchStrategy": "exact"
-                  }
+                  "matchStrategy": "exact"
                 },
                 "response": {
-                  "textCriterion": {
-                    "matchStrategy": "contains"
-                  }
+                  "matchStrategy": "exact"
                 }
               }
             }
@@ -36,7 +33,7 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "a85ab257-96ba-4650-920d-193363936d1c",
+            "invocationId": "53845847-16e0-4960-9d00-d3abf0ab1807",
             "userContent": {
               "parts": [
                 {
@@ -56,7 +53,7 @@
             "intermediateData": {
               "toolUses": [
                 {
-                  "id": "call_00_czP9rKlVRjw9BY5uLhjcnDYX",
+                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
                   "args": {
                     "a": 2,
                     "b": 3,
@@ -67,7 +64,7 @@
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_czP9rKlVRjw9BY5uLhjcnDYX",
+                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
                   "name": "calculator",
                   "response": {
                     "a": 2,
@@ -114,6 +111,9 @@
                   "id": "tool_use_1",
                   "name": "calculator",
                   "response": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add",
                     "result": 5
                   }
                 }
@@ -123,7 +123,8 @@
           "evalMetricResults": [
             {
               "metricName": "tool_trajectory_avg_score",
-              "evalStatus": 2,
+              "score": 1,
+              "evalStatus": 1,
               "threshold": 1,
               "criterion": {
                 "toolTrajectory": {
@@ -132,14 +133,10 @@
                       "matchStrategy": "exact"
                     },
                     "arguments": {
-                      "textCriterion": {
-                        "matchStrategy": "exact"
-                      }
+                      "matchStrategy": "exact"
                     },
                     "response": {
-                      "textCriterion": {
-                        "matchStrategy": "contains"
-                      }
+                      "matchStrategy": "exact"
                     }
                   }
                 }
@@ -148,17 +145,18 @@
           ]
         }
       ],
-      "sessionId": "78a21442-3299-4608-b40e-d6db402c5afc",
+      "sessionId": "e9cc851f-8c89-45f4-b430-7c54991c7dda",
       "userId": "user"
     },
     {
       "evalSetId": "math-basic",
       "evalId": "calc_multiply",
-      "finalEvalStatus": 2,
+      "finalEvalStatus": 1,
       "overallEvalMetricResults": [
         {
           "metricName": "tool_trajectory_avg_score",
-          "evalStatus": 2,
+          "score": 1,
+          "evalStatus": 1,
           "threshold": 1,
           "criterion": {
             "toolTrajectory": {
@@ -167,14 +165,10 @@
                   "matchStrategy": "exact"
                 },
                 "arguments": {
-                  "textCriterion": {
-                    "matchStrategy": "exact"
-                  }
+                  "matchStrategy": "exact"
                 },
                 "response": {
-                  "textCriterion": {
-                    "matchStrategy": "contains"
-                  }
+                  "matchStrategy": "exact"
                 }
               }
             }
@@ -184,7 +178,7 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "29574cb6-9f23-4342-b6e6-8d2207d4d7eb",
+            "invocationId": "bfc1f3ef-7b7c-4d36-ac50-6fa3a9991abb",
             "userContent": {
               "parts": [
                 {
@@ -204,7 +198,7 @@
             "intermediateData": {
               "toolUses": [
                 {
-                  "id": "call_00_1z0xkVXrnI83JceWH9ScC9PA",
+                  "id": "call_00_xcGeTAsvZJxhKMA8oT478nMP",
                   "args": {
                     "a": 6,
                     "b": 7,
@@ -215,7 +209,7 @@
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_1z0xkVXrnI83JceWH9ScC9PA",
+                  "id": "call_00_xcGeTAsvZJxhKMA8oT478nMP",
                   "name": "calculator",
                   "response": {
                     "a": 6,
@@ -262,7 +256,10 @@
                   "id": "tool_use_2",
                   "name": "calculator",
                   "response": {
-                    "result": 5
+                    "a": 6,
+                    "b": 7,
+                    "operation": "multiply",
+                    "result": 42
                   }
                 }
               ]
@@ -271,7 +268,8 @@
           "evalMetricResults": [
             {
               "metricName": "tool_trajectory_avg_score",
-              "evalStatus": 2,
+              "score": 1,
+              "evalStatus": 1,
               "threshold": 1,
               "criterion": {
                 "toolTrajectory": {
@@ -280,14 +278,10 @@
                       "matchStrategy": "exact"
                     },
                     "arguments": {
-                      "textCriterion": {
-                        "matchStrategy": "exact"
-                      }
+                      "matchStrategy": "exact"
                     },
                     "response": {
-                      "textCriterion": {
-                        "matchStrategy": "contains"
-                      }
+                      "matchStrategy": "exact"
                     }
                   }
                 }
@@ -296,9 +290,9 @@
           ]
         }
       ],
-      "sessionId": "15df54b1-8374-432e-a695-cc7199196a6b",
+      "sessionId": "bd844ee7-066c-43b0-adfa-34e1d8bffeb6",
       "userId": "user"
     }
   ],
-  "creationTimestamp": 1763995079.6665025
+  "creationTimestamp": 1763997862.5581782
 }
