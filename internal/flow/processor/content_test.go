@@ -1127,7 +1127,7 @@ func TestNewContentRequestProcessor(t *testing.T) {
 	defaultWant := &ContentRequestProcessor{
 		BranchFilterMode:   "prefix",
 		AddContextPrefix:   true,
-		PreserveSameBranch: true,
+		PreserveSameBranch: false,
 		TimelineFilterMode: "all",
 		AddSessionSummary:  false,
 		MaxHistoryRuns:     0,
@@ -1217,13 +1217,156 @@ func TestNewContentRequestProcessor(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.want.BranchFilterMode, got.BranchFilterMode, "IncludeContentFilterMode mismatch")
-			assert.Equal(t, tt.want.AddContextPrefix, got.AddContextPrefix, "AddContextPrefix mismatch")
-			assert.Equal(t, tt.want.PreserveSameBranch, got.PreserveSameBranch, "PreserveSameBranch mismatch")
-			assert.Equal(t, tt.want.TimelineFilterMode, got.TimelineFilterMode, "TimelineFilterMode mismatch")
-			assert.Equal(t, tt.want.AddSessionSummary, got.AddSessionSummary, "AddSessionSummary mismatch")
-			assert.Equal(t, tt.want.MaxHistoryRuns, got.MaxHistoryRuns, "MaxHistoryRuns mismatch")
+			assert.Equal(t, tt.want.AddContextPrefix, got.AddContextPrefix,
+				"AddContextPrefix mismatch")
+			assert.Equal(t, tt.want.PreserveSameBranch,
+				got.PreserveSameBranch,
+				"PreserveSameBranch mismatch")
+			assert.Equal(t, tt.want.TimelineFilterMode,
+				got.TimelineFilterMode, "TimelineFilterMode mismatch")
+			assert.Equal(t, tt.want.AddSessionSummary,
+				got.AddSessionSummary, "AddSessionSummary mismatch")
+			assert.Equal(t, tt.want.MaxHistoryRuns, got.MaxHistoryRuns,
+				"MaxHistoryRuns mismatch")
 		})
 	}
+}
+
+func TestContentRequestProcessor_mergeUserMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []model.Message
+		want     []model.Message
+		desc     string
+	}{
+		{
+			name:     "empty slice",
+			messages: nil,
+			want:     nil,
+			desc:     "nil input should return nil",
+		},
+		{
+			name: "single user message",
+			messages: []model.Message{
+				model.NewUserMessage("hello"),
+			},
+			want: []model.Message{
+				model.NewUserMessage("hello"),
+			},
+			desc: "single message should be unchanged",
+		},
+		{
+			name: "mixed roles unchanged",
+			messages: []model.Message{
+				model.NewUserMessage("hello"),
+				model.NewAssistantMessage("hi"),
+				model.NewUserMessage("there"),
+			},
+			want: []model.Message{
+				model.NewUserMessage("hello"),
+				model.NewAssistantMessage("hi"),
+				model.NewUserMessage("there"),
+			},
+			desc: "non-context user and assistant messages stay as-is",
+		},
+		{
+			name: "merge consecutive context users",
+			messages: []model.Message{
+				model.NewUserMessage(contextPrefix + " A"),
+				model.NewUserMessage(contextPrefix + " B"),
+				model.NewAssistantMessage("keep"),
+			},
+			want: []model.Message{
+				model.NewUserMessage(
+					contextPrefix + " A" + mergedUserSeparator +
+						contextPrefix + " B",
+				),
+				model.NewAssistantMessage("keep"),
+			},
+			desc: "context user messages are merged into one",
+		},
+		{
+			name: "merge context users with content parts",
+			messages: []model.Message{
+				{
+					Role:    model.RoleUser,
+					Content: contextPrefix + " A",
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: func() *string {
+								text := "part A"
+								return &text
+							}(),
+						},
+					},
+				},
+				{
+					Role:    model.RoleUser,
+					Content: contextPrefix + " B",
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: func() *string {
+								text := "part B"
+								return &text
+							}(),
+						},
+					},
+				},
+			},
+			want: []model.Message{
+				{
+					Role: model.RoleUser,
+					Content: contextPrefix + " A" +
+						mergedUserSeparator +
+						contextPrefix + " B",
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: func() *string {
+								text := "part A"
+								return &text
+							}(),
+						},
+						{
+							Type: model.ContentTypeText,
+							Text: func() *string {
+								text := "part B"
+								return &text
+							}(),
+						},
+					},
+				},
+			},
+			desc: "content parts from context users are merged",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &ContentRequestProcessor{
+				AddContextPrefix: true,
+			}
+			got := p.mergeUserMessages(tt.messages)
+			assert.Equal(t, tt.want, got, tt.desc)
+		})
+	}
+}
+
+func TestContentRequestProcessor_mergeUserMessages_NoPrefix(t *testing.T) {
+	p := &ContentRequestProcessor{
+		AddContextPrefix: false,
+	}
+	messages := []model.Message{
+		model.NewUserMessage(contextPrefix + " one"),
+		model.NewUserMessage(contextPrefix + " two"),
+	}
+
+	got := p.mergeUserMessages(messages)
+
+	assert.Equal(t, messages, got,
+		"when AddContextPrefix is false messages should be unchanged")
 }
 
 func TestContentRequestProcessor_mergeFunctionResponseEvents(t *testing.T) {
