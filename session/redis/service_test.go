@@ -1400,10 +1400,10 @@ func TestGetSession_EventFiltering_Integration(t *testing.T) {
 	require.NotNil(t, retrievedSess)
 
 	// Should have 2 events (from event3 onwards)
-	assert.Equal(t, 4, len(retrievedSess.Events), "Should filter out assistant events before first user event")
-	assert.Equal(t, "event1", retrievedSess.Events[0].ID, "First event should be the user event")
-	assert.Equal(t, model.RoleAssistant, retrievedSess.Events[0].Response.Choices[0].Message.Role)
-	assert.Equal(t, "event2", retrievedSess.Events[1].ID, "Second event should be the subsequent assistant event")
+	assert.Equal(t, 2, len(retrievedSess.Events), "Should filter out assistant events before first user event")
+	assert.Equal(t, "event3", retrievedSess.Events[0].ID, "First event should be the user event")
+	assert.Equal(t, model.RoleUser, retrievedSess.Events[0].Response.Choices[0].Message.Role)
+	assert.Equal(t, "event4", retrievedSess.Events[1].ID, "Second event should be the subsequent assistant event")
 
 	// Test ListSessions - should apply same filtering
 	sessionList, err := service.ListSessions(context.Background(), session.UserKey{
@@ -1414,9 +1414,9 @@ func TestGetSession_EventFiltering_Integration(t *testing.T) {
 	require.Len(t, sessionList, 1)
 
 	// Should have same filtering as GetSession
-	assert.Equal(t, 4, len(sessionList[0].Events), "ListSessions should also filter events")
-	assert.Equal(t, "event1", sessionList[0].Events[0].ID, "First event should be the user event")
-	assert.Equal(t, model.RoleAssistant, sessionList[0].Events[0].Response.Choices[0].Message.Role)
+	assert.Equal(t, 2, len(sessionList[0].Events), "ListSessions should also filter events")
+	assert.Equal(t, "event3", sessionList[0].Events[0].ID, "First event should be the user event")
+	assert.Equal(t, model.RoleUser, sessionList[0].Events[0].Response.Choices[0].Message.Role)
 }
 
 func TestGetSession_AllAssistantEvents_Integration(t *testing.T) {
@@ -1448,6 +1448,21 @@ func TestGetSession_AllAssistantEvents_Integration(t *testing.T) {
 					{
 						Index: 0,
 						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "user message 1",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event1",
+			Timestamp: baseTime.Add(-3 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 1,
+						Message: model.Message{
 							Role:    model.RoleAssistant,
 							Content: "Assistant message 1",
 						},
@@ -1461,7 +1476,7 @@ func TestGetSession_AllAssistantEvents_Integration(t *testing.T) {
 			Response: &model.Response{
 				Choices: []model.Choice{
 					{
-						Index: 0,
+						Index: 2,
 						Message: model.Message{
 							Role:    model.RoleAssistant,
 							Content: "Assistant message 2",
@@ -1484,7 +1499,7 @@ func TestGetSession_AllAssistantEvents_Integration(t *testing.T) {
 	require.NotNil(t, retrievedSess)
 
 	// Should have no events since all are from assistant
-	assert.Equal(t, 2, len(retrievedSess.Events), "Should filter out all assistant events when no user events exist")
+	assert.Equal(t, 3, len(retrievedSess.Events), "Should filter out all assistant events when no user events exist")
 }
 
 func TestService_Close_MultipleTimes(t *testing.T) {

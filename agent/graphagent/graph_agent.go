@@ -186,15 +186,21 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 
 	// Execute the graph.
 	if ga.agentCallbacks != nil {
-		customResponse, err := ga.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		result, err := ga.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+			Invocation: invocation,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
-		if customResponse != nil {
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
+		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
-			customevent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			customevent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customevent)
 			close(eventChan)
 			return eventChan, nil
@@ -324,7 +330,14 @@ func (ga *GraphAgent) wrapEventChannel(
 			}
 		}
 		// After all events are processed, run after agent callbacks
-		customResponse, err := ga.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		result, err := ga.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+			Invocation: invocation,
+			Error:      nil,
+		})
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
 		var evt *event.Event
 		if err != nil {
 			// Send error event.
@@ -334,12 +347,12 @@ func (ga *GraphAgent) wrapEventChannel(
 				agent.ErrorTypeAgentCallbackError,
 				err.Error(),
 			)
-		} else if customResponse != nil {
+		} else if result != nil && result.CustomResponse != nil {
 			// Create an event from the custom response.
 			evt = event.NewResponseEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
-				customResponse,
+				result.CustomResponse,
 			)
 		}
 
