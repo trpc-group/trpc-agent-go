@@ -37,6 +37,9 @@ type config struct {
 	httpClient            *http.Client
 	maxContentLength      int
 	maxTotalContentLength int
+	allowedDomains        []string
+	blockedDomains        []string
+	urlFilter             URLFilter
 }
 
 // WithHTTPClient sets the HTTP client.
@@ -59,6 +62,32 @@ func WithMaxContentLength(limit int) Option {
 func WithMaxTotalContentLength(limit int) Option {
 	return func(cfg *config) {
 		cfg.maxTotalContentLength = limit
+	}
+}
+
+// WithAllowedDomains sets the list of allowed domains or URL patterns.
+// If provided, only URLs matching one of these patterns (host and optional path prefix) will be allowed.
+// Examples: "example.com" (allows all paths), "example.com/docs" (allows /docs/...).
+func WithAllowedDomains(domains []string) Option {
+	return func(cfg *config) {
+		cfg.allowedDomains = domains
+	}
+}
+
+// WithBlockedDomains sets the list of blocked domains or URL patterns.
+// URLs matching one of these patterns will be blocked.
+func WithBlockedDomains(domains []string) Option {
+	return func(cfg *config) {
+		cfg.blockedDomains = domains
+	}
+}
+
+// WithURLFilter sets a custom function to filter URLs.
+// The function receives the URL string and returns true if the URL is allowed, false otherwise.
+// This filter is applied in addition to allowed/blocked domains configuration.
+func WithURLFilter(f URLFilter) Option {
+	return func(cfg *config) {
+		cfg.urlFilter = f
 	}
 }
 
@@ -96,6 +125,31 @@ func NewTool(opts ...Option) tool.CallableTool {
 		maxTotalContentLength: cfg.maxTotalContentLength,
 	}
 
+	// Register urlValidators
+	// 1. Blocked domains
+	for _, blocked := range cfg.blockedDomains {
+		t.urlValidators = append(t.urlValidators, urlValidator{
+			filter: newBlockPatternFilter(blocked),
+			errMsg: fmt.Sprintf("URL matches blocked pattern: %s", blocked),
+		})
+	}
+
+	// 2. Allowed domains
+	if len(cfg.allowedDomains) > 0 {
+		t.urlValidators = append(t.urlValidators, urlValidator{
+			filter: newAllowPatternsFilter(cfg.allowedDomains),
+			errMsg: "URL does not match any allowed pattern",
+		})
+	}
+
+	// 3. Custom URL filter
+	if cfg.urlFilter != nil {
+		t.urlValidators = append(t.urlValidators, urlValidator{
+			filter: cfg.urlFilter,
+			errMsg: "URL rejected by custom filter",
+		})
+	}
+
 	return function.NewFunctionTool(
 		t.fetch,
 		function.WithName("web_fetch"),
@@ -108,6 +162,7 @@ type webFetchTool struct {
 	client                *http.Client
 	maxContentLength      int
 	maxTotalContentLength int
+	urlValidators         []urlValidator
 }
 
 func (t *webFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchResponse, error) {
@@ -178,6 +233,11 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 		RetrievedURL: urlStr,
 	}
 
+	if err := checkURL(t.urlValidators, urlStr); err != nil {
+		item.Error = err.Error()
+		return item
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return item
@@ -210,7 +270,7 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
 	} else {
-		item.Error = fmt.Errorf("unsupported content type: %s", item.ContentType).Error()
+		item.Error = fmt.Sprintf("unsupported content type: %s", item.ContentType)
 		return item
 	}
 
