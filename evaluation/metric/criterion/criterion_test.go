@@ -10,6 +10,7 @@
 package criterion
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,4 +26,17 @@ func TestCriterionWithToolTrajectory(t *testing.T) {
 	custom := tooltrajectory.New()
 	c := New(WithToolTrajectory(custom))
 	assert.Equal(t, custom, c.ToolTrajectory)
+}
+
+func TestCriterionJSONRoundTrip(t *testing.T) {
+	c := &Criterion{
+		ToolTrajectory: tooltrajectory.New(),
+	}
+	data, err := json.Marshal(c)
+	assert.NoError(t, err)
+
+	var decoded Criterion
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.NotNil(t, decoded.ToolTrajectory)
 }
