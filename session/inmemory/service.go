@@ -723,7 +723,7 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 		sess.EventMu.Lock()
 		sess.Events = append(sess.Events, *e)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
-			sess.Events = sess.Events[len(sess.Events)-s.opts.sessionEventLimit:]
+			sess.ApplyEventFiltering(session.WithEventNum(s.opts.sessionEventLimit))
 		}
 		sess.EventMu.Unlock()
 	}
