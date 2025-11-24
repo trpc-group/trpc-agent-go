@@ -7,18 +7,18 @@
 //
 //
 
-package webfetch_test
+package httpfetch_test
 
 import (
 	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-agent-go/tool/webfetch"
+	"trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch"
 )
 
 func TestWebFetch_1(t *testing.T) {
-	wft := webfetch.NewTool()
+	wft := httpfetch.NewTool()
 
 	// The Call method expects JSON input with a "urls" field
 	args := `{"urls": ["https://geminicli.com/docs/tools/web-fetch/"]}`
@@ -32,7 +32,7 @@ func TestWebFetch_1(t *testing.T) {
 
 func TestWebFetch_2(t *testing.T) {
 
-	wft := webfetch.NewTool()
+	wft := httpfetch.NewTool()
 
 	// The Call method expects JSON input with a "urls" field
 	args := `{"urls": ["https://ai.google.dev/gemini-api/docs/url-context"]}`

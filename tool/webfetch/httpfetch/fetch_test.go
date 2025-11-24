@@ -7,7 +7,7 @@
 //
 //
 
-package webfetch
+package httpfetch
 
 import (
 	"context"

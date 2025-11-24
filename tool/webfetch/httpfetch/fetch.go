@@ -7,7 +7,7 @@
 //
 //
 
-package webfetch
+package httpfetch
 
 import (
 	"context"
@@ -23,6 +23,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/tool/webfetch/internal/urlfilter"
 )
 
 const (
@@ -39,7 +40,6 @@ type config struct {
 	maxTotalContentLength int
 	allowedDomains        []string
 	blockedDomains        []string
-	urlFilter             URLFilter
 }
 
 // WithHTTPClient sets the HTTP client.
@@ -82,15 +82,6 @@ func WithBlockedDomains(domains []string) Option {
 	}
 }
 
-// WithURLFilter sets a custom function to filter URLs.
-// The function receives the URL string and returns true if the URL is allowed, false otherwise.
-// This filter is applied in addition to allowed/blocked domains configuration.
-func WithURLFilter(f URLFilter) Option {
-	return func(cfg *config) {
-		cfg.urlFilter = f
-	}
-}
-
 // fetchRequest is the input for the tool.
 type fetchRequest struct {
 	URLS []string `json:"urls" jsonschema:"description=The list of URLs to fetch content from"`
@@ -128,25 +119,17 @@ func NewTool(opts ...Option) tool.CallableTool {
 	// Register urlValidators
 	// 1. Blocked domains
 	for _, blocked := range cfg.blockedDomains {
-		t.urlValidators = append(t.urlValidators, urlValidator{
-			filter: newBlockPatternFilter(blocked),
-			errMsg: fmt.Sprintf("URL matches blocked pattern: %s", blocked),
+		t.urlValidators = append(t.urlValidators, urlfilter.URLValidator{
+			Filter: urlfilter.NewBlockPatternFilter(blocked),
+			ErrMsg: fmt.Sprintf("URL matches blocked pattern: %s", blocked),
 		})
 	}
 
 	// 2. Allowed domains
 	if len(cfg.allowedDomains) > 0 {
-		t.urlValidators = append(t.urlValidators, urlValidator{
-			filter: newAllowPatternsFilter(cfg.allowedDomains),
-			errMsg: "URL does not match any allowed pattern",
-		})
-	}
-
-	// 3. Custom URL filter
-	if cfg.urlFilter != nil {
-		t.urlValidators = append(t.urlValidators, urlValidator{
-			filter: cfg.urlFilter,
-			errMsg: "URL rejected by custom filter",
+		t.urlValidators = append(t.urlValidators, urlfilter.URLValidator{
+			Filter: urlfilter.NewAllowPatternsFilter(cfg.allowedDomains),
+			ErrMsg: "URL does not match any allowed pattern",
 		})
 	}
 
@@ -162,7 +145,7 @@ type webFetchTool struct {
 	client                *http.Client
 	maxContentLength      int
 	maxTotalContentLength int
-	urlValidators         []urlValidator
+	urlValidators         []urlfilter.URLValidator
 }
 
 func (t *webFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchResponse, error) {
@@ -233,7 +216,7 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 		RetrievedURL: urlStr,
 	}
 
-	if err := checkURL(t.urlValidators, urlStr); err != nil {
+	if err := urlfilter.CheckURL(t.urlValidators, urlStr); err != nil {
 		item.Error = err.Error()
 		return item
 	}

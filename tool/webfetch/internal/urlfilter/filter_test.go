@@ -7,10 +7,9 @@
 //
 //
 
-package webfetch
+package urlfilter
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestWebFetch_DomainFiltering(t *testing.T) {
@@ -32,76 +30,70 @@ func TestWebFetch_DomainFiltering(t *testing.T) {
 	// We'll use 127.0.0.1 for filtering tests.
 
 	t.Run("AllowedDomains", func(t *testing.T) {
-		tool := NewTool(WithAllowedDomains([]string{"127.0.0.1"}))
-		args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
-
-		res, err := tool.Call(context.Background(), []byte(args))
-		require.NoError(t, err)
-		resp := res.(fetchResponse)
-		assert.Len(t, resp.Results, 1)
-		assert.Equal(t, http.StatusOK, resp.Results[0].StatusCode)
-		assert.Empty(t, resp.Results[0].Error)
+		validators := []URLValidator{
+			{
+				Filter: NewAllowPatternsFilter([]string{"127.0.0.1"}),
+				ErrMsg: "URL does not match any allowed pattern",
+			},
+		}
+		err := CheckURL(validators, ts.URL)
+		assert.NoError(t, err)
 	})
 
 	t.Run("AllowedDomains_Blocked", func(t *testing.T) {
-		tool := NewTool(WithAllowedDomains([]string{"example.com"})) // 127.0.0.1 not allowed
-		args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
-
-		res, err := tool.Call(context.Background(), []byte(args))
-		require.NoError(t, err)
-		resp := res.(fetchResponse)
-		assert.Len(t, resp.Results, 1)
-		assert.Contains(t, resp.Results[0].Error, "does not match any allowed pattern")
+		validators := []URLValidator{
+			{
+				Filter: NewAllowPatternsFilter([]string{"example.com"}),
+				ErrMsg: "URL does not match any allowed pattern",
+			},
+		}
+		err := CheckURL(validators, ts.URL)
+		assert.Contains(t, err.Error(), "does not match any allowed pattern")
 	})
 
 	t.Run("BlockedDomains", func(t *testing.T) {
-		tool := NewTool(WithBlockedDomains([]string{"127.0.0.1"}))
-		args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
-
-		res, err := tool.Call(context.Background(), []byte(args))
-		require.NoError(t, err)
-		resp := res.(fetchResponse)
-		assert.Len(t, resp.Results, 1)
-		assert.Contains(t, resp.Results[0].Error, "matches blocked pattern")
+		validators := []URLValidator{
+			{
+				Filter: NewBlockPatternFilter("127.0.0.1"),
+				ErrMsg: "URL matches blocked pattern: 127.0.0.1",
+			},
+		}
+		err := CheckURL(validators, ts.URL)
+		assert.Contains(t, err.Error(), "matches blocked pattern")
 	})
 
 	t.Run("AllowedDomains_Subpath", func(t *testing.T) {
-		// ts.URL + "/docs" allowed
-		// ts.URL + "/admin" not allowed
-
-		tool := NewTool(WithAllowedDomains([]string{"127.0.0.1/docs"}))
+		validators := []URLValidator{
+			{
+				Filter: NewAllowPatternsFilter([]string{"127.0.0.1/docs"}),
+				ErrMsg: "URL does not match any allowed pattern",
+			},
+		}
 
 		// Allowed path
-		argsOK := fmt.Sprintf(`{"urls": ["%s/docs/page1"]}`, ts.URL)
-		resOK, errOK := tool.Call(context.Background(), []byte(argsOK))
-		require.NoError(t, errOK)
-		respOK := resOK.(fetchResponse)
-		assert.Empty(t, respOK.Results[0].Error, "Should allow /docs/page1")
+		errOK := CheckURL(validators, ts.URL+"/docs/page1")
+		assert.NoError(t, errOK, "Should allow /docs/page1")
 
 		// Blocked path
-		argsBlock := fmt.Sprintf(`{"urls": ["%s/admin"]}`, ts.URL)
-		resBlock, errBlock := tool.Call(context.Background(), []byte(argsBlock))
-		require.NoError(t, errBlock)
-		respBlock := resBlock.(fetchResponse)
-		assert.Contains(t, respBlock.Results[0].Error, "not match any allowed pattern", "Should block /admin")
+		errBlock := CheckURL(validators, ts.URL+"/admin")
+		assert.Contains(t, errBlock.Error(), "not match any allowed pattern", "Should block /admin")
 	})
 
 	t.Run("BlockedDomains_Subpath", func(t *testing.T) {
-		tool := NewTool(WithBlockedDomains([]string{"127.0.0.1/private"}))
+		validators := []URLValidator{
+			{
+				Filter: NewBlockPatternFilter("127.0.0.1/private"),
+				ErrMsg: "URL matches blocked pattern: 127.0.0.1/private",
+			},
+		}
 
 		// Allowed path (not blocked)
-		argsOK := fmt.Sprintf(`{"urls": ["%s/public"]}`, ts.URL)
-		resOK, errOK := tool.Call(context.Background(), []byte(argsOK))
-		require.NoError(t, errOK)
-		respOK := resOK.(fetchResponse)
-		assert.Empty(t, respOK.Results[0].Error, "Should allow /public")
+		errOK := CheckURL(validators, ts.URL+"/public")
+		assert.NoError(t, errOK, "Should allow /public")
 
 		// Blocked path
-		argsBlock := fmt.Sprintf(`{"urls": ["%s/private/secret"]}`, ts.URL)
-		resBlock, errBlock := tool.Call(context.Background(), []byte(argsBlock))
-		require.NoError(t, errBlock)
-		respBlock := resBlock.(fetchResponse)
-		assert.Contains(t, respBlock.Results[0].Error, "matches blocked pattern", "Should block /private/secret")
+		errBlock := CheckURL(validators, ts.URL+"/private/secret")
+		assert.Contains(t, errBlock.Error(), "matches blocked pattern", "Should block /private/secret")
 	})
 
 	t.Run("CustomURLFilter", func(t *testing.T) {
@@ -109,21 +101,20 @@ func TestWebFetch_DomainFiltering(t *testing.T) {
 		filter := func(u string) bool {
 			return strings.Contains(u, "secure")
 		}
-		tool := NewTool(WithURLFilter(filter))
+		validators := []URLValidator{
+			{
+				Filter: filter,
+				ErrMsg: "URL rejected by custom filter",
+			},
+		}
 
 		// Allowed path
-		argsOK := fmt.Sprintf(`{"urls": ["%s/secure/page"]}`, ts.URL)
-		resOK, errOK := tool.Call(context.Background(), []byte(argsOK))
-		require.NoError(t, errOK)
-		respOK := resOK.(fetchResponse)
-		assert.Empty(t, respOK.Results[0].Error, "Should allow /secure/page")
+		errOK := CheckURL(validators, ts.URL+"/secure/page")
+		assert.NoError(t, errOK, "Should allow /secure/page")
 
 		// Blocked path
-		argsBlock := fmt.Sprintf(`{"urls": ["%s/unsafe/page"]}`, ts.URL)
-		resBlock, errBlock := tool.Call(context.Background(), []byte(argsBlock))
-		require.NoError(t, errBlock)
-		respBlock := resBlock.(fetchResponse)
-		assert.Contains(t, respBlock.Results[0].Error, "rejected by custom filter", "Should block /unsafe/page")
+		errBlock := CheckURL(validators, ts.URL+"/unsafe/page")
+		assert.Contains(t, errBlock.Error(), "rejected by custom filter", "Should block /unsafe/page")
 	})
 }
 
@@ -192,13 +183,13 @@ func TestMatchPattern(t *testing.T) {
 
 // Tests moved from webfetch_coverage_test.go that relate to urlfilter logic
 func TestNewBlockPatternFilter_InvalidURL(t *testing.T) {
-	filter := newBlockPatternFilter("example.com")
+	filter := NewBlockPatternFilter("example.com")
 	// Pass an invalid URL string that url.Parse fails on.
 	// Control character in URL path
-	assert.False(t, filter("http://example.com/"))
+	assert.False(t, filter("http://example.com/\x00"))
 }
 
 func TestNewAllowPatternsFilter_InvalidURL(t *testing.T) {
-	filter := newAllowPatternsFilter([]string{"example.com"})
-	assert.False(t, filter("http://example.com/"))
+	filter := NewAllowPatternsFilter([]string{"example.com"})
+	assert.False(t, filter("http://example.com/\x00"))
 }

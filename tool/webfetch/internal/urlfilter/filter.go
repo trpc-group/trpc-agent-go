@@ -7,7 +7,7 @@
 //
 //
 
-package webfetch
+package urlfilter
 
 import (
 	"fmt"
@@ -15,25 +15,28 @@ import (
 	"strings"
 )
 
-// URLFilter is a function that determines if a URL should be allowed.
+// urlFilter is a function that determines if a URL should be allowed.
 // It returns true if the URL is allowed, false otherwise.
-type URLFilter func(url string) bool
+type urlFilter func(url string) bool
 
-type urlValidator struct {
-	filter URLFilter
-	errMsg string
+// URLValidator combines a filter with an error message.
+type URLValidator struct {
+	Filter urlFilter
+	ErrMsg string
 }
 
-// checkURL checks the URL against the configured validators.
-func checkURL(validators []urlValidator, urlStr string) error {
+// CheckURL checks the URL against the configured validators.
+func CheckURL(validators []URLValidator, urlStr string) error {
 	for _, v := range validators {
-		if !v.filter(urlStr) {
-			return fmt.Errorf("%s", v.errMsg)
+		if !v.Filter(urlStr) {
+			return fmt.Errorf("%s", v.ErrMsg)
 		}
 	}
 	return nil
 }
-func newBlockPatternFilter(pattern string) URLFilter {
+
+// NewBlockPatternFilter creates a filter that blocks URLs matching the pattern.
+func NewBlockPatternFilter(pattern string) urlFilter {
 	return func(urlStr string) bool {
 		u, err := url.Parse(urlStr)
 		if err != nil {
@@ -44,7 +47,8 @@ func newBlockPatternFilter(pattern string) URLFilter {
 	}
 }
 
-func newAllowPatternsFilter(patterns []string) URLFilter {
+// NewAllowPatternsFilter creates a filter that allows URLs matching any of the patterns.
+func NewAllowPatternsFilter(patterns []string) urlFilter {
 	return func(urlStr string) bool {
 		u, err := url.Parse(urlStr)
 		if err != nil {

@@ -1,8 +1,8 @@
-module trpc.group/trpc-go/trpc-agent-go/tool/webfetch
+module trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch
 
-go 1.24.4
+go 1.23.0
 
-replace trpc.group/trpc-go/trpc-agent-go => ../../
+replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.4.0
