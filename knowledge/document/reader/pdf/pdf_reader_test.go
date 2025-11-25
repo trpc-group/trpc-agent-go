@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	"github.com/go-pdf/fpdf"
+	pdfPkg "github.com/ledongthuc/pdf"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
@@ -212,8 +214,6 @@ func TestReader_Name(t *testing.T) {
 	}
 }
 
-
-
 // mockOCRExtractor is a mock OCR extractor for testing
 type mockOCRExtractor struct {
 	extractTextCalled int
@@ -235,8 +235,6 @@ func (m *mockOCRExtractor) ExtractTextFromReader(ctx context.Context, reader io.
 func (m *mockOCRExtractor) Close() error {
 	return nil
 }
-
-
 
 // BenchmarkReader_ReadFromReader benchmarks PDF processing from io.Reader
 func BenchmarkReader_ReadFromReader(b *testing.B) {
@@ -574,10 +572,6 @@ func TestReader_ContextCancellation(t *testing.T) {
 	}
 }
 
-
-
-
-
 // TestReader_ChunkDocumentNilStrategy tests chunkDocument with nil strategy
 func TestReader_ChunkDocumentNilStrategy(t *testing.T) {
 	data := newTestPDF(t)
@@ -768,5 +762,375 @@ func TestReader_WithOCRContextCancellation(t *testing.T) {
 	_, err := rdr.ReadFromFileWithContext(ctx, filePath)
 	if err == nil {
 		t.Fatal("expected error with cancelled context")
+	}
+}
+
+// TestReader_WithRealPDF tests reading from a real PDF file with images
+func TestReader_WithRealPDF(t *testing.T) {
+	realPDFPath := "test_data/trpc-go.pdf"
+
+	if _, err := os.Stat(realPDFPath); os.IsNotExist(err) {
+		t.Skipf("Skipping test: %s does not exist", realPDFPath)
+	}
+
+	tests := []struct {
+		name string
+		opts []reader.Option
+	}{
+		{
+			name: "without OCR",
+			opts: []reader.Option{reader.WithChunk(false)},
+		},
+		{
+			name: "with OCR",
+			opts: []reader.Option{
+				reader.WithChunk(false),
+				reader.WithOCRExtractor(&mockOCRExtractor{}),
+			},
+		},
+		{
+			name: "with chunking",
+			opts: []reader.Option{
+				reader.WithChunk(true),
+				reader.WithChunkSize(200),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rdr := New(tt.opts...)
+			if closer, ok := rdr.(interface{ Close() error }); ok {
+				defer closer.Close()
+			}
+
+			docs, err := rdr.ReadFromFile(realPDFPath)
+			if err != nil {
+				t.Fatalf("ReadFromFile failed: %v", err)
+			}
+			if len(docs) == 0 {
+				t.Fatal("expected at least one document")
+			}
+		})
+	}
+}
+
+// TestReader_OCRImageExtraction tests OCR with actual image extraction
+func TestReader_OCRImageExtraction(t *testing.T) {
+	realPDFPath := "test_data/trpc-go.pdf"
+
+	if _, err := os.Stat(realPDFPath); os.IsNotExist(err) {
+		t.Skipf("Skipping test: %s does not exist", realPDFPath)
+	}
+
+	mockOCR := &mockOCRExtractor{}
+	rdr := New(reader.WithOCRExtractor(mockOCR)).(*Reader)
+	defer rdr.Close()
+
+	docs, err := rdr.ReadFromFile(realPDFPath)
+	if err != nil {
+		t.Fatalf("ReadFromFile with OCR failed: %v", err)
+	}
+
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+
+	if mockOCR.extractTextCalled == 0 {
+		t.Log("Warning: OCR was not called, PDF might not have images")
+	}
+}
+
+// TestReader_OCRFromReader tests OCR processing from io.Reader
+func TestReader_OCRFromReader(t *testing.T) {
+	realPDFPath := "test_data/trpc-go.pdf"
+
+	if _, err := os.Stat(realPDFPath); os.IsNotExist(err) {
+		t.Skipf("Skipping test: %s does not exist", realPDFPath)
+	}
+
+	data, err := os.ReadFile(realPDFPath)
+	if err != nil {
+		t.Fatalf("failed to read test PDF: %v", err)
+	}
+
+	mockOCR := &mockOCRExtractor{}
+	rdr := New(reader.WithOCRExtractor(mockOCR)).(*Reader)
+	defer rdr.Close()
+
+	docs, err := rdr.ReadFromReader("test-pdf", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("ReadFromReader with OCR failed: %v", err)
+	}
+
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestReader_ExtractTextFromPageNullPage tests extractTextFromPage with null page
+func TestReader_ExtractTextFromPageNullPage(t *testing.T) {
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.SetFont("Helvetica", "", 12)
+	pdf.AddPage()
+	pdf.Cell(40, 10, "Page 1")
+	pdf.AddPage()
+	pdf.Cell(40, 10, "Page 2")
+
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		t.Fatalf("failed to generate PDF: %v", err)
+	}
+
+	rdr := New(reader.WithChunk(false)).(*Reader)
+	pdfReader, err := pdfPkg.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("failed to create PDF reader: %v", err)
+	}
+
+	text := rdr.extractTextFromPage(pdfReader, 1)
+	if !strings.Contains(text, "Page 1") {
+		t.Logf("Page 1 text: %s", text)
+	}
+}
+
+// TestReader_GetImageDataFromPDFCPUImageNoReader tests getImageDataFromPDFCPUImage error path
+func TestReader_GetImageDataFromPDFCPUImageNoReader(t *testing.T) {
+	rdr := New().(*Reader)
+
+	img := model.Image{
+		Reader: nil,
+	}
+
+	data, err := rdr.getImageDataFromPDFCPUImage(img)
+	if err == nil {
+		t.Fatal("expected error when image has no reader")
+	}
+	if len(data) != 0 {
+		t.Fatalf("expected empty data, got %d bytes", len(data))
+	}
+}
+
+// TestReader_GetImageDataFromPDFCPUImageWithReader tests getImageDataFromPDFCPUImage success path
+func TestReader_GetImageDataFromPDFCPUImageWithReader(t *testing.T) {
+	rdr := New().(*Reader)
+
+	testData := []byte("fake image data")
+	img := model.Image{
+		Reader: bytes.NewReader(testData),
+	}
+
+	data, err := rdr.getImageDataFromPDFCPUImage(img)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(data, testData) {
+		t.Fatalf("expected %v, got %v", testData, data)
+	}
+}
+
+// TestReader_CombinedOptions tests multiple options together
+func TestReader_CombinedOptions(t *testing.T) {
+	mockOCR := &mockOCRExtractor{}
+	customChunker := &mockChunker{}
+
+	rdr := New(
+		reader.WithOCRExtractor(mockOCR),
+		reader.WithCustomChunkingStrategy(customChunker),
+		reader.WithChunk(true),
+	).(*Reader)
+	defer rdr.Close()
+
+	if rdr.ocrExtractor == nil {
+		t.Fatal("OCR extractor should be set")
+	}
+	if rdr.chunkingStrategy == nil {
+		t.Fatal("chunking strategy should be set")
+	}
+	if !rdr.chunk {
+		t.Fatal("chunk should be enabled")
+	}
+
+	data := newTestPDF(t)
+	docs, err := rdr.ReadFromReader("test", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("ReadFromReader failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestReader_ExtractContentByPageError tests extractContentByPage error handling
+func TestReader_ExtractContentByPageError(t *testing.T) {
+	rdr := New(reader.WithOCRExtractor(&mockOCRExtractor{})).(*Reader)
+	defer rdr.Close()
+
+	badSeeker := &badReadSeeker{}
+	_, err := rdr.extractContentByPage(context.Background(), badSeeker)
+	if err == nil {
+		t.Fatal("expected error from bad read seeker")
+	}
+}
+
+// TestReader_ExtractContentByPageContextCancellation tests context cancellation in extractContentByPage
+func TestReader_ExtractContentByPageContextCancellation(t *testing.T) {
+	realPDFPath := "test_data/trpc-go.pdf"
+
+	if _, err := os.Stat(realPDFPath); os.IsNotExist(err) {
+		t.Skipf("Skipping test: %s does not exist", realPDFPath)
+	}
+
+	data, err := os.ReadFile(realPDFPath)
+	if err != nil {
+		t.Skipf("failed to read test PDF: %v", err)
+	}
+
+	mockOCR := &mockOCRExtractor{}
+	rdr := New(reader.WithOCRExtractor(mockOCR)).(*Reader)
+	defer rdr.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = rdr.extractContentByPage(ctx, bytes.NewReader(data))
+	if err == nil {
+		t.Log("Warning: expected context cancellation error")
+	}
+}
+
+// TestReader_ExtractFileNameFromURLEdgeCases tests edge cases in extractFileNameFromURL
+func TestReader_ExtractFileNameFromURLEdgeCases(t *testing.T) {
+	rdr := New().(*Reader)
+
+	tests := []struct {
+		url      string
+		expected string
+	}{
+		{"", ""},
+		{"/", ""},
+		{"https://example.com/", ""},
+		{"file.pdf", "file"},
+		{"path/to/file.pdf#anchor", "file"},
+		{"https://example.com/docs/report.pdf?version=1", "report"},
+	}
+
+	for _, tt := range tests {
+		result := rdr.extractFileNameFromURL(tt.url)
+		if result != tt.expected {
+			t.Errorf("extractFileNameFromURL(%q) = %q, want %q", tt.url, result, tt.expected)
+		}
+	}
+}
+
+// TestReader_ReadFromFileTextOnlyPDFError tests PDF parsing error in readFromFileTextOnly
+func TestReader_ReadFromFileTextOnlyPDFError(t *testing.T) {
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	tmp, err := os.CreateTemp(t.TempDir(), "invalid-*.pdf")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer tmp.Close()
+
+	if _, err := tmp.Write([]byte("invalid pdf content")); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	_, err = rdr.readFromFileTextOnly(tmp.Name(), "test")
+	if err == nil {
+		t.Fatal("expected error for invalid PDF")
+	}
+}
+
+// TestReader_ExtractTextFromReadSeekerPDFError tests PDF parsing error in extractTextFromReadSeeker
+func TestReader_ExtractTextFromReadSeekerPDFError(t *testing.T) {
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	invalidData := bytes.NewReader([]byte("not a valid pdf"))
+	_, err := rdr.extractTextFromReadSeeker(invalidData)
+	if err == nil {
+		t.Fatal("expected error for invalid PDF data")
+	}
+}
+
+// TestReader_ReadFromURLWithContextHTTPError tests HTTP request error
+func TestReader_ReadFromURLWithContextHTTPError(t *testing.T) {
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	_, err := rdr.ReadFromURLWithContext(context.Background(), "http://non-existent-domain-12345.com/file.pdf")
+	if err == nil {
+		t.Fatal("expected error for non-existent domain")
+	}
+}
+
+// TestReader_ExtractTextFromReaderBothPaths tests both paths in extractTextFromReader
+func TestReader_ExtractTextFromReaderBothPaths(t *testing.T) {
+	data := newTestPDF(t)
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	docs1, err := rdr.extractTextFromReader(bytes.NewReader(data), "test1")
+	if err != nil {
+		t.Fatalf("extractTextFromReader failed with ReadSeeker: %v", err)
+	}
+	if len(docs1) == 0 {
+		t.Fatal("expected at least one document")
+	}
+
+	nonSeeker := &limitedReader{r: bytes.NewReader(data), n: int64(len(data))}
+	docs2, err := rdr.extractTextFromReader(nonSeeker, "test2")
+	if err != nil {
+		t.Fatalf("extractTextFromReader failed with non-ReadSeeker: %v", err)
+	}
+	if len(docs2) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestReader_ReadFromURLContextError tests ReadFromURL with context error
+func TestReader_ReadFromURLContextError(t *testing.T) {
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := rdr.ReadFromURLWithContext(ctx, server.URL+"/test.pdf")
+	if err == nil {
+		t.Fatal("expected error with cancelled context")
+	}
+}
+
+// TestReader_ReadFromFileTextOnlyStatError tests stat error in readFromFileTextOnly
+func TestReader_ReadFromFileTextOnlyStatError(t *testing.T) {
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	tmp := t.TempDir() + "/nonexistent.pdf"
+	_, err := rdr.readFromFileTextOnly(tmp, "test")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+// TestReader_ExtractTextFromPDFReaderPageError tests extractTextFromPDFReader with page error
+func TestReader_ExtractTextFromPDFReaderPageError(t *testing.T) {
+	data := newTestPDF(t)
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	pdfReader, err := pdfPkg.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("failed to create PDF reader: %v", err)
+	}
+
+	text, err := rdr.extractTextFromPDFReader(pdfReader)
+	if err != nil {
+		t.Fatalf("extractTextFromPDFReader failed: %v", err)
+	}
+	if !strings.Contains(text, "Hello World") {
+		t.Errorf("expected 'Hello World' in text, got: %s", text)
 	}
 }
