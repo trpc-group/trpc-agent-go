@@ -257,6 +257,47 @@ func TestServer_Handler(t *testing.T) {
 	assert.NotNil(t, handler)
 }
 
+func TestServer_BasePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     []Option
+		expected string
+	}{
+		{
+			name:     "default base path",
+			opts:     []Option{WithAgent(&mockAgent{name: "test-agent"})},
+			expected: defaultBasePath,
+		},
+		{
+			name: "custom base path",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithBasePath("/api/v1"),
+			},
+			expected: "/api/v1",
+		},
+		{
+			name: "base path with trailing slash",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithBasePath("/api/v1/"),
+			},
+			expected: "/api/v1/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := New(tt.opts...)
+			require.NoError(t, err)
+			require.NotNil(t, s)
+
+			basePath := s.BasePath()
+			assert.Equal(t, tt.expected, basePath)
+		})
+	}
+}
+
 func TestServer_Close(t *testing.T) {
 	tests := []struct {
 		name        string

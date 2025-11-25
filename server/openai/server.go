@@ -114,6 +114,11 @@ func (s *Server) Handler() http.Handler {
 	return s.handler
 }
 
+// BasePath returns the base path of the server.
+func (s *Server) BasePath() string {
+	return s.basePath
+}
+
 // Close closes the server and releases owned resources.
 // It's safe to call Close multiple times.
 // Only resources created by this server (not provided by user) will be closed.
