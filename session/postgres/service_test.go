@@ -15,6 +15,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -553,17 +554,36 @@ func TestGetSession_Success(t *testing.T) {
 		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
 		WillReturnRows(userRows)
 
-	// Mock events
-	eventRows := sqlmock.NewRows([]string{"session_id", "event"})
+		// Prepare mock event
+	evt := event.New("inv-1", "author")
+	evt.Response = &model.Response{
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "Hello, world!",
+				},
+			},
+		},
+	}
+	eventBytes, _ := json.Marshal(evt)
 	mock.ExpectQuery("SELECT session_id, event FROM session_events").
 		WithArgs("test-app", "test-user", "{test-session}").
-		WillReturnRows(eventRows)
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}).
+			AddRow(key.SessionID, eventBytes))
+
+	// Mock: Batch load summaries with data
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary FROM session_summaries")).
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary"}))
 
 	sess, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "test-session", sess.ID)
 	assert.Equal(t, []byte("value1"), sess.State["key1"])
+	assert.Equal(t, 1, len(sess.Events))
+	assert.Equal(t, "Hello, world!", sess.Events[0].Response.Choices[0].Message.Content)
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
