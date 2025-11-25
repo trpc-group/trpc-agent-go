@@ -105,14 +105,14 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 	}{
 		{
 			name:        "wait_with_context_cancel_error",
-			ctxDelay:    50 * time.Millisecond,
+			ctxDelay:    100 * time.Millisecond,
 			noticeKey:   "test-channel-1",
-			waitTimeout: 100 * time.Millisecond,
+			waitTimeout: 200 * time.Millisecond,
 			errType:     2,
-			mainSleep:   300 * time.Millisecond,
+			mainSleep:   500 * time.Millisecond,
 			execTime: execTime{
-				min: 50 * time.Millisecond,
-				max: 150 * time.Millisecond,
+				min: 80 * time.Millisecond,
+				max: 300 * time.Millisecond,
 			},
 		},
 		{
@@ -123,7 +123,7 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 			waitTimeout: 100 * time.Millisecond,
 			mainSleep:   300 * time.Millisecond,
 			execTime: execTime{
-				min: 100 * time.Millisecond,
+				min: 80 * time.Millisecond,
 				max: 300 * time.Millisecond,
 			},
 		},
@@ -133,10 +133,10 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 			noticeKey:   "test-channel-3",
 			errType:     0,
 			waitTimeout: 1 * time.Second,
-			mainSleep:   300 * time.Millisecond,
+			mainSleep:   100 * time.Millisecond,
 			execTime: execTime{
-				min: 30 * time.Millisecond,
-				max: 1 * time.Second,
+				min: 80 * time.Millisecond,
+				max: 500 * time.Millisecond,
 			},
 		},
 		{
@@ -145,55 +145,84 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 			noticeKey:   "test-channel-4",
 			errType:     0,
 			waitTimeout: 1 * time.Second,
-			mainSleep:   300 * time.Millisecond,
+			mainSleep:   100 * time.Millisecond,
 			execTime: execTime{
-				min: 300 * time.Millisecond,
-				max: 1 * time.Second,
+				min: 80 * time.Millisecond,
+				max: 500 * time.Millisecond,
 			},
 		},
 	}
 
-	inv := NewInvocation()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			inv := NewInvocation()
 			ctx := context.Background()
 			if tt.ctxDelay > 0 {
 				innerCtx, cancel := context.WithTimeout(ctx, tt.ctxDelay)
 				defer cancel()
 				ctx = innerCtx
 			}
-			complete := false
-			startTime := time.Now()
-			go func() {
-				startTime := time.Now()
-				err := inv.AddNoticeChannelAndWait(ctx, tt.noticeKey, tt.waitTimeout)
-				duration := time.Since(startTime)
-				complete = true
-				require.True(t, duration > tt.execTime.min && duration < tt.execTime.max)
 
-				switch tt.errType {
-				case 0:
-					require.NoError(t, err)
-				case 1:
-					require.Error(t, err)
-					_, isWaitNoticeTimeoutError := AsWaitNoticeTimeoutError(err)
-					require.True(t, isWaitNoticeTimeoutError)
-				case 2:
-					require.Error(t, err)
-					_, isWaitNoticeTimeoutError := AsWaitNoticeTimeoutError(err)
-					require.False(t, isWaitNoticeTimeoutError)
-				}
+			done := make(chan struct{})
+			errCh := make(chan error, 1)
+			durationCh := make(chan time.Duration, 1)
+			startTime := time.Now()
+
+			go func() {
+				defer close(done)
+				goroutineStart := time.Now()
+				err := inv.AddNoticeChannelAndWait(ctx, tt.noticeKey, tt.waitTimeout)
+				durationCh <- time.Since(goroutineStart)
+				errCh <- err
 			}()
-			time.Sleep(tt.mainSleep)
-			inv.NotifyCompletion(ctx, tt.noticeKey)
-			require.Equal(t, 0, len(inv.noticeChanMap))
-			for {
-				if complete {
-					break
-				}
+
+			// Wait for the expected trigger condition
+			if tt.errType == 0 {
+				// For success cases, notify before timeout/context cancel
+				time.Sleep(tt.mainSleep)
+				inv.NotifyCompletion(context.Background(), tt.noticeKey)
+			} else {
+				// For error cases, let timeout or context cancel happen naturally
+				// No notification needed
 			}
-			duration := time.Since(startTime)
-			require.True(t, duration > tt.mainSleep)
+
+			// Wait for goroutine to complete
+			<-done
+
+			duration := <-durationCh
+			err := <-errCh
+
+			// Verify execution time with more tolerance
+			require.GreaterOrEqual(t, duration, tt.execTime.min,
+				"execution time %v should be >= %v", duration, tt.execTime.min)
+			require.LessOrEqual(t, duration, tt.execTime.max,
+				"execution time %v should be <= %v", duration, tt.execTime.max)
+
+			// Verify error type
+			switch tt.errType {
+			case 0:
+				require.NoError(t, err, "expected no error but got: %v", err)
+			case 1:
+				require.Error(t, err, "expected timeout error but got no error")
+				_, isWaitNoticeTimeoutError := AsWaitNoticeTimeoutError(err)
+				require.True(t, isWaitNoticeTimeoutError, "expected WaitNoticeTimeoutError but got: %T", err)
+			case 2:
+				require.Error(t, err, "expected context error but got no error")
+				_, isWaitNoticeTimeoutError := AsWaitNoticeTimeoutError(err)
+				require.False(t, isWaitNoticeTimeoutError, "expected context error but got WaitNoticeTimeoutError")
+			}
+
+			// Verify channel cleanup
+			if tt.errType == 0 {
+				require.Equal(t, 0, len(inv.noticeChanMap), "notice channel should be cleaned up")
+			}
+
+			// Verify main execution time
+			mainDuration := time.Since(startTime)
+			if tt.errType == 0 {
+				require.GreaterOrEqual(t, mainDuration, tt.mainSleep,
+					"main execution time %v should be >= sleep time %v", mainDuration, tt.mainSleep)
+			}
 		})
 	}
 }

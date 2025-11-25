@@ -246,6 +246,10 @@ func (fakeSessionService) UpdateAppState(context.Context, string, session.StateM
 	return nil
 }
 
+func (fakeSessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	return nil
+}
+
 func (fakeSessionService) DeleteAppState(context.Context, string, string) error {
 	return nil
 }
