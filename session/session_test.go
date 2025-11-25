@@ -676,6 +676,10 @@ func (m *MockService) DeleteUserState(ctx context.Context, userKey UserKey, key 
 	return nil
 }
 
+func (m *MockService) UpdateSessionState(ctx context.Context, key Key, state StateMap) error {
+	return nil
+}
+
 func (m *MockService) AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error {
 	return nil
 }
