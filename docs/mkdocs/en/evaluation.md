@@ -58,53 +58,64 @@ if err != nil {
 
 ```json
 {
-  "eval_set_id": "math-basic",
+  "evalSetId": "math-basic",
   "name": "math-basic",
-  "eval_cases": [
+  "evalCases": [
     {
-      "eval_id": "calc_add",
-      "conversation": [
-        {
-          "invocation_id": "calc_add-1",
-          "user_content": {
-            "parts": [
-              {
-                "text": "calc add 2 3"
-              }
-            ],
-            "role": "user"
-          },
-          "final_response": {
-            "parts": [
-              {
-                "text": "calc result: 5"
-              }
-            ],
-            "role": "assistant"
-          },
-          "intermediate_data": {
-            "tool_uses": [
-              {
-                "args": {
-                  "a": 2,
-                  "b": 3,
-                  "operation": "add"
-                },
-                "name": "calculator"
-              }
-            ]
-          },
-          "creation_timestamp": 1761134484.981062
+        "evalId": "calc_add",
+        "conversation": [
+          {
+            "invocationId": "calc_add-1",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "calc add 2 3"
+                }
+              ],
+              "role": "user"
+            },
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "calc result: 5"
+                }
+              ],
+              "role": "assistant"
+            },
+            "intermediateData": {
+              "toolUses": [
+                {
+                  "id": "tool_use_1",
+                  "args": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add"
+                  },
+                  "name": "calculator"
+                }
+              ],
+              "toolResponses": [
+                {
+                  "id": "tool_use_1",
+                  "name": "calculator",
+                  "response": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add",
+                    "result": 5
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "sessionInput": {
+          "appName": "math-eval-app",
+          "userId": "user"
         }
-      ],
-      "session_input": {
-        "app_name": "math-eval-app",
-        "user_id": "user"
-      },
-      "creation_timestamp": 1761134484.981062
-    },
+      }
   ],
-  "creation_timestamp": 1761134484.9804401
+  "creationTimestamp": 1761134484.9804401
 }
 ```
 
@@ -113,8 +124,23 @@ if err != nil {
 ```json
 [
   {
-    "metric_name": "tool_trajectory_avg_score",
-    "threshold": 1
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "response": {
+            "matchStrategy": "exact"
+          }
+        }
+      }
+    }
   }
 ]
 ```
@@ -122,7 +148,159 @@ if err != nil {
 #### Evaluation Result File Example
 
 ```json
-"{\"eval_set_result_id\":\"math-eval-app_math-basic_76798060-dcc3-41e9-b20e-06f23aa3cdbc\",\"eval_set_result_name\":\"math-eval-app_math-basic_76798060-dcc3-41e9-b20e-06f23aa3cdbc\",\"eval_set_id\":\"math-basic\",\"eval_case_results\":[{\"eval_set_id\":\"math-basic\",\"eval_id\":\"calc_add\",\"final_eval_status\":1,\"overall_eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}],\"eval_metric_result_per_invocation\":[{\"actual_invocation\":{\"invocation_id\":\"8b205b3f-682e-409a-b751-89ef805d0221\",\"user_content\":{\"parts\":[{\"text\":\"calc add 2 3\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"The result of adding 2 and 3 is **5**.\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"id\":\"call_00_j75SIh8A9xSlG61OrC1ARIab\",\"args\":{\"a\":2,\"b\":3,\"operation\":\"add\"},\"name\":\"calculator\"}]}},\"expected_invocation\":{\"invocation_id\":\"calc_add-1\",\"user_content\":{\"parts\":[{\"text\":\"calc add 2 3\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"calc result: 5\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"args\":{\"a\":2,\"b\":3,\"operation\":\"add\"},\"name\":\"calculator\"}]},\"creation_timestamp\":1761134484.981062},\"eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}]}],\"session_id\":\"74252944-b1a7-4c17-8f39-4a5809395d1d\",\"user_id\":\"user\"},{\"eval_set_id\":\"math-basic\",\"eval_id\":\"calc_multiply\",\"final_eval_status\":1,\"overall_eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}],\"eval_metric_result_per_invocation\":[{\"actual_invocation\":{\"invocation_id\":\"65226930-d45c-43ae-ab88-9c35f3abce70\",\"user_content\":{\"parts\":[{\"text\":\"calc multiply 6 7\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"6 × 7 = 42\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"id\":\"call_00_b3Gj4Y3fJu9Blkbl6H0MLquO\",\"args\":{\"a\":6,\"b\":7,\"operation\":\"multiply\"},\"name\":\"calculator\"}]}},\"expected_invocation\":{\"invocation_id\":\"calc_multiply-1\",\"user_content\":{\"parts\":[{\"text\":\"calc multiply 6 7\"}],\"role\":\"user\"},\"final_response\":{\"parts\":[{\"text\":\"calc result: 42\"}],\"role\":\"assistant\"},\"intermediate_data\":{\"tool_uses\":[{\"args\":{\"a\":6,\"b\":7,\"operation\":\"multiply\"},\"name\":\"calculator\"}]},\"creation_timestamp\":1761134484.9812014},\"eval_metric_results\":[{\"metric_name\":\"tool_trajectory_avg_score\",\"score\":1,\"eval_status\":1,\"threshold\":1}]}],\"session_id\":\"6393fabd-ab50-49b7-8656-59fcb0a29758\",\"user_id\":\"user\"}],\"creation_timestamp\":1761134849.3572516}"
+{
+  "evalSetResultId": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
+  "evalSetResultName": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
+  "evalSetId": "math-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "math-basic",
+      "evalId": "calc_add",
+      "finalEvalStatus": 1,
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": 1,
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "response": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "53845847-16e0-4960-9d00-d3abf0ab1807",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "calc add 2 3"
+                }
+              ],
+              "role": "user"
+            },
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "The result of 2 + 3 is **5**."
+                }
+              ],
+              "role": "assistant"
+            },
+            "intermediateData": {
+              "toolUses": [
+                {
+                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
+                  "args": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add"
+                  },
+                  "name": "calculator"
+                }
+              ],
+              "toolResponses": [
+                {
+                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
+                  "name": "calculator",
+                  "response": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add",
+                    "result": 5
+                  }
+                }
+              ]
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "calc_add-1",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "calc add 2 3"
+                }
+              ],
+              "role": "user"
+            },
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "calc result: 5"
+                }
+              ],
+              "role": "assistant"
+            },
+            "intermediateData": {
+              "toolUses": [
+                {
+                  "id": "tool_use_1",
+                  "args": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add"
+                  },
+                  "name": "calculator"
+                }
+              ],
+              "toolResponses": [
+                {
+                  "id": "tool_use_1",
+                  "name": "calculator",
+                  "response": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add",
+                    "result": 5
+                  }
+                }
+              ]
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": 1,
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "response": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "e9cc851f-8c89-45f4-b430-7c54991c7dda",
+      "userId": "user"
+    }
+  ],
+  "creationTimestamp": 1763997862.5581782
+}
 ```
 
 ### inmemory
@@ -217,11 +395,24 @@ cases := []*evalset.EvalCase{
 				IntermediateData: &evalset.IntermediateData{
 					ToolUses: []*genai.FunctionCall{
 						{
+							ID:   "tool_use_1",
 							Name: "calculator",
 							Args: map[string]interface{}{
 								"operation": "add",
 								"a":         2.0,
 								"b":         3.0,
+							},
+						},
+					},
+					ToolResponses: []*genai.FunctionResponse{
+						{
+							ID:   "tool_use_1",
+							Name: "calculator",
+							Response: map[string]interface{}{
+								"a":         2.0,
+								"b":         3.0,
+								"operation": "add",
+								"result":    5.0,
 							},
 						},
 					},
@@ -249,6 +440,25 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 evalMetric := &metric.EvalMetric{
 	MetricName: "tool_trajectory_avg_score",
 	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithToolTrajectory(
+			ctooltrajectory.New(
+				ctooltrajectory.WithDefault(
+					&ctooltrajectory.ToolTrajectoryStrategy{
+						Name: &text.TextCriterion{
+							MatchStrategy: text.TextMatchStrategyExact,
+						},
+						Arguments: &cjson.JSONCriterion{
+							MatchStrategy: cjson.JSONMatchStrategyExact,
+						},
+						Response: &cjson.JSONCriterion{
+							MatchStrategy: cjson.JSONMatchStrategyExact,
+						},
+					},
+				),
+			),
+		),
+	),
 }
 metricManager.Add(ctx, appName, evalSetID, evalMetric)
 ```
@@ -357,6 +567,32 @@ The framework provides two implementations of the EvalSet Manager:
 - inmemory: Stores the evaluation set in memory, ensuring a deep copy of all operations. This is suitable for temporary testing scenarios.
 
 ### Metric
+
+Metric represents an evaluation indicator used to measure a certain aspect of EvalSet’s performance. Each evaluation indicator includes the metric name, evaluation criterion, and score threshold.
+
+During the evaluation process, the evaluator compares the actual conversation with the expected conversation according to the configured evaluation criterion, calculates the evaluation score for this metric, and compares it with the threshold:
+
+* When the evaluation score is lower than the threshold, the metric is determined as not passed.
+* When the evaluation score reaches or exceeds the threshold, the metric is determined as passed.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
+
+// EvalMetric represents a single metric used to evaluate an EvalCase.
+type EvalMetric struct {
+	MetricName string               // Metric name.
+	Threshold  float64              // Score threshold.
+	Criterion  *criterion.Criterion // Evaluation criterion.
+}
+
+// Criterion aggregates various evaluation criteria.
+type Criterion struct {
+	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion // Tool trajectory evaluation criterion.
+}
+```
 
 A Metric represents an evaluation metric used to measure a specific aspect of an EvalSet's performance.
 
@@ -959,5 +1195,178 @@ func (l *customLocator) List(baseDir, appName string) ([]string, error) {
 		}
 	}
 	return results, nil
+}
+```
+
+### Evaluation Criterion
+
+The evaluation criterion describes the specific evaluation method and can be combined as needed.
+
+The framework has the following built-in types of evaluation criteria:
+
+| Criterion Type          | Applicable Object                                     |
+| ----------------------- | ----------------------------------------------------- |
+| TextCriterion           | Text string                                           |
+| JSONCriterion           | JSON object, usually used to compare `map[string]any` |
+| ToolTrajectoryCriterion | Tool invocation trajectory                            |
+| Criterion               | Aggregation of multiple criteria                      |
+
+#### TextCriterion
+
+TextCriterion is used for string matching and can be configured to ignore case and to use a specific matching strategy.
+
+```go
+// TextCriterion defines the matching method for strings.
+type TextCriterion struct {
+	Ignore          bool              // Whether to skip matching.
+	CaseInsensitive bool              // Whether case-insensitive.
+	MatchStrategy   TextMatchStrategy // Matching strategy.
+	Compare         func(actual, expected string) (bool, error) // Custom comparison.
+}
+```
+
+Explanation of TextMatchStrategy values:
+
+| TextMatchStrategy Value | Description                                                             |
+| ----------------------- | ----------------------------------------------------------------------- |
+| exact                   | The actual string is exactly the same as the expected string (default). |
+| contains                | The actual string contains the expected string.                         |
+| regex                   | The actual string matches the expected string as a regular expression.  |
+
+#### JSONCriterion
+
+JSONCriterion is used to compare structured JSON data. You can configure whether to ignore the comparison and choose a specific matching strategy.
+
+```go
+// JSONCriterion defines the matching method for JSON objects.
+type JSONCriterion struct {
+	Ignore        bool               // Whether to skip matching.
+	MatchStrategy JSONMatchStrategy  // Matching strategy.
+	Compare       func(actual, expected map[string]any) (bool, error) // Custom comparison.
+}
+```
+
+Explanation of JSONMatchStrategy values:
+
+| JSONMatchStrategy Value | Description                                                         |
+| ----------------------- | ------------------------------------------------------------------- |
+| exact                   | The actual JSON is exactly the same as the expected JSON (default). |
+
+#### ToolTrajectoryCriterion
+
+ToolTrajectoryCriterion is used to configure the evaluation criteria for tool invocations and responses. You can set default strategies, customize strategies by tool name, and control whether to ignore the invocation order.
+
+```go
+// ToolTrajectoryCriterion defines the evaluation criteria for tool invocations and responses.
+type ToolTrajectoryCriterion struct {
+	DefaultStrategy  *ToolTrajectoryStrategy            // Default strategy.
+	ToolStrategy     map[string]*ToolTrajectoryStrategy // Customized strategies by tool name.
+	OrderInsensitive bool                               // Whether to ignore invocation order.
+	Compare          func(actual, expected *evalset.Invocation) (bool, error) // Custom comparison.
+}
+
+// ToolTrajectoryStrategy defines the matching strategy for a single tool.
+type ToolTrajectoryStrategy struct {
+	Name      *TextCriterion  // Tool name matching.
+	Arguments *JSONCriterion  // Invocation arguments matching.
+	Response  *JSONCriterion  // Tool response matching.
+}
+```
+
+DefaultStrategy is used to configure the global default evaluation criterion and applies to all tools.
+
+ToolStrategy overrides the evaluation criterion for specific tools by tool name. When ToolStrategy is not set, all tool invocations use DefaultStrategy.
+
+If no evaluation criterion is configured, the framework uses the default evaluation criterion: tool names are compared using TextCriterion with the `exact` strategy, and arguments and responses are compared using JSONCriterion with the `exact` strategy. This ensures that tool trajectory evaluation always has a reasonable fallback behavior.
+
+The following example illustrates a typical scenario: for most tools you want strict alignment of tool invocations and results, but for time-related tools such as `current_time`, the response value itself is unstable. Therefore, you only need to check whether the correct tool and arguments were invoked as expected, without requiring the time value itself to be exactly the same.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
+
+criterion := criterion.New(
+	criterion.WithToolTrajectory(
+		tooltrajectory.New(
+			tooltrajectory.WithDefault(
+				&tooltrajectory.ToolTrajectoryStrategy{
+					Name: &text.TextCriterion{
+						MatchStrategy: text.TextMatchStrategyExact,
+					},
+					Arguments: &json.JSONCriterion{
+						MatchStrategy: json.JSONMatchStrategyExact,
+					},
+					Response: &json.JSONCriterion{
+						MatchStrategy: json.JSONMatchStrategyExact,
+					},
+				},
+			),
+			tooltrajectory.WithTool(map[string]*tooltrajectory.ToolTrajectoryStrategy{
+				"current_time": {
+					Name: &text.TextCriterion{
+						MatchStrategy: text.TextMatchStrategyExact,
+					},
+					Arguments: &json.JSONCriterion{
+						MatchStrategy: json.JSONMatchStrategyExact,
+					},
+					Response: &json.JSONCriterion{
+						Ignore: true, // Ignore matching of this tool's response.
+					},
+				},
+			}),
+		),
+	),
+)
+```
+
+By default, tool invocations are compared one by one in the order in which they appear. The actual tool invocation sequence and the expected tool invocation sequence must match in length, order, and in the tool name, arguments, and response at each step. If the invocation order is different, the evaluation will be considered as failed.
+
+OrderInsensitive controls whether the tool invocation order is ignored. When enabled, the evaluation logic first generates a sorting key for each tool invocation (composed of the tool name and the normalized representation of arguments and response). It then sorts the actual invocation sequence and the expected invocation sequence by this key, producing two invocation lists with stable order. Next, it compares the corresponding invocations in the sorted lists one by one, and determines whether these invocations match according to the configured evaluation criteria. Put simply, as long as the tool invocations on both sides are completely identical in content, the evaluation will not fail due to differences in the original invocation order. For example:
+
+```go
+criterion := criterion.New(
+	criterion.WithToolTrajectory(
+		ctooltrajectory.New(
+			ctooltrajectory.WithOrderInsensitive(true),
+		),
+	),
+)
+```
+
+### Evaluator
+
+#### Tool Trajectory Evaluator
+
+The metric name corresponding to the tool trajectory evaluator is `tool_trajectory_avg_score`. It is used to evaluate whether the Agent’s use of tools across multiple conversations conforms to expectations.
+
+In a single conversation, the evaluator compares the actual tool invocation trajectory with the expected trajectory using `ToolTrajectoryCriterion`:
+
+* If the entire tool invocation trajectory satisfies the evaluation criterion, the score of this conversation on this metric is 1.
+* If any step of the invocation does not satisfy the evaluation criterion, the score of this conversation on this metric is 0.
+
+In the scenario of multiple conversations, the evaluator takes the average of the scores of all conversations on this metric as the final `tool_trajectory_avg_score`, and compares it with `EvalMetric.Threshold` to determine whether the result is pass or fail.
+
+A typical way to combine the tool trajectory evaluator with Metric and Criterion is as follows:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "tool_trajectory_avg_score",
+	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithToolTrajectory(
+			// Use the default evaluation criterion; tool name, arguments, and response must be strictly identical.
+			ctooltrajectory.New(),
+		),
+	),
 }
 ```
