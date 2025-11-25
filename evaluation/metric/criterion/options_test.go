@@ -30,6 +30,6 @@ func TestWithToolTrajectory(t *testing.T) {
 
 func TestWithLlmJudge(t *testing.T) {
 	llmJudge := llm.New("p", "m")
-	opts := newOptions(WithLlmJudge(llmJudge))
+	opts := newOptions(WithLLMJudge(llmJudge))
 	assert.Equal(t, llmJudge, opts.llmJudge)
 }

@@ -19,8 +19,8 @@ import (
 type Criterion struct {
 	// ToolTrajectory configures checks for tool call and response sequences.
 	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion `json:"toolTrajectory,omitempty"`
-	// LlmJudge configures the LLM-based judge criterion.
-	LlmJudge *llm.LlmCriterion `json:"llmJudge,omitempty"`
+	// LLMJudge configures the LLM-based judge criterion.
+	LLMJudge *llm.LLMCriterion `json:"llmJudge,omitempty"`
 }
 
 // New creates a Criterion with the provided options.
@@ -28,6 +28,6 @@ func New(opt ...Option) *Criterion {
 	opts := newOptions(opt...)
 	return &Criterion{
 		ToolTrajectory: opts.toolTrajectory,
-		LlmJudge:       opts.llmJudge,
+		LLMJudge:       opts.llmJudge,
 	}
 }

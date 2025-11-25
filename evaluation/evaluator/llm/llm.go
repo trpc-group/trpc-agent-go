@@ -63,12 +63,12 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	if evalMetric == nil ||
 		evalMetric.Criterion == nil ||
-		evalMetric.Criterion.LlmJudge == nil ||
-		evalMetric.Criterion.LlmJudge.JudgeModel == nil ||
-		evalMetric.Criterion.LlmJudge.JudgeModel.Generation == nil {
+		evalMetric.Criterion.LLMJudge == nil ||
+		evalMetric.Criterion.LLMJudge.JudgeModel == nil ||
+		evalMetric.Criterion.LLMJudge.JudgeModel.Generation == nil {
 		return nil, fmt.Errorf("missing required fields in eval metric")
 	}
-	if evalMetric.Criterion.LlmJudge.JudgeModel.NumSamples <= 0 {
+	if evalMetric.Criterion.LLMJudge.JudgeModel.NumSamples <= 0 {
 		return nil, fmt.Errorf("num samples must be greater than 0")
 	}
 	if len(actuals) != len(expecteds) {
@@ -83,7 +83,7 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		if err != nil {
 			return nil, fmt.Errorf("construct messages: %w", err)
 		}
-		numSamples := evalMetric.Criterion.LlmJudge.JudgeModel.NumSamples
+		numSamples := evalMetric.Criterion.LLMJudge.JudgeModel.NumSamples
 		samples := make([]*evaluator.PerInvocationResult, 0, numSamples)
 		for range numSamples {
 			response, err := judgeModelResponse(ctx, messages, evalMetric)
@@ -141,7 +141,7 @@ func (r *LLMBaseEvaluator) ConstructMessages(actual, expected *evalset.Invocatio
 // judgeModelResponse calls the judge model and returns the final response.
 func judgeModelResponse(ctx context.Context, messages []model.Message,
 	evalMetric *metric.EvalMetric) (*model.Response, error) {
-	judgeModel := evalMetric.Criterion.LlmJudge.JudgeModel
+	judgeModel := evalMetric.Criterion.LLMJudge.JudgeModel
 	req := model.Request{
 		Messages:         messages,
 		GenerationConfig: *judgeModel.Generation,

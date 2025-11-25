@@ -19,7 +19,7 @@ type options struct {
 	// ToolTrajectory sets the default tool trajectory criterion.
 	toolTrajectory *tooltrajectory.ToolTrajectoryCriterion
 	// llmJudge sets the LLM judge criterion.
-	llmJudge *llm.LlmCriterion
+	llmJudge *llm.LLMCriterion
 }
 
 // newOptions creates a Options with the provided options.
@@ -43,8 +43,8 @@ func WithToolTrajectory(toolTrajectory *tooltrajectory.ToolTrajectoryCriterion) 
 	}
 }
 
-// WithLlmJudge sets the LLM judge criterion.
-func WithLlmJudge(llmJudge *llm.LlmCriterion) Option {
+// WithLLMJudge sets the LLM judge criterion.
+func WithLLMJudge(llmJudge *llm.LLMCriterion) Option {
 	return func(o *options) {
 		o.llmJudge = llmJudge
 	}

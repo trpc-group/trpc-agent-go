@@ -107,7 +107,7 @@ func buildEvalMetric(providerName string, numSamples int) *metric.EvalMetric {
 	return &metric.EvalMetric{
 		Threshold: 0.5,
 		Criterion: &criterion.Criterion{
-			LlmJudge: &llm.LlmCriterion{
+			LLMJudge: &llm.LLMCriterion{
 				JudgeModel: &llm.JudgeModelOptions{
 					ProviderName: providerName,
 					ModelName:    "fake-model",
