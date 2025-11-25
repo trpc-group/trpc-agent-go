@@ -10,6 +10,7 @@
 package reranker
 
 import (
+	"context"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -22,8 +23,10 @@ func TestTopKReranker(t *testing.T) {
 		{Document: &document.Document{ID: "3"}, Score: 0.7},
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	rk := NewTopKReranker(WithK(2))
-	out, err := rk.Rerank(nil, nil, results)
+	out, err := rk.Rerank(ctx, nil, results)
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}
@@ -36,7 +39,9 @@ func TestTopKReranker(t *testing.T) {
 
 	// K greater than len.
 	rk2 := NewTopKReranker(WithK(10))
-	out2, _ := rk2.Rerank(nil, nil, results)
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	out2, _ := rk2.Rerank(ctx, nil, results)
 	if len(out2) != 3 {
 		t.Fatalf("expected all results")
 	}
