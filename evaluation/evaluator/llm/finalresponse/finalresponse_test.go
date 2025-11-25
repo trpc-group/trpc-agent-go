@@ -76,7 +76,7 @@ func TestScoreBasedOnResponse(t *testing.T) {
 	score, err := ev.ScoreBasedOnResponse(validResp, nil)
 	require.NoError(t, err)
 	require.NotNil(t, score.Score)
-	assert.Equal(t, 1.0, *score.Score)
+	assert.Equal(t, 1.0, score.Score)
 
 	invalidResp := &model.Response{
 		Choices: []model.Choice{
@@ -90,7 +90,7 @@ func TestScoreBasedOnResponse(t *testing.T) {
 	score, err = ev.ScoreBasedOnResponse(invalidResp, nil)
 	require.NoError(t, err)
 	require.NotNil(t, score.Score)
-	assert.Equal(t, 0.0, *score.Score)
+	assert.Equal(t, 0.0, score.Score)
 
 	unknownResp := &model.Response{
 		Choices: []model.Choice{

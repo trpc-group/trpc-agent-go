@@ -58,7 +58,7 @@ func (f *fakeLLMEvaluator) ScoreBasedOnResponse(_ *model.Response,
 	_ *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	f.scoreBasedOnResponseCalls++
 	score := 0.9
-	return &evalresult.ScoreResult{Score: &score}, nil
+	return &evalresult.ScoreResult{Score: score}, nil
 }
 
 func (f *fakeLLMEvaluator) AggregateSamples(samples []*evaluator.PerInvocationResult,
@@ -202,7 +202,7 @@ func (s *scriptedLLMEvaluator) ScoreBasedOnResponse(*model.Response,
 		return nil, s.scoreErr
 	}
 	score := s.scoreValue
-	return &evalresult.ScoreResult{Score: &score}, nil
+	return &evalresult.ScoreResult{Score: score}, nil
 }
 
 func (s *scriptedLLMEvaluator) AggregateSamples(samples []*evaluator.PerInvocationResult,

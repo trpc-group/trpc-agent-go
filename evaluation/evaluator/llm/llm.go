@@ -95,13 +95,13 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 				return nil, fmt.Errorf("score based on response: %w", err)
 			}
 			evalStatus := status.EvalStatusPassed
-			if *score.Score < evalMetric.Threshold {
+			if score.Score < evalMetric.Threshold {
 				evalStatus = status.EvalStatusFailed
 			}
 			samples = append(samples, &evaluator.PerInvocationResult{
 				ActualInvocation:   actual,
 				ExpectedInvocation: expected,
-				Score:              *score.Score,
+				Score:              score.Score,
 				Status:             evalStatus,
 			})
 		}

@@ -145,7 +145,7 @@ func (e *finalResponseEvaluator) ScoreBasedOnResponse(response *model.Response,
 		return nil, fmt.Errorf("unknown label: %v", label)
 	}
 	return &evalresult.ScoreResult{
-		Score: &score,
+		Score: score,
 	}, nil
 }
 
