@@ -7,6 +7,7 @@
 //
 //
 
+// Package urlfilter provides URL filtering functions.
 package urlfilter
 
 import (
