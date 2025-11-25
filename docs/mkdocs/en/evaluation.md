@@ -747,15 +747,19 @@ type EvalCaseResult struct {
 EvalMetricResult represents the evaluation result of a specific metric, including the score, status, threshold, and additional information.
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+)
 
 // EvalMetricResult represents the evaluation result of a single metric.
 type EvalMetricResult struct {
-	MetricName string            // Metric name.
-	Score      float64           // Actual score.
-	EvalStatus status.EvalStatus // Evaluation status.
-	Threshold  float64           // Score threshold.
-	Details    map[string]any    // Additional information, such as scoring process, error description, etc.
+	MetricName string               // Metric name.
+	Score      float64              // Actual score.
+	EvalStatus status.EvalStatus    // Evaluation status.
+	Threshold  float64              // Score threshold.
+	Criterion  *criterion.Criterion // Evaluation criterion.
+	Details    map[string]any       // Additional information, such as scoring process, error description, etc.
 }
 ```
 

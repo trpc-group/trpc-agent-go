@@ -735,15 +735,19 @@ type EvalCaseResult struct {
 EvalMetricResult 表示某一指标的评估结果，包括得分、状态、阈值及附加信息。
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+)
 
 // EvalMetricResult 表示单项指标的评估结果
 type EvalMetricResult struct {
-	MetricName string            // 指标名称
-	Score      float64           // 实际得分
-	EvalStatus status.EvalStatus // 评测状态
-	Threshold  float64           // 阈值
-	Details    map[string]any    // 额外信息，如评分过程、错误描述等
+	MetricName string               // 指标名称
+	Score      float64              // 实际得分
+	EvalStatus status.EvalStatus    // 评测状态
+	Threshold  float64              // 阈值
+	Criterion  *criterion.Criterion // 评估准则
+	Details    map[string]any       // 额外信息，如评分过程、错误描述等
 }
 ```
 
