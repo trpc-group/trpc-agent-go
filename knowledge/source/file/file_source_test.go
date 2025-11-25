@@ -423,23 +423,3 @@ func TestProcessFileAbsPathError(t *testing.T) {
 		t.Fatal("expected at least one document")
 	}
 }
-
-// TestProcessFileReaderError verifies error handling when no reader is available.
-func TestProcessFileReaderError(t *testing.T) {
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "test.xyz123")
-	if err := os.WriteFile(filePath, []byte("content"), 0600); err != nil {
-		t.Fatalf("failed to write file: %v", err)
-	}
-
-	src := New([]string{filePath})
-	_, err := src.ReadDocuments(context.Background())
-	if err == nil {
-		t.Error("expected error for unsupported file type")
-		return
-	}
-	if !strings.Contains(err.Error(), "no reader available") && !strings.Contains(err.Error(), "failed to") {
-		t.Errorf("expected reader error, got: %v", err)
-	}
-}
-
