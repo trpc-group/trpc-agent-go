@@ -614,3 +614,779 @@ func (m *mockFlusher) Flush() {
 func stringPtr(s string) *string {
 	return &s
 }
+
+// mockRunnerWithError is a mock runner that returns an error.
+type mockRunnerWithError struct {
+	err error
+}
+
+func (m *mockRunnerWithError) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	return nil, m.err
+}
+
+func (m *mockRunnerWithError) Close() error {
+	return errors.New("close error")
+}
+
+// mockRunnerWithEmptyEvents is a mock runner that returns empty events.
+type mockRunnerWithEmptyEvents struct {
+	events chan *event.Event
+}
+
+func (m *mockRunnerWithEmptyEvents) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	return m.events, nil
+}
+
+func (m *mockRunnerWithEmptyEvents) Close() error {
+	return nil
+}
+
+// mockRunnerWithNilEvents is a mock runner that returns nil events.
+type mockRunnerWithNilEvents struct {
+	events chan *event.Event
+}
+
+func (m *mockRunnerWithNilEvents) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	return m.events, nil
+}
+
+func (m *mockRunnerWithNilEvents) Close() error {
+	return nil
+}
+
+// mockRunnerWithAggregateError is a mock runner that returns events that will cause aggregate error.
+type mockRunnerWithAggregateError struct {
+	events chan *event.Event
+}
+
+func (m *mockRunnerWithAggregateError) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	return m.events, nil
+}
+
+func (m *mockRunnerWithAggregateError) Close() error {
+	return nil
+}
+
+// mockRunnerWithPartialEvents is a mock runner that returns partial events.
+type mockRunnerWithPartialEvents struct {
+	events chan *event.Event
+}
+
+func (m *mockRunnerWithPartialEvents) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	return m.events, nil
+}
+
+func (m *mockRunnerWithPartialEvents) Close() error {
+	return nil
+}
+
+// mockRunnerWithContextCancel is a mock runner that respects context cancellation.
+type mockRunnerWithContextCancel struct {
+	events chan *event.Event
+}
+
+func (m *mockRunnerWithContextCancel) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	return m.events, nil
+}
+
+func (m *mockRunnerWithContextCancel) Close() error {
+	return nil
+}
+
+// mockRunnerWithFinalChunk is a mock runner that returns events with usage for final chunk.
+type mockRunnerWithFinalChunk struct {
+	events chan *event.Event
+}
+
+func (m *mockRunnerWithFinalChunk) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	return m.events, nil
+}
+
+func (m *mockRunnerWithFinalChunk) Close() error {
+	return nil
+}
+
+// mockResponseWriterWithError is a mock ResponseWriter that fails on Encode.
+type mockResponseWriterWithError struct {
+	http.ResponseWriter
+	Code int
+}
+
+func (m *mockResponseWriterWithError) WriteHeader(code int) {
+	m.Code = code
+}
+
+func (m *mockResponseWriterWithError) Write([]byte) (int, error) {
+	return 0, errors.New("write error")
+}
+
+func TestServer_Close_WithError(t *testing.T) {
+	// Create a server with owned runner that will return error on Close.
+	agent := &mockAgent{name: "test-agent"}
+	s, err := New(WithAgent(agent))
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	// Replace runner with one that returns error on Close.
+	s.runner = &mockRunnerWithError{err: errors.New("close error")}
+	s.ownedRunner = true
+
+	// Close should return error.
+	err = s.Close()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "close error")
+}
+
+func TestServer_handleNonStreaming_RunnerError(t *testing.T) {
+	s, err := New(WithRunner(&mockRunnerWithError{err: errors.New("runner error")}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestServer_handleNonStreaming_EmptyEvents(t *testing.T) {
+	emptyCh := make(chan *event.Event)
+	close(emptyCh)
+	s, err := New(WithRunner(&mockRunnerWithEmptyEvents{events: emptyCh}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestServer_handleNonStreaming_NilEvents(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	ch <- nil
+	close(ch)
+	s, err := New(WithRunner(&mockRunnerWithNilEvents{events: ch}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestServer_handleNonStreaming_ResponseIDEmpty(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{
+		name:      "test-agent",
+		response:  "Hello",
+		streaming: false,
+	}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response openAIResponse
+	err = json.NewDecoder(w.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.NotEmpty(t, response.ID)
+}
+
+func TestServer_handleNonStreaming_WithHistory(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{
+		name:      "test-agent",
+		response:  "Hello",
+		streaming: false,
+	}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "system",
+				Content: "You are a helpful assistant",
+			},
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_handleNonStreaming_WithSessionID(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{
+		name:      "test-agent",
+		response:  "Hello",
+		streaming: false,
+	}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	req.Header.Set(headerSessionID, "test-session-id")
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_handleNonStreaming_WithUserID(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{
+		name:      "test-agent",
+		response:  "Hello",
+		streaming: false,
+	}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+		User:   "test-user",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_handleStreaming_RunnerError(t *testing.T) {
+	s, err := New(WithRunner(&mockRunnerWithError{err: errors.New("runner error")}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestServer_handleStreaming_ContextCancel(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+	s, err := New(WithRunner(&mockRunnerWithContextCancel{events: ch}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	// Should return early due to context cancellation.
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_handleStreaming_NilEvent(t *testing.T) {
+	ch := make(chan *event.Event, 2)
+	ch <- nil
+	ch <- &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Content: "Hello",
+					},
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+	close(ch)
+	s, err := New(WithRunner(&mockRunnerWithNilEvents{events: ch}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_handleStreaming_NilResponse(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		ID:       "test-id",
+		Response: nil,
+	}
+	close(ch)
+	s, err := New(WithRunner(&mockRunnerWithNilEvents{events: ch}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_handleStreaming_PartialEvent(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Content: "Hello",
+					},
+				},
+			},
+			IsPartial: true,
+			Done:      true,
+			Created:   time.Now().Unix(),
+		},
+	}
+	close(ch)
+	s, err := New(WithRunner(&mockRunnerWithPartialEvents{events: ch}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_handleStreaming_FinalChunk(t *testing.T) {
+	ch := make(chan *event.Event, 2)
+	finishReason := "stop"
+	ch <- &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Content: "Hello",
+					},
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+	ch <- &event.Event{
+		ID: "test-id-final",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Content: "",
+					},
+					FinishReason: &finishReason,
+				},
+			},
+			Done:    true,
+			Created: time.Now().Unix(),
+			Usage: &model.Usage{
+				PromptTokens:     10,
+				CompletionTokens: 5,
+				TotalTokens:      15,
+			},
+		},
+	}
+	close(ch)
+	s, err := New(WithRunner(&mockRunnerWithFinalChunk{events: ch}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: true,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, sseDoneMarker)
+}
+
+func TestServer_sendFinalChunk(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	flusher := &mockFlusher{ResponseWriter: w}
+	finishReason := "stop"
+	evt := &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					FinishReason: &finishReason,
+				},
+			},
+			Usage: &model.Usage{
+				PromptTokens:     10,
+				CompletionTokens: 5,
+				TotalTokens:      15,
+			},
+		},
+	}
+
+	s.sendFinalChunk(w, flusher, evt, "test-response-id", time.Now().Unix())
+
+	assert.True(t, flusher.flushed)
+	body := w.Body.String()
+	assert.Contains(t, body, sseDataPrefix)
+}
+
+func TestServer_sendFinalChunk_NoUsage(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	flusher := &mockFlusher{ResponseWriter: w}
+	evt := &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{},
+		},
+	}
+
+	s.sendFinalChunk(w, flusher, evt, "test-response-id", time.Now().Unix())
+
+	// Should return early without writing.
+	body := w.Body.String()
+	assert.Empty(t, body)
+}
+
+func TestServer_processStreamingChunk_ConvertError(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	flusher := &mockFlusher{ResponseWriter: w}
+	// Create an event that will cause convertToChunk to return error.
+	evt := &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Content: "test",
+					},
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+
+	isFinal := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
+
+	assert.False(t, isFinal)
+}
+
+func TestServer_processStreamingChunk_NilChunk(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	flusher := &mockFlusher{ResponseWriter: w}
+	// Create an event that will return nil chunk.
+	evt := &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Content: "",
+						Role:    "",
+					},
+				},
+			},
+			Done:    true,
+			Created: time.Now().Unix(),
+		},
+	}
+
+	isFinal := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
+
+	assert.True(t, isFinal)
+}
+
+func TestServer_writeChunk_MarshalError(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	flusher := &mockFlusher{ResponseWriter: w}
+	// Create a chunk with invalid data that will cause marshal error.
+	// Use a channel which cannot be marshaled.
+	chunk := &openAIChunk{
+		ID:      "test-id",
+		Object:  objectChatCompletionChunk,
+		Created: time.Now().Unix(),
+		Model:   "gpt-3.5-turbo",
+		Choices: []openAIChunkChoice{
+			{
+				Delta: openAIMessage{
+					Content: make(chan int), // Invalid content type.
+				},
+			},
+		},
+	}
+
+	result := s.writeChunk(w, flusher, chunk)
+
+	assert.False(t, result)
+}
+
+func TestServer_writeJSON_EncodeError(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := &mockResponseWriterWithError{ResponseWriter: httptest.NewRecorder()}
+	// Use a value that cannot be encoded (channel).
+	data := make(chan int)
+
+	s.writeJSON(w, data)
+
+	// Should handle error gracefully (just log).
+	assert.Equal(t, contentTypeJSON, w.Header().Get(headerContentType))
+}
+
+func TestServer_writeError_EncodeError(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := &mockResponseWriterWithError{ResponseWriter: httptest.NewRecorder()}
+	testErr := errors.New("test error")
+
+	s.writeError(w, testErr, errorTypeInvalidRequest, http.StatusBadRequest)
+
+	// Should handle error gracefully (just log).
+	assert.Equal(t, contentTypeJSON, w.Header().Get(headerContentType))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestServer_processStreamingChunk_WriteChunkError(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	// Create an event that will cause writeChunk to fail.
+	evt := &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Content: "test",
+					},
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+
+	// Use a writer that fails on Write.
+	w2 := &mockResponseWriterWithError{ResponseWriter: httptest.NewRecorder()}
+	flusher2 := &mockFlusher{ResponseWriter: w2}
+
+	isFinal := s.processStreamingChunk(context.Background(), w2, flusher2, evt, "test-id", time.Now().Unix())
+
+	// writeChunk will fail, so should return false.
+	assert.False(t, isFinal)
+}
+
+func TestServer_processStreamingChunk_NotFinal(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	flusher := &mockFlusher{ResponseWriter: w}
+	evt := &event.Event{
+		ID: "test-id",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Content: "test",
+					},
+				},
+			},
+			Done:    false,
+			Created: time.Now().Unix(),
+		},
+	}
+
+	isFinal := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
+
+	assert.False(t, isFinal)
+}
+
+func TestServer_handleChatCompletions_PathWithSlash(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{
+		name:      "test-agent",
+		response:  "Hello",
+		streaming: false,
+	}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	// Test path with trailing slash.
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions/", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}

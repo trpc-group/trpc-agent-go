@@ -919,3 +919,314 @@ func parseInt(v any) (*int, error) {
 		return nil, fmt.Errorf("cannot convert %T to int", v)
 	}
 }
+
+func TestConverter_convertMessage_MultimodalMultipleText(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	msg := openAIMessage{
+		Role: "user",
+		Content: []any{
+			map[string]any{
+				"type": "text",
+				"text": "First",
+			},
+			map[string]any{
+				"type": "text",
+				"text": "Second",
+			},
+		},
+	}
+
+	result, err := conv.convertMessage(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "First\nSecond", result.Content)
+}
+
+func TestConverter_convertMessage_MultimodalWithImageDetail(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	msg := openAIMessage{
+		Role: "user",
+		Content: []any{
+			map[string]any{
+				"type": "image_url",
+				"image_url": map[string]any{
+					"url":    "https://example.com/image.jpg",
+					"detail": "high",
+				},
+			},
+		},
+	}
+
+	result, err := conv.convertMessage(msg)
+	require.NoError(t, err)
+	// Note: ImageURL handling would need to check the message's image URLs.
+	// This test verifies the code path is executed.
+	assert.NotNil(t, result)
+}
+
+func TestConverter_convertMessage_MultimodalInvalidPart(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	// Create a part that cannot be marshaled/unmarshaled properly.
+	msg := openAIMessage{
+		Role: "user",
+		Content: []any{
+			map[string]any{
+				"type": "text",
+				"text": "Hello",
+			},
+			// Invalid part that will be skipped.
+			make(chan int),
+		},
+	}
+
+	result, err := conv.convertMessage(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "Hello", result.Content)
+}
+
+func TestConverter_convertToChunk_WithRole(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	evt := &event.Event{
+		ID: "event-123",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "",
+					},
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+
+	chunk, err := conv.convertToChunk(evt)
+	require.NoError(t, err)
+	assert.NotNil(t, chunk)
+	assert.Equal(t, "assistant", chunk.Choices[0].Delta.Role)
+}
+
+func TestConverter_convertToChunk_WithToolCalls(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	evt := &event.Event{
+		ID: "event-123",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID:   "call-1",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "test",
+								},
+							},
+						},
+					},
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+
+	chunk, err := conv.convertToChunk(evt)
+	require.NoError(t, err)
+	assert.NotNil(t, chunk)
+	assert.Len(t, chunk.Choices[0].Delta.ToolCalls, 1)
+}
+
+func TestConverter_convertToChunk_ContentNil(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	evt := &event.Event{
+		ID: "event-123",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Role: model.RoleAssistant,
+					},
+					FinishReason: stringPtr("stop"),
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+
+	chunk, err := conv.convertToChunk(evt)
+	require.NoError(t, err)
+	assert.NotNil(t, chunk)
+	assert.NotNil(t, chunk.Choices[0].FinishReason)
+}
+
+func TestConverter_aggregateStreamingEvents_NoFinalEvent(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	events := []*event.Event{
+		{
+			ID: "event-1",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Delta: model.Message{
+							Content: "Hello",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID: "event-2",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Delta: model.Message{
+							Content: " world",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	resp, err := conv.aggregateStreamingEvents(events)
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+	// Should use the last event.
+	assert.Equal(t, "event-2", resp.ID)
+	assert.Equal(t, "Hello world", resp.Choices[0].Message.Content)
+}
+
+func TestConverter_aggregateStreamingEvents_NonStreamingMessageContent(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	events := []*event.Event{
+		{
+			ID: "event-1",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Content: "Hello world",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	resp, err := conv.aggregateStreamingEvents(events)
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, "Hello world", resp.Choices[0].Message.Content)
+}
+
+func TestConverter_aggregateStreamingEvents_NonStreamingToolCalls(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	events := []*event.Event{
+		{
+			ID: "event-1",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{
+								{
+									ID:   "call-1",
+									Type: "function",
+									Function: model.FunctionDefinitionParam{
+										Name: "test",
+									},
+								},
+							},
+						},
+					},
+				},
+				Usage: &model.Usage{
+					PromptTokens:     5,
+					CompletionTokens: 2,
+					TotalTokens:      7,
+				},
+			},
+		},
+	}
+
+	resp, err := conv.aggregateStreamingEvents(events)
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+	assert.NotNil(t, resp.Choices[0].FinishReason)
+	assert.Equal(t, "tool_calls", *resp.Choices[0].FinishReason)
+}
+
+func TestConverter_aggregateStreamingEvents_FrameworkFinishReason(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	finishReason := "length"
+	events := []*event.Event{
+		{
+			ID: "event-1",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Delta: model.Message{
+							Content: "Hello",
+						},
+						FinishReason: &finishReason,
+					},
+				},
+				Usage: &model.Usage{
+					PromptTokens:     5,
+					CompletionTokens: 2,
+					TotalTokens:      7,
+				},
+			},
+		},
+	}
+
+	resp, err := conv.aggregateStreamingEvents(events)
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.NotNil(t, resp.Choices[0].FinishReason)
+	assert.Equal(t, "length", *resp.Choices[0].FinishReason)
+}
+
+func TestConverter_convertModelMessageToOpenAI_EmptyContent(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	msg := model.Message{
+		Role:    model.RoleAssistant,
+		Content: "",
+	}
+
+	result, err := conv.convertModelMessageToOpenAI(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "assistant", result.Role)
+	assert.Nil(t, result.Content)
+}
+
+func TestConverter_convertModelMessageToOpenAI_WithToolID(t *testing.T) {
+	conv := newConverter("gpt-3.5-turbo")
+
+	msg := model.Message{
+		Role:     model.RoleTool,
+		Content:  "result",
+		ToolID:   "call-123",
+		ToolName: "test_function",
+	}
+
+	result, err := conv.convertModelMessageToOpenAI(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "tool", result.Role)
+	assert.Equal(t, "call-123", result.ToolCallID)
+	assert.Equal(t, "test_function", result.Name)
+	assert.Equal(t, "result", result.Content)
+}
