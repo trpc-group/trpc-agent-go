@@ -1,5 +1,8 @@
 ## Callbacks
 
+> **Version Requirement**  
+> The structured callback API (recommended) requires **trpc-agent-go >= 0.6.0**.
+
 This page describes the callback system used across the project to intercept,
 observe, and customize model inference, tool invocation, and agent execution.
 
@@ -16,108 +19,237 @@ short-circuit the default execution by returning a non-nil custom response.
 
 ## ModelCallbacks
 
-- BeforeModelCallback: Runs before a model inference.
-- AfterModelCallback: Runs after the model finishes (or per streaming phase).
+### Structured Model Callbacks (Recommended)
+
+- BeforeModelCallbackStructured: Runs before a model inference with structured arguments.
+- AfterModelCallbackStructured: Runs after the model finishes with structured arguments.
+
+Arguments:
+
+```go
+type BeforeModelArgs struct {
+    Request *model.Request  // The request about to be sent (can be modified)
+}
+
+type BeforeModelResult struct {
+    Context        context.Context  // Optional context for subsequent operations
+    CustomResponse *model.Response  // If non-nil, skips model call and returns this response
+}
+
+type AfterModelArgs struct {
+    Request  *model.Request   // The original request sent to the model
+    Response *model.Response  // The response from the model (may be nil)
+    Error    error            // Any error that occurred during model call
+}
+
+type AfterModelResult struct {
+    Context        context.Context  // Optional context for subsequent operations
+    CustomResponse *model.Response  // If non-nil, replaces the original response
+}
+```
 
 Signatures:
 
 ```go
-type BeforeModelCallback func(ctx context.Context, req *model.Request) (*model.Response, error)
-type AfterModelCallback  func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error)
+type BeforeModelCallbackStructured func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error)
+type AfterModelCallbackStructured  func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error)
 ```
 
 Key points:
 
+- Structured parameters provide better type safety and clearer intent.
+- `BeforeModelResult.Context` can be used to pass context to subsequent operations.
+- `AfterModelResult.Context` allows passing context between callbacks.
 - Before can return a non-nil response to skip the model call.
-- After receives the original request, useful for content restoration and
-  post-processing.
+- After receives the original request, useful for content restoration and post-processing.
+
+### Callback Execution Control
+
+By default, callback execution stops immediately when:
+
+- A callback returns an error
+- A callback returns a non-nil `CustomResponse` (for Before callbacks) or `CustomResult` (for Tool callbacks)
+
+You can control this behavior using options when creating callbacks:
+
+```go
+// Continue executing remaining callbacks even if an error occurs
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnError(true),
+)
+
+// Continue executing remaining callbacks even if a CustomResponse is returned
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnResponse(true),
+)
+
+// Enable both options: continue on both error and CustomResponse
+modelCallbacks := model.NewCallbacks(
+    model.WithContinueOnError(true),
+    model.WithContinueOnResponse(true),
+)
+```
+
+**Execution Modes:**
+
+1. **Default (both false)**: Stop on first error or CustomResponse
+2. **Continue on Error**: Continue executing remaining callbacks even if one returns an error
+3. **Continue on Response**: Continue executing remaining callbacks even if one returns a CustomResponse
+4. **Continue on Both**: Continue executing all callbacks regardless of errors or CustomResponse
+
+**Priority Rules:**
+
+- If both an error and a CustomResponse occur, the error takes priority and will be returned (unless `continueOnError` is true)
+- When `continueOnError` is true and an error occurs, execution continues but the first error is preserved and returned at the end
+- When `continueOnResponse` is true and a CustomResponse is returned, execution continues but the last CustomResponse is used
 
 Example:
 
 ```go
 modelCallbacks := model.NewCallbacks().
   // Before: respond to a special prompt to skip the real model call.
-  RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-    if len(req.Messages) > 0 && strings.Contains(req.Messages[len(req.Messages)-1].Content, "/ping") {
-      return &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "pong"}}}}, nil
+  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+    if len(args.Request.Messages) > 0 && strings.Contains(args.Request.Messages[len(args.Request.Messages)-1].Content, "/ping") {
+      return &model.BeforeModelResult{
+        CustomResponse: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "pong"}}}},
+      }, nil
     }
     return nil, nil
   }).
   // After: annotate successful responses, keep errors untouched.
-  RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-    if runErr != nil || resp == nil || len(resp.Choices) == 0 {
-      return resp, runErr
+  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+    if args.Error != nil {
+      return nil, args.Error
     }
-    c := resp.Choices[0]
-    c.Message.Content = c.Message.Content + "\n\n-- answered by callback"
-    resp.Choices[0] = c
-    return resp, nil
+    if args.Response != nil && len(args.Response.Choices) > 0 {
+      args.Response.Choices[0].Message.Content += "\n\n-- answered by callback"
+      return &model.AfterModelResult{CustomResponse: args.Response}, nil
+    }
+    return nil, nil
   })
 ```
+
+### Legacy Model Callbacks (Deprecated)
+
+> **⚠️ Deprecated**  
+> Legacy callbacks are deprecated. Use structured callbacks for new code.
 
 ---
 
 ## ToolCallbacks
 
-- BeforeToolCallback: Runs before each tool invocation.
-- AfterToolCallback: Runs after each tool invocation.
+### Structured Tool Callbacks (Recommended)
+
+- BeforeToolCallbackStructured: Runs before each tool invocation with structured arguments.
+- AfterToolCallbackStructured: Runs after each tool invocation with structured arguments.
+
+Arguments:
+
+```go
+type BeforeToolArgs struct {
+    ToolName     string               // The name of the tool
+    Declaration  *tool.Declaration    // Tool declaration metadata
+    Arguments    []byte               // JSON arguments (can be modified)
+}
+
+type BeforeToolResult struct {
+    Context       context.Context     // Optional context for subsequent operations
+    CustomResult  any                 // If non-nil, skips tool execution and returns this result
+    ModifiedArguments []byte          // Optional modified arguments for tool execution
+}
+
+type AfterToolArgs struct {
+    ToolName     string               // The name of the tool
+    Declaration  *tool.Declaration    // Tool declaration metadata
+    Arguments    []byte               // Original JSON arguments
+    Result       any                  // Result from tool execution (may be nil)
+    Error        error                // Any error that occurred during tool execution
+}
+
+type AfterToolResult struct {
+    Context       context.Context     // Optional context for subsequent operations
+    CustomResult  any                 // If non-nil, replaces the original result
+}
+```
 
 Signatures:
 
 ```go
-// Before: can short-circuit with a custom result and can mutate arguments via pointer.
-type BeforeToolCallback func(
-  ctx context.Context,
-  toolName string,
-  toolDeclaration *tool.Declaration,
-  jsonArgs *[]byte, // pointer: mutations are visible to the caller
-) (any, error)
-
-// After: can override the result.
-type AfterToolCallback func(
-  ctx context.Context,
-  toolName string,
-  toolDeclaration *tool.Declaration,
-  jsonArgs []byte,
-  result any,
-  runErr error,
-) (any, error)
+type BeforeToolCallbackStructured func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error)
+type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error)
 ```
 
-Argument mutation (important):
+Key points:
 
-- jsonArgs is passed as a pointer (`*[]byte`) to BeforeToolCallback.
-- The callback may replace the slice (e.g., `*jsonArgs = newBytes`).
-- The mutated arguments will be used for:
-  - The actual tool execution.
-  - Telemetry traces and graph events (emitToolStartEvent/emitToolCompleteEvent).
+- Structured parameters provide better type safety and clearer intent.
+- `BeforeToolResult.ModifiedArguments` allows modifying tool arguments.
+- `BeforeToolResult.Context` and `AfterToolResult.Context` can pass context between operations.
+- Arguments can be modified directly via `args.Arguments`.
+- If BeforeToolCallbackStructured returns a non-nil custom result, the tool is skipped and that result is used directly.
 
-Short-circuiting:
+### Callback Execution Control
 
-- If BeforeToolCallback returns a non-nil custom result, the tool is skipped
-  and that result is used directly.
+By default, callback execution stops immediately when:
+
+- A callback returns an error
+- A callback returns a non-nil `CustomResult`
+
+You can control this behavior using options when creating callbacks:
+
+```go
+// Continue executing remaining callbacks even if an error occurs
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnError(true),
+)
+
+// Continue executing remaining callbacks even if a CustomResult is returned
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnResponse(true),
+)
+
+// Enable both options: continue on both error and CustomResult
+toolCallbacks := tool.NewCallbacks(
+    tool.WithContinueOnError(true),
+    tool.WithContinueOnResponse(true),
+)
+```
+
+**Execution Modes:**
+
+1. **Default (both false)**: Stop on first error or CustomResult
+2. **Continue on Error**: Continue executing remaining callbacks even if one returns an error
+3. **Continue on Response**: Continue executing remaining callbacks even if one returns a CustomResult
+4. **Continue on Both**: Continue executing all callbacks regardless of errors or CustomResult
+
+**Priority Rules:**
+
+- If both an error and a CustomResult occur, the error takes priority and will be returned (unless `continueOnError` is true)
+- When `continueOnError` is true and an error occurs, execution continues but the first error is preserved and returned at the end
+- When `continueOnResponse` is true and a CustomResult is returned, execution continues but the last CustomResult is used
 
 Example:
 
 ```go
 toolCallbacks := tool.NewCallbacks().
-  RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    if jsonArgs != nil && toolName == "calculator" {
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if args.Arguments != nil && args.ToolName == "calculator" {
       // Enrich arguments.
-      original := string(*jsonArgs)
+      original := string(args.Arguments)
       enriched := []byte(fmt.Sprintf(`{"original":%s,"ts":%d}`, original, time.Now().Unix()))
-      *jsonArgs = enriched
+      args.Arguments = enriched
     }
     return nil, nil
   }).
-  RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
-    if runErr != nil {
-      return nil, runErr
+  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    if args.Error != nil {
+      return nil, args.Error
     }
-    if s, ok := result.(string); ok {
-      return s + "\n-- post processed by tool callback", nil
+    if s, ok := args.Result.(string); ok {
+      return &tool.AfterToolResult{
+        CustomResult: s + "\n-- post processed by tool callback",
+      }, nil
     }
-    return result, nil
+    return nil, nil
   })
 ```
 
@@ -127,50 +259,130 @@ Telemetry and events:
   - `TraceToolCall` telemetry attributes.
   - Graph events emitted by `emitToolStartEvent` and `emitToolCompleteEvent`.
 
+### Legacy Tool Callbacks (Deprecated)
+
+> **⚠️ Deprecated**  
+> Legacy callbacks are deprecated. Use structured callbacks for new code.
+
 ---
 
 ## AgentCallbacks
 
-- BeforeAgentCallback: Runs before agent execution.
-- AfterAgentCallback: Runs after agent execution.
+### Structured Agent Callbacks (Recommended)
+
+- BeforeAgentCallbackStructured: Runs before agent execution with structured arguments.
+- AfterAgentCallbackStructured: Runs after agent execution with structured arguments.
+
+Arguments:
+
+```go
+type BeforeAgentArgs struct {
+    Invocation *agent.Invocation  // The invocation context
+}
+
+type BeforeAgentResult struct {
+    Context        context.Context  // Optional context for subsequent operations
+    CustomResponse *model.Response  // If non-nil, skips agent execution and returns this response
+}
+
+type AfterAgentArgs struct {
+    Invocation *agent.Invocation  // The invocation context
+    Error      error              // Any error that occurred during agent execution
+}
+
+type AfterAgentResult struct {
+    Context        context.Context  // Optional context for subsequent operations
+    CustomResponse *model.Response  // If non-nil, replaces the original response
+}
+```
 
 Signatures:
 
 ```go
-type BeforeAgentCallback func(ctx context.Context, inv *agent.Invocation) (*model.Response, error)
-type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error)
+type BeforeAgentCallbackStructured func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error)
+type AfterAgentCallbackStructured  func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error)
 ```
 
 Key points:
 
+- Structured parameters provide better type safety and clearer intent.
+- `BeforeAgentResult.Context` and `AfterAgentResult.Context` can pass context between operations.
+- Access to full invocation context allows for rich per-invocation logic.
 - Before can short-circuit with a custom model.Response.
 - After can return a replacement response.
+
+### Callback Execution Control
+
+By default, callback execution stops immediately when:
+
+- A callback returns an error
+- A callback returns a non-nil `CustomResponse`
+
+You can control this behavior using options when creating callbacks:
+
+```go
+// Continue executing remaining callbacks even if an error occurs
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnError(true),
+)
+
+// Continue executing remaining callbacks even if a CustomResponse is returned
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnResponse(true),
+)
+
+// Enable both options: continue on both error and CustomResponse
+agentCallbacks := agent.NewCallbacks(
+    agent.WithContinueOnError(true),
+    agent.WithContinueOnResponse(true),
+)
+```
+
+**Execution Modes:**
+
+1. **Default (both false)**: Stop on first error or CustomResponse
+2. **Continue on Error**: Continue executing remaining callbacks even if one returns an error
+3. **Continue on Response**: Continue executing remaining callbacks even if one returns a CustomResponse
+4. **Continue on Both**: Continue executing all callbacks regardless of errors or CustomResponse
+
+**Priority Rules:**
+
+- If both an error and a CustomResponse occur, the error takes priority and will be returned (unless `continueOnError` is true)
+- When `continueOnError` is true and an error occurs, execution continues but the first error is preserved and returned at the end
+- When `continueOnResponse` is true and a CustomResponse is returned, execution continues but the last CustomResponse is used
 
 Example:
 
 ```go
 agentCallbacks := agent.NewCallbacks().
   // Before: if the user message contains /abort, return a fixed response and skip the rest.
-  RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-    if inv != nil && strings.Contains(inv.GetUserMessageContent(), "/abort") {
-      return &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "aborted by callback"}}}}, nil
+  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    if args.Invocation != nil && strings.Contains(args.Invocation.GetUserMessageContent(), "/abort") {
+      return &agent.BeforeAgentResult{
+        CustomResponse: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "aborted by callback"}}}},
+      }, nil
     }
     return nil, nil
   }).
   // After: append a footer to successful responses.
-  RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-    if runErr != nil {
-      return nil, runErr
+  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if args.Error != nil {
+      return nil, args.Error
     }
-    if inv == nil || inv.Response == nil || len(inv.Response.Choices) == 0 {
-      return nil, nil
+    if args.Invocation != nil && args.Invocation.Response != nil && len(args.Invocation.Response.Choices) > 0 {
+      c := args.Invocation.Response.Choices[0]
+      c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
+      args.Invocation.Response.Choices[0] = c
+      return &agent.AfterAgentResult{CustomResponse: args.Invocation.Response}, nil
     }
-    c := inv.Response.Choices[0]
-    c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
-    inv.Response.Choices[0] = c
-    return inv.Response, nil
+    return nil, nil
   })
 ```
+
+### Legacy Agent Callbacks (Deprecated)
+
+> **⚠️ Deprecated**  
+> Legacy callbacks are deprecated. Use structured callbacks for new code.
 
 ---
 
@@ -230,18 +442,18 @@ To avoid key conflicts between different use cases, use prefixes:
 
 ```go
 // BeforeAgentCallback: Record start time.
-agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-  inv.SetState("agent:start_time", time.Now())
+agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+  args.Invocation.SetState("agent:start_time", time.Now())
   return nil, nil
 })
 
 // AfterAgentCallback: Calculate execution duration.
-agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-  if startTimeVal, ok := inv.GetState("agent:start_time"); ok {
+agentCallbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+  if startTimeVal, ok := args.Invocation.GetState("agent:start_time"); ok {
     startTime := startTimeVal.(time.Time)
     duration := time.Since(startTime)
     fmt.Printf("Agent execution took: %v\n", duration)
-    inv.DeleteState("agent:start_time") // Clean up state.
+    args.Invocation.DeleteState("agent:start_time") // Clean up state.
   }
   return nil, nil
 })
@@ -253,7 +465,7 @@ Model and Tool callbacks need to retrieve the Invocation from context first:
 
 ```go
 // BeforeModelCallback: Record start time.
-modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
     inv.SetState("model:start_time", time.Now())
   }
@@ -261,7 +473,7 @@ modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request)
 })
 
 // AfterModelCallback: Calculate execution duration.
-modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
     if startTimeVal, ok := inv.GetState("model:start_time"); ok {
       startTime := startTimeVal.(time.Time)
@@ -278,7 +490,7 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 
 ```go
 // BeforeToolCallback: Record tool start time.
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
     // Get tool call ID for concurrent call support.
     toolCallID, ok := tool.ToolCallIDFromContext(ctx)
@@ -287,14 +499,14 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
     }
 
     // Use tool call ID to build unique key.
-    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
     inv.SetState(key, time.Now())
   }
   return nil, nil
 })
 
 // AfterToolCallback: Calculate tool execution duration.
-toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
   if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
     // Get tool call ID for concurrent call support.
     toolCallID, ok := tool.ToolCallIDFromContext(ctx)
@@ -302,11 +514,11 @@ toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, d *to
       toolCallID = "default" // Fallback for compatibility.
     }
 
-    key := fmt.Sprintf("tool:%s:%s:start_time", toolName, toolCallID)
+    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
     if startTimeVal, ok := inv.GetState(key); ok {
       startTime := startTimeVal.(time.Time)
       duration := time.Since(startTime)
-      fmt.Printf("Tool %s (call %s) took: %v\n", toolName, toolCallID, duration)
+      fmt.Printf("Tool %s (call %s) took: %v\n", args.ToolName, toolCallID, duration)
       inv.DeleteState(key) // Clean up state.
     }
   }
@@ -339,32 +551,31 @@ You can define reusable global callbacks using chain registration.
 
 ```go
 _ = model.NewCallbacks().
-  RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-    fmt.Printf("Global BeforeModel: %d messages.\n", len(req.Messages))
+  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+    fmt.Printf("Global BeforeModel: %d messages.\n", len(args.Request.Messages))
     return nil, nil
   }).
-  RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, err error) (*model.Response, error) {
+  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
     fmt.Println("Global AfterModel: completed.")
     return nil, nil
   })
 
 _ = tool.NewCallbacks().
-  RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
-    fmt.Printf("Global BeforeTool: %s.\n", toolName)
-    // jsonArgs is a pointer; modifications are visible to the caller.
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    fmt.Printf("Global BeforeTool: %s.\n", args.ToolName)
     return nil, nil
   }).
-  RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-    fmt.Printf("Global AfterTool: %s done.\n", toolName)
+  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    fmt.Printf("Global AfterTool: %s done.\n", args.ToolName)
     return nil, nil
   })
 
 _ = agent.NewCallbacks().
-  RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
-    fmt.Printf("Global BeforeAgent: %s.\n", inv.AgentName)
+  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    fmt.Printf("Global BeforeAgent: %s.\n", args.Invocation.AgentName)
     return nil, nil
   }).
-  RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
     fmt.Println("Global AfterAgent: completed.")
     return nil, nil
   })
@@ -377,9 +588,11 @@ _ = agent.NewCallbacks().
 Mock a tool result and short-circuit execution:
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
-  if toolName == "calculator" && jsonArgs != nil && strings.Contains(string(*jsonArgs), "42") {
-    return calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242}, nil
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+  if args.ToolName == "calculator" && args.Arguments != nil && strings.Contains(string(args.Arguments), "42") {
+    return &tool.BeforeToolResult{
+      CustomResult: calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242},
+    }, nil
   }
   return nil, nil
 })
@@ -388,11 +601,11 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 Modify arguments prior to execution (and telemetry/event reporting):
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
-  if jsonArgs != nil && toolName == "calculator" {
-    originalArgs := string(*jsonArgs)
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+  if args.Arguments != nil && args.ToolName == "calculator" {
+    originalArgs := string(args.Arguments)
     modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-    *jsonArgs = []byte(modifiedArgs)
+    args.Arguments = []byte(modifiedArgs)
   }
   return nil, nil
 })

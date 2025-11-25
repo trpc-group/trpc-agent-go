@@ -1917,7 +1917,7 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#5-token-裁剪token-tailoring)。
+关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#6-token-裁剪token-tailoring)。
 
 ## Provider
 
