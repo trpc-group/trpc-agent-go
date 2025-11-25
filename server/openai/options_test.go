@@ -26,6 +26,12 @@ func TestWithBasePath(t *testing.T) {
 	assert.Equal(t, "/api/v1", opts.basePath)
 }
 
+func TestWithPath(t *testing.T) {
+	opts := &options{}
+	WithPath("/completions")(opts)
+	assert.Equal(t, "/completions", opts.path)
+}
+
 func TestWithSessionService(t *testing.T) {
 	svc := inmemory.NewSessionService()
 	opts := &options{}
@@ -84,11 +90,12 @@ func TestOptions_DefaultValues(t *testing.T) {
 	opts := &options{}
 	// Apply default options
 	WithBasePath(defaultBasePath)(opts)
+	WithPath(defaultPath)(opts)
 	WithModelName(defaultModelName)(opts)
 	WithAppName(defaultAppName)(opts)
 
 	assert.Equal(t, defaultBasePath, opts.basePath)
+	assert.Equal(t, defaultPath, opts.path)
 	assert.Equal(t, defaultModelName, opts.modelName)
 	assert.Equal(t, defaultAppName, opts.appName)
 }
-

@@ -20,7 +20,8 @@ type Option func(*options)
 
 // options holds the configuration for the OpenAI server.
 type options struct {
-	basePath       string
+	basePath       string // basePath is the base path for the service.
+	path           string // path is the chat completions endpoint path.
 	sessionService session.Service
 	agent          agent.Agent
 	runner         runner.Runner
@@ -33,6 +34,14 @@ type options struct {
 func WithBasePath(path string) Option {
 	return func(opts *options) {
 		opts.basePath = path
+	}
+}
+
+// WithPath sets the chat completions endpoint path.
+// Default is "/chat/completions".
+func WithPath(path string) Option {
+	return func(opts *options) {
+		opts.path = path
 	}
 }
 

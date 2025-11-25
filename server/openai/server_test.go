@@ -298,6 +298,72 @@ func TestServer_BasePath(t *testing.T) {
 	}
 }
 
+func TestServer_Path(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     []Option
+		expected string
+	}{
+		{
+			name:     "default path",
+			opts:     []Option{WithAgent(&mockAgent{name: "test-agent"})},
+			expected: "/v1/chat/completions",
+		},
+		{
+			name: "custom base path",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithBasePath("/api/v1"),
+			},
+			expected: "/api/v1/chat/completions",
+		},
+		{
+			name: "custom path",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithPath("/completions"),
+			},
+			expected: "/v1/completions",
+		},
+		{
+			name: "custom base path and path",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithBasePath("/api/v1"),
+				WithPath("/completions"),
+			},
+			expected: "/api/v1/completions",
+		},
+		{
+			name: "base path with trailing slash",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithBasePath("/api/v1/"),
+			},
+			expected: "/api/v1/chat/completions",
+		},
+		{
+			name: "path with leading slash",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent"}),
+				WithPath("/completions"),
+			},
+			expected: "/v1/completions",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := New(tt.opts...)
+			require.NoError(t, err)
+			require.NotNil(t, s)
+
+			path := s.Path()
+			assert.Equal(t, tt.expected, path)
+		})
+	}
+}
+
 func TestServer_Close(t *testing.T) {
 	tests := []struct {
 		name        string

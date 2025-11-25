@@ -16,7 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
+	"net/url"
 	"sync"
 	"time"
 
@@ -31,10 +31,9 @@ import (
 
 const (
 	defaultBasePath  = "/v1"
+	defaultPath      = "/chat/completions"
 	defaultModelName = "gpt-3.5-turbo"
 	defaultAppName   = "openai-server"
-
-	apiPathChatCompletions = "/chat/completions"
 
 	headerAllow                = "Allow"
 	headerSessionID            = "X-Session-ID"
@@ -60,6 +59,7 @@ const (
 // Server provides OpenAI-compatible API server.
 type Server struct {
 	basePath       string
+	path           string // path is the chat completions endpoint path.
 	handler        http.Handler
 	sessionService session.Service
 	runner         runner.Runner
@@ -74,6 +74,7 @@ type Server struct {
 func New(opts ...Option) (*Server, error) {
 	options := &options{
 		basePath:  defaultBasePath,
+		path:      defaultPath,
 		modelName: defaultModelName,
 		appName:   defaultAppName,
 	}
@@ -86,10 +87,15 @@ func New(opts ...Option) (*Server, error) {
 	if options.sessionService == nil {
 		options.sessionService = inmemory.NewSessionService()
 	}
+	chatPath, err := joinURLPath(options.basePath, options.path)
+	if err != nil {
+		return nil, fmt.Errorf("openai: url join chat path: %w", err)
+	}
 	var r runner.Runner
 	var ownedRunner bool
 	if options.runner != nil {
 		r = options.runner
+		ownedRunner = false
 	} else {
 		r = runner.NewRunner(options.appName, options.agent,
 			runner.WithSessionService(options.sessionService))
@@ -98,6 +104,7 @@ func New(opts ...Option) (*Server, error) {
 	conv := newConverter(options.modelName)
 	s := &Server{
 		basePath:       options.basePath,
+		path:           chatPath,
 		sessionService: options.sessionService,
 		runner:         r,
 		agent:          options.agent,
@@ -117,6 +124,11 @@ func (s *Server) Handler() http.Handler {
 // BasePath returns the base path of the server.
 func (s *Server) BasePath() string {
 	return s.basePath
+}
+
+// Path returns the chat completions endpoint path joined with BasePath.
+func (s *Server) Path() string {
+	return s.path
 }
 
 // Close closes the server and releases owned resources.
@@ -141,10 +153,14 @@ func (s *Server) Close() error {
 // setupHandler sets up the HTTP routes.
 func (s *Server) setupHandler() {
 	mux := http.NewServeMux()
-	path := strings.TrimSuffix(s.basePath, "/") + apiPathChatCompletions
-	mux.HandleFunc(path, s.handleChatCompletions)
-	mux.HandleFunc(path+"/", s.handleChatCompletions)
+	mux.HandleFunc(s.path, s.handleChatCompletions)
+	mux.HandleFunc(s.path+"/", s.handleChatCompletions)
 	s.handler = mux
+}
+
+// joinURLPath joins the base path and the path into a URL path.
+func joinURLPath(basePath, path string) (string, error) {
+	return url.JoinPath(basePath, path)
 }
 
 // handleChatCompletions handles the /v1/chat/completions endpoint.
