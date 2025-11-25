@@ -408,3 +408,277 @@ func TestFetch_TotalLimitExceeded(t *testing.T) {
 	assert.Empty(t, resp.Results[1].Content)
 	assert.Contains(t, resp.Results[1].Error, "truncated due to total length limit")
 }
+
+// ============================================================================
+// URL Filtering Tests
+// ============================================================================
+
+func TestWebFetch_WithAllowedDomains(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "Allowed content")
+	}))
+	defer ts.Close()
+
+	// Only allow localhost
+	tool := NewTool(WithAllowedDomains([]string{"127.0.0.1"}))
+
+	// This should be allowed
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "Allowed content", resp.Results[0].Content)
+	assert.Empty(t, resp.Results[0].Error)
+}
+
+func TestWebFetch_WithAllowedDomains_Blocked(t *testing.T) {
+	// Only allow example.com
+	tool := NewTool(WithAllowedDomains([]string{"example.com"}))
+
+	// Try to fetch from google.com (should be blocked)
+	args := `{"urls": ["https://google.com"]}`
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 1)
+	assert.NotEmpty(t, resp.Results[0].Error)
+	assert.Contains(t, resp.Results[0].Error, "does not match any allowed pattern")
+}
+
+func TestWebFetch_WithBlockedDomains(t *testing.T) {
+	// Block malicious.com
+	tool := NewTool(WithBlockedDomains([]string{"malicious.com"}))
+
+	// Try to fetch from blocked domain
+	args := `{"urls": ["https://malicious.com/page"]}`
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 1)
+	assert.NotEmpty(t, resp.Results[0].Error)
+	assert.Contains(t, resp.Results[0].Error, "matches blocked pattern")
+}
+
+func TestWebFetch_WithBlockedDomains_Allowed(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "Not blocked")
+	}))
+	defer ts.Close()
+
+	// Block example.com but allow localhost
+	tool := NewTool(WithBlockedDomains([]string{"example.com"}))
+
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "Not blocked", resp.Results[0].Content)
+	assert.Empty(t, resp.Results[0].Error)
+}
+
+func TestWebFetch_CombinedFilters(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "Success")
+	}))
+	defer ts.Close()
+
+	// Allow 127.0.0.1 and block nothing specific
+	tool := NewTool(
+		WithAllowedDomains([]string{"127.0.0.1"}),
+		WithBlockedDomains([]string{"evil.com"}),
+	)
+
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "Success", resp.Results[0].Content)
+}
+
+// ============================================================================
+// Additional Edge Case Tests
+// ============================================================================
+
+func TestWebFetch_DuplicateURLs(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "content")
+	}))
+	defer ts.Close()
+
+	// Submit same URL twice - should be deduplicated
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s", "%s", "%s"]}`, ts.URL, ts.URL, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	// Should only fetch once due to deduplication
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "content", resp.Results[0].Content)
+	assert.Contains(t, resp.Summary, "Fetched 1 URLs")
+}
+
+func TestWebFetch_EmptyURLs(t *testing.T) {
+	// Test with empty strings in URL list
+	tool := NewTool()
+	args := `{"urls": ["", "  ", ""]}`
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	assert.Empty(t, resp.Results)
+	// After trimming and deduplication, empty URLs result in "Fetched 0 URLs"
+	assert.Equal(t, "Fetched 0 URLs", resp.Summary)
+}
+
+func TestWebFetch_MixedEmptyAndValid(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "valid")
+	}))
+	defer ts.Close()
+
+	// Mix of empty and valid URLs
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["", "%s", "  ", "%s", ""]}`, ts.URL, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	// Should only fetch the one unique valid URL
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "valid", resp.Results[0].Content)
+}
+
+func TestWebFetch_MaxURLsLimit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "ok")
+	}))
+	defer ts.Close()
+
+	// Generate 25 unique URLs (more than maxURLs=20)
+	urls := make([]string, 25)
+	for i := 0; i < 25; i++ {
+		urls[i] = fmt.Sprintf("%s/page%d", ts.URL, i)
+	}
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, strings.Join(urls, `","`))
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	// Should only fetch first 20 due to limit
+	assert.Len(t, resp.Results, 20)
+	assert.Contains(t, resp.Summary, "Fetched 20 URLs")
+}
+
+func TestWebFetch_SupportedTextTypes(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		content     string
+		supported   bool
+	}{
+		{"application/json", "application/json", `{"test": "json"}`, true},
+		{"text/plain", "text/plain", "plain text", true},
+		{"text/xml", "text/xml", "<xml>data</xml>", true},
+		{"text/css", "text/css", "body { color: red; }", true},
+		{"text/javascript", "text/javascript", "console.log('test');", true},
+		{"text/csv", "text/csv", "a,b,c\n1,2,3", true},
+		{"text/rtf", "text/rtf", "{\\rtf1 test}", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tt.contentType)
+				fmt.Fprint(w, tt.content)
+			}))
+			defer ts.Close()
+
+			tool := NewTool()
+			args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+			res, err := tool.Call(context.Background(), []byte(args))
+			require.NoError(t, err)
+
+			resp := res.(fetchResponse)
+			assert.Len(t, resp.Results, 1)
+
+			if tt.supported {
+				assert.Equal(t, tt.content, resp.Results[0].Content)
+				assert.Empty(t, resp.Results[0].Error)
+			} else {
+				assert.NotEmpty(t, resp.Results[0].Error)
+			}
+		})
+	}
+}
+
+func TestIsSupportedTextType(t *testing.T) {
+	// Direct function test
+	assert.True(t, isSupportedTextType("application/json"))
+	assert.True(t, isSupportedTextType("text/plain"))
+	assert.True(t, isSupportedTextType("text/xml"))
+	assert.True(t, isSupportedTextType("text/css"))
+	assert.True(t, isSupportedTextType("text/javascript"))
+	assert.True(t, isSupportedTextType("text/csv"))
+	assert.True(t, isSupportedTextType("text/rtf"))
+
+	assert.False(t, isSupportedTextType("application/pdf"))
+	assert.False(t, isSupportedTextType("image/png"))
+	assert.False(t, isSupportedTextType("video/mp4"))
+	assert.False(t, isSupportedTextType(""))
+}
+
+func TestWebFetch_TotalLimitWithError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "error") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "12345")
+	}))
+	defer ts.Close()
+
+	// Total limit 10. First URL errors, second succeeds
+	tool := NewTool(WithMaxTotalContentLength(10))
+	args := fmt.Sprintf(`{"urls": ["%s/error", "%s/ok"]}`, ts.URL, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	assert.Len(t, resp.Results, 2)
+
+	// First should have error (not counted toward total)
+	assert.NotEmpty(t, resp.Results[0].Error)
+
+	// Second should succeed with full content
+	assert.Equal(t, "12345", resp.Results[1].Content)
+}
+
+func TestTruncateString_ExactLength(t *testing.T) {
+	// Test when string length equals limit
+	assert.Equal(t, "hello", truncateString("hello", 5))
+	assert.Equal(t, "hello", truncateString("hello", 10))
+}
