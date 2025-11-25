@@ -508,7 +508,7 @@ func TestToolTrajectoryStrategyArgumentAndResponseMismatch(t *testing.T) {
 		"tool": strategy,
 	}))
 	ok, err := criterion.Match(actual, expected)
-	assert.True(t, ok)
+	assert.False(t, ok)
 	assert.Error(t, err)
 }
 

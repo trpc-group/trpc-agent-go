@@ -42,3 +42,28 @@ func TestMapCriterionDeepEqualSuccess(t *testing.T) {
 	assert.True(t, ok)
 	assert.NoError(t, err)
 }
+
+func TestJSONCriterionIgnoreSkipsCompare(t *testing.T) {
+	called := false
+	criterion := &JSONCriterion{
+		Ignore: true,
+		Compare: func(actual, expected map[string]any) (bool, error) {
+			called = true
+			return false, nil
+		},
+		MatchStrategy: JSONMatchStrategyExact,
+	}
+	ok, err := criterion.Match(map[string]any{"k": "v"}, map[string]any{"k": "diff"})
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.False(t, called)
+}
+
+func TestJSONCriterionInvalidMatchStrategy(t *testing.T) {
+	criterion := &JSONCriterion{
+		MatchStrategy: JSONMatchStrategy("invalid"),
+	}
+	ok, err := criterion.Match(map[string]any{"k": "v"}, map[string]any{"k": "v"})
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
