@@ -554,16 +554,10 @@ func TestGetSession_Success(t *testing.T) {
 		WillReturnRows(userRows)
 
 	// Mock events
-	eventRows := sqlmock.NewRows([]string{"event"})
-	mock.ExpectQuery("SELECT event FROM session_events").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(), sqlmock.AnyArg()).
+	eventRows := sqlmock.NewRows([]string{"session_id", "event"})
+	mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		WithArgs("test-app", "test-user", "{test-session}").
 		WillReturnRows(eventRows)
-
-	// Mock summaries
-	summaryRows := sqlmock.NewRows([]string{"filter_key", "summary"})
-	mock.ExpectQuery("SELECT filter_key, summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
-		WillReturnRows(summaryRows)
 
 	sess, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
@@ -609,9 +603,9 @@ func TestGetSession_WithTrackEvents(t *testing.T) {
 		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
 		WillReturnRows(userRows)
 
-	eventRows := sqlmock.NewRows([]string{"event"})
-	mock.ExpectQuery("SELECT event FROM session_events").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(), sqlmock.AnyArg()).
+	eventRows := sqlmock.NewRows([]string{"session_id", "event"})
+	mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		WithArgs("test-app", "test-user", "{test-session}").
 		WillReturnRows(eventRows)
 
 	trackEvent := &session.TrackEvent{
@@ -620,10 +614,6 @@ func TestGetSession_WithTrackEvents(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 	trackBytes, _ := json.Marshal(trackEvent)
-	summaryRows := sqlmock.NewRows([]string{"filter_key", "summary"})
-	mock.ExpectQuery("SELECT filter_key, summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
-		WillReturnRows(summaryRows)
 
 	trackRows := sqlmock.NewRows([]string{"event"}).AddRow(trackBytes)
 	mock.ExpectQuery("SELECT event FROM session_track_events").
@@ -822,8 +812,8 @@ func TestListSessions_WithTrackEvents(t *testing.T) {
 		WillReturnRows(sessionRows)
 
 	eventRows := sqlmock.NewRows([]string{"session_id", "event"})
-	mock.ExpectQuery("SELECT s\\.session_id, e\\.event").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", sqlmock.AnyArg(), sqlmock.AnyArg(), 1).
+	mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		WithArgs("test-app", "test-user", "{session-1}").
 		WillReturnRows(eventRows)
 
 	summaryRows := sqlmock.NewRows([]string{"session_id", "filter_key", "summary"})
@@ -1190,7 +1180,7 @@ func TestAppendEvent_SyncMode(t *testing.T) {
 	// Mock insert event
 	mock.ExpectExec("INSERT INTO session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()
@@ -1643,16 +1633,10 @@ func TestGetSession_WithEventLimit(t *testing.T) {
 		WillReturnRows(userRows)
 
 	// Mock events - with LIMIT in query (limit controls how many to return, not delete)
-	eventRows := sqlmock.NewRows([]string{"event"})
-	mock.ExpectQuery("SELECT event FROM session_events").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(), sqlmock.AnyArg(), 5).
+	eventRows := sqlmock.NewRows([]string{"session_id", "event"})
+	mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		WithArgs("test-app", "test-user", "{test-session}").
 		WillReturnRows(eventRows)
-
-	// Mock summaries
-	summaryRows := sqlmock.NewRows([]string{"filter_key", "summary"})
-	mock.ExpectQuery("SELECT filter_key, summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
-		WillReturnRows(summaryRows)
 
 	// WithEventNum(5) controls how many events to return in the query
 	// Note: This does NOT delete events from database, only limits the result set
@@ -1702,16 +1686,10 @@ func TestGetSession_WithTTLRefresh(t *testing.T) {
 		WillReturnRows(userRows)
 
 	// Mock events
-	eventRows := sqlmock.NewRows([]string{"event"})
-	mock.ExpectQuery("SELECT event FROM session_events").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(), sqlmock.AnyArg()).
+	eventRows := sqlmock.NewRows([]string{"test-session", "event"})
+	mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		WithArgs("test-app", "test-user", "{test-session}").
 		WillReturnRows(eventRows)
-
-	// Mock summaries
-	summaryRows := sqlmock.NewRows([]string{"filter_key", "summary"})
-	mock.ExpectQuery("SELECT filter_key, summary FROM session_summaries").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
-		WillReturnRows(summaryRows)
 
 	// Mock TTL refresh UPDATE - this should be called after successful GetSession
 	mock.ExpectExec("UPDATE session_states").
@@ -1780,7 +1758,7 @@ func TestAppendEvent_PartialEvent(t *testing.T) {
 	// So partial events might still be inserted. We need to expect the INSERT.
 	mock.ExpectExec("INSERT INTO session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()

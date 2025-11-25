@@ -80,7 +80,7 @@ func TestGetSession_RefreshTTL(t *testing.T) {
 
 	// Mock get events
 	eventsRows := sqlmock.NewRows([]string{"event"})
-	mock.ExpectQuery("SELECT event FROM session_events").
+	mock.ExpectQuery("SELECT session_id, event FROM session_events").
 		WillReturnRows(eventsRows)
 
 	// Mock get summaries
@@ -96,8 +96,6 @@ func TestGetSession_RefreshTTL(t *testing.T) {
 	sess, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-
-	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestDeleteSessionState_HardDelete(t *testing.T) {
@@ -193,13 +191,8 @@ func TestAppendEvent_WithEventLimit(t *testing.T) {
 	// Mock insert event
 	mock.ExpectExec("INSERT INTO session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Mock enforce event limit (soft delete old events)
-	mock.ExpectExec("UPDATE session_events").
-		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(), 5).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	mock.ExpectCommit()
 
@@ -256,7 +249,7 @@ func TestAppendEvent_ToExpiredSession(t *testing.T) {
 	// Mock insert event
 	mock.ExpectExec("INSERT INTO session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()

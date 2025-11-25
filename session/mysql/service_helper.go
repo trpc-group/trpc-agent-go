@@ -32,7 +32,7 @@ func (s *Service) getSession(
 	// Query session state (MySQL syntax with ?)
 	var sessState *SessionState
 	stateQuery := fmt.Sprintf(`SELECT state, created_at, updated_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL`, s.tableSessionStates)
-	stateArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now()}
+	stateArgs := []any{key.AppName, key.UserID, key.SessionID, time.Now()}
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		// rows.Next() is already called by the Query loop, so we just scan directly
@@ -74,91 +74,32 @@ func (s *Service) getSession(
 		return nil, err
 	}
 
-	// Query events
-	events := []event.Event{}
-	now := time.Now()
-	var eventQuery string
-	var eventArgs []interface{}
-
-	if limit > 0 {
-		eventQuery = fmt.Sprintf(`SELECT event FROM %s
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND (expires_at IS NULL OR expires_at > ?)
-			AND created_at > ?
-			AND deleted_at IS NULL
-			ORDER BY created_at DESC
-			LIMIT ?`, s.tableSessionEvents)
-		eventArgs = []interface{}{key.AppName, key.UserID, key.SessionID, now, afterTime, limit}
-	} else {
-		eventQuery = fmt.Sprintf(`SELECT event FROM %s
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND (expires_at IS NULL OR expires_at > ?)
-			AND created_at > ?
-			AND deleted_at IS NULL
-			ORDER BY created_at DESC`, s.tableSessionEvents)
-		eventArgs = []interface{}{key.AppName, key.UserID, key.SessionID, now, afterTime}
-	}
-
-	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		// rows.Next() is already called by the Query loop, so we just scan directly
-		var eventBytes []byte
-		if err := rows.Scan(&eventBytes); err != nil {
-			return err
-		}
-		var evt event.Event
-		if err := json.Unmarshal(eventBytes, &evt); err != nil {
-			return fmt.Errorf("unmarshal event failed: %w", err)
-		}
-		events = append(events, evt)
-		return nil
-	}, eventQuery, eventArgs...)
-
+	// Batch load events for all sessions
+	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
-
-	// Reverse events to get chronological order
-	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-		events[i], events[j] = events[j], events[i]
-	}
+	events := eventsList[0]
 
 	// Query summaries
 	summaries := make(map[string]*session.Summary)
-	summaryQuery := fmt.Sprintf(`SELECT filter_key, summary FROM %s
-		WHERE app_name = ? AND user_id = ? AND session_id = ?
-		AND (expires_at IS NULL OR expires_at > ?)
-		AND deleted_at IS NULL`, s.tableSessionSummaries)
-	summaryArgs := []interface{}{key.AppName, key.UserID, key.SessionID, time.Now()}
-
-	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		// rows.Next() is already called by the Query loop, so we just scan directly
-		var filterKey string
-		var summaryBytes []byte
-		if err := rows.Scan(&filterKey, &summaryBytes); err != nil {
-			return err
+	if len(events) > 0 {
+		// Batch load summaries for all sessions
+		summariesList, err := s.getSummariesList(ctx, []session.Key{key})
+		if err != nil {
+			return nil, fmt.Errorf("get summaries failed: %w", err)
 		}
-		var sum session.Summary
-		if err := json.Unmarshal(summaryBytes, &sum); err != nil {
-			return fmt.Errorf("unmarshal summary failed: %w", err)
-		}
-		summaries[filterKey] = &sum
-		return nil
-	}, summaryQuery, summaryArgs...)
-
-	if err != nil {
-		return nil, fmt.Errorf("get summaries failed: %w", err)
+		summaries = summariesList[0]
 	}
 
 	sess := session.NewSession(
 		key.AppName, key.UserID, sessState.ID,
 		session.WithSessionState(sessState.State),
 		session.WithSessionEvents(events),
+		session.WithSessionSummaries(summaries),
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
-	if len(events) > 0 {
-		sess.Summaries = summaries
-	}
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -189,7 +130,7 @@ func (s *Service) listSessions(
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL
 		ORDER BY updated_at DESC`, s.tableSessionStates)
-	listArgs := []interface{}{key.AppName, key.UserID, time.Now()}
+	listArgs := []any{key.AppName, key.UserID, time.Now()}
 
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		// rows.Next() is already called by the Query loop
@@ -316,18 +257,11 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		// Insert event if it has response and is not partial
 		if event.Response != nil && !event.IsPartial && event.IsValidContent() {
 			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at, expires_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID, eventBytes, now, now, expiresAt)
+				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
+				key.AppName, key.UserID, key.SessionID, eventBytes, now, now)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
-			}
-
-			// Enforce event limit if configured
-			if s.opts.sessionEventLimit > 0 {
-				if err := s.enforceEventLimit(ctx, tx, key, now); err != nil {
-					return err
-				}
 			}
 		}
 		return nil
@@ -335,46 +269,6 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 	if err != nil {
 		return fmt.Errorf("store event failed: %w", err)
-	}
-	return nil
-}
-
-// enforceEventLimit removes old events beyond the configured limit (MySQL syntax).
-func (s *Service) enforceEventLimit(ctx context.Context, tx *sql.Tx, key session.Key, now time.Time) error {
-	// MySQL approach: use NOT IN with IDs from subquery to avoid same-table restrictions
-	// First, get IDs of events to keep (Nth newest)
-	var cutoffCreatedAt time.Time
-	err := tx.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT created_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 OFFSET ?",
-			s.tableSessionEvents),
-		key.AppName, key.UserID, key.SessionID, s.opts.sessionEventLimit).Scan(&cutoffCreatedAt)
-
-	// If no cutoff time found (fewer events than limit), nothing to delete
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("get cutoff time failed: %w", err)
-	}
-
-	if s.opts.softDelete {
-		// Soft delete: mark events older than the cutoff time
-		_, err := tx.ExecContext(ctx,
-			fmt.Sprintf("UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL AND created_at < ?",
-				s.tableSessionEvents),
-			now, key.AppName, key.UserID, key.SessionID, cutoffCreatedAt)
-		if err != nil {
-			return fmt.Errorf("soft delete old events failed: %w", err)
-		}
-	} else {
-		// Hard delete: physically remove events older than the cutoff time
-		_, err := tx.ExecContext(ctx,
-			fmt.Sprintf("DELETE FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND created_at < ?",
-				s.tableSessionEvents),
-			key.AppName, key.UserID, key.SessionID, cutoffCreatedAt)
-		if err != nil {
-			return fmt.Errorf("hard delete old events failed: %w", err)
-		}
 	}
 	return nil
 }
@@ -483,24 +377,19 @@ func (s *Service) getEventsList(
 	// Build IN clause for batch query (MySQL doesn't support arrays like PostgreSQL)
 	// We'll use (app_name, user_id, session_id) IN (...) pattern
 	placeholders := make([]string, len(sessionKeys))
-	args := make([]interface{}, 0, len(sessionKeys)*3+2)
+	args := make([]any, 0, len(sessionKeys)*3)
 
 	for i, key := range sessionKeys {
 		placeholders[i] = "(?, ?, ?)"
 		args = append(args, key.AppName, key.UserID, key.SessionID)
 	}
 
-	// Add additional args
-	args = append(args, time.Now(), afterTime)
-
 	// Note: We cannot apply LIMIT in SQL because we're querying multiple sessions
 	// The limit is applied per session in memory after grouping by session key
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
-		AND (expires_at IS NULL OR expires_at > ?)
-		AND created_at > ?
 		AND deleted_at IS NULL
-		ORDER BY app_name, user_id, session_id, created_at DESC`,
+		ORDER BY app_name, user_id, session_id, created_at ASC`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
 
 	// Map to collect events by session
@@ -526,23 +415,22 @@ func (s *Service) getEventsList(
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
+	if limit <= 0 {
+		limit = s.opts.sessionEventLimit
+	}
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
 	// Build result in same order as sessionKeys
 	result := make([][]event.Event, len(sessionKeys))
 	for i, key := range sessionKeys {
 		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-		events := eventsMap[keyStr]
-
-		// Apply limit per session if configured
-		if limit > 0 && len(events) > limit {
-			events = events[:limit]
+		sess := session.Session{
+			Events: eventsMap[keyStr],
 		}
-
-		// Reverse to get chronological order
-		for j, k := 0, len(events)-1; j < k; j, k = j+1, k-1 {
-			events[j], events[k] = events[k], events[j]
-		}
-
-		result[i] = events
+		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+		result[i] = sess.Events
 	}
 
 	return result, nil
@@ -559,7 +447,7 @@ func (s *Service) getSummariesList(
 
 	// Build IN clause for batch query
 	placeholders := make([]string, len(sessionKeys))
-	args := make([]interface{}, 0, len(sessionKeys)*3+1)
+	args := make([]any, 0, len(sessionKeys)*3+1)
 
 	for i, key := range sessionKeys {
 		placeholders[i] = "(?, ?, ?)"
