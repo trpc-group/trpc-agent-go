@@ -1,0 +1,52 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package llm defines criteria for LLM-based judging.
+package llm
+
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// LlmCriterion configures an LLM judge for evaluation.
+type LlmCriterion struct {
+	JudgeModel *JudgeModelOptions `json:"judgeModel,omitempty"` // JudgeModel holds configuration for the judge model.
+}
+
+// JudgeModelOptions captures model and generation configuration for the judge.
+type JudgeModelOptions struct {
+	// ProviderName is the LLM provider name.
+	ProviderName string `json:"providerName,omitempty"`
+	// ModelName identifies the judge model.
+	ModelName string `json:"modelName,omitempty"`
+	// BaseURL is an optional custom endpoint.
+	BaseURL string `json:"baseURL,omitempty"`
+	// APIKey is used for the judge provider.
+	APIKey string `json:"apiKey,omitempty"`
+	// ExtraFields carries extra fields.
+	ExtraFields map[string]any `json:"extraFields,omitempty"`
+	// NumSamples sets how many judge samples to collect.
+	NumSamples int `json:"numSamples,omitempty"`
+	// Generation holds generation parameters for the judge.
+	Generation *model.GenerationConfig `json:"generationConfig,omitempty"`
+}
+
+// New builds an LlmCriterion with judge model settings.
+func New(providerName, modelName string, opt ...Option) *LlmCriterion {
+	opts := newOptions(opt...)
+	return &LlmCriterion{
+		JudgeModel: &JudgeModelOptions{
+			ProviderName: providerName,
+			ModelName:    modelName,
+			BaseURL:      opts.baseURL,
+			APIKey:       opts.apiKey,
+			ExtraFields:  opts.extraFields,
+			NumSamples:   opts.numSamples,
+			Generation:   opts.generation,
+		},
+	}
+}

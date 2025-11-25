@@ -67,7 +67,7 @@ type EvalMetricResult struct {
 	// Criterion contains the criterion used for this metric evaluation.
 	Criterion *criterion.Criterion `json:"criterion,omitempty"`
 	// Details contains additional metric-specific information.
-	Details map[string]any `json:"details,omitempty"`
+	Details *EvalMetricResultDetails `json:"details,omitempty"`
 }
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
@@ -79,6 +79,20 @@ type EvalMetricResultPerInvocation struct {
 	ExpectedInvocation *evalset.Invocation `json:"expectedInvocation,omitempty"`
 	// EvalMetricResults contains results for each metric for this invocation.
 	EvalMetricResults []*EvalMetricResult `json:"evalMetricResults,omitempty"`
+}
+
+type ScoreResult struct {
+	Score        *float64
+	RubricScores []*RubricScore
+}
+
+type RubricScore struct {
+	RubricID  string  `json:"rubric_id"` // The id of the rubric that was assessed.
+	Rationale string  `json:"rationale"` // Reasoning/rationale for the score.
+	Score     float64 `json:"score"`
+}
+
+type EvalMetricResultDetails struct {
 }
 
 // Manager defines the interface for managing evaluation results.

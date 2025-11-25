@@ -635,10 +635,10 @@ func (f *fakeEvaluatorImpl) Evaluate(ctx context.Context, actuals, expecteds []*
 	result := &evaluator.EvaluateResult{
 		OverallScore:         1,
 		OverallStatus:        status.EvalStatusPassed,
-		PerInvocationResults: make([]evaluator.PerInvocationResult, len(actuals)),
+		PerInvocationResults: make([]*evaluator.PerInvocationResult, len(actuals)),
 	}
 	for i := range actuals {
-		result.PerInvocationResults[i] = evaluator.PerInvocationResult{
+		result.PerInvocationResults[i] = &evaluator.PerInvocationResult{
 			ActualInvocation:   actuals[i],
 			ExpectedInvocation: expecteds[i],
 			Score:              1,
