@@ -62,53 +62,58 @@ if err != nil {
   "name": "math-basic",
   "evalCases": [
     {
-      "evalId": "calc_add",
-      "conversation": [
-        {
-          "invocationId": "calc_add-1",
-          "userContent": {
-            "parts": [
-              {
-                "text": "calc add 2 3"
-              }
-            ],
-            "role": "user"
-          },
-          "finalResponse": {
-            "parts": [
-              {
-                "text": "calc result: 5"
-              }
-            ],
-            "role": "assistant"
-          },
-          "intermediateData": {
-            "toolUses": [
-              {
-                "args": {
-                  "a": 2,
-                  "b": 3,
-                  "operation": "add"
-                },
-                "name": "calculator"
-              }
-            ],
-            "toolResponses": [
-              {
-                "name": "calculator",
-                "response": {
-                  "result": 5
+        "evalId": "calc_add",
+        "conversation": [
+          {
+            "invocationId": "calc_add-1",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "calc add 2 3"
                 }
-              }
-            ]
+              ],
+              "role": "user"
+            },
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "calc result: 5"
+                }
+              ],
+              "role": "assistant"
+            },
+            "intermediateData": {
+              "toolUses": [
+                {
+                  "id": "tool_use_1",
+                  "args": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add"
+                  },
+                  "name": "calculator"
+                }
+              ],
+              "toolResponses": [
+                {
+                  "id": "tool_use_1",
+                  "name": "calculator",
+                  "response": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add",
+                    "result": 5
+                  }
+                }
+              ]
+            }
           }
+        ],
+        "sessionInput": {
+          "appName": "math-eval-app",
+          "userId": "user"
         }
-      ],
-      "sessionInput": {
-        "appName": "math-eval-app",
-        "userId": "user"
       }
-    }
   ],
   "creationTimestamp": 1761134484.9804401
 }
@@ -128,14 +133,10 @@ if err != nil {
             "matchStrategy": "exact"
           },
           "arguments": {
-            "textCriterion": {
-              "matchStrategy": "exact"
-            }
+            "matchStrategy": "exact"
           },
           "response": {
-            "textCriterion": {
-              "matchStrategy": "contains"
-            }
+            "matchStrategy": "exact"
           }
         }
       }
@@ -148,8 +149,8 @@ if err != nil {
 
 ```json
 {
-  "evalSetResultId": "math-eval-app_math-basic_c95c08af-c85c-43c4-ac7b-ee12870fa973",
-  "evalSetResultName": "math-eval-app_math-basic_c95c08af-c85c-43c4-ac7b-ee12870fa973",
+  "evalSetResultId": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
+  "evalSetResultName": "math-eval-app_math-basic_d545562e-f2fa-4dcf-816e-3474e85b3494",
   "evalSetId": "math-basic",
   "evalCaseResults": [
     {
@@ -169,14 +170,10 @@ if err != nil {
                   "matchStrategy": "exact"
                 },
                 "arguments": {
-                  "textCriterion": {
-                    "matchStrategy": "exact"
-                  }
+                  "matchStrategy": "exact"
                 },
                 "response": {
-                  "textCriterion": {
-                    "matchStrategy": "contains"
-                  }
+                  "matchStrategy": "exact"
                 }
               }
             }
@@ -186,7 +183,7 @@ if err != nil {
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "49ff84cf-ad89-42ab-be07-1fffc4dc78f2",
+            "invocationId": "53845847-16e0-4960-9d00-d3abf0ab1807",
             "userContent": {
               "parts": [
                 {
@@ -206,7 +203,7 @@ if err != nil {
             "intermediateData": {
               "toolUses": [
                 {
-                  "id": "call_00_pCwL67NPbNQAJEvZjvxuthX6",
+                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
                   "args": {
                     "a": 2,
                     "b": 3,
@@ -217,7 +214,7 @@ if err != nil {
               ],
               "toolResponses": [
                 {
-                  "id": "call_00_pCwL67NPbNQAJEvZjvxuthX6",
+                  "id": "call_00_J7WhW8PJurYtWji3J5H7ITN9",
                   "name": "calculator",
                   "response": {
                     "a": 2,
@@ -250,6 +247,7 @@ if err != nil {
             "intermediateData": {
               "toolUses": [
                 {
+                  "id": "tool_use_1",
                   "args": {
                     "a": 2,
                     "b": 3,
@@ -260,8 +258,12 @@ if err != nil {
               ],
               "toolResponses": [
                 {
+                  "id": "tool_use_1",
                   "name": "calculator",
                   "response": {
+                    "a": 2,
+                    "b": 3,
+                    "operation": "add",
                     "result": 5
                   }
                 }
@@ -281,14 +283,10 @@ if err != nil {
                       "matchStrategy": "exact"
                     },
                     "arguments": {
-                      "textCriterion": {
-                        "matchStrategy": "exact"
-                      }
+                      "matchStrategy": "exact"
                     },
                     "response": {
-                      "textCriterion": {
-                        "matchStrategy": "contains"
-                      }
+                      "matchStrategy": "exact"
                     }
                   }
                 }
@@ -297,11 +295,11 @@ if err != nil {
           ]
         }
       ],
-      "sessionId": "007a49f9-5a2c-49ba-a6ae-b0657d50aafb",
+      "sessionId": "e9cc851f-8c89-45f4-b430-7c54991c7dda",
       "userId": "user"
     }
   ],
-  "creationTimestamp": 1763960812.6226852
+  "creationTimestamp": 1763997862.5581782
 }
 ```
 
@@ -397,6 +395,7 @@ cases := []*evalset.EvalCase{
 				IntermediateData: &evalset.IntermediateData{
 					ToolUses: []*genai.FunctionCall{
 						{
+							ID:   "tool_use_1",
 							Name: "calculator",
 							Args: map[string]interface{}{
 								"operation": "add",
@@ -407,9 +406,13 @@ cases := []*evalset.EvalCase{
 					},
 					ToolResponses: []*genai.FunctionResponse{
 						{
+							ID:   "tool_use_1",
 							Name: "calculator",
 							Response: map[string]interface{}{
-								"result": 5.0,
+								"a":         2.0,
+								"b":         3.0,
+								"operation": "add",
+								"result":    5.0,
 							},
 						},
 					},
@@ -445,15 +448,11 @@ evalMetric := &metric.EvalMetric{
 						Name: &text.TextCriterion{
 							MatchStrategy: text.TextMatchStrategyExact,
 						},
-						Arguments: &maptext.MapTextCriterion{
-							TextCriterion: &text.TextCriterion{
-								MatchStrategy: text.TextMatchStrategyExact,
-							},
+						Arguments: &cjson.JSONCriterion{
+							MatchStrategy: cjson.JSONMatchStrategyExact,
 						},
-						Response: &maptext.MapTextCriterion{
-							TextCriterion: &text.TextCriterion{
-								MatchStrategy: text.TextMatchStrategyContains,
-							},
+						Response: &cjson.JSONCriterion{
+							MatchStrategy: cjson.JSONMatchStrategyExact,
 						},
 					},
 				),
@@ -561,18 +560,29 @@ type Manager interface {
 
 ### 评估指标 -- Metric
 
-Metric 表示一个评估指标，用于衡量 EvalSet 的某一方面表现。
+Metric 表示一个评估指标，用于衡量 EvalSet 的某一方面表现，每个评估指标包含指标名、评估准则和评分阈值。
 
-每个指标包含指标名和评分阈值:
+评估过程中，评估器会根据配置的评估准则对实际会话与预期会话进行比较，计算出该指标的评估得分，并与阈值进行对比：
 
 - 当评估得分低于阈值时，指标判定为未通过。
 - 当评估得分达到或超过阈值时，指标判定为通过。
 
 ```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
+
 // EvalMetric 表示用于评估 EvalCase 的单项指标
 type EvalMetric struct {
-	MetricName string         // 指标名称
-	Threshold  float64        // 评分阈值
+	MetricName string               // 指标名称
+	Threshold  float64              // 评分阈值
+	Criterion  *criterion.Criterion // 评估准则
+}
+
+// Criterion 聚合各类评估准则
+type Criterion struct {
+	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion // 工具轨迹评估准则
 }
 ```
 
@@ -1155,5 +1165,178 @@ func (l *customLocator) List(baseDir, appName string) ([]string, error) {
 		}
 	}
 	return results, nil
+}
+```
+
+### 评估准则
+
+评估准则描述具体的评估方式，可按需组合使用。
+
+框架内置了以下评估准则类型：
+
+| 准则类型                | 适用对象                                |
+|-------------------------|--------------------------------------|
+| TextCriterion           | 文本字符串                             |
+| JSONCriterion           | JSON 对象，通常用于比较 map[string]any  |
+| ToolTrajectoryCriterion | 工具调用轨迹                           |
+| Criterion               | 多种准则的聚合                         |
+
+#### TextCriterion
+
+TextCriterion 用于字符串匹配，可配置是否忽略大小写和具体的匹配策略。
+
+```go
+// TextCriterion 定义字符串的匹配方式。
+type TextCriterion struct {
+	Ignore          bool              // 是否跳过匹配
+	CaseInsensitive bool              // 是否大小写不敏感
+	MatchStrategy   TextMatchStrategy // 匹配策略
+	Compare         func(actual, expected string) (bool, error) // 自定义比较
+}
+```
+
+TextMatchStrategy 取值说明：
+
+| TextMatchStrategy 取值 | 说明                         |
+|-----------------------|------------------------------|
+| exact                 | 实际字符串与预期字符串完全一致（默认）。 |
+| contains              | 实际字符串包含预期字符串。       |
+| regex                 | 实际字符串满足预期字符串作为正则表达式。 |
+
+#### JSONCriterion
+
+JSONCriterion 用于对比结构化 JSON 数据，可配置是否忽略比较以及具体的匹配策略。
+
+```go
+// JSONCriterion 定义 JSON 对象的匹配方式。
+type JSONCriterion struct {
+	Ignore       bool              // 是否跳过匹配
+	MatchStrategy JSONMatchStrategy // 匹配策略
+	Compare       func(actual, expected map[string]any) (bool, error) // 自定义比较
+}
+```
+
+JSONMatchStrategy 取值说明：
+
+| JSONMatchStrategy 取值 | 说明                         |
+|-----------------------|------------------------------|
+| exact                 | 实际 JSON 与预期 JSON 完全一致（默认）。 |
+
+#### ToolTrajectoryCriterion
+
+ToolTrajectoryCriterion 用于配置工具调用与响应的评估准则，可设置默认策略、按工具名定制策略以及是否忽略调用顺序。
+
+```go
+// ToolTrajectoryCriterion 定义工具调用与响应的评估准则。
+type ToolTrajectoryCriterion struct {
+	DefaultStrategy  *ToolTrajectoryStrategy            // 默认策略
+	ToolStrategy     map[string]*ToolTrajectoryStrategy // 按工具名定制策略
+	OrderInsensitive bool                               // 是否忽略调用顺序
+	Compare          func(actual, expected *evalset.Invocation) (bool, error) // 自定义比较
+}
+
+// ToolTrajectoryStrategy 定义单个工具的匹配策略。
+type ToolTrajectoryStrategy struct {
+	Name      *TextCriterion  // 工具名匹配
+	Arguments *JSONCriterion  // 调用参数匹配
+	Response  *JSONCriterion  // 工具响应匹配
+}
+```
+
+DefaultStrategy 用于配置全局默认评估准则，适用于所有工具。
+
+ToolStrategy 按工具名覆盖特定工具的评估准则，未设置 ToolStrategy 时所有工具调用都使用 DefaultStrategy。
+
+若未设置任何评估准则，框架会使用默认评估准则：工具名按 TextCriterion 的 exact 策略比较，参数和响应按 JSONCriterion 的 exact 策略比较，保证工具轨迹评估始终有合理的兜底行为。
+
+下面的示例展示了一个典型场景，大部分工具希望严格对齐工具调用和结果，但 current_time 这类时间相关工具的响应值本身不稳定，因此只需要检查是否按预期调用了正确的工具和参数，而不要求时间值本身完全一致。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
+
+criterion := criterion.New(
+	criterion.WithToolTrajectory(
+		tooltrajectory.New(
+			tooltrajectory.WithDefault(
+				&tooltrajectory.ToolTrajectoryStrategy{
+					Name: &text.TextCriterion{
+						MatchStrategy: text.TextMatchStrategyExact,
+					},
+					Arguments: &json.JSONCriterion{
+						MatchStrategy: json.JSONMatchStrategyExact,
+					},
+					Response: &json.JSONCriterion{
+						MatchStrategy: json.JSONMatchStrategyExact,
+					},
+				},
+			),
+			tooltrajectory.WithTool(map[string]*tooltrajectory.ToolTrajectoryStrategy{
+				"current_time": {
+					Name: &text.TextCriterion{
+						MatchStrategy: text.TextMatchStrategyExact,
+					},
+					Arguments: &json.JSONCriterion{
+						MatchStrategy: json.JSONMatchStrategyExact,
+					},
+					Response: &json.JSONCriterion{
+						Ignore: true, // 忽略该工具响应的匹配.
+					},
+				},
+			}),
+		),
+	),
+)
+```
+
+默认情况下，工具调用是按出现顺序逐条比对的，实际调用工具序列与预期工具调用序列在长度、顺序以及每一步的工具名、参数和响应上都需要匹配，若调用顺序不同则会被判定为评估不通过。
+
+OrderInsensitive 用于控制是否对工具调用顺序不敏感。开启后，评估逻辑会先为每一次工具调用生成一个排序键（由工具名以及参数和响应的规范化表示共同构成），再分别对实际调用序列和预期调用序列按照这一键进行排序，得到两个具有稳定顺序的调用列表；随后按排序后的顺序逐一比对对应位置的调用，并根据配置的评估准则判断这些调用是否匹配。换简单来说，只要两侧包含的工具调用在调用内容上完全一致，即使原始调用顺序不同，也不会因为顺序差异而导致评估不通过，示例如下：
+
+```go
+criterion := criterion.New(
+	criterion.WithToolTrajectory(
+		ctooltrajectory.New(
+			ctooltrajectory.WithOrderInsensitive(true),
+		),
+	),
+)
+```
+
+### 评估器
+
+#### 工具轨迹评估器
+
+工具轨迹评估器对应的指标名称为 `tool_trajectory_avg_score`，用于评估 Agent 在多次会话中对工具的使用是否符合预期。
+
+在单次会话中，评估器会使用 `ToolTrajectoryCriterion` 对实际工具调用轨迹与预期轨迹进行比较：
+
+- 若整条工具调用轨迹满足评估准则，则该会话在此指标上的得分为 1。  
+- 若任意一步调用不满足评估准则，则该会话在此指标上的得分为 0。
+
+在多次会话的场景下，评估器会对所有会话在该指标上的得分取平均值，作为最终的 `tool_trajectory_avg_score`，并与 `EvalMetric.Threshold` 比较，得到通过/未通过的判定结果。
+
+工具轨迹评估器与 Metric、Criterion 的典型组合方式如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "tool_trajectory_avg_score",
+	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithToolTrajectory(
+			// 使用默认评估准则，工具的名称、参数和响应需严格一致
+			ctooltrajectory.New(),
+		),
+	),
 }
 ```
