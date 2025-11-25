@@ -21,9 +21,16 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+type mockChunkingStrategy struct{}
+
+func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
+	return []*document.Document{doc}, nil
+}
 
 // TestReadDocuments verifies Auto Source handles plain text input with and
 // without custom chunk configuration.
@@ -63,6 +70,111 @@ func TestReadDocuments(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestProcessAsURLError verifies error handling in processAsURL.
+func TestProcessAsURLError(t *testing.T) {
+	ctx := context.Background()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	src := New([]string{})
+	_, err := src.processAsURL(ctx, ts.URL)
+	if err == nil {
+		t.Error("expected error from failed URL processing")
+	}
+}
+
+// TestProcessAsDirectoryError verifies error handling in processAsDirectory.
+func TestProcessAsDirectoryError(t *testing.T) {
+	ctx := context.Background()
+
+	src := New([]string{})
+	_, err := src.processAsDirectory(ctx, "/nonexistent/directory")
+	if err == nil {
+		t.Error("expected error when processing nonexistent directory")
+	}
+}
+
+// TestProcessAsFileError verifies error handling in processAsFile.
+func TestProcessAsFileError(t *testing.T) {
+	ctx := context.Background()
+
+	src := New([]string{})
+	_, err := src.processAsFile(ctx, "/nonexistent/file.txt")
+	if err == nil {
+		t.Error("expected error when processing nonexistent file")
+	}
+}
+
+// TestProcessAsTextError verifies error handling in processAsText.
+func TestProcessAsTextError(t *testing.T) {
+	src := New([]string{})
+
+	docs, err := src.processAsText("valid text content")
+	if err != nil {
+		t.Errorf("processAsText should not error for valid content, got: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Error("expected at least one document from text processing")
+	}
+}
+
+// TestProcessAsDirectoryWithCustomChunking verifies processAsDirectory with custom chunking.
+func TestProcessAsDirectoryWithCustomChunking(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	filePath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("test content"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	strategy := &mockChunkingStrategy{}
+	src := New([]string{}, WithCustomChunkingStrategy(strategy))
+
+	docs, err := src.processAsDirectory(ctx, tmpDir)
+	if err != nil {
+		t.Errorf("processAsDirectory failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Error("expected at least one document")
+	}
+}
+
+// TestProcessAsFileWithCustomChunking verifies processAsFile with custom chunking.
+func TestProcessAsFileWithCustomChunking(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	filePath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("test content"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	strategy := &mockChunkingStrategy{}
+	src := New([]string{}, WithCustomChunkingStrategy(strategy))
+
+	docs, err := src.processAsFile(ctx, filePath)
+	if err != nil {
+		t.Errorf("processAsFile failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Error("expected at least one document")
+	}
+}
+
+// TestWithCustomChunkingStrategy verifies the WithCustomChunkingStrategy option.
+func TestWithCustomChunkingStrategy(t *testing.T) {
+	strategy := &mockChunkingStrategy{}
+	src := New([]string{"test input"}, WithCustomChunkingStrategy(strategy))
+
+	if src.customChunkingStrategy != strategy {
+		t.Error("WithCustomChunkingStrategy did not set custom chunking strategy")
+	}
 }
 
 func TestHelpers(t *testing.T) {

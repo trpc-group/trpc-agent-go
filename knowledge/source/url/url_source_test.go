@@ -29,6 +29,14 @@ import (
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
 
+type mockChunkingStrategy struct {
+	name string
+}
+
+func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
+	return []*document.Document{doc}, nil
+}
+
 // TestReadDocuments verifies URL Source with and without custom chunk
 // configuration.
 func TestReadDocuments(t *testing.T) {
@@ -412,6 +420,16 @@ func TestProcessURLMetadata(t *testing.T) {
 	// Check source type
 	if v, ok := docs[0].Metadata[source.MetaSource]; !ok || v != source.TypeURL {
 		t.Errorf("source type not set correctly, got %v", docs[0].Metadata[source.MetaSource])
+	}
+}
+
+// TestWithCustomChunkingStrategy verifies the WithCustomChunkingStrategy option.
+func TestWithCustomChunkingStrategy(t *testing.T) {
+	strategy := &mockChunkingStrategy{name: "test-strategy"}
+	src := New([]string{"https://example.com"}, WithCustomChunkingStrategy(strategy))
+
+	if src.customChunkingStrategy != strategy {
+		t.Error("WithCustomChunkingStrategy did not set custom chunking strategy")
 	}
 }
 
