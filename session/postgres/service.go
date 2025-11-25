@@ -534,6 +534,86 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 	return userStateMap, nil
 }
 
+// UpdateSessionState updates the session-level state directly without appending an event.
+// This is useful for state initialization, correction, or synchronization scenarios
+// where event history is not needed.
+// Keys with app: or user: prefixes are not allowed (use UpdateAppState/UpdateUserState instead).
+// Keys with temp: prefix are allowed as they represent session-scoped ephemeral state.
+func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+
+	// Validate: disallow app: and user: prefixes
+	for k := range state {
+		if strings.HasPrefix(k, session.StateAppPrefix) {
+			return fmt.Errorf("postgres session service update session state failed: %s is not allowed, use UpdateAppState instead", k)
+		}
+		if strings.HasPrefix(k, session.StateUserPrefix) {
+			return fmt.Errorf("postgres session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
+		}
+	}
+
+	// Get current session state
+	var currentStateBytes []byte
+	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+		if rows.Next() {
+			return rows.Scan(&currentStateBytes)
+		}
+		return sql.ErrNoRows
+	}, fmt.Sprintf(`SELECT state FROM %s
+		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND deleted_at IS NULL`, s.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID)
+
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("postgres session service update session state failed: session not found")
+	}
+	if err != nil {
+		return fmt.Errorf("postgres session service update session state failed: get session state: %w", err)
+	}
+
+	// Unmarshal current state
+	var currentState session.StateMap
+	if len(currentStateBytes) > 0 {
+		if err := json.Unmarshal(currentStateBytes, &currentState); err != nil {
+			return fmt.Errorf("postgres session service update session state failed: unmarshal state: %w", err)
+		}
+	} else {
+		currentState = make(session.StateMap)
+	}
+
+	// Merge new state into current state
+	for k, v := range state {
+		currentState[k] = v
+	}
+
+	// Marshal updated state
+	updatedStateBytes, err := json.Marshal(currentState)
+	if err != nil {
+		return fmt.Errorf("postgres session service update session state failed: marshal state: %w", err)
+	}
+
+	// Update session state in database
+	now := time.Now()
+	var expiresAt *time.Time
+	if s.sessionTTL > 0 {
+		t := now.Add(s.sessionTTL)
+		expiresAt = &t
+	}
+
+	_, err = s.pgClient.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
+		 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
+		updatedStateBytes, now, expiresAt,
+		key.AppName, key.UserID, key.SessionID)
+
+	if err != nil {
+		return fmt.Errorf("postgres session service update session state failed: %w", err)
+	}
+
+	return nil
+}
+
 // DeleteUserState deletes the state by target scope and key.
 func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	if err := userKey.CheckUserKey(); err != nil {
