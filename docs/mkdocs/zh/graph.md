@@ -1124,9 +1124,8 @@ ga, err := graphagent.New(
     graphagent.WithInitialState(graph.State{"init": 1}),
     graphagent.WithChannelBufferSize(512),
     graphagent.WithCheckpointSaver(saver),
-    graphagent.WithSubAgents([]agent.Agent{subAgent}),
-    graphagent.WithAgentCallbacks(agent.NewCallbacks()), // 注意：结构化回调 API 需要 trpc-agent-go >= 0.6.0
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
+    graphagent.WithAgentCallbacks(agent.NewCallbacks()), // 注意：结构化回调 API 需要 trpc-agent-go >= 0.6.0
     // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
     // 时间维度过滤条件
     // 默认值: graphagent.TimelineFilterAll

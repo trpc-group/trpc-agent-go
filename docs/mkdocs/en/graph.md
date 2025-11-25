@@ -1112,7 +1112,7 @@ ga, err := graphagent.New(
     graphagent.WithInitialState(graph.State{"init": 1}),
     graphagent.WithChannelBufferSize(512),
     graphagent.WithCheckpointSaver(saver),
-    graphagent.WithSubAgents([]agent.Agent{subAgent}),
+    graphagent.WithSubAgents([]agent.Agent{subAgent}), // Set Subagents
     graphagent.WithAgentCallbacks(agent.NewCallbacks()), // Note: Structured callback API requires trpc-agent-go >= 0.6.0
     // Set the filter mode for messages passed to the model. The final messages passed to the model must satisfy both WithMessageTimelineFilterMode and WithMessageBranchFilterMode conditions.
     // Timeline dimension filter conditions
