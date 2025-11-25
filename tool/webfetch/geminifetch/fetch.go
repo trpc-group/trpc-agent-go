@@ -23,10 +23,16 @@ import (
 // Option configures the GeminiFetch tool.
 type Option func(*config)
 
+// modelCaller is the interface for the model caller. for testing purposes, we can inject a stub model caller.
+type modelCaller interface {
+	GenerateContent(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error)
+}
+
 type config struct {
-	apiKey string
-	model  string
-	client *genai.Client
+	apiKey      string
+	model       string
+	client      *genai.Client
+	modelCaller modelCaller
 }
 
 // WithAPIKey sets the Google AI API key.
@@ -104,18 +110,28 @@ func (t *geminiFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchRes
 		return fetchResponse{}, nil
 	}
 
-	// Get or create client
+	// Resolve the model caller so tests can inject a stub without hitting the API.
+	modelCaller := t.cfg.modelCaller
 	client := t.cfg.client
-	if client == nil {
-		var err error
-		client, err = genai.NewClient(ctx, &genai.ClientConfig{
-			APIKey:  t.cfg.apiKey,
-			Backend: genai.BackendGeminiAPI,
-		})
-		if err != nil {
-			return fetchResponse{}, fmt.Errorf("failed to create Gemini client: %w", err)
+	if modelCaller == nil {
+		if client == nil {
+			var err error
+			client, err = genai.NewClient(ctx, &genai.ClientConfig{
+				APIKey:  t.cfg.apiKey,
+				Backend: genai.BackendGeminiAPI,
+			})
+			if err != nil {
+				return fetchResponse{}, fmt.Errorf("failed to create Gemini client: %w", err)
+			}
+			// Note: Client doesn't have Close method in this version
 		}
-		// Note: Client doesn't have Close method in this version
+		if client == nil || client.Models == nil {
+			return fetchResponse{}, fmt.Errorf("gemini client is missing the Models service")
+		}
+		modelCaller = client.Models
+	}
+	if modelCaller == nil {
+		return fetchResponse{}, fmt.Errorf("gemini model caller is not available")
 	}
 
 	// Build content parts with the user's prompt
@@ -139,7 +155,7 @@ func (t *geminiFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchRes
 	}
 
 	// Generate content
-	resp, err := client.Models.GenerateContent(ctx, t.cfg.model, contents, config)
+	resp, err := modelCaller.GenerateContent(ctx, t.cfg.model, contents, config)
 	if err != nil {
 		return fetchResponse{}, fmt.Errorf("failed to generate content: %w", err)
 	}
