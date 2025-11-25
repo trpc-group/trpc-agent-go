@@ -1483,6 +1483,11 @@ type modelExecutionConfig struct {
 	Span           oteltrace.Span
 }
 
+const (
+	errMsgNoModelResponse = "no response received from model"
+	errMsgNoModelChoices  = "model returned no choices"
+)
+
 // executeModelWithEvents executes the model with event processing.
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
 	ctx, responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
@@ -1544,8 +1549,18 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		finalResponse = response
 	}
 	if finalResponse == nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", "no response received from model"))
-		return nil, errors.New("no response received from model")
+		config.Span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgNoModelResponse,
+		))
+		return nil, errors.New(errMsgNoModelResponse)
+	}
+	if len(finalResponse.Choices) == 0 {
+		config.Span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgNoModelChoices,
+		))
+		return nil, errors.New(errMsgNoModelChoices)
 	}
 	if len(finalResponse.Choices[0].Message.ToolCalls) < len(toolCalls) {
 		finalResponse.Choices[0].Message.ToolCalls = toolCalls
