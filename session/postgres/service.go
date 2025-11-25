@@ -949,11 +949,15 @@ func (s *Service) listSessions(
 
 	sessions := make([]*session.Session, 0, len(sessStates))
 	for i, sessState := range sessStates {
+		var summaries map[string]*session.Summary
+		if len(eventsList[i]) > 0 {
+			summaries = summariesList[i]
+		}
 		sess := session.NewSession(
 			key.AppName, key.UserID, sessState.ID,
 			session.WithSessionState(sessState.State),
 			session.WithSessionEvents(eventsList[i]),
-			session.WithSessionSummaries(summariesList[i]),
+			session.WithSessionSummaries(summaries),
 			session.WithSessionCreatedAt(sessState.CreatedAt),
 			session.WithSessionUpdatedAt(sessState.UpdatedAt),
 		)
