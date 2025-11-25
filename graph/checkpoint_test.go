@@ -1112,6 +1112,22 @@ func (e *emptyModel) GenerateContent(ctx context.Context, req *model.Request) (<
 }
 func (e *emptyModel) Info() model.Info { return model.Info{Name: "empty"} }
 
+type emptyChoicesModel struct{}
+
+func (e *emptyChoicesModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{}
+	close(ch)
+	return ch, nil
+}
+
+func (e *emptyChoicesModel) Info() model.Info {
+	return model.Info{Name: "empty_choices"}
+}
+
 func TestExecuteModelWithEvents_NoResponseError(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
@@ -1127,6 +1143,29 @@ func TestExecuteModelWithEvents_NoResponseError(t *testing.T) {
 		Span:           span,
 		NodeID:         "n",
 	})
+	require.Error(t, err)
+}
+
+func TestExecuteModelWithEvents_NoChoicesError(t *testing.T) {
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+	_, err := executeModelWithEvents(context.Background(),
+		modelExecutionConfig{
+			ModelCallbacks: nil,
+			LLMModel:       &emptyChoicesModel{},
+			Request: &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+			},
+			EventChan:    make(chan *event.Event, 1),
+			InvocationID: "inv",
+			SessionID:    "sid",
+			AppName:      "app",
+			UserID:       "user",
+			Span:         span,
+			NodeID:       "n",
+		})
 	require.Error(t, err)
 }
 
