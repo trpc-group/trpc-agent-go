@@ -346,6 +346,7 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 			dataPart.Metadata = map[string]any{
 				metadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
 			}
+			parts = append(parts, dataPart)
 		}
 	}
 
