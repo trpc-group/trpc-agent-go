@@ -572,8 +572,8 @@ Metric represents an evaluation indicator used to measure a certain aspect of Ev
 
 During the evaluation process, the evaluator compares the actual conversation with the expected conversation according to the configured evaluation criterion, calculates the evaluation score for this metric, and compares it with the threshold:
 
-* When the evaluation score is lower than the threshold, the metric is determined as not passed.
-* When the evaluation score reaches or exceeds the threshold, the metric is determined as passed.
+- When the evaluation score is lower than the threshold, the metric is determined as not passed.
+- When the evaluation score reaches or exceeds the threshold, the metric is determined as passed.
 
 ```go
 import (
@@ -591,21 +591,6 @@ type EvalMetric struct {
 // Criterion aggregates various evaluation criteria.
 type Criterion struct {
 	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion // Tool trajectory evaluation criterion.
-}
-```
-
-A Metric represents an evaluation metric used to measure a specific aspect of an EvalSet's performance.
-
-Each metric consists of a metric name and a scoring threshold:
-
-- When the evaluation score falls below the threshold, the metric is considered failed.
-- When the evaluation score reaches or exceeds the threshold, the metric is considered passed.
-
-```go
-// EvalMetric represents a single metric used to evaluate an EvalCase.
-type EvalMetric struct {
-	MetricName string         // metric name.
-	Threshold  float64        // scoring threshold.
 }
 ```
 
