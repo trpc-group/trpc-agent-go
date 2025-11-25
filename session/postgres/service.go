@@ -1335,7 +1335,7 @@ func (s *Service) getEventsList(
 	afterTime time.Time,
 ) ([][]event.Event, error) {
 	if len(sessionKeys) == 0 {
-		return [][]event.Event{}, nil
+		return nil, nil
 	}
 
 	// Build session IDs array
