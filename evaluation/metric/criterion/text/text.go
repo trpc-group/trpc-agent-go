@@ -42,11 +42,11 @@ const (
 
 // Match compares source and target using the configured strategy.
 func (t *TextCriterion) Match(source, target string) (bool, error) {
-	if t.Compare != nil {
-		return t.Compare(source, target)
-	}
 	if t.Ignore {
 		return true, nil
+	}
+	if t.Compare != nil {
+		return t.Compare(source, target)
 	}
 	if t.CaseInsensitive {
 		source = strings.ToLower(source)

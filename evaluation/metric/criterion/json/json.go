@@ -17,6 +17,8 @@ import (
 
 // JSONCriterion compares two JSON objects using exact matching.
 type JSONCriterion struct {
+	// Ignore skips comparison when true.
+	Ignore bool `json:"ignore,omitempty"`
 	// MatchStrategy selects the comparison rule.
 	MatchStrategy JSONMatchStrategy `json:"matchStrategy,omitempty"`
 	// Compare overrides default comparison when provided.
@@ -33,8 +35,8 @@ const (
 
 // Match compares two JSON objects using custom logic or deep equality.
 func (j *JSONCriterion) Match(actual, expected map[string]any) (bool, error) {
-	if j == nil {
-		return false, fmt.Errorf("json criterion is nil")
+	if j.Ignore {
+		return true, nil
 	}
 	if j.Compare != nil {
 		return j.Compare(actual, expected)
