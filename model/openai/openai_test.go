@@ -1276,6 +1276,23 @@ func TestWithOpenAIOptions_CombinedOptions(t *testing.T) {
 	assert.NotNil(t, m.chatChunkCallback, "expected chat chunk callback to be set")
 }
 
+func TestWithHeaders_AppendsOptions(t *testing.T) {
+	opts := &options{}
+	source := map[string]string{
+		"X-Custom":   "a",
+		"X-Request":  "req-1",
+		"User-Agent": "ua",
+	}
+
+	WithHeaders(source)(opts)
+	assert.Len(t, opts.OpenAIOptions, 3, "expected headers to expand into OpenAI options")
+
+	// Mutation after application should not affect already captured values.
+	source["X-Custom"] = "changed"
+	WithHeaders(map[string]string{"X-Another": "extra"})(opts)
+	assert.Len(t, opts.OpenAIOptions, 4, "expected additional headers to append")
+}
+
 func TestConvertSystemMessageContent(t *testing.T) {
 	// Test converting message with text content parts
 	textPart := model.ContentPart{
@@ -3705,6 +3722,18 @@ func TestEmptyChunkHandling(t *testing.T) {
 		assert.True(t, m.shouldSkipEmptyChunk(chunk))
 	})
 
+	t.Run("shouldSkipEmptyChunk with finish reason", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					FinishReason: "stop",
+				},
+			},
+		}
+		// Should not skip chunks that only carry a finish reason.
+		assert.False(t, m.shouldSkipEmptyChunk(chunk))
+	})
+
 	t.Run("shouldSuppressChunk with empty delta", func(t *testing.T) {
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -3780,6 +3809,37 @@ func TestEmptyChunkHandling(t *testing.T) {
 		assert.Equal(t, "{\"content\":\"partial\"}",
 			string(tc.Function.Arguments))
 	})
+}
+
+// TestCreateFinalResponseFinishReason verifies that finish reasons from the
+// accumulated choices are propagated to the final aggregated response.
+func TestCreateFinalResponseFinishReason(t *testing.T) {
+	m := &Model{}
+
+	var acc openai.ChatCompletionAccumulator
+	chunk := openai.ChatCompletionChunk{
+		ID:    "acc-id",
+		Model: "test-model",
+		Choices: []openai.ChatCompletionChunkChoice{
+			{
+				Index: 0,
+				Delta: openai.ChatCompletionChunkChoiceDelta{
+					Content: "Hello",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	acc.AddChunk(chunk)
+
+	finalResponse := m.createFinalResponse(
+		acc, false, nil, "")
+	require.NotNil(t, finalResponse)
+	require.Len(t, finalResponse.Choices, 1)
+	require.NotNil(t, finalResponse.Choices[0].FinishReason)
+	assert.Equal(t, "stop",
+		*finalResponse.Choices[0].FinishReason)
 }
 
 // TestToolCallIndexMapping tests the tool call index mapping functionality.

@@ -59,3 +59,41 @@ const (
 	StateFieldCounter   = "counter"
 	StateFieldStepCount = "step_count"
 )
+
+// isUnsafeStateKey reports whether the key points to values that are
+// non-serializable or potentially mutated concurrently by other subsystems
+// (e.g., session service), which should be excluded from final snapshots.
+func isUnsafeStateKey(key string) bool {
+	switch key {
+	case StateKeyExecContext,
+		StateKeyParentAgent,
+		StateKeyNodeCallbacks,
+		StateKeyToolCallbacks,
+		StateKeyModelCallbacks,
+		StateKeyAgentCallbacks,
+		StateKeyCurrentNodeID,
+		StateKeySession:
+		return true
+	default:
+		return false
+	}
+}
+
+// isInternalStateKey returns true when a state key is internal/ephemeral
+// and should not be serialized into final state snapshots nor propagated to
+// sub-agents' RuntimeState. Keep this list in sync with graph executor/event
+// machinery.
+func isInternalStateKey(key string) bool {
+	if isUnsafeStateKey(key) {
+		return true
+	}
+
+	switch key {
+	// Graph metadata keys stored in state delta for instrumentation
+	case MetadataKeyNode, MetadataKeyPregel, MetadataKeyChannel,
+		MetadataKeyState, MetadataKeyCompletion:
+		return true
+	default:
+		return false
+	}
+}

@@ -376,18 +376,21 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 	}
 
 	tests := []struct {
-		name  string
-		setup func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig)
+		name      string
+		expectErr bool
+		setup     func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig)
 	}{
 		{
-			name: "nil inference result",
+			name:      "nil inference result",
+			expectErr: true,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, _, _ := prepare(t)
 				return svc, nil, &service.EvaluateConfig{}
 			},
 		},
 		{
-			name: "nil evaluate config",
+			name:      "nil evaluate config",
+			expectErr: true,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, _, _ := prepare(t)
 				inference := makeInferenceResult(appName, evalSetID, "case", "session", nil)
@@ -395,7 +398,8 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "missing eval case",
+			name:      "missing eval case",
+			expectErr: true,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, _, _ := prepare(t)
 				inference := makeInferenceResult(appName, evalSetID, "missing", "session", []*evalset.Invocation{})
@@ -404,7 +408,8 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid eval case",
+			name:      "invalid eval case",
+			expectErr: true,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, _ := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
@@ -422,7 +427,8 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "mismatched inference count",
+			name:      "mismatched inference count",
+			expectErr: true,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, _ := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
@@ -434,7 +440,8 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "missing evaluator",
+			name:      "missing evaluator",
+			expectErr: false,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, _ := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
@@ -447,7 +454,8 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "per invocation mismatch",
+			name:      "per invocation mismatch",
+			expectErr: true,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
@@ -470,7 +478,8 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "summarize failure",
+			name:      "summarize failure",
+			expectErr: true,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
@@ -493,7 +502,8 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "evaluator error",
+			name:      "evaluator error",
+			expectErr: true,
 			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
@@ -514,7 +524,11 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, inference, config := tc.setup(t)
 			_, err := svc.evaluatePerCase(ctx, inference, config)
-			assert.Error(t, err)
+			if tc.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }

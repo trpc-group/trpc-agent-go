@@ -155,7 +155,7 @@ User context is injected at the beginning of agent execution:
 
 ```go
 // BeforeAgentCallback
-func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
     // Get user info from somewhere (e.g., request metadata)
     userCtx := &UserContext{
         UserID:      getUserIDFromRequest(),
@@ -164,7 +164,7 @@ func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
     }
 
     // Store in invocation state
-    inv.SetState("custom:user_context", userCtx)
+    args.Invocation.SetState("custom:user_context", userCtx)
     return nil, nil
 }
 ```
@@ -175,7 +175,7 @@ Tool callbacks check permissions before execution:
 
 ```go
 // BeforeToolCallback
-func(ctx context.Context, toolName string, ...) (any, error) {
+func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
     inv, _ := agent.InvocationFromContext(ctx)
 
     // Get user context from state
@@ -186,7 +186,7 @@ func(ctx context.Context, toolName string, ...) (any, error) {
     userCtx := userCtxVal.(*UserContext)
 
     // Check permission
-    if !hasPermission(userCtx, toolName) {
+    if !hasPermission(userCtx, args.ToolName) {
         return nil, errors.New("permission denied")
     }
 
@@ -200,7 +200,7 @@ All tool calls are logged with user context:
 
 ```go
 // AfterToolCallback
-func(ctx context.Context, toolName string, ...) (any, error) {
+func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
     inv, _ := agent.InvocationFromContext(ctx)
     userCtx := getUserContext(inv)
 
@@ -209,7 +209,7 @@ func(ctx context.Context, toolName string, ...) (any, error) {
         time.Now().Format(time.RFC3339),
         userCtx.UserID,
         userCtx.Role,
-        toolName,
+        args.ToolName,
     )
 
     // Append to audit log in state

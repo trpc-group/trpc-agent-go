@@ -12,6 +12,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sync"
@@ -443,6 +444,115 @@ func TestSession_GetEventCount(t *testing.T) {
 	}
 }
 
+func TestSessionAppendTrackEvent(t *testing.T) {
+	t.Run("nil session returns error", func(t *testing.T) {
+		var sess *Session
+		err := sess.AppendTrackEvent(&TrackEvent{Track: "alpha"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "session is nil")
+	})
+
+	t.Run("nil event returns error", func(t *testing.T) {
+		sess := &Session{}
+		err := sess.AppendTrackEvent(nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "track event is nil")
+	})
+
+	t.Run("append initializes state and stores copy", func(t *testing.T) {
+		sess := &Session{}
+		first := &TrackEvent{
+			Track:   "alpha",
+			Payload: json.RawMessage("first"),
+		}
+		err := sess.AppendTrackEvent(first)
+		require.NoError(t, err)
+
+		require.NotNil(t, sess.State)
+		tracks, err := TracksFromState(sess.State)
+		require.NoError(t, err)
+		assert.Equal(t, []Track{"alpha"}, tracks)
+
+		require.NotNil(t, sess.Tracks)
+		trackData, ok := sess.Tracks["alpha"]
+		require.True(t, ok)
+		require.NotNil(t, trackData)
+		require.Len(t, trackData.Events, 1)
+		assert.Equal(t, first.Track, trackData.Events[0].Track)
+		assert.Equal(t, json.RawMessage("first"), trackData.Events[0].Payload)
+		assert.False(t, sess.UpdatedAt.IsZero())
+
+		first.Payload = json.RawMessage("mutated")
+		second := &TrackEvent{
+			Track:   "alpha",
+			Payload: json.RawMessage("second"),
+		}
+		err = sess.AppendTrackEvent(second)
+		require.NoError(t, err)
+
+		require.Len(t, trackData.Events, 2)
+		assert.Equal(t, json.RawMessage("first"), trackData.Events[0].Payload)
+		assert.Equal(t, json.RawMessage("second"), trackData.Events[1].Payload)
+	})
+}
+
+func TestSessionGetTrackEvents(t *testing.T) {
+	t.Run("tracks map empty", func(t *testing.T) {
+		sess := &Session{}
+		_, err := sess.GetTrackEvents("alpha")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "tracks is empty")
+	})
+
+	t.Run("track missing", func(t *testing.T) {
+		sess := &Session{Tracks: map[Track]*TrackEvents{}}
+		_, err := sess.GetTrackEvents("alpha")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "track events not found")
+	})
+
+	t.Run("track entry nil", func(t *testing.T) {
+		sess := &Session{Tracks: map[Track]*TrackEvents{"alpha": nil}}
+		_, err := sess.GetTrackEvents("alpha")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "track events not found")
+	})
+
+	t.Run("track exists without events returns copy", func(t *testing.T) {
+		original := &TrackEvents{Track: "alpha"}
+		sess := &Session{Tracks: map[Track]*TrackEvents{"alpha": original}}
+		result, err := sess.GetTrackEvents("alpha")
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, Track("alpha"), result.Track)
+		assert.Nil(t, result.Events)
+		assert.NotSame(t, original, result)
+	})
+
+	t.Run("track events slice copied", func(t *testing.T) {
+		eventTime := time.Now()
+		original := &TrackEvents{
+			Track: "alpha",
+			Events: []TrackEvent{
+				{
+					Track:     "alpha",
+					Payload:   json.RawMessage("first"),
+					Timestamp: eventTime,
+				},
+			},
+		}
+		sess := &Session{Tracks: map[Track]*TrackEvents{"alpha": original}}
+		result, err := sess.GetTrackEvents("alpha")
+		require.NoError(t, err)
+		require.Len(t, result.Events, 1)
+		assert.Equal(t, json.RawMessage("first"), original.Events[0].Payload)
+
+		result.Events[0].Payload = json.RawMessage("changed")
+		assert.Equal(t, json.RawMessage("first"), original.Events[0].Payload)
+		assert.Equal(t, json.RawMessage("changed"), result.Events[0].Payload)
+	})
+}
+
 func TestSession_GetEventsConcurrentSafety(t *testing.T) {
 	// Test that GetEvents is safe for concurrent reads.
 	session := &Session{
@@ -563,6 +673,10 @@ func (m *MockService) ListUserStates(ctx context.Context, userKey UserKey) (Stat
 }
 
 func (m *MockService) DeleteUserState(ctx context.Context, userKey UserKey, key string) error {
+	return nil
+}
+
+func (m *MockService) UpdateSessionState(ctx context.Context, key Key, state StateMap) error {
 	return nil
 }
 

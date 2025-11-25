@@ -149,6 +149,33 @@ type Usage struct {
 
     // Total number of tokens used in response.
     TotalTokens int `json:"total_tokens"`
+
+    // Timing statistics (optional).
+    TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+type TimingInfo struct {
+    // FirstTokenDuration is the accumulated duration from request start to the first meaningful token.
+    // A "meaningful token" is defined as the first chunk containing reasoning content, regular content, or tool calls.
+    //
+    // Return timing:
+    // - Streaming requests: Calculated and returned immediately when the first meaningful chunk is received
+    // - Non-streaming requests: Calculated and returned when the complete response is received
+    FirstTokenDuration time.Duration `json:"time_to_first_token,omitempty"`
+
+    // ReasoningDuration is the accumulated duration of reasoning phases (streaming mode only).
+    // Measured from the first reasoning chunk to the last reasoning chunk in each LLM call.
+    //
+    // Measurement details:
+    // - Starts timing when the first chunk with reasoning content is received
+    // - Continues timing for all subsequent reasoning chunks
+    // - Stops timing when the first non-reasoning chunk (regular content or tool call) is received
+    //
+    // Return timing:
+    // - Streaming requests: Calculated and returned immediately when reasoning ends (i.e., when the first
+    //   non-reasoning content/tool call chunk is received)
+    // - Non-streaming requests: Cannot be measured precisely, this field will remain 0
+    ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 ```
 

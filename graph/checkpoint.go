@@ -549,16 +549,7 @@ func (cm *CheckpointManager) CreateCheckpoint(
 
 	// Convert state to channel values with deep copy to prevent races when
 	// the saver serializes the checkpoint concurrently with node execution.
-	channelValues := make(map[string]any)
-	for k, v := range state {
-		// Skip non-serializable or volatile keys (callbacks, exec context,
-		// session, etc.) to avoid losing function pointers and to prevent
-		// JSON marshaling errors in savers.
-		if isUnsafeStateKey(k) {
-			continue
-		}
-		channelValues[k] = deepCopyAny(v)
-	}
+	channelValues := state.deepCopy(false, nil)
 
 	// Create channel versions (simple incrementing integers for now).
 	channelVersions := make(map[string]int64)

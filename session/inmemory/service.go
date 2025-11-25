@@ -42,7 +42,10 @@ type sessionWithTTL struct {
 	expiredAt time.Time
 }
 
-var _ session.Service = (*SessionService)(nil)
+var (
+	_ session.Service      = (*SessionService)(nil)
+	_ session.TrackService = (*SessionService)(nil)
+)
 
 // isExpired checks if the given time has passed.
 func isExpired(expiredAt time.Time) bool {
@@ -475,6 +478,65 @@ func (s *SessionService) UpdateUserState(ctx context.Context, userKey session.Us
 	return nil
 }
 
+// UpdateSessionState updates the session-level state directly without appending an event.
+// This is useful for state initialization, correction, or synchronization scenarios
+// where event history is not needed.
+// Keys with app: or user: prefixes are not allowed (use UpdateAppState/UpdateUserState instead).
+// Keys with temp: prefix are allowed as they represent session-scoped ephemeral state.
+func (s *SessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+
+	app := s.getOrCreateAppSessions(key.AppName)
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	// Find the session
+	userSessions, userExists := app.sessions[key.UserID]
+	if !userExists {
+		return fmt.Errorf("memory session service update session state failed: user not found")
+	}
+
+	sessWithTTL, sessExists := userSessions[key.SessionID]
+	if !sessExists {
+		return fmt.Errorf("memory session service update session state failed: session not found")
+	}
+
+	// Check if session is expired
+	if isExpired(sessWithTTL.expiredAt) {
+		return fmt.Errorf("memory session service update session state failed: session expired")
+	}
+
+	// Validate: disallow app: and user: prefixes
+	for k := range state {
+		if strings.HasPrefix(k, session.StateAppPrefix) {
+			return fmt.Errorf("memory session service update session state failed: %s is not allowed, use UpdateAppState instead", k)
+		}
+		if strings.HasPrefix(k, session.StateUserPrefix) {
+			return fmt.Errorf("memory session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
+		}
+	}
+
+	// Update session state (allow temp: prefix and unprefixed keys)
+	for k, v := range state {
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessWithTTL.session.State[k] = copiedValue
+	}
+
+	// Update timestamp
+	sessWithTTL.session.UpdatedAt = time.Now()
+
+	// Refresh TTL if configured
+	if s.opts.sessionTTL > 0 {
+		sessWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
+	}
+
+	return nil
+}
+
 // DeleteUserState deletes the user state.
 func (s *SessionService) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	if err := userKey.CheckUserKey(); err != nil {
@@ -581,7 +643,62 @@ func (s *SessionService) AppendEvent(
 	// update stored session with the given event
 	s.updateStoredSession(storedSession, event)
 
-	// Update the session in the wrapper and refresh TTL
+	// Update the session in the wrapper and refresh TTL.
+	storedSessionWithTTL.session = storedSession
+	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
+	return nil
+}
+
+// AppendTrackEvent appends a track event to a session transcript.
+func (s *SessionService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	trackEvent *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("append track event: %w", err)
+	}
+	key := session.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+
+	app, ok := s.getAppSessions(key.AppName)
+	if !ok {
+		return fmt.Errorf("app not found: %s", key.AppName)
+	}
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	// Check if user exists first to prevent panic.
+	userSessions, ok := app.sessions[key.UserID]
+	if !ok {
+		return fmt.Errorf("user not found: %s", key.UserID)
+	}
+
+	storedSessionWithTTL, ok := userSessions[key.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+
+	// Check if session is expired.
+	storedSession := getValidSession(storedSessionWithTTL)
+	if storedSession == nil {
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+
+	// Append track event to the session.
+	if err := storedSession.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("append track event: %w", err)
+	}
+
+	// Update the session in the wrapper and refresh TTL.
 	storedSessionWithTTL.session = storedSession
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	return nil
@@ -665,7 +782,7 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 		sess.EventMu.Lock()
 		sess.Events = append(sess.Events, *e)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
-			sess.Events = sess.Events[len(sess.Events)-s.opts.sessionEventLimit:]
+			sess.ApplyEventFiltering(session.WithEventNum(s.opts.sessionEventLimit))
 		}
 		sess.EventMu.Unlock()
 	}
