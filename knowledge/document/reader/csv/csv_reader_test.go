@@ -17,13 +17,14 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 )
 
 func TestCSVReader_Read_NoChunk(t *testing.T) {
 	data := "name,age\nAlice,30\nBob,25\n"
 
 	rdr := New(
-		WithChunking(false),
+		reader.WithChunk(false),
 	)
 
 	docs, err := rdr.ReadFromReader("people", strings.NewReader(data))
@@ -44,7 +45,7 @@ func TestCSVReader_Read_NoChunk(t *testing.T) {
 
 func TestCSVReader_ChunkingAndHelpers(t *testing.T) {
 	data := "a,b,c\n1,2,3\n4,5,6\n"
-	rdr := New() // default chunking enabled
+	rdr := New().(*Reader) // default chunking enabled
 
 	docs, err := rdr.ReadFromReader("sheet", strings.NewReader(data))
 	if err != nil {
@@ -84,7 +85,7 @@ func TestCSVReader_ReadFromFileAndURL(t *testing.T) {
 	tmp.Close()
 
 	rdr := New(
-		WithChunkingStrategy(mockChunker{}), // provided, ensures branch taken
+		reader.WithCustomChunkingStrategy(mockChunker{}), // provided, ensures branch taken
 	)
 
 	// Test ReadFromFile
@@ -166,7 +167,7 @@ func TestCSVReader_ReadFromURLErrors(t *testing.T) {
 
 // TestCSVReader_ChunkDocumentDefaultStrategy verifies default chunking strategy initialization.
 func TestCSVReader_ChunkDocumentDefaultStrategy(t *testing.T) {
-	rdr := New(WithChunking(true))
+	rdr := New(reader.WithChunk(true))
 
 	csvData := "name,age\nAlice,30\nBob,25\n"
 	docs, err := rdr.ReadFromReader("test", strings.NewReader(csvData))
@@ -180,7 +181,7 @@ func TestCSVReader_ChunkDocumentDefaultStrategy(t *testing.T) {
 
 // TestCSVReader_ExtractFileNameFromURL tests URL filename extraction.
 func TestCSVReader_ExtractFileNameFromURL(t *testing.T) {
-	rdr := New()
+	rdr := New().(*Reader)
 
 	tests := []struct {
 		name     string
