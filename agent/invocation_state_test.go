@@ -323,3 +323,124 @@ func TestInvocation_State_ComplexStruct(t *testing.T) {
 	assert.Equal(t, data.ID, retrieved.ID)
 	assert.Equal(t, data.Metadata, retrieved.Metadata)
 }
+
+func TestGetStateValue(t *testing.T) {
+	t.Run("key not found", func(t *testing.T) {
+		inv := NewInvocation()
+		val, ok := GetStateValue[string](inv, "nonexistent")
+		assert.False(t, ok)
+		assert.Equal(t, "", val)
+	})
+
+	t.Run("matching type", func(t *testing.T) {
+		inv := NewInvocation()
+		inv.SetState("agent:string", "hello")
+		inv.SetState("agent:int", 42)
+		inv.SetState("agent:float", 3.14)
+		inv.SetState("agent:bool", true)
+		inv.SetState("agent:time", time.Now())
+
+		// Test string.
+		strVal, ok := GetStateValue[string](inv, "agent:string")
+		assert.True(t, ok)
+		assert.Equal(t, "hello", strVal)
+
+		// Test int.
+		intVal, ok := GetStateValue[int](inv, "agent:int")
+		assert.True(t, ok)
+		assert.Equal(t, 42, intVal)
+
+		// Test float64.
+		floatVal, ok := GetStateValue[float64](inv, "agent:float")
+		assert.True(t, ok)
+		assert.Equal(t, 3.14, floatVal)
+
+		// Test bool.
+		boolVal, ok := GetStateValue[bool](inv, "agent:bool")
+		assert.True(t, ok)
+		assert.Equal(t, true, boolVal)
+
+		// Test time.Time.
+		timeVal, ok := GetStateValue[time.Time](inv, "agent:time")
+		assert.True(t, ok)
+		assert.IsType(t, time.Time{}, timeVal)
+	})
+
+	t.Run("type mismatch", func(t *testing.T) {
+		inv := NewInvocation()
+		inv.SetState("agent:value", "hello")
+
+		// Try to get as int when it's actually string.
+		intVal, ok := GetStateValue[int](inv, "agent:value")
+		assert.False(t, ok)
+		assert.Equal(t, 0, intVal)
+
+		// Try to get as string when it's actually int.
+		inv.SetState("agent:number", 42)
+		strVal, ok := GetStateValue[string](inv, "agent:number")
+		assert.False(t, ok)
+		assert.Equal(t, "", strVal)
+	})
+
+	t.Run("nil invocation", func(t *testing.T) {
+		var inv *Invocation
+		val, ok := GetStateValue[string](inv, "key")
+		assert.False(t, ok)
+		assert.Equal(t, "", val)
+	})
+
+	t.Run("complex struct type", func(t *testing.T) {
+		type CustomData struct {
+			ID        string
+			Timestamp time.Time
+			Metadata  map[string]string
+		}
+
+		inv := NewInvocation()
+		data := CustomData{
+			ID:        "test-123",
+			Timestamp: time.Now(),
+			Metadata: map[string]string{
+				"key1": "value1",
+				"key2": "value2",
+			},
+		}
+		inv.SetState("agent:custom_data", data)
+
+		retrieved, ok := GetStateValue[CustomData](inv, "agent:custom_data")
+		require.True(t, ok)
+		assert.Equal(t, data.ID, retrieved.ID)
+		assert.Equal(t, data.Metadata, retrieved.Metadata)
+	})
+
+	t.Run("pointer type", func(t *testing.T) {
+		inv := NewInvocation()
+		str := "hello"
+		inv.SetState("agent:ptr", &str)
+
+		ptrVal, ok := GetStateValue[*string](inv, "agent:ptr")
+		assert.True(t, ok)
+		require.NotNil(t, ptrVal)
+		assert.Equal(t, "hello", *ptrVal)
+	})
+
+	t.Run("slice type", func(t *testing.T) {
+		inv := NewInvocation()
+		slice := []int{1, 2, 3}
+		inv.SetState("agent:slice", slice)
+
+		sliceVal, ok := GetStateValue[[]int](inv, "agent:slice")
+		assert.True(t, ok)
+		assert.Equal(t, []int{1, 2, 3}, sliceVal)
+	})
+
+	t.Run("map type", func(t *testing.T) {
+		inv := NewInvocation()
+		m := map[string]int{"a": 1, "b": 2}
+		inv.SetState("agent:map", m)
+
+		mapVal, ok := GetStateValue[map[string]int](inv, "agent:map")
+		assert.True(t, ok)
+		assert.Equal(t, map[string]int{"a": 1, "b": 2}, mapVal)
+	})
+}

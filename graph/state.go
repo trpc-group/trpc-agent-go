@@ -53,6 +53,35 @@ const (
 // This is the shared data structure that flows between nodes.
 type State map[string]any
 
+// GetStateValue retrieves a typed value from the state.
+//
+// Returns the typed value and true if the key exists and the type matches,
+// or the zero value and false otherwise.
+//
+// Example:
+//
+//	if messages, ok := GetStateValue[[]model.Message](state, StateKeyMessages); ok {
+//	    // use messages
+//	}
+//	if userInput, ok := GetStateValue[string](state, StateKeyUserInput); ok {
+//	    // use userInput
+//	}
+func GetStateValue[T any](s State, key string) (T, bool) {
+	var zero T
+	if s == nil {
+		return zero, false
+	}
+	val, ok := s[key]
+	if !ok {
+		return zero, false
+	}
+	typedVal, ok := val.(T)
+	if !ok {
+		return zero, false
+	}
+	return typedVal, true
+}
+
 // Clone creates a deep copy of the state.
 func (s State) Clone() State {
 	clone := make(State, len(s))
