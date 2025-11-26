@@ -9,8 +9,8 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/model/provider v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/model/provider v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (
@@ -47,5 +47,5 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-00010101000000-000000000000 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519 // indirect
 )

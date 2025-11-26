@@ -15,8 +15,8 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0
 	go.opentelemetry.io/otel/trace v1.38.0
 	google.golang.org/genai v1.33.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (
