@@ -94,7 +94,7 @@ func (e *emailToolSet) sendMail(ctx context.Context, req *sendMailRequest) (rsp 
 		message := gomail.NewMsg()
 		err = message.From(req.Auth.Name)
 		if err != nil {
-			rsp.Message = fmt.Sprintf("fromm email err: %v", err)
+			rsp.Message = fmt.Sprintf("from email err: %v", err)
 			return rsp, nil
 		}
 		err = message.To(m.ToEmail)
@@ -161,8 +161,10 @@ func checkMailBoxType(email string) (MailboxType, error) {
 	if err != nil {
 		return MAIL_UNKNOWN, fmt.Errorf("parse email address ERROR: %w", err)
 	}
+	log.Infof("addr: %v", addr)
 	// to lower
 	emailAddr := strings.ToLower(addr.Address)
+	log.Infof("emailAddr: %v", emailAddr)
 
 	// split by name and domain
 	lastAt := strings.LastIndex(emailAddr, "@")
@@ -170,6 +172,8 @@ func checkMailBoxType(email string) (MailboxType, error) {
 		return MAIL_UNKNOWN, fmt.Errorf("invalid email address")
 	}
 	domain := emailAddr[lastAt:]
+	domain = strings.TrimPrefix(domain, "@")
+	log.Infof("domain: %v", domain)
 
 	switch domain {
 	case "qq.com", "vip.qq.com", "foxmail.com":

@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/memory/postgres
 
-go 1.21
+go 1.21.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2

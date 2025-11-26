@@ -10,7 +10,6 @@ import (
 func TestMailTool_sendMail(t *testing.T) {
 	toolSet, err := NewToolSet(
 		WithSendEmailEnabled(true),
-		WithName("email"),
 	)
 	if err != nil {
 		t.Errorf("NewToolSet failed, err: %v", err)
@@ -51,7 +50,7 @@ func TestMailTool_sendMail(t *testing.T) {
 				Name:     tt.Name,
 				Password: tt.Password,
 			},
-			MailList: []*mail{
+			MailList: []*Mail{
 				{
 					ToEmail: tt.ToEmail,
 					Subject: tt.Subject,
