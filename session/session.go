@@ -40,12 +40,14 @@ const SummaryFilterKeyAllContents = ""
 
 // Session is the interface that all sessions must implement.
 type Session struct {
-	ID      string        `json:"id"`      // ID is the session id.
-	AppName string        `json:"appName"` // AppName is the app name.
-	UserID  string        `json:"userID"`  // UserID is the user id.
-	State   StateMap      `json:"state"`   // State is the session state with delta support.
-	Events  []event.Event `json:"events"`  // Events is the session events.
-	EventMu sync.RWMutex  `json:"-"`
+	ID       string                 `json:"id"`      // ID is the session id.
+	AppName  string                 `json:"appName"` // AppName is the app name.
+	UserID   string                 `json:"userID"`  // UserID is the user id.
+	State    StateMap               `json:"state"`   // State is the session state with delta support.
+	Events   []event.Event          `json:"events"`  // Events is the session events.
+	EventMu  sync.RWMutex           `json:"-"`
+	Tracks   map[Track]*TrackEvents `json:"tracks,omitempty"` // Tracks stores track events.
+	TracksMu sync.RWMutex           `json:"-"`
 	// Summaries holds filter-aware summaries. The key is the event filter key.
 	SummariesMu sync.RWMutex        `json:"-"`                   // SummariesMu is the read-write mutex for Summaries.
 	Summaries   map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
@@ -72,8 +74,26 @@ func (sess *Session) Clone() *Session {
 		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field.
 		Hash:      sess.Hash,
 	}
+	// Copy events.
 	copy(copiedSess.Events, sess.Events)
 	sess.EventMu.RUnlock()
+
+	// Copy track events.
+	sess.TracksMu.RLock()
+	if len(sess.Tracks) > 0 {
+		copiedSess.Tracks = make(map[Track]*TrackEvents, len(sess.Tracks))
+		for track, events := range sess.Tracks {
+			history := &TrackEvents{
+				Track: events.Track,
+			}
+			if len(events.Events) > 0 {
+				history.Events = make([]TrackEvent, len(events.Events))
+				copy(history.Events, events.Events)
+			}
+			copiedSess.Tracks[track] = history
+		}
+	}
+	sess.TracksMu.RUnlock()
 
 	// Copy state.
 	if sess.State != nil {
@@ -180,6 +200,54 @@ func (sess *Session) GetEventCount() int {
 	defer sess.EventMu.RUnlock()
 
 	return len(sess.Events)
+}
+
+// AppendTrackEvent appends a track event to the session.
+func (sess *Session) AppendTrackEvent(event *TrackEvent, opts ...Option) error {
+	if sess == nil {
+		return fmt.Errorf("session is nil")
+	}
+	if event == nil {
+		return fmt.Errorf("track event is nil")
+	}
+	if sess.State == nil {
+		sess.State = make(StateMap)
+	}
+	if err := ensureTrackExists(sess.State, event.Track); err != nil {
+		return fmt.Errorf("ensure track indexed: %w", err)
+	}
+	sess.TracksMu.Lock()
+	defer sess.TracksMu.Unlock()
+	if sess.Tracks == nil {
+		sess.Tracks = make(map[Track]*TrackEvents)
+	}
+	trackEvents, ok := sess.Tracks[event.Track]
+	if !ok || trackEvents == nil {
+		trackEvents = &TrackEvents{Track: event.Track}
+		sess.Tracks[event.Track] = trackEvents
+	}
+	trackEvents.Events = append(trackEvents.Events, *event)
+	sess.UpdatedAt = time.Now()
+	return nil
+}
+
+// GetTrackEvents returns the track events snapshot.
+func (sess *Session) GetTrackEvents(track Track) (*TrackEvents, error) {
+	sess.TracksMu.RLock()
+	defer sess.TracksMu.RUnlock()
+	if sess.Tracks == nil {
+		return nil, fmt.Errorf("tracks is empty")
+	}
+	trackEvents, ok := sess.Tracks[track]
+	if !ok || trackEvents == nil {
+		return nil, fmt.Errorf("track events not found: %s", track)
+	}
+	copied := &TrackEvents{Track: trackEvents.Track}
+	if len(trackEvents.Events) > 0 {
+		copied.Events = make([]TrackEvent, len(trackEvents.Events))
+		copy(copied.Events, trackEvents.Events)
+	}
+	return copied, nil
 }
 
 // EnsureEventStartWithUser filters events to ensure they start with RoleUser.
@@ -379,6 +447,13 @@ type Service interface {
 
 	// DeleteUserState deletes the state by target scope and key.
 	DeleteUserState(ctx context.Context, userKey UserKey, key string) error
+
+	// UpdateSessionState updates the session-level state directly without appending an event.
+	// This is useful for state initialization, correction, or synchronization scenarios
+	// where event history is not needed.
+	// Keys with app: or user: prefixes are not allowed (use UpdateAppState/UpdateUserState instead).
+	// Keys with temp: prefix are allowed as they represent session-scoped ephemeral state.
+	UpdateSessionState(ctx context.Context, key Key, state StateMap) error
 
 	// AppendEvent appends an event to a session.
 	AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error

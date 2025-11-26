@@ -98,6 +98,9 @@ type Invocation struct {
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
 	state   map[string]any
 	stateMu sync.RWMutex
+
+	// timingInfo stores timing information for the first LLM call in this invocation.
+	timingInfo *model.TimingInfo
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -159,6 +162,16 @@ func WithKnowledgeConditionedFilter(filter *searchfilter.UniversalFilterConditio
 func WithMessages(messages []model.Message) RunOption {
 	return func(opts *RunOptions) {
 		opts.Messages = messages
+	}
+}
+
+// WithResume enables or disables resume mode for this run.
+// When enabled, flows like llmflow may inspect the existing Session history
+// and resume unfinished work (for example, executing pending tool calls)
+// before issuing a new model call.
+func WithResume(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.Resume = enabled
 	}
 }
 
@@ -323,6 +336,13 @@ type RunOptions struct {
 	// `invocation.Message` when no events exist).
 	Messages []model.Message
 
+	// Resume indicates whether this run should attempt to resume from existing
+	// session context before making a new model call. When true, flows may
+	// inspect the latest session events (for example, assistant messages with
+	// pending tool calls) and complete unfinished work prior to issuing a new
+	// LLM request.
+	Resume bool
+
 	// RequestID is the request id of the request.
 	RequestID string
 
@@ -468,7 +488,7 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		agentName = inv.AgentName
 		requestID = inv.RunOptions.RequestID
 	}
-	log.Debugf("[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: %d, current length: %d, branch: %s, agent name:%s",
+	log.Tracef("[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: %d, current length: %d, branch: %s, agent name:%s",
 		requestID, cap(ch), len(ch), e.Branch, agentName)
 	return event.EmitEvent(ctx, ch, e)
 }
@@ -536,6 +556,19 @@ func (inv *Invocation) GetState(key string) (any, bool) {
 	}
 	value, ok := inv.state[key]
 	return value, ok
+}
+
+// GetOrCreateTimingInfo gets or creates timing info for this invocation.
+// Only the first LLM call will create and populate timing info; subsequent calls reuse it.
+// This ensures timing metrics only reflect the first LLM call in scenarios with multiple calls (e.g., tool calls).
+func (inv *Invocation) GetOrCreateTimingInfo() *model.TimingInfo {
+	if inv == nil {
+		return nil
+	}
+	if inv.timingInfo == nil {
+		inv.timingInfo = &model.TimingInfo{}
+	}
+	return inv.timingInfo
 }
 
 // DeleteState removes a value from the invocation state.

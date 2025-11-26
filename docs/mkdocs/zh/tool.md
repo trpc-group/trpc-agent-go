@@ -7,7 +7,7 @@ Tool 工具系统是 tRPC-Agent-Go 框架的核心组件，为 Agent 提供了�
 ### 🎯 核心特性
 
 - **🔧 多类型工具**：支持函数工具（Function Tools）和 MCP 标准工具
-- **🌊 流式响应**：支持实时流式响应和普通响应两种模式  
+- **🌊 流式响应**：支持实时流式响应和普通响应两种模式
 - **⚡ 并行执行**：工具调用支持并行执行以提升性能
 - **🔄 MCP 协议**：完整支持 STDIO、SSE、Streamable HTTP 三种传输方式
 - **🛠️ 配置支持**：提供配置选项和过滤器支持
@@ -78,12 +78,12 @@ type StreamChunk struct {
 
 ### 工具类型说明
 
-| 工具类型 | 定义 | 集成方式 |
-|---------|------|---------|
-| **Function Tools** | 直接调用 Go 函数实现的工具 | `Tool` 接口，进程内调用 |
-| **Agent Tool (AgentTool)** | 将任意 Agent 包装为可调用工具 | `Tool` 接口，支持流式内部转发 |
-| **DuckDuckGo Tool** | 基于 DuckDuckGo API 的搜索工具 | `Tool` 接口，HTTP API |
-| **MCP ToolSet** | 基于 MCP 协议的外部工具集 | `ToolSet` 接口，支持多种传输方式 |
+| 工具类型                   | 定义                           | 集成方式                         |
+| -------------------------- | ------------------------------ | -------------------------------- |
+| **Function Tools**         | 直接调用 Go 函数实现的工具     | `Tool` 接口，进程内调用          |
+| **Agent Tool (AgentTool)** | 将任意 Agent 包装为可调用工具  | `Tool` 接口，支持流式内部转发    |
+| **DuckDuckGo Tool**        | 基于 DuckDuckGo API 的搜索工具 | `Tool` 接口，HTTP API            |
+| **MCP ToolSet**            | 基于 MCP 协议的外部工具集      | `ToolSet` 接口，支持多种传输方式 |
 
 > **📖 相关文档**：Agent 间协作相关的 Agent Tool 和 Transfer Tool 请参考 [多 Agent 系统文档](multiagent.md)。
 
@@ -142,7 +142,7 @@ func getStreamableWeather(input weatherInput) *tool.StreamReader {
     stream := tool.NewStream(10)
     go func() {
         defer stream.Writer.Close()
-        
+
         // 模拟逐步返回天气数据
         result := "Sunny, 25°C in " + input.Location
         for i := 0; i < len(result); i++ {
@@ -152,14 +152,14 @@ func getStreamableWeather(input weatherInput) *tool.StreamReader {
                 },
                 Metadata: tool.Metadata{CreatedAt: time.Now()},
             }
-            
+
             if closed := stream.Writer.Send(chunk, nil); closed {
                 break
             }
             time.Sleep(10 * time.Millisecond) // 模拟延迟
         }
     }()
-    
+
     return stream.Reader
 }
 
@@ -185,7 +185,7 @@ for {
     if err != nil {
         return err
     }
-    
+
     // 处理每个数据块
     fmt.Printf("收到数据: %v\n", chunk.Content)
 }
@@ -240,6 +240,7 @@ MCP（Model Context Protocol）是一个开放协议，标准化了应用程序�
 - 🔗 **统一接口**：所有 MCP 工具都通过 `mcp.NewMCPToolSet()` 创建
 - 🚀 **多种传输**：支持 STDIO、SSE、Streamable HTTP 三种传输方式
 - 🔧 **工具过滤**：支持包含/排除特定工具
+- ✅ **显式初始化**：通过 `(*mcp.ToolSet).Init(ctx)`，可以在应用启动阶段提前发现 MCP 连接/工具加载错误并快速失败
 
 ### 基本用法
 
@@ -256,6 +257,11 @@ mcpToolSet := mcp.NewMCPToolSet(
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // 可选：工具过滤
 )
+
+// （可选但推荐）显式初始化 MCP：建立连接 + 初始化会话 + 列工具
+if err := mcpToolSet.Init(ctx); err != nil {
+    log.Fatalf("初始化 MCP 工具集失败: %v", err)
+}
 
 // 集成到 Agent
 agent := llmagent.New("mcp-assistant",
@@ -280,6 +286,9 @@ mcpToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 STDIO MCP 工具集失败: %w", err)
+}
 ```
 
 #### 2. SSE 传输
@@ -297,10 +306,14 @@ mcpToolSet := mcp.NewMCPToolSet(
         },
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 SSE MCP 工具集失败: %w", err)
+}
 ```
 
 #### 3. Streamable HTTP 传输
-使用标准 HTTP 协议进行通信，支持普通HTTP和流式响应。
+
+使用标准 HTTP 协议进行通信，支持普通 HTTP 和流式响应。
 
 ```go
 mcpToolSet := mcp.NewMCPToolSet(
@@ -310,6 +323,9 @@ mcpToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
 )
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("初始化 Streamable MCP 工具集失败: %w", err)
+}
 ```
 
 ### 会话重连支持
@@ -403,10 +419,12 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
 ### 选项说明
 
 - WithSkipSummarization(bool)：
+
   - false（默认）：允许在工具结果后继续一次 LLM 调用进行总结/回答
   - true：外层 Flow 在 `tool.response` 后直接结束本轮（不再额外总结）
 
 - WithStreamInner(bool)：
+
   - true：把子 Agent 的事件直接转发到父流程（强烈建议父/子 Agent 都开启 `GenerationConfig{Stream: true}`）
   - false：按“仅可调用工具”处理，不做内部事件转发
 
@@ -438,6 +456,7 @@ child := agenttool.NewTool(
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool/function"
     "trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo"
     "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
@@ -449,7 +468,7 @@ calculatorTool := function.NewFunctionTool(calculator,
     function.WithDescription("执行基础数学运算"))
 
 timeTool := function.NewFunctionTool(getCurrentTime,
-    function.WithName("current_time"), 
+    function.WithName("current_time"),
     function.WithDescription("获取当前时间"))
 
 // 创建内置工具
@@ -653,9 +672,9 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message,
 
 框架会自动区分**用户工具**和**框架工具**，只过滤用户工具：
 
-| 工具分类 | 包含的工具 | 是否被过滤 |
-|---------|----------|----------|
-| **用户工具** | 通过 `WithTools` 注册的工具<br>通过 `WithToolSets` 注册的工具 | ✅ 受过滤控制 |
+| 工具分类     | 包含的工具                                                                                             | 是否被过滤            |
+| ------------ | ------------------------------------------------------------------------------------------------------ | --------------------- |
+| **用户工具** | 通过 `WithTools` 注册的工具<br>通过 `WithToolSets` 注册的工具                                          | ✅ 受过滤控制         |
 | **框架工具** | `transfer_to_agent`（多 Agent 协调）<br>`knowledge_search`（知识库检索）<br>`agentic_knowledge_search` | ❌ 永不过滤，自动保留 |
 
 **示例：**
@@ -694,7 +713,7 @@ func sensitiveOperation(ctx context.Context, req Request) (Result, error) {
     if !hasPermission(ctx, req.UserID, "sensitive_operation") {
         return nil, fmt.Errorf("permission denied")
     }
-    
+
     // 执行操作
     return performOperation(req)
 }
@@ -725,14 +744,14 @@ stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
 ```bash
 # 并行执行（启用时）
 Tool 1: get_weather     [====] 50ms
-Tool 2: get_population  [====] 50ms  
+Tool 2: get_population  [====] 50ms
 Tool 3: get_time       [====] 50ms
 总时间: ~50ms（同时执行）
 
 # 串行执行（默认）
 Tool 1: get_weather     [====] 50ms
 Tool 2: get_population       [====] 50ms
-Tool 3: get_time                  [====] 50ms  
+Tool 3: get_time                  [====] 50ms
 总时间: ~150ms（依次执行）
 ```
 
@@ -753,7 +772,7 @@ package main
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -783,7 +802,7 @@ func main() {
         function.WithName("calculator"),
         function.WithDescription("简单计算器"),
     )
-    
+
     // 2. 创建模型和 Agent
     llmModel := openai.New("DeepSeek-V3-Online-64K")
     agent := llmagent.New("calculator-assistant",
@@ -792,25 +811,25 @@ func main() {
         llmagent.WithTools([]tool.Tool{calculatorTool}),
         llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // 启用流式输出
     )
-    
+
     // 3. 创建 Runner 并执行
     r := runner.NewRunner("math-app", agent)
-    
+
     ctx := context.Background()
     userMessage := model.NewUserMessage("请计算 25 乘以 4")
-    
+
     eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
     if err != nil {
         panic(err)
     }
-    
+
     // 4. 处理响应
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("错误: %s\n", event.Error.Message)
             continue
         }
-        
+
         // 显示工具调用
         if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
             for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
@@ -818,12 +837,12 @@ func main() {
                 fmt.Printf("   参数: %s\n", string(toolCall.Function.Arguments))
             }
         }
-        
+
         // 显示流式内容
         if len(event.Response.Choices) > 0 {
             fmt.Print(event.Response.Choices[0].Delta.Content)
         }
-        
+
         if event.Done {
             break
         }
@@ -838,7 +857,7 @@ func main() {
 cd examples/tool
 go run .
 
-# 进入 MCP 工具示例目录  
+# 进入 MCP 工具示例目录
 cd examples/mcp_tool
 
 # 启动外部服务器

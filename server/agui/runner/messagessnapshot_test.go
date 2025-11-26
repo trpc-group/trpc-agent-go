@@ -13,24 +13,28 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestMessagesSnapshotRequiresAppName(t *testing.T) {
+	svc := &testSessionService{}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
 	r := &runner{
 		runner:            noopBaseRunner{},
 		userIDResolver:    NewOptions().UserIDResolver,
 		runAgentInputHook: NewOptions().RunAgentInputHook,
-		sessionService:    &testSessionService{},
+		tracker:           tracker,
 	}
 
 	ch, err := r.MessagesSnapshot(
@@ -41,12 +45,32 @@ func TestMessagesSnapshotRequiresAppName(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestMessagesSnapshotRequiresRunner(t *testing.T) {
+	r := &runner{}
+	ch, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
+	)
+	assert.Nil(t, ch)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "runner is nil")
+}
+
+func TestMessagesSnapshotRequiresInput(t *testing.T) {
+	r := &runner{
+		runner: noopBaseRunner{},
+	}
+	ch, err := r.MessagesSnapshot(context.Background(), nil)
+	assert.Nil(t, ch)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "run input cannot be nil")
+}
+
 func TestMessagesSnapshotRequiresSessionService(t *testing.T) {
 	r := &runner{
-		runner:            noopBaseRunner{},
-		userIDResolver:    NewOptions().UserIDResolver,
-		runAgentInputHook: NewOptions().RunAgentInputHook,
-		appName:           "demo",
+		runner:         noopBaseRunner{},
+		appName:        "demo",
+		userIDResolver: NewOptions().UserIDResolver,
 	}
 
 	ch, err := r.MessagesSnapshot(
@@ -58,82 +82,174 @@ func TestMessagesSnapshotRequiresSessionService(t *testing.T) {
 }
 
 func TestMessagesSnapshotHappyPath(t *testing.T) {
-	events := []event.Event{
-		newResponse(model.RoleUser, "hello", nil),
-		newResponse(model.RoleSystem, "system", nil),
-		newResponse(model.RoleAssistant, "reply", func(m *model.Message) {
-			m.ToolName = "calc"
-			m.ToolCalls = []model.ToolCall{{
-				ID:   "tool-call-1",
-				Type: "function",
-				Function: model.FunctionDefinitionParam{
-					Name:      "calc",
-					Arguments: []byte("{}"),
-				},
-			}}
-		}),
-		newResponse(model.RoleTool, "42", func(m *model.Message) {
-			m.ToolName = "calc"
-			m.ToolID = "tool-call-1"
-		}),
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "thinking")),
+			newTrackEvent(t, aguievents.NewToolCallStartEvent("tool-call-1", "calc", aguievents.WithParentMessageID("assistant-1"))),
+			newTrackEvent(t, aguievents.NewToolCallArgsEvent("tool-call-1", "{\"a\":1}")),
+			newTrackEvent(t, aguievents.NewToolCallEndEvent("tool-call-1")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-1")),
+			newTrackEvent(t, aguievents.NewToolCallResultEvent("tool-msg-1", "tool-call-1", "42")),
+		},
 	}
-
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
 	r := &runner{
 		runner:            noopBaseRunner{},
 		userIDResolver:    NewOptions().UserIDResolver,
 		runAgentInputHook: NewOptions().RunAgentInputHook,
 		appName:           "demo",
-		sessionService:    &testSessionService{events: events},
+		tracker:           tracker,
 	}
 
 	stream, err := r.MessagesSnapshot(
 		context.Background(),
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	collected := collectAGUIEvents(t, stream)
-	assert.Len(t, collected, 3)
+	require.Len(t, collected, 3)
 
-	_, ok := collected[0].(*aguievents.RunStartedEvent)
-	assert.True(t, ok)
+	if _, ok := collected[0].(*aguievents.RunStartedEvent); !ok {
+		t.Fatalf("expected RUN_STARTED")
+	}
 
 	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
-	assert.True(t, ok)
-	assert.Len(t, snapshot.Messages, 4)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 3)
+	assert.Equal(t, "user", snapshot.Messages[0].Role)
 	assert.Equal(t, "hello", *snapshot.Messages[0].Content)
-	assert.Equal(t, "system", *snapshot.Messages[1].Content)
-	assert.Equal(t, "calc", snapshot.Messages[2].ToolCalls[0].Function.Name)
-	assert.Equal(t, "tool-call-1", *snapshot.Messages[3].ToolCallID)
+	assert.Equal(t, "assistant", snapshot.Messages[1].Role)
+	require.Len(t, snapshot.Messages[1].ToolCalls, 1)
+	assert.Equal(t, "calc", snapshot.Messages[1].ToolCalls[0].Function.Name)
+	assert.Equal(t, "tool", snapshot.Messages[2].Role)
+	assert.Equal(t, "tool-call-1", *snapshot.Messages[2].ToolCallID)
 
-	_, ok = collected[2].(*aguievents.RunFinishedEvent)
-	assert.True(t, ok)
+	if _, ok := collected[2].(*aguievents.RunFinishedEvent); !ok {
+		t.Fatalf("expected RUN_FINISHED")
+	}
 }
 
-func TestMessagesSnapshotUnknownRole(t *testing.T) {
-	events := []event.Event{
-		newResponse(model.RoleUser, "hello", nil),
-		newResponse(model.Role("unknown"), "?", nil),
-	}
-
+func TestMessagesSnapshotEmptyTrack(t *testing.T) {
+	svc := &testSessionService{}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
 	r := &runner{
 		runner:            noopBaseRunner{},
 		userIDResolver:    NewOptions().UserIDResolver,
 		runAgentInputHook: NewOptions().RunAgentInputHook,
 		appName:           "demo",
-		sessionService:    &testSessionService{events: events},
+		tracker:           tracker,
 	}
 
 	stream, err := r.MessagesSnapshot(
 		context.Background(),
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
 	)
-	assert.NoError(t, err)
-
+	require.NoError(t, err)
 	collected := collectAGUIEvents(t, stream)
-	assert.Len(t, collected, 2)
-	_, ok := collected[1].(*aguievents.RunErrorEvent)
-	assert.True(t, ok)
+	require.Len(t, collected, 2)
+	if _, ok := collected[1].(*aguievents.RunErrorEvent); !ok {
+		t.Fatalf("expected RUN_ERROR")
+	}
+}
+
+func TestMessagesSnapshotGetSessionError(t *testing.T) {
+	svc := &testSessionService{getErr: errors.New("boom")}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
+	)
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 2)
+	if _, ok := collected[1].(*aguievents.RunErrorEvent); !ok {
+		t.Fatalf("expected RUN_ERROR")
+	}
+}
+
+func TestMessagesSnapshotUserIDResolverError(t *testing.T) {
+	svc := &testSessionService{trackEvents: []session.TrackEvent{newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")))}}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	userIDResolver := func(context.Context, *adapter.RunAgentInput) (string, error) {
+		return "", errors.New("boom")
+	}
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    userIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
+	)
+	require.Error(t, err)
+	assert.Nil(t, stream)
+	assert.Contains(t, err.Error(), "resolve user ID")
+}
+
+func TestMessagesSnapshotRunAgentInputHookError(t *testing.T) {
+	svc := &testSessionService{}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:         noopBaseRunner{},
+		appName:        "demo",
+		tracker:        tracker,
+		userIDResolver: NewOptions().UserIDResolver,
+		runAgentInputHook: func(context.Context, *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
+			return nil, errors.New("hook fail")
+		},
+	}
+
+	ch, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.Nil(t, ch)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "run input hook")
+}
+
+func TestMessagesSnapshotReduceError(t *testing.T) {
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 2)
+	errEvt, ok := collected[1].(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, errEvt.Message, "reduce track events")
 }
 
 func collectAGUIEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event {
@@ -145,114 +261,21 @@ func collectAGUIEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Ev
 	return events
 }
 
-func TestMessagesSnapshotRunnerNil(t *testing.T) {
-	r := &runner{
-		runner: nil,
+func newTrackEvent(t *testing.T, evt aguievents.Event) session.TrackEvent {
+	t.Helper()
+	payload, err := evt.ToJSON()
+	require.NoError(t, err)
+	return session.TrackEvent{
+		Track:     track.TrackAGUI,
+		Payload:   append([]byte(nil), payload...),
+		Timestamp: time.Now(),
 	}
-	ch, err := r.MessagesSnapshot(
-		context.Background(),
-		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
-	)
-	assert.Nil(t, ch)
-	assert.Error(t, err)
-}
-
-func TestMessagesSnapshotInputNil(t *testing.T) {
-	r := &runner{
-		runner: noopBaseRunner{},
-	}
-	ch, err := r.MessagesSnapshot(context.Background(), nil)
-	assert.Nil(t, ch)
-	assert.Error(t, err)
-}
-
-func TestMessagesSnapshotUserIDResolverError(t *testing.T) {
-	userIDResolver := func(context.Context, *adapter.RunAgentInput) (string, error) { return "", errors.New("boom") }
-	r := &runner{
-		runner:            noopBaseRunner{},
-		userIDResolver:    userIDResolver,
-		runAgentInputHook: NewOptions().RunAgentInputHook,
-		appName:           "demo",
-		sessionService:    &testSessionService{events: []event.Event{newResponse(model.RoleUser, "hello", nil)}},
-	}
-
-	stream, err := r.MessagesSnapshot(
-		context.Background(),
-		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
-	)
-	assert.NoError(t, err)
-	collected := collectAGUIEvents(t, stream)
-	assert.Len(t, collected, 2)
-	_, ok := collected[1].(*aguievents.RunErrorEvent)
-	assert.True(t, ok)
-}
-
-func TestMessagesSnapshotEmptyEvents(t *testing.T) {
-	r := &runner{
-		runner:            noopBaseRunner{},
-		userIDResolver:    NewOptions().UserIDResolver,
-		runAgentInputHook: NewOptions().RunAgentInputHook,
-		appName:           "demo",
-		sessionService:    &testSessionService{},
-	}
-
-	stream, err := r.MessagesSnapshot(
-		context.Background(),
-		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
-	)
-	assert.NoError(t, err)
-	collected := collectAGUIEvents(t, stream)
-	assert.Len(t, collected, 3)
-	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
-	assert.True(t, ok)
-	assert.Len(t, snapshot.Messages, 0)
-}
-
-func TestMessagesSnapshotGetSessionError(t *testing.T) {
-	r := &runner{
-		runner:            noopBaseRunner{},
-		userIDResolver:    NewOptions().UserIDResolver,
-		runAgentInputHook: NewOptions().RunAgentInputHook,
-		appName:           "demo",
-		sessionService:    &testSessionService{getErr: errors.New("get session error")},
-	}
-
-	stream, err := r.MessagesSnapshot(
-		context.Background(),
-		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
-	)
-	assert.NoError(t, err)
-	collected := collectAGUIEvents(t, stream)
-	assert.Len(t, collected, 2)
-	_, ok := collected[1].(*aguievents.RunErrorEvent)
-	assert.True(t, ok)
-}
-
-// TestMessagesSnapshotRunAgentInputHookError verifies MessagesSnapshot returns error when input hook fails.
-func TestMessagesSnapshotRunAgentInputHookError(t *testing.T) {
-	runAgentInputHook := func(context.Context, *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
-		return nil, errors.New("hook failure")
-	}
-	r := &runner{
-		runner:            noopBaseRunner{},
-		userIDResolver:    NewOptions().UserIDResolver,
-		runAgentInputHook: runAgentInputHook,
-		appName:           "demo",
-		sessionService:    &testSessionService{},
-	}
-
-	ch, err := r.MessagesSnapshot(
-		context.Background(),
-		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
-	)
-	assert.Nil(t, ch)
-	assert.Error(t, err)
 }
 
 type noopBaseRunner struct{}
 
-func (noopBaseRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message,
-	_ ...agent.RunOption) (<-chan *event.Event, error) {
+func (noopBaseRunner) Run(ctx context.Context, userID, sessionID string, message model.Message,
+	runOpts ...agent.RunOption) (<-chan *event.Event, error) {
 	ch := make(chan *event.Event)
 	close(ch)
 	return ch, nil
@@ -260,283 +283,10 @@ func (noopBaseRunner) Run(ctx context.Context, userID string, sessionID string, 
 
 func (noopBaseRunner) Close() error { return nil }
 
-// TestGetSessionEventsNilSession verifies nil session is handled gracefully.
-func TestGetSessionEventsNilSession(t *testing.T) {
-	r := &runner{
-		sessionService: &testSessionService{returnNil: true},
-	}
-	events, err := r.getSessionEvents(context.Background(), session.Key{})
-	assert.NoError(t, err)
-	assert.Nil(t, events)
-}
-
-// TestConvertToMessagesSnapshotEventSkipsNilResponse ensures nil response events are ignored.
-func TestConvertToMessagesSnapshotEventSkipsNilResponse(t *testing.T) {
-	r := &runner{}
-	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(), "user-id", []event.Event{{}})
-	assert.NoError(t, err)
-	assert.NotNil(t, snapshot)
-	assert.Len(t, snapshot.Messages, 0)
-}
-
-func TestConvertToMessagesSnapshotEventIncludesUserIDName(t *testing.T) {
-	r := &runner{}
-	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(),
-		"user-id", []event.Event{newResponse(model.RoleUser, "hello", nil)})
-	assert.NoError(t, err)
-	assert.NotNil(t, snapshot)
-	assert.Len(t, snapshot.Messages, 1)
-	assert.NotNil(t, snapshot.Messages[0].Name)
-	assert.Equal(t, "user-id", *snapshot.Messages[0].Name)
-}
-
-// TestConvertToMessagesSnapshotEventBeforeCallbackMutates ensures before callbacks update messages.
-func TestConvertToMessagesSnapshotEventBeforeCallbackMutates(t *testing.T) {
-	callbacks := translator.NewCallbacks().
-		RegisterBeforeTranslate(func(ctx context.Context, evt *event.Event) (*event.Event, error) {
-			if evt.Response != nil && len(evt.Response.Choices) > 0 {
-				evt.Response.Choices[0].Message.Content = "patched"
-			}
-			return evt, nil
-		})
-	r := &runner{
-		translateCallbacks: callbacks,
-	}
-	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(),
-		"user-id", []event.Event{newResponse(model.RoleUser, "hello", nil)})
-	assert.NoError(t, err)
-	assert.NotNil(t, snapshot)
-	assert.Len(t, snapshot.Messages, 1)
-	assert.Equal(t, "patched", *snapshot.Messages[0].Content)
-}
-
-func TestConvertToMessagesSnapshotEventDeduplicatesUserMessages(t *testing.T) {
-	r := &runner{}
-	sharedRequestID := "req-shared"
-	events := []event.Event{
-		newResponseWithRequestID(model.RoleUser, "hello", sharedRequestID, nil),
-		newResponseWithRequestID(model.RoleUser, "hello again", sharedRequestID, nil),
-		newResponseWithRequestID(model.RoleUser, "next", "req-next", nil),
-	}
-	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(), "user-id", events)
-	assert.NoError(t, err)
-	assert.NotNil(t, snapshot)
-	assert.Len(t, snapshot.Messages, 2)
-	assert.Equal(t, "hello", *snapshot.Messages[0].Content)
-	assert.Equal(t, "next", *snapshot.Messages[1].Content)
-}
-
-func TestConvertToMessagesSnapshotEventUsesResponseIDForAssistant(t *testing.T) {
-	r := &runner{}
-	assistantEvent := event.Event{
-		ID: "event-id",
-		Response: &model.Response{
-			ID:     "response-id",
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{
-				{Message: model.Message{Role: model.RoleAssistant, Content: "reply"}},
-			},
-		},
-	}
-	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(), "user-id", []event.Event{assistantEvent})
-	assert.NoError(t, err)
-	assert.NotNil(t, snapshot)
-	if assert.Len(t, snapshot.Messages, 1) {
-		assert.Equal(t, "response-id", snapshot.Messages[0].ID)
-	}
-}
-
-func TestIgnoreEvent(t *testing.T) {
-	tests := []struct {
-		name string
-		evt  *event.Event
-		want bool
-	}{
-		{
-			name: "nil event",
-			evt:  nil,
-			want: true,
-		},
-		{
-			name: "nil response",
-			evt:  &event.Event{Response: nil},
-			want: true,
-		},
-		{
-			name: "nil choices",
-			evt:  &event.Event{Response: &model.Response{Choices: nil}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypeChatCompletion,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypeChatCompletion,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}},
-			}},
-			want: false,
-		},
-		{
-			name: model.ObjectTypeToolResponse,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypeToolResponse,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleTool, Content: "hello"}}},
-			}},
-			want: false,
-		},
-		{
-			name: "",
-			evt: &event.Event{Response: &model.Response{
-				Object:  "",
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}},
-			}},
-			want: false,
-		},
-		{
-			name: model.ObjectTypeError,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypeError,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypePreprocessingBasic,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypePreprocessingBasic,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypePreprocessingContent,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypePreprocessingContent,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypePreprocessingIdentity,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypePreprocessingIdentity,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypePreprocessingInstruction,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypePreprocessingInstruction,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypePreprocessingPlanning,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypePreprocessingPlanning,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypePostprocessingPlanning,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypePostprocessingPlanning,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypePostprocessingCodeExecution,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypePostprocessingCodeExecution,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypeTransfer,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypeTransfer,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypeRunnerCompletion,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypeRunnerCompletion,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypeStateUpdate,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypeStateUpdate,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-		{
-			name: model.ObjectTypeChatCompletionChunk,
-			evt: &event.Event{Response: &model.Response{
-				Object:  model.ObjectTypeChatCompletionChunk,
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
-			}},
-			want: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			r := &runner{}
-			got := r.ignoreEvent(test.evt)
-			assert.Equal(t, test.want, got)
-		})
-	}
-}
-
-// TestConvertToMessagesSnapshotEventBeforeCallbackError ensures errors bubble up.
-func TestConvertToMessagesSnapshotEventBeforeCallbackError(t *testing.T) {
-	callbacks := translator.NewCallbacks().
-		RegisterBeforeTranslate(func(ctx context.Context, evt *event.Event) (*event.Event, error) {
-			return nil, errors.New("fail")
-		})
-	r := &runner{
-		translateCallbacks: callbacks,
-	}
-	snapshot, err := r.convertToMessagesSnapshotEvent(context.Background(),
-		"user-id", []event.Event{newResponse(model.RoleUser, "hello", nil)})
-	assert.Nil(t, snapshot)
-	assert.Error(t, err)
-}
-
-func newResponse(role model.Role, content string, mutate func(*model.Message)) event.Event {
-	msg := model.Message{Role: role, Content: content}
-	if mutate != nil {
-		mutate(&msg)
-	}
-	resp := &model.Response{
-		ID:      "id-" + string(role) + content,
-		Choices: []model.Choice{{Message: msg}},
-	}
-	evt := event.NewResponseEvent("invocation", string(role), resp)
-	evt.RequestID = uuid.NewString()
-	return *evt
-}
-
-func newResponseWithRequestID(role model.Role, content, requestID string,
-	mutate func(*model.Message)) event.Event {
-	evt := newResponse(role, content, mutate)
-	evt.RequestID = requestID
-	return evt
-}
-
 type testSessionService struct {
-	events    []event.Event
-	getErr    error
-	returnNil bool
+	trackEvents []session.TrackEvent
+	getErr      error
+	returnNil   bool
 }
 
 func (s *testSessionService) CreateSession(ctx context.Context, key session.Key, state session.StateMap,
@@ -553,8 +303,13 @@ func (s *testSessionService) GetSession(ctx context.Context, key session.Key,
 		return nil, nil
 	}
 	sess := &session.Session{AppName: key.AppName, UserID: key.UserID, ID: key.SessionID}
-	if len(s.events) > 0 {
-		sess.Events = append([]event.Event(nil), s.events...)
+	if len(s.trackEvents) > 0 {
+		sess.Tracks = map[session.Track]*session.TrackEvents{
+			track.TrackAGUI: {
+				Track:  track.TrackAGUI,
+				Events: append([]session.TrackEvent(nil), s.trackEvents...),
+			},
+		}
 	}
 	return sess, nil
 }
@@ -592,8 +347,20 @@ func (s *testSessionService) DeleteUserState(ctx context.Context, key session.Us
 	return nil
 }
 
+func (s *testSessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	return nil
+}
+
 func (s *testSessionService) AppendEvent(ctx context.Context, sess *session.Session, evt *event.Event,
 	opts ...session.Option) error {
+	return nil
+}
+
+func (s *testSessionService) AppendTrackEvent(ctx context.Context, sess *session.Session,
+	evt *session.TrackEvent, opts ...session.Option) error {
+	if evt != nil {
+		s.trackEvents = append(s.trackEvents, *evt)
+	}
 	return nil
 }
 

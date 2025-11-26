@@ -19,10 +19,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // Additional unit tests for long-running tool tracking and preprocess
@@ -513,7 +515,7 @@ func TestRunAfterModelCallbacks_ErrorPassing(t *testing.T) {
 				modelCallbacks: callbacks,
 			}
 
-			_, err := flow.runAfterModelCallbacks(context.Background(), &model.Request{}, tt.response)
+			_, _, err := flow.runAfterModelCallbacks(context.Background(), &model.Request{}, tt.response)
 			require.NoError(t, err)
 
 			if tt.wantErr {
@@ -524,4 +526,95 @@ func TestRunAfterModelCallbacks_ErrorPassing(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Test that when RunOptions.Resume is enabled and the latest session event
+// is an assistant tool_call response, the flow executes the pending tool
+// before issuing a new LLM request.
+func TestRun_WithResumeExecutesPendingToolCalls(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	// Record invocations of the test tool.
+	var toolCalls []string
+	testTool := function.NewFunctionTool(
+		func(_ context.Context, req *struct {
+			Value string `json:"value"`
+		}) (*struct {
+			Value string `json:"value"`
+		}, error) {
+			toolCalls = append(toolCalls, req.Value)
+			return &struct {
+				Value string `json:"value"`
+			}{Value: "ok:" + req.Value}, nil
+		},
+		function.WithName("resume_tool"),
+		function.WithDescription("resume test tool"),
+	)
+
+	// Session contains a single assistant tool_call response.
+	sess := &session.Session{}
+	resp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: "call-1",
+							Function: model.FunctionDefinitionParam{
+								Name:      "resume_tool",
+								Arguments: []byte(`{"value":"resume"}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	toolCallEvent := event.NewResponseEvent("inv-1", "agent-resume", resp)
+	sess.Events = append(sess.Events, *toolCallEvent)
+
+	// Agent with the test tool and a model that returns no responses.
+	agentWithTool := &mockAgentWithTools{
+		name:  "agent-resume",
+		tools: []tool.Tool{testTool},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-1"),
+		agent.WithInvocationAgent(agentWithTool),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationModel(&noResponseModel{}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			Resume: true,
+		}),
+	)
+
+	llmFlow := New(
+		nil,
+		[]flow.ResponseProcessor{
+			processor.NewFunctionCallResponseProcessor(false, nil),
+		},
+		Options{},
+	)
+
+	eventCh, err := llmFlow.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var sawToolResult bool
+	for evt := range eventCh {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			_ = inv.NotifyCompletion(ctx, key)
+		}
+		if evt.Response != nil && evt.Response.IsToolResultResponse() {
+			sawToolResult = true
+		}
+	}
+
+	require.True(t, sawToolResult, "expected tool result event when resuming")
+	require.Len(t, toolCalls, 1)
+	require.Equal(t, "resume", toolCalls[0])
 }

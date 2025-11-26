@@ -83,6 +83,16 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	return toolSet
 }
 
+// Init establishes the MCP session and preloads tools by calling
+// Initialize and ListTools once. It returns any initialization error so
+// callers can fail fast during startup.
+func (ts *ToolSet) Init(ctx context.Context) error {
+	if err := ts.listTools(ctx); err != nil {
+		return fmt.Errorf("failed to initialize MCP tool set %q: %w", ts.name, err)
+	}
+	return nil
+}
+
 // Tools implements the ToolSet interface.
 func (ts *ToolSet) Tools(ctx context.Context) []tool.Tool {
 	if err := ts.listTools(ctx); err != nil {

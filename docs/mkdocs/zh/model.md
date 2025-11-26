@@ -1005,12 +1005,26 @@ HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）�
 
 推荐顺序：
 
-- 通过 OpenAI RequestOption 设置全局 Header（简单、直观）
+- 通过 `openai.WithHeaders` 快速追加静态 Header（简便）
+- 通过 OpenAI RequestOption 设置全局 Header（灵活、可组合中间件）
 - 通过自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
 
-上述两种方式同样影响流式请求，因为底层使用的是同一个客户端。
+上述三种方式同样影响流式请求，因为底层使用的是同一个客户端。
 
-##### 1. 使用 OpenAI RequestOption 设置全局 Header
+##### 1. 使用 openai.WithHeaders 追加 Header
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai"
+
+llm := openai.New("deepseek-chat",
+    openai.WithHeaders(map[string]string{
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID":    "req-123",
+    }),
+)
+```
+
+##### 2. 使用 OpenAI RequestOption 设置全局 Header
 
 通过 `WithOpenAIOptions` 配合 `openaiopt.WithHeader` 或
 `openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的“每个请求”
@@ -1065,7 +1079,7 @@ llm := openai.New("deepseek-chat",
   `WithAPIKey`，改为使用
   `openaiopt.WithHeader("api-key", "<key>")`。
 
-##### 2. 使用自定义 http.RoundTripper（进阶）
+##### 3. 使用自定义 http.RoundTripper（进阶）
 
 在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等
 能力的场景。
@@ -1774,12 +1788,26 @@ eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
 
 推荐顺序：
 
-- 通过 Anthropic RequestOption 设置全局 Header（简单、直观）
+- 通过 `anthropic.WithHeaders` 快速追加静态 Header（简便）
+- 通过 Anthropic RequestOption 设置全局 Header（灵活、可组合中间件）
 - 通过自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
 
-上述两种方式同样影响流式请求，因为底层使用的是同一个客户端，
+上述三种方式同样影响流式请求，因为底层使用的是同一个客户端，
 
-##### 1. 使用 Anthropic RequestOption 设置全局 Header
+##### 1. 使用 anthropic.WithHeaders 追加 Header
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+
+llm := anthropic.New("claude-sonnet-4-0",
+    anthropic.WithHeaders(map[string]string{
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID":    "req-123",
+    }),
+)
+```
+
+##### 2. 使用 Anthropic RequestOption 设置全局 Header
 
 通过 `WithAnthropicClientOptions` 配合 `anthropicopt.WithHeader` 或 `anthropicopt.WithMiddleware`，可为底层 Anthropic 客户端发起的每个请求注入 Header。
 
@@ -1829,7 +1857,7 @@ llm := anthropic.New("claude-sonnet-4-0",
 )
 ```
 
-##### 2. 使用自定义 http.RoundTripper
+##### 3. 使用自定义 http.RoundTripper
 
 在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等能力的场景。
 
@@ -1889,7 +1917,7 @@ model := anthropic.New("claude-3-5-sonnet",
 )
 ```
 
-关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#5-token-裁剪token-tailoring)。
+关于 Token 计算公式、裁剪策略和自定义策略的详细说明，请参考 [OpenAI Model 的 Token 裁剪部分](#6-token-裁剪token-tailoring)。
 
 ## Provider
 
@@ -1905,6 +1933,7 @@ Provider 支持以下 `Option`：
 | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | `WithAPIKey` / `WithBaseURL`                                                                      | 设置模型的 API Key 和 Base URL                 |
 | `WithHTTPClientName` / `WithHTTPClientTransport`                                                  | 配置 HTTP 客户端属性                           |
+| `WithHeaders`                                                                                     | 追加 HTTP Header                     |
 | `WithChannelBufferSize`                                                                           | 调整响应 channel 缓冲区容量                    |
 | `WithCallbacks`                                                                                   | 配置 OpenAI / Anthropic 的请求、响应、流式回调 |
 | `WithExtraFields`                                                                                 | 配置请求体自定义字段                           |
@@ -1931,6 +1960,10 @@ modelInstance, err := provider.Model(
     provider.WithChannelBufferSize(c.channelBufferSize),
     provider.WithEnableTokenTailoring(c.tokenTailoring),
     provider.WithMaxInputTokens(c.maxInputTokens),
+    provider.WithHeaders(map[string]string{
+        "X-Custom-Header": "custom-value",
+        "X-Request-ID":    "req-123",
+    }),
 )
 
 agent := llmagent.New("chat-assistant", llmagent.WithModel(modelInstance))

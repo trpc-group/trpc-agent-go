@@ -10,12 +10,10 @@ require (
 	github.com/gonfva/docxlib v0.0.0-20210517191039-d8f39cecf1ad
 	github.com/google/go-cmp v0.6.0
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/mux v1.8.1
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/openai/openai-go v1.12.0
-	github.com/panjf2000/ants/v2 v2.9.0
-	github.com/rs/cors v1.11.1
+	github.com/panjf2000/ants/v2 v2.10.0
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.10.0
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.69
@@ -89,5 +87,3 @@ require (
 	gopkg.in/alexcesaro/quotedprintable.v3 v3.0.0-20150716171945-2caba252f4dc // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace trpc.group/trpc-go/trpc-agent-go/memory/postgres => ./memory/postgres

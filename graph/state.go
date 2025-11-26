@@ -55,11 +55,47 @@ type State map[string]any
 
 // Clone creates a deep copy of the state.
 func (s State) Clone() State {
-	clone := make(State)
+	clone := make(State, len(s))
 	for k, v := range s {
 		clone[k] = v
 	}
 	return clone
+}
+
+func (s State) safeClone() State {
+	clone := make(State, len(s))
+	for k, v := range s {
+		if isUnsafeStateKey(k) {
+			continue
+		}
+		clone[k] = v
+	}
+	return clone
+}
+
+func (s State) deepCopy(retainUnsafeKey bool, fields map[string]StateField) State {
+	isDisableDeepCopyKey := func(key string) bool {
+		if field, ok := fields[key]; ok {
+			return field.DisableDeepCopy
+		}
+		return false
+	}
+
+	tmp := make(State, len(s))
+	for k, v := range s {
+		unsafeKey := isUnsafeStateKey(k)
+		if unsafeKey && !retainUnsafeKey {
+			continue
+		}
+
+		if unsafeKey || isDisableDeepCopyKey(k) {
+			tmp[k] = v
+			continue
+		}
+		tmp[k] = deepCopyAny(v)
+	}
+
+	return tmp
 }
 
 // StateReducer is a function that determines how state updates are merged.
