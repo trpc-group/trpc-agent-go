@@ -727,6 +727,36 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 // cleanupExpiredSessions cleans up expired session states, events, and summaries.
 func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 	var deletedCount int64
+	var sessionKeys []session.Key
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
+				WHERE deleted_at IS NULL GROUP BY app_name, user_id, session_id`,
+		s.tableSessionEvents)
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		// rows.Next() is already called by the Query loop
+		var appName, userID, sessionID string
+		var updatedAt time.Time
+		if err := rows.Scan(&appName, &userID, &sessionID, &updatedAt); err != nil {
+			return err
+		}
+		if updatedAt.Before(now.Add(-s.sessionTTL)) {
+			sessionKeys = append(sessionKeys, session.Key{
+				AppName:   appName,
+				UserID:    userID,
+				SessionID: sessionID,
+			})
+		}
+		return nil
+	}, query)
+	if err != nil {
+		log.Warnf("fetch events failed: %w", err)
+		return
+	}
+	placeholders := make([]string, len(sessionKeys))
+	args := make([]any, 0, len(sessionKeys))
+	for i, key := range sessionKeys {
+		placeholders[i] = "(?, ?, ?)"
+		args = append(args, key.AppName, key.UserID, key.SessionID)
+	}
 
 	if s.opts.softDelete {
 		// Use transaction to ensure atomicity
@@ -743,17 +773,19 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 			// Soft delete related events and summaries with same expiration condition
 			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
-					s.tableSessionEvents),
-				now, now); err != nil {
-				return fmt.Errorf("soft delete events: %w", err)
-			}
-
-			if _, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
 					s.tableSessionSummaries),
 				now, now); err != nil {
 				return fmt.Errorf("soft delete summaries: %w", err)
 			}
+
+			if len(args) > 0 {
+				if _, err := tx.ExecContext(ctx,
+					fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
+						s.tableSessionEvents, strings.Join(placeholders, ",")), args...); err != nil {
+					return fmt.Errorf("soft delete events: %w", err)
+				}
+			}
+
 			return nil
 		})
 		if err != nil {
@@ -775,16 +807,16 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 			// Hard delete events and summaries with same expiration condition
 			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`,
-					s.tableSessionEvents),
-				now); err != nil {
-				return fmt.Errorf("hard delete events: %w", err)
-			}
-
-			if _, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`,
 					s.tableSessionSummaries),
 				now); err != nil {
 				return fmt.Errorf("hard delete summaries: %w", err)
+			}
+			if len(args) > 0 {
+				if _, err := tx.ExecContext(ctx,
+					fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
+						s.tableSessionEvents, strings.Join(placeholders, ",")), args...); err != nil {
+					return fmt.Errorf("soft delete summaries: %w", err)
+				}
 			}
 			return nil
 		})

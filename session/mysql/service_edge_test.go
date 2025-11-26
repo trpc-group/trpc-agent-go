@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"testing"
 	"time"
 
@@ -700,6 +701,10 @@ func TestCleanupExpired(t *testing.T) {
 
 		s := createTestService(t, db)
 		s.opts.softDelete = true
+
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
+			WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
+				AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
 
 		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE session_states SET deleted_at").
