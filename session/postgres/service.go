@@ -1675,10 +1675,9 @@ func (s *Service) softDeleteExpiredTableInTx(
 			args = append(args, key.AppName, key.UserID, key.SessionID)
 		}
 		if len(args) > 0 {
-			args := append([]any{now}, args...)
 			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE %s SET deleted_at = $1 WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
-					tableName, strings.Join(placeholders, ",")), args...); err != nil {
+					tableName, strings.Join(placeholders, ",")), append([]any{now}, args...)...); err != nil {
 				return fmt.Errorf("soft delete events: %w", err)
 			}
 		}
@@ -1736,7 +1735,7 @@ func (s *Service) hardDeleteExpiredTableInTx(
 			query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
 			WHERE app_name = $1 AND user_id = $2
 			AND deleted_at IS NULL GROUP BY app_name, user_id, session_id`, tableName)
-			args := []any{now, userKey.AppName, userKey.UserID}
+			args := []any{userKey.AppName, userKey.UserID}
 			err = s.pgClient.Query(ctx, handleFunc, query, args...)
 		} else {
 			query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
