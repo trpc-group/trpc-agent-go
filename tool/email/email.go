@@ -64,18 +64,10 @@ func WithSendEmailEnabled(enabled bool) Option {
 	}
 }
 
-// WithName sets the name of the email tool set.
-func WithName(name string) Option {
-	return func(f *emailToolSet) {
-		f.name = name
-	}
-}
-
 // emailToolSet implements the ToolSet interface for file operations.
 type emailToolSet struct {
 	sendEmailEnabled bool
 	tools            []tool.Tool
-	name             string
 }
 
 // Tools implements the ToolSet interface.
@@ -85,7 +77,7 @@ func (e *emailToolSet) Tools(_ context.Context) []tool.Tool {
 
 // Name implements the ToolSet interface.
 func (e *emailToolSet) Name() string {
-	return e.name
+	return "email"
 }
 
 // Close implements the ToolSet interface.
@@ -99,7 +91,6 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	emailToolSet := &emailToolSet{
 		sendEmailEnabled: true,
 		tools:            nil,
-		name:             defaultName,
 	}
 
 	// Apply user-provided options.
