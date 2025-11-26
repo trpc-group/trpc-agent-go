@@ -18,13 +18,14 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 )
 
 func TestMarkdownReader_Read_NoChunk(t *testing.T) {
 	data := "# Title\n\nThis is **markdown**."
 
 	rdr := New(
-		WithChunking(false),
+		reader.WithChunk(false),
 	)
 
 	docs, err := rdr.ReadFromReader("doc", strings.NewReader(data))
@@ -72,7 +73,7 @@ func (failChunk) Chunk(doc *document.Document) ([]*document.Document, error) {
 }
 
 func TestMarkdownReader_ChunkError(t *testing.T) {
-	rdr := New(WithChunkingStrategy(failChunk{}))
+	rdr := New(reader.WithCustomChunkingStrategy(failChunk{}))
 	_, err := rdr.ReadFromReader("n", strings.NewReader("content"))
 	if err == nil {
 		t.Fatalf("expected error")
@@ -141,7 +142,7 @@ func TestMarkdownReader_ReadFromURLErrors(t *testing.T) {
 
 // TestMarkdownReader_ChunkDocumentDefaultStrategy verifies default chunking strategy initialization.
 func TestMarkdownReader_ChunkDocumentDefaultStrategy(t *testing.T) {
-	rdr := New(WithChunking(true))
+	rdr := New(reader.WithChunk(true))
 
 	docs, err := rdr.ReadFromReader("test", strings.NewReader("# Test\n\nContent"))
 	if err != nil {
@@ -154,7 +155,7 @@ func TestMarkdownReader_ChunkDocumentDefaultStrategy(t *testing.T) {
 
 // TestMarkdownReader_ExtractFileNameFromURL tests URL filename extraction.
 func TestMarkdownReader_ExtractFileNameFromURL(t *testing.T) {
-	rdr := New()
+	rdr := New().(*Reader)
 
 	tests := []struct {
 		name     string

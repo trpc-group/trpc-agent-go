@@ -18,13 +18,14 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 )
 
 func TestJSONReadFromReaderNoChunk(t *testing.T) {
 	data := `{"name":"Alice","age":30}`
 
 	rdr := New(
-		WithChunking(false),
+		reader.WithChunk(false),
 	)
 
 	docs, err := rdr.ReadFromReader("person", strings.NewReader(data))
@@ -82,7 +83,7 @@ func (e errChunker) Chunk(doc *document.Document) ([]*document.Document, error) 
 }
 
 func TestJSONReader_jsonToTextError(t *testing.T) {
-	rdr := New()
+	rdr := New().(*Reader)
 	_, err := rdr.jsonToText("{invalid json}")
 	if err == nil {
 		t.Fatalf("expected error for invalid json")
@@ -90,7 +91,7 @@ func TestJSONReader_jsonToTextError(t *testing.T) {
 }
 
 func TestJSONReader_CustomChunkerError(t *testing.T) {
-	rdr := New(WithChunkingStrategy(errChunker{}))
+	rdr := New(reader.WithCustomChunkingStrategy(errChunker{}))
 	// use simple valid json
 	docs, err := rdr.ReadFromReader("n", strings.NewReader(`{"a":1}`))
 	if err == nil {
@@ -159,7 +160,7 @@ func TestJSONReader_ReadFromURLErrors(t *testing.T) {
 
 // TestJSONReader_ChunkDocumentDefaultStrategy verifies default chunking strategy initialization.
 func TestJSONReader_ChunkDocumentDefaultStrategy(t *testing.T) {
-	rdr := New(WithChunking(true))
+	rdr := New(reader.WithChunk(true))
 
 	jsonData := `{"name":"test","value":123}`
 	docs, err := rdr.ReadFromReader("test", strings.NewReader(jsonData))
@@ -173,7 +174,7 @@ func TestJSONReader_ChunkDocumentDefaultStrategy(t *testing.T) {
 
 // TestJSONReader_ExtractFileNameFromURL tests URL filename extraction.
 func TestJSONReader_ExtractFileNameFromURL(t *testing.T) {
-	rdr := New()
+	rdr := New().(*Reader)
 
 	tests := []struct {
 		name     string

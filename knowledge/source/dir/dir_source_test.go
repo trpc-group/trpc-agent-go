@@ -11,14 +11,46 @@ package dir
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+
+	// Import readers to register them
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/docx"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
+
+type mockChunkingStrategy struct {
+	name string
+}
+
+func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
+	return []*document.Document{doc}, nil
+}
+
+type mockOCRExtractor struct{}
+
+func (m *mockOCRExtractor) ExtractText(ctx context.Context, imageData []byte, opts ...ocr.Option) (string, error) {
+	return "mock-text", nil
+}
+
+func (m *mockOCRExtractor) ExtractTextFromReader(ctx context.Context, reader io.Reader, opts ...ocr.Option) (string, error) {
+	return "mock-text", nil
+}
+
+func (m *mockOCRExtractor) Close() error {
+	return nil
+}
 
 // TestReadDocuments verifies Directory Source with and without
 // custom chunk configuration.
@@ -405,5 +437,41 @@ func TestReadDocumentsAbsolutePathInMetadata(t *testing.T) {
 	// Check URI has file:// scheme
 	if uri, ok := docs[0].Metadata[source.MetaURI].(string); !ok || !strings.HasPrefix(uri, "file://") {
 		t.Errorf("expected file:// URI, got %v", uri)
+	}
+}
+
+// TestWithCustomChunkingStrategy verifies the WithCustomChunkingStrategy option.
+func TestWithCustomChunkingStrategy(t *testing.T) {
+	strategy := &mockChunkingStrategy{name: "test-strategy"}
+	src := New([]string{"dummy"}, WithCustomChunkingStrategy(strategy))
+
+	if src.customChunkingStrategy != strategy {
+		t.Error("WithCustomChunkingStrategy did not set custom chunking strategy")
+	}
+}
+
+// TestWithOCRExtractor verifies the WithOCRExtractor option.
+func TestWithOCRExtractor(t *testing.T) {
+	extractor := &mockOCRExtractor{}
+	src := New([]string{"dummy"}, WithOCRExtractor(extractor))
+
+	if src.ocrExtractor == nil {
+		t.Error("WithOCRExtractor did not set OCR extractor")
+	}
+}
+
+// TestProcessFileNotRegular verifies error handling when path is not a regular file.
+func TestProcessFileNotRegular(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	os.Mkdir(subDir, 0755)
+
+	src := New([]string{tmpDir})
+	_, err := src.processFile(subDir)
+	if err == nil {
+		t.Error("expected error when processing directory as file")
+	}
+	if !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("expected 'not a regular file' error, got: %v", err)
 	}
 }

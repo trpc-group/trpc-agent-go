@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
@@ -31,17 +32,18 @@ import (
 
 const (
 	defaultAutoSourceName = "Auto Source"
-	autoSourceType        = "auto"
 )
 
 // Source represents a knowledge source that automatically detects the source type.
 type Source struct {
-	inputs       []string
-	name         string
-	metadata     map[string]any
-	textReader   reader.Reader
-	chunkSize    int
-	chunkOverlap int
+	inputs                 []string
+	name                   string
+	metadata               map[string]any
+	textReader             reader.Reader
+	chunkSize              int
+	chunkOverlap           int
+	customChunkingStrategy chunking.Strategy
+	ocrExtractor           ocr.Extractor
 }
 
 // New creates a new auto knowledge source.
@@ -67,21 +69,19 @@ func New(inputs []string, opts ...Option) *Source {
 
 // initializeReaders initializes all available readers.
 func (s *Source) initializeReaders() {
-	if s.chunkSize <= 0 && s.chunkOverlap <= 0 {
-		s.textReader = text.New()
-		return
-	}
-
-	// Build chunking options.
-	var fixedOpts []chunking.Option
+	// Build reader options - pass all configurations to reader layer
+	var opts []reader.Option
 	if s.chunkSize > 0 {
-		fixedOpts = append(fixedOpts, chunking.WithChunkSize(s.chunkSize))
+		opts = append(opts, reader.WithChunkSize(s.chunkSize))
 	}
 	if s.chunkOverlap > 0 {
-		fixedOpts = append(fixedOpts, chunking.WithOverlap(s.chunkOverlap))
+		opts = append(opts, reader.WithChunkOverlap(s.chunkOverlap))
 	}
-	fixedChunk := chunking.NewFixedSizeChunking(fixedOpts...)
-	s.textReader = text.New(text.WithChunkingStrategy(fixedChunk))
+	if s.customChunkingStrategy != nil {
+		opts = append(opts, reader.WithCustomChunkingStrategy(s.customChunkingStrategy))
+	}
+
+	s.textReader = text.New(opts...)
 }
 
 // ReadDocuments automatically detects the source type and reads documents.
@@ -162,11 +162,25 @@ func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Do
 
 // processAsDirectory processes the input as a directory.
 func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*document.Document, error) {
-	dirSource := dirsource.New(
-		[]string{input},
-		dirsource.WithChunkSize(s.chunkSize),
-		dirsource.WithChunkOverlap(s.chunkOverlap),
-	)
+	var opts []dirsource.Option
+
+	// If a custom chunking strategy is set, use it
+	if s.customChunkingStrategy != nil {
+		opts = append(opts, dirsource.WithCustomChunkingStrategy(s.customChunkingStrategy))
+	} else {
+		// Otherwise, pass chunk size/overlap
+		if s.chunkSize > 0 {
+			opts = append(opts, dirsource.WithChunkSize(s.chunkSize))
+		}
+		if s.chunkOverlap > 0 {
+			opts = append(opts, dirsource.WithChunkOverlap(s.chunkOverlap))
+		}
+	}
+
+	if s.ocrExtractor != nil {
+		opts = append(opts, dirsource.WithOCRExtractor(s.ocrExtractor))
+	}
+	dirSource := dirsource.New([]string{input}, opts...)
 	// Copy metadata.
 	for k, v := range s.metadata {
 		dirSource.SetMetadata(k, v)
@@ -176,11 +190,25 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 
 // processAsFile processes the input as a file.
 func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.Document, error) {
-	fileSource := filesource.New(
-		[]string{input},
-		filesource.WithChunkSize(s.chunkSize),
-		filesource.WithChunkOverlap(s.chunkOverlap),
-	)
+	var opts []filesource.Option
+
+	// If a custom chunking strategy is set, use it
+	if s.customChunkingStrategy != nil {
+		opts = append(opts, filesource.WithCustomChunkingStrategy(s.customChunkingStrategy))
+	} else {
+		// Otherwise, pass chunk size/overlap
+		if s.chunkSize > 0 {
+			opts = append(opts, filesource.WithChunkSize(s.chunkSize))
+		}
+		if s.chunkOverlap > 0 {
+			opts = append(opts, filesource.WithChunkOverlap(s.chunkOverlap))
+		}
+	}
+
+	if s.ocrExtractor != nil {
+		opts = append(opts, filesource.WithOCRExtractor(s.ocrExtractor))
+	}
+	fileSource := filesource.New([]string{input}, opts...)
 
 	// Copy metadata.
 	for k, v := range s.metadata {

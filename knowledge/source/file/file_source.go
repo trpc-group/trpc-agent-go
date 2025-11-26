@@ -17,25 +17,28 @@ import (
 	"os"
 	"path/filepath"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 )
 
 const (
 	defaultFileSourceName = "File Source"
-	fileSourceType        = "file"
 )
 
 // Source represents a knowledge source for file-based content.
 type Source struct {
-	filePaths    []string
-	name         string
-	metadata     map[string]any
-	readers      map[string]reader.Reader
-	chunkSize    int
-	chunkOverlap int
+	filePaths              []string
+	name                   string
+	metadata               map[string]any
+	readers                map[string]reader.Reader
+	chunkSize              int
+	chunkOverlap           int
+	customChunkingStrategy chunking.Strategy
+	ocrExtractor           ocr.Extractor
 }
 
 // New creates a new file knowledge source.
@@ -48,17 +51,28 @@ func New(filePaths []string, opts ...Option) *Source {
 		chunkOverlap: 0,
 	}
 
-	// Apply options first to capture chunk configuration.
+	// Apply options first to capture configuration.
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	// Initialize readers with potential custom chunk configuration.
-	if s.chunkSize > 0 || s.chunkOverlap > 0 {
-		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
-	} else {
-		s.readers = isource.GetReaders()
+	// Build reader options - pass all configurations to internal source layer
+	var readerOpts []isource.ReaderOption
+	if s.chunkSize > 0 {
+		readerOpts = append(readerOpts, isource.WithChunkSize(s.chunkSize))
 	}
+	if s.chunkOverlap > 0 {
+		readerOpts = append(readerOpts, isource.WithChunkOverlap(s.chunkOverlap))
+	}
+	if s.customChunkingStrategy != nil {
+		readerOpts = append(readerOpts, isource.WithCustomChunkingStrategy(s.customChunkingStrategy))
+	}
+	if s.ocrExtractor != nil {
+		readerOpts = append(readerOpts, isource.WithOCRExtractor(s.ocrExtractor))
+	}
+
+	// Initialize readers with configuration
+	s.readers = isource.GetReaders(readerOpts...)
 
 	return s
 }

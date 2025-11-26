@@ -10,6 +10,11 @@
 // Package file provides file-based knowledge source implementation.
 package file
 
+import (
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+)
+
 // Option represents a functional option for configuring FileSource.
 type Option func(*Source)
 
@@ -37,16 +42,34 @@ func WithMetadataValue(key string, value any) Option {
 	}
 }
 
-// WithChunkSize sets the desired chunk size for document splitting.
+// WithCustomChunkingStrategy sets a custom chunking strategy for document splitting.
+// This overrides the reader's default chunking strategy.
+// For example: WithCustomChunkingStrategy(chunking.NewRecursiveChunking())
+// Note: Most readers have their own optimal chunking strategy (JSON->JSONChunking, Markdown->MarkdownChunking, etc.)
+func WithCustomChunkingStrategy(strategy chunking.Strategy) Option {
+	return func(s *Source) {
+		s.customChunkingStrategy = strategy
+	}
+}
+
+// WithChunkSize sets the chunk size for the reader's default chunking strategy.
+// Each reader will use its own optimal chunking strategy with this size parameter.
 func WithChunkSize(size int) Option {
 	return func(s *Source) {
 		s.chunkSize = size
 	}
 }
 
-// WithChunkOverlap sets the desired chunk overlap for document splitting.
+// WithChunkOverlap sets the chunk overlap for the reader's default chunking strategy.
 func WithChunkOverlap(overlap int) Option {
 	return func(s *Source) {
 		s.chunkOverlap = overlap
+	}
+}
+
+// WithOCRExtractor sets an OCR extractor for processing images in documents (e.g., PDFs).
+func WithOCRExtractor(extractor ocr.Extractor) Option {
+	return func(s *Source) {
+		s.ocrExtractor = extractor
 	}
 }

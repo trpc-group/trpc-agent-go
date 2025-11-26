@@ -71,7 +71,7 @@ func TestRegistry_RegisterAndList(t *testing.T) {
 
 	// Register a reader with mixed-case extensions to verify normalization.
 	r := &dummyReader{name: "dummy", exts: []string{".TXT", ".Md"}}
-	RegisterReader(r.exts, func() Reader { return r })
+	RegisterReader(r.exts, func(opts ...Option) Reader { return r })
 
 	// GetRegisteredExtensions should include normalized lowercase extensions as registered.
 	exts := GetRegisteredExtensions()
@@ -137,7 +137,7 @@ func TestGetReader(t *testing.T) {
 			name: "get registered extension",
 			setupFn: func() {
 				ClearRegistry()
-				RegisterReader([]string{".test"}, func() Reader {
+				RegisterReader([]string{".test"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "test-reader", exts: []string{".test"}}
 				})
 			},
@@ -149,7 +149,7 @@ func TestGetReader(t *testing.T) {
 			name: "get with case insensitive extension",
 			setupFn: func() {
 				ClearRegistry()
-				RegisterReader([]string{".TXT"}, func() Reader {
+				RegisterReader([]string{".TXT"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "txt-reader", exts: []string{".txt"}}
 				})
 			},
@@ -161,7 +161,7 @@ func TestGetReader(t *testing.T) {
 			name: "get cached reader instance",
 			setupFn: func() {
 				ClearRegistry()
-				RegisterReader([]string{".cached"}, func() Reader {
+				RegisterReader([]string{".cached"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "cached-reader", exts: []string{".cached"}}
 				})
 				// First call to cache the instance
@@ -175,7 +175,7 @@ func TestGetReader(t *testing.T) {
 			name: "get uppercase extension",
 			setupFn: func() {
 				ClearRegistry()
-				RegisterReader([]string{".md"}, func() Reader {
+				RegisterReader([]string{".md"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "md-reader", exts: []string{".md"}}
 				})
 			},
@@ -236,7 +236,7 @@ func TestGetAllReaders(t *testing.T) {
 			name: "single reader",
 			setupFn: func() {
 				ClearRegistry()
-				RegisterReader([]string{".txt"}, func() Reader {
+				RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
 				})
 			},
@@ -247,13 +247,13 @@ func TestGetAllReaders(t *testing.T) {
 			name: "multiple readers",
 			setupFn: func() {
 				ClearRegistry()
-				RegisterReader([]string{".txt"}, func() Reader {
+				RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
 				})
-				RegisterReader([]string{".md"}, func() Reader {
+				RegisterReader([]string{".md"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "markdown-reader", exts: []string{".md"}}
 				})
-				RegisterReader([]string{".json"}, func() Reader {
+				RegisterReader([]string{".json"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "json-reader", exts: []string{".json"}}
 				})
 			},
@@ -264,7 +264,7 @@ func TestGetAllReaders(t *testing.T) {
 			name: "multiple extensions same type",
 			setupFn: func() {
 				ClearRegistry()
-				RegisterReader([]string{".txt", ".text"}, func() Reader {
+				RegisterReader([]string{".txt", ".text"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "text-reader", exts: []string{".txt", ".text"}}
 				})
 			},
@@ -275,10 +275,10 @@ func TestGetAllReaders(t *testing.T) {
 			name: "with cached readers",
 			setupFn: func() {
 				ClearRegistry()
-				RegisterReader([]string{".txt"}, func() Reader {
+				RegisterReader([]string{".txt"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "text-reader", exts: []string{".txt"}}
 				})
-				RegisterReader([]string{".md"}, func() Reader {
+				RegisterReader([]string{".md"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "markdown-reader", exts: []string{".md"}}
 				})
 				// Pre-cache one reader
@@ -324,7 +324,7 @@ func TestGetReaderConcurrent(t *testing.T) {
 	ClearRegistry()
 
 	// Register a reader
-	RegisterReader([]string{".concurrent"}, func() Reader {
+	RegisterReader([]string{".concurrent"}, func(opts ...Option) Reader {
 		return &dummyReader{name: "concurrent-reader", exts: []string{".concurrent"}}
 	})
 
@@ -396,7 +396,7 @@ func TestRegisterReaderMultipleExtensions(t *testing.T) {
 	ClearRegistry()
 
 	extensions := []string{".test1", ".test2", ".test3"}
-	RegisterReader(extensions, func() Reader {
+	RegisterReader(extensions, func(opts ...Option) Reader {
 		return &dummyReader{name: "multi-ext-reader", exts: extensions}
 	})
 

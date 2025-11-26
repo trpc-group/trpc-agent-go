@@ -10,7 +10,11 @@
 // Package url provides URL-based knowledge source implementation.
 package url
 
-import "net/http"
+import (
+	"net/http"
+
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+)
 
 // Option represents a functional option for configuring Source.
 type Option func(*Source)
@@ -54,14 +58,22 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
-// WithChunkSize sets the desired chunk size for document splitting.
+// WithCustomChunkingStrategy sets a custom chunking strategy for document splitting.
+// This overrides the reader's default chunking strategy.
+func WithCustomChunkingStrategy(strategy chunking.Strategy) Option {
+	return func(s *Source) {
+		s.customChunkingStrategy = strategy
+	}
+}
+
+// WithChunkSize sets the chunk size for the reader's default chunking strategy.
 func WithChunkSize(size int) Option {
 	return func(s *Source) {
 		s.chunkSize = size
 	}
 }
 
-// WithChunkOverlap sets the desired chunk overlap for document splitting.
+// WithChunkOverlap sets the chunk overlap for the reader's default chunking strategy.
 func WithChunkOverlap(overlap int) Option {
 	return func(s *Source) {
 		s.chunkOverlap = overlap

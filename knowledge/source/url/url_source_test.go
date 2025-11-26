@@ -20,7 +20,22 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+
+	// Import readers to register them
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/docx"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
+
+type mockChunkingStrategy struct {
+	name string
+}
+
+func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
+	return []*document.Document{doc}, nil
+}
 
 // TestReadDocuments verifies URL Source with and without custom chunk
 // configuration.
@@ -405,6 +420,16 @@ func TestProcessURLMetadata(t *testing.T) {
 	// Check source type
 	if v, ok := docs[0].Metadata[source.MetaSource]; !ok || v != source.TypeURL {
 		t.Errorf("source type not set correctly, got %v", docs[0].Metadata[source.MetaSource])
+	}
+}
+
+// TestWithCustomChunkingStrategy verifies the WithCustomChunkingStrategy option.
+func TestWithCustomChunkingStrategy(t *testing.T) {
+	strategy := &mockChunkingStrategy{name: "test-strategy"}
+	src := New([]string{"https://example.com"}, WithCustomChunkingStrategy(strategy))
+
+	if src.customChunkingStrategy != strategy {
+		t.Error("WithCustomChunkingStrategy did not set custom chunking strategy")
 	}
 }
 
