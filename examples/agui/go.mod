@@ -14,7 +14,7 @@ require (
 	go.opentelemetry.io/otel v1.29.0
 	go.opentelemetry.io/otel/trace v1.29.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (
