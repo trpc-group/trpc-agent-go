@@ -485,6 +485,9 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 	mock.ExpectExec(`UPDATE session_states SET deleted_at = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// 2. Soft delete session_events.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
+			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
 	mock.ExpectExec(`UPDATE session_events SET deleted_at = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// 3. Soft delete session_track_events.
@@ -1925,6 +1928,9 @@ func TestCleanupExpired(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
+			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
 	mock.ExpectExec("UPDATE session_events SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 10))
 	mock.ExpectExec("UPDATE session_track_events SET deleted_at").
@@ -1960,8 +1966,10 @@ func TestCleanupExpiredForUser(t *testing.T) {
 	mock.ExpectExec("UPDATE session_states SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
+			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
 	mock.ExpectExec("UPDATE session_events SET deleted_at").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("UPDATE session_track_events SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
@@ -1990,6 +1998,9 @@ func TestHardDeleteExpired(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM session_states").
 		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
+			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
 	mock.ExpectExec("DELETE FROM session_events").
 		WillReturnResult(sqlmock.NewResult(0, 7))
 	mock.ExpectExec("DELETE FROM session_track_events").

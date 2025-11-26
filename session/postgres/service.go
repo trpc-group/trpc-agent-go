@@ -1632,9 +1632,60 @@ func (s *Service) softDeleteExpiredTableInTx(
 	now time.Time,
 	userKey *session.UserKey,
 ) error {
+	if tableName == s.tableSessionEvents {
+		var sessionKeys []session.Key
+		var err error
+		handleFunc := func(rows *sql.Rows) error {
+			for rows.Next() {
+				var appName, userID, sessionID string
+				var updatedAt time.Time
+				if err := rows.Scan(&appName, &userID, &sessionID, &updatedAt); err != nil {
+					return err
+				}
+				if updatedAt.Before(now.Add(-s.sessionTTL)) {
+					sessionKeys = append(sessionKeys, session.Key{
+						AppName:   appName,
+						UserID:    userID,
+						SessionID: sessionID,
+					})
+				}
+			}
+			return nil
+		}
+		if userKey != nil {
+			query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
+			WHERE app_name = $1 AND user_id = $2
+			AND deleted_at IS NULL GROUP BY app_name, user_id, session_id`, tableName)
+			args := []any{now, userKey.AppName, userKey.UserID}
+			err = s.pgClient.Query(ctx, handleFunc, query, args...)
+		} else {
+			query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
+				WHERE deleted_at IS NULL GROUP BY app_name, user_id, session_id`, tableName)
+			err = s.pgClient.Query(ctx, handleFunc, query)
+		}
+		if err != nil {
+			return fmt.Errorf("soft delete expired %s: %w", tableName, err)
+		}
+		placeholders := make([]string, len(sessionKeys))
+		args := make([]any, 0, len(sessionKeys))
+		index := 2
+		for i, key := range sessionKeys {
+			placeholders[i] = fmt.Sprintf("($%d, $%d, $%d)", index, index+1, index+2)
+			index += 3
+			args = append(args, key.AppName, key.UserID, key.SessionID)
+		}
+		if len(args) > 0 {
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = $1 WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
+					tableName, strings.Join(placeholders, ",")), args...); err != nil {
+				return fmt.Errorf("soft delete events: %w", err)
+			}
+		}
+		return nil
+	}
+
 	var query string
 	var args []any
-
 	if userKey != nil {
 		query = fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			WHERE app_name = $2 AND user_id = $3
@@ -1660,9 +1711,60 @@ func (s *Service) hardDeleteExpiredTableInTx(
 	now time.Time,
 	userKey *session.UserKey,
 ) error {
+	if tableName == s.tableSessionEvents {
+		var sessionKeys []session.Key
+		var err error
+		handleFunc := func(rows *sql.Rows) error {
+			for rows.Next() {
+				var appName, userID, sessionID string
+				var updatedAt time.Time
+				if err := rows.Scan(&appName, &userID, &sessionID, &updatedAt); err != nil {
+					return err
+				}
+				if updatedAt.Before(now.Add(-s.sessionTTL)) {
+					sessionKeys = append(sessionKeys, session.Key{
+						AppName:   appName,
+						UserID:    userID,
+						SessionID: sessionID,
+					})
+				}
+			}
+			return nil
+		}
+		if userKey != nil {
+			query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
+			WHERE app_name = $1 AND user_id = $2
+			AND deleted_at IS NULL GROUP BY app_name, user_id, session_id`, tableName)
+			args := []any{now, userKey.AppName, userKey.UserID}
+			err = s.pgClient.Query(ctx, handleFunc, query, args...)
+		} else {
+			query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
+				WHERE deleted_at IS NULL GROUP BY app_name, user_id, session_id`, tableName)
+			err = s.pgClient.Query(ctx, handleFunc, query)
+		}
+		if err != nil {
+			return fmt.Errorf("soft delete expired %s: %w", tableName, err)
+		}
+		placeholders := make([]string, len(sessionKeys))
+		args := make([]any, 0, len(sessionKeys))
+		index := 1
+		for i, key := range sessionKeys {
+			placeholders[i] = fmt.Sprintf("($%d, $%d, $%d)", index, index+1, index+2)
+			index += 3
+			args = append(args, key.AppName, key.UserID, key.SessionID)
+		}
+		if len(args) > 0 {
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
+					tableName, strings.Join(placeholders, ",")), args...); err != nil {
+				return fmt.Errorf("hard delete events: %w", err)
+			}
+		}
+		return nil
+	}
+
 	var query string
 	var args []any
-
 	if userKey != nil {
 		query = fmt.Sprintf(`DELETE FROM %s
 			WHERE app_name = $1 AND user_id = $2
