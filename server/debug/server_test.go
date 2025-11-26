@@ -89,6 +89,10 @@ type fakeRunner struct {
 	err    error
 }
 
+type ctxCapturingRunner struct {
+	ctx context.Context
+}
+
 func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -104,6 +108,23 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 }
 
 func (f *fakeRunner) Close() error { return nil }
+
+func (f *ctxCapturingRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	runOpts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	f.ctx = ctx
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (f *ctxCapturingRunner) Close() error {
+	return nil
+}
 
 type flushRecorder struct {
 	*httptest.ResponseRecorder
@@ -1433,6 +1454,82 @@ func TestHandleRunSSE_NonStreaming(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "data: ")
+}
+
+func TestNewDetachedContextPreservesValues(t *testing.T) {
+	type ctxKey struct{}
+	key := ctxKey{}
+	parent, cancel := context.WithCancel(
+		context.WithValue(context.Background(), key, "trace-id"),
+	)
+	cancel()
+
+	ctx := newDetachedContext(parent)
+
+	assert.Equal(t, "trace-id", ctx.Value(key))
+	_, ok := ctx.Deadline()
+	assert.False(t, ok)
+	assert.Nil(t, ctx.Done())
+	assert.Nil(t, ctx.Err())
+
+	err := agent.CheckContextCancelled(ctx)
+	assert.NoError(t, err)
+}
+
+func TestHandleRunSSE_UsesDetachedContext(t *testing.T) {
+	type ctxKey struct{}
+	key := ctxKey{}
+
+	ctxRunner := &ctxCapturingRunner{}
+	server := &Server{
+		agents:     map[string]agent.Agent{},
+		router:     mux.NewRouter(),
+		runners:    map[string]runner.Runner{"app": ctxRunner},
+		sessionSvc: sessioninmemory.NewSessionService(),
+		traces:     map[string]attribute.Set{},
+
+		memoryExporter: newInMemoryExporter(),
+	}
+
+	reqBody := schema.AgentRunRequest{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+		NewMessage: schema.Content{
+			Role:  "user",
+			Parts: []schema.Part{{Text: "hi"}},
+		},
+		Streaming: true,
+	}
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
+
+	baseCtx, cancel := context.WithCancel(
+		context.WithValue(context.Background(), key, "trace-id"),
+	)
+	cancel()
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/run_sse",
+		bytes.NewReader(body),
+	).WithContext(baseCtx)
+	req.Header.Set("Content-Type", "application/json")
+	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	server.handleRunSSE(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	if assert.NotNil(t, ctxRunner.ctx) {
+		assert.Equal(t, "trace-id", ctxRunner.ctx.Value(key))
+		_, ok := ctxRunner.ctx.Deadline()
+		assert.False(t, ok)
+		assert.Nil(t, ctxRunner.ctx.Done())
+		assert.Nil(t, ctxRunner.ctx.Err())
+
+		err = agent.CheckContextCancelled(ctxRunner.ctx)
+		assert.NoError(t, err)
+	}
 }
 
 func TestServerGetRunnerCache(t *testing.T) {
