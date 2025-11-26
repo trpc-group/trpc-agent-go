@@ -1656,7 +1656,7 @@ func (s *Service) softDeleteExpiredTableInTx(
 			query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s
 			WHERE app_name = $1 AND user_id = $2
 			AND deleted_at IS NULL GROUP BY app_name, user_id, session_id`, tableName)
-			args := []any{now, userKey.AppName, userKey.UserID}
+			args := []any{userKey.AppName, userKey.UserID}
 			err = s.pgClient.Query(ctx, handleFunc, query, args...)
 		} else {
 			query := fmt.Sprintf(`SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM %s

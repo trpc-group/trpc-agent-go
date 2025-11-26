@@ -778,6 +778,7 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 				return fmt.Errorf("soft delete summaries: %w", err)
 			}
 
+			args = append([]any{now}, args...)
 			if len(args) > 0 {
 				if _, err := tx.ExecContext(ctx,
 					fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
