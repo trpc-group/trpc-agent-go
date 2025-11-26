@@ -1675,6 +1675,7 @@ func (s *Service) softDeleteExpiredTableInTx(
 			args = append(args, key.AppName, key.UserID, key.SessionID)
 		}
 		if len(args) > 0 {
+			args := append([]any{now}, args...)
 			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE %s SET deleted_at = $1 WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
 					tableName, strings.Join(placeholders, ",")), args...); err != nil {
