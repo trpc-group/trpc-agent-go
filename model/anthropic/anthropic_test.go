@@ -147,6 +147,63 @@ func Test_convertTools(t *testing.T) {
 	assert.Equal(t, "t1", params[0].OfTool.Name)
 }
 
+func Test_buildToolDescription_AppendsOutputSchema(t *testing.T) {
+	schema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"status": {Type: "string"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "foo",
+		Description:  "desc",
+		OutputSchema: schema,
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Contains(t, desc, "desc", "expected base description to remain")
+	assert.Contains(t, desc, "Output schema:", "expected output schema label to be present")
+	assert.Contains(t, desc, `"status"`, "expected output schema to be embedded in description")
+}
+
+func Test_buildToolDescription_NoOutputSchema(t *testing.T) {
+	decl := &tool.Declaration{
+		Name:        "foo",
+		Description: "bar",
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "bar", desc, "description should stay unchanged when no output schema")
+}
+
+func Test_convertTools_UsesOutputSchemaDescription(t *testing.T) {
+	outputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"count": {Type: "integer"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "tool_with_out",
+		Description:  "tool desc",
+		InputSchema:  &tool.Schema{Type: "object"},
+		OutputSchema: outputSchema,
+	}
+
+	params := convertTools(map[string]tool.Tool{
+		decl.Name: stubTool{decl: decl},
+	})
+
+	require.Len(t, params, 1)
+	require.NotNil(t, params[0].OfTool)
+	expected := buildToolDescription(decl)
+	assert.True(t, params[0].OfTool.Description.Valid(), "description should be set")
+	assert.Equal(t, expected, params[0].OfTool.Description.Value)
+	assert.Contains(t, params[0].OfTool.Description.Value, `"count"`, "output schema JSON should appear in description")
+}
+
 func Test_decodeToolArguments(t *testing.T) {
 	// Empty -> empty map.
 	v := decodeToolArguments(nil)

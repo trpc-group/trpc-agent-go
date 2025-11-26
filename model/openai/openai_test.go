@@ -322,6 +322,63 @@ func TestModel_convertTools(t *testing.T) {
 	require.False(t, reflect.ValueOf(fn.Parameters).IsZero(), "expected parameters to be populated from schema")
 }
 
+func TestBuildToolDescription_AppendsOutputSchema(t *testing.T) {
+	schema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"result": {Type: "string"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "example",
+		Description:  "base",
+		OutputSchema: schema,
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Contains(t, desc, "base", "expected base description to be preserved")
+	assert.Contains(t, desc, "Output schema:", "expected output schema label to be present")
+	assert.Contains(t, desc, `"result"`, "expected output schema to be present in description")
+}
+
+func TestBuildToolDescription_NoOutputSchema(t *testing.T) {
+	decl := &tool.Declaration{
+		Name:        "example",
+		Description: "only desc",
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "only desc", desc, "description should remain unchanged without output schema")
+}
+
+func TestConvertTools_UsesOutputSchemaInDescription(t *testing.T) {
+	m := New("dummy")
+	outputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"value": {Type: "number"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "tool1",
+		Description:  "desc",
+		InputSchema:  &tool.Schema{Type: "object"},
+		OutputSchema: outputSchema,
+	}
+
+	params := m.convertTools(map[string]tool.Tool{
+		decl.Name: stubTool{decl: decl},
+	})
+
+	require.Len(t, params, 1)
+	expectedDesc := buildToolDescription(decl)
+	require.True(t, params[0].Function.Description.Valid(), "function description should be set")
+	assert.Equal(t, expectedDesc, params[0].Function.Description.Value)
+	assert.Contains(t, params[0].Function.Description.Value, `"value"`, "output schema JSON should be embedded")
+}
+
 // TestModel_Callbacks tests that callback functions are properly called with
 // the correct parameters including the request parameter.
 func TestModel_Callbacks(t *testing.T) {
