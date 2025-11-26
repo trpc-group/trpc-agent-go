@@ -274,9 +274,13 @@ func processDataPart(part protocol.Part) (content string, toolCall *model.ToolCa
 		return
 	}
 
+	// Try both standard "type" and ADK-compatible "adk_type" metadata keys
 	typeVal, hasType := d.Metadata[ia2a.DataPartMetadataTypeKey]
 	if !hasType {
-		return
+		typeVal, hasType = d.Metadata[ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)]
+		if !hasType {
+			return
+		}
 	}
 
 	// Convert typeVal to string for comparison

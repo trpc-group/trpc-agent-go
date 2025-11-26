@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -151,7 +150,7 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will generate UUID
+			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
 		},
 		{
 			name: "request with empty user ID header",
@@ -161,7 +160,7 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will generate UUID
+			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
 		},
 	}
 
@@ -194,13 +193,9 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 					t.Errorf("Authenticate() userID = %v, want %v", user.ID, expectedUserID)
 				}
 			} else {
-				// Should be a valid UUID when no user ID provided
-				if user.ID == "" {
-					t.Errorf("Authenticate() userID should not be empty")
-				}
-				// Validate it's a valid UUID format
-				if _, err := uuid.Parse(user.ID); err != nil {
-					t.Errorf("Authenticate() userID should be valid UUID, got: %v", user.ID)
+				// Should be empty when no user ID provided - will be generated from context ID in ProcessMessage
+				if user.ID != "" {
+					t.Errorf("Authenticate() userID should be empty when not provided, got: %v", user.ID)
 				}
 			}
 		})
@@ -503,7 +498,7 @@ func TestDefaultAuthProvider_CustomUserIDHeader(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will generate UUID
+			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
 		},
 		{
 			name:     "default header still works",
@@ -545,13 +540,9 @@ func TestDefaultAuthProvider_CustomUserIDHeader(t *testing.T) {
 					t.Errorf("Authenticate() userID = %v, want %v", user.ID, tt.expectedID)
 				}
 			} else {
-				// Should be a valid UUID when no user ID provided
-				if user.ID == "" {
-					t.Errorf("Authenticate() userID should not be empty")
-				}
-				// Validate it's a valid UUID format
-				if _, err := uuid.Parse(user.ID); err != nil {
-					t.Errorf("Authenticate() userID should be valid UUID, got: %v", user.ID)
+				// Should be empty when no user ID provided - will be generated from context ID in ProcessMessage
+				if user.ID != "" {
+					t.Errorf("Authenticate() userID should be empty when not provided, got: %v", user.ID)
 				}
 			}
 		})
@@ -596,6 +587,37 @@ func TestWithUserIDHeader(t *testing.T) {
 				if opts.userIDHeader != tt.expectedHeader {
 					t.Errorf("WithUserIDHeader() userIDHeader = %v, want %v", opts.userIDHeader, tt.expectedHeader)
 				}
+			}
+		})
+	}
+}
+
+func TestWithADKCompatibility(t *testing.T) {
+	tests := []struct {
+		name     string
+		enabled  bool
+		expected bool
+	}{
+		{
+			name:     "ADK compatibility enabled",
+			enabled:  true,
+			expected: true,
+		},
+		{
+			name:     "ADK compatibility disabled",
+			enabled:  false,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &options{}
+			WithADKCompatibility(tt.enabled)(opts)
+
+			if opts.adkCompatibility != tt.expected {
+				t.Errorf("WithADKCompatibility(%v) adkCompatibility = %v, want %v",
+					tt.enabled, opts.adkCompatibility, tt.expected)
 			}
 		})
 	}

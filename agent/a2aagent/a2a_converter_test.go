@@ -1250,6 +1250,177 @@ func TestConvertDataPartToToolResponse(t *testing.T) {
 	}
 }
 
+// TestProcessDataPart_ADKMetadataKey tests handling of ADK-compatible metadata keys
+func TestProcessDataPart_ADKMetadataKey(t *testing.T) {
+	type testCase struct {
+		name         string
+		dataPart     protocol.Part
+		validateFunc func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo)
+	}
+
+	tests := []testCase{
+		{
+			name: "function call with adk_type metadata",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"id":   "call-adk-1",
+					"type": "function",
+					"name": "get_weather",
+					"args": `{"location": "Beijing"}`,
+				},
+				Metadata: map[string]any{
+					"adk_type": "function_call", // Using ADK-compatible key
+				},
+			},
+			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
+				if toolCall == nil {
+					t.Fatal("expected tool call, got nil")
+				}
+				if toolCall.ID != "call-adk-1" {
+					t.Errorf("expected ID 'call-adk-1', got %s", toolCall.ID)
+				}
+				if toolCall.Function.Name != "get_weather" {
+					t.Errorf("expected name 'get_weather', got %s", toolCall.Function.Name)
+				}
+				if toolResp != nil {
+					t.Errorf("expected nil tool response, got %v", toolResp)
+				}
+			},
+		},
+		{
+			name: "function response with adk_type metadata",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"id":       "call-adk-2",
+					"name":     "get_weather",
+					"response": "Beijing: Sunny, 20°C",
+				},
+				Metadata: map[string]any{
+					"adk_type": "function_response", // Using ADK-compatible key
+				},
+			},
+			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
+				if content != "Beijing: Sunny, 20°C" {
+					t.Errorf("expected content 'Beijing: Sunny, 20°C', got %s", content)
+				}
+				if toolResp == nil {
+					t.Fatal("expected tool response info, got nil")
+				}
+				if toolResp.id != "call-adk-2" {
+					t.Errorf("expected tool response ID 'call-adk-2', got %s", toolResp.id)
+				}
+				if toolResp.name != "get_weather" {
+					t.Errorf("expected tool response name 'get_weather', got %s", toolResp.name)
+				}
+				if toolCall != nil {
+					t.Errorf("expected nil tool call, got %v", toolCall)
+				}
+			},
+		},
+		{
+			name: "no type metadata",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"id":   "call-no-type",
+					"name": "some_function",
+				},
+				Metadata: map[string]any{
+					"other_key": "other_value",
+				},
+			},
+			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
+				if content != "" {
+					t.Errorf("expected empty content, got %s", content)
+				}
+				if toolCall != nil {
+					t.Errorf("expected nil tool call, got %v", toolCall)
+				}
+				if toolResp != nil {
+					t.Errorf("expected nil tool response, got %v", toolResp)
+				}
+			},
+		},
+		{
+			name: "nil metadata",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"id":   "call-nil-meta",
+					"name": "some_function",
+				},
+				Metadata: nil,
+			},
+			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
+				if content != "" {
+					t.Errorf("expected empty content, got %s", content)
+				}
+				if toolCall != nil {
+					t.Errorf("expected nil tool call, got %v", toolCall)
+				}
+				if toolResp != nil {
+					t.Errorf("expected nil tool response, got %v", toolResp)
+				}
+			},
+		},
+		{
+			name: "non-string type value",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"id":   "call-bad-type",
+					"name": "some_function",
+				},
+				Metadata: map[string]any{
+					"type": 12345, // Non-string type value
+				},
+			},
+			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
+				if content != "" {
+					t.Errorf("expected empty content, got %s", content)
+				}
+				if toolCall != nil {
+					t.Errorf("expected nil tool call, got %v", toolCall)
+				}
+				if toolResp != nil {
+					t.Errorf("expected nil tool response, got %v", toolResp)
+				}
+			},
+		},
+		{
+			name: "standard type key takes precedence over adk_type",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"id":   "call-precedence",
+					"type": "function",
+					"name": "test_func",
+					"args": `{"x": 1}`,
+				},
+				Metadata: map[string]any{
+					"type":     "function_call",     // Standard key
+					"adk_type": "function_response", // ADK key (should be ignored)
+				},
+			},
+			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
+				// Should process as function_call, not function_response
+				if toolCall == nil {
+					t.Fatal("expected tool call, got nil")
+				}
+				if toolCall.Function.Name != "test_func" {
+					t.Errorf("expected name 'test_func', got %s", toolCall.Function.Name)
+				}
+				if toolResp != nil {
+					t.Errorf("expected nil tool response (standard key should take precedence), got %v", toolResp)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			content, toolCall, toolResp := processDataPart(tc.dataPart)
+			tc.validateFunc(t, content, toolCall, toolResp)
+		})
+	}
+}
+
 // Helper function to create string pointer
 func stringPtr(s string) *string {
 	return &s

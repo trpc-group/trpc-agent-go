@@ -34,4 +34,18 @@ const (
 
 	// ToolCallFieldResponse is the data field key for tool call response.
 	ToolCallFieldResponse = "response"
+
+	// ADKMetadataKeyPrefix is the prefix for ADK-compatible metadata keys.
+	// ADK uses "adk_" prefix for metadata keys like "adk_type", "adk_app_name", "adk_user_id", etc.
+	// This ensures compatibility with ADK's part converter which expects "adk_type" instead of "type".
+	ADKMetadataKeyPrefix = "adk_"
 )
+
+// GetADKMetadataKey returns the ADK-compatible metadata key with "adk_" prefix.
+// For example, GetADKMetadataKey("app_name") returns "adk_app_name".
+func GetADKMetadataKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	return ADKMetadataKeyPrefix + key
+}
