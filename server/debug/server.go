@@ -72,6 +72,30 @@ type Server struct {
 	memoryExporter *inMemoryExporter
 }
 
+// detachedContext wraps a parent context but disables cancellation and
+// deadlines while preserving all values. This allows us to keep trace and
+// logging metadata from the incoming request context without being affected
+// by HTTP‑level timeouts or client disconnects.
+type detachedContext struct {
+	context.Context
+}
+
+func (detachedContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func (detachedContext) Done() <-chan struct{} {
+	return nil
+}
+
+func (detachedContext) Err() error {
+	return nil
+}
+
+func newDetachedContext(ctx context.Context) context.Context {
+	return detachedContext{Context: ctx}
+}
+
 // Option configures the Server instance.
 type Option func(*Server)
 
@@ -569,8 +593,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
+	ctx := newDetachedContext(r.Context())
+	out, err := rn.Run(ctx, req.UserID, req.SessionID,
 		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -616,7 +640,8 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	out, err := rn.Run(context.Background(), req.UserID, req.SessionID,
+	ctx := newDetachedContext(r.Context())
+	out, err := rn.Run(ctx, req.UserID, req.SessionID,
 		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
