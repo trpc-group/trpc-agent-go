@@ -176,6 +176,11 @@ func (r *runner) Run(
 		agent.WithInvocationEventFilterKey(r.appName),
 	)
 
+	// Initialize invocation state from RunOptions if provided.
+	if ro.InitialInvocationState != nil {
+		invocation.SetStates(ro.InitialInvocationState)
+	}
+
 	// If caller provided a history via RunOptions and the session is empty,
 	// persist that history into the session exactly once, so subsequent turns
 	// and tool calls build on the same canonical transcript.

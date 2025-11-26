@@ -139,6 +139,44 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
+// WithInvocationState sets the initial invocation state for the RunOptions.
+// These key-value pairs will be set as initial invocation state when the Invocation
+// is created, and can be accessed via invocation.GetState() throughout the
+// invocation lifecycle.
+//
+// This is useful for passing request-specific data that needs to be accessible
+// in callbacks, middleware, or any invocation-scoped logic.
+//
+// This is different from RuntimeState:
+//   - RuntimeState: Used for GraphAgent to initialize graph execution state
+//   - InitialInvocationState: Used to initialize invocation-scoped state storage
+//
+// Example:
+//
+//	runner.Run(ctx, userID, sessionID, message,
+//	    agent.WithInvocationState(map[string]any{
+//	        "user_request": req,
+//	        "exec_context": execCtx,
+//	    }),
+//	)
+//
+//	// Later in callbacks:
+//	req, ok := invocation.GetState("user_request")
+func WithInvocationState(state map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		if state == nil {
+			opts.InitialInvocationState = nil
+			return
+		}
+		// Create a shallow copy to prevent external modifications
+		copied := make(map[string]any, len(state))
+		for k, v := range state {
+			copied[k] = v
+		}
+		opts.InitialInvocationState = copied
+	}
+}
+
 // WithKnowledgeFilter sets the metadata filter for the RunOptions.
 func WithKnowledgeFilter(filter map[string]any) RunOption {
 	return func(opts *RunOptions) {
@@ -389,6 +427,22 @@ type RunOptions struct {
 	//       return t.Declaration().Name == "calculator"
 	//   })
 	ToolFilter tool.FilterFunc
+
+	// InitialInvocationState contains key-value pairs that will be set as initial
+	// invocation state when the Invocation is created. This allows callers to pass
+	// initial state data that can be accessed via invocation.GetState() throughout
+	// the invocation lifecycle.
+	//
+	// This is different from RuntimeState:
+	//   - RuntimeState: Used for GraphAgent to initialize graph execution state
+	//   - InitialInvocationState: Used to initialize invocation-scoped state storage
+	//
+	// Example:
+	//   agent.WithInvocationState(map[string]any{
+	//       "user_request": req,
+	//       "exec_context": execCtx,
+	//   })
+	InitialInvocationState map[string]any
 }
 
 // NewInvocation create a new invocation
@@ -530,6 +584,34 @@ func (inv *Invocation) SetState(key string, value any) {
 		inv.state = make(map[string]any)
 	}
 	inv.state[key] = value
+}
+
+// SetStates sets multiple key-value pairs in the invocation state atomically.
+// This is more efficient than calling SetState multiple times as it only
+// acquires the lock once.
+//
+// If state is nil or empty, this method does nothing.
+//
+// Example:
+//
+//	inv.SetStates(map[string]any{
+//	    "user_request": req,
+//	    "exec_context": execCtx,
+//	    "request_id":   "req-123",
+//	})
+func (inv *Invocation) SetStates(state map[string]any) {
+	if inv == nil || len(state) == 0 {
+		return
+	}
+	inv.stateMu.Lock()
+	defer inv.stateMu.Unlock()
+
+	if inv.state == nil {
+		inv.state = make(map[string]any, len(state))
+	}
+	for key, value := range state {
+		inv.state[key] = value
+	}
 }
 
 // GetState retrieves a value from the invocation state.

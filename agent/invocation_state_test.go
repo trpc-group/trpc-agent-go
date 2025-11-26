@@ -323,3 +323,183 @@ func TestInvocation_State_ComplexStruct(t *testing.T) {
 	assert.Equal(t, data.ID, retrieved.ID)
 	assert.Equal(t, data.Metadata, retrieved.Metadata)
 }
+
+func TestInvocation_State_CloneIsolation(t *testing.T) {
+	// Create parent invocation with state.
+	parent := NewInvocation()
+	parent.SetState("parent:key1", "parent_value1")
+	parent.SetState("parent:key2", "parent_value2")
+
+	// Clone creates a new invocation with separate state.
+	child := parent.Clone()
+
+	// Child should have its own empty state initially.
+	_, ok := child.GetState("parent:key1")
+	assert.False(t, ok, "Child should not inherit parent state")
+
+	// Set state in child.
+	child.SetState("child:key1", "child_value1")
+
+	// Parent state should remain unchanged.
+	parentValue, ok := parent.GetState("parent:key1")
+	assert.True(t, ok)
+	assert.Equal(t, "parent_value1", parentValue)
+
+	// Child state should be independent.
+	childValue, ok := child.GetState("child:key1")
+	assert.True(t, ok)
+	assert.Equal(t, "child_value1", childValue)
+
+	// Parent should not see child's state.
+	_, ok = parent.GetState("child:key1")
+	assert.False(t, ok, "Parent should not see child state")
+}
+
+func TestInvocation_State_Lifecycle(t *testing.T) {
+	// Create invocation and set state.
+	inv := NewInvocation()
+	inv.SetState("test:key1", "value1")
+	inv.SetState("test:key2", "value2")
+
+	// Verify state exists.
+	v1, ok1 := inv.GetState("test:key1")
+	assert.True(t, ok1)
+	assert.Equal(t, "value1", v1)
+
+	v2, ok2 := inv.GetState("test:key2")
+	assert.True(t, ok2)
+	assert.Equal(t, "value2", v2)
+
+	// Delete one key.
+	inv.DeleteState("test:key1")
+
+	// Verify deleted key is gone.
+	_, ok := inv.GetState("test:key1")
+	assert.False(t, ok)
+
+	// Verify other key still exists.
+	v2, ok2 = inv.GetState("test:key2")
+	assert.True(t, ok2)
+	assert.Equal(t, "value2", v2)
+
+	// Note: When invocation goes out of scope and has no references,
+	// Go's garbage collector will automatically reclaim the memory,
+	// including the state map. There's no explicit cleanup needed.
+}
+
+func TestInvocation_SetStates(t *testing.T) {
+	inv := NewInvocation()
+
+	// Test SetStates with multiple key-value pairs.
+	state := map[string]any{
+		"key1": "value1",
+		"key2": 42,
+		"key3": true,
+		"key4": time.Now(),
+	}
+
+	inv.SetStates(state)
+
+	// Verify all values are set.
+	v1, ok1 := inv.GetState("key1")
+	assert.True(t, ok1)
+	assert.Equal(t, "value1", v1)
+
+	v2, ok2 := inv.GetState("key2")
+	assert.True(t, ok2)
+	assert.Equal(t, 42, v2)
+
+	v3, ok3 := inv.GetState("key3")
+	assert.True(t, ok3)
+	assert.Equal(t, true, v3)
+
+	v4, ok4 := inv.GetState("key4")
+	assert.True(t, ok4)
+	assert.IsType(t, time.Time{}, v4)
+}
+
+func TestInvocation_SetStates_Empty(t *testing.T) {
+	inv := NewInvocation()
+
+	// Test SetStates with nil map.
+	inv.SetStates(nil)
+	assert.Nil(t, inv.state)
+
+	// Test SetStates with empty map.
+	inv.SetStates(map[string]any{})
+	assert.Nil(t, inv.state)
+
+	// Set some state first.
+	inv.SetState("existing", "value")
+
+	// SetStates with empty map should not clear existing state.
+	inv.SetStates(map[string]any{})
+	v, ok := inv.GetState("existing")
+	assert.True(t, ok)
+	assert.Equal(t, "value", v)
+}
+
+func TestInvocation_SetStates_Overwrite(t *testing.T) {
+	inv := NewInvocation()
+
+	// Set initial state.
+	inv.SetState("key1", "old_value1")
+	inv.SetState("key2", "old_value2")
+
+	// Overwrite with SetStates.
+	inv.SetStates(map[string]any{
+		"key1": "new_value1",
+		"key3": "new_value3",
+	})
+
+	// Verify overwritten value.
+	v1, ok1 := inv.GetState("key1")
+	assert.True(t, ok1)
+	assert.Equal(t, "new_value1", v1)
+
+	// Verify old value still exists (not overwritten).
+	v2, ok2 := inv.GetState("key2")
+	assert.True(t, ok2)
+	assert.Equal(t, "old_value2", v2)
+
+	// Verify new value is set.
+	v3, ok3 := inv.GetState("key3")
+	assert.True(t, ok3)
+	assert.Equal(t, "new_value3", v3)
+}
+
+func TestInvocation_SetStates_NilInvocation(t *testing.T) {
+	var inv *Invocation
+
+	// SetStates on nil invocation should not panic.
+	inv.SetStates(map[string]any{
+		"key1": "value1",
+	})
+}
+
+func TestInvocation_SetStates_Concurrent(t *testing.T) {
+	inv := NewInvocation()
+	var wg sync.WaitGroup
+
+	// Concurrent SetStates calls.
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			inv.SetStates(map[string]any{
+				fmt.Sprintf("key%d", index): fmt.Sprintf("value%d", index),
+			})
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify all keys are set.
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("key%d", i)
+		expectedValue := fmt.Sprintf("value%d", i)
+		v, ok := inv.GetState(key)
+		assert.True(t, ok, "Key %s should exist", key)
+		assert.Equal(t, expectedValue, v)
+	}
+}

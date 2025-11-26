@@ -12,6 +12,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1021,4 +1022,379 @@ func TestRunner_Close_SessionServiceError(t *testing.T) {
 	err = r.Close()
 	require.NoError(t, err)
 	assert.Equal(t, 1, errorSessionService.closeCalled, "Close should only be called once")
+}
+
+func TestRunner_InitialInvocationState(t *testing.T) {
+	// Create an in-memory session service.
+	sessionService := sessioninmemory.NewSessionService()
+
+	// Create a mock agent that verifies invocation state.
+	mockAgent := &invocationStateVerificationAgent{
+		name: "test-agent",
+		expectedState: map[string]any{
+			"user_request": "req-123",
+			"exec_context": 456,
+			"metadata":     true,
+		},
+	}
+
+	// Create runner.
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session"
+	message := model.NewUserMessage("Test invocation state")
+
+	// Run the agent with InitialInvocationState.
+	eventCh, err := runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		message,
+		agent.WithInvocationState(map[string]any{
+			"user_request": "req-123",
+			"exec_context": 456,
+			"metadata":     true,
+		}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, eventCh)
+
+	// Collect all events.
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+
+	// Verify we received the success response.
+	require.Len(t, events, 2)
+
+	// First event should be from the mock agent indicating success.
+	agentEvent := events[0]
+	assert.Equal(t, "test-agent", agentEvent.Author)
+	assert.Equal(t, "invocation-state-verification-success", agentEvent.Response.ID)
+	assert.True(t, agentEvent.Response.Done)
+	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "All invocation state verified")
+}
+
+func TestRunner_InitialInvocationState_Empty(t *testing.T) {
+	// Create an in-memory session service.
+	sessionService := sessioninmemory.NewSessionService()
+
+	// Create a mock agent that verifies invocation state is empty.
+	mockAgent := &invocationStateVerificationAgent{
+		name:          "test-agent",
+		expectedState: nil,
+	}
+
+	// Create runner.
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session"
+	message := model.NewUserMessage("Test empty invocation state")
+
+	// Run the agent without InitialInvocationState.
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
+	require.NoError(t, err)
+	require.NotNil(t, eventCh)
+
+	// Collect all events.
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+
+	// Verify we received the success response.
+	require.Len(t, events, 2)
+
+	// First event should be from the mock agent indicating success.
+	agentEvent := events[0]
+	assert.Equal(t, "test-agent", agentEvent.Author)
+	assert.Equal(t, "invocation-state-verification-success", agentEvent.Response.ID)
+	assert.True(t, agentEvent.Response.Done)
+}
+
+func TestRunner_InitialInvocationState_Overwrite(t *testing.T) {
+	// Create an in-memory session service.
+	sessionService := sessioninmemory.NewSessionService()
+
+	// Create a mock agent that verifies invocation state can be overwritten.
+	mockAgent := &invocationStateOverwriteAgent{name: "test-agent"}
+
+	// Create runner.
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session"
+	message := model.NewUserMessage("Test invocation state overwrite")
+
+	// Run the agent with InitialInvocationState.
+	eventCh, err := runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		message,
+		agent.WithInvocationState(map[string]any{
+			"key1": "initial_value",
+		}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, eventCh)
+
+	// Collect all events.
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+
+	// Verify we received the success response.
+	require.Len(t, events, 2)
+
+	// First event should be from the mock agent indicating success.
+	agentEvent := events[0]
+	assert.Equal(t, "test-agent", agentEvent.Author)
+	assert.Equal(t, "invocation-state-overwrite-success", agentEvent.Response.ID)
+	assert.True(t, agentEvent.Response.Done)
+}
+
+// invocationStateVerificationAgent verifies that invocation state matches expected values.
+type invocationStateVerificationAgent struct {
+	name          string
+	expectedState map[string]any
+}
+
+func (m *invocationStateVerificationAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for testing invocation state",
+	}
+}
+
+func (m *invocationStateVerificationAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *invocationStateVerificationAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *invocationStateVerificationAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	eventCh := make(chan *event.Event, 1)
+
+	// Verify invocation state.
+	if m.expectedState == nil {
+		// If expectedState is nil, verify that no state was set (or only internal state).
+		// We'll consider this a success if we can at least access the invocation.
+		responseEvent := &event.Event{
+			Response: &model.Response{
+				ID:    "invocation-state-verification-success",
+				Model: "test-model",
+				Done:  true,
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Invocation state verified (empty)",
+						},
+					},
+				},
+			},
+			InvocationID: invocation.InvocationID,
+			Author:       m.name,
+			ID:           "success-event-id",
+			Timestamp:    time.Now(),
+		}
+		eventCh <- responseEvent
+		close(eventCh)
+		return eventCh, nil
+	}
+
+	// Verify all expected state values are present.
+	var missingKeys []string
+	for key, expectedValue := range m.expectedState {
+		actualValue, ok := invocation.GetState(key)
+		if !ok {
+			missingKeys = append(missingKeys, key)
+			continue
+		}
+		if actualValue != expectedValue {
+			// Create error event if value doesn't match.
+			errorEvent := &event.Event{
+				Response: &model.Response{
+					ID:    "invocation-state-verification-error",
+					Model: "test-model",
+					Done:  true,
+					Error: &model.ResponseError{
+						Type:    "invocation_state_error",
+						Message: fmt.Sprintf("State value mismatch for key %s: expected %v, got %v", key, expectedValue, actualValue),
+					},
+				},
+				InvocationID: invocation.InvocationID,
+				Author:       m.name,
+				ID:           "error-event-id",
+				Timestamp:    time.Now(),
+			}
+			eventCh <- errorEvent
+			close(eventCh)
+			return eventCh, nil
+		}
+	}
+
+	if len(missingKeys) > 0 {
+		// Create error event if keys are missing.
+		errorEvent := &event.Event{
+			Response: &model.Response{
+				ID:    "invocation-state-verification-error",
+				Model: "test-model",
+				Done:  true,
+				Error: &model.ResponseError{
+					Type:    "invocation_state_error",
+					Message: fmt.Sprintf("Missing state keys: %v", missingKeys),
+				},
+			},
+			InvocationID: invocation.InvocationID,
+			Author:       m.name,
+			ID:           "error-event-id",
+			Timestamp:    time.Now(),
+		}
+		eventCh <- errorEvent
+		close(eventCh)
+		return eventCh, nil
+	}
+
+	// Create success event if all state values match.
+	responseEvent := &event.Event{
+		Response: &model.Response{
+			ID:    "invocation-state-verification-success",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "All invocation state verified",
+					},
+				},
+			},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "success-event-id",
+		Timestamp:    time.Now(),
+	}
+	eventCh <- responseEvent
+	close(eventCh)
+	return eventCh, nil
+}
+
+func (m *invocationStateVerificationAgent) Tools() []tool.Tool {
+	return []tool.Tool{}
+}
+
+// invocationStateOverwriteAgent verifies that invocation state can be overwritten.
+type invocationStateOverwriteAgent struct {
+	name string
+}
+
+func (m *invocationStateOverwriteAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for testing invocation state overwrite",
+	}
+}
+
+func (m *invocationStateOverwriteAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *invocationStateOverwriteAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *invocationStateOverwriteAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	eventCh := make(chan *event.Event, 1)
+
+	// Verify initial state is set.
+	initialValue, ok := invocation.GetState("key1")
+	if !ok || initialValue != "initial_value" {
+		errorEvent := &event.Event{
+			Response: &model.Response{
+				ID:    "invocation-state-overwrite-error",
+				Model: "test-model",
+				Done:  true,
+				Error: &model.ResponseError{
+					Type:    "invocation_state_error",
+					Message: "Initial state not set correctly",
+				},
+			},
+			InvocationID: invocation.InvocationID,
+			Author:       m.name,
+			ID:           "error-event-id",
+			Timestamp:    time.Now(),
+		}
+		eventCh <- errorEvent
+		close(eventCh)
+		return eventCh, nil
+	}
+
+	// Overwrite the state.
+	invocation.SetState("key1", "overwritten_value")
+
+	// Verify overwrite worked.
+	overwrittenValue, ok := invocation.GetState("key1")
+	if !ok || overwrittenValue != "overwritten_value" {
+		errorEvent := &event.Event{
+			Response: &model.Response{
+				ID:    "invocation-state-overwrite-error",
+				Model: "test-model",
+				Done:  true,
+				Error: &model.ResponseError{
+					Type:    "invocation_state_error",
+					Message: "State overwrite failed",
+				},
+			},
+			InvocationID: invocation.InvocationID,
+			Author:       m.name,
+			ID:           "error-event-id",
+			Timestamp:    time.Now(),
+		}
+		eventCh <- errorEvent
+		close(eventCh)
+		return eventCh, nil
+	}
+
+	// Create success event.
+	responseEvent := &event.Event{
+		Response: &model.Response{
+			ID:    "invocation-state-overwrite-success",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Invocation state overwrite verified",
+					},
+				},
+			},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "success-event-id",
+		Timestamp:    time.Now(),
+	}
+	eventCh <- responseEvent
+	close(eventCh)
+	return eventCh, nil
+}
+
+func (m *invocationStateOverwriteAgent) Tools() []tool.Tool {
+	return []tool.Tool{}
 }

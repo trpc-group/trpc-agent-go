@@ -46,6 +46,47 @@ func TestWithRuntimeState(t *testing.T) {
 	require.Equal(t, true, ro.RuntimeState["config"])
 }
 
+func TestWithInvocationState(t *testing.T) {
+	state := map[string]any{
+		"user_request": "req-123",
+		"exec_context": 456,
+		"metadata":     true,
+	}
+
+	var ro RunOptions
+	WithInvocationState(state)(&ro)
+
+	require.NotNil(t, ro.InitialInvocationState)
+	require.Equal(t, state, ro.InitialInvocationState)
+	require.Equal(t, "req-123", ro.InitialInvocationState["user_request"])
+	require.Equal(t, 456, ro.InitialInvocationState["exec_context"])
+	require.Equal(t, true, ro.InitialInvocationState["metadata"])
+}
+
+func TestWithInvocationState_Nil(t *testing.T) {
+	var ro RunOptions
+	WithInvocationState(nil)(&ro)
+
+	require.Nil(t, ro.InitialInvocationState)
+}
+
+func TestWithInvocationState_Copy(t *testing.T) {
+	originalState := map[string]any{
+		"key1": "value1",
+		"key2": "value2",
+	}
+
+	var ro RunOptions
+	WithInvocationState(originalState)(&ro)
+
+	// Modify original state.
+	originalState["key1"] = "modified"
+
+	// Verify RunOptions state is not affected (shallow copy).
+	require.Equal(t, "value1", ro.InitialInvocationState["key1"])
+	require.Equal(t, "value2", ro.InitialInvocationState["key2"])
+}
+
 func TestWithKnowledgeFilter(t *testing.T) {
 	filter := map[string]any{
 		"category": "tech",
@@ -122,11 +163,13 @@ func TestMultipleRunOptions(t *testing.T) {
 		model.NewUserMessage("test"),
 	}
 	state := map[string]any{"key": "value"}
+	invocationState := map[string]any{"inv_key": "inv_value"}
 	filter := map[string]any{"filter": "test"}
 
 	var ro RunOptions
 	WithMessages(msgs)(&ro)
 	WithRuntimeState(state)(&ro)
+	WithInvocationState(invocationState)(&ro)
 	WithKnowledgeFilter(filter)(&ro)
 	WithResume(true)(&ro)
 	WithRequestID("multi-req-123")(&ro)
@@ -134,6 +177,7 @@ func TestMultipleRunOptions(t *testing.T) {
 
 	require.Equal(t, msgs, ro.Messages)
 	require.Equal(t, state, ro.RuntimeState)
+	require.Equal(t, invocationState, ro.InitialInvocationState)
 	require.Equal(t, filter, ro.KnowledgeFilter)
 	require.True(t, ro.Resume)
 	require.Equal(t, "multi-req-123", ro.RequestID)
