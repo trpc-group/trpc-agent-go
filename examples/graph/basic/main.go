@@ -387,7 +387,10 @@ func (w *documentWorkflow) formatExecutionStats(history []map[string]any) string
 	for i, entry := range history {
 		nodeName, _ := entry["node_name"].(string)
 		nodeType, _ := entry["node_type"].(string)
-		success, _ := entry["success"].(bool)
+		success, ok := entry["success"].(bool)
+		if !ok {
+			success = true
+		}
 		executionTime, _ := entry["execution_time"].(time.Duration)
 
 		status := "✅"
@@ -444,7 +447,8 @@ func (w *documentWorkflow) routeComplexity(ctx context.Context, state graph.Stat
 	// Prefer to pass original text directly to downstream nodes.
 	// Avoid wrapping to reduce prompt interference for summarizer/enhancer.
 	var newInput string
-	if orig, ok := state[stateKeyOriginalText].(string); ok && strings.TrimSpace(orig) != "" {
+	if orig, ok := state[stateKeyOriginalText].(string); ok &&
+		strings.TrimSpace(orig) != "" {
 		newInput = orig
 	} else if in, ok := state[graph.StateKeyUserInput].(string); ok {
 		newInput = in
@@ -455,68 +459,104 @@ func (w *documentWorkflow) routeComplexity(ctx context.Context, state graph.Stat
 	if newInput != "" {
 		out[graph.StateKeyUserInput] = newInput
 	}
+	if level := inferComplexityLevel(state); level != "" {
+		out[stateKeyComplexityLevel] = level
+	}
 	return out, nil
 }
 
-func (w *documentWorkflow) complexityCondition(ctx context.Context, state graph.State) (level string, err error) {
-	// Ensure we persist whatever we decide for downstream formatting.
-	defer func() { state[stateKeyComplexityLevel] = level }()
-
-	// 1) Prefer tool-derived result when present (most reliable)
-	if msgs, ok := state[graph.StateKeyMessages].([]model.Message); ok {
-		for i := len(msgs) - 1; i >= 0; i-- { // scan backwards for latest tool result
-			msg := msgs[i]
-			if msg.Role != model.RoleTool {
-				continue
-			}
-			var result complexityResult
-			if err := json.Unmarshal([]byte(msg.Content), &result); err == nil {
-				switch strings.ToLower(strings.TrimSpace(result.Level)) {
-				case complexityComplex:
-					return complexityComplex, nil
-				case complexityModerate:
-					return complexityModerate, nil
-				case complexitySimple:
-					return complexitySimple, nil
-				}
-			}
-		}
+func (w *documentWorkflow) complexityCondition(
+	ctx context.Context,
+	state graph.State,
+) (string, error) {
+	level := inferComplexityLevel(state)
+	if level == "" {
+		level = complexitySimple
 	}
+	return level, nil
+}
 
-	// 2) Try to parse the LLM textual response robustly
-	if lastResponse, ok := state[graph.StateKeyLastResponse].(string); ok {
-		normalized := strings.ToLower(strings.TrimSpace(lastResponse))
-		// Try exact token match first
-		switch normalized {
-		case complexitySimple:
-			return complexitySimple, nil
-		case complexityModerate:
-			return complexityModerate, nil
-		case complexityComplex:
-			return complexityComplex, nil
-		}
-		// Fallback: contains any (no surrounding spaces requirement)
-		if strings.Contains(normalized, "complex") {
-			return complexityComplex, nil
-		}
-		if strings.Contains(normalized, "moderate") {
-			return complexityModerate, nil
-		}
-		if strings.Contains(normalized, "simple") {
-			return complexitySimple, nil
-		}
+const (
+	complexityWordThresholdModerate = 50
+	complexityWordThresholdComplex  = 200
+)
+
+func inferComplexityLevel(state graph.State) string {
+	// 1) Prefer tool-derived result when present (most reliable).
+	if level := inferComplexityFromTools(state); level != "" {
+		return level
 	}
-
-	// 3) Final fallback: heuristic on word count
-	const complexityThreshold = 200
+	// 2) Then try to parse the LLM textual response.
+	if level := inferComplexityFromText(state); level != "" {
+		return level
+	}
+	// 3) Final fallback: heuristic on word count.
 	if wordCount, ok := state[stateKeyWordCount].(int); ok {
-		if wordCount > complexityThreshold {
-			return complexityComplex, nil
-		} else if wordCount > 50 {
-			return complexityModerate, nil
+		if wordCount > complexityWordThresholdComplex {
+			return complexityComplex
+		}
+		if wordCount > complexityWordThresholdModerate {
+			return complexityModerate
+		}
+		return complexitySimple
+	}
+	return ""
+}
+
+func inferComplexityFromTools(state graph.State) string {
+	msgs, ok := state[graph.StateKeyMessages].([]model.Message)
+	if !ok {
+		return ""
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		msg := msgs[i]
+		if msg.Role != model.RoleTool {
+			continue
+		}
+		var result complexityResult
+		if err := json.Unmarshal([]byte(msg.Content), &result); err != nil {
+			continue
+		}
+		if level := normalizeComplexityLevel(result.Level); level != "" {
+			return level
 		}
 	}
-	return complexitySimple, nil
+	return ""
+}
+
+func inferComplexityFromText(state graph.State) string {
+	lastResponse, ok := state[graph.StateKeyLastResponse].(string)
+	if !ok {
+		return ""
+	}
+	normalized := strings.ToLower(strings.TrimSpace(lastResponse))
+	if level := normalizeComplexityLevel(normalized); level != "" {
+		return level
+	}
+	if strings.Contains(normalized, complexityComplex) {
+		return complexityComplex
+	}
+	if strings.Contains(normalized, complexityModerate) {
+		return complexityModerate
+	}
+	if strings.Contains(normalized, complexitySimple) {
+		return complexitySimple
+	}
+	return ""
+}
+
+func normalizeComplexityLevel(raw string) string {
+	level := strings.ToLower(strings.TrimSpace(raw))
+	switch level {
+	case complexitySimple:
+		return complexitySimple
+	case complexityModerate:
+		return complexityModerate
+	case complexityComplex:
+		return complexityComplex
+	default:
+		return ""
+	}
 }
 
 func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) (any, error) {
@@ -545,6 +585,9 @@ func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) 
 	}
 	// Create final formatted output.
 	complexityLevel, _ := state[stateKeyComplexityLevel].(string)
+	if strings.TrimSpace(complexityLevel) == "" {
+		complexityLevel = inferComplexityLevel(state)
+	}
 	wordCount, _ := state[stateKeyWordCount].(int)
 
 	// Extract callback-generated metadata for enhanced output.
@@ -693,6 +736,7 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 		// Track if we are between analyze and next hop to assert tool usage
 		inAnalyze              bool
 		toolSeenForThisAnalyze bool
+		completionEvent        *event.Event
 	)
 	for event := range eventChan {
 		// Handle errors.
@@ -835,12 +879,51 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 			}
 		}
 		// Stage counting now handled on node-complete events for clarity.
-		// Handle completion.
-		if event.Done {
+		if event.IsRunnerCompletion() {
+			completionEvent = event
 			break
 		}
 	}
+	if completionEvent == nil {
+		return nil
+	}
+	if workflowStarted {
+		fmt.Println()
+	}
+	finalOutput := finalOutputFromEvent(completionEvent)
+	if strings.TrimSpace(finalOutput) == "" {
+		return nil
+	}
+	fmt.Println(finalOutput)
 	return nil
+}
+
+func finalOutputFromEvent(e *event.Event) string {
+	if e == nil || e.Response == nil {
+		return ""
+	}
+
+	if len(e.Response.Choices) > 0 {
+		content := e.Response.Choices[0].Message.Content
+		if strings.TrimSpace(content) != "" {
+			return content
+		}
+	}
+
+	if e.StateDelta == nil {
+		return ""
+	}
+
+	data, ok := e.StateDelta[graph.StateKeyLastResponse]
+	if !ok {
+		return ""
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return ""
+	}
+	return text
 }
 
 // showHelp displays available commands.

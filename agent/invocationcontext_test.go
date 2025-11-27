@@ -114,3 +114,85 @@ func TestInvocationFromContext(t *testing.T) {
 		})
 	}
 }
+
+func TestGetStateValueFromContext(t *testing.T) {
+	t.Run("context without invocation", func(t *testing.T) {
+		ctx := context.Background()
+		val, ok := GetStateValueFromContext[string](ctx, "key")
+		assert.False(t, ok)
+		assert.Equal(t, "", val)
+	})
+
+	t.Run("context with invocation but key not found", func(t *testing.T) {
+		inv := NewInvocation()
+		ctx := NewInvocationContext(context.Background(), inv)
+		val, ok := GetStateValueFromContext[string](ctx, "nonexistent")
+		assert.False(t, ok)
+		assert.Equal(t, "", val)
+	})
+
+	t.Run("context with invocation and matching type", func(t *testing.T) {
+		inv := NewInvocation()
+		inv.SetState("agent:string", "hello")
+		inv.SetState("agent:int", 42)
+		inv.SetState("agent:time", time.Now())
+		ctx := NewInvocationContext(context.Background(), inv)
+
+		// Test string value.
+		strVal, ok := GetStateValueFromContext[string](ctx, "agent:string")
+		assert.True(t, ok)
+		assert.Equal(t, "hello", strVal)
+
+		// Test int value.
+		intVal, ok := GetStateValueFromContext[int](ctx, "agent:int")
+		assert.True(t, ok)
+		assert.Equal(t, 42, intVal)
+
+		// Test time.Time value.
+		timeVal, ok := GetStateValueFromContext[time.Time](ctx, "agent:time")
+		assert.True(t, ok)
+		assert.IsType(t, time.Time{}, timeVal)
+	})
+
+	t.Run("context with invocation but type mismatch", func(t *testing.T) {
+		inv := NewInvocation()
+		inv.SetState("agent:value", "hello")
+		ctx := NewInvocationContext(context.Background(), inv)
+
+		// Try to get as int when it's actually string.
+		intVal, ok := GetStateValueFromContext[int](ctx, "agent:value")
+		assert.False(t, ok)
+		assert.Equal(t, 0, intVal)
+	})
+
+	t.Run("context with nil invocation", func(t *testing.T) {
+		ctx := NewInvocationContext(context.Background(), nil)
+		val, ok := GetStateValueFromContext[string](ctx, "key")
+		assert.False(t, ok)
+		assert.Equal(t, "", val)
+	})
+
+	t.Run("complex struct type", func(t *testing.T) {
+		type CustomData struct {
+			ID        string
+			Timestamp time.Time
+			Metadata  map[string]string
+		}
+
+		inv := NewInvocation()
+		data := CustomData{
+			ID:        "test-123",
+			Timestamp: time.Now(),
+			Metadata: map[string]string{
+				"key1": "value1",
+			},
+		}
+		inv.SetState("agent:custom_data", data)
+		ctx := NewInvocationContext(context.Background(), inv)
+
+		retrieved, ok := GetStateValueFromContext[CustomData](ctx, "agent:custom_data")
+		require.True(t, ok)
+		assert.Equal(t, data.ID, retrieved.ID)
+		assert.Equal(t, data.Metadata, retrieved.Metadata)
+	})
+}

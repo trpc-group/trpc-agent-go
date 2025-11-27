@@ -734,7 +734,7 @@ func TestAddDocument_EmptyEmbedding(t *testing.T) {
 
 	// Create a vector store that tracks the embedding it receives
 	vs := &trackingVectorStore{}
-	
+
 	kb := &BuiltinKnowledge{
 		embedder:    nil, // No embedder - should pass empty embedding
 		vectorStore: vs,

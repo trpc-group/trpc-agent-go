@@ -242,6 +242,10 @@ func (serviceWithoutTrack) ListUserStates(ctx context.Context, key session.UserK
 	return nil, nil
 }
 
+func (serviceWithoutTrack) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	return nil
+}
+
 func (serviceWithoutTrack) DeleteUserState(ctx context.Context, key session.UserKey, stateKey string) error {
 	return nil
 }
