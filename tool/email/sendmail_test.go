@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMailTool_sendMail(t *testing.T) {
+func Test_emailToolSet_sendMail(t *testing.T) {
 	toolSet, err := NewToolSet(
 		WithSendEmailEnabled(true),
 	)
@@ -21,6 +21,7 @@ func TestMailTool_sendMail(t *testing.T) {
 		ToEmail  string
 		Subject  string
 		Content  string
+		wantErr  bool
 	}{
 
 		{
@@ -29,6 +30,7 @@ func TestMailTool_sendMail(t *testing.T) {
 			ToEmail:  "zhuangguang5524621@gmail.com",
 			Subject:  "test",
 			Content:  "test",
+			wantErr:  false,
 		},
 
 		{
@@ -37,13 +39,10 @@ func TestMailTool_sendMail(t *testing.T) {
 			ToEmail:  "1850396756@qq.com",
 			Subject:  "test",
 			Content:  "test",
+			wantErr:  false,
 		},
 	}
 	for _, tt := range tests {
-
-		if tt.Password == "" {
-			t.Skip("no passwd skip")
-		}
 
 		rsp, err := toolSet.(*emailToolSet).sendMail(context.Background(), &sendMailRequest{
 			Auth: Auth{
@@ -58,10 +57,81 @@ func TestMailTool_sendMail(t *testing.T) {
 				},
 			},
 		})
-		if err != nil {
-			t.Errorf("send mail err: %v", err)
+		t.Logf("rsp: %+v err:%v", rsp, err)
+		if tt.Password == "" {
+			t.Logf("password is empty, skip")
+			continue
 		}
-		t.Logf("rsp: %+v", rsp)
+		if rsp.Message != "" {
+			if tt.wantErr == false {
+				t.Errorf("send mail err: %s", rsp.Message)
+			}
+		} else if tt.wantErr == true {
+			t.Errorf("should err but not")
+		}
+
+	}
+}
+
+func Test_emailToolSet_sendMail2(t *testing.T) {
+	toolSet, err := NewToolSet(
+		WithSendEmailEnabled(true),
+	)
+	if err != nil {
+		t.Errorf("NewToolSet failed, err: %v", err)
+	}
+
+	tests := []struct {
+		Name     string
+		Password string
+		ToEmail  string
+		Subject  string
+		Content  string
+		wantErr  bool
+	}{
+		// error case
+		{
+			Name:     "18503@96756@qq.com",
+			Password: "",
+			ToEmail:  "zhuangguang5524621@gmail.com",
+			Subject:  "test",
+			Content:  "test",
+			wantErr:  true,
+		},
+		// error case
+		{
+			Name:     "zhuangguang5524621@gmail.com",
+			Password: "",
+			ToEmail:  "185039@6756@qq.com",
+			Subject:  "test",
+			Content:  "test",
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+
+		rsp, err := toolSet.(*emailToolSet).sendMail(context.Background(), &sendMailRequest{
+			Auth: Auth{
+				Name:     tt.Name,
+				Password: tt.Password,
+			},
+			MailList: []*Mail{
+				{
+					ToEmail: tt.ToEmail,
+					Subject: tt.Subject,
+					Content: tt.Content,
+				},
+			},
+		})
+		t.Logf("rsp: %+v err:%v", rsp, err)
+		if rsp.Message != "" {
+			if tt.wantErr == false {
+				t.Errorf("send mail err: %s", rsp.Message)
+			}
+		} else if tt.wantErr == true {
+			t.Errorf("should err but not")
+		}
+
 	}
 }
 
@@ -146,6 +216,12 @@ func Test_checkMailBoxType(t *testing.T) {
 			args:    args{email: "User@GmAiL.cOm"},
 			want:    MAIL_GMAIL,
 			wantErr: false,
+		},
+		{
+			name:    "not valid email",
+			args:    args{email: "UserGmAiL.cOm"},
+			want:    MAIL_UNKNOWN,
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {

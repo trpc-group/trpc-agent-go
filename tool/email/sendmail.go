@@ -52,7 +52,6 @@ type sendMailResponse struct {
 }
 
 // sendMail performs the send mail operation.
-// go smtp not support context, one send one mail, can't stop
 func (e *emailToolSet) sendMail(ctx context.Context, req *sendMailRequest) (rsp *sendMailResponse, err error) {
 	rsp = &sendMailResponse{}
 
@@ -81,7 +80,7 @@ func (e *emailToolSet) sendMail(ctx context.Context, req *sendMailRequest) (rsp 
 		opts...,
 	)
 	if err != nil {
-		rsp.Message = fmt.Sprintf("the address or password is incorrect,please check: %v", err)
+		rsp.Message = fmt.Sprintf("the server address err: %v", err)
 		return rsp, nil
 	}
 
