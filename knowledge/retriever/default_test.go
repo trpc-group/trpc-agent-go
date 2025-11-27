@@ -270,7 +270,7 @@ type mockReranker struct {
 	err error
 }
 
-func (m *mockReranker) Rerank(ctx context.Context, results []*r.Result) ([]*r.Result, error) {
+func (m *mockReranker) Rerank(ctx context.Context, query *r.Query, results []*r.Result) ([]*r.Result, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
