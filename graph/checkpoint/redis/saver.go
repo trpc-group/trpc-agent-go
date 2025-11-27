@@ -94,16 +94,12 @@ func NewSaver(options ...Option) (*Saver, error) {
 	// if instance name set, and url not set, use instance name to create redis client
 	if opts.url == "" && opts.instanceName != "" {
 		var ok bool
-		builderOpts, ok = storage.GetRedisInstance(opts.instanceName)
-		if !ok {
+		if builderOpts, ok = storage.GetRedisInstance(opts.instanceName); !ok {
 			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
 		}
 	}
 
-	var redisClient redis.UniversalClient
-	var err error
-	builder := storage.GetClientBuilder()
-	redisClient, err = builder(builderOpts...)
+	redisClient, err := storage.GetClientBuilder()(builderOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
