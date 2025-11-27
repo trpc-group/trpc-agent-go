@@ -104,39 +104,19 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
-	var redisClient redis.UniversalClient
-	var err error
-	builder := storage.GetClientBuilder()
-
-	// if instance name set, and url not set, use instance name to create redis client
-	if opts.url == "" && opts.instanceName != "" {
-		builderOpts, ok := storage.GetRedisInstance(opts.instanceName)
-		if !ok {
-			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
-		}
-		redisClient, err = builder(builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
-		}
-		s := &Service{
-			opts:         opts,
-			redisClient:  redisClient,
-			sessionTTL:   opts.sessionTTL,
-			appStateTTL:  opts.appStateTTL,
-			userStateTTL: opts.userStateTTL,
-		}
-		if opts.enableAsyncPersist {
-			s.startAsyncPersistWorker()
-		}
-		// Always start async summary workers by default.
-		s.startAsyncSummaryWorker()
-		return s, nil
-	}
-
-	redisClient, err = builder(
+	builderOpts := []storage.ClientBuilderOpt{
 		storage.WithClientBuilderURL(opts.url),
 		storage.WithExtraOptions(opts.extraOptions...),
-	)
+	}
+	// if instance name set, and url not set, use instance name to create redis client
+	if opts.url == "" && opts.instanceName != "" {
+		var ok bool
+		if builderOpts, ok = storage.GetRedisInstance(opts.instanceName); !ok {
+			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
+		}
+	}
+
+	redisClient, err := storage.GetClientBuilder()(builderOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
