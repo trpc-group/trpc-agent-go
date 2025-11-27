@@ -76,6 +76,9 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+
+    // Import PDF reader to register it (optional - has separate go.mod to avoid unnecessary dependencies).
+    // _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 )
 
 func main() {
@@ -1206,6 +1209,9 @@ import (
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+
+    // Import PDF reader to register it (optional - has separate go.mod to avoid unnecessary dependencies).
+    // _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 )
 
 func main() {
@@ -1542,3 +1548,15 @@ go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
      - Confirm files exist and extensions are supported (.md/.txt/.pdf/.csv/.json/.docx, etc.);
      - Whether directory source needs `WithRecursive(true)`;
      - Use `WithFileExtensions` for whitelist filtering.
+
+7. **PDF file reading support**
+
+   - Note: The PDF reader depends on third-party libraries. To avoid introducing unnecessary dependencies into the main module, the PDF reader uses a separate `go.mod`.
+   - Usage: To support PDF file reading, manually import the PDF reader package for registration:
+     ```go
+     import (
+         // Import PDF reader to support .pdf file parsing.
+         _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
+     )
+     ```
+   - Note: Readers for other formats (.txt/.md/.csv/.json, etc.) are automatically registered and do not require manual import.
