@@ -208,6 +208,8 @@ type ToolExecutionMetadata struct {
 	ToolName string `json:"toolName"`
 	// ToolID is the unique identifier of the tool call.
 	ToolID string `json:"toolId"`
+	// ResponseID is the response/message ID that issued this tool call.
+	ResponseID string `json:"responseId,omitempty"`
 	// Phase is the execution phase.
 	Phase ToolExecutionPhase `json:"phase"`
 	// StartTime is when the execution started.
@@ -463,6 +465,7 @@ type ToolEventOptions struct {
 	InvocationID string
 	ToolName     string
 	ToolID       string
+	ResponseID   string
 	Phase        ToolExecutionPhase
 	StartTime    time.Time
 	EndTime      time.Time
@@ -633,6 +636,13 @@ func WithToolEventToolName(toolName string) ToolEventOption {
 func WithToolEventToolID(toolID string) ToolEventOption {
 	return func(opts *ToolEventOptions) {
 		opts.ToolID = toolID
+	}
+}
+
+// WithToolEventResponseID sets the parent response ID for tool events.
+func WithToolEventResponseID(responseID string) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.ResponseID = responseID
 	}
 }
 
@@ -1091,6 +1101,7 @@ func NewToolExecutionEvent(opts ...ToolEventOption) *event.Event {
 	metadata := ToolExecutionMetadata{
 		ToolName:     options.ToolName,
 		ToolID:       options.ToolID,
+		ResponseID:   options.ResponseID,
 		Phase:        options.Phase,
 		StartTime:    options.StartTime,
 		EndTime:      options.EndTime,

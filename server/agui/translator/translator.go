@@ -11,10 +11,14 @@
 package translator
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -43,15 +47,28 @@ type translator struct {
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
 func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, error) {
-	if event == nil || event.Response == nil {
+	if event == nil {
 		return nil, errors.New("event is nil")
 	}
+
+	var events []aguievents.Event
+
+	// GraphAgent emits model/tool metadata via StateDelta instead of raw tool_calls.
+	events = append(events, t.graphModelEvents(event)...)
+	events = append(events, t.graphToolEvents(event)...)
+
 	rsp := event.Response
+	if rsp == nil {
+		if len(events) > 0 {
+			return events, nil
+		}
+		return nil, errors.New("event response is nil")
+	}
 	if rsp.Error != nil {
 		log.Errorf("agui: threadID: %s, runID: %s, error in response: %v", t.threadID, t.runID, rsp.Error)
-		return []aguievents.Event{aguievents.NewRunErrorEvent(rsp.Error.Message, aguievents.WithRunID(t.runID))}, nil
+		events = append(events, aguievents.NewRunErrorEvent(rsp.Error.Message, aguievents.WithRunID(t.runID)))
+		return events, nil
 	}
-	events := []aguievents.Event{}
 	if rsp.Object == model.ObjectTypeChatCompletionChunk || rsp.Object == model.ObjectTypeChatCompletion {
 		textMessageEvents, err := t.textMessageEvent(rsp)
 		if err != nil {
@@ -158,6 +175,8 @@ func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, err
 			if toolCallArguments != "" {
 				events = append(events, aguievents.NewToolCallArgsEvent(toolCall.ID, toolCallArguments))
 			}
+			// Tool call end should precede result to align with AG-UI protocol.
+			events = append(events, aguievents.NewToolCallEndEvent(toolCall.ID))
 		}
 	}
 	t.lastMessageID = rsp.ID
@@ -169,15 +188,13 @@ func (t *translator) toolResultEvent(rsp *model.Response, messageID string) ([]a
 	if rsp == nil || len(rsp.Choices) == 0 {
 		return nil, nil
 	}
-	eventas := make([]aguievents.Event, 0, len(rsp.Choices))
+	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
-		// Tool call end event.
-		eventas = append(eventas, aguievents.NewToolCallEndEvent(choice.Message.ToolID))
-		// Tool call result event.
-		eventas = append(eventas, aguievents.NewToolCallResultEvent(messageID,
+		events = append(events, aguievents.NewToolCallResultEvent(messageID,
 			choice.Message.ToolID, choice.Message.Content))
 	}
-	return eventas, nil
+	t.lastMessageID = messageID
+	return events, nil
 }
 
 // formatToolCallArguments formats a tool call arguments event to a string.
@@ -186,4 +203,70 @@ func formatToolCallArguments(arguments []byte) string {
 		return ""
 	}
 	return string(arguments)
+}
+
+// graphModelEvents converts graph model metadata (from StateDelta) into text events.
+func (t *translator) graphModelEvents(evt *agentevent.Event) []aguievents.Event {
+	if evt.StateDelta == nil {
+		return nil
+	}
+	raw, ok := evt.StateDelta[graph.MetadataKeyModel]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	var meta graph.ModelExecutionMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return []aguievents.Event{aguievents.NewRunErrorEvent(
+			fmt.Sprintf("invalid graph model metadata: %v", err),
+			aguievents.WithRunID(t.runID),
+		)}
+	}
+	if meta.Output == "" {
+		return nil
+	}
+	var events []aguievents.Event
+	if t.receivingMessage && t.lastMessageID != "" {
+		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+		t.receivingMessage = false
+	}
+	msgID := evt.ID
+	events = append(events,
+		aguievents.NewTextMessageStartEvent(msgID, aguievents.WithRole(model.RoleAssistant.String())),
+		aguievents.NewTextMessageContentEvent(msgID, meta.Output),
+		aguievents.NewTextMessageEndEvent(msgID),
+	)
+	t.lastMessageID = msgID
+	return events
+}
+
+// graphToolEvents converts graph tool metadata (from StateDelta) into tool call events.
+func (t *translator) graphToolEvents(evt *agentevent.Event) []aguievents.Event {
+	if evt.StateDelta == nil {
+		return nil
+	}
+	raw, ok := evt.StateDelta[graph.MetadataKeyTool]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	var meta graph.ToolExecutionMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return []aguievents.Event{aguievents.NewRunErrorEvent(
+			fmt.Sprintf("invalid graph tool metadata: %v", err),
+			aguievents.WithRunID(t.runID),
+		)}
+	}
+
+	switch meta.Phase {
+	case graph.ToolExecutionPhaseStart:
+		var events []aguievents.Event
+		opts := []aguievents.ToolCallStartOption{aguievents.WithParentMessageID(meta.ResponseID)}
+		events = append(events, aguievents.NewToolCallStartEvent(meta.ToolID, meta.ToolName, opts...))
+		if strings.TrimSpace(meta.Input) != "" {
+			events = append(events, aguievents.NewToolCallArgsEvent(meta.ToolID, meta.Input))
+		}
+		events = append(events, aguievents.NewToolCallEndEvent(meta.ToolID))
+		return events
+	default:
+		return nil
+	}
 }

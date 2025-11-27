@@ -33,6 +33,8 @@ const (
 	// StateKeyMessages is the key of the messages.
 	// Typically it is used and updated by the LLM node.
 	StateKeyMessages = "messages"
+	// StateKeyLastResponseID stores the ID of the last model response.
+	StateKeyLastResponseID = "last_response_id"
 	// StateKeyMetadata is the key of the metadata.
 	StateKeyMetadata = "metadata"
 	// StateKeyExecContext is the key of the execution context.

@@ -721,6 +721,7 @@ func (r *llmRunner) executeOneShotStage(
 		StateKeyMessages:        ops,
 		StateKeyOneShotMessages: []model.Message(nil), // Clear one-shot messages after execution.
 		StateKeyLastResponse:    asst.Content,
+		StateKeyLastResponseID:  extractResponseID(result),
 		StateKeyNodeResponses: map[string]any{
 			r.nodeID: asst.Content,
 		},
@@ -760,6 +761,9 @@ func (r *llmRunner) executeUserInputStage(
 		StateKeyMessages:     ops,
 		StateKeyUserInput:    "", // Clear user input after execution.
 		StateKeyLastResponse: asst.Content,
+		StateKeyLastResponseID: func() string {
+			return extractResponseID(result)
+		}(),
 		StateKeyNodeResponses: map[string]any{
 			r.nodeID: asst.Content,
 		},
@@ -784,6 +788,9 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 		return State{
 			StateKeyMessages:     AppendMessages{Items: []model.Message{*asst}},
 			StateKeyLastResponse: asst.Content,
+			StateKeyLastResponseID: func() string {
+				return extractResponseID(result)
+			}(),
 			StateKeyNodeResponses: map[string]any{
 				r.nodeID: asst.Content,
 			},
@@ -871,6 +878,14 @@ func extractAssistantMessage(result any) *model.Message {
 		return &response.Choices[0].Message
 	}
 	return nil
+}
+
+// extractResponseID extracts response ID from model result.
+func extractResponseID(result any) string {
+	if response, ok := result.(*model.Response); ok {
+		return response.ID
+	}
+	return ""
 }
 
 // ensureSystemHead ensures system prompt is at the head if provided.
@@ -1735,12 +1750,16 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Extract current node ID from state for event authoring.
 	var nodeID string
+	var responseID string
 	sessInfo := &session.Session{}
 	if state := config.State; state != nil {
 		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
 			if id, ok := nodeIDData.(string); ok {
 				nodeID = id
 			}
+		}
+		if rid, ok := state[StateKeyLastResponseID].(string); ok {
+			responseID = rid
 		}
 		if sess, ok := state[StateKeySession]; ok {
 			if s, ok := sess.(*session.Session); ok && s != nil {
@@ -1758,7 +1777,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
 		ctx, config.EventChan, config.InvocationID, name, id, nodeID,
-		startTime, modifiedArgs,
+		startTime, modifiedArgs, responseID,
 	)
 
 	var interruptErr *InterruptError
@@ -1780,6 +1799,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Result:       result,
 		Error:        eventErr,
 		Arguments:    modifiedArgs,
+		ResponseID:   responseID,
 	})
 	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
@@ -1818,6 +1838,7 @@ func emitToolStartEvent(
 	invocationID, toolName, toolID, nodeID string,
 	startTime time.Time,
 	arguments []byte,
+	responseID string,
 ) {
 	if eventChan == nil {
 		return
@@ -1827,6 +1848,7 @@ func emitToolStartEvent(
 		WithToolEventInvocationID(invocationID),
 		WithToolEventToolName(toolName),
 		WithToolEventToolID(toolID),
+		WithToolEventResponseID(responseID),
 		WithToolEventNodeID(nodeID),
 		WithToolEventPhase(ToolExecutionPhaseStart),
 		WithToolEventStartTime(startTime),
@@ -1844,6 +1866,7 @@ type toolCompleteEventConfig struct {
 	ToolName     string
 	ToolID       string
 	NodeID       string
+	ResponseID   string
 	StartTime    time.Time
 	Result       any
 	Error        error
@@ -1868,6 +1891,7 @@ func emitToolCompleteEvent(ctx context.Context, config toolCompleteEventConfig) 
 		WithToolEventInvocationID(config.InvocationID),
 		WithToolEventToolName(config.ToolName),
 		WithToolEventToolID(config.ToolID),
+		WithToolEventResponseID(config.ResponseID),
 		WithToolEventNodeID(config.NodeID),
 		WithToolEventPhase(ToolExecutionPhaseComplete),
 		WithToolEventStartTime(config.StartTime),
@@ -1905,6 +1929,10 @@ func MessagesStateSchema() *StateSchema {
 		Reducer: DefaultReducer,
 	})
 	schema.AddField(StateKeyLastResponse, StateField{
+		Type:    reflect.TypeOf(""),
+		Reducer: DefaultReducer,
+	})
+	schema.AddField(StateKeyLastResponseID, StateField{
 		Type:    reflect.TypeOf(""),
 		Reducer: DefaultReducer,
 	})
