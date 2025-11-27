@@ -91,7 +91,8 @@ func (c *emailChat) setup(_ context.Context) error {
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with access to email sending capabilities"),
-		llmagent.WithInstruction("Use the email tool to send emails. ask user to provide account credentials"),
+		llmagent.WithInstruction("Use the email tool to send emails. ask user to provide account credentials. "+
+			"if sending failed, error message contain web link, please tell the link to user"),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithToolSets([]tool.ToolSet{emailTool}),
 	)
