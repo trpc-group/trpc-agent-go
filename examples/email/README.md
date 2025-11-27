@@ -1,6 +1,6 @@
 # email Example
 
-This example demonstrates how to handle various types of email (qq,gmail) using OpenAI-compatible models.
+This example demonstrates how to handle various types of email (qq,gmail,163) using OpenAI-compatible models.
 
 ## Features
 

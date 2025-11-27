@@ -23,7 +23,7 @@ func Test_emailToolSet_sendMail(t *testing.T) {
 		Content  string
 		wantErr  bool
 	}{
-
+		// qq to gmail
 		{
 			Name:     "1850396756@qq.com",
 			Password: "",
@@ -32,11 +32,20 @@ func Test_emailToolSet_sendMail(t *testing.T) {
 			Content:  "test",
 			wantErr:  false,
 		},
-
+		// gmail to qq
 		{
 			Name:     "zhuangguang5524621@gmail.com",
 			Password: "",
 			ToEmail:  "1850396756@qq.com",
+			Subject:  "test",
+			Content:  "test",
+			wantErr:  false,
+		},
+		// 163 to gmail
+		{
+			Name:     "18218025138@163.com",
+			Password: "",
+			ToEmail:  "zhuangguang5524621@gmail.com",
 			Subject:  "test",
 			Content:  "test",
 			wantErr:  false,
@@ -59,8 +68,7 @@ func Test_emailToolSet_sendMail(t *testing.T) {
 		})
 		t.Logf("rsp: %+v err:%v", rsp, err)
 		if tt.Password == "" {
-			t.Logf("password is empty, skip")
-			continue
+			t.Skip("password is empty, skip")
 		}
 		if rsp.Message != "" {
 			if tt.wantErr == false {
@@ -306,6 +314,19 @@ func Test_emailToolSet_getEmailAddr(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name: "163 mail",
+			e:    &emailToolSet{},
+			args: args{
+				req: &sendMailRequest{
+					Auth: Auth{Name: "user@163.com"},
+				},
+			},
+			wantAddr:  netEase163Mail,
+			wantPort:  netEase1163Port,
+			wantIsSSL: true,
+			wantErr:   false,
+		},
+		{
 			name: "invalid email format",
 			e:    &emailToolSet{},
 			args: args{
@@ -320,7 +341,7 @@ func Test_emailToolSet_getEmailAddr(t *testing.T) {
 			e:    &emailToolSet{},
 			args: args{
 				req: &sendMailRequest{
-					Auth: Auth{Name: "user@163.com"},
+					Auth: Auth{Name: "user@icloud.com"},
 				},
 			},
 			wantErr: true,

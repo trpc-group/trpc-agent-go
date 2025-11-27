@@ -16,10 +16,12 @@ import (
 )
 
 const (
-	qqMail    = "smtp.qq.com"
-	qqPort    = 465
-	gmailMail = "smtp.gmail.com"
-	gmailPort = 587
+	qqMail          = "smtp.qq.com"
+	qqPort          = 465
+	gmailMail       = "smtp.gmail.com"
+	gmailPort       = 587
+	netEase163Mail  = "smtp.163.com"
+	netEase1163Port = 465
 )
 
 // sendMailRequest represents the input for the send mail operation.
@@ -144,6 +146,11 @@ func (e *emailToolSet) getEmailAddr(req *sendMailRequest) (addr string, port int
 			addr = gmailMail
 			port = gmailPort
 			isSSL = false
+		case MAIL_163:
+			//163 email
+			addr = netEase163Mail
+			port = netEase1163Port
+			isSSL = true
 		default:
 			// not support
 			err = fmt.Errorf("not support mailbox type:%s", MailboxTypeToString(mailBoxType))
