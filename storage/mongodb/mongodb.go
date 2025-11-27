@@ -66,36 +66,7 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 		return nil, fmt.Errorf("mongodb: ping failed: %w", err)
 	}
 
-	return &nativeClient{client: client}, nil
-}
-
-// ClientBuilderOpt is the option for the mongodb client.
-type ClientBuilderOpt func(*ClientBuilderOpts)
-
-// ClientBuilderOpts is the options for the mongodb client.
-type ClientBuilderOpts struct {
-	// URI is the mongodb connection string.
-	// Format: "mongodb://username:password@host:port/database?options"
-	URI string
-
-	// ExtraOptions is the extra options for the mongodb client.
-	// This is mainly used for customized mongodb client builders.
-	ExtraOptions []any
-}
-
-// WithClientBuilderDSN sets the mongodb connection URI for clientBuilder.
-func WithClientBuilderDSN(uri string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) {
-		opts.URI = uri
-	}
-}
-
-// WithExtraOptions sets the mongodb client extra options for clientBuilder.
-// This option is mainly used for customized mongodb client builders.
-func WithExtraOptions(extraOptions ...any) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) {
-		opts.ExtraOptions = append(opts.ExtraOptions, extraOptions...)
-	}
+	return &defaultClient{client: client}, nil
 }
 
 // RegisterMongoDBInstance registers a mongodb instance with the given options.
@@ -150,85 +121,55 @@ type Client interface {
 	Disconnect(ctx context.Context) error
 }
 
-// ErrNoClientBuilder is returned when no client builder is set.
-var ErrNoClientBuilder = errors.New("mongodb: no client builder set, please call SetClientBuilder first")
-
-// NewClient creates a new mongodb client using the global builder.
-func NewClient(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
-	if globalBuilder == nil {
-		return nil, ErrNoClientBuilder
-	}
-	return globalBuilder(ctx, opts...)
-}
-
-// NewClientFromInstance creates a new mongodb client from a registered instance.
-func NewClientFromInstance(ctx context.Context, instanceName string, extraOpts ...ClientBuilderOpt) (Client, error) {
-	if globalBuilder == nil {
-		return nil, ErrNoClientBuilder
-	}
-
-	builderOpts, ok := GetMongoDBInstance(instanceName)
-	if !ok {
-		return nil, errors.New("mongodb: instance not found: " + instanceName)
-	}
-
-	// Append extra options if provided
-	allOpts := make([]ClientBuilderOpt, 0, len(builderOpts)+len(extraOpts))
-	allOpts = append(allOpts, builderOpts...)
-	allOpts = append(allOpts, extraOpts...)
-
-	return globalBuilder(ctx, allOpts...)
-}
-
-// nativeClient wraps *mongo.Client to implement the Client interface.
-type nativeClient struct {
+// defaultClient wraps *mongo.Client to implement the Client interface.
+type defaultClient struct {
 	client *mongo.Client
 }
 
 // InsertOne implements Client.InsertOne.
-func (c *nativeClient) InsertOne(ctx context.Context, database string, coll string, document interface{},
+func (c *defaultClient) InsertOne(ctx context.Context, database string, coll string, document interface{},
 	opts ...*options.InsertOneOptions) (*mongo.InsertOneResult, error) {
 	return c.client.Database(database).Collection(coll).InsertOne(ctx, document, opts...)
 }
 
 // UpdateOne implements Client.UpdateOne.
-func (c *nativeClient) UpdateOne(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) UpdateOne(ctx context.Context, database string, coll string, filter interface{},
 	update interface{}, opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
 	return c.client.Database(database).Collection(coll).UpdateOne(ctx, filter, update, opts...)
 }
 
 // DeleteOne implements Client.DeleteOne.
-func (c *nativeClient) DeleteOne(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) DeleteOne(ctx context.Context, database string, coll string, filter interface{},
 	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	return c.client.Database(database).Collection(coll).DeleteOne(ctx, filter, opts...)
 }
 
 // DeleteMany implements Client.DeleteMany.
-func (c *nativeClient) DeleteMany(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) DeleteMany(ctx context.Context, database string, coll string, filter interface{},
 	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	return c.client.Database(database).Collection(coll).DeleteMany(ctx, filter, opts...)
 }
 
 // FindOne implements Client.FindOne.
-func (c *nativeClient) FindOne(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) FindOne(ctx context.Context, database string, coll string, filter interface{},
 	opts ...*options.FindOneOptions) *mongo.SingleResult {
 	return c.client.Database(database).Collection(coll).FindOne(ctx, filter, opts...)
 }
 
 // Find implements Client.Find.
-func (c *nativeClient) Find(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) Find(ctx context.Context, database string, coll string, filter interface{},
 	opts ...*options.FindOptions) (*mongo.Cursor, error) {
 	return c.client.Database(database).Collection(coll).Find(ctx, filter, opts...)
 }
 
 // CountDocuments implements Client.CountDocuments.
-func (c *nativeClient) CountDocuments(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) CountDocuments(ctx context.Context, database string, coll string, filter interface{},
 	opts ...*options.CountOptions) (int64, error) {
 	return c.client.Database(database).Collection(coll).CountDocuments(ctx, filter, opts...)
 }
 
 // Transaction implements Client.Transaction.
-func (c *nativeClient) Transaction(ctx context.Context, sf func(sc mongo.SessionContext) error,
+func (c *defaultClient) Transaction(ctx context.Context, sf func(sc mongo.SessionContext) error,
 	tOpts []*options.TransactionOptions, opts ...*options.SessionOptions) error {
 	session, err := c.client.StartSession(opts...)
 	if err != nil {
@@ -248,6 +189,6 @@ func (c *nativeClient) Transaction(ctx context.Context, sf func(sc mongo.Session
 }
 
 // Disconnect implements Client.Disconnect.
-func (c *nativeClient) Disconnect(ctx context.Context) error {
+func (c *defaultClient) Disconnect(ctx context.Context) error {
 	return c.client.Disconnect(ctx)
 }
