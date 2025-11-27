@@ -144,7 +144,9 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 }
 
 // defaultEventToA2AMessage is the default implementation of EventToA2AMessageConverter.
-type defaultEventToA2AMessage struct{}
+type defaultEventToA2AMessage struct {
+	adkCompatibility bool // Enable ADK-compatible metadata keys (e.g., "adk_type" instead of "type")
+}
 
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
 // For non-streaming responses, it returns the full content including tool calls.
@@ -302,8 +304,15 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 
 			// Create DataPart with metadata indicating this is a function call
 			dataPart := protocol.NewDataPart(toolCallData)
+
+			// Use ADK-compatible metadata key if enabled
+			metadataTypeKey := ia2a.DataPartMetadataTypeKey
+			if c.adkCompatibility {
+				metadataTypeKey = ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)
+			}
+
 			dataPart.Metadata = map[string]any{
-				ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionCall,
+				metadataTypeKey: ia2a.DataPartMetadataTypeFunctionCall,
 			}
 			parts = append(parts, dataPart)
 		}
@@ -327,8 +336,15 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 
 			// Create DataPart with metadata indicating this is a function response
 			dataPart := protocol.NewDataPart(toolResponseData)
+
+			// Use ADK-compatible metadata key if enabled
+			metadataTypeKey := ia2a.DataPartMetadataTypeKey
+			if c.adkCompatibility {
+				metadataTypeKey = ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)
+			}
+
 			dataPart.Metadata = map[string]any{
-				ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
+				metadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
 			}
 			parts = append(parts, dataPart)
 		}

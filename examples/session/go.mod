@@ -14,9 +14,9 @@ replace (
 require (
 	github.com/google/uuid v1.6.0
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (
