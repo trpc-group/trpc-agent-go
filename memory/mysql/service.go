@@ -15,7 +15,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -69,33 +68,22 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
-	// Create MySQL client
-	builder := storage.GetClientBuilder()
-	var db storage.Client
-	var err error
-
+	builderOpts := []storage.ClientBuilderOpt{
+		storage.WithClientBuilderDSN(opts.dsn),
+		storage.WithExtraOptions(opts.extraOptions...),
+	}
 	// Priority: dsn > instanceName.
-	if opts.dsn != "" {
-		// Method 1: Use DSN directly (recommended).
-		db, err = builder(
-			storage.WithClientBuilderDSN(opts.dsn),
-			storage.WithExtraOptions(opts.extraOptions...),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create mysql client from dsn failed: %w", err)
-		}
-	} else if opts.instanceName != "" {
-		// Method 2: Use pre-registered MySQL instance.
-		builderOpts, ok := storage.GetMySQLInstance(opts.instanceName)
-		if !ok {
+	if opts.dsn == "" && opts.instanceName != "" {
+		var ok bool
+		if builderOpts, ok = storage.GetMySQLInstance(opts.instanceName); !ok {
 			return nil, fmt.Errorf("mysql instance %s not found", opts.instanceName)
 		}
-		db, err = builder(builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create mysql client from instance name failed: %w", err)
-		}
-	} else {
-		return nil, errors.New("either dsn or instance name must be provided")
+	}
+
+	// Method 1: Use DSN directly (recommended).
+	db, err := storage.GetClientBuilder()(builderOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("create mysql client from dsn failed: %w", err)
 	}
 
 	s := &Service{
