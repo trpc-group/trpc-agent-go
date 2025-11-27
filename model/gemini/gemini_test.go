@@ -2,10 +2,11 @@ package gemini
 
 import (
 	"encoding/json"
-	"github.com/stretchr/testify/assert"
-	"google.golang.org/genai"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )

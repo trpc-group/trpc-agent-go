@@ -13,6 +13,7 @@ package gemini
 import (
 	"strings"
 	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 

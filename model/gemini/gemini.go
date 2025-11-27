@@ -14,10 +14,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"google.golang.org/genai"
 	"strings"
 	"sync"
 	"time"
+
+	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"

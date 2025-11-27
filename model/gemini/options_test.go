@@ -1,9 +1,10 @@
 package gemini
 
 import (
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/genai"
-	"testing"
 )
 
 func TestOptions(t *testing.T) {

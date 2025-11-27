@@ -1,9 +1,10 @@
 package gemini
 
 import (
-	"github.com/stretchr/testify/assert"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
