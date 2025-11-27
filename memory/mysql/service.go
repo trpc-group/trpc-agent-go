@@ -80,7 +80,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		}
 	}
 
-	// Method 1: Use DSN directly (recommended).
 	db, err := storage.GetClientBuilder()(builderOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create mysql client from dsn failed: %w", err)
