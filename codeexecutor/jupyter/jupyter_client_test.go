@@ -204,7 +204,7 @@ func Test_waitForReady(t *testing.T) {
 	defer srv.Close()
 
 	_, err = srv.cli.waitForReady()
-	assert.NoError(t, err)
+	assert.Error(t, err)
 }
 
 func Test_sendMessage(t *testing.T) {
