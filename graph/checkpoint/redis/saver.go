@@ -416,6 +416,7 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 		writeJSON, _ := json.Marshal(writeData)
 		pipe.HSet(ctx, writeKey, field, writeJSON)
 	}
+	pipe.Expire(ctx, writeKey, s.opts.ttl)
 
 	_, err := pipe.Exec(ctx)
 	return err
