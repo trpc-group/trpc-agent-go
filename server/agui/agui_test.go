@@ -286,8 +286,4 @@ func (fakeSessionService) GetSessionSummaryText(context.Context, *session.Sessio
 	return "", false
 }
 
-func (fakeSessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
-	return nil
-}
-
 func (fakeSessionService) Close() error { return nil }

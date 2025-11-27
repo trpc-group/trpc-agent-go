@@ -266,10 +266,6 @@ func (serviceWithoutTrack) GetSessionSummaryText(ctx context.Context, sess *sess
 	return "", false
 }
 
-func (serviceWithoutTrack) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
-	return nil
-}
-
 func (serviceWithoutTrack) Close() error {
 	return nil
 }
