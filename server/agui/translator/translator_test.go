@@ -13,11 +13,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -650,7 +647,7 @@ func TestToolNilResponse(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestGraphToolEventsUsesResponseID(t *testing.T) {
+func TestGraphToolEventsSkippedWhenResponseIDPresent(t *testing.T) {
 	tr := New("thread", "run")
 
 	meta := graph.ToolExecutionMetadata{
@@ -661,9 +658,9 @@ func TestGraphToolEventsUsesResponseID(t *testing.T) {
 		Input:      `{"exp_group_id":1}`,
 	}
 	raw, err := json.Marshal(meta)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
-	evt := &event.Event{
+	evt := &agentevent.Event{
 		ID: "evt-tool",
 		StateDelta: map[string][]byte{
 			graph.MetadataKeyTool: raw,
@@ -671,11 +668,187 @@ func TestGraphToolEventsUsesResponseID(t *testing.T) {
 	}
 
 	translated, err := tr.Translate(evt)
-	require.NoError(t, err)
-	require.Len(t, translated, 3)
+	assert.NoError(t, err)
+	assert.Len(t, translated, 0)
+}
 
-	start, ok := translated[0].(*events.ToolCallStartEvent)
-	require.True(t, ok)
-	require.NotNil(t, start.ParentMessageID)
-	require.Equal(t, meta.ResponseID, *start.ParentMessageID)
+func TestTranslateSubagentGraph(t *testing.T) {
+	translator := New("thread", "run")
+
+	const (
+		chatMessageID       = "chat-msg"
+		transferToolCallID  = "call-transfer"
+		transferResultID    = "transfer-result"
+		graphModelMessageID = "graph-model"
+		graphModelText      = "我需要先计算乘法部分，然后再进行加法运算。让我分步计算："
+		toolResponseID      = "calc-result"
+	)
+
+	graphModelMeta, err := json.Marshal(graph.ModelExecutionMetadata{Output: graphModelText})
+	assert.NoError(t, err)
+	toolMeta := graph.ToolExecutionMetadata{
+		ToolName:   "calculator",
+		ToolID:     "call-00-hyBMVOPvZ",
+		ResponseID: "response-123",
+		Phase:      graph.ToolExecutionPhaseStart,
+		Input:      `{"operation":"multiply","a":456,"b":456}`,
+	}
+	rawToolMeta, err := json.Marshal(toolMeta)
+	assert.NoError(t, err)
+
+	chatEvent := &agentevent.Event{
+		Response: &model.Response{
+			ID:     chatMessageID,
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "我来帮你计算这个数学表达式。让我调用数学图表代理来处理这个计算。",
+					ToolCalls: []model.ToolCall{{
+						ID: transferToolCallID,
+						Function: model.FunctionDefinitionParam{
+							Name:      "transfer_to_agent",
+							Arguments: []byte(`{"agent_name":"math-graph","message":"计算123+456*456"}`),
+						},
+					}},
+				},
+			}},
+			Done: true,
+		},
+	}
+	transferResult := &agentevent.Event{
+		ID: transferResultID,
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ToolID:  transferToolCallID,
+					Content: `{"success":true,"message":"Transfer initiated to agent 'math-graph'"}`,
+				},
+			}},
+		},
+	}
+	graphModelEvent := &agentevent.Event{
+		ID: graphModelMessageID,
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyModel: graphModelMeta,
+		},
+	}
+	toolMetaEvent := &agentevent.Event{
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyTool: rawToolMeta,
+		},
+	}
+	calcResult := &agentevent.Event{
+		ID: toolResponseID,
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ToolID:  toolMeta.ToolID,
+					Content: `{"operation":"multiply","a":456,"b":456,"result":207936}`,
+				},
+			}},
+		},
+	}
+	runCompletion := &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+
+	events := []*agentevent.Event{
+		chatEvent,
+		transferResult,
+		graphModelEvent,
+		toolMetaEvent,
+		calcResult,
+		runCompletion,
+	}
+
+	var translated []aguievents.Event
+	for _, evt := range events {
+		evs, err := translator.Translate(evt)
+		assert.NoError(t, err)
+		translated = append(translated, evs...)
+	}
+	assert.Len(t, translated, 15)
+
+	start, ok := translated[0].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, chatMessageID, start.MessageID)
+
+	content, ok := translated[1].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, chatEvent.Choices[0].Message.Content, content.Delta)
+
+	end, ok := translated[2].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, chatMessageID, end.MessageID)
+
+	callStart, ok := translated[3].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.NotEmpty(t, chatEvent.Choices[0].Message.ToolCalls)
+	expectedToolCall := chatEvent.Choices[0].Message.ToolCalls[0]
+	assert.Equal(t, expectedToolCall.ID, callStart.ToolCallID)
+	assert.Equal(t, expectedToolCall.Function.Name, callStart.ToolCallName)
+	if assert.NotNil(t, callStart.ParentMessageID) {
+		assert.Equal(t, chatMessageID, *callStart.ParentMessageID)
+	}
+
+	callArgs, ok := translated[4].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, expectedToolCall.ID, callArgs.ToolCallID)
+	assert.Equal(t, string(expectedToolCall.Function.Arguments), callArgs.Delta)
+
+	callEnd, ok := translated[5].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, expectedToolCall.ID, callEnd.ToolCallID)
+
+	transfer, ok := translated[6].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, transferResult.ID, transfer.MessageID)
+	assert.Equal(t, expectedToolCall.ID, transfer.ToolCallID)
+	assert.Equal(t, transferResult.Choices[0].Message.Content, transfer.Content)
+
+	modelStart, ok := translated[7].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, graphModelEvent.ID, modelStart.MessageID)
+
+	modelContent, ok := translated[8].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, graphModelEvent.ID, modelContent.MessageID)
+	assert.Equal(t, graphModelText, modelContent.Delta)
+
+	modelEnd, ok := translated[9].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, graphModelEvent.ID, modelEnd.MessageID)
+
+	callStart, ok = translated[10].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, toolMeta.ToolID, callStart.ToolCallID)
+	assert.Equal(t, toolMeta.ToolName, callStart.ToolCallName)
+	assert.NotNil(t, callStart.ParentMessageID)
+	assert.Equal(t, toolMeta.ResponseID, *callStart.ParentMessageID)
+
+	callArgs, ok = translated[11].(*aguievents.ToolCallArgsEvent)
+	assert.True(t, ok)
+	assert.Equal(t, toolMeta.ToolID, callArgs.ToolCallID)
+	assert.Equal(t, toolMeta.Input, callArgs.Delta)
+
+	callEnd, ok = translated[12].(*aguievents.ToolCallEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, toolMeta.ToolID, callEnd.ToolCallID)
+
+	transfer, ok = translated[13].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, calcResult.ID, transfer.MessageID)
+	assert.Equal(t, toolMeta.ToolID, transfer.ToolCallID)
+	assert.Equal(t, calcResult.Choices[0].Message.Content, transfer.Content)
+
+	runFinished, ok := translated[14].(*aguievents.RunFinishedEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "thread", runFinished.ThreadID())
+	assert.Equal(t, "run", runFinished.RunID())
 }
