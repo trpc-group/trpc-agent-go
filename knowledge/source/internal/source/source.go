@@ -17,6 +17,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
 
 // ReaderConfig holds configuration for creating readers.
