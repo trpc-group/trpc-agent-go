@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/memory/mysql
 
-go 1.21.0
+go 1.24
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
