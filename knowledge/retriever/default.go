@@ -122,7 +122,13 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, er
 
 	// Step 5: Rerank results (if reranker is available).
 	if dr.reranker != nil {
-		rerankerResults, err = dr.reranker.Rerank(ctx, rerankerResults)
+		rerankerResults, err = dr.reranker.Rerank(ctx, &reranker.Query{
+			Text:       q.Text,
+			FinalQuery: finalQuery,
+			History:    q.History,
+			UserID:     q.UserID,
+			SessionID:  q.SessionID,
+		}, rerankerResults)
 		if err != nil {
 			return nil, err
 		}
