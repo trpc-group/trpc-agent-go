@@ -32,6 +32,29 @@ func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
 	return invocation, ok
 }
 
+// GetStateValueFromContext retrieves a typed value from the invocation state
+// stored in the context.
+//
+// Returns the typed value and true if the invocation exists, the key exists,
+// and the type matches, or the zero value and false otherwise.
+//
+// Example:
+//
+//	if startTime, ok := GetStateValueFromContext[time.Time](ctx, "agent:start_time"); ok {
+//	    duration := time.Since(startTime)
+//	}
+//	if requestID, ok := GetStateValueFromContext[string](ctx, "middleware:request_id"); ok {
+//	    log.Printf("Request ID: %s", requestID)
+//	}
+func GetStateValueFromContext[T any](ctx context.Context, key string) (T, bool) {
+	var zero T
+	inv, ok := InvocationFromContext(ctx)
+	if !ok {
+		return zero, false
+	}
+	return GetStateValue[T](inv, key)
+}
+
 // CheckContextCancelled check context cancelled
 func CheckContextCancelled(ctx context.Context) error {
 	select {
