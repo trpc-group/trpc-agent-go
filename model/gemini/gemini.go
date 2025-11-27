@@ -52,10 +52,10 @@ type ChatStreamCompleteCallbackFunc func(
 	ctx context.Context,
 	chatRequest []*genai.Content,
 	generateConfig *genai.GenerateContentConfig,
-	chatResponse *genai.GenerateContentResponse,
+	chatResponse *model.Response,
 )
 
-// Model implements the model.Model interface for OpenAI API.
+// Model implements the model.Model interface for Gemini API.
 type Model struct {
 	client                     *genai.Client
 	name                       string
@@ -79,7 +79,7 @@ type Model struct {
 	maxInputTokensRatio    float64
 }
 
-// New creates a new OpenAI-like model.
+// New creates a new Gemini-like model.
 func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 	o := &options{
 		channelBufferSize: defaultChannelBufferSize,
@@ -230,22 +230,32 @@ func (m *Model) handleStreamingResponse(
 ) {
 	chatCompletion := m.client.Models.GenerateContentStream(
 		ctx, m.name, chatRequest, generateConfig)
+	acc := &Accumulator{}
 	for chunk := range chatCompletion {
 		response := m.buildResponse(chunk)
-		if response.IsPartial {
-			if m.chatChunkCallback != nil {
-				m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
-			}
-		} else {
-			if m.chatStreamCompleteCallback != nil {
-				m.chatStreamCompleteCallback(ctx, chatRequest, generateConfig, chunk)
-			}
+		acc.Accumulate(response)
+		response.Object = model.ObjectTypeChatCompletionChunk
+		response.IsPartial = true
+		if m.chatChunkCallback != nil {
+			m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
+		}
+		if m.chatChunkCallback != nil {
+			m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
 		}
 		select {
 		case responseChan <- response:
 		case <-ctx.Done():
 			return
 		}
+	}
+	finalResponse := acc.BuildResponse()
+	if m.chatStreamCompleteCallback != nil {
+		m.chatStreamCompleteCallback(ctx, chatRequest, generateConfig, finalResponse)
+	}
+	select {
+	case responseChan <- finalResponse:
+	case <-ctx.Done():
+		return
 	}
 }
 
@@ -292,6 +302,8 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 	}, finishReason
 }
 
+// buildResponse builds a partial streaming response for a chunk.
+// Returns nil if the chunk should be skipped.
 func (m *Model) buildResponse(chatCompletion *genai.GenerateContentResponse) *model.Response {
 	if chatCompletion == nil {
 		return &model.Response{}
@@ -300,7 +312,7 @@ func (m *Model) buildResponse(chatCompletion *genai.GenerateContentResponse) *mo
 		ID:        chatCompletion.ResponseID,
 		Created:   chatCompletion.CreateTime.Unix(),
 		Model:     chatCompletion.ModelVersion,
-		Timestamp: time.Now(),
+		Timestamp: chatCompletion.CreateTime,
 	}
 	message, finishReason := m.convertContentBlock(chatCompletion.Candidates)
 	response.Choices = []model.Choice{
@@ -313,9 +325,6 @@ func (m *Model) buildResponse(chatCompletion *genai.GenerateContentResponse) *mo
 	// Set finish reason.
 	if finishReason != "" {
 		response.Choices[0].FinishReason = &finishReason
-		response.Done = true
-	} else {
-		response.IsPartial = true
 	}
 	// Convert usage information.
 	response.Usage = m.completionUsageToModelUsage(chatCompletion.UsageMetadata)
