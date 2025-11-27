@@ -810,7 +810,7 @@ func (m *mockQueryEnhancer) EnhanceQuery(ctx context.Context, req *query.Request
 
 type mockReranker struct{}
 
-func (m *mockReranker) Rerank(ctx context.Context, results []*reranker.Result) ([]*reranker.Result, error) {
+func (m *mockReranker) Rerank(ctx context.Context, query *reranker.Query, results []*reranker.Result) ([]*reranker.Result, error) {
 	return results, nil
 }
 
