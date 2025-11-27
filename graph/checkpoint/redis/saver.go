@@ -86,31 +86,24 @@ func NewSaver(options ...Option) (*Saver, error) {
 		option(&opts)
 	}
 
-	var redisClient redis.UniversalClient
-	var err error
-	builder := storage.GetClientBuilder()
+	builderOpts := []storage.ClientBuilderOpt{
+		storage.WithClientBuilderURL(opts.url),
+		storage.WithExtraOptions(opts.extraOptions...),
+	}
 
 	// if instance name set, and url not set, use instance name to create redis client
 	if opts.url == "" && opts.instanceName != "" {
-		builderOpts, ok := storage.GetRedisInstance(opts.instanceName)
+		var ok bool
+		builderOpts, ok = storage.GetRedisInstance(opts.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
 		}
-		redisClient, err = builder(builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
-		}
-		s := &Saver{
-			opts:   opts,
-			client: redisClient,
-		}
-		return s, nil
 	}
 
-	redisClient, err = builder(
-		storage.WithClientBuilderURL(opts.url),
-		storage.WithExtraOptions(opts.extraOptions...),
-	)
+	var redisClient redis.UniversalClient
+	var err error
+	builder := storage.GetClientBuilder()
+	redisClient, err = builder(builderOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
