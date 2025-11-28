@@ -139,6 +139,35 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
+// GetRuntimeStateValue retrieves a typed value from the runtime state.
+//
+// Returns the typed value and true if the key exists and the type matches,
+// or the zero value and false otherwise.
+//
+// Example:
+//
+//	if userID, ok := GetRuntimeStateValue[string](&inv.RunOptions, "user_id"); ok {
+//	    log.Printf("User ID: %s", userID)
+//	}
+//	if roomID, ok := GetRuntimeStateValue[int](&inv.RunOptions, "room_id"); ok {
+//	    log.Printf("Room ID: %d", roomID)
+//	}
+func GetRuntimeStateValue[T any](opts *RunOptions, key string) (T, bool) {
+	var zero T
+	if opts == nil || opts.RuntimeState == nil {
+		return zero, false
+	}
+	val, ok := opts.RuntimeState[key]
+	if !ok {
+		return zero, false
+	}
+	typedVal, ok := val.(T)
+	if !ok {
+		return zero, false
+	}
+	return typedVal, true
+}
+
 // WithKnowledgeFilter sets the metadata filter for the RunOptions.
 func WithKnowledgeFilter(filter map[string]any) RunOption {
 	return func(opts *RunOptions) {
@@ -556,6 +585,35 @@ func (inv *Invocation) GetState(key string) (any, bool) {
 	}
 	value, ok := inv.state[key]
 	return value, ok
+}
+
+// GetStateValue retrieves a typed value from the invocation state.
+//
+// Returns the typed value and true if the key exists and the type matches,
+// or the zero value and false otherwise.
+//
+// Example:
+//
+//	if startTime, ok := GetStateValue[time.Time](inv, "agent:start_time"); ok {
+//	    duration := time.Since(startTime)
+//	}
+//	if requestID, ok := GetStateValue[string](inv, "middleware:request_id"); ok {
+//	    log.Printf("Request ID: %s", requestID)
+//	}
+func GetStateValue[T any](inv *Invocation, key string) (T, bool) {
+	var zero T
+	if inv == nil {
+		return zero, false
+	}
+	val, ok := inv.GetState(key)
+	if !ok {
+		return zero, false
+	}
+	typedVal, ok := val.(T)
+	if !ok {
+		return zero, false
+	}
+	return typedVal, true
 }
 
 // GetOrCreateTimingInfo gets or creates timing info for this invocation.

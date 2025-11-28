@@ -32,9 +32,7 @@ var (
 
 // init registers the markdown reader with the global registry.
 func init() {
-	reader.RegisterReader(supportedExtensions, func() reader.Reader {
-		return New()
-	})
+	reader.RegisterReader(supportedExtensions, New)
 }
 
 // Reader reads markdown documents and applies chunking strategies.
@@ -43,36 +41,38 @@ type Reader struct {
 	chunkingStrategy chunking.Strategy
 }
 
-// Option represents a functional option for configuring the markdown reader.
-type Option func(*Reader)
-
-// WithChunking enables or disables document chunking.
-func WithChunking(chunk bool) Option {
-	return func(r *Reader) {
-		r.chunk = chunk
-	}
-}
-
-// WithChunkingStrategy sets the chunking strategy to use.
-func WithChunkingStrategy(strategy chunking.Strategy) Option {
-	return func(r *Reader) {
-		r.chunkingStrategy = strategy
-	}
-}
-
 // New creates a new markdown reader with the given options.
-func New(opts ...Option) *Reader {
-	r := &Reader{
-		chunk:            true,
-		chunkingStrategy: chunking.NewMarkdownChunking(),
+// Markdown reader uses MarkdownChunking by default.
+func New(opts ...reader.Option) reader.Reader {
+	// Build config from options
+	config := &reader.Config{
+		Chunk: true,
 	}
-
-	// Apply options.
 	for _, opt := range opts {
-		opt(r)
+		opt(config)
 	}
 
-	return r
+	// Build chunking strategy using the default builder for markdown
+	strategy := reader.BuildChunkingStrategy(config, buildDefaultChunkingStrategy)
+
+	// Create reader from config
+	return &Reader{
+		chunk:            config.Chunk,
+		chunkingStrategy: strategy,
+	}
+}
+
+// buildDefaultChunkingStrategy builds the default chunking strategy for markdown reader.
+// Markdown uses MarkdownChunking with configurable chunk size and overlap.
+func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
+	var opts []chunking.MarkdownOption
+	if chunkSize > 0 {
+		opts = append(opts, chunking.WithMarkdownChunkSize(chunkSize))
+	}
+	if overlap > 0 {
+		opts = append(opts, chunking.WithMarkdownOverlap(overlap))
+	}
+	return chunking.NewMarkdownChunking(opts...)
 }
 
 // ReadFromReader reads markdown content from an io.Reader and returns a list of documents.

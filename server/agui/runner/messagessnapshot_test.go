@@ -246,8 +246,51 @@ func TestMessagesSnapshotReduceError(t *testing.T) {
 	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	require.NoError(t, err)
 	collected := collectAGUIEvents(t, stream)
-	require.Len(t, collected, 2)
-	errEvt, ok := collected[1].(*aguievents.RunErrorEvent)
+	require.Len(t, collected, 3)
+	if _, ok := collected[0].(*aguievents.RunStartedEvent); !ok {
+		t.Fatalf("expected RUN_STARTED")
+	}
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 1)
+	errEvt, ok := collected[2].(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, errEvt.Message, "reduce track events")
+}
+
+func TestMessagesSnapshotReduceErrorEmitsSnapshotThenError(t *testing.T) {
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "!")),
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	if _, ok := collected[0].(*aguievents.RunStartedEvent); !ok {
+		t.Fatalf("expected RUN_STARTED")
+	}
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 1)
+	if snapshot.Messages[0].Content == nil || *snapshot.Messages[0].Content != "hello" {
+		t.Fatalf("unexpected snapshot content %v", snapshot.Messages[0].Content)
+	}
+	errEvt, ok := collected[2].(*aguievents.RunErrorEvent)
 	require.True(t, ok)
 	assert.Contains(t, errEvt.Message, "reduce track events")
 }

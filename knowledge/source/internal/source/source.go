@@ -16,18 +16,86 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 
-	// Import readers to trigger their init() functions for registration.
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/docx"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
 
-// GetReaders returns all available readers from the registry.
-func GetReaders() map[string]reader.Reader {
-	return reader.GetAllReaders()
+// ReaderConfig holds configuration for creating readers.
+type ReaderConfig struct {
+	chunkSize              int
+	chunkOverlap           int
+	customChunkingStrategy chunking.Strategy
+	ocrExtractor           ocr.Extractor
+}
+
+// ReaderOption is a functional option for configuring readers.
+type ReaderOption func(*ReaderConfig)
+
+// WithChunkSize sets the chunk size for readers.
+func WithChunkSize(size int) ReaderOption {
+	return func(c *ReaderConfig) {
+		c.chunkSize = size
+	}
+}
+
+// WithChunkOverlap sets the chunk overlap for readers.
+func WithChunkOverlap(overlap int) ReaderOption {
+	return func(c *ReaderConfig) {
+		c.chunkOverlap = overlap
+	}
+}
+
+// WithCustomChunkingStrategy sets a custom chunking strategy for readers.
+func WithCustomChunkingStrategy(strategy chunking.Strategy) ReaderOption {
+	return func(c *ReaderConfig) {
+		c.customChunkingStrategy = strategy
+	}
+}
+
+// WithOCRExtractor sets the OCR extractor for PDF reader.
+func WithOCRExtractor(extractor ocr.Extractor) ReaderOption {
+	return func(c *ReaderConfig) {
+		c.ocrExtractor = extractor
+	}
+}
+
+// GetReaders returns all available readers configured with the given options.
+func GetReaders(opts ...ReaderOption) map[string]reader.Reader {
+	config := &ReaderConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	// Build reader options
+	readerOpts := buildReaderOptions(config)
+
+	// Get readers with options
+	return reader.GetAllReaders(readerOpts...)
+}
+
+// buildReaderOptions constructs reader options from config.
+func buildReaderOptions(config *ReaderConfig) []reader.Option {
+	var opts []reader.Option
+
+	// Pass all configurations to readers, let reader layer handle priority
+	if config.chunkSize > 0 {
+		opts = append(opts, reader.WithChunkSize(config.chunkSize))
+	}
+	if config.chunkOverlap > 0 {
+		opts = append(opts, reader.WithChunkOverlap(config.chunkOverlap))
+	}
+	if config.customChunkingStrategy != nil {
+		opts = append(opts, reader.WithCustomChunkingStrategy(config.customChunkingStrategy))
+	}
+	if config.ocrExtractor != nil {
+		opts = append(opts, reader.WithOCRExtractor(config.ocrExtractor))
+	}
+
+	return opts
 }
 
 // GetFileType determines the file type based on the file extension.
@@ -94,45 +162,8 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 	}
 }
 
-// GetReadersWithChunkConfig returns readers configured with a fixed-size
-// chunking strategy customized by chunkSize and overlap. If both parameters
-// are zero or negative, it falls back to the default readers configuration.
+// GetReadersWithChunkConfig is deprecated. Use GetReaders with functional options instead.
+// Deprecated: Use GetReaders(WithChunkSize(size), WithChunkOverlap(overlap)) instead.
 func GetReadersWithChunkConfig(chunkSize, overlap int) map[string]reader.Reader {
-	// If no custom configuration is provided, return the defaults.
-	if chunkSize <= 0 && overlap <= 0 {
-		return GetReaders()
-	}
-
-	// Build chunking options.
-	var fixedOpts []chunking.Option
-	var mdOpts []chunking.MarkdownOption
-	if chunkSize > 0 {
-		fixedOpts = append(fixedOpts, chunking.WithChunkSize(chunkSize))
-		mdOpts = append(mdOpts, chunking.WithMarkdownChunkSize(chunkSize))
-	}
-	if overlap > 0 {
-		fixedOpts = append(fixedOpts, chunking.WithOverlap(overlap))
-		mdOpts = append(mdOpts, chunking.WithMarkdownOverlap(overlap))
-	}
-
-	fixedChunk := chunking.NewFixedSizeChunking(fixedOpts...)
-	markdownChunk := chunking.NewMarkdownChunking(mdOpts...)
-
-	// Create readers with custom chunking configuration.
-	// We need to use the concrete types to access their WithChunkingStrategy options.
-	readers := make(map[string]reader.Reader)
-	readers["text"] = text.New(text.WithChunkingStrategy(fixedChunk))
-	readers["markdown"] = markdown.New(markdown.WithChunkingStrategy(markdownChunk))
-	readers["json"] = json.New(json.WithChunkingStrategy(fixedChunk))
-	readers["csv"] = csv.New(csv.WithChunkingStrategy(fixedChunk))
-	readers["docx"] = docx.New(docx.WithChunkingStrategy(fixedChunk))
-
-	// Check if PDF reader is registered and add it with chunking.
-	if pdfReader, exists := reader.GetReader(".pdf"); exists {
-		// PDF reader is available, but we can't configure its chunking
-		// without importing the package. Just use the default instance.
-		readers["pdf"] = pdfReader
-	}
-
-	return readers
+	return GetReaders(WithChunkSize(chunkSize), WithChunkOverlap(overlap))
 }

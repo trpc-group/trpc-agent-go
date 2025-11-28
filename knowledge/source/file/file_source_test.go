@@ -18,8 +18,38 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+
+	// Import readers to register them
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/docx"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
+
+type mockChunkingStrategy struct {
+	name string
+}
+
+func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
+	return []*document.Document{doc}, nil
+}
+
+type mockOCRExtractor struct{}
+
+func (m *mockOCRExtractor) ExtractText(ctx context.Context, imageData []byte, opts ...ocr.Option) (string, error) {
+	return "mock-text", nil
+}
+
+func (m *mockOCRExtractor) ExtractTextFromReader(ctx context.Context, reader io.Reader, opts ...ocr.Option) (string, error) {
+	return "mock-text", nil
+}
+
+func (m *mockOCRExtractor) Close() error {
+	return nil
+}
 
 // TestReadDocuments verifies that File Source correctly reads documents with
 // and without custom chunk configuration.
@@ -339,5 +369,57 @@ func TestReadDocumentsMultipleFiles(t *testing.T) {
 
 	if len(docs) < 2 {
 		t.Errorf("expected at least 2 documents, got %d", len(docs))
+	}
+}
+
+// TestWithCustomChunkingStrategy verifies the WithCustomChunkingStrategy option.
+func TestWithCustomChunkingStrategy(t *testing.T) {
+	strategy := &mockChunkingStrategy{name: "test-strategy"}
+	src := New([]string{"dummy.txt"}, WithCustomChunkingStrategy(strategy))
+
+	if src.customChunkingStrategy != strategy {
+		t.Error("WithCustomChunkingStrategy did not set custom chunking strategy")
+	}
+}
+
+// TestWithOCRExtractor verifies the WithOCRExtractor option.
+func TestWithOCRExtractor(t *testing.T) {
+	extractor := &mockOCRExtractor{}
+	src := New([]string{"dummy.txt"}, WithOCRExtractor(extractor))
+
+	if src.ocrExtractor == nil {
+		t.Error("WithOCRExtractor did not set OCR extractor")
+	}
+}
+
+// TestProcessFileNotRegular verifies error handling when path is not a regular file.
+func TestProcessFileNotRegular(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := New([]string{tmpDir})
+
+	_, err := src.processFile(tmpDir)
+	if err == nil {
+		t.Error("expected error when processing directory as file")
+	}
+	if !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("expected 'not a regular file' error, got: %v", err)
+	}
+}
+
+// TestProcessFileAbsPathError verifies error handling when getting absolute path fails.
+func TestProcessFileAbsPathError(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("content"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath})
+	docs, err := src.processFile(filePath)
+	if err != nil {
+		t.Fatalf("processFile failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
 	}
 }

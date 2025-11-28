@@ -79,12 +79,20 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 	messagesSnapshotEvent, err := r.getMessagesSnapshotEvent(ctx, input.key)
 	if err != nil {
 		log.Errorf("agui messages snapshot: threadID: %s, runID: %s, load history: %v", threadID, runID, err)
-		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("load history: %v", err),
-			aguievents.WithRunID(runID)), input)
-		return
+		if messagesSnapshotEvent == nil {
+			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("load history: %v", err),
+				aguievents.WithRunID(runID)), input)
+			return
+		}
 	}
+	// In order to fetch the history messages as much as possible, still emit the messages even if there is an error.
 	// Emit a MESSAGES_SNAPSHOT event to send the snapshot payload.
 	if !r.emitEvent(ctx, events, messagesSnapshotEvent, input) {
+		return
+	}
+	if err != nil {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("load history: %v", err),
+			aguievents.WithRunID(runID)), input)
 		return
 	}
 	// Emit a RUN_FINISHED event to signal downstream consumers there is no more data.
@@ -94,6 +102,7 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 }
 
 // getMessagesSnapshotEvent loads AG-UI track events and converts them to an AG-UI MessagesSnapshotEvent.
+// In order to fetch the history messages as much as possible, still return the messages even if there is an error.
 func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	sessionKey session.Key) (*aguievents.MessagesSnapshotEvent, error) {
 	trackEvents, err := r.tracker.GetEvents(ctx, sessionKey)
@@ -102,7 +111,7 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	}
 	messages, err := reduce.Reduce(r.appName, sessionKey.UserID, trackEvents.Events)
 	if err != nil {
-		return nil, fmt.Errorf("reduce track events: %w", err)
+		err = fmt.Errorf("reduce track events: %w", err)
 	}
-	return aguievents.NewMessagesSnapshotEvent(messages), nil
+	return aguievents.NewMessagesSnapshotEvent(messages), err
 }
