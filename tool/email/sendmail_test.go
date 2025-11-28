@@ -8,9 +8,7 @@ import (
 )
 
 func Test_emailToolSet_sendMail(t *testing.T) {
-	toolSet, err := NewToolSet(
-		WithSendEmailEnabled(true),
-	)
+	toolSet, err := NewToolSet()
 	if err != nil {
 		t.Errorf("NewToolSet failed, err: %v", err)
 	}
@@ -82,9 +80,7 @@ func Test_emailToolSet_sendMail(t *testing.T) {
 }
 
 func Test_emailToolSet_sendMail2(t *testing.T) {
-	toolSet, err := NewToolSet(
-		WithSendEmailEnabled(true),
-	)
+	toolSet, err := NewToolSet()
 	if err != nil {
 		t.Errorf("NewToolSet failed, err: %v", err)
 	}

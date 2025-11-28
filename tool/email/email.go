@@ -57,13 +57,6 @@ func MailboxTypeToString(mailboxType MailboxType) string {
 // Option is a functional option for configuring the file tool set.
 type Option func(*emailToolSet)
 
-// WithSendEmailEnabled enables or disables the send email functionality, default is true.
-func WithSendEmailEnabled(enabled bool) Option {
-	return func(f *emailToolSet) {
-		f.sendEmailEnabled = enabled
-	}
-}
-
 // emailToolSet implements the ToolSet interface for file operations.
 type emailToolSet struct {
 	sendEmailEnabled bool

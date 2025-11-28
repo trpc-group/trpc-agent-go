@@ -20,7 +20,6 @@ import (
 )
 
 var (
-	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
 )
 
@@ -30,7 +29,6 @@ func main() {
 
 	fmt.Printf("🚀 Send Email  Chat Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: send_email\n")
 	fmt.Println(strings.Repeat("=", 50))
@@ -38,7 +36,6 @@ func main() {
 	// Create and run the chat.
 	chat := &emailChat{
 		modelName: *modelName,
-		streaming: *streaming,
 	}
 
 	if err := chat.run(); err != nil {
@@ -51,6 +48,7 @@ type emailChat struct {
 	runner    runner.Runner
 	userID    string
 	sessionID string
+	// current not support streaming
 	streaming bool
 }
 
