@@ -12,10 +12,10 @@ package llm
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
 var (
-	defaultNumSamples  = 1    // defaultNumSamples sets the default judge sample count.
-	defaultMaxTokens   = 2000 // defaultMaxTokens sets the default max tokens for judge generation.
-	defaultTemperature = 0.5  // defaultTemperature sets the default temperature for judge generation.
-	defaultStream      = true // defaultStream sets the default streaming behavior for judge generation.
+	defaultNumSamples  = 1     // defaultNumSamples sets the default judge sample count.
+	defaultMaxTokens   = 2000  // defaultMaxTokens sets the default max tokens for judge generation.
+	defaultTemperature = 0.8   // defaultTemperature sets the default temperature for judge generation.
+	defaultStream      = false // defaultStream sets the default streaming behavior for judge generation.
 )
 
 // options captures judge model configuration overrides.
