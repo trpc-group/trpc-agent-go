@@ -80,8 +80,6 @@ const (
 	sqlDeleteDocument = `DELETE FROM %s WHERE %s = $1`
 
 	sqlTruncateTable = `TRUNCATE TABLE %s`
-
-	sqlDocumentExists = `SELECT 1 FROM %s WHERE %s = $1`
 )
 
 // VectorStore is the vector store for pgvector.
@@ -309,15 +307,6 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 	if doc.ID == "" {
 		return errDocumentIDRequired
-	}
-
-	// Check if document exists.
-	exists, err := vs.documentExists(ctx, doc.ID)
-	if err != nil {
-		return fmt.Errorf("pgvector check document existence: %w", err)
-	}
-	if !exists {
-		return fmt.Errorf("pgvector document not found: %s", doc.ID)
 	}
 
 	// Build update using updateBuilder.
@@ -739,33 +728,6 @@ func (vs *VectorStore) Close() error {
 		return nil
 	}
 	return vs.client.Close()
-}
-
-// Helper functions.
-func (vs *VectorStore) documentExists(ctx context.Context, id string) (bool, error) {
-	querySQL := fmt.Sprintf(sqlDocumentExists, vs.option.table, vs.option.idFieldName)
-
-	var exists int
-	var found bool
-
-	err := vs.client.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			found = true
-			if err := rows.Scan(&exists); err != nil {
-				return err
-			}
-		}
-		return nil
-	}, querySQL, id)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return found && exists == 1, nil
 }
 
 func (vs *VectorStore) buildQueryFilter(qb queryFilterBuilder, cond *vectorstore.SearchFilter) error {
