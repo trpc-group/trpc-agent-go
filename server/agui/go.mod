@@ -4,6 +4,8 @@ go 1.24.4
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
+replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => ../../../ag-ui/sdks/community/go
+
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251023014556-5eaa5fba9ad5
 	github.com/google/uuid v1.6.0
