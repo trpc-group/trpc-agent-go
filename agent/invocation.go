@@ -139,6 +139,35 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
+// GetRuntimeStateValue retrieves a typed value from the runtime state.
+//
+// Returns the typed value and true if the key exists and the type matches,
+// or the zero value and false otherwise.
+//
+// Example:
+//
+//	if userID, ok := GetRuntimeStateValue[string](&inv.RunOptions, "user_id"); ok {
+//	    log.Printf("User ID: %s", userID)
+//	}
+//	if roomID, ok := GetRuntimeStateValue[int](&inv.RunOptions, "room_id"); ok {
+//	    log.Printf("Room ID: %d", roomID)
+//	}
+func GetRuntimeStateValue[T any](opts *RunOptions, key string) (T, bool) {
+	var zero T
+	if opts == nil || opts.RuntimeState == nil {
+		return zero, false
+	}
+	val, ok := opts.RuntimeState[key]
+	if !ok {
+		return zero, false
+	}
+	typedVal, ok := val.(T)
+	if !ok {
+		return zero, false
+	}
+	return typedVal, true
+}
+
 // WithKnowledgeFilter sets the metadata filter for the RunOptions.
 func WithKnowledgeFilter(filter map[string]any) RunOption {
 	return func(opts *RunOptions) {
