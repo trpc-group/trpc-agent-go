@@ -44,21 +44,13 @@ import (
 )
 
 func main() {
-    ctx := context.Background()
-
     // 1. 创建 LLM 模型
-    llm, err := openai.NewModel(
-        openai.WithAPIKey("your-api-key"),
-        openai.WithModelName("gpt-4"),
-    )
-    if err != nil {
-        panic(err)
-    }
+    llm := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
     // 2. （可选）创建摘要器 - 自动压缩长对话历史
     summarizer := summary.NewSummarizer(
         llm, // 使用相同的 LLM 模型生成摘要
-        summary.WithChecksAny(                         // 任一条件满足即触发摘要
+        summary.WithChecksAny( // 任一条件满足即触发摘要
             summary.CheckEventThreshold(20),           // 20 个事件后触发
             summary.CheckTokenThreshold(4000),         // 4000 个 token 后触发
             summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
@@ -68,16 +60,16 @@ func main() {
 
     // 3. 创建 Session Service（可选，不配置则使用默认内存存储）
     sessionService := inmemory.NewSessionService(
-        inmemory.WithSummarizer(summarizer),     // 可选：注入摘要器
-        inmemory.WithAsyncSummaryNum(2),         // 可选：2 个异步 worker
-        inmemory.WithSummaryQueueSize(100),      // 可选：队列大小 100
+        inmemory.WithSummarizer(summarizer), // 可选：注入摘要器
+        inmemory.WithAsyncSummaryNum(2),     // 可选：2 个异步 worker
+        inmemory.WithSummaryQueueSize(100),  // 可选：队列大小 100
     )
 
     // 4. 创建 Agent
     agent := llmagent.New(
         "my-agent",
         llmagent.WithModel(llm),
-        llmagent.WithSystemPrompt("你是一个智能助手"),
+        llmagent.WithInstruction("你是一个智能助手"),
         llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文
         // 注意：WithAddSessionSummary(true) 时会忽略 WithMaxHistoryRuns 配置
         // 摘要会包含所有历史，增量事件会完整保留
@@ -91,6 +83,7 @@ func main() {
     )
 
     // 6. 第一次对话
+    ctx := context.Background()
     userMsg1 := model.NewUserMessage("我叫张三")
     eventChan, err := r.Run(ctx, "user123", "session-001", userMsg1)
     if err != nil {
@@ -1106,13 +1099,7 @@ import (
 )
 
 // 创建用于摘要的 LLM 模型
-summaryModel, err := openai.NewModel(
-    openai.WithAPIKey("your-api-key"),
-    openai.WithModelName("gpt-4"),
-)
-if err != nil {
-    panic(err)
-}
+summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
 // 创建摘要器并配置触发条件
 summarizer := summary.NewSummarizer(
@@ -1517,10 +1504,7 @@ func main() {
     ctx := context.Background()
 
     // 创建用于聊天和摘要的 LLM 模型
-    llm, _ := openai.NewModel(
-        openai.WithAPIKey("your-api-key"),
-        openai.WithModelName("gpt-4"),
-    )
+    llm := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
     // 创建带灵活触发条件的摘要器
     summarizer := summary.NewSummarizer(
