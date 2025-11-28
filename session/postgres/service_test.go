@@ -2305,3 +2305,40 @@ func TestClose_Multiple(t *testing.T) {
 	err = s.Close()
 	require.NoError(t, err)
 }
+
+func TestNewService_MissingDSNAndInstance(t *testing.T) {
+	svc, err := NewService()
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Contains(t, err.Error(), "create postgres client failed")
+}
+
+func TestNewService_WithInstance_Success(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	// Register instance
+	instanceName := "test-instance-success"
+	storage.RegisterPostgresInstance(instanceName,
+		storage.WithClientConnString("test:test@tcp(localhost:3306)/testdb"),
+	)
+
+	svc, err := NewService(
+		WithPostgresInstance(instanceName),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+
+	err = svc.Close()
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

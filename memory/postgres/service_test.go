@@ -1370,7 +1370,7 @@ func TestNewService_ConnectionSettingsBuilderError(t *testing.T) {
 
 	_, err := NewService(WithHost("localhost"), WithPort(5432), WithDatabase("testdb"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "create postgres client from connection settings failed")
+	assert.Contains(t, err.Error(), "create postgres client failed")
 }
 
 func TestNewService_InstanceNameBuilderError(t *testing.T) {
@@ -1387,7 +1387,7 @@ func TestNewService_InstanceNameBuilderError(t *testing.T) {
 
 	_, err := NewService(WithPostgresInstance("test-instance"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "create postgres client from instance name failed")
+	assert.Contains(t, err.Error(), "create postgres client failed")
 }
 
 func TestNewService_ConnectionSettingsPriority(t *testing.T) {
@@ -1787,13 +1787,6 @@ func TestBuildCreateIndexSQL(t *testing.T) {
 			assert.Contains(t, result, "CREATE INDEX IF NOT EXISTS")
 		})
 	}
-}
-
-// Test NewService with missing connection settings
-func TestNewService_MissingConnectionSettings(t *testing.T) {
-	_, err := NewService()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "either connection settings")
 }
 
 // Test NewService with skipDBInit

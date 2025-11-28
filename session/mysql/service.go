@@ -102,32 +102,21 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	// Create MySQL client
-	builder := storage.GetClientBuilder()
-	var mysqlClient storage.Client
-	var err error
-
-	// Priority: dsn > instanceName
-	if opts.dsn != "" {
-		// Method 1: Use DSN directly (recommended)
-		mysqlClient, err = builder(
-			storage.WithClientBuilderDSN(opts.dsn),
-			storage.WithExtraOptions(opts.extraOptions...),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create mysql client from dsn failed: %w", err)
-		}
-	} else if opts.instanceName != "" {
+	builderOpts := []storage.ClientBuilderOpt{
+		storage.WithClientBuilderDSN(opts.dsn),
+		storage.WithExtraOptions(opts.extraOptions...),
+	}
+	if opts.dsn == "" && opts.instanceName != "" {
 		// Method 2: Use pre-registered MySQL instance
-		builderOpts, ok := storage.GetMySQLInstance(opts.instanceName)
-		if !ok {
+		var ok bool
+		if builderOpts, ok = storage.GetMySQLInstance(opts.instanceName); !ok {
 			return nil, fmt.Errorf("mysql instance %s not found", opts.instanceName)
 		}
-		mysqlClient, err = builder(builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create mysql client from instance name failed: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("either dsn or instance name must be provided")
+	}
+
+	mysqlClient, err := storage.GetClientBuilder()(builderOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("create mysql client failed: %w", err)
 	}
 
 	// Build table names with prefix
