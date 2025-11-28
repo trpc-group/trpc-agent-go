@@ -949,12 +949,12 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		}
 	}
 	var llmEvent *event.Event
+	author := config.LLMModel.Info().Name
+	if config.NodeID != "" {
+		author = config.NodeID
+	}
+	llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
 	if config.EventChan != nil && !config.Response.Done {
-		author := config.LLMModel.Info().Name
-		if config.NodeID != "" {
-			author = config.NodeID
-		}
-		llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
 		invocation, ok := agent.InvocationFromContext(ctx)
 		if !ok {
 			invocation = agent.NewInvocation(
