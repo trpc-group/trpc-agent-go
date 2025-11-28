@@ -725,6 +725,20 @@ CREATE TABLE session_events (
     deleted_at TIMESTAMP
 );
 
+-- 轨迹事件表
+CREATE TABLE session_track_events (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    track VARCHAR(255) NOT NULL,
+    event JSONB NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
 -- 会话摘要表
 CREATE TABLE session_summaries (
     id BIGSERIAL PRIMARY KEY,
