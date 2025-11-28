@@ -155,6 +155,20 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		))
 		return nil, err
 	}
+
+	if functionResponseEvent != nil && hasTransferToolCall(llmResponse) {
+		functionResponseEvent.Tag = TransferTag
+		functionResponseEvent.RequiresCompletion = true
+		if invocation != nil {
+			completionKey := agent.GetAppendEventNoticeKey(functionResponseEvent.ID)
+			invocation.AddNoticeChannel(ctx, completionKey)
+			if invocation.TransferInfo == nil {
+				invocation.TransferInfo = &agent.TransferInfo{}
+			}
+			invocation.TransferInfo.ToolResponseEventID = functionResponseEvent.ID
+		}
+	}
+
 	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
 	return functionResponseEvent, nil
 }
@@ -1038,6 +1052,19 @@ func buildMergedEvent(baseEvent *event.Event, resp *model.Response) *event.Event
 func shouldSkipSummarization(es []*event.Event) bool {
 	for _, e := range es {
 		if e != nil && e.Actions != nil && e.Actions.SkipSummarization {
+			return true
+		}
+	}
+	return false
+}
+
+// hasTransferToolCall checks whether the response contains a transfer_to_agent tool call.
+func hasTransferToolCall(resp *model.Response) bool {
+	if resp == nil || len(resp.Choices) == 0 {
+		return false
+	}
+	for _, tc := range resp.Choices[0].Message.ToolCalls {
+		if tc.Function.Name == transfer.TransferToolName {
 			return true
 		}
 	}

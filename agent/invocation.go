@@ -48,6 +48,8 @@ type TransferInfo struct {
 	TargetAgentName string
 	// Message is the message to send to the target agent.
 	Message string
+	// ToolResponseEventID captures the transfer tool.response event ID for persistence wait.
+	ToolResponseEventID string
 }
 
 // Invocation represents the context for a flow execution.

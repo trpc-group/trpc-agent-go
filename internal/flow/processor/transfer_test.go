@@ -11,6 +11,7 @@ package processor
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,25 +68,33 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	target := &mockAgent{name: "child", emit: true}
 	parent := &parentAgent{child: target}
 
-	inv := &agent.Invocation{
-		Agent:        parent,
-		AgentName:    "parent",
-		InvocationID: "inv",
-		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "hi"},
-	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(parent),
+		agent.WithInvocationID("inv"),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{TargetAgentName: "child", Message: "hi"}),
+	)
 
 	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
 
 	out := make(chan *event.Event, 10)
 	proc := NewTransferResponseProcessor(true)
-	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
-	close(out)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+		close(out)
+	}()
 
 	// Expect transfer event + child event
 	evts := []*event.Event{}
 	for e := range out {
+		if e.RequiresCompletion {
+			_ = inv.NotifyCompletion(context.Background(), agent.GetAppendEventNoticeKey(e.ID))
+		}
 		evts = append(evts, e)
 	}
+	wg.Wait()
 	require.Len(t, evts, 3)
 	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
 	require.Equal(t, "child", evts[1].Author)
@@ -93,7 +102,11 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 
 func TestTransferResponseProc_Target404(t *testing.T) {
 	parent := &parentAgent{child: nil}
-	inv := &agent.Invocation{Agent: parent, AgentName: "parent", InvocationID: "inv", TransferInfo: &agent.TransferInfo{TargetAgentName: "missing"}}
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(parent),
+		agent.WithInvocationID("inv"),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{TargetAgentName: "missing"}),
+	)
 	rsp := &model.Response{ID: "r"}
 	out := make(chan *event.Event, 1)
 	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
