@@ -109,6 +109,160 @@ func TestBuildMessagesHappyPath(t *testing.T) {
 	}
 }
 
+func TestReduceReturnsMessagesOnReduceError(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),
+		aguievents.NewTextMessageContentEvent("user-1", "hello"),
+		aguievents.NewTextMessageEndEvent("user-1"),
+		aguievents.NewTextMessageContentEvent("user-1", "!"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	if err == nil || !strings.Contains(err.Error(), "reduce: text message content after end: user-1") {
+		t.Fatalf("unexpected error %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Content == nil || *msgs[0].Content != "hello" {
+		t.Fatalf("unexpected content %v", msgs[0].Content)
+	}
+}
+
+func TestReduceReturnsMessagesOnFinalizeError(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),
+		aguievents.NewTextMessageContentEvent("user-1", "hello"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	if err == nil || !strings.Contains(err.Error(), "finalize: text message user-1 not closed") {
+		t.Fatalf("unexpected error %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Content != nil {
+		t.Fatalf("expected nil content, got %v", msgs[0].Content)
+	}
+}
+
+func TestHandleTextChunkSuccess(t *testing.T) {
+	tests := []struct {
+		name        string
+		chunk       *aguievents.TextMessageChunkEvent
+		wantRole    string
+		wantName    string
+		wantContent string
+	}{
+		{
+			name:        "assistant default role empty delta",
+			chunk:       aguievents.NewTextMessageChunkEvent().WithChunkMessageID("msg-1"),
+			wantRole:    "assistant",
+			wantName:    testAppName,
+			wantContent: "",
+		},
+		{
+			name: "user role with delta",
+			chunk: aguievents.NewTextMessageChunkEvent().
+				WithChunkMessageID("msg-2").
+				WithChunkRole("user").
+				WithChunkDelta("hi"),
+			wantRole:    "user",
+			wantName:    testUserID,
+			wantContent: "hi",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := new(testAppName, testUserID)
+			if err := r.handleTextChunk(tt.chunk); err != nil {
+				t.Fatalf("handleTextChunk err: %v", err)
+			}
+			if err := r.finalize(); err != nil {
+				t.Fatalf("finalize err: %v", err)
+			}
+			if len(r.messages) != 1 {
+				t.Fatalf("expected 1 message, got %d", len(r.messages))
+			}
+			msg := r.messages[0]
+			if msg.Role != tt.wantRole {
+				t.Fatalf("unexpected role %q", msg.Role)
+			}
+			if msg.Name == nil || *msg.Name != tt.wantName {
+				t.Fatalf("unexpected name %v", msg.Name)
+			}
+			if msg.Content == nil || *msg.Content != tt.wantContent {
+				t.Fatalf("unexpected content %v", msg.Content)
+			}
+			state, ok := r.texts[*tt.chunk.MessageID]
+			if !ok {
+				t.Fatalf("expected text state for %s", *tt.chunk.MessageID)
+			}
+			if state.phase != textEnded {
+				t.Fatalf("unexpected phase %v", state.phase)
+			}
+			if got := state.content.String(); got != tt.wantContent {
+				t.Fatalf("unexpected builder content %q", got)
+			}
+			if state.index != 0 {
+				t.Fatalf("unexpected state index %d", state.index)
+			}
+		})
+	}
+}
+
+func TestHandleTextChunkErrors(t *testing.T) {
+	t.Run("missing id", func(t *testing.T) {
+		chunk := aguievents.NewTextMessageChunkEvent()
+		r := new(testAppName, testUserID)
+		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "text message chunk missing id") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+	t.Run("duplicate id", func(t *testing.T) {
+		chunk := aguievents.NewTextMessageChunkEvent().WithChunkMessageID("msg-1")
+		r := new(testAppName, testUserID)
+		if err := r.handleTextChunk(chunk); err != nil {
+			t.Fatalf("handleTextChunk err: %v", err)
+		}
+		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "duplicate text message chunk: msg-1") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+	t.Run("unsupported role", func(t *testing.T) {
+		chunk := aguievents.NewTextMessageChunkEvent().WithChunkMessageID("msg-3").WithChunkRole("tool")
+		r := new(testAppName, testUserID)
+		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "unsupported role: tool") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+	t.Run("empty string id pointer", func(t *testing.T) {
+		chunk := aguievents.NewTextMessageChunkEvent()
+		empty := ""
+		chunk.MessageID = &empty
+		r := new(testAppName, testUserID)
+		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "text message chunk missing id") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+}
+
+func TestReduceEventDispatchesChunk(t *testing.T) {
+	r := new(testAppName, testUserID)
+	chunk := aguievents.NewTextMessageChunkEvent().WithChunkMessageID("msg-1").WithChunkDelta("hi")
+	if err := r.reduceEvent(chunk); err != nil {
+		t.Fatalf("reduceEvent err: %v", err)
+	}
+	if err := r.finalize(); err != nil {
+		t.Fatalf("finalize err: %v", err)
+	}
+	if len(r.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(r.messages))
+	}
+	if r.messages[0].Content == nil || *r.messages[0].Content != "hi" {
+		t.Fatalf("unexpected content %v", r.messages[0].Content)
+	}
+}
+
 func TestAssistantOnlyToolCall(t *testing.T) {
 	events := []session.TrackEvent{
 		newTrackEvent(aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
