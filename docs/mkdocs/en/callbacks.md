@@ -286,8 +286,9 @@ type BeforeAgentResult struct {
 }
 
 type AfterAgentArgs struct {
-    Invocation *agent.Invocation  // The invocation context
-    Error      error              // Any error that occurred during agent execution
+    Invocation        *agent.Invocation  // The invocation context
+    FullResponseEvent *event.Event       // The final response event from agent execution (may be nil)
+    Error             error              // Any error that occurred during agent execution (may be nil)
 }
 
 type AfterAgentResult struct {
@@ -310,6 +311,7 @@ Key points:
 - Access to full invocation context allows for rich per-invocation logic.
 - Before can short-circuit with a custom model.Response.
 - After can return a replacement response.
+- `AfterAgentArgs.FullResponseEvent` provides access to the final response event from agent execution, useful for logging, monitoring, post-processing, etc.
 
 ### Callback Execution Control
 
@@ -364,16 +366,19 @@ agentCallbacks := agent.NewCallbacks().
     }
     return nil, nil
   }).
-  // After: append a footer to successful responses.
+  // After: append a footer to successful responses, can access FullResponseEvent for final response event.
   RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
     if args.Error != nil {
       return nil, args.Error
     }
-    if args.Invocation != nil && args.Invocation.Response != nil && len(args.Invocation.Response.Choices) > 0 {
-      c := args.Invocation.Response.Choices[0]
-      c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
-      args.Invocation.Response.Choices[0] = c
-      return &agent.AfterAgentResult{CustomResponse: args.Invocation.Response}, nil
+    // Can access the final response event from agent execution via FullResponseEvent.
+    if args.FullResponseEvent != nil && args.FullResponseEvent.Response != nil {
+      if len(args.FullResponseEvent.Response.Choices) > 0 {
+        c := args.FullResponseEvent.Response.Choices[0]
+        c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
+        args.FullResponseEvent.Response.Choices[0] = c
+        return &agent.AfterAgentResult{CustomResponse: args.FullResponseEvent.Response}, nil
+      }
     }
     return nil, nil
   })
