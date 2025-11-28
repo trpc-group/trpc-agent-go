@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -36,6 +37,25 @@ func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, n
 
 // Declaration returns the tool declaration.
 func (s stubTool) Declaration() *tool.Declaration { return s.decl }
+
+type stubLogger struct {
+	debugfCalled bool
+	debugfMsg    string
+}
+
+func (stubLogger) Debug(args ...any) {}
+func (l *stubLogger) Debugf(format string, args ...any) {
+	l.debugfCalled = true
+	l.debugfMsg = fmt.Sprintf(format, args...)
+}
+func (stubLogger) Info(args ...any)                  {}
+func (stubLogger) Infof(format string, args ...any)  {}
+func (stubLogger) Warn(args ...any)                  {}
+func (stubLogger) Warnf(format string, args ...any)  {}
+func (stubLogger) Error(args ...any)                 {}
+func (stubLogger) Errorf(format string, args ...any) {}
+func (stubLogger) Fatal(args ...any)                 {}
+func (stubLogger) Fatalf(format string, args ...any) {}
 
 func Test_Model_Info(t *testing.T) {
 	m := New("claude-3-5-sonnet-latest")
@@ -165,6 +185,28 @@ func Test_buildToolDescription_AppendsOutputSchema(t *testing.T) {
 	assert.Contains(t, desc, "desc", "expected base description to remain")
 	assert.Contains(t, desc, "Output schema:", "expected output schema label to be present")
 	assert.Contains(t, desc, `"status"`, "expected output schema to be embedded in description")
+}
+
+func Test_buildToolDescription_MarshalError(t *testing.T) {
+	logger := &stubLogger{}
+	original := agentlog.Default
+	agentlog.Default = logger
+	defer func() { agentlog.Default = original }()
+
+	decl := &tool.Declaration{
+		Name:        "foo",
+		Description: "desc",
+		OutputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: func() {},
+		},
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "desc", desc, "description should fall back when marshal fails")
+	assert.True(t, logger.debugfCalled, "expected marshal error to be logged")
+	assert.Contains(t, logger.debugfMsg, "marshal output schema", "expected marshal error message")
 }
 
 func Test_buildToolDescription_NoOutputSchema(t *testing.T) {

@@ -27,6 +27,7 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
@@ -241,6 +242,25 @@ type stubTool struct{ decl *tool.Declaration }
 func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, nil }
 func (s stubTool) Declaration() *tool.Declaration                { return s.decl }
 
+type stubLogger struct {
+	errorfCalled bool
+	errorfMsg    string
+}
+
+func (stubLogger) Debug(args ...any)                 {}
+func (stubLogger) Debugf(format string, args ...any) {}
+func (stubLogger) Info(args ...any)                  {}
+func (stubLogger) Infof(format string, args ...any)  {}
+func (stubLogger) Warn(args ...any)                  {}
+func (stubLogger) Warnf(format string, args ...any)  {}
+func (stubLogger) Error(args ...any)                 {}
+func (l *stubLogger) Errorf(format string, args ...any) {
+	l.errorfCalled = true
+	l.errorfMsg = fmt.Sprintf(format, args...)
+}
+func (stubLogger) Fatal(args ...any)                 {}
+func (stubLogger) Fatalf(format string, args ...any) {}
+
 // TestModel_convertMessages verifies that messages are converted to the
 // openai-go request format with the expected roles and fields.
 func TestModel_convertMessages(t *testing.T) {
@@ -340,6 +360,28 @@ func TestBuildToolDescription_AppendsOutputSchema(t *testing.T) {
 	assert.Contains(t, desc, "base", "expected base description to be preserved")
 	assert.Contains(t, desc, "Output schema:", "expected output schema label to be present")
 	assert.Contains(t, desc, `"result"`, "expected output schema to be present in description")
+}
+
+func TestBuildToolDescription_MarshalError(t *testing.T) {
+	logger := &stubLogger{}
+	originalLogger := agentlog.Default
+	agentlog.Default = logger
+	defer func() { agentlog.Default = originalLogger }()
+
+	decl := &tool.Declaration{
+		Name:        "invalid",
+		Description: "desc",
+		OutputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: func() {},
+		},
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "desc", desc, "description should fall back when marshal fails")
+	assert.True(t, logger.errorfCalled, "expected marshal error to be logged")
+	assert.Contains(t, logger.errorfMsg, "marshal output schema", "expected marshal error message")
 }
 
 func TestBuildToolDescription_NoOutputSchema(t *testing.T) {
