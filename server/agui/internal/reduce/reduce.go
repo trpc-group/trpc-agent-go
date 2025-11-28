@@ -64,21 +64,27 @@ type toolCallState struct {
 }
 
 // Reduce reduces the AG-UI track events into message snapshots.
+// In order to fetch the history messages as much as possible, still return the messages even if there is an error.
 func Reduce(appName, userID string, events []session.TrackEvent) ([]aguievents.Message, error) {
 	r := new(appName, userID)
+	var err error
 	for _, trackEvent := range events {
-		if err := r.reduce(trackEvent); err != nil {
-			return nil, fmt.Errorf("reduce: %w", err)
+		if err = r.reduce(trackEvent); err != nil {
+			err = fmt.Errorf("reduce: %w", err)
+			break
 		}
 	}
-	if err := r.finalize(); err != nil {
-		return nil, fmt.Errorf("finalize: %w", err)
+	if err == nil {
+		if finalizeErr := r.finalize(); finalizeErr != nil {
+			err = fmt.Errorf("finalize: %w", finalizeErr)
+		}
 	}
 	messages := make([]aguievents.Message, 0, len(r.messages))
 	for _, message := range r.messages {
 		messages = append(messages, *message)
 	}
-	return messages, nil
+	// In order to fetch the history messages as much as possible, still return the messages even if there is an error.
+	return messages, err
 }
 
 // new creates a new reducer.
@@ -101,6 +107,10 @@ func (r *reducer) reduce(trackEvent session.TrackEvent) error {
 	if err != nil {
 		return fmt.Errorf("unmarshal track event payload: %w", err)
 	}
+	return r.reduceEvent(evt)
+}
+
+func (r *reducer) reduceEvent(evt aguievents.Event) error {
 	switch e := evt.(type) {
 	case *aguievents.TextMessageStartEvent:
 		return r.handleTextStart(e)
@@ -108,6 +118,8 @@ func (r *reducer) reduce(trackEvent session.TrackEvent) error {
 		return r.handleTextContent(e)
 	case *aguievents.TextMessageEndEvent:
 		return r.handleTextEnd(e)
+	case *aguievents.TextMessageChunkEvent:
+		return r.handleTextChunk(e)
 	case *aguievents.ToolCallStartEvent:
 		return r.handleToolStart(e)
 	case *aguievents.ToolCallArgsEvent:
@@ -181,6 +193,49 @@ func (r *reducer) handleTextEnd(e *aguievents.TextMessageEndEvent) error {
 	state.phase = textEnded
 	text := strings.Clone(state.content.String())
 	r.messages[state.index].Content = &text
+	return nil
+}
+
+// handleTextChunk handles the text message chunk event.
+func (r *reducer) handleTextChunk(e *aguievents.TextMessageChunkEvent) error {
+	if e.MessageID == nil || *e.MessageID == "" {
+		return fmt.Errorf("text message chunk missing id")
+	}
+	if _, exists := r.texts[*e.MessageID]; exists {
+		return fmt.Errorf("duplicate text message chunk: %s", *e.MessageID)
+	}
+	role := string(model.RoleAssistant)
+	if e.Role != nil && *e.Role != "" {
+		role = string(*e.Role)
+	}
+	name := ""
+	switch role {
+	case string(model.RoleUser):
+		name = r.userID
+	case string(model.RoleAssistant):
+		name = r.appName
+	default:
+		return fmt.Errorf("unsupported role: %s", role)
+	}
+	content := ""
+	if e.Delta != nil {
+		content = strings.Clone(*e.Delta)
+	}
+	r.messages = append(r.messages, &aguievents.Message{
+		ID:      *e.MessageID,
+		Role:    role,
+		Name:    &name,
+		Content: &content,
+	})
+	builder := strings.Builder{}
+	builder.WriteString(content)
+	r.texts[*e.MessageID] = &textState{
+		role:    role,
+		name:    name,
+		content: builder,
+		phase:   textEnded,
+		index:   len(r.messages) - 1,
+	}
 	return nil
 }
 
