@@ -18,6 +18,11 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+#root {
+  width: 100%;
+  height: 100%;
+}
+
 .agui-chat {
   width: 100vw;
   height: 100vh;

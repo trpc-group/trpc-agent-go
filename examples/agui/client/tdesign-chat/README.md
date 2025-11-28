@@ -1,331 +1,203 @@
-# TDesign Chat Front-End for the AG-UI Server
+# TDesign Chat + AG-UI Demo
 
-This example demonstrates how to integrate the Go-based AG-UI server with a React front-end built on [TDesign Chat](https://tdesign.woa.com/react-chat). The UI streams Server-Sent Events from the AG-UI endpoint using TDesign Chat's native AG-UI protocol support.
+## ✨ 特性
 
-## Features
+这是一个使用 **Vite + React + TDesign Chat** 构建的 AG-UI 客户端示例，展示了如何与 Go AG-UI 服务进行集成。
 
-✨ **Native AG-UI Protocol Support** - TDesign Chat natively supports AG-UI protocol without complex adapters
+TDesign Chat 现已支持适配 AG-UI 协议：
+- 完整适配16个标准AG-UI协议事件
+- 原生 `TOOL_CALL_*` 事件处理和自定义工具组件注册机制
+- 内置 `STATE_SNAPSHOT` 和 `STATE_DELTA` 支持
+- 自动工具调用生命周期管理
+- 支持消息回填
+- 支持多种框架（vue/react/webcomponent），多端（web和微信小程序）
+- 继续了解更多，[react版本](https://tdesign.tencent.com/react-chat/agui)，[vue版本](https://tdesign.tencent.com/chat/components/chatbot)
 
-🧮 **Tool Call Rendering** - Automatically renders tool calls (e.g., calculator) with beautiful UI components
+## 📋 环境要求
 
-📊 **Streaming Support** - Real-time streaming of AI responses with smooth UX
+- Node.js >= 16
+- Go >= 1.21
+- pnpm 或 npm
 
-🎨 **Modern UI** - Clean, professional interface built with TDesign component library
+## 🚀 快速开始
 
-🔧 **Type-Safe** - Full TypeScript support with comprehensive type definitions
+### 一键启动（推荐）
 
-## Architecture Comparison
-
-### CopilotKit vs TDesign Chat
-
-| Aspect | CopilotKit | TDesign Chat |
-|--------|-----------|--------------|
-| AG-UI Support | Requires custom adapter (~150 lines) | Native support (0 lines adapter) |
-| Tool Rendering | Manual event parsing and rendering | `useAgentToolcall` hook + component registration |
-| Code Complexity | ~700 lines | ~300 lines |
-| Bundle Size | Larger (includes CopilotKit runtime) | Smaller (direct AG-UI client) |
-| Customization | Limited by framework | Fully customizable components |
-| Chinese Support | Requires customization | Built-in |
-
-## Quick Start
-
-### 1. Start the AG-UI Server
-
-First, ensure the Go AG-UI server is running:
-
-```bash
-cd ../../server/default
-go run main.go
-```
-
-The server will start on `http://127.0.0.1:8080/agui`.
-
-### 2. Install Dependencies
-
-```bash
-pnpm install   # or npm install
-```
-
-### 3. Start the Development Server
-
-```bash
-pnpm dev       # or npm run dev
-```
-
-### 4. Open in Browser
-
-Open `http://localhost:3000` and start chatting!
-
-Try the default prompt:
-```
-Calculate 2*(10+11), first explain the idea, then calculate, and finally give the conclusion.
-```
-
-## Environment Variables
-
-You can customize the AG-UI endpoint before running `pnpm dev`:
-
-```bash
-# Override the default AG-UI endpoint
-export NEXT_PUBLIC_AG_UI_ENDPOINT=http://your-server:port/agui
-pnpm dev
-```
-
-Default: `http://127.0.0.1:8080/agui`
-
-## Project Structure
-
-```
-tdesign-chat/
-├── app/
-│   ├── page.tsx           # Main chat page with tool registration
-│   ├── layout.tsx         # Root layout with TDesign styles
-│   └── globals.css        # Custom styles for tool cards
-├── package.json           # Dependencies
-├── tsconfig.json          # TypeScript configuration
-├── next.config.mjs        # Next.js configuration
-└── README.md             # This file
-```
-
-## Key Implementation Details
-
-### Tool Registration
-
-TDesign Chat uses `useAgentToolcall` hook to register tool components:
-
-```tsx
-useAgentToolcall([
-  {
-    name: 'calculator',
-    description: 'Calculator tool',
-    parameters: [
-      { name: 'operation', type: 'string', required: true },
-      { name: 'a', type: 'number', required: true },
-      { name: 'b', type: 'number', required: true },
-    ],
-    component: CalculatorTool,  // Custom React component
-  },
-]);
-```
-
-### Chat Configuration
-
-```tsx
-const { chatEngine, messages, status } = useChat({
-  chatServiceConfig: {
-    endpoint: 'http://127.0.0.1:8080/agui',
-    protocol: 'agui',  // Enable AG-UI protocol
-    stream: true,
-  },
-});
-```
-
-### Tool Component Example
-
-```tsx
-const CalculatorTool: React.FC<ToolcallComponentProps<Args, Result>> = ({
-  status,   // 'pending' | 'executing' | 'complete' | 'error'
-  args,     // Tool arguments
-  result,   // Tool execution result
-  error,    // Error object if failed
-}) => {
-  return (
-    <Card>
-      {/* Render tool UI based on status and data */}
-    </Card>
-  );
-};
-```
-
-## Advantages Over CopilotKit
-
-### 1. Simpler Implementation
-
-**CopilotKit** requires:
-- Custom `HttpAgent` subclass to transform events
-- Complex message parsing logic
-- Custom rendering for different message types
-- ~700 lines of code
-
-**TDesign Chat** only needs:
-- Tool component registration
-- ~300 lines of clean, readable code
-
-### 2. Better AG-UI Integration
-
-TDesign Chat is designed specifically for AG-UI protocol:
-- Native `TOOL_CALL_*` event handling
-- Built-in `STATE_SNAPSHOT` and `STATE_DELTA` support
-- Automatic tool call lifecycle management
-
-### 3. More Flexible
-
-- Fully customizable tool components
-- Easy to add new tools
-- Clean separation of concerns
-- Better TypeScript support
-
-## Testing Steps
-
-### Step 1: Start the Go AG-UI Server
-
-Open a terminal and navigate to the server directory:
+**终端 1：启动后端**
 
 ```bash
 cd /Users/caolin/workspace/private/trpc-agent-go/examples/agui/server/default
 go run main.go
 ```
 
-You should see output like:
-```
-2025-XX-XX XX:XX:XX+08:00       INFO    default/main.go:60      AG-UI: serving agent "agui-agent" on http://127.0.0.1:8080/agui
-```
+服务将运行在 `http://127.0.0.1:8080/agui`
 
-### Step 2: Install Frontend Dependencies
-
-Open another terminal and navigate to the TDesign Chat client:
+**终端 2：启动前端**
 
 ```bash
 cd /Users/caolin/workspace/private/trpc-agent-go/examples/agui/client/tdesign-chat
-pnpm install
+pnpm install && pnpm dev
 ```
 
-If you don't have pnpm, you can use npm:
+**访问应用**
+
+打开浏览器访问：`http://localhost:3000`
+
+**测试示例**
+
+输入：`Calculate 2*(10+11)`
+
+应该看到：
+1. AI 解释计算思路
+2. 计算器工具被调用
+3. 显示计算过程和结果（42）
+
+### 分步启动
+
+如果你想分步执行，可以按照以下步骤：
+
+**1. 启动 AG-UI 服务端**
+
 ```bash
+cd ../../server/default
+go run main.go
+```
+
+**2. 安装依赖**
+
+```bash
+pnpm install
+# 或
 npm install
 ```
 
-### Step 3: Start the Frontend Dev Server
+**3. 启动开发服务器**
 
 ```bash
 pnpm dev
-# or
+# 或
 npm run dev
 ```
 
-You should see:
-```
-  ▲ Next.js 14.x.x
-  - Local:        http://localhost:3000
-  - Ready in XXXms
-```
+**4. 打开浏览器**
 
-### Step 4: Open Browser and Test
+访问 `http://localhost:3000`，尝试发送消息：
 
-1. Open your browser and navigate to `http://localhost:3000`
-
-2. You should see the TDesign Chat interface with the header "AG-UI TDesign Chat Demo"
-
-3. Try the following test cases:
-
-#### Test Case 1: Basic Calculation
-**Input:**
-```
-Calculate 2*(10+11)
-```
-
-**Expected Output:**
-- AI explains the calculation idea
-- Calculator tool is called with:
-  - First: `2 * (10+11)` → calls with operation="add", a=10, b=11
-  - Then: `2 * 21` → calls with operation="multiply", a=2, b=21
-- Final result: 42
-- Tool card shows the calculation process
-
-#### Test Case 2: Division
-**Input:**
-```
-What is 100 divided by 5?
-```
-
-**Expected Output:**
-- Calculator tool called with operation="divide", a=100, b=5
-- Result: 20
-
-#### Test Case 3: Power Operation
-**Input:**
-```
-Calculate 2 to the power of 8
-```
-
-**Expected Output:**
-- Calculator tool called with operation="power", a=2, b=8
-- Result: 256
-
-#### Test Case 4: Multiple Operations
-**Input:**
 ```
 Calculate 2*(10+11), first explain the idea, then calculate, and finally give the conclusion.
 ```
 
-**Expected Output:**
-- AI explains the mathematical approach
-- Multiple tool calls for sub-calculations
-- Final conclusion with the answer
+## 🌍 环境变量
 
-### Step 5: Verify Features
+可以通过环境变量自定义 AG-UI 端点：
 
-Check the following features work correctly:
+```bash
+# 创建 .env 文件
+cp .env.example .env
 
-- ✅ **Streaming Response**: Text appears character by character
-- ✅ **Tool Call Display**: Calculator tool card appears with nice UI
-- ✅ **Tool Status**: Shows "计算中..." → "计算完成" status
-- ✅ **Tool Arguments**: Displays the calculation expression
-- ✅ **Tool Result**: Shows the result with green success badge
-- ✅ **Action Bar**: Copy, Good, Bad, Replay buttons appear
-- ✅ **Regenerate**: Click replay button to regenerate response
-- ✅ **Stop**: Click stop button while AI is responding
-- ✅ **Scroll**: Auto-scrolls to bottom with new messages
+# 编辑 .env
+VITE_AGUI_ENDPOINT=http://your-server:port/agui
+```
 
-## Troubleshooting
+默认值：`http://127.0.0.1:8080/agui`
 
-### Issue: Cannot connect to AG-UI server
-
-**Symptoms:**
-- Error in console: "Failed to fetch"
-- No response from AI
-
-**Solution:**
-1. Verify the Go server is running on `http://127.0.0.1:8080/agui`
-2. Check server logs for errors
-3. Verify the endpoint in browser console network tab
-
-### Issue: Tool calls not rendering
-
-**Symptoms:**
-- Tool calls appear as plain text
-- No calculator card UI
-
-**Solution:**
-1. Check browser console for errors
-2. Verify `useAgentToolcall` is called before `useChat`
-3. Ensure tool name matches exactly: `'calculator'`
-
-### Issue: CORS errors
-
-**Symptoms:**
-- Browser console shows CORS policy error
-
-**Solution:**
-The Go server should handle CORS automatically. If not:
-1. Check server CORS configuration
-2. Verify you're accessing from `localhost:3000`
-
-### Issue: Styles not loading
-
-**Symptoms:**
-- UI looks broken, no TDesign styles
-
-**Solution:**
-1. Verify imports in `layout.tsx`:
-   ```tsx
-   import 'tdesign-react/es/style/index.css';
-   import '@tdesign-react/chat/es/style/index.css';
-   ```
-2. Clear Next.js cache: `rm -rf .next`
-3. Restart dev server
-
-## Example Interaction
+## 📁 项目结构
 
 ```
-User: Calculate 2*(10+11)
+tdesign-chat/
+├── src/
+│   ├── App.tsx           # 主应用组件（聊天逻辑 + 工具注册）
+│   ├── main.tsx          # 应用入口
+│   └── index.css         # 全局样式
+├── index.html            # HTML 模板
+├── package.json          # 依赖配置
+├── tsconfig.json         # TypeScript 配置
+├── vite.config.ts        # Vite 配置
+└── README.md             # 本文件
+```
+
+## 🔧 核心实现
+
+### 工具注册
+
+使用 `useAgentToolcall` 注册计算器工具：
+
+```tsx
+useAgentToolcall([
+  {
+    name: 'calculator',
+    description: '计算器工具',
+    parameters: [
+      { name: 'operation', type: 'string', required: true },
+      { name: 'a', type: 'number', required: true },
+      { name: 'b', type: 'number', required: true },
+    ],
+    component: CalculatorTool,  // 自定义 React 组件
+  },
+]);
+```
+
+### 聊天配置
+
+配置聊天服务，发送正确的 AG-UI 协议消息：
+
+```tsx
+const { chatEngine, messages, status } = useChat({
+  chatServiceConfig: {
+    endpoint: 'http://127.0.0.1:8080/agui',
+    protocol: 'agui',  // 启用 AG-UI 协议
+    stream: true,
+    onRequest: (params: ChatRequestParams) => {
+      const runId = `run-${Date.now()}`;
+      
+      return {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadId: threadId,  // 会话ID（整个对话保持不变）
+          runId: runId,        // 运行ID（每次请求唯一）
+          messages: [
+            {
+              role: 'user',
+              content: params.prompt,
+            }
+          ],
+        }),
+      };
+    },
+  },
+});
+```
+
+**请求格式：**
+
+后端期望的 JSON 结构：
+```json
+{
+  "threadId": "session-1732777776000",
+  "runId": "run-1732777776123",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Calculate 2*(10+11)..."
+    }
+  ]
+}
+```
+
+### 工具组件示例
+
+```tsx
+const CalculatorTool: React.FC<ToolcallComponentProps<Args, Result>> = ({
+  status,   // 'pending' | 'executing' | 'complete' | 'error'
+  args,     // 工具参数
+  result,   // 工具执行结果
+  error,    // 错误对象（如果失败）
+}) => {
+  return (
+    <Card>
+      {/* 根据 status 和数据渲染工具 UI */}
+    </Card>
+  );
+};
+```

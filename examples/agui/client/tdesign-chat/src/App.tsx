@@ -1,5 +1,3 @@
-'use client';
-
 import React, { useRef, useState, useMemo, useCallback } from 'react';
 import { LoadingIcon, CheckCircleFilledIcon, CloseCircleFilledIcon } from 'tdesign-icons-react';
 import {
@@ -132,7 +130,7 @@ const CalculatorTool: React.FC<ToolcallComponentProps<CalculatorArgs, Calculator
 
 // ==================== 主组件 ====================
 
-export default function ChatClient() {
+export default function App() {
   const listRef = useRef<any>(null);
   const [inputValue, setInputValue] = useState<string>(DEFAULT_PROMPT);
   // 保持会话ID，用于多轮对话
@@ -156,7 +154,7 @@ export default function ChatClient() {
   const { chatEngine, messages, status } = useChat({
     defaultMessages: [],
     chatServiceConfig: {
-      endpoint: process.env.NEXT_PUBLIC_AG_UI_ENDPOINT || 'http://21.91.108.16:9754/agui',
+      endpoint: 'http://127.0.0.1:8080/agui',
       protocol: 'agui',
       stream: true,
       onRequest: (params: ChatRequestParams) => {
@@ -215,7 +213,7 @@ export default function ChatClient() {
         chatEngine.regenerateAIMessage();
       }
     },
-    [chatEngine],
+    [chatEngine]
   );
 
   // 渲染消息内容
@@ -241,7 +239,7 @@ export default function ChatClient() {
         )}
       </>
     ),
-    [renderMessageContent, handleAction],
+    [renderMessageContent, handleAction]
   );
 
   // 发送消息
@@ -258,7 +256,7 @@ export default function ChatClient() {
     <div className="agui-chat">
       <div className="agui-chat__container">
         <header className="agui-chat__header">
-          <h1 className="agui-chat__title">AG-UI TDesign Chat Demo</h1>
+          <h1 className="agui-chat__title">AG-UI + TDesign Chat Demo</h1>
           <p className="agui-chat__subtitle">与 Go AG-UI 服务进行对话 | 支持工具调用 | 支持流式响应</p>
         </header>
 
