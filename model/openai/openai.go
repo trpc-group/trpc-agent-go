@@ -1213,12 +1213,28 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 		result = append(result, openai.ChatCompletionToolParam{
 			Function: openai.FunctionDefinitionParam{
 				Name:        declaration.Name,
-				Description: openai.String(declaration.Description),
+				Description: openai.String(buildToolDescription(declaration)),
 				Parameters:  parameters,
 			},
 		})
 	}
 	return result
+}
+
+// buildToolDescription builds the description for a tool.
+// It appends the output schema to the description.
+func buildToolDescription(declaration *tool.Declaration) string {
+	desc := declaration.Description
+	if declaration.OutputSchema == nil {
+		return desc
+	}
+	schemaJSON, err := json.Marshal(declaration.OutputSchema)
+	if err != nil {
+		log.Errorf("marshal output schema for tool %s: %v", declaration.Name, err)
+		return desc
+	}
+	desc += "\nOutput schema: " + string(schemaJSON)
+	return desc
 }
 
 // handleStreamingResponse handles streaming chat completion responses.
