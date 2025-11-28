@@ -848,7 +848,7 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        declaration.Name,
-				Description: anthropic.String(declaration.Description),
+				Description: anthropic.String(buildToolDescription(declaration)),
 				InputSchema: anthropic.ToolInputSchemaParam{
 					Type:       constant.Object(declaration.InputSchema.Type),
 					Properties: declaration.InputSchema.Properties,
@@ -858,6 +858,22 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 		})
 	}
 	return result
+}
+
+// buildToolDescription builds the description for a tool.
+// It appends the output schema to the description.
+func buildToolDescription(declaration *tool.Declaration) string {
+	desc := declaration.Description
+	if declaration.OutputSchema == nil {
+		return desc
+	}
+	schemaJSON, err := json.Marshal(declaration.OutputSchema)
+	if err != nil {
+		log.Debugf("marshal output schema for tool %s: %v", declaration.Name, err)
+		return desc
+	}
+	desc += "Output schema: " + string(schemaJSON)
+	return desc
 }
 
 // convertMessages builds Anthropic message parameters and system prompts from trpc-agent-go messages.

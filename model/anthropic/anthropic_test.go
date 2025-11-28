@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -36,6 +37,25 @@ func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, n
 
 // Declaration returns the tool declaration.
 func (s stubTool) Declaration() *tool.Declaration { return s.decl }
+
+type stubLogger struct {
+	debugfCalled bool
+	debugfMsg    string
+}
+
+func (stubLogger) Debug(args ...any) {}
+func (l *stubLogger) Debugf(format string, args ...any) {
+	l.debugfCalled = true
+	l.debugfMsg = fmt.Sprintf(format, args...)
+}
+func (stubLogger) Info(args ...any)                  {}
+func (stubLogger) Infof(format string, args ...any)  {}
+func (stubLogger) Warn(args ...any)                  {}
+func (stubLogger) Warnf(format string, args ...any)  {}
+func (stubLogger) Error(args ...any)                 {}
+func (stubLogger) Errorf(format string, args ...any) {}
+func (stubLogger) Fatal(args ...any)                 {}
+func (stubLogger) Fatalf(format string, args ...any) {}
 
 func Test_Model_Info(t *testing.T) {
 	m := New("claude-3-5-sonnet-latest")
@@ -145,6 +165,85 @@ func Test_convertTools(t *testing.T) {
 	assert.Equal(t, 1, len(params))
 	assert.NotNil(t, params[0].OfTool)
 	assert.Equal(t, "t1", params[0].OfTool.Name)
+}
+
+func Test_buildToolDescription_AppendsOutputSchema(t *testing.T) {
+	schema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"status": {Type: "string"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "foo",
+		Description:  "desc",
+		OutputSchema: schema,
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Contains(t, desc, "desc", "expected base description to remain")
+	assert.Contains(t, desc, "Output schema:", "expected output schema label to be present")
+	assert.Contains(t, desc, `"status"`, "expected output schema to be embedded in description")
+}
+
+func Test_buildToolDescription_MarshalError(t *testing.T) {
+	logger := &stubLogger{}
+	original := agentlog.Default
+	agentlog.Default = logger
+	defer func() { agentlog.Default = original }()
+
+	decl := &tool.Declaration{
+		Name:        "foo",
+		Description: "desc",
+		OutputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: func() {},
+		},
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "desc", desc, "description should fall back when marshal fails")
+	assert.True(t, logger.debugfCalled, "expected marshal error to be logged")
+	assert.Contains(t, logger.debugfMsg, "marshal output schema", "expected marshal error message")
+}
+
+func Test_buildToolDescription_NoOutputSchema(t *testing.T) {
+	decl := &tool.Declaration{
+		Name:        "foo",
+		Description: "bar",
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "bar", desc, "description should stay unchanged when no output schema")
+}
+
+func Test_convertTools_UsesOutputSchemaDescription(t *testing.T) {
+	outputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"count": {Type: "integer"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "tool_with_out",
+		Description:  "tool desc",
+		InputSchema:  &tool.Schema{Type: "object"},
+		OutputSchema: outputSchema,
+	}
+
+	params := convertTools(map[string]tool.Tool{
+		decl.Name: stubTool{decl: decl},
+	})
+
+	require.Len(t, params, 1)
+	require.NotNil(t, params[0].OfTool)
+	expected := buildToolDescription(decl)
+	assert.True(t, params[0].OfTool.Description.Valid(), "description should be set")
+	assert.Equal(t, expected, params[0].OfTool.Description.Value)
+	assert.Contains(t, params[0].OfTool.Description.Value, `"count"`, "output schema JSON should appear in description")
 }
 
 func Test_decodeToolArguments(t *testing.T) {

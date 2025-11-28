@@ -27,6 +27,7 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
@@ -241,6 +242,25 @@ type stubTool struct{ decl *tool.Declaration }
 func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, nil }
 func (s stubTool) Declaration() *tool.Declaration                { return s.decl }
 
+type stubLogger struct {
+	errorfCalled bool
+	errorfMsg    string
+}
+
+func (stubLogger) Debug(args ...any)                 {}
+func (stubLogger) Debugf(format string, args ...any) {}
+func (stubLogger) Info(args ...any)                  {}
+func (stubLogger) Infof(format string, args ...any)  {}
+func (stubLogger) Warn(args ...any)                  {}
+func (stubLogger) Warnf(format string, args ...any)  {}
+func (stubLogger) Error(args ...any)                 {}
+func (l *stubLogger) Errorf(format string, args ...any) {
+	l.errorfCalled = true
+	l.errorfMsg = fmt.Sprintf(format, args...)
+}
+func (stubLogger) Fatal(args ...any)                 {}
+func (stubLogger) Fatalf(format string, args ...any) {}
+
 // TestModel_convertMessages verifies that messages are converted to the
 // openai-go request format with the expected roles and fields.
 func TestModel_convertMessages(t *testing.T) {
@@ -320,6 +340,85 @@ func TestModel_convertTools(t *testing.T) {
 	require.True(t, fn.Description.Valid() && fn.Description.Value == toolDesc, "function description mismatch")
 
 	require.False(t, reflect.ValueOf(fn.Parameters).IsZero(), "expected parameters to be populated from schema")
+}
+
+func TestBuildToolDescription_AppendsOutputSchema(t *testing.T) {
+	schema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"result": {Type: "string"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "example",
+		Description:  "base",
+		OutputSchema: schema,
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Contains(t, desc, "base", "expected base description to be preserved")
+	assert.Contains(t, desc, "Output schema:", "expected output schema label to be present")
+	assert.Contains(t, desc, `"result"`, "expected output schema to be present in description")
+}
+
+func TestBuildToolDescription_MarshalError(t *testing.T) {
+	logger := &stubLogger{}
+	originalLogger := agentlog.Default
+	agentlog.Default = logger
+	defer func() { agentlog.Default = originalLogger }()
+
+	decl := &tool.Declaration{
+		Name:        "invalid",
+		Description: "desc",
+		OutputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: func() {},
+		},
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "desc", desc, "description should fall back when marshal fails")
+	assert.True(t, logger.errorfCalled, "expected marshal error to be logged")
+	assert.Contains(t, logger.errorfMsg, "marshal output schema", "expected marshal error message")
+}
+
+func TestBuildToolDescription_NoOutputSchema(t *testing.T) {
+	decl := &tool.Declaration{
+		Name:        "example",
+		Description: "only desc",
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "only desc", desc, "description should remain unchanged without output schema")
+}
+
+func TestConvertTools_UsesOutputSchemaInDescription(t *testing.T) {
+	m := New("dummy")
+	outputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"value": {Type: "number"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "tool1",
+		Description:  "desc",
+		InputSchema:  &tool.Schema{Type: "object"},
+		OutputSchema: outputSchema,
+	}
+
+	params := m.convertTools(map[string]tool.Tool{
+		decl.Name: stubTool{decl: decl},
+	})
+
+	require.Len(t, params, 1)
+	expectedDesc := buildToolDescription(decl)
+	require.True(t, params[0].Function.Description.Valid(), "function description should be set")
+	assert.Equal(t, expectedDesc, params[0].Function.Description.Value)
+	assert.Contains(t, params[0].Function.Description.Value, `"value"`, "output schema JSON should be embedded")
 }
 
 // TestModel_Callbacks tests that callback functions are properly called with
