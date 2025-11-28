@@ -118,7 +118,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	redisClient, err := storage.GetClientBuilder()(builderOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("create redis client from url failed: %w", err)
+		return nil, fmt.Errorf("create redis client failed: %w", err)
 	}
 
 	s := &Service{

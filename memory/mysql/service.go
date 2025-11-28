@@ -82,7 +82,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	db, err := storage.GetClientBuilder()(builderOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("create mysql client from dsn failed: %w", err)
+		return nil, fmt.Errorf("create mysql client failed: %w", err)
 	}
 
 	s := &Service{
