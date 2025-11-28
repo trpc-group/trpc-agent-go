@@ -129,6 +129,24 @@ modelCallbacks := model.NewCallbacks().
   })
 ```
 
+**Usage**: After creating callbacks, pass them to the LLM Agent when creating it using the `llmagent.WithModelCallbacks()` option:
+
+```go
+// Create model callbacks
+modelCallbacks := model.NewCallbacks().
+  RegisterBeforeModel(...).
+  RegisterAfterModel(...)
+
+// Create LLM Agent and pass model callbacks
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithModelCallbacks(modelCallbacks),  // Pass model callbacks
+)
+```
+
+For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
+
 ### Legacy Model Callbacks (Deprecated)
 
 > **⚠️ Deprecated**  
@@ -252,6 +270,25 @@ toolCallbacks := tool.NewCallbacks().
     return nil, nil
   })
 ```
+
+**Usage**: After creating callbacks, pass them to the LLM Agent when creating it using the `llmagent.WithToolCallbacks()` option:
+
+```go
+// Create tool callbacks
+toolCallbacks := tool.NewCallbacks().
+  RegisterBeforeTool(...).
+  RegisterAfterTool(...)
+
+// Create LLM Agent and pass tool callbacks
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools(tools),
+  llmagent.WithToolCallbacks(toolCallbacks),  // Pass tool callbacks
+)
+```
+
+For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
 
 Telemetry and events:
 
@@ -378,6 +415,24 @@ agentCallbacks := agent.NewCallbacks().
     return nil, nil
   })
 ```
+
+**Usage**: After creating callbacks, pass them to the LLM Agent when creating it using the `llmagent.WithAgentCallbacks()` option:
+
+```go
+// Create agent callbacks
+agentCallbacks := agent.NewCallbacks().
+  RegisterBeforeAgent(...).
+  RegisterAfterAgent(...)
+
+// Create LLM Agent and pass agent callbacks
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithAgentCallbacks(agentCallbacks),  // Pass agent callbacks
+)
+```
+
+For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
 
 ### Legacy Agent Callbacks (Deprecated)
 
@@ -542,39 +597,6 @@ For a complete timing example with OpenTelemetry integration, see:
 
 For an authentication and authorization example using Invocation State for permission checks and audit logging, see:
 [examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
-
----
-
-## Using Callbacks
-
-After creating callbacks, you need to pass them to the LLM Agent for them to take effect. When creating an Agent with `llmagent.New()`, pass callbacks using the following options:
-
-```go
-// Create callbacks
-modelCallbacks := model.NewCallbacks().
-  RegisterBeforeModel(...).
-  RegisterAfterModel(...)
-
-toolCallbacks := tool.NewCallbacks().
-  RegisterBeforeTool(...).
-  RegisterAfterTool(...)
-
-agentCallbacks := agent.NewCallbacks().
-  RegisterBeforeAgent(...).
-  RegisterAfterAgent(...)
-
-// Create LLM Agent and pass callbacks
-llmAgent := llmagent.New(
-  "chat-assistant",
-  llmagent.WithModel(modelInstance),
-  llmagent.WithTools(tools),
-  llmagent.WithModelCallbacks(modelCallbacks),  // Pass model callbacks
-  llmagent.WithToolCallbacks(toolCallbacks),    // Pass tool callbacks
-  llmagent.WithAgentCallbacks(agentCallbacks),  // Pass agent callbacks
-)
-```
-
-For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
 
 ---
 

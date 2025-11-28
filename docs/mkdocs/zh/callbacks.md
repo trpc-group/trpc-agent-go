@@ -130,9 +130,27 @@ modelCallbacks := model.NewCallbacks().
   })
 ```
 
+**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithModelCallbacks()` 选项传入：
+
+```go
+// 创建模型回调
+modelCallbacks := model.NewCallbacks().
+  RegisterBeforeModel(...).
+  RegisterAfterModel(...)
+
+// 创建 LLM Agent 并传入模型回调
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithModelCallbacks(modelCallbacks),  // 传入模型回调
+)
+```
+
+完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
+
 ### 传统模型回调（已弃用）
 
-> **⚠️ 已弃用**  
+> **⚠️ 已弃用**
 > 传统回调已弃用。请在新代码中使用结构化回调。
 
 ---
@@ -254,6 +272,25 @@ toolCallbacks := tool.NewCallbacks().
   })
 ```
 
+**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithToolCallbacks()` 选项传入：
+
+```go
+// 创建工具回调
+toolCallbacks := tool.NewCallbacks().
+  RegisterBeforeTool(...).
+  RegisterAfterTool(...)
+
+// 创建 LLM Agent 并传入工具回调
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools(tools),
+  llmagent.WithToolCallbacks(toolCallbacks),  // 传入工具回调
+)
+```
+
+完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
+
 可观测与事件：
 
 - 修改后的参数会同步到：
@@ -262,7 +299,7 @@ toolCallbacks := tool.NewCallbacks().
 
 ### 传统工具回调（已弃用）
 
-> **⚠️ 已弃用**  
+> **⚠️ 已弃用**
 > 传统回调已弃用。请在新代码中使用结构化回调。
 
 ---
@@ -380,9 +417,27 @@ agentCallbacks := agent.NewCallbacks().
   })
 ```
 
+**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithAgentCallbacks()` 选项传入：
+
+```go
+// 创建 Agent 回调
+agentCallbacks := agent.NewCallbacks().
+  RegisterBeforeAgent(...).
+  RegisterAfterAgent(...)
+
+// 创建 LLM Agent 并传入 Agent 回调
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithAgentCallbacks(agentCallbacks),  // 传入 Agent 回调
+)
+```
+
+完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
+
 ### 传统 Agent 回调（已弃用）
 
-> **⚠️ 已弃用**  
+> **⚠️ 已弃用**
 > 传统回调已弃用。请在新代码中使用结构化回调。
 
 ---
@@ -594,39 +649,6 @@ toolCallbacks := tool.NewCallbacks().
 
 用户认证与授权示例（使用 Invocation State 进行权限检查和审计日志）请参考：
 [examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
-
----
-
-## 使用 Callbacks
-
-创建 callbacks 后，需要将它们传递给 LLM Agent 才能生效。使用 `llmagent.New()` 创建 Agent 时，通过以下选项传入 callbacks：
-
-```go
-// 创建 callbacks
-modelCallbacks := model.NewCallbacks().
-  RegisterBeforeModel(...).
-  RegisterAfterModel(...)
-
-toolCallbacks := tool.NewCallbacks().
-  RegisterBeforeTool(...).
-  RegisterAfterTool(...)
-
-agentCallbacks := agent.NewCallbacks().
-  RegisterBeforeAgent(...).
-  RegisterAfterAgent(...)
-
-// 创建 LLM Agent 并传入 callbacks
-llmAgent := llmagent.New(
-  "chat-assistant",
-  llmagent.WithModel(modelInstance),
-  llmagent.WithTools(tools),
-  llmagent.WithModelCallbacks(modelCallbacks),  // 传入模型回调
-  llmagent.WithToolCallbacks(toolCallbacks),    // 传入工具回调
-  llmagent.WithAgentCallbacks(agentCallbacks),  // 传入 Agent 回调
-)
-```
-
-完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
 
 ---
 
