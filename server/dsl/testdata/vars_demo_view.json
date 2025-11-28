@@ -1,0 +1,24 @@
+{
+    "version": "1.0",
+    "name": "vars_demo",
+    "description": "Minimal graph for /vars testing",
+    "nodes": [
+      {
+        "id": "agent",
+        "data": {
+          "label": "Agent",
+          "engine": {
+            "label": "Agent",
+            "node_type": "builtin.llmagent",
+            "config": {
+              "model": "gpt-4.1-mini"
+            }
+          }
+        }
+      }
+    ],
+    "edges": [],
+    "start_node_id": "agent",
+    "metadata": {}
+  }
+  
