@@ -129,6 +129,24 @@ modelCallbacks := model.NewCallbacks().
   })
 ```
 
+**Usage**: After creating callbacks, pass them to the LLM Agent when creating it using the `llmagent.WithModelCallbacks()` option:
+
+```go
+// Create model callbacks
+modelCallbacks := model.NewCallbacks().
+  RegisterBeforeModel(...).
+  RegisterAfterModel(...)
+
+// Create LLM Agent and pass model callbacks
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithModelCallbacks(modelCallbacks),  // Pass model callbacks
+)
+```
+
+For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
+
 ### Legacy Model Callbacks (Deprecated)
 
 > **⚠️ Deprecated**  
@@ -252,6 +270,25 @@ toolCallbacks := tool.NewCallbacks().
     return nil, nil
   })
 ```
+
+**Usage**: After creating callbacks, pass them to the LLM Agent when creating it using the `llmagent.WithToolCallbacks()` option:
+
+```go
+// Create tool callbacks
+toolCallbacks := tool.NewCallbacks().
+  RegisterBeforeTool(...).
+  RegisterAfterTool(...)
+
+// Create LLM Agent and pass tool callbacks
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools(tools),
+  llmagent.WithToolCallbacks(toolCallbacks),  // Pass tool callbacks
+)
+```
+
+For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
 
 Telemetry and events:
 
@@ -379,6 +416,24 @@ agentCallbacks := agent.NewCallbacks().
   })
 ```
 
+**Usage**: After creating callbacks, pass them to the LLM Agent when creating it using the `llmagent.WithAgentCallbacks()` option:
+
+```go
+// Create agent callbacks
+agentCallbacks := agent.NewCallbacks().
+  RegisterBeforeAgent(...).
+  RegisterAfterAgent(...)
+
+// Create LLM Agent and pass agent callbacks
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithAgentCallbacks(agentCallbacks),  // Pass agent callbacks
+)
+```
+
+For a complete example, see [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go).
+
 ### Legacy Agent Callbacks (Deprecated)
 
 > **⚠️ Deprecated**  
@@ -441,22 +496,22 @@ To avoid key conflicts between different use cases, use prefixes:
 ### Example: Agent Callback Timing
 
 ```go
-// BeforeAgentCallback: Record start time.
-agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
-  args.Invocation.SetState("agent:start_time", time.Now())
-  return nil, nil
-})
-
-// AfterAgentCallback: Calculate execution duration.
-agentCallbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
-  if startTimeVal, ok := args.Invocation.GetState("agent:start_time"); ok {
-    startTime := startTimeVal.(time.Time)
-    duration := time.Since(startTime)
-    fmt.Printf("Agent execution took: %v\n", duration)
-    args.Invocation.DeleteState("agent:start_time") // Clean up state.
-  }
-  return nil, nil
-})
+agentCallbacks := agent.NewCallbacks().
+  // BeforeAgentCallback: Record start time.
+  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    args.Invocation.SetState("agent:start_time", time.Now())
+    return nil, nil
+  }).
+  // AfterAgentCallback: Calculate execution duration.
+  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if startTimeVal, ok := args.Invocation.GetState("agent:start_time"); ok {
+      startTime := startTimeVal.(time.Time)
+      duration := time.Since(startTime)
+      fmt.Printf("Agent execution took: %v\n", duration)
+      args.Invocation.DeleteState("agent:start_time") // Clean up state.
+    }
+    return nil, nil
+  })
 ```
 
 ### Example: Model Callback Timing
@@ -464,66 +519,66 @@ agentCallbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAge
 Model and Tool callbacks need to retrieve the Invocation from context first:
 
 ```go
-// BeforeModelCallback: Record start time.
-modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    inv.SetState("model:start_time", time.Now())
-  }
-  return nil, nil
-})
-
-// AfterModelCallback: Calculate execution duration.
-modelCallbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
-  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    if startTimeVal, ok := inv.GetState("model:start_time"); ok {
-      startTime := startTimeVal.(time.Time)
-      duration := time.Since(startTime)
-      fmt.Printf("Model inference took: %v\n", duration)
-      inv.DeleteState("model:start_time") // Clean up state.
+modelCallbacks := model.NewCallbacks().
+  // BeforeModelCallback: Record start time.
+  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+      inv.SetState("model:start_time", time.Now())
     }
-  }
-  return nil, nil
-})
+    return nil, nil
+  }).
+  // AfterModelCallback: Calculate execution duration.
+  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+      if startTimeVal, ok := inv.GetState("model:start_time"); ok {
+        startTime := startTimeVal.(time.Time)
+        duration := time.Since(startTime)
+        fmt.Printf("Model inference took: %v\n", duration)
+        inv.DeleteState("model:start_time") // Clean up state.
+      }
+    }
+    return nil, nil
+  })
 ```
 
 ### Example: Tool Callback Timing (Multi-tool Isolation)
 
 ```go
-// BeforeToolCallback: Record tool start time.
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    // Get tool call ID for concurrent call support.
-    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-    if !ok || toolCallID == "" {
-      toolCallID = "default" // Fallback for compatibility.
-    }
+toolCallbacks := tool.NewCallbacks().
+  // BeforeToolCallback: Record tool start time.
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+      // Get tool call ID for concurrent call support.
+      toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+      if !ok || toolCallID == "" {
+        toolCallID = "default" // Fallback for compatibility.
+      }
 
-    // Use tool call ID to build unique key.
-    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
-    inv.SetState(key, time.Now())
-  }
-  return nil, nil
-})
-
-// AfterToolCallback: Calculate tool execution duration.
-toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    // Get tool call ID for concurrent call support.
-    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-    if !ok || toolCallID == "" {
-      toolCallID = "default" // Fallback for compatibility.
+      // Use tool call ID to build unique key.
+      key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+      inv.SetState(key, time.Now())
     }
+    return nil, nil
+  }).
+  // AfterToolCallback: Calculate tool execution duration.
+  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+      // Get tool call ID for concurrent call support.
+      toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+      if !ok || toolCallID == "" {
+        toolCallID = "default" // Fallback for compatibility.
+      }
 
-    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
-    if startTimeVal, ok := inv.GetState(key); ok {
-      startTime := startTimeVal.(time.Time)
-      duration := time.Since(startTime)
-      fmt.Printf("Tool %s (call %s) took: %v\n", args.ToolName, toolCallID, duration)
-      inv.DeleteState(key) // Clean up state.
+      key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+      if startTimeVal, ok := inv.GetState(key); ok {
+        startTime := startTimeVal.(time.Time)
+        duration := time.Since(startTime)
+        fmt.Printf("Tool %s (call %s) took: %v\n", args.ToolName, toolCallID, duration)
+        inv.DeleteState(key) // Clean up state.
+      }
     }
-  }
-  return nil, nil
-})
+    return nil, nil
+  })
 ```
 
 **Key Points**:
@@ -588,27 +643,29 @@ _ = agent.NewCallbacks().
 Mock a tool result and short-circuit execution:
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-  if args.ToolName == "calculator" && args.Arguments != nil && strings.Contains(string(args.Arguments), "42") {
-    return &tool.BeforeToolResult{
-      CustomResult: calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242},
-    }, nil
-  }
-  return nil, nil
-})
+toolCallbacks := tool.NewCallbacks().
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if args.ToolName == "calculator" && args.Arguments != nil && strings.Contains(string(args.Arguments), "42") {
+      return &tool.BeforeToolResult{
+        CustomResult: calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242},
+      }, nil
+    }
+    return nil, nil
+  })
 ```
 
 Modify arguments prior to execution (and telemetry/event reporting):
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-  if args.Arguments != nil && args.ToolName == "calculator" {
-    originalArgs := string(args.Arguments)
-    modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-    args.Arguments = []byte(modifiedArgs)
-  }
-  return nil, nil
-})
+toolCallbacks := tool.NewCallbacks().
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if args.Arguments != nil && args.ToolName == "calculator" {
+      originalArgs := string(args.Arguments)
+      modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
+      args.Arguments = []byte(modifiedArgs)
+    }
+    return nil, nil
+  })
 ```
 
 Both examples mirror the runnable demo under [examples/callbacks](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks).
