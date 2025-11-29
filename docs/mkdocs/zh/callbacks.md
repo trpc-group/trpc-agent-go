@@ -130,9 +130,27 @@ modelCallbacks := model.NewCallbacks().
   })
 ```
 
+**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithModelCallbacks()` 选项传入：
+
+```go
+// 创建模型回调
+modelCallbacks := model.NewCallbacks().
+  RegisterBeforeModel(...).
+  RegisterAfterModel(...)
+
+// 创建 LLM Agent 并传入模型回调
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithModelCallbacks(modelCallbacks),  // 传入模型回调
+)
+```
+
+完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
+
 ### 传统模型回调（已弃用）
 
-> **⚠️ 已弃用**  
+> **⚠️ 已弃用**
 > 传统回调已弃用。请在新代码中使用结构化回调。
 
 ---
@@ -254,6 +272,25 @@ toolCallbacks := tool.NewCallbacks().
   })
 ```
 
+**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithToolCallbacks()` 选项传入：
+
+```go
+// 创建工具回调
+toolCallbacks := tool.NewCallbacks().
+  RegisterBeforeTool(...).
+  RegisterAfterTool(...)
+
+// 创建 LLM Agent 并传入工具回调
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools(tools),
+  llmagent.WithToolCallbacks(toolCallbacks),  // 传入工具回调
+)
+```
+
+完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
+
 可观测与事件：
 
 - 修改后的参数会同步到：
@@ -262,7 +299,7 @@ toolCallbacks := tool.NewCallbacks().
 
 ### 传统工具回调（已弃用）
 
-> **⚠️ 已弃用**  
+> **⚠️ 已弃用**
 > 传统回调已弃用。请在新代码中使用结构化回调。
 
 ---
@@ -380,9 +417,27 @@ agentCallbacks := agent.NewCallbacks().
   })
 ```
 
+**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithAgentCallbacks()` 选项传入：
+
+```go
+// 创建 Agent 回调
+agentCallbacks := agent.NewCallbacks().
+  RegisterBeforeAgent(...).
+  RegisterAfterAgent(...)
+
+// 创建 LLM Agent 并传入 Agent 回调
+llmAgent := llmagent.New(
+  "chat-assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithAgentCallbacks(agentCallbacks),  // 传入 Agent 回调
+)
+```
+
+完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
+
 ### 传统 Agent 回调（已弃用）
 
-> **⚠️ 已弃用**  
+> **⚠️ 已弃用**
 > 传统回调已弃用。请在新代码中使用结构化回调。
 
 ---
@@ -459,13 +514,13 @@ if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 ### 核心方法
 
 ```go
-// 设置状态值.
+// 设置状态值
 func (inv *Invocation) SetState(key string, value any)
 
-// 获取状态值，返回值和是否存在.
+// 获取状态值，返回值和是否存在
 func (inv *Invocation) GetState(key string) (any, bool)
 
-// 删除状态值.
+// 删除状态值
 func (inv *Invocation) DeleteState(key string)
 ```
 
@@ -491,22 +546,22 @@ func (inv *Invocation) DeleteState(key string)
 ### 示例：Agent 回调计时
 
 ```go
-// BeforeAgentCallback：记录开始时间.
-agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
-  args.Invocation.SetState("agent:start_time", time.Now())
-  return nil, nil
-})
-
-// AfterAgentCallback：计算执行时长.
-agentCallbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
-  if startTimeVal, ok := args.Invocation.GetState("agent:start_time"); ok {
-    startTime := startTimeVal.(time.Time)
-    duration := time.Since(startTime)
-    fmt.Printf("Agent execution took: %v\n", duration)
-    args.Invocation.DeleteState("agent:start_time") // 清理状态.
-  }
-  return nil, nil
-})
+agentCallbacks := agent.NewCallbacks().
+  // BeforeAgentCallback：记录开始时间
+  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+    args.Invocation.SetState("agent:start_time", time.Now())
+    return nil, nil
+  }).
+  // AfterAgentCallback：计算执行时长
+  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+    if startTimeVal, ok := args.Invocation.GetState("agent:start_time"); ok {
+      startTime := startTimeVal.(time.Time)
+      duration := time.Since(startTime)
+      fmt.Printf("Agent execution took: %v\n", duration)
+      args.Invocation.DeleteState("agent:start_time") // 清理状态
+    }
+    return nil, nil
+  })
 ```
 
 ### 示例：Model 回调计时
@@ -514,26 +569,26 @@ agentCallbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAge
 Model 和 Tool 回调需要先从 context 中获取 Invocation：
 
 ```go
-// BeforeModelCallback：记录开始时间.
-modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    inv.SetState("model:start_time", time.Now())
-  }
-  return nil, nil
-})
-
-// AfterModelCallback：计算执行时长.
-modelCallbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
-  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    if startTimeVal, ok := inv.GetState("model:start_time"); ok {
-      startTime := startTimeVal.(time.Time)
-      duration := time.Since(startTime)
-      fmt.Printf("Model inference took: %v\n", duration)
-      inv.DeleteState("model:start_time") // 清理状态.
+modelCallbacks := model.NewCallbacks().
+  // BeforeModelCallback：记录开始时间
+  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+      inv.SetState("model:start_time", time.Now())
     }
-  }
-  return nil, nil
-})
+    return nil, nil
+  }).
+  // AfterModelCallback：计算执行时长
+  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+      if startTimeVal, ok := inv.GetState("model:start_time"); ok {
+        startTime := startTimeVal.(time.Time)
+        duration := time.Since(startTime)
+        fmt.Printf("Model inference took: %v\n", duration)
+        inv.DeleteState("model:start_time") // 清理状态
+      }
+    }
+    return nil, nil
+  })
 ```
 
 ### 示例：Tool 回调计时（支持并发工具调用）
@@ -541,41 +596,41 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, args *model.AfterMod
 当 LLM 在一次响应中返回多个工具调用（包括同一工具的多次调用）时，框架会并发执行这些工具。为了正确追踪每个工具调用的状态，需要使用 **tool call ID** 来区分：
 
 ```go
-// BeforeToolCallback：记录工具开始时间.
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    // 获取 tool call ID 以支持并发调用.
-    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-    if !ok || toolCallID == "" {
-      toolCallID = "default" // 降级方案.
-    }
+toolCallbacks := tool.NewCallbacks().
+  // BeforeToolCallback：记录工具开始时间
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+      // 获取 tool call ID 以支持并发调用
+      toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+      if !ok || toolCallID == "" {
+        toolCallID = "default" // 降级方案
+      }
 
-    // 使用 tool call ID 构建唯一键.
-    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
-    inv.SetState(key, time.Now())
-  }
-  return nil, nil
-})
-
-// AfterToolCallback：计算工具执行时长.
-toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-  if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-    // 使用相同的逻辑获取 tool call ID.
-    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
-    if !ok || toolCallID == "" {
-      toolCallID = "default"
+      // 使用 tool call ID 构建唯一键
+      key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+      inv.SetState(key, time.Now())
     }
+    return nil, nil
+  }).
+  // AfterToolCallback：计算工具执行时长
+  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+      // 使用相同的逻辑获取 tool call ID
+      toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+      if !ok || toolCallID == "" {
+        toolCallID = "default"
+      }
 
-    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
-    if startTimeVal, ok := inv.GetState(key); ok {
-      startTime := startTimeVal.(time.Time)
-      duration := time.Since(startTime)
-      fmt.Printf("Tool %s (call %s) took: %v\n", args.ToolName, toolCallID, duration)
-      inv.DeleteState(key) // 清理状态.
+      key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+      if startTimeVal, ok := inv.GetState(key); ok {
+        startTime := startTimeVal.(time.Time)
+        duration := time.Since(startTime)
+        fmt.Printf("Tool %s (call %s) took: %v\n", args.ToolName, toolCallID, duration)
+        inv.DeleteState(key) // 清理状态
+      }
     }
-  }
-  return nil, nil
-})
+    return nil, nil
+  })
 ```
 
 **关键点**：
@@ -640,27 +695,29 @@ _ = agent.NewCallbacks().
 Mock 工具结果并中止后续工具调用：
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-  if args.ToolName == "calculator" && args.Arguments != nil && strings.Contains(string(args.Arguments), "42") {
-    return &tool.BeforeToolResult{
-      CustomResult: calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242},
-    }, nil
-  }
-  return nil, nil
-})
+toolCallbacks := tool.NewCallbacks().
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if args.ToolName == "calculator" && args.Arguments != nil && strings.Contains(string(args.Arguments), "42") {
+      return &tool.BeforeToolResult{
+        CustomResult: calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242},
+      }, nil
+    }
+    return nil, nil
+  })
 ```
 
 执行前修改参数（并在可观测/事件中体现）：
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-  if args.Arguments != nil && args.ToolName == "calculator" {
-    originalArgs := string(args.Arguments)
-    modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
-    args.Arguments = []byte(modifiedArgs)
-  }
-  return nil, nil
-})
+toolCallbacks := tool.NewCallbacks().
+  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+    if args.Arguments != nil && args.ToolName == "calculator" {
+      originalArgs := string(args.Arguments)
+      modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
+      args.Arguments = []byte(modifiedArgs)
+    }
+    return nil, nil
+  })
 ```
 
 以上示例与 [`examples/callbacks`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks) 可运行示例保持一致。
