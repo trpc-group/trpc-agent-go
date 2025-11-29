@@ -15,6 +15,10 @@ import (
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -146,11 +150,24 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 					IntermediateData: &evalset.IntermediateData{
 						ToolUses: []*genai.FunctionCall{
 							{
+								ID:   "tool_use_1",
 								Name: "calculator",
 								Args: map[string]interface{}{
 									"operation": "add",
 									"a":         2.0,
 									"b":         3.0,
+								},
+							},
+						},
+						ToolResponses: []*genai.FunctionResponse{
+							{
+								ID:   "tool_use_1",
+								Name: "calculator",
+								Response: map[string]interface{}{
+									"a":         2.0,
+									"b":         3.0,
+									"operation": "add",
+									"result":    5.0,
 								},
 							},
 						},
@@ -186,11 +203,24 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 					IntermediateData: &evalset.IntermediateData{
 						ToolUses: []*genai.FunctionCall{
 							{
+								ID:   "tool_use_2",
 								Name: "calculator",
 								Args: map[string]interface{}{
 									"operation": "multiply",
 									"a":         6.0,
 									"b":         7.0,
+								},
+							},
+						},
+						ToolResponses: []*genai.FunctionResponse{
+							{
+								ID:   "tool_use_2",
+								Name: "calculator",
+								Response: map[string]interface{}{
+									"a":         6.0,
+									"b":         7.0,
+									"operation": "multiply",
+									"result":    42.0,
 								},
 							},
 						},
@@ -215,6 +245,25 @@ func prepareMetric(ctx context.Context, metricManager metric.Manager) error {
 	evalMetric := &metric.EvalMetric{
 		MetricName: "tool_trajectory_avg_score",
 		Threshold:  1.0,
+		Criterion: criterion.New(
+			criterion.WithToolTrajectory(
+				ctooltrajectory.New(
+					ctooltrajectory.WithDefault(
+						&ctooltrajectory.ToolTrajectoryStrategy{
+							Name: &text.TextCriterion{
+								MatchStrategy: text.TextMatchStrategyExact,
+							},
+							Arguments: &cjson.JSONCriterion{
+								MatchStrategy: cjson.JSONMatchStrategyExact,
+							},
+							Response: &cjson.JSONCriterion{
+								MatchStrategy: cjson.JSONMatchStrategyExact,
+							},
+						},
+					),
+				),
+			),
+		),
 	}
 	return metricManager.Add(ctx, appName, evalSetID, evalMetric)
 }

@@ -13,13 +13,13 @@ package tooltrajectory
 import (
 	"context"
 	"fmt"
-	"reflect"
 
-	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // toolTrajectoryEvaluator is a tool trajectory evaluator implementation for evaluator.
@@ -53,10 +53,11 @@ func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context, actuals, expecte
 	for i := range len(actuals) {
 		actual := actuals[i]
 		expected := expecteds[i]
-		actualCalls := getToolCalls(actual)
-		expectedCalls := getToolCalls(expected)
 		score := 0.0
-		if toolCallsEqual(actualCalls, expectedCalls) {
+		ok, err := toolCallsMatch(actual, expected, evalMetric.Criterion.ToolTrajectory)
+		if err != nil {
+			log.Errorf("tool trajectory mismatch: %v", err)
+		} else if ok {
 			score = 1.0
 		}
 		status := e.statusForScore(score, evalMetric)
@@ -88,24 +89,14 @@ func (e *toolTrajectoryEvaluator) statusForScore(score float64, evalMetric *metr
 	return status.EvalStatusFailed
 }
 
-func getToolCalls(invocation *evalset.Invocation) []*genai.FunctionCall {
-	if invocation == nil || invocation.IntermediateData == nil {
-		return nil
+func toolCallsMatch(actual, expected *evalset.Invocation,
+	criterion *ctooltrajectory.ToolTrajectoryCriterion) (bool, error) {
+	if criterion == nil {
+		return false, fmt.Errorf("criterion is nil")
 	}
-	return invocation.IntermediateData.ToolUses
-}
-
-func toolCallsEqual(actual, expected []*genai.FunctionCall) bool {
-	if len(actual) != len(expected) {
-		return false
+	ok, err := criterion.Match(actual, expected)
+	if err != nil {
+		return false, fmt.Errorf("tool trajectory mismatch: %w", err)
 	}
-	for i := range actual {
-		if actual[i].Name != expected[i].Name {
-			return false
-		}
-		if !reflect.DeepEqual(actual[i].Args, expected[i].Args) {
-			return false
-		}
-	}
-	return true
+	return ok, nil
 }

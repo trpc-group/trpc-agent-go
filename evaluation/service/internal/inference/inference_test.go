@@ -265,3 +265,54 @@ func TestConvertToolCallResponse(t *testing.T) {
 	assert.Equal(t, "tool", result[0].Name)
 	assert.Equal(t, float64(1), result[0].Args["count"])
 }
+
+func TestConvertToolResultResponse(t *testing.T) {
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "tool",
+						Content:  `{"result":42}`,
+					},
+				},
+			},
+		},
+	}
+	result, err := convertToolResultResponse(ev)
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "call-1", result[0].ID)
+	assert.Equal(t, "tool", result[0].Name)
+	assert.Equal(t, float64(42), result[0].Response["result"])
+}
+
+func TestConvertToolResultResponseSkipEmptyID(t *testing.T) {
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{Content: "{}", ToolID: ""}},
+				{Message: model.Message{Content: `{"ok":true}`, ToolID: "id-1", ToolName: "t"}},
+			},
+		},
+	}
+	result, err := convertToolResultResponse(ev)
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "id-1", result[0].ID)
+	assert.Equal(t, "t", result[0].Name)
+	assert.Equal(t, true, result[0].Response["ok"])
+}
+
+func TestConvertToolResultResponseInvalidJSON(t *testing.T) {
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{Content: "{", ToolID: "bad"}},
+			},
+		},
+	}
+	_, err := convertToolResultResponse(ev)
+	assert.Error(t, err)
+}

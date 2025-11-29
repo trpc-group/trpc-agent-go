@@ -72,11 +72,12 @@ func inferenceInvocation(
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
-	// Capture the invocation ID, final response, and tool uses.
+	// Capture the invocation ID, final response, tool uses, and tool responses.
 	var (
 		invocationID  string
 		finalResponse *genai.Content
 		toolUses      []*genai.FunctionCall
+		toolResponses []*genai.FunctionResponse
 	)
 	for event := range events {
 		if event == nil {
@@ -105,6 +106,14 @@ func inferenceInvocation(
 			}
 			toolUses = append(toolUses, uses...)
 		}
+		// Capture tool call responses.
+		if event.IsToolResultResponse() {
+			responses, err := convertToolResultResponse(event)
+			if err != nil {
+				return nil, fmt.Errorf("convert tool result response: %w", err)
+			}
+			toolResponses = append(toolResponses, responses...)
+		}
 	}
 	// Convert the final response to evalset content.
 	return &evalset.Invocation{
@@ -112,7 +121,8 @@ func inferenceInvocation(
 		UserContent:   invocation.UserContent,
 		FinalResponse: finalResponse,
 		IntermediateData: &evalset.IntermediateData{
-			ToolUses: toolUses,
+			ToolUses:      toolUses,
+			ToolResponses: toolResponses,
 		},
 	}, nil
 }
@@ -130,6 +140,27 @@ func convertToolCallResponse(event *event.Event) ([]*genai.FunctionCall, error) 
 		}
 	}
 	return toolUses, nil
+}
+
+// convertToolResultResponse converts the tool result response to function responses.
+func convertToolResultResponse(event *event.Event) ([]*genai.FunctionResponse, error) {
+	toolResponses := []*genai.FunctionResponse{}
+	for _, choice := range event.Response.Choices {
+		if choice.Message.ToolID == "" {
+			continue
+		}
+		var response map[string]any
+		if err := json.Unmarshal([]byte(choice.Message.Content), &response); err != nil {
+			return nil, fmt.Errorf("unmarshal tool result response: %w", err)
+		}
+		toolResponse := &genai.FunctionResponse{
+			ID:       choice.Message.ToolID,
+			Name:     choice.Message.ToolName,
+			Response: response,
+		}
+		toolResponses = append(toolResponses, toolResponse)
+	}
+	return toolResponses, nil
 }
 
 // convertContentToMessage transforms evalset input content into a model message.

@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -195,6 +196,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		count     int
 		score     float64
 		threshold float64
+		criterion *criterion.Criterion
 	}
 	// Group metrics results by metric name.
 	aggregatedMetrics := make(map[string]*aggregatedMetric)
@@ -208,6 +210,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 			}
 			aggregatedMetrics[metric.MetricName].count++
 			aggregatedMetrics[metric.MetricName].score += metric.Score
+			aggregatedMetrics[metric.MetricName].criterion = metric.Criterion
 		}
 	}
 	// Aggregate metrics results by metric name.
@@ -223,6 +226,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 			Score:      average,
 			EvalStatus: evalStatus,
 			Threshold:  aggregatedMetric.threshold,
+			Criterion:  aggregatedMetric.criterion,
 		})
 	}
 	status, err := istatus.SummarizeMetricsStatus(metricsResults)
