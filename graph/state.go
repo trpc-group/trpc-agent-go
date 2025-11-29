@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -67,19 +68,7 @@ type State map[string]any
 //	    // use userInput
 //	}
 func GetStateValue[T any](s State, key string) (T, bool) {
-	var zero T
-	if s == nil {
-		return zero, false
-	}
-	val, ok := s[key]
-	if !ok {
-		return zero, false
-	}
-	typedVal, ok := val.(T)
-	if !ok {
-		return zero, false
-	}
-	return typedVal, true
+	return util.GetMapValue[string, T](s, key)
 }
 
 // Clone creates a deep copy of the state.

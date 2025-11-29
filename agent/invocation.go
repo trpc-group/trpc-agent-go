@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -605,15 +606,10 @@ func GetStateValue[T any](inv *Invocation, key string) (T, bool) {
 	if inv == nil {
 		return zero, false
 	}
-	val, ok := inv.GetState(key)
-	if !ok {
-		return zero, false
-	}
-	typedVal, ok := val.(T)
-	if !ok {
-		return zero, false
-	}
-	return typedVal, true
+	inv.stateMu.RLock()
+	defer inv.stateMu.RUnlock()
+
+	return util.GetMapValue[string, T](inv.state, key)
 }
 
 // GetOrCreateTimingInfo gets or creates timing info for this invocation.
