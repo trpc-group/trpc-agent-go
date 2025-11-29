@@ -25,6 +25,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
@@ -302,6 +303,10 @@ func TestGetProvider(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, provider)
 
+	provider, ok = Get("gemini")
+	assert.True(t, ok)
+	assert.NotNil(t, provider)
+
 	provider, ok = Get("not-exist")
 	assert.False(t, ok)
 	assert.Nil(t, provider)
@@ -370,6 +375,26 @@ func TestModelWithAllOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, modelInstance)
 	assert.Equal(t, "claude", modelInstance.Info().Name)
+
+	modelInstance, err = Model(
+		"gemini",
+		"gemini-pro",
+		WithChannelBufferSize(128),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(2048),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+		WithTokenTailoringConfig(config),
+		WithCallbacks(Callbacks{
+			GeminiChatChunk:      nil,
+			GeminiChatRequest:    nil,
+			GeminiStreamComplete: nil,
+			GeminiChatResponse:   nil,
+		}),
+		WithGeminiOption(gemini.WithGeminiClientConfig(nil)),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, modelInstance)
 }
 
 func readStringField(obj any, name string) string {
