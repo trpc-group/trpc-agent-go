@@ -144,7 +144,7 @@ func (a *ChainAgent) executeChainRun(
 	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan)
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil {
-		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
 	}
 	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage)
 }
@@ -262,11 +262,13 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent *event.Event,
 ) *event.Event {
 
 	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
-		Invocation: invocation,
-		Error:      nil,
+		Invocation:        invocation,
+		Error:             nil,
+		FullResponseEvent: fullRespEvent,
 	})
 	// Use the context from result if provided.
 	if result != nil && result.Context != nil {
