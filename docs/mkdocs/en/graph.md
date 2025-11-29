@@ -2424,6 +2424,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis"
     "trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -2433,6 +2434,22 @@ saver, _ := sqlite.NewSaver(db)
 
 graphAgent, _ := graphagent.New("workflow", g,
     graphagent.WithCheckpointSaver(saver))
+
+// Checkpoints are saved automatically during execution (by default every step)
+
+// Resume from a checkpoint
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyCheckpointID: "ckpt-123",
+    }),
+)
+
+// Configure redis checkpoints
+redisSaver, _ := redis.NewSaver(redis.WithRedisClientURL("redis://[username:password@]host:port[/database]"))
+
+graphAgent, _ := graphagent.New("workflow", g,
+    graphagent.WithCheckpointSaver(redisSaver))
 
 // Checkpoints are saved automatically during execution (by default every step)
 
