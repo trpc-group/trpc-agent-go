@@ -735,20 +735,23 @@ func TestTranslateSubagentGraph_Stream(t *testing.T) {
 	translator := New("thread", "run")
 
 	const (
-		chatMessageID       = "chat-msg"
-		transferToolCallID  = "call-transfer"
-		transferResultID    = "transfer-result"
-		graphModelMessageID = "graph-model"
-		graphModelText      = "我需要先计算乘法部分，然后再进行加法运算。让我分步计算："
-		toolResponseID      = "calc-result"
+		chatMessageID      = "chat-msg"
+		transferToolCallID = "call-transfer"
+		transferResultID   = "transfer-result"
+		graphResponseID    = "graph-response"
+		graphModelText     = "我需要先计算乘法部分，然后再进行加法运算。让我分步计算："
+		toolResponseID     = "calc-result"
 	)
 
-	graphModelMeta, err := json.Marshal(graph.ModelExecutionMetadata{Output: graphModelText})
+	graphModelMeta, err := json.Marshal(graph.ModelExecutionMetadata{
+		Output:     graphModelText,
+		ResponseID: graphResponseID,
+	})
 	assert.NoError(t, err)
 	toolMeta := graph.ToolExecutionMetadata{
 		ToolName:   "calculator",
 		ToolID:     "call-00-hyBMVOPvZ",
-		ResponseID: "response-123",
+		ResponseID: graphResponseID,
 		Phase:      graph.ToolExecutionPhaseStart,
 		Input:      `{"operation":"multiply","a":456,"b":456}`,
 	}
@@ -788,7 +791,6 @@ func TestTranslateSubagentGraph_Stream(t *testing.T) {
 		},
 	}
 	graphModelEvent := &agentevent.Event{
-		ID: graphModelMessageID,
 		StateDelta: map[string][]byte{
 			graph.MetadataKeyModel: graphModelMeta,
 		},
@@ -873,16 +875,16 @@ func TestTranslateSubagentGraph_Stream(t *testing.T) {
 
 	modelStart, ok := translated[7].(*aguievents.TextMessageStartEvent)
 	assert.True(t, ok)
-	assert.Equal(t, graphModelEvent.ID, modelStart.MessageID)
+	assert.Equal(t, graphResponseID, modelStart.MessageID)
 
 	modelContent, ok := translated[8].(*aguievents.TextMessageContentEvent)
 	assert.True(t, ok)
-	assert.Equal(t, graphModelEvent.ID, modelContent.MessageID)
+	assert.Equal(t, graphResponseID, modelContent.MessageID)
 	assert.Equal(t, graphModelText, modelContent.Delta)
 
 	modelEnd, ok := translated[9].(*aguievents.TextMessageEndEvent)
 	assert.True(t, ok)
-	assert.Equal(t, graphModelEvent.ID, modelEnd.MessageID)
+	assert.Equal(t, graphResponseID, modelEnd.MessageID)
 
 	callStart, ok = translated[10].(*aguievents.ToolCallStartEvent)
 	assert.True(t, ok)
