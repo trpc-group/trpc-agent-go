@@ -1,0 +1,833 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package ollama provides Ollama-compatible model implementations.
+package ollama
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"encoding/base64"
+	"github.com/ollama/ollama/api"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+const (
+	defaultChannelBufferSize = 256
+	functionToolType         = "function"
+	// OllamaHost is the environment variable for the Ollama host.
+	OllamaHost = "OLLAMA_HOST"
+)
+
+var (
+	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
+	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
+	inputTokensFloor       = imodel.DefaultInputTokensFloor
+	outputTokensFloor      = imodel.DefaultOutputTokensFloor
+	safetyMarginRatio      = imodel.DefaultSafetyMarginRatio
+	maxInputTokensRatio    = imodel.DefaultMaxInputTokensRatio
+)
+
+// Model implements the model.Model interface for Ollama API.
+type Model struct {
+	client                     *api.Client
+	name                       string
+	host                       string
+	httpClient                 *http.Client
+	channelBufferSize          int
+	chatRequestCallback        ChatRequestCallbackFunc
+	chatResponseCallback       ChatResponseCallbackFunc
+	chatChunkCallback          ChatChunkCallbackFunc
+	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	enableTokenTailoring       bool                    // Enable automatic token tailoring.
+	maxInputTokens             int                     // Max input tokens for token tailoring.
+	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
+	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
+	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
+	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
+	// Token tailoring budget parameters (instance-level overrides).
+	protocolOverheadTokens int
+	reserveOutputTokens    int
+	inputTokensFloor       int
+	outputTokensFloor      int
+	safetyMarginRatio      float64
+	maxInputTokensRatio    float64
+	// Additional options for Ollama API. such as temperature/top_p
+	options   map[string]any
+	keepAlive *api.Duration
+}
+
+// ChatRequestCallbackFunc is the function type for the chat request callback.
+type ChatRequestCallbackFunc func(
+	ctx context.Context,
+	chatRequest *api.ChatRequest,
+)
+
+// ChatResponseCallbackFunc is the function type for the chat response callback.
+type ChatResponseCallbackFunc func(
+	ctx context.Context,
+	chatRequest *api.ChatRequest,
+	chatResponse *api.ChatResponse,
+)
+
+// ChatChunkCallbackFunc is the function type for the chat chunk callback.
+type ChatChunkCallbackFunc func(
+	ctx context.Context,
+	chatRequest *api.ChatRequest,
+	chatChunk *api.ChatResponse,
+)
+
+// ChatStreamCompleteCallbackFunc is the function type for the chat stream completion callback.
+type ChatStreamCompleteCallbackFunc func(
+	ctx context.Context,
+	chatRequest *api.ChatRequest,
+	streamErr error,
+)
+
+// options contains configuration options for creating an Ollama model.
+type options struct {
+	// Host URL for the Ollama server.
+	host string
+	// HTTP client for the Ollama client.
+	httpClient *http.Client
+	// Buffer size for response channels (default: 256)
+	channelBufferSize int
+	// Callback for the chat request.
+	chatRequestCallback ChatRequestCallbackFunc
+	// Callback for the chat response.
+	chatResponseCallback ChatResponseCallbackFunc
+	// Callback for the chat chunk.
+	chatChunkCallback ChatChunkCallbackFunc
+	// Callback for the chat stream completion.
+	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	// enableTokenTailoring enables automatic token tailoring based on model context window.
+	enableTokenTailoring bool
+	// tokenCounter count tokens for token tailoring.
+	tokenCounter model.TokenCounter
+	// tailoringStrategy defines the strategy for token tailoring.
+	tailoringStrategy model.TailoringStrategy
+	// maxInputTokens is the max input tokens for token tailoring.
+	maxInputTokens int
+	// tokenTailoringConfig allows customization of token tailoring parameters.
+	tokenTailoringConfig *model.TokenTailoringConfig
+	// Additional options for Ollama API.
+	options   map[string]any
+	keepAlive *api.Duration
+}
+
+// Option is a function that configures an Ollama model.
+type Option func(*options)
+
+// WithHost sets the host URL for the Ollama server.
+func WithHost(host string) Option {
+	return func(o *options) {
+		o.host = host
+	}
+}
+
+// withHttpClient sets the HTTP client to use.
+// The site is temporarily not open to the public, as we may implement injection of an internal http client.
+func withHttpClient(client *http.Client) Option {
+	return func(o *options) {
+		o.httpClient = client
+	}
+}
+
+// WithChannelBufferSize sets the channel buffer size for the Ollama client, 256 by default.
+func WithChannelBufferSize(size int) Option {
+	return func(o *options) {
+		if size <= 0 {
+			size = defaultChannelBufferSize
+		}
+		o.channelBufferSize = size
+	}
+}
+
+// WithChatRequestCallback sets the function to be called before sending a chat request.
+func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
+	return func(opts *options) {
+		opts.chatRequestCallback = fn
+	}
+}
+
+// WithChatResponseCallback sets the function to be called after receiving a chat response.
+func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
+	return func(opts *options) {
+		opts.chatResponseCallback = fn
+	}
+}
+
+// WithChatChunkCallback sets the function to be called after receiving a chat chunk.
+func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
+	return func(opts *options) {
+		opts.chatChunkCallback = fn
+	}
+}
+
+// WithChatStreamCompleteCallback sets the function to be called when streaming is completed.
+func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
+	return func(opts *options) {
+		opts.chatStreamCompleteCallback = fn
+	}
+}
+
+// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
+func WithEnableTokenTailoring(enabled bool) Option {
+	return func(opts *options) {
+		opts.enableTokenTailoring = enabled
+	}
+}
+
+// WithMaxInputTokens sets only the input token limit for token tailoring.
+func WithMaxInputTokens(limit int) Option {
+	return func(opts *options) {
+		opts.maxInputTokens = limit
+	}
+}
+
+// WithTokenCounter sets the TokenCounter used for token tailoring.
+func WithTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *options) {
+		opts.tokenCounter = counter
+	}
+}
+
+// WithTailoringStrategy sets the TailoringStrategy used for token tailoring.
+func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
+	return func(opts *options) {
+		opts.tailoringStrategy = strategy
+	}
+}
+
+// WithTokenTailoringConfig sets custom token tailoring budget parameters.
+func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
+	return func(opts *options) {
+		opts.tokenTailoringConfig = config
+	}
+}
+
+// WithOptions sets additional options for Ollama API.
+func WithOptions(opt map[string]any) Option {
+	return func(opts *options) {
+		opts.options = opt
+	}
+}
+
+// WithKeepAlive sets the keep alive duration for the Ollama API.
+func WithKeepAlive(duration time.Duration) Option {
+	return func(opts *options) {
+		d := api.Duration{Duration: duration}
+		opts.keepAlive = &d
+	}
+}
+
+// New creates a new Ollama model adapter.
+func New(name string, opts ...Option) *Model {
+	defaultPort := "11434"
+	o := &options{
+		channelBufferSize: defaultChannelBufferSize,
+		host:              "http://localhost:11434",
+		httpClient:        http.DefaultClient,
+	}
+
+	// Get host from environment variable if set.
+	if ollamaHost := os.Getenv(OllamaHost); ollamaHost != "" {
+		o.host = ollamaHost
+	}
+
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	// Initialize token tailoring budget parameters with defaults.
+	protocolOverhead := protocolOverheadTokens
+	reserveOutput := reserveOutputTokens
+	inputFloor := inputTokensFloor
+	outputFloor := outputTokensFloor
+	safetyMargin := safetyMarginRatio
+	maxInputRatio := maxInputTokensRatio
+
+	// Apply custom token tailoring config if provided.
+	if o.tokenTailoringConfig != nil {
+		if o.tokenTailoringConfig.ProtocolOverheadTokens > 0 {
+			protocolOverhead = o.tokenTailoringConfig.ProtocolOverheadTokens
+		}
+		if o.tokenTailoringConfig.ReserveOutputTokens > 0 {
+			reserveOutput = o.tokenTailoringConfig.ReserveOutputTokens
+		}
+		if o.tokenTailoringConfig.InputTokensFloor > 0 {
+			inputFloor = o.tokenTailoringConfig.InputTokensFloor
+		}
+		if o.tokenTailoringConfig.OutputTokensFloor > 0 {
+			outputFloor = o.tokenTailoringConfig.OutputTokensFloor
+		}
+		if o.tokenTailoringConfig.SafetyMarginRatio > 0 {
+			safetyMargin = o.tokenTailoringConfig.SafetyMarginRatio
+		}
+		if o.tokenTailoringConfig.MaxInputTokensRatio > 0 {
+			maxInputRatio = o.tokenTailoringConfig.MaxInputTokensRatio
+		}
+	}
+
+	s := strings.TrimSpace(o.host)
+	scheme, hostport, ok := strings.Cut(s, "://")
+	switch {
+	case !ok:
+		scheme, hostport = "http", s
+		if s == "ollama.com" {
+			scheme, hostport = "https", "ollama.com:443"
+		}
+	case scheme == "http":
+		defaultPort = "80"
+	case scheme == "https":
+		defaultPort = "443"
+	}
+
+	hostport, path, _ := strings.Cut(hostport, "/")
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host, port = "127.0.0.1", defaultPort
+		if ip := net.ParseIP(strings.Trim(hostport, "[]")); ip != nil {
+			host = ip.String()
+		} else if hostport != "" {
+			host = hostport
+		}
+	}
+
+	if n, err := strconv.ParseInt(port, 10, 32); err != nil || n > 65535 || n < 0 {
+		port = defaultPort
+	}
+
+	baseURL := &url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(host, port),
+		Path:   path,
+	}
+	o.host = fmt.Sprintf("%s://%s", scheme, baseURL.Host)
+
+	// Create Ollama API client.
+	client := api.NewClient(baseURL, o.httpClient)
+
+	// Provide defaults at construction time when token tailoring is enabled.
+	if o.maxInputTokens > 0 {
+		if o.tokenCounter == nil {
+			o.tokenCounter = model.NewSimpleTokenCounter()
+		}
+		if o.tailoringStrategy == nil {
+			o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
+		}
+	}
+
+	return &Model{
+		client:                     client,
+		name:                       name,
+		host:                       o.host,
+		channelBufferSize:          o.channelBufferSize,
+		chatRequestCallback:        o.chatRequestCallback,
+		chatResponseCallback:       o.chatResponseCallback,
+		chatChunkCallback:          o.chatChunkCallback,
+		chatStreamCompleteCallback: o.chatStreamCompleteCallback,
+		enableTokenTailoring:       o.enableTokenTailoring,
+		tokenCounter:               o.tokenCounter,
+		tailoringStrategy:          o.tailoringStrategy,
+		maxInputTokens:             o.maxInputTokens,
+		protocolOverheadTokens:     protocolOverhead,
+		reserveOutputTokens:        reserveOutput,
+		inputTokensFloor:           inputFloor,
+		outputTokensFloor:          outputFloor,
+		safetyMarginRatio:          safetyMargin,
+		maxInputTokensRatio:        maxInputRatio,
+		options:                    o.options,
+		keepAlive:                  o.keepAlive,
+	}
+}
+
+// Info returns the model information.
+func (m *Model) Info() model.Info {
+	return model.Info{
+		Name: m.name,
+	}
+}
+
+// GenerateContent generates content from the model.
+func (m *Model) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	if request == nil {
+		return nil, errors.New("request cannot be nil")
+	}
+
+	// Apply token tailoring if configured.
+	m.applyTokenTailoring(ctx, request)
+
+	chatRequest, err := m.buildChatRequest(request)
+	if err != nil {
+		return nil, fmt.Errorf("build chat request: %w", err)
+	}
+
+	// Send chat request and handle response.
+	responseChan := make(chan *model.Response, m.channelBufferSize)
+	go func() {
+		defer close(responseChan)
+		if m.chatRequestCallback != nil {
+			m.chatRequestCallback(ctx, chatRequest)
+		}
+		if request.Stream {
+			m.handleStreamingResponse(ctx, *chatRequest, responseChan)
+			return
+		}
+		m.handleNonStreamingResponse(ctx, *chatRequest, responseChan)
+	}()
+	return responseChan, nil
+}
+
+// applyTokenTailoring performs best-effort token tailoring if configured.
+func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
+	// Early return if token tailoring is disabled or no messages to process.
+	if !m.enableTokenTailoring || len(request.Messages) == 0 {
+		return
+	}
+
+	// Determine max input tokens using priority: user config > auto calculation > default.
+	maxInputTokens := m.maxInputTokens
+	if maxInputTokens <= 0 {
+		// Auto-calculate based on model context window with custom or default parameters.
+		contextWindow := imodel.ResolveContextWindow(m.name)
+		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
+			// Use custom parameters if any are set.
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				m.protocolOverheadTokens,
+				m.reserveOutputTokens,
+				m.inputTokensFloor,
+				m.safetyMarginRatio,
+				m.maxInputTokensRatio,
+			)
+		} else {
+			// Use default parameters.
+			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
+		}
+		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
+			m.name, contextWindow, maxInputTokens)
+	}
+
+	// Determine token counter using priority: user config > default.
+	tokenCounter := m.tokenCounter
+	if tokenCounter == nil {
+		m.tokenCounterOnce.Do(func() {
+			if m.tokenCounter == nil {
+				m.tokenCounter = model.NewSimpleTokenCounter()
+			}
+		})
+		tokenCounter = m.tokenCounter
+	}
+
+	// Determine tailoring strategy using priority: user config > default.
+	tailoringStrategy := m.tailoringStrategy
+	if tailoringStrategy == nil {
+		m.tailoringStrategyOnce.Do(func() {
+			if m.tailoringStrategy == nil {
+				m.tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
+			}
+		})
+		tailoringStrategy = m.tailoringStrategy
+	}
+
+	// Apply token tailoring.
+	tailored, err := tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	if err != nil {
+		log.Warn("token tailoring failed in ollama.Model", err)
+		return
+	}
+
+	request.Messages = tailored
+
+	// Calculate remaining tokens for output based on context window.
+	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	if err != nil {
+		log.Warn("failed to count tokens after tailoring", err)
+		return
+	}
+
+	// Set max output tokens only if user hasn't specified it.
+	if request.GenerationConfig.MaxTokens == nil {
+		contextWindow := imodel.ResolveContextWindow(m.name)
+		var maxOutputTokens int
+		if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {
+			// Use custom parameters if any are set.
+			maxOutputTokens = imodel.CalculateMaxOutputTokensWithParams(
+				contextWindow,
+				usedTokens,
+				m.protocolOverheadTokens,
+				m.outputTokensFloor,
+				m.safetyMarginRatio,
+			)
+		} else {
+			// Use default parameters.
+			maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
+		}
+		if maxOutputTokens > 0 {
+			request.GenerationConfig.MaxTokens = &maxOutputTokens
+			log.Debugf("token tailoring: contextWindow=%d, usedTokens=%d, maxOutputTokens=%d",
+				contextWindow, usedTokens, maxOutputTokens)
+		}
+	}
+}
+
+// buildChatRequest builds the chat request for the Ollama API.
+func (m *Model) buildChatRequest(request *model.Request) (*api.ChatRequest, error) {
+	// Convert messages to Ollama format.
+	messages, err := convertMessages(request.Messages)
+	if err != nil {
+		return nil, err
+	}
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("request must include at least one message")
+	}
+
+	// Build chat request.
+	chatRequest := &api.ChatRequest{
+		Model:    m.name,
+		Messages: messages,
+		Tools:    convertTools(request.Tools),
+		Options:  m.options,
+	}
+	if chatRequest.Options == nil {
+		chatRequest.Options = make(map[string]any)
+	}
+
+	// Set stream option.
+	chatRequest.Stream = &request.Stream
+
+	// Set generation parameters.
+	if request.Temperature != nil {
+		chatRequest.Options["temperature"] = *request.Temperature
+	}
+	if request.TopP != nil {
+		chatRequest.Options["top_p"] = *request.TopP
+	}
+	if len(request.Stop) > 0 {
+		chatRequest.Options["stop"] = request.Stop
+	}
+	if request.MaxTokens != nil {
+		chatRequest.Options["num_predict"] = *request.MaxTokens
+	}
+	if request.ThinkingEnabled != nil {
+		chatRequest.Think = &api.ThinkValue{
+			Value: *request.ThinkingEnabled,
+		}
+	}
+
+	// Set keep alive if configured.
+	if m.keepAlive != nil {
+		chatRequest.KeepAlive = m.keepAlive
+	}
+
+	return chatRequest, nil
+}
+
+// handleNonStreamingResponse sends a non-streaming request to the Ollama API.
+func (m *Model) handleNonStreamingResponse(
+	ctx context.Context,
+	chatRequest api.ChatRequest,
+	responseChan chan<- *model.Response,
+) {
+	// Issue non-streaming request.
+	var chatResponse api.ChatResponse
+	err := m.client.Chat(ctx, &chatRequest, func(resp api.ChatResponse) error {
+		chatResponse = resp
+		return nil
+	})
+	if err != nil {
+		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
+		return
+	}
+
+	if m.chatResponseCallback != nil {
+		m.chatResponseCallback(ctx, &chatRequest, &chatResponse)
+	}
+
+	response, err := convertChatResponse(chatResponse)
+	if err != nil {
+		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
+		return
+	}
+
+	// Emit final response.
+	select {
+	case responseChan <- response:
+	case <-ctx.Done():
+	}
+}
+
+// handleStreamingResponse sends a streaming request to the Ollama API.
+func (m *Model) handleStreamingResponse(
+	ctx context.Context,
+	chatRequest api.ChatRequest,
+	responseChan chan<- *model.Response,
+) {
+	var streamErr error
+
+	err := m.client.Chat(ctx, &chatRequest, func(chunk api.ChatResponse) error {
+		if m.chatChunkCallback != nil {
+			m.chatChunkCallback(ctx, &chatRequest, &chunk)
+		}
+
+		response, err := convertChatResponse(chunk)
+		if err != nil {
+			return err
+		}
+
+		// Emit partial response.
+		select {
+		case responseChan <- response:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		streamErr = err
+		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
+	}
+
+	// Call the stream complete callback.
+	if m.chatStreamCompleteCallback != nil {
+		m.chatStreamCompleteCallback(ctx, &chatRequest, streamErr)
+	}
+}
+
+// sendErrorResponse sends an error response through the channel.
+func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *model.Response, errType string, err error) {
+	errorResponse := &model.Response{
+		Error: &model.ResponseError{
+			Message: err.Error(),
+			Type:    errType,
+		},
+		Timestamp: time.Now(),
+		Done:      true,
+	}
+	select {
+	case responseChan <- errorResponse:
+	case <-ctx.Done():
+	}
+}
+
+// convertMessages converts model messages to Ollama messages.
+func convertMessages(messages []model.Message) ([]api.Message, error) {
+	result := make([]api.Message, 0, len(messages))
+	for _, msg := range messages {
+		oMsg, err := convertMessage(msg)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, oMsg)
+	}
+	return result, nil
+}
+
+func convertChatResponse(resp api.ChatResponse) (*model.Response, error) {
+	var toolCalls []model.ToolCall
+	for _, toolCall := range resp.Message.ToolCalls {
+		args, err := json.Marshal(toolCall.Function.Arguments)
+		if err != nil {
+			return nil, err
+		}
+		toolCalls = append(toolCalls, model.ToolCall{
+			Type: functionToolType,
+			ID:   toolCall.ID,
+			Function: model.FunctionDefinitionParam{
+				Name:      toolCall.Function.Name,
+				Arguments: args,
+			},
+		})
+	}
+	choice := model.Choice{}
+	done := resp.Done
+	obj := model.ObjectTypeChatCompletionChunk
+	var usage *model.Usage
+	if done {
+		obj = model.ObjectTypeChatCompletion
+		choice.Message = model.Message{
+			Role:             model.RoleAssistant,
+			ReasoningContent: resp.Message.Thinking,
+			Content:          resp.Message.Content,
+			ToolCalls:        toolCalls,
+		}
+		usage = &model.Usage{
+			PromptTokens:     resp.PromptEvalCount,
+			CompletionTokens: resp.EvalCount,
+			TotalTokens:      resp.PromptEvalCount + resp.EvalCount,
+		}
+	} else {
+		choice.Delta = model.Message{
+			Role:             model.RoleAssistant,
+			ReasoningContent: resp.Message.Thinking,
+			Content:          resp.Message.Content,
+			ToolCalls:        toolCalls,
+		}
+	}
+	now := time.Now()
+	msg := &model.Response{
+		Object:    obj,
+		Created:   now.Unix(),
+		Timestamp: now,
+		IsPartial: !done,
+		Choices: []model.Choice{
+			choice,
+		},
+		Model: resp.Model,
+		Done:  done,
+		Usage: usage,
+	}
+	return msg, nil
+}
+
+// convertMessage converts a model message to an Ollama message.
+// ollama only support system/user/assistant role msg
+func convertMessage(msg model.Message) (api.Message, error) {
+	var toolCalls []api.ToolCall
+	for i, toolCall := range msg.ToolCalls {
+		args, err := argsToObject(toolCall.Function.Arguments)
+		if err != nil {
+			return api.Message{}, err
+		}
+		toolCalls = append(toolCalls, api.ToolCall{
+			Function: api.ToolCallFunction{
+				Index:     i,
+				Name:      toolCall.Function.Name,
+				Arguments: args,
+			},
+		})
+	}
+	// ollama role ("system", "user", or "assistant")
+	var role string
+	switch msg.Role {
+	case model.RoleSystem:
+		role = "system"
+	case model.RoleUser, model.RoleTool:
+		role = "user"
+	case model.RoleAssistant:
+		role = "assistant"
+	default:
+		role = "user"
+	}
+	oMsg := api.Message{
+		Role:      role,
+		Thinking:  msg.ReasoningContent,
+		ToolCalls: toolCalls,
+	}
+	if len(msg.ContentParts) == 0 {
+		oMsg.Content = msg.Content
+		return oMsg, nil
+	}
+
+	var content string
+	var images []api.ImageData
+	for _, part := range msg.ContentParts {
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text != nil {
+				content += *part.Text
+			}
+		case model.ContentTypeImage:
+			if part.Image != nil && part.Image.Data != nil {
+				images = append(images, []byte(imageToURLOrBase64(part.Image)))
+			}
+		default:
+		}
+	}
+	oMsg.Content = content
+	oMsg.Images = images
+	return oMsg, nil
+}
+
+// convertTools converts our tool declarations to Ollama tool parameters.
+func convertTools(tools map[string]tool.Tool) []api.Tool {
+	var result []api.Tool
+	for _, tl := range tools {
+		properties := make(map[string]api.ToolProperty)
+		var required []string
+
+		decl := tl.Declaration()
+		if decl.InputSchema != nil && decl.InputSchema.Properties != nil {
+			for name, prop := range decl.InputSchema.Properties {
+				properties[name] = api.ToolProperty{
+					Type:        api.PropertyType{prop.Type},
+					Description: prop.Description,
+					Items:       prop.Items,
+					Enum:        prop.Enum,
+				}
+				required = append(required, prop.Required...)
+			}
+		}
+		result = append(result, api.Tool{
+			Type: functionToolType,
+			Function: api.ToolFunction{
+				Name:        decl.Name,
+				Description: buildToolDescription(decl),
+				Parameters: api.ToolFunctionParameters{
+					Type:       "object",
+					Properties: properties,
+					Required:   required,
+				},
+			},
+		})
+	}
+	return result
+}
+
+// buildToolDescription builds the description for a tool.
+// It appends the output schema to the description.
+func buildToolDescription(declaration *tool.Declaration) string {
+	desc := declaration.Description
+	if declaration.OutputSchema == nil {
+		return desc
+	}
+	schemaJSON, err := json.Marshal(declaration.OutputSchema)
+	if err != nil {
+		log.Debugf("marshal output schema for tool %s: %v", declaration.Name, err)
+		return desc
+	}
+	desc += "Output schema: " + string(schemaJSON)
+	return desc
+}
+
+func imageToURLOrBase64(image *model.Image) string {
+	if len(image.Data) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(image.Data)
+}
+
+func argsToObject(args []byte) (map[string]any, error) {
+	var result map[string]any
+	if err := json.Unmarshal(args, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal tool call arguments: %w", err)
+	}
+	return result, nil
+}

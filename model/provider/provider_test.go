@@ -20,6 +20,7 @@ import (
 
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/ollama/ollama/api"
 	openaisdk "github.com/openai/openai-go"
 	"github.com/stretchr/testify/assert"
 
@@ -27,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/model/ollama"
 )
 
 func TestModelUnknownProvider(t *testing.T) {
@@ -395,6 +397,29 @@ func TestModelWithAllOptions(t *testing.T) {
 	)
 	assert.Error(t, err)
 	assert.Nil(t, modelInstance)
+
+	modelInstance, err = Model(
+		"ollama",
+		"llama3.2:latest",
+		WithBaseURL("https://test.example.com"),
+		WithChannelBufferSize(128),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(2048),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+		WithTokenTailoringConfig(config),
+		WithCallbacks(
+			Callbacks{
+				OllamaChatRequest:    ollama.ChatRequestCallbackFunc(func(context.Context, *api.ChatRequest) {}),
+				OllamaChatResponse:   ollama.ChatResponseCallbackFunc(func(context.Context, *api.ChatRequest, *api.ChatResponse) {}),
+				OllamaChatChunk:      ollama.ChatChunkCallbackFunc(func(context.Context, *api.ChatRequest, *api.ChatResponse) {}),
+				OllamaStreamComplete: ollama.ChatStreamCompleteCallbackFunc(func(context.Context, *api.ChatRequest, error) {}),
+			},
+		),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, modelInstance)
+	assert.Equal(t, "llama3.2:latest", modelInstance.Info().Name)
 }
 
 func readStringField(obj any, name string) string {

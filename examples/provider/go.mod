@@ -7,6 +7,7 @@ toolchain go1.24.11
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
+	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../model/provider
 )
 
@@ -32,6 +33,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/ollama/ollama v0.13.0 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
