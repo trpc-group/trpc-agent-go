@@ -11,7 +11,6 @@ package pgvector
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -240,12 +239,6 @@ func TestVectorStore_Update(t *testing.T) {
 			},
 			vector: []float64{0.9, 0.6, 0.3},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				// Expect document exists check
-				existsRows := mockExistsRow(true)
-				mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-					WithArgs("test_001").
-					WillReturnRows(existsRows)
-
 				// Expect update (6 args: id, updated_at, name, content, embedding, metadata)
 				mock.ExpectExec("UPDATE documents SET").
 					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -254,12 +247,11 @@ func TestVectorStore_Update(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:      "nil_document",
-			doc:       nil,
-			vector:    []float64{1.0, 0.5, 0.2},
-			setupMock: func(mock sqlmock.Sqlmock) {},
-			wantErr:   true,
-			errMsg:    "document is required",
+			name:    "nil_document",
+			doc:     nil,
+			vector:  []float64{1.0, 0.5, 0.2},
+			wantErr: true,
+			errMsg:  "document is required",
 		},
 		{
 			name: "empty_document_id",
@@ -267,10 +259,9 @@ func TestVectorStore_Update(t *testing.T) {
 				ID:      "",
 				Content: "Test",
 			},
-			vector:    []float64{1.0, 0.5, 0.2},
-			setupMock: func(mock sqlmock.Sqlmock) {},
-			wantErr:   true,
-			errMsg:    "document ID is required",
+			vector:  []float64{1.0, 0.5, 0.2},
+			wantErr: true,
+			errMsg:  "document ID is required",
 		},
 		{
 			name: "document_not_found",
@@ -278,31 +269,15 @@ func TestVectorStore_Update(t *testing.T) {
 				ID:      "non_existent",
 				Content: "Test",
 			},
-			vector: []float64{1.0, 0.5, 0.2},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				existsRows := mockExistsRow(false)
-				mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-					WithArgs("non_existent").
-					WillReturnRows(existsRows)
+				// Expect update (6 args: id, updated_at, name, content, embedding, metadata)
+				mock.ExpectExec("UPDATE documents SET").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(0, 0))
 			},
+			vector:  []float64{1.0, 0.5, 0.2},
 			wantErr: true,
-			errMsg:  "not found",
-		},
-		{
-			name: "document_check_query_error",
-			doc: &document.Document{
-				ID:      "query_error_test",
-				Content: "Test",
-			},
-			vector: []float64{1.0, 0.5, 0.2},
-			setupMock: func(mock sqlmock.Sqlmock) {
-				// Return a query error that's not sql.ErrNoRows
-				mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-					WithArgs("query_error_test").
-					WillReturnError(sql.ErrNoRows)
-			},
-			wantErr: true,
-			errMsg:  "check document existence",
+			errMsg:  "pgvector document not updated",
 		},
 		{
 			name: "dimension_mismatch",
@@ -310,13 +285,7 @@ func TestVectorStore_Update(t *testing.T) {
 				ID:      "test_002",
 				Content: "Test",
 			},
-			vector: []float64{1.0, 0.5}, // Only 2 dimensions
-			setupMock: func(mock sqlmock.Sqlmock) {
-				existsRows := mockExistsRow(true)
-				mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-					WithArgs("test_002").
-					WillReturnRows(existsRows)
-			},
+			vector:  []float64{1.0, 0.5}, // Only 2 dimensions
 			wantErr: true,
 			errMsg:  "dimension mismatch",
 		},
@@ -327,7 +296,9 @@ func TestVectorStore_Update(t *testing.T) {
 			vs, tc := newTestVectorStore(t, WithIndexDimension(3))
 			defer tc.Close()
 
-			tt.setupMock(tc.mock)
+			if tt.setupMock != nil {
+				tt.setupMock(tc.mock)
+			}
 
 			err := vs.Update(context.Background(), tt.doc, tt.vector)
 
@@ -677,11 +648,6 @@ func TestVectorStore_Update_RowsAffectedError(t *testing.T) {
 	}
 	vector := []float64{1.0, 0.5, 0.2}
 
-	// Mock document exists check
-	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-		WithArgs("test_001").
-		WillReturnRows(mockExistsRow(true))
-
 	// Mock update that succeeds but RowsAffected fails
 	tc.mock.ExpectExec("UPDATE documents").
 		WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected error")))
@@ -1027,35 +993,6 @@ func TestVectorStore_QueryMetadataBatch_QueryError(t *testing.T) {
 	assert.Contains(t, err.Error(), "get metadata batch")
 }
 
-// TestVectorStore_DocumentExists_NoRows tests documentExists when no rows returned
-func TestVectorStore_DocumentExists_NoRows(t *testing.T) {
-	vs, tc := newTestVectorStore(t)
-	defer tc.Close()
-
-	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-		WithArgs("test_001").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}))
-
-	exists, err := vs.documentExists(context.Background(), "test_001")
-	require.NoError(t, err)
-	assert.False(t, exists)
-}
-
-// TestVectorStore_DocumentExists_QueryError tests documentExists with query error
-func TestVectorStore_DocumentExists_QueryError(t *testing.T) {
-	vs, tc := newTestVectorStore(t)
-	defer tc.Close()
-
-	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-		WithArgs("test_001").
-		WillReturnError(errors.New("database error"))
-
-	exists, err := vs.documentExists(context.Background(), "test_001")
-	require.Error(t, err)
-	assert.False(t, exists)
-	assert.Contains(t, err.Error(), "database error")
-}
-
 // TestMapToJSON_MarshalError tests mapToJSON with unmarshalable data
 func TestMapToJSON_MarshalError(t *testing.T) {
 	// Create a map with a value that cannot be marshaled to JSON
@@ -1124,32 +1061,4 @@ func TestVectorStore_GetMetadata_OptionsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "limit should be greater than 0")
-}
-
-// TestVectorStore_DocumentExists_ScanError tests documentExists with scan error (line 705)
-func TestVectorStore_DocumentExists_ScanError(t *testing.T) {
-	vs, tc := newTestVectorStore(t)
-	defer tc.Close()
-
-	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-		WithArgs("test_001").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow("invalid"))
-
-	exists, err := vs.documentExists(context.Background(), "test_001")
-	require.Error(t, err)
-	assert.False(t, exists)
-}
-
-// TestVectorStore_DocumentExists_ErrNoRows tests documentExists with ErrNoRows (line 713)
-func TestVectorStore_DocumentExists_ErrNoRows(t *testing.T) {
-	vs, tc := newTestVectorStore(t)
-	defer tc.Close()
-
-	tc.mock.ExpectQuery("SELECT 1 FROM documents WHERE id").
-		WithArgs("test_001").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}))
-
-	exists, err := vs.documentExists(context.Background(), "test_001")
-	require.NoError(t, err)
-	assert.False(t, exists)
 }

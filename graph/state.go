@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -33,6 +34,8 @@ const (
 	// StateKeyMessages is the key of the messages.
 	// Typically it is used and updated by the LLM node.
 	StateKeyMessages = "messages"
+	// StateKeyLastResponseID stores the ID of the last model response.
+	StateKeyLastResponseID = "last_response_id"
 	// StateKeyMetadata is the key of the metadata.
 	StateKeyMetadata = "metadata"
 	// StateKeyExecContext is the key of the execution context.
@@ -67,19 +70,7 @@ type State map[string]any
 //	    // use userInput
 //	}
 func GetStateValue[T any](s State, key string) (T, bool) {
-	var zero T
-	if s == nil {
-		return zero, false
-	}
-	val, ok := s[key]
-	if !ok {
-		return zero, false
-	}
-	typedVal, ok := val.(T)
-	if !ok {
-		return zero, false
-	}
-	return typedVal, true
+	return util.GetMapValue[string, T](s, key)
 }
 
 // Clone creates a deep copy of the state.

@@ -274,6 +274,10 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 	// Add parent agent to state so agent nodes can access sub-agents.
 	initialState[graph.StateKeyParentAgent] = ga
+	// Set checkpoint namespace if not already set.
+	if ns, ok := initialState[graph.CfgKeyCheckpointNS].(string); !ok || ns == "" {
+		initialState[graph.CfgKeyCheckpointNS] = ga.name
+	}
 
 	return initialState
 }
@@ -319,16 +323,21 @@ func (ga *GraphAgent) wrapEventChannel(
 	wrappedChan := make(chan *event.Event, ga.channelBufferSize)
 	go func() {
 		defer close(wrappedChan)
+		var fullRespEvent *event.Event
 		// Forward all events from the original channel
 		for evt := range originalChan {
+			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+				fullRespEvent = evt
+			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
 		// After all events are processed, run after agent callbacks
 		result, err := ga.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
-			Invocation: invocation,
-			Error:      nil,
+			Invocation:        invocation,
+			Error:             nil,
+			FullResponseEvent: fullRespEvent,
 		})
 		// Use the context from result if provided.
 		if result != nil && result.Context != nil {

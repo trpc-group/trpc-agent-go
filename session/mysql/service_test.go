@@ -1666,7 +1666,7 @@ func TestNewService_MissingDSNAndInstance(t *testing.T) {
 	svc, err := NewService()
 	assert.Error(t, err)
 	assert.Nil(t, svc)
-	assert.Contains(t, err.Error(), "either dsn or instance name must be provided")
+	assert.Contains(t, err.Error(), "create mysql client failed")
 }
 
 func TestNewService_WithInstance_Success(t *testing.T) {
@@ -1725,7 +1725,7 @@ func TestNewService_ClientBuilderError(t *testing.T) {
 	)
 	assert.Error(t, err)
 	assert.Nil(t, svc)
-	assert.Contains(t, err.Error(), "create mysql client from dsn failed")
+	assert.Contains(t, err.Error(), "create mysql client failed")
 
 	// Test with instance name
 	storage.RegisterMySQLInstance("test-error-instance",
@@ -1737,7 +1737,7 @@ func TestNewService_ClientBuilderError(t *testing.T) {
 	)
 	assert.Error(t, err)
 	assert.Nil(t, svc)
-	assert.Contains(t, err.Error(), "create mysql client from instance name failed")
+	assert.Contains(t, err.Error(), "create mysql client failed")
 }
 
 func TestNewService_DBInitFailure(t *testing.T) {
