@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/memory/postgres
 
-go 1.21.0
+go 1.21
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..

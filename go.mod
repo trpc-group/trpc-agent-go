@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go
 
-go 1.21.0
+go 1.21
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1

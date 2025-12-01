@@ -127,7 +127,7 @@ func (e *emailToolSet) sendMail(ctx context.Context, req *sendMailRequest) (rsp 
 func (e *emailToolSet) getEmailAddr(req *sendMailRequest) (addr string, port int, isSSL bool, err error) {
 	mailBoxType, err := checkMailBoxType(req.Auth.Name)
 	if err != nil {
-		err = fmt.Errorf("checkMailBoxType ERROR: %v", err)
+		err = fmt.Errorf("checkMailBoxType ERROR: %v addr:%s", err, req.Auth.Name)
 		return
 	}
 
@@ -167,10 +167,8 @@ func checkMailBoxType(email string) (MailboxType, error) {
 	if err != nil {
 		return MAIL_UNKNOWN, fmt.Errorf("parse email address ERROR: %w", err)
 	}
-	log.Infof("addr: %v", addr)
 	// to lower
 	emailAddr := strings.ToLower(addr.Address)
-	log.Infof("emailAddr: %v", emailAddr)
 
 	// split by name and domain
 	lastAt := strings.LastIndex(emailAddr, "@")
@@ -179,7 +177,6 @@ func checkMailBoxType(email string) (MailboxType, error) {
 	}
 	domain := emailAddr[lastAt:]
 	domain = strings.TrimPrefix(domain, "@")
-	log.Infof("domain: %v", domain)
 
 	switch domain {
 	case "qq.com", "vip.qq.com", "foxmail.com":
@@ -203,7 +200,7 @@ func (e *emailToolSet) sendMailTool() tool.CallableTool {
 }
 
 func qqHandleError(err error) error {
-	log.Infof("err: %v %T", err, err)
+	//log.Infof("err: %v %T", err, err)
 
 	var sendErr *gomail.SendError
 	// Check if this is an SMTP RESET error after successful delivery
