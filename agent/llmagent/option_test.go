@@ -53,3 +53,84 @@ func TestWithChannelBufferSize(t *testing.T) {
 		})
 	}
 }
+
+func TestWithMessageFilterMode(t *testing.T) {
+	tests := []struct {
+		name                   string
+		inputMode              MessageFilterMode
+		wantBranchFilterMode   string
+		wantTimelineFilterMode string
+		wantPanic              bool
+	}{
+		{
+			name:                   "FullPrefix mode",
+			inputMode:              FullPrefix,
+			wantBranchFilterMode:   BranchFilterModePrefix,
+			wantTimelineFilterMode: TimelineFilterAll,
+			wantPanic:              false,
+		},
+		{
+			name:                   "CurrentRequest mode",
+			inputMode:              CurrentRequest,
+			wantBranchFilterMode:   BranchFilterModePrefix,
+			wantTimelineFilterMode: TimelineFilterCurrentRequest,
+			wantPanic:              false,
+		},
+		{
+			name:                   "CurrentInvocation mode",
+			inputMode:              CurrentInvocation,
+			wantBranchFilterMode:   BranchFilterModePrefix,
+			wantTimelineFilterMode: TimelineFilterCurrentInvocation,
+			wantPanic:              false,
+		},
+		{
+			name:                   "IsolatedRequest mode",
+			inputMode:              IsolatedRequest,
+			wantBranchFilterMode:   BranchFilterModeExact,
+			wantTimelineFilterMode: TimelineFilterCurrentRequest,
+			wantPanic:              false,
+		},
+		{
+			name:                   "IsolatedInvocation mode",
+			inputMode:              IsolatedInvocation,
+			wantBranchFilterMode:   BranchFilterModeExact,
+			wantTimelineFilterMode: TimelineFilterCurrentInvocation,
+			wantPanic:              false,
+		},
+		{
+			name:      "Invalid mode should panic",
+			inputMode: MessageFilterMode(99), // 无效值
+			wantPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 测试 panic 情况
+			if tt.wantPanic {
+				defer func() {
+					if r := recover(); r == nil {
+						t.Error("Expected panic but did not get one")
+					}
+				}()
+			}
+
+			// 执行选项函数
+			opt := WithMessageFilterMode(tt.inputMode)
+			opts := &Options{} // 假设 Options 结构体已定义
+			opt(opts)
+
+			// 验证结果（非 panic 情况）
+			if !tt.wantPanic {
+				if opts.messageBranchFilterMode != tt.wantBranchFilterMode {
+					t.Errorf("BranchFilterMode got = %v, want %v",
+						opts.messageBranchFilterMode, tt.wantBranchFilterMode)
+				}
+				if opts.messageTimelineFilterMode != tt.wantTimelineFilterMode {
+					t.Errorf("TimelineFilterMode got = %v, want %v",
+						opts.messageTimelineFilterMode, tt.wantTimelineFilterMode)
+				}
+			}
+		})
+	}
+}
