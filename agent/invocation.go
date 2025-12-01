@@ -662,6 +662,8 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	select {
 	case <-ch:
 	case <-time.After(timeout):
+		log.Infof("[AddNoticeChannelAndWait]: Wait for notification message timeout. key: %s, timeout: %d(s)",
+			key, int64(timeout/time.Second))
 		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
 	case <-ctx.Done():
 		return ctx.Err()
@@ -702,6 +704,7 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 
 	ch, ok := inv.noticeChanMap[key]
 	if !ok {
+		log.Warnf("notice channel not found for %s", key)
 		return fmt.Errorf("notice channel not found for %s", key)
 	}
 
