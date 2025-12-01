@@ -99,14 +99,13 @@ func TestWithMessageFilterMode(t *testing.T) {
 		},
 		{
 			name:      "Invalid mode should panic",
-			inputMode: MessageFilterMode(99), // 无效值
+			inputMode: MessageFilterMode(99),
 			wantPanic: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// 测试 panic 情况
 			if tt.wantPanic {
 				defer func() {
 					if r := recover(); r == nil {
@@ -115,12 +114,10 @@ func TestWithMessageFilterMode(t *testing.T) {
 				}()
 			}
 
-			// 执行选项函数
 			opt := WithMessageFilterMode(tt.inputMode)
-			opts := &Options{} // 假设 Options 结构体已定义
+			opts := &Options{}
 			opt(opts)
 
-			// 验证结果（非 panic 情况）
 			if !tt.wantPanic {
 				if opts.messageBranchFilterMode != tt.wantBranchFilterMode {
 					t.Errorf("BranchFilterMode got = %v, want %v",
