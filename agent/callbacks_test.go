@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -629,4 +630,176 @@ func TestAgentCallbacks_BothOptions_ContinuesExecution(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "response 2", result.CustomResponse.ID)
 	require.Equal(t, []int{1, 2, 3}, executed)
+}
+
+// TestAgentCallbacks_After_FullResponseEvent tests that FullResponseEvent
+// is correctly passed to after agent callbacks.
+func TestAgentCallbacks_After_FullResponseEvent(t *testing.T) {
+	callbacks := NewCallbacks()
+	fullRespEvent := event.NewResponseEvent(
+		"test-invocation",
+		"test-agent",
+		&model.Response{
+			ID:   "test-response",
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Hello, world!",
+					},
+				},
+			},
+		},
+	)
+
+	var capturedEvent *event.Event
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		capturedEvent = args.FullResponseEvent
+		return nil, nil
+	})
+
+	args := &AfterAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+		Error:             nil,
+		FullResponseEvent: fullRespEvent,
+	}
+	result, err := callbacks.RunAfterAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, capturedEvent)
+	require.Equal(t, fullRespEvent, capturedEvent)
+	require.Equal(t, "test-response", capturedEvent.Response.ID)
+	require.Equal(t, "Hello, world!", capturedEvent.Response.Choices[0].Message.Content)
+	require.Nil(t, result)
+}
+
+// TestAgentCallbacks_After_FullResponseEvent_Nil tests that FullResponseEvent
+// can be nil when no response event is available.
+func TestAgentCallbacks_After_FullResponseEvent_Nil(t *testing.T) {
+	callbacks := NewCallbacks()
+	var capturedEvent *event.Event
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		capturedEvent = args.FullResponseEvent
+		return nil, nil
+	})
+
+	args := &AfterAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+		FullResponseEvent: nil,
+		Error:             nil,
+	}
+	result, err := callbacks.RunAfterAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.Nil(t, capturedEvent)
+	require.Nil(t, result)
+}
+
+// TestAgentCallbacks_After_FullResponseEvent_WithError tests that FullResponseEvent
+// and Error can coexist in AfterAgentArgs.
+func TestAgentCallbacks_After_FullResponseEvent_WithError(t *testing.T) {
+	callbacks := NewCallbacks()
+	fullRespEvent := event.NewResponseEvent(
+		"test-invocation",
+		"test-agent",
+		&model.Response{
+			ID:   "test-response",
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Error occurred",
+					},
+				},
+			},
+			Error: &model.ResponseError{
+				Type:    "test_error",
+				Message: "test error message",
+			},
+		},
+	)
+
+	var capturedEvent *event.Event
+	var capturedError error
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		capturedEvent = args.FullResponseEvent
+		capturedError = args.Error
+		return nil, nil
+	})
+
+	testError := errors.New("agent execution error")
+	args := &AfterAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+		FullResponseEvent: fullRespEvent,
+		Error:             testError,
+	}
+	result, err := callbacks.RunAfterAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, capturedEvent)
+	require.Equal(t, fullRespEvent, capturedEvent)
+	require.Equal(t, testError, capturedError)
+	require.Nil(t, result)
+}
+
+// TestAgentCallbacks_After_FullResponseEvent_MultiCallback tests that FullResponseEvent
+// is correctly passed to multiple callbacks.
+func TestAgentCallbacks_After_FullResponseEvent_MultiCallback(t *testing.T) {
+	callbacks := NewCallbacks()
+	fullRespEvent := event.NewResponseEvent(
+		"test-invocation",
+		"test-agent",
+		&model.Response{
+			ID:   "test-response",
+			Done: true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Multi callback test",
+					},
+				},
+			},
+		},
+	)
+
+	var capturedEvents []*event.Event
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		capturedEvents = append(capturedEvents, args.FullResponseEvent)
+		return nil, nil
+	})
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *AfterAgentArgs) (*AfterAgentResult, error) {
+		capturedEvents = append(capturedEvents, args.FullResponseEvent)
+		return nil, nil
+	})
+
+	args := &AfterAgentArgs{
+		Invocation: &Invocation{
+			InvocationID: "test-invocation",
+			AgentName:    "test-agent",
+			Message:      model.Message{Role: model.RoleUser, Content: "Hello"},
+		},
+		FullResponseEvent: fullRespEvent,
+		Error:             nil,
+	}
+	result, err := callbacks.RunAfterAgent(context.Background(), args)
+	require.NoError(t, err)
+	require.Len(t, capturedEvents, 2)
+	require.Equal(t, fullRespEvent, capturedEvents[0])
+	require.Equal(t, fullRespEvent, capturedEvents[1])
+	require.Nil(t, result)
 }

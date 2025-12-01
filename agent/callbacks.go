@@ -13,6 +13,7 @@ package agent
 import (
 	"context"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -63,6 +64,8 @@ type BeforeAgentCallbackStructured = func(
 type AfterAgentArgs struct {
 	// Invocation is the invocation context.
 	Invocation *Invocation
+	// FullResponseEvent is the final response event from agent execution (may be nil).
+	FullResponseEvent *event.Event
 	// Error is the error occurred during agent execution (may be nil).
 	Error error
 }

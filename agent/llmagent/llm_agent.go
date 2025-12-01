@@ -544,8 +544,9 @@ func (a *LLMAgent) wrapEventChannel(
 		// After all events are processed, run after agent callbacks
 		if a.agentCallbacks != nil {
 			result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
-				Invocation: invocation,
-				Error:      agentErr,
+				Invocation:        invocation,
+				Error:             agentErr,
+				FullResponseEvent: fullRespEvent,
 			})
 			// Use the context from result if provided.
 			if result != nil && result.Context != nil {

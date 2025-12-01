@@ -324,8 +324,9 @@ type BeforeAgentResult struct {
 }
 
 type AfterAgentArgs struct {
-    Invocation *agent.Invocation  // 调用上下文
-    Error      error              // Agent 执行过程中发生的错误
+    Invocation        *agent.Invocation  // 调用上下文
+    FullResponseEvent *event.Event       // Agent 执行后的最终响应事件（可能为 nil）
+    Error             error              // Agent 执行过程中发生的错误（可能为 nil）
 }
 
 type AfterAgentResult struct {
@@ -348,6 +349,7 @@ type AfterAgentCallbackStructured  func(ctx context.Context, args *agent.AfterAg
 - 可访问完整的调用上下文，便于实现丰富的按次逻辑
 - Before 可返回自定义 `*model.Response` 以中止后续模型调用
 - After 可返回替换响应
+- `AfterAgentArgs.FullResponseEvent` 提供对 agent 最终输出结果的访问，可用于日志记录、监控、后处理等场景
 
 ### 回调执行控制
 
@@ -402,16 +404,19 @@ agentCallbacks := agent.NewCallbacks().
     }
     return nil, nil
   }).
-  // After：在成功响应末尾追加标注
+  // After：在成功响应末尾追加标注，可以访问 FullResponseEvent 获取最终响应事件
   RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
     if args.Error != nil {
       return nil, args.Error
     }
-    if args.Invocation != nil && args.Invocation.Response != nil && len(args.Invocation.Response.Choices) > 0 {
-      c := args.Invocation.Response.Choices[0]
-      c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
-      args.Invocation.Response.Choices[0] = c
-      return &agent.AfterAgentResult{CustomResponse: args.Invocation.Response}, nil
+    // 可以通过 FullResponseEvent 访问 agent 的最终输出结果
+    if args.FullResponseEvent != nil && args.FullResponseEvent.Response != nil {
+      if len(args.FullResponseEvent.Response.Choices) > 0 {
+        c := args.FullResponseEvent.Response.Choices[0]
+        c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
+        args.FullResponseEvent.Response.Choices[0] = c
+        return &agent.AfterAgentResult{CustomResponse: args.FullResponseEvent.Response}, nil
+      }
     }
     return nil, nil
   })
