@@ -79,15 +79,15 @@ func TestWithMessageFilterMode(t *testing.T) {
 		{
 			name:                   "IsolatedRequest mode",
 			inputMode:              IsolatedRequest,
-			wantBranchFilterMode:   BranchFilterModePrefix,
-			wantTimelineFilterMode: TimelineFilterCurrentInvocation,
+			wantBranchFilterMode:   BranchFilterModeExact,
+			wantTimelineFilterMode: TimelineFilterCurrentRequest,
 			wantPanic:              false,
 		},
 		{
 			name:                   "IsolatedInvocation mode",
 			inputMode:              IsolatedInvocation,
 			wantBranchFilterMode:   BranchFilterModeExact,
-			wantTimelineFilterMode: TimelineFilterCurrentRequest,
+			wantTimelineFilterMode: TimelineFilterCurrentInvocation,
 			wantPanic:              false,
 		},
 		{
