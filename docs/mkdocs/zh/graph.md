@@ -2393,7 +2393,7 @@ API 参考：
 
 ### 检查点与恢复
 
-为了支持时间旅行与可靠恢复，可以为执行器或 GraphAgent 配置检查点保存器。下面演示使用 SQLite Saver 持久化检查点并从特定检查点恢复。
+为了支持时间旅行与可靠恢复，可以为执行器或 GraphAgent 配置检查点保存器。下面演示使用 SQLite/Redis Saver 持久化检查点并从特定检查点恢复。
 
 ```go
 import (
@@ -2404,6 +2404,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis"
     "trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -2413,6 +2414,22 @@ saver, _ := sqlite.NewSaver(db)
 
 graphAgent, _ := graphagent.New("workflow", g,
     graphagent.WithCheckpointSaver(saver))
+
+// 执行时自动保存检查点（默认每步保存）
+
+// 从检查点恢复
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyCheckpointID: "ckpt-123",
+    }),
+)
+
+// 配置redis检查点
+redisSaver, _ := redis.NewSaver(redis.WithRedisClientURL("redis://[username:password@]host:port[/database]"))
+
+graphAgent, _ := graphagent.New("workflow", g,
+    graphagent.WithCheckpointSaver(redisSaver))
 
 // 执行时自动保存检查点（默认每步保存）
 
