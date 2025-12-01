@@ -15,8 +15,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/model/ollama"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
 // Option configures how a model instance should be constructed.
@@ -41,8 +41,8 @@ type Options struct {
 	TokenTailoringConfig *model.TokenTailoringConfig // TokenTailoringConfig customizes token tailoring budget parameters for all providers.
 	OpenAIOption         []openai.Option             // OpenAIOption stores additional OpenAI options.
 	AnthropicOption      []anthropic.Option          // AnthropicOption stores additional Anthropic options.
-	GeminiOption         []gemini.Option
-	OllamaOption         []ollama.Option// GeminiOption stores additional Gemini options.
+	GeminiOption         []gemini.Option             // GeminiOption stores additional Gemini options.
+	OllamaOption         []ollama.Option             // OllamaOption stores additional Ollama options.
 }
 
 // Callbacks collects provider specific callback hooks.
@@ -250,5 +250,12 @@ func WithAnthropicOption(opt ...anthropic.Option) Option {
 func WithGeminiOption(opt ...gemini.Option) Option {
 	return func(o *Options) {
 		o.GeminiOption = append(o.GeminiOption, opt...)
+	}
+}
+
+// WithOllamaOption appends raw Ollama options.
+func WithOllamaOption(opt ...ollama.Option) Option {
+	return func(o *Options) {
+		o.OllamaOption = append(o.OllamaOption, opt...)
 	}
 }

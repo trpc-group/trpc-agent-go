@@ -91,6 +91,7 @@ func TestNew(t *testing.T) {
 				WithMaxInputTokens(1000),
 				WithOptions(map[string]any{"temperature": 0.7}),
 				WithKeepAlive(30 * time.Second),
+				withHttpClient(http.DefaultClient),
 			},
 			expected: &Model{
 				name:                 "test-model",
@@ -447,12 +448,25 @@ func Test_buildToolDescription_MarshalError(t *testing.T) {
 func Test_HandleNonStreamingResponse(t *testing.T) {
 	// Create mock server
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/chat") {
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") && !strings.HasPrefix(r.URL.Path, "/api/show") {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/show" {
+			resp := map[string]any{
+				"license":    "xxx",
+				"modelfile":  "xxx",
+				"parameters": "xxx",
+				"template":   "xxx",
+				"model_info": map[string]any{
+					"llama.context_length": 131072,
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
 		resp := map[string]any{
 			"model":                "llama3.2:latest",
 			"created_at":           "2024-01-01T00:00:00Z",
@@ -479,6 +493,8 @@ func Test_HandleNonStreamingResponse(t *testing.T) {
 			calledResponse = true
 		}),
 	)
+
+	assert.Equal(t, 131072, m.contextWindow)
 
 	ctx := context.Background()
 	req := &model.Request{
@@ -513,12 +529,26 @@ func Test_HandleNonStreamingResponse(t *testing.T) {
 func Test_HandleStreamingResponse(t *testing.T) {
 	// Create mock server
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/chat") {
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") && !strings.HasPrefix(r.URL.Path, "/api/show") {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/show" {
+			resp := map[string]any{
+				"license":    "xxx",
+				"modelfile":  "xxx",
+				"parameters": "xxx",
+				"template":   "xxx",
+				"model_info": map[string]any{
+					"gptoss.context_length": 131072,
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -558,7 +588,7 @@ func Test_HandleStreamingResponse(t *testing.T) {
 	defer srv.Close()
 
 	var chunkCalled, streamCompleteCalled bool
-	m := New("llama3.2:latest",
+	m := New("gpt-oss:20b",
 		WithHost(srv.URL),
 		WithChatChunkCallback(func(ctx context.Context, req *api.ChatRequest, chunk *api.ChatResponse) {
 			chunkCalled = true
@@ -567,6 +597,8 @@ func Test_HandleStreamingResponse(t *testing.T) {
 			streamCompleteCalled = true
 		}),
 	)
+
+	assert.Equal(t, 131072, m.contextWindow)
 
 	ctx := context.Background()
 	req := &model.Request{

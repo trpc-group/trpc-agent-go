@@ -7,14 +7,17 @@ toolchain go1.24.11
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
+	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
+	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../model/provider
 	trpc.group/trpc-go/trpc-agent-go/model/tiktoken => ../../model/tiktoken
 )
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.17.0
+	github.com/ollama/ollama v0.13.1
 	github.com/openai/openai-go v1.12.0
-	trpc.group/trpc-go/trpc-agent-go v0.4.0
+	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/model/tiktoken v0.0.0-20251126064502-c8c2594d2519
 )
@@ -24,13 +27,12 @@ require (
 	cloud.google.com/go/auth v0.17.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
-	github.com/google/uuid v1.6.0 // indirect
-	github.com/ollama/ollama v0.13.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.7 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
@@ -57,4 +59,5 @@ require (
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-20251203120347-0b4d62cb115d // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.0.0-20251201063627-880416fa9808 // indirect
 )

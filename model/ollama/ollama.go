@@ -12,6 +12,7 @@ package ollama
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"encoding/base64"
 	"github.com/ollama/ollama/api"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -41,6 +41,13 @@ const (
 )
 
 var (
+	// DefaultHost is the default Ollama host port.
+	defaultPort = "11434"
+	// DefaultHost is the default Ollama host.
+	defaultHost = "http://localhost:11434"
+)
+
+var (
 	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
 	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
 	inputTokensFloor       = imodel.DefaultInputTokensFloor
@@ -54,6 +61,7 @@ type Model struct {
 	client                     *api.Client
 	name                       string
 	host                       string
+	contextWindow              int
 	httpClient                 *http.Client
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
@@ -244,10 +252,9 @@ func WithKeepAlive(duration time.Duration) Option {
 
 // New creates a new Ollama model adapter.
 func New(name string, opts ...Option) *Model {
-	defaultPort := "11434"
 	o := &options{
 		channelBufferSize: defaultChannelBufferSize,
-		host:              "http://localhost:11434",
+		host:              defaultHost,
 		httpClient:        http.DefaultClient,
 	}
 
@@ -338,8 +345,7 @@ func New(name string, opts ...Option) *Model {
 			o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
 		}
 	}
-
-	return &Model{
+	m := &Model{
 		client:                     client,
 		name:                       name,
 		host:                       o.host,
@@ -361,6 +367,12 @@ func New(name string, opts ...Option) *Model {
 		options:                    o.options,
 		keepAlive:                  o.keepAlive,
 	}
+	m.contextWindow, err = m.getContextWindow()
+	if err != nil {
+		log.Warnf("failed to get context window for %s: %v", m.name, err)
+		m.contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	return m
 }
 
 // Info returns the model information.
@@ -473,12 +485,11 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	// Set max output tokens only if user hasn't specified it.
 	if request.GenerationConfig.MaxTokens == nil {
-		contextWindow := imodel.ResolveContextWindow(m.name)
 		var maxOutputTokens int
 		if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {
 			// Use custom parameters if any are set.
 			maxOutputTokens = imodel.CalculateMaxOutputTokensWithParams(
-				contextWindow,
+				m.contextWindow,
 				usedTokens,
 				m.protocolOverheadTokens,
 				m.outputTokensFloor,
@@ -486,12 +497,12 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			)
 		} else {
 			// Use default parameters.
-			maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
+			maxOutputTokens = imodel.CalculateMaxOutputTokens(m.contextWindow, usedTokens)
 		}
 		if maxOutputTokens > 0 {
 			request.GenerationConfig.MaxTokens = &maxOutputTokens
 			log.Debugf("token tailoring: contextWindow=%d, usedTokens=%d, maxOutputTokens=%d",
-				contextWindow, usedTokens, maxOutputTokens)
+				m.contextWindow, usedTokens, maxOutputTokens)
 		}
 	}
 }
@@ -637,6 +648,77 @@ func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *mode
 	}
 }
 
+// getContextWindow retrieves the context window size for the model.
+// for example, ollama /api/show show model info, and get context_length
+//
+//	{
+//	   "license": "xxx",
+//	   "modelfile": "xxx",
+//	   "parameters": "xxx",
+//	   "template": "xxx",
+//	   "details": {
+//	   },
+//	   "model_info": {
+//	       "general.architecture": "llama",
+//	       "general.basename": "DeepSeek-R1-Distill-Llama",
+//	       "general.file_type": 15,
+//	       "general.parameter_count": 8030261312,
+//	       "general.quantization_version": 2,
+//	       "general.size_label": "8B",
+//	       "general.type": "model",
+//	       "llama.attention.head_count": 32,
+//	       "llama.attention.head_count_kv": 8,
+//	       "llama.attention.layer_norm_rms_epsilon": 0.00001,
+//	       "llama.block_count": 32,
+//	       "llama.context_length": 131072,
+//	       "llama.embedding_length": 4096,
+//	       "llama.feed_forward_length": 14336,
+//	       "llama.rope.dimension_count": 128,
+//	       "llama.rope.freq_base": 500000,
+//	       "llama.vocab_size": 128256,
+//	       "tokenizer.ggml.add_bos_token": true,
+//	       "tokenizer.ggml.add_eos_token": false,
+//	       "tokenizer.ggml.bos_token_id": 128000,
+//	       "tokenizer.ggml.eos_token_id": 128001,
+//	       "tokenizer.ggml.merges": null,
+//	       "tokenizer.ggml.model": "gpt2",
+//	       "tokenizer.ggml.padding_token_id": 128001,
+//	       "tokenizer.ggml.pre": "llama-bpe",
+//	       "tokenizer.ggml.token_type": null,
+//	       "tokenizer.ggml.tokens": null
+//	   }
+//	}
+//
+// llama.context_length is the context window size
+// ref: https://github.com/ollama/ollama/blob/main/docs/api.md#show-model-information
+func (m *Model) getContextWindow() (int, error) {
+	resp, err := m.client.Show(context.Background(), &api.ShowRequest{
+		Model: m.name,
+	})
+	if err != nil {
+		return 0, err
+	}
+	for key, val := range resp.ModelInfo {
+		if strings.HasSuffix(key, "context_length") {
+			window, ok := val.(int)
+			if ok {
+				return window, nil
+			}
+			float64Window, ok := val.(float64)
+			if ok {
+				return int(float64Window), nil
+			}
+			int64Window, ok := val.(int64)
+			if ok {
+				return int(int64Window), nil
+			}
+
+			return 0, fmt.Errorf("context_length is not an int")
+		}
+	}
+	return 0, fmt.Errorf("context_length not found")
+}
+
 // convertMessages converts model messages to Ollama messages.
 func convertMessages(messages []model.Message) ([]api.Message, error) {
 	result := make([]api.Message, 0, len(messages))
@@ -677,6 +759,9 @@ func convertChatResponse(resp api.ChatResponse) (*model.Response, error) {
 			ReasoningContent: resp.Message.Thinking,
 			Content:          resp.Message.Content,
 			ToolCalls:        toolCalls,
+		}
+		if resp.DoneReason != "" {
+			choice.FinishReason = &[]string{resp.DoneReason}[0]
 		}
 		usage = &model.Usage{
 			PromptTokens:     resp.PromptEvalCount,
