@@ -63,38 +63,31 @@ func TestWithMessageFilterMode(t *testing.T) {
 		wantPanic              bool
 	}{
 		{
-			name:                   "FullPrefix mode",
-			inputMode:              PrefixAll,
+			name:                   "FullContext mode",
+			inputMode:              FullContext,
 			wantBranchFilterMode:   BranchFilterModePrefix,
 			wantTimelineFilterMode: TimelineFilterAll,
 			wantPanic:              false,
 		},
 		{
-			name:                   "PrefixRequest mode",
-			inputMode:              PrefixRequest,
+			name:                   "RequestContext mode",
+			inputMode:              RequestContext,
 			wantBranchFilterMode:   BranchFilterModePrefix,
 			wantTimelineFilterMode: TimelineFilterCurrentRequest,
 			wantPanic:              false,
 		},
 		{
-			name:                   "PrefixInvocation mode",
-			inputMode:              PrefixInvocation,
+			name:                   "IsolatedRequest mode",
+			inputMode:              IsolatedRequest,
 			wantBranchFilterMode:   BranchFilterModePrefix,
 			wantTimelineFilterMode: TimelineFilterCurrentInvocation,
 			wantPanic:              false,
 		},
 		{
-			name:                   "ExactRequest mode",
-			inputMode:              ExactRequest,
+			name:                   "IsolatedInvocation mode",
+			inputMode:              IsolatedInvocation,
 			wantBranchFilterMode:   BranchFilterModeExact,
 			wantTimelineFilterMode: TimelineFilterCurrentRequest,
-			wantPanic:              false,
-		},
-		{
-			name:                   "ExactInvocation mode",
-			inputMode:              ExactInvocation,
-			wantBranchFilterMode:   BranchFilterModeExact,
-			wantTimelineFilterMode: TimelineFilterCurrentInvocation,
 			wantPanic:              false,
 		},
 		{
