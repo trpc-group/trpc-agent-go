@@ -226,6 +226,7 @@ func (a *CycleAgent) runSubAgent(
 	subAgent agent.Agent,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent **event.Event,
 ) bool {
 	// Create a proper invocation for the sub-agent with correct attribution.
 	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
@@ -248,6 +249,9 @@ func (a *CycleAgent) runSubAgent(
 
 	// Forward events from the sub-agent and check for escalation.
 	for subEvent := range subEventChan {
+		if subEvent != nil && subEvent.Response != nil && !subEvent.Response.IsPartial {
+			*fullRespEvent = subEvent
+		}
 		if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 			return true
 		}
@@ -266,6 +270,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent **event.Event,
 ) bool {
 	for _, subAgent := range a.subAgents {
 		// Check if context was cancelled.
@@ -274,7 +279,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 		}
 
 		// Run the sub-agent.
-		if a.runSubAgent(ctx, subAgent, invocation, eventChan) {
+		if a.runSubAgent(ctx, subAgent, invocation, eventChan, fullRespEvent) {
 			return true // Indicates escalation or early return
 		}
 
@@ -291,14 +296,16 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent *event.Event,
 ) {
 	if a.agentCallbacks == nil {
 		return
 	}
 
 	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
-		Invocation: invocation,
-		Error:      nil,
+		Invocation:        invocation,
+		Error:             nil,
+		FullResponseEvent: fullRespEvent,
 	})
 	// Use the context from result if provided.
 	if result != nil && result.Context != nil {
@@ -344,6 +351,7 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		}
 
 		var timesLooped int
+		var fullRespEvent *event.Event
 
 		// Main loop: continue until max iterations or escalation.
 		for a.maxIterations == nil || timesLooped < *a.maxIterations {
@@ -352,8 +360,8 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 				return
 			}
 
-			// Run sub-agents loop.
-			if a.runSubAgentsLoop(ctx, invocation, eventChan) {
+			// Run sub-agents loop and collect full response event.
+			if a.runSubAgentsLoop(ctx, invocation, eventChan, &fullRespEvent) {
 				break // Escalation or early return
 			}
 
@@ -361,7 +369,7 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		}
 
 		// Handle after agent callbacks.
-		a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+		a.handleAfterAgentCallbacks(ctx, invocation, eventChan, fullRespEvent)
 	}()
 
 	return eventChan, nil
