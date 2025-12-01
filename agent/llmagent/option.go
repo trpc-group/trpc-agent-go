@@ -49,6 +49,26 @@ const (
 	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
 )
 
+// MessageFilterMode is the mode for filtering messages.
+type MessageFilterMode int
+
+const (
+	// FullPrefix includes all messages, equivalent to TimelineFilterAll + BranchFilterModePrefix.
+	FullPrefix MessageFilterMode = iota
+	// CurrentRequest includes only messages within the current request cycle,
+	// equivalent to TimelineFilterCurrentRequest + BranchFilterModePrefix.
+	CurrentRequest
+	//CurrentInvocation includes only messages within the current invocation session,
+	// equivalent to TimelineFilterCurrentInvocation + BranchFilterModePrefix.
+	CurrentInvocation
+	// IsolatedRequest includes only messages within the current request cycle,
+	// equivalent to TimelineFilterCurrentRequest + BranchFilterModeExact.
+	IsolatedRequest
+	// IsolatedInvocation includes only messages within the current invocation session,
+	// equivalent to TimelineFilterCurrentInvocation + BranchFilterModeExact.
+	IsolatedInvocation
+)
+
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
@@ -495,5 +515,30 @@ func WithMessageBranchFilterMode(mode string) Option {
 func WithToolFilter(filter tool.FilterFunc) Option {
 	return func(opts *Options) {
 		opts.toolFilter = filter
+	}
+}
+
+// WithMessageFilterMode sets the message filter mode.
+func WithMessageFilterMode(mode MessageFilterMode) Option {
+	return func(opts *Options) {
+		switch mode {
+		case FullPrefix:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterAll
+		case CurrentRequest:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
+		case CurrentInvocation:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterCurrentInvocation
+		case IsolatedRequest:
+			opts.messageBranchFilterMode = BranchFilterModeExact
+			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
+		case IsolatedInvocation:
+			opts.messageBranchFilterMode = BranchFilterModeExact
+			opts.messageTimelineFilterMode = TimelineFilterCurrentInvocation
+		default:
+			panic("invalid option value")
+		}
 	}
 }
