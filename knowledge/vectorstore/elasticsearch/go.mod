@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch
 
-go 1.24
+go 1.23
 
 toolchain go1.24.10
 

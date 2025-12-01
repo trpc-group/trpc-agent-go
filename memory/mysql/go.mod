@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/memory/mysql
 
-go 1.24
+go 1.21.0
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..

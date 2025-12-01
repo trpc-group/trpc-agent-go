@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch
 
-go 1.24
+go 1.23
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
