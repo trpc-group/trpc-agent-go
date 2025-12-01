@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	gomail "github.com/wneessen/go-mail"
 )
 
 func Test_emailToolSet_sendMail(t *testing.T) {
@@ -385,6 +386,41 @@ func Test_emailToolSet_getEmailAddr(t *testing.T) {
 			}
 			if gotIsSSL != tt.wantIsSSL {
 				t.Errorf("getEmailAddr() gotIsSSL = %v, want %v", gotIsSSL, tt.wantIsSSL)
+			}
+		})
+	}
+}
+
+func Test_qqHandleError(t *testing.T) {
+	type args struct {
+		err error
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "nil error",
+			args: args{
+				err: nil,
+			},
+			wantErr: false,
+		},
+		{
+			name: "smtp reset send error is not error",
+			args: args{
+				err: &gomail.SendError{
+					Reason: gomail.ErrSMTPReset,
+				},
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := qqHandleError(tt.args.err); (err != nil) != tt.wantErr {
+				t.Errorf("qqHandleError() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
