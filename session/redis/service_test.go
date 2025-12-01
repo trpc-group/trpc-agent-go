@@ -49,7 +49,7 @@ func TestNewService(t *testing.T) {
 			name:        "invalid redis URL",
 			options:     []ServiceOpt{WithRedisClientURL("invalid://url")},
 			expectError: true,
-			errorMsg:    "create redis client from url failed",
+			errorMsg:    "create redis client failed",
 		},
 		{
 			name:        "empty options",
