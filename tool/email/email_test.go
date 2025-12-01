@@ -107,9 +107,9 @@ func TestMailboxTypeToString(t *testing.T) {
 		args args
 		want string
 	}{
-		{"qq", args{mailboxType: MAIL_QQ}, "qq"},
-		{"163", args{mailboxType: MAIL_163}, "163"},
-		{"gmail", args{mailboxType: MAIL_GMAIL}, "gmail"},
+		{"qq", args{mailboxType: MailQQ}, "qq"},
+		{"163", args{mailboxType: Mail163}, "163"},
+		{"gmail", args{mailboxType: MailGmail}, "gmail"},
 		{"zero", args{mailboxType: 0}, "unknown"},
 		{"negative", args{mailboxType: -1}, "unknown"},
 		{"undefined", args{mailboxType: 99}, "unknown"},

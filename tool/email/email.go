@@ -26,27 +26,27 @@ const (
 type MailboxType int32
 
 const (
-	// MAIL_UNKNOWN unknown mail
-	MAIL_UNKNOWN MailboxType = 0
-	// MAIL_QQ qq mail
-	MAIL_QQ MailboxType = 1
-	// MAIL_163 163 mail
-	MAIL_163 MailboxType = 2
-	// MAIL_GMAIL google mail
-	MAIL_GMAIL MailboxType = 3
+	// MailUnknown unknown mail
+	MailUnknown MailboxType = 0
+	// MailQQ qq mail
+	MailQQ MailboxType = 1
+	// Mail163 163 mail
+	Mail163 MailboxType = 2
+	// MailGmail google mail
+	MailGmail MailboxType = 3
 )
 
 // MailboxTypeToString convert mailbox type to string
 func MailboxTypeToString(mailboxType MailboxType) string {
 	switch mailboxType {
 	// qq mail
-	case MAIL_QQ:
+	case MailQQ:
 		return "qq"
 	// 163 mail
-	case MAIL_163:
+	case Mail163:
 		return "163"
 	// google mail
-	case MAIL_GMAIL:
+	case MailGmail:
 		return "gmail"
 	// unknown mail
 	default:
@@ -70,7 +70,7 @@ func (e *emailToolSet) Tools(_ context.Context) []tool.Tool {
 
 // Name implements the ToolSet interface.
 func (e *emailToolSet) Name() string {
-	return "email"
+	return defaultName
 }
 
 // Close implements the ToolSet interface.

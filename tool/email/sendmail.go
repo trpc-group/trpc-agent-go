@@ -136,17 +136,17 @@ func (e *emailToolSet) getEmailAddr(req *sendMailRequest) (addr string, port int
 		port = req.Extra.Port
 	} else {
 		switch mailBoxType {
-		case MAIL_QQ:
+		case MailQQ:
 			//qq email
 			addr = qqMail
 			port = qqPort
 			isSSL = true
-		case MAIL_GMAIL:
+		case MailGmail:
 			//gmail email
 			addr = gmailMail
 			port = gmailPort
 			isSSL = false
-		case MAIL_163:
+		case Mail163:
 			//163 email
 			addr = netEase163Mail
 			port = netEase1163Port
@@ -165,7 +165,7 @@ func checkMailBoxType(email string) (MailboxType, error) {
 
 	addr, err := mail.ParseAddress(email)
 	if err != nil {
-		return MAIL_UNKNOWN, fmt.Errorf("parse email address ERROR: %w", err)
+		return MailUnknown, fmt.Errorf("parse email address ERROR: %w", err)
 	}
 	// to lower
 	emailAddr := strings.ToLower(addr.Address)
@@ -173,20 +173,20 @@ func checkMailBoxType(email string) (MailboxType, error) {
 	// split by name and domain
 	lastAt := strings.LastIndex(emailAddr, "@")
 	if lastAt < 0 {
-		return MAIL_UNKNOWN, fmt.Errorf("invalid email address")
+		return MailUnknown, fmt.Errorf("invalid email address")
 	}
 	domain := emailAddr[lastAt:]
 	domain = strings.TrimPrefix(domain, "@")
 
 	switch domain {
 	case "qq.com", "vip.qq.com", "foxmail.com":
-		return MAIL_QQ, nil
+		return MailQQ, nil
 	case "gmail.com", "googlemail.com":
-		return MAIL_GMAIL, nil
+		return MailGmail, nil
 	case "163.com":
-		return MAIL_163, nil
+		return Mail163, nil
 	default:
-		return MAIL_UNKNOWN, nil
+		return MailUnknown, nil
 	}
 }
 
