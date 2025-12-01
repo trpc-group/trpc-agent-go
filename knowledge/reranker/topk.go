@@ -47,7 +47,7 @@ func NewTopKReranker(opts ...Option) *TopKReranker {
 }
 
 // Rerank implements the Reranker interface by returning top K results in original order.
-func (t *TopKReranker) Rerank(ctx context.Context, results []*Result) ([]*Result, error) {
+func (t *TopKReranker) Rerank(ctx context.Context, query *Query, results []*Result) ([]*Result, error) {
 	// Return top K results, or all if fewer than K available.
 	if t.k <= 0 || len(results) <= t.k {
 		return results, nil

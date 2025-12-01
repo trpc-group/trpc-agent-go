@@ -300,7 +300,7 @@ func (f *Flow) handleAfterModelCallbacks(
 	response *model.Response,
 	eventChan chan<- *event.Event,
 ) (*model.Response, error) {
-	customResp, err := f.runAfterModelCallbacks(ctx, llmRequest, response)
+	ctx, customResp, err := f.runAfterModelCallbacks(ctx, llmRequest, response)
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, err
@@ -349,9 +349,9 @@ func (f *Flow) runAfterModelCallbacks(
 	ctx context.Context,
 	req *model.Request,
 	response *model.Response,
-) (*model.Response, error) {
+) (context.Context, *model.Response, error) {
 	if f.modelCallbacks == nil {
-		return response, nil
+		return ctx, response, nil
 	}
 
 	// Convert response.Error to Go error for callback.
@@ -360,7 +360,22 @@ func (f *Flow) runAfterModelCallbacks(
 		modelErr = fmt.Errorf("%s: %s", response.Error.Type, response.Error.Message)
 	}
 
-	return f.modelCallbacks.RunAfterModel(ctx, req, response, modelErr)
+	result, err := f.modelCallbacks.RunAfterModel(ctx, &model.AfterModelArgs{
+		Request:  req,
+		Response: response,
+		Error:    modelErr,
+	})
+	if err != nil {
+		return ctx, nil, err
+	}
+	// Use the context from result if provided for subsequent operations.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
+		return ctx, result.CustomResponse, nil
+	}
+	return ctx, response, nil
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
@@ -475,15 +490,21 @@ func (f *Flow) callLLM(
 
 	// Run before model callbacks if they exist.
 	if f.modelCallbacks != nil {
-		customResponse, err := f.modelCallbacks.RunBeforeModel(ctx, llmRequest)
+		result, err := f.modelCallbacks.RunBeforeModel(ctx, &model.BeforeModelArgs{
+			Request: llmRequest,
+		})
 		if err != nil {
 			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
 			return nil, err
 		}
-		if customResponse != nil {
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
+		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			responseChan := make(chan *model.Response, 1)
-			responseChan <- customResponse
+			responseChan <- result.CustomResponse
 			close(responseChan)
 			return responseChan, nil
 		}

@@ -144,7 +144,9 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 }
 
 // defaultEventToA2AMessage is the default implementation of EventToA2AMessageConverter.
-type defaultEventToA2AMessage struct{}
+type defaultEventToA2AMessage struct {
+	adkCompatibility bool // Enable ADK-compatible metadata keys (e.g., "adk_type" instead of "type")
+}
 
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
 // For non-streaming responses, it returns the full content including tool calls.
@@ -285,10 +287,11 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 		return nil, nil
 	}
 
-	choice := event.Response.Choices[0]
 	var parts []protocol.Part
 
 	// Handle tool call requests (assistant making function calls)
+	// OpenAI returns tool calls in a single choice with multiple ToolCalls
+	choice := event.Response.Choices[0]
 	if len(choice.Message.ToolCalls) > 0 {
 		for _, toolCall := range choice.Message.ToolCalls {
 			// Convert ToolCall to map for DataPart
@@ -301,33 +304,50 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 
 			// Create DataPart with metadata indicating this is a function call
 			dataPart := protocol.NewDataPart(toolCallData)
+
+			// Use ADK-compatible metadata key if enabled
+			metadataTypeKey := ia2a.DataPartMetadataTypeKey
+			if c.adkCompatibility {
+				metadataTypeKey = ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)
+			}
+
 			dataPart.Metadata = map[string]any{
-				ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionCall,
+				metadataTypeKey: ia2a.DataPartMetadataTypeFunctionCall,
 			}
 			parts = append(parts, dataPart)
 		}
 	}
 
 	// Handle tool call responses (tool returning results)
-	if choice.Message.Role == model.RoleTool || choice.Message.ToolID != "" {
-		// Convert tool response to DataPart
-		toolResponseData := map[string]any{
-			ia2a.ToolCallFieldName: choice.Message.ToolName,
-			ia2a.ToolCallFieldID:   choice.Message.ToolID,
-		}
+	// OpenAI returns each tool response in a separate choice
+	for _, choice := range event.Response.Choices {
+		if choice.Message.Role == model.RoleTool || choice.Message.ToolID != "" {
+			// Convert tool response to DataPart
+			toolResponseData := map[string]any{
+				ia2a.ToolCallFieldName: choice.Message.ToolName,
+				ia2a.ToolCallFieldID:   choice.Message.ToolID,
+			}
 
-		// Pass content as-is without parsing
-		// Client will receive the raw response string and display it directly
-		if choice.Message.Content != "" {
-			toolResponseData[ia2a.ToolCallFieldResponse] = choice.Message.Content
-		}
+			// Pass content as-is without parsing
+			// Client will receive the raw response string and display it directly
+			if choice.Message.Content != "" {
+				toolResponseData[ia2a.ToolCallFieldResponse] = choice.Message.Content
+			}
 
-		// Create DataPart with metadata indicating this is a function response
-		dataPart := protocol.NewDataPart(toolResponseData)
-		dataPart.Metadata = map[string]any{
-			ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
+			// Create DataPart with metadata indicating this is a function response
+			dataPart := protocol.NewDataPart(toolResponseData)
+
+			// Use ADK-compatible metadata key if enabled
+			metadataTypeKey := ia2a.DataPartMetadataTypeKey
+			if c.adkCompatibility {
+				metadataTypeKey = ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)
+			}
+
+			dataPart.Metadata = map[string]any{
+				metadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
+			}
+			parts = append(parts, dataPart)
 		}
-		parts = append(parts, dataPart)
 	}
 
 	if len(parts) == 0 {

@@ -153,6 +153,10 @@ func (m *mockSessionService) DeleteUserState(ctx context.Context, userKey sessio
 	return nil
 }
 
+func (m *mockSessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	return nil
+}
+
 func (m *mockSessionService) AppendEvent(ctx context.Context, session *session.Session, event *event.Event, options ...session.Option) error {
 	return nil
 }
@@ -1210,7 +1214,7 @@ func TestProcessAgentStreamingEvents_SendFailure(t *testing.T) {
 		},
 	}
 
-	proc.processAgentStreamingEvents(ctx, "task", msg, events, sub, handler)
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, handler)
 	assert.True(t, handlerCalled)
 	assert.True(t, cleaned)
 }
@@ -1238,7 +1242,7 @@ func TestProcessAgentStreamingEvents_ConverterError(t *testing.T) {
 		return &res, nil
 	}
 
-	proc.processAgentStreamingEvents(ctx, "task", msg, events, &mockTaskSubscriber{}, &mockTaskHandler{})
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, &mockTaskSubscriber{}, &mockTaskHandler{})
 	assert.True(t, handlerCalled)
 }
 
@@ -1262,7 +1266,7 @@ func TestProcessAgentStreamingEvents_Success(t *testing.T) {
 	processor := createTestMessageProcessor()
 	processor.debugLogging = true
 	ch := sub.Channel()
-	processor.processAgentStreamingEvents(ctx, "task", msg, events, sub, handler)
+	processor.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, handler)
 
 	count := 0
 	for evt := range ch {
@@ -1271,6 +1275,170 @@ func TestProcessAgentStreamingEvents_Success(t *testing.T) {
 		}
 	}
 	assert.NotZero(t, count)
+}
+
+// TestMessageProcessor_ProcessMessage_EmptyUserID tests the userID generation when user.ID is empty
+func TestMessageProcessor_ProcessMessage_EmptyUserID(t *testing.T) {
+	ctxID := "test-context-123"
+
+	tests := []struct {
+		name           string
+		userID         string
+		expectedUserID string
+		validateFunc   func(t *testing.T, capturedUserID string)
+	}{
+		{
+			name:           "empty_user_id_generates_from_context",
+			userID:         "", // Empty user ID
+			expectedUserID: "A2A_USER_test-context-123",
+			validateFunc: func(t *testing.T, capturedUserID string) {
+				if capturedUserID != "A2A_USER_test-context-123" {
+					t.Errorf("Expected generated userID 'A2A_USER_test-context-123', got '%s'", capturedUserID)
+				}
+			},
+		},
+		{
+			name:           "non_empty_user_id_uses_original",
+			userID:         "actual-user-456",
+			expectedUserID: "actual-user-456",
+			validateFunc: func(t *testing.T, capturedUserID string) {
+				if capturedUserID != "actual-user-456" {
+					t.Errorf("Expected original userID 'actual-user-456', got '%s'", capturedUserID)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedUserID string
+
+			// Create a mock runner that captures the userID
+			mockRunner := &mockRunner{
+				runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+					capturedUserID = userID
+					ch := make(chan *event.Event, 1)
+					ch <- &event.Event{
+						Response: &model.Response{
+							Choices: []model.Choice{{Message: model.Message{Content: "response"}}},
+						},
+					}
+					close(ch)
+					return ch, nil
+				},
+			}
+
+			processor := &messageProcessor{
+				runner:              mockRunner,
+				a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+				eventToA2AConverter: &defaultEventToA2AMessage{},
+				errorHandler:        defaultErrorHandler,
+				debugLogging:        true,
+			}
+
+			// Create context with user having the specified ID
+			ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: tt.userID})
+
+			msg := protocol.Message{
+				ContextID: &ctxID,
+				MessageID: "test-msg",
+				Role:      protocol.MessageRoleUser,
+				Parts:     []protocol.Part{protocol.NewTextPart("test message")},
+			}
+
+			handler := &mockTaskHandler{
+				buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+					return "task-id", nil
+				},
+			}
+
+			result, err := processor.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{Streaming: false}, handler)
+
+			if err != nil {
+				t.Errorf("ProcessMessage() unexpected error: %v", err)
+				return
+			}
+
+			if result == nil {
+				t.Error("ProcessMessage() returned nil result")
+				return
+			}
+
+			// Validate the captured userID
+			if tt.validateFunc != nil {
+				tt.validateFunc(t, capturedUserID)
+			}
+		})
+	}
+}
+
+// TestMessageProcessor_ProcessStreamingMessage_EmptyUserID tests userID generation in streaming mode
+func TestMessageProcessor_ProcessStreamingMessage_EmptyUserID(t *testing.T) {
+	ctxID := "stream-context-789"
+
+	var capturedUserID string
+
+	mockRunner := &mockRunner{
+		runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+			capturedUserID = userID
+			ch := make(chan *event.Event, 1)
+			ch <- &event.Event{
+				Response: &model.Response{
+					Choices: []model.Choice{{Delta: model.Message{Content: "chunk"}}},
+				},
+			}
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	processor := &messageProcessor{
+		runner:              mockRunner,
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+		debugLogging:        false,
+	}
+
+	// Create context with user having empty ID
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: ""})
+
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "stream-msg",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("streaming test")},
+	}
+
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+			return "stream-task-id", nil
+		},
+		subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+			return &mockTaskSubscriber{}, nil
+		},
+		cleanTaskFunc: func(taskID *string) error {
+			return nil
+		},
+	}
+
+	result, err := processor.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{Streaming: true}, handler)
+
+	if err != nil {
+		t.Errorf("ProcessMessage() unexpected error: %v", err)
+		return
+	}
+
+	if result == nil {
+		t.Error("ProcessMessage() returned nil result")
+		return
+	}
+
+	// Verify the userID was generated from context ID
+	expectedUserID := "A2A_USER_stream-context-789"
+	if capturedUserID != expectedUserID {
+		t.Errorf("Expected generated userID '%s', got '%s'", expectedUserID, capturedUserID)
+	}
 }
 
 func TestBuildA2AServer_EdgeCases(t *testing.T) {

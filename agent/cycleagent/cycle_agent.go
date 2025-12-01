@@ -181,16 +181,19 @@ func (a *CycleAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
+// Returns the updated context and whether execution should stop early.
 func (a *CycleAgent) handleBeforeAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) bool {
+) (context.Context, bool) {
 	if a.agentCallbacks == nil {
-		return false
+		return ctx, false
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+		Invocation: invocation,
+	})
 	if err != nil {
 		// Send error event.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
@@ -199,18 +202,22 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	if customResponse != nil {
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	return false // Continue execution
+	return ctx, false // Continue execution
 }
 
 // runSubAgent executes a single sub-agent and forwards its events.
@@ -219,6 +226,7 @@ func (a *CycleAgent) runSubAgent(
 	subAgent agent.Agent,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent **event.Event,
 ) bool {
 	// Create a proper invocation for the sub-agent with correct attribution.
 	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
@@ -241,6 +249,9 @@ func (a *CycleAgent) runSubAgent(
 
 	// Forward events from the sub-agent and check for escalation.
 	for subEvent := range subEventChan {
+		if subEvent != nil && subEvent.Response != nil && !subEvent.Response.IsPartial {
+			*fullRespEvent = subEvent
+		}
 		if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 			return true
 		}
@@ -259,6 +270,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent **event.Event,
 ) bool {
 	for _, subAgent := range a.subAgents {
 		// Check if context was cancelled.
@@ -267,7 +279,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 		}
 
 		// Run the sub-agent.
-		if a.runSubAgent(ctx, subAgent, invocation, eventChan) {
+		if a.runSubAgent(ctx, subAgent, invocation, eventChan, fullRespEvent) {
 			return true // Indicates escalation or early return
 		}
 
@@ -284,12 +296,21 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent *event.Event,
 ) {
 	if a.agentCallbacks == nil {
 		return
 	}
 
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation:        invocation,
+		Error:             nil,
+		FullResponseEvent: fullRespEvent,
+	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -299,12 +320,12 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response.
 		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		)
 	}
 
@@ -323,11 +344,14 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		defer close(eventChan)
 
 		// Handle before agent callbacks.
-		if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+		var shouldReturn bool
+		ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+		if shouldReturn {
 			return
 		}
 
 		var timesLooped int
+		var fullRespEvent *event.Event
 
 		// Main loop: continue until max iterations or escalation.
 		for a.maxIterations == nil || timesLooped < *a.maxIterations {
@@ -336,8 +360,8 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 				return
 			}
 
-			// Run sub-agents loop.
-			if a.runSubAgentsLoop(ctx, invocation, eventChan) {
+			// Run sub-agents loop and collect full response event.
+			if a.runSubAgentsLoop(ctx, invocation, eventChan, &fullRespEvent) {
 				break // Escalation or early return
 			}
 
@@ -345,7 +369,7 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		}
 
 		// Handle after agent callbacks.
-		a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+		a.handleAfterAgentCallbacks(ctx, invocation, eventChan, fullRespEvent)
 	}()
 
 	return eventChan, nil

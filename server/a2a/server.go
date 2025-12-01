@@ -35,7 +35,8 @@ import (
 // New creates a new a2a server.
 func New(opts ...Option) (*a2a.A2AServer, error) {
 	options := &options{
-		errorHandler: defaultErrorHandler,
+		errorHandler:     defaultErrorHandler,
+		adkCompatibility: true, // Enable ADK compatibility by default
 	}
 	for _, opt := range opts {
 		opt(options)
@@ -96,7 +97,7 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 
 	eventToA2AConverter := options.eventToA2AConverter
 	if eventToA2AConverter == nil {
-		eventToA2AConverter = &defaultEventToA2AMessage{}
+		eventToA2AConverter = &defaultEventToA2AMessage{adkCompatibility: options.adkCompatibility}
 	}
 
 	return &messageProcessor{
@@ -105,6 +106,8 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 		eventToA2AConverter: eventToA2AConverter,
 		errorHandler:        options.errorHandler,
 		debugLogging:        options.debugLogging,
+		adkCompatibility:    options.adkCompatibility,
+		agentName:           agentName,
 	}
 }
 
@@ -197,6 +200,8 @@ type messageProcessor struct {
 	eventToA2AConverter EventToA2AMessage
 	errorHandler        ErrorHandler
 	debugLogging        bool
+	adkCompatibility    bool
+	agentName           string
 }
 
 func isFinalStreamingEvent(evt *event.Event) bool {
@@ -294,8 +299,15 @@ func (m *messageProcessor) ProcessMessage(
 		return m.handleError(ctx, &message, options.Streaming, errors.New("context id not exists"))
 	}
 
-	userID := user.ID
 	ctxID := *message.ContextID
+
+	// Get user ID from auth context, or generate from context ID if not available
+	// This follows ADK pattern: use auth user if available, otherwise use A2A_USER_{context_id}
+	userID := user.ID
+	if userID == "" {
+		userID = fmt.Sprintf("A2A_USER_%s", ctxID)
+		log.Debugf("UserID not set in auth context, using generated ID from context: %s", userID)
+	}
 
 	// Convert A2A message to agent message
 	agentMsg, err := m.a2aToAgentConverter.ConvertToAgentMessage(ctx, message)
@@ -365,7 +377,7 @@ func (m *messageProcessor) processStreamingMessage(
 				}
 			}
 		}()
-		m.processAgentStreamingEvents(ctx, taskID, a2aMsg, agentMsgChan, subscriber, handler)
+		m.processAgentStreamingEvents(ctx, taskID, userID, ctxID, a2aMsg, agentMsgChan, subscriber, handler)
 	}()
 
 	return &taskmanager.MessageProcessingResult{
@@ -377,6 +389,8 @@ func (m *messageProcessor) processStreamingMessage(
 func (m *messageProcessor) processAgentStreamingEvents(
 	ctx context.Context,
 	taskID string,
+	userID string,
+	sessionID string,
 	a2aMsg *protocol.Message,
 	agentMsgChan <-chan *event.Event,
 	subscriber taskmanager.TaskSubscriber,
@@ -413,6 +427,8 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		},
 		false,
 	)
+	// Add ADK-compatible metadata if enabled
+	m.addTaskMetadata(&taskSubmitted, userID, sessionID)
 	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &taskSubmitted}); err != nil {
 		log.Errorf("failed to send task submitted message: %v", err)
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
@@ -425,7 +441,9 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
 
-	finalArtifact := protocol.NewTaskArtifactUpdateEvent(taskID, *a2aMsg.ContextID, protocol.Artifact{}, true)
+	finalArtifact := protocol.NewTaskArtifactUpdateEvent(taskID, *a2aMsg.ContextID, protocol.Artifact{
+		Parts: []protocol.Part{},
+	}, true)
 	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &finalArtifact}); err != nil {
 		log.Errorf("failed to send final artifact message: %v", err)
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
@@ -643,4 +661,22 @@ func buildSkillsFromTools(agent agent.Agent, agentName, agentDesc string) []a2a.
 	}
 
 	return skills
+}
+
+// addTaskMetadata adds ADK-compatible metadata to task status update events.
+// When ADK compatibility mode is enabled, it adds metadata with "adk_" prefix
+// (e.g., "adk_app_name", "adk_user_id", "adk_session_id") to match ADK Python implementation.
+func (m *messageProcessor) addTaskMetadata(event *protocol.TaskStatusUpdateEvent, userID, sessionID string) {
+	if !m.adkCompatibility {
+		return
+	}
+
+	if event.Metadata == nil {
+		event.Metadata = make(map[string]any)
+	}
+
+	// Add ADK-compatible metadata keys
+	event.Metadata[ia2a.GetADKMetadataKey("app_name")] = m.agentName
+	event.Metadata[ia2a.GetADKMetadataKey("user_id")] = userID
+	event.Metadata[ia2a.GetADKMetadataKey("session_id")] = sessionID
 }

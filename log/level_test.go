@@ -12,6 +12,7 @@ package log
 // ... existing code ...
 
 import (
+	"strings"
 	"testing"
 
 	"go.uber.org/zap/zapcore"
@@ -42,26 +43,47 @@ func TestSetLevel(t *testing.T) {
 	}
 }
 
-// TestTracef makes sure Tracef forwards the call to the underlying
-// logger at the debug level. The test installs a stub logger that
-// records the last format string received and asserts that Tracef
-// prefixes the message with the required tag.
-func TestTracef(t *testing.T) {
-	var recorded string
-	stub := &stubLogger{debugf: func(format string, _ ...any) {
-		recorded = format
-	}}
-
-	// Replace Default logger with stub and restore afterwards.
-	old := Default
+// TestTraceDisabledByDefault ensures trace logging starts disabled and Tracef is a no-op.
+func TestTraceDisabledByDefault(t *testing.T) {
+	stub := &stubLogger{}
+	oldDefault := Default
+	oldTrace := traceEnabled
 	Default = stub
-	defer func() { Default = old }()
+	t.Cleanup(func() {
+		Default = oldDefault
+		traceEnabled = oldTrace
+	})
+
+	if traceEnabled {
+		t.Fatalf("traceEnabled should be false by default")
+	}
 
 	Tracef("hello %s", "world")
 
-	wantPrefix := "[TRACE] "
-	if recorded == "" || recorded[:len(wantPrefix)] != wantPrefix {
-		t.Fatalf("Tracef did not prefix message with %q: got %q", wantPrefix, recorded)
+	if stub.debugfCalls != 0 {
+		t.Fatalf("Tracef should not log when trace is disabled; got %d calls", stub.debugfCalls)
+	}
+}
+
+// TestTracefEnabled makes sure Tracef forwards the call when trace is enabled.
+func TestTracefEnabled(t *testing.T) {
+	stub := &stubLogger{}
+	oldDefault := Default
+	oldTrace := traceEnabled
+	Default = stub
+	SetTraceEnabled(true)
+	t.Cleanup(func() {
+		Default = oldDefault
+		traceEnabled = oldTrace
+	})
+
+	Tracef("hello %s", "world")
+
+	if stub.debugfCalls != 1 {
+		t.Fatalf("Tracef should log once when trace is enabled; got %d calls", stub.debugfCalls)
+	}
+	if !strings.HasPrefix(stub.lastFormat, "[TRACE] ") {
+		t.Fatalf("Tracef did not prefix message with \"[TRACE] \": got %q", stub.lastFormat)
 	}
 }
 
@@ -70,11 +92,15 @@ func TestTracef(t *testing.T) {
 // Only the methods required by the tests are implemented; the rest
 // are no-ops to satisfy the interface.
 type stubLogger struct {
-	debugf func(format string, args ...any)
+	lastFormat  string
+	debugfCalls int
 }
 
-func (s *stubLogger) Debug(args ...any)                 {}
-func (s *stubLogger) Debugf(format string, args ...any) { s.debugf(format, args...) }
+func (s *stubLogger) Debug(args ...any) {}
+func (s *stubLogger) Debugf(format string, args ...any) {
+	s.debugfCalls++
+	s.lastFormat = format
+}
 func (s *stubLogger) Info(args ...any)                  {}
 func (s *stubLogger) Infof(format string, args ...any)  {}
 func (s *stubLogger) Warn(args ...any)                  {}

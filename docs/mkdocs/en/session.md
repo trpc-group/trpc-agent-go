@@ -44,16 +44,8 @@ import (
 )
 
 func main() {
-    ctx := context.Background()
-
     // 1. Create LLM model
-    llm, err := openai.NewModel(
-        openai.WithAPIKey("your-api-key"),
-        openai.WithModelName("gpt-4"),
-    )
-    if err != nil {
-        panic(err)
-    }
+    llm := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
     // 2. (Optional) Create summarizer - automatically compress long conversation history
     summarizer := summary.NewSummarizer(
@@ -77,8 +69,10 @@ func main() {
     agent := llmagent.New(
         "my-agent",
         llmagent.WithModel(llm),
-        llmagent.WithSystemPrompt("You are a helpful assistant"),
+        llmagent.WithInstruction("You are a helpful assistant"),
         llmagent.WithAddSessionSummary(true), // Optional: enable summary injection to context
+        // Note: WithAddSessionSummary(true) ignores WithMaxHistoryRuns configuration
+        // Summary includes all history, incremental events fully retained
     )
 
     // 5. Create Runner and inject Session Service
@@ -89,6 +83,7 @@ func main() {
     )
 
     // 6. First conversation
+    ctx := context.Background()
     userMsg1 := model.NewUserMessage("My name is Alice")
     eventChan, err := r.Run(ctx, "user123", "session-001", userMsg1)
     if err != nil {
@@ -236,15 +231,20 @@ After enabling summary, the framework prepends the summary as a system message t
 ┌─────────────────────────────────────────┐
 │ System Prompt                           │
 ├─────────────────────────────────────────┤
-│ Session Summary (system message)        │ ← Compressed history
+│ Session Summary (system message)        │ ← Compressed version of historical conversations
+│ - Updated at: 2024-01-10 14:30          │   (events before updated_at)
+│ - Includes: Event1 ~ Event20            │
 ├─────────────────────────────────────────┤
-│ Event 1 (after summary)                 │ ┐
-│ Event 2                                 │ │
-│ Event 3                                 │ │ New events
-│ ...                                     │ │ (fully retained)
+│ Event 21 (user message)                 │ ┐
+│ Event 22 (assistant response)           │ │
+│ Event 23 (user message)                 │ │ All new conversations after summary
+│ Event 24 (assistant response)           │ │ (fully retained, no truncation)
+│ ...                                     │ │
 │ Event N (current message)               │ ┘
 └─────────────────────────────────────────┘
 ```
+
+**Important Note:** When `WithAddSessionSummary(true)` is enabled, the `WithMaxHistoryRuns` parameter is ignored, and all events after the summary are fully retained.
 
 For detailed configuration and advanced usage, see the [Session Summary](#session-summary) section.
 
@@ -728,6 +728,20 @@ CREATE TABLE session_events (
     deleted_at TIMESTAMP
 );
 
+-- Track events table.
+CREATE TABLE session_track_events (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    track VARCHAR(255) NOT NULL,
+    event JSONB NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
 -- Session summaries table
 CREATE TABLE session_summaries (
     id BIGSERIAL PRIMARY KEY,
@@ -1072,23 +1086,26 @@ sess, err := sessionService.GetSession(ctx, key,
     session.WithEventTime(time.Now().Add(-1*time.Hour)))
 ```
 
-## Session Summary
+## Session Summarization
 
 ### Overview
 
-As conversations continue to grow, maintaining complete event history can consume significant memory and may exceed LLM context window limits. The session summary feature uses LLM to automatically compress historical conversations into concise summaries, significantly reducing memory usage and token consumption while preserving important context.
+As conversations grow longer, maintaining full event history can become memory-intensive and may exceed LLM context windows. The session summarization feature automatically compresses historical conversation content into concise summaries using LLM-based summarization, reducing memory usage while preserving important context for future interactions.
 
-**Core Features:**
+### Key Features
 
-- **Automatic Triggering**: Automatically generate summaries based on event count, token count, or time thresholds
-- **Incremental Processing**: Only process new events since the last summary
-- **LLM-Driven**: Use configured LLM model to generate high-quality summaries
-- **Non-Destructive**: Original events fully preserved, summaries stored separately
-- **Asynchronous Processing**: Execute asynchronously in background without blocking conversation flow
+- **Automatic summarization**: Automatically trigger summaries based on configurable conditions such as event count, token count, or time threshold.
+- **Incremental summarization**: Only new events since the last summary are processed, avoiding redundant computation.
+- **LLM-powered**: Uses any configured LLM model to generate high-quality, context-aware summaries.
+- **Non-destructive**: Original events remain unchanged; summaries are stored separately.
+- **Asynchronous processing**: Summary jobs are processed asynchronously to avoid blocking the main conversation flow.
+- **Customizable prompts**: Configure custom summarization prompts and word limits.
 
-### Basic Configuration
+### Basic Usage
 
-#### Step 1: Create Summarizer
+#### Configure Summarizer
+
+Create a summarizer with an LLM model and configure trigger conditions:
 
 ```go
 import (
@@ -1097,62 +1114,49 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-// Create LLM model for summarization
-summaryModel, err := openai.NewModel(
-    openai.WithAPIKey("your-api-key"),
-    openai.WithModelName("gpt-4"),
-)
+// Create LLM model for summarization.
+summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
-// Create summarizer and configure trigger conditions
+// Create summarizer with trigger conditions.
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithChecksAny(                     // Trigger when any condition is met
-        summary.CheckEventThreshold(20),       // Trigger after 20 events
-        summary.CheckTokenThreshold(4000),     // Trigger after 4000 tokens
-        summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
-    ),
-    summary.WithMaxSummaryWords(200),          // Limit summary to 200 words
+    summary.WithEventThreshold(20),        // Trigger after 20 events.
+    summary.WithTokenThreshold(4000),      // Trigger after 4000 tokens.
+    summary.WithMaxSummaryWords(200),      // Limit summary to 200 words.
 )
 ```
 
-#### Step 2: Configure Session Service
+#### Integrate with Session Service
+
+Attach the summarizer to your session service (in-memory or Redis):
 
 ```go
-// Memory storage
-sessionService := inmemory.NewSessionService(
-    inmemory.WithSummarizer(summarizer),
-    inmemory.WithAsyncSummaryNum(2),
-    inmemory.WithSummaryQueueSize(100),
-    inmemory.WithSummaryJobTimeout(30*time.Second),
+import (
+    "time"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
-// Redis storage
+// Option 1: In-memory session service with summarizer.
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithAsyncSummaryNum(2),                // 2 async workers.
+    inmemory.WithSummaryQueueSize(100),             // Queue size 100.
+    inmemory.WithSummaryJobTimeout(30*time.Second), // 30s timeout per job.
+)
+
+// Option 2: Redis session service with summarizer.
 sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://localhost:6379"),
     redis.WithSummarizer(summarizer),
-    redis.WithAsyncSummaryNum(4),
-    redis.WithSummaryQueueSize(200),
-)
-
-// PostgreSQL storage
-sessionService, err := postgres.NewService(
-    postgres.WithHost("localhost"),
-    postgres.WithPassword("your-password"),
-    postgres.WithSummarizer(summarizer),
-    postgres.WithAsyncSummaryNum(2),
-    postgres.WithSummaryQueueSize(100),
-)
-
-// MySQL storage
-sessionService, err := mysql.NewService(
-    mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
-    mysql.WithSummarizer(summarizer),
-    mysql.WithAsyncSummaryNum(2),
-    mysql.WithSummaryQueueSize(100),
+    redis.WithAsyncSummaryNum(4),           // 4 async workers.
+    redis.WithSummaryQueueSize(200),        // Queue size 200.
 )
 ```
 
-#### Step 3: Configure Agent and Runner
+#### Automatic Summarization in Runner
+
+Once configured, the Runner automatically triggers summarization. You can also configure the LLM agent to use summaries in context:
 
 ```go
 import (
@@ -1160,104 +1164,257 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
-// Create Agent (enable summary injection)
+// Create agent with summary injection enabled.
 llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
-    llmagent.WithAddSessionSummary(true),   // Enable summary injection
+    llmagent.WithAddSessionSummary(true),   // Inject summary as system message.
+    llmagent.WithMaxHistoryRuns(10),        // Keep last 10 runs when summary exists.
 )
 
-// Create Runner
-r := runner.NewRunner(
+// Create runner with session service.
+runner := runner.NewRunner(
     "my-agent",
     llmAgent,
     runner.WithSessionService(sessionService),
 )
 
-// Run conversation - summary automatically managed
-eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
+// Summaries are automatically created and injected during conversation.
+eventChan, err := runner.Run(ctx, userID, sessionID, userMessage)
 ```
 
-### Summary Trigger Mechanism
+**How it works:**
 
-**Automatic Triggering (Recommended):** Runner automatically checks trigger conditions after each conversation completes, generating summaries asynchronously in background when conditions are met.
+The framework provides two distinct modes for managing conversation context sent to the LLM:
 
-**Manual Triggering:**
+**Mode 1: With Summary (`WithAddSessionSummary(true)`)**
+
+- The session summary is prepended as a system message.
+- **All incremental events** after the summary timestamp are included (no truncation).
+- This ensures complete context: condensed history (summary) + all new conversations since summarization.
+- `WithMaxHistoryRuns` is **ignored** in this mode.
+
+**Mode 2: Without Summary (`WithAddSessionSummary(false)`)**
+
+- No summary is prepended.
+- Only the **most recent `MaxHistoryRuns` conversation turns** are included.
+- When `MaxHistoryRuns=0` (default), no limit is applied and all history is included.
+- Use this mode for short sessions or when you want direct control over context window size.
+
+**Context Construction Details:**
+
+```
+When AddSessionSummary = true:
+┌─────────────────────────────────────┐
+│ System Prompt                       │
+├─────────────────────────────────────┤
+│ Session Summary (system message)    │ ← Condensed history
+├─────────────────────────────────────┤
+│ Event 1 (after summary timestamp)   │ ┐
+│ Event 2                             │ │ All incremental
+│ Event 3                             │ │ events since
+│ ...                                 │ │ last summary
+│ Event N (current)                   │ ┘
+└─────────────────────────────────────┘
+
+When AddSessionSummary = false:
+┌─────────────────────────────────────┐
+│ System Prompt                       │
+├─────────────────────────────────────┤
+│ Event N-k+1                         │ ┐
+│ Event N-k+2                         │ │ Last k turns
+│ ...                                 │ │ (if MaxHistoryRuns=k)
+│ Event N (current)                   │ ┘
+└─────────────────────────────────────┘
+```
+
+**Best Practices:**
+
+- For long-running sessions, use `WithAddSessionSummary(true)` to maintain full context while managing token usage.
+- For short sessions or when testing, use `WithAddSessionSummary(false)` with appropriate `MaxHistoryRuns`.
+- The Runner automatically enqueues async summary jobs after appending events to the session.
+
+### Configuration Options
+
+#### Summarizer Options
+
+Configure the summarizer behavior with the following options:
+
+**Trigger Conditions:**
+
+- **`WithEventThreshold(eventCount int)`**: Trigger summarization when the number of events exceeds the threshold. Example: `WithEventThreshold(20)` triggers after 20 events.
+- **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the total token count exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers after 4000 tokens.
+- **`WithTimeThreshold(interval time.Duration)`**: Trigger summarization when time elapsed since the last event exceeds the interval. Example: `WithTimeThreshold(5*time.Minute)` triggers after 5 minutes of inactivity.
+
+**Composite Conditions:**
+
+- **`WithChecksAll(checks ...Checker)`**: Require all conditions to be met (AND logic). Use with `Check*` functions (not `With*`). Example:
+  ```go
+  summary.WithChecksAll(
+      summary.CheckEventThreshold(10),
+      summary.CheckTokenThreshold(2000),
+  )
+  ```
+- **`WithChecksAny(checks ...Checker)`**: Trigger if any condition is met (OR logic). Use with `Check*` functions (not `With*`). Example:
+  ```go
+  summary.WithChecksAny(
+      summary.CheckEventThreshold(50),
+      summary.CheckTimeThreshold(10*time.Minute),
+  )
+  ```
+
+**Note:** Use `Check*` functions (like `CheckEventThreshold`) inside `WithChecksAll` and `WithChecksAny`. Use `With*` functions (like `WithEventThreshold`) as direct options to `NewSummarizer`. The `Check*` functions create checker instances, while `With*` functions are option setters.
+
+**Summary Generation:**
+
+- **`WithMaxSummaryWords(maxWords int)`**: Limit the summary to a maximum word count. The limit is included in the prompt to guide the model's generation. Example: `WithMaxSummaryWords(150)` requests summaries within 150 words.
+- **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. Optionally include `{max_summary_words}` for word limit instructions.
+
+**Example with custom prompt:**
 
 ```go
-// Asynchronous summarization (recommended) - background processing, non-blocking
+customPrompt := `Analyze the following conversation and provide a concise summary
+focusing on key decisions, action items, and important context.
+Keep it within {max_summary_words} words.
+
+<conversation>
+{conversation_text}
+</conversation>
+
+Summary:`
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPrompt(customPrompt),
+    summary.WithMaxSummaryWords(100),
+    summary.WithEventThreshold(15),
+)
+```
+
+#### Session Service Options
+
+Configure async summary processing in session services:
+
+- **`WithSummarizer(s summary.SessionSummarizer)`**: Inject the summarizer into the session service.
+- **`WithAsyncSummaryNum(num int)`**: Set the number of async worker goroutines for summary processing. Default is 2. More workers allow higher concurrency but consume more resources.
+- **`WithSummaryQueueSize(size int)`**: Set the size of the summary job queue. Default is 100. Larger queues allow more pending jobs but consume more memory.
+- **`WithSummaryJobTimeout(timeout time.Duration)`** _(in-memory only)_: Set the timeout for processing a single summary job. Default is 30 seconds.
+
+### Manual Summarization
+
+You can manually trigger summarization using the session service APIs:
+
+```go
+// Asynchronous summarization (recommended) - background processing, non-blocking.
 err := sessionService.EnqueueSummaryJob(
     ctx,
     sess,
-    session.SummaryFilterKeyAllContents,
-    false, // force=false, respects trigger conditions
+    session.SummaryFilterKeyAllContents, // Full session summary.
+    false,                                // force=false, respects trigger conditions.
 )
 
-// Synchronous summarization - immediate processing, blocking
+// Synchronous summarization - immediate processing, blocking.
 err := sessionService.CreateSessionSummary(
     ctx,
     sess,
     session.SummaryFilterKeyAllContents,
-    false,
+    false, // force=false, respects trigger conditions.
 )
 
-// Force summarization - bypass trigger conditions
+// Asynchronous force summarization - bypass trigger conditions.
 err := sessionService.EnqueueSummaryJob(
     ctx,
     sess,
     session.SummaryFilterKeyAllContents,
-    true, // force=true, bypass all trigger condition checks
+    true, // force=true, bypass all trigger condition checks.
+)
+
+// Synchronous force summarization - immediate forced generation.
+err := sessionService.CreateSessionSummary(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents,
+    true, // force=true, bypass all trigger condition checks.
 )
 ```
 
-### Context Injection Mechanism
+**API Description:**
 
-**Mode 1: Enable Summary Injection (Recommended)**
+- **`EnqueueSummaryJob`**: Asynchronous summarization (recommended)
+
+  - Background processing, non-blocking
+  - Automatic fallback to sync processing on failure
+  - Suitable for production environments
+
+- **`CreateSessionSummary`**: Synchronous summarization
+  - Immediate processing, blocking current operation
+  - Direct result return
+  - Suitable for debugging or scenarios requiring immediate results
+
+**Parameter Description:**
+
+- **filterKey**: `session.SummaryFilterKeyAllContents` indicates generating summary for the complete session
+- **force parameter**:
+  - `false`: Respects configured trigger conditions (event count, token count, time threshold, etc.), only generates summary when conditions are met
+  - `true`: Forces summary generation, completely ignores all trigger condition checks, executes regardless of session state
+
+**Usage Scenarios:**
+
+| Scenario                   | API                            | force   | Description                                      |
+| -------------------------- | ------------------------------ | ------- | ------------------------------------------------ |
+| Normal auto-summary        | Automatically called by Runner | `false` | Auto-generates when trigger conditions met       |
+| Session end                | `EnqueueSummaryJob`            | `true`  | Force generate final complete summary            |
+| User requests view         | `CreateSessionSummary`         | `true`  | Immediately generate and return                  |
+| Scheduled batch processing | `EnqueueSummaryJob`            | `false` | Batch check and process qualified sessions       |
+| Debug/testing              | `CreateSessionSummary`         | `true`  | Immediate execution, convenient for verification |
+
+### Retrieve Summary
+
+Get the latest summary text from a session:
 
 ```go
-llmagent.WithAddSessionSummary(true)
+summaryText, found := sessionService.GetSessionSummaryText(ctx, sess)
+if found {
+    fmt.Printf("Summary: %s\n", summaryText)
+}
 ```
 
-- Summary automatically prepended as system message to LLM input
-- Includes all incremental events after summary timestamp
-- Ensures complete context: condensed history + complete new conversations
+### How It Works
 
-**Mode 2: Without Summary**
+1. **Incremental Processing**: The summarizer tracks the last summarization time for each session. On subsequent runs, it only processes events that occurred after the last summary.
 
-```go
-llmagent.WithAddSessionSummary(false)
-llmagent.WithMaxHistoryRuns(10)  // Include only last 10 conversation rounds
-```
+2. **Delta Summarization**: New events are combined with the previous summary (prepended as a system event) to generate an updated summary that incorporates both old context and new information.
 
-### Advanced Summarizer Options
+3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (event count, token count, time threshold). If conditions aren't met and `force=false`, summarization is skipped.
 
-```go
-summarizer := summary.NewSummarizer(
-    summaryModel,
-    // Trigger conditions
-    summary.WithEventThreshold(20),
-    summary.WithTokenThreshold(4000),
-    summary.WithTimeThreshold(5*time.Minute),
+4. **Async Workers**: Summary jobs are distributed across multiple worker goroutines using hash-based distribution. This ensures jobs for the same session are processed sequentially while different sessions can be processed in parallel.
 
-    // Composite conditions (any met)
-    summary.WithChecksAny(
-        summary.CheckEventThreshold(50),
-        summary.CheckTimeThreshold(10*time.Minute),
-    ),
+5. **Fallback Mechanism**: If async enqueueing fails (queue full, context cancelled, or workers not initialized), the system automatically falls back to synchronous processing.
 
-    // Composite conditions (all met)
-    summary.WithChecksAll(
-        summary.CheckEventThreshold(10),
-        summary.CheckTokenThreshold(2000),
-    ),
+### Best Practices
 
-    // Summary generation
-    summary.WithMaxSummaryWords(200),
-    summary.WithPrompt(customPrompt),
-)
-```
+1. **Choose appropriate thresholds**: Set event/token thresholds based on your LLM's context window and conversation patterns. For GPT-4 (8K context), consider `WithTokenThreshold(4000)` to leave room for responses.
+
+2. **Use async processing**: Always use `EnqueueSummaryJob` instead of `CreateSessionSummary` in production to avoid blocking the conversation flow.
+
+3. **Monitor queue sizes**: If you see frequent "queue is full" warnings, increase `WithSummaryQueueSize` or `WithAsyncSummaryNum`.
+
+4. **Customize prompts**: Tailor the summarization prompt to your application's needs. For example, if you're building a customer support agent, focus on key issues and resolutions.
+
+5. **Balance word limits**: Set `WithMaxSummaryWords` to balance between preserving context and reducing token usage. Typical values range from 100-300 words.
+
+6. **Test trigger conditions**: Experiment with different combinations of `WithChecksAny` and `WithChecksAll` to find the right balance between summary frequency and cost.
+
+### Performance Considerations
+
+- **LLM costs**: Each summary generation calls the LLM. Monitor your trigger conditions to balance cost and context preservation.
+- **Memory usage**: Summaries are stored in addition to events. Configure appropriate TTLs to manage memory in long-running sessions.
+- **Async workers**: More workers increase throughput but consume more resources. Start with 2-4 workers and scale based on load.
+- **Queue capacity**: Size the queue based on your expected concurrency and summary generation time.
 
 ### Complete Example
+
+Here's a complete example demonstrating all components together:
 
 ```go
 package main
@@ -1277,17 +1434,10 @@ import (
 func main() {
     ctx := context.Background()
 
-    // Create LLM model
-    llm, err := openai.NewModel(
-        openai.WithAPIKey("your-api-key"),
-        openai.WithModelName("gpt-4"),
-    )
-    if err != nil {
-        // Handle error...
-        return
-    }
+    // Create LLM model for both chat and summarization.
+    llm := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
-    // Create summarizer
+    // Create summarizer with flexible trigger conditions.
     summarizer := summary.NewSummarizer(
         llm,
         summary.WithMaxSummaryWords(200),
@@ -1298,7 +1448,7 @@ func main() {
         ),
     )
 
-    // Create session service
+    // Create session service with summarizer.
     sessionService := inmemory.NewSessionService(
         inmemory.WithSummarizer(summarizer),
         inmemory.WithAsyncSummaryNum(2),
@@ -1306,52 +1456,32 @@ func main() {
         inmemory.WithSummaryJobTimeout(30*time.Second),
     )
 
-    // Create Agent
+    // Create agent with summary injection enabled.
     agent := llmagent.New(
         "my-agent",
         llmagent.WithModel(llm),
         llmagent.WithAddSessionSummary(true),
+        llmagent.WithMaxHistoryRuns(10),
     )
 
-    // Create Runner
+    // Create runner.
     r := runner.NewRunner("my-app", agent,
         runner.WithSessionService(sessionService))
 
-    // Run conversation
+    // Run conversation - summaries are automatically managed.
     userMsg := model.NewUserMessage("Tell me about AI")
-    eventChan, err := r.Run(ctx, "user123", "session456", userMsg)
-    if err != nil {
-        // Handle error...
-        return
-    }
+    eventChan, _ := r.Run(ctx, "user123", "session456", userMsg)
 
-    // Consume events
+    // Consume events.
     for event := range eventChan {
-        if event == nil || event.Response == nil {
-            continue
-        }
-        if event.Response.Error != nil {
-            // Handle error event...
-            continue
-        }
-        if len(event.Response.Choices) > 0 {
-            choice := event.Response.Choices[0]
-            if choice.Delta.Content != "" {
-                // Process streaming content...
-            } else if choice.Message.Content != "" {
-                // Process complete content...
-            }
-        }
-        if event.IsFinalResponse() {
-            break
-        }
+        // Handle events...
     }
 }
 ```
 
 ## References
 
-- [Session Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
-- [Summary Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
+- [Session example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
+- [Summary example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 
-By properly using session management in combination with session summary mechanisms, you can build stateful intelligent Agents that maintain conversation context while efficiently managing memory, providing users with continuous and personalized interaction experiences.
+By properly using session management, in combination with session summarization mechanisms, you can build stateful intelligent Agents that maintain conversation context while efficiently managing memory, providing users with continuous and personalized interaction experiences while ensuring the long-term sustainability of your system.

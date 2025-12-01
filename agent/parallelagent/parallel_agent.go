@@ -123,16 +123,23 @@ func (a *ParallelAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
+// Returns the updated context and whether execution should stop early.
 func (a *ParallelAgent) handleBeforeAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) bool {
+) (context.Context, bool) {
 	if a.agentCallbacks == nil {
-		return false
+		return ctx, false
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+		Invocation: invocation,
+	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 
 	if err != nil {
@@ -143,17 +150,17 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
-		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 	}
 
 	if evt == nil {
-		return false // Continue execution
+		return ctx, false // Continue execution
 	}
 
 	agent.EmitEvent(ctx, invocation, eventChan, evt)
-	return true
+	return ctx, true
 }
 
 // startSubAgents starts all sub-agents in parallel and returns their event channels.
@@ -221,12 +228,21 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent *event.Event,
 ) {
 	if a.agentCallbacks == nil {
 		return
 	}
 
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation:        invocation,
+		Error:             nil,
+		FullResponseEvent: fullRespEvent,
+	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -236,9 +252,9 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response.
-		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 	}
 
 	agent.EmitEvent(ctx, invocation, eventChan, evt)
@@ -270,18 +286,21 @@ func (a *ParallelAgent) executeParallelRun(
 	a.setupInvocation(invocation)
 
 	// Handle before agent callbacks.
-	if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+	var shouldReturn bool
+	ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+	if shouldReturn {
 		return
 	}
 
 	// Start sub-agents.
 	eventChans := a.startSubAgents(ctx, invocation, eventChan)
 
-	// Merge events from all sub-agents.
-	a.mergeEventStreams(ctx, eventChans, eventChan)
+	// Merge events from all sub-agents and collect full response event.
+	var fullRespEvent *event.Event
+	a.mergeEventStreams(ctx, eventChans, eventChan, &fullRespEvent)
 
 	// Handle after agent callbacks.
-	a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+	a.handleAfterAgentCallbacks(ctx, invocation, eventChan, fullRespEvent)
 }
 
 // mergeEventStreams merges multiple event channels into a single output channel.
@@ -290,8 +309,10 @@ func (a *ParallelAgent) mergeEventStreams(
 	ctx context.Context,
 	eventChans []<-chan *event.Event,
 	outputChan chan<- *event.Event,
+	fullRespEvent **event.Event,
 ) {
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 
 	// Start a goroutine for each input channel.
 	for _, ch := range eventChans {
@@ -311,6 +332,11 @@ func (a *ParallelAgent) mergeEventStreams(
 				}
 			}()
 			for evt := range inputChan {
+				if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+					mu.Lock()
+					*fullRespEvent = evt
+					mu.Unlock()
+				}
 				if err := event.EmitEvent(ctx, outputChan, evt); err != nil {
 					return
 				}

@@ -100,6 +100,136 @@ func TestWithInvocationRunOptions(t *testing.T) {
 	assert.Equal(t, "value1", inv.RunOptions.RuntimeState["key1"])
 }
 
+func TestGetRuntimeStateValue(t *testing.T) {
+	t.Run("key not found", func(t *testing.T) {
+		opts := &RunOptions{
+			RuntimeState: map[string]any{},
+		}
+		val, ok := GetRuntimeStateValue[string](opts, "nonexistent")
+		assert.False(t, ok)
+		assert.Equal(t, "", val)
+	})
+
+	t.Run("nil RunOptions", func(t *testing.T) {
+		var opts *RunOptions
+		val, ok := GetRuntimeStateValue[string](opts, "key")
+		assert.False(t, ok)
+		assert.Equal(t, "", val)
+	})
+
+	t.Run("nil RuntimeState", func(t *testing.T) {
+		opts := &RunOptions{}
+		val, ok := GetRuntimeStateValue[string](opts, "key")
+		assert.False(t, ok)
+		assert.Equal(t, "", val)
+	})
+
+	t.Run("matching type", func(t *testing.T) {
+		opts := &RunOptions{
+			RuntimeState: map[string]any{
+				"user_id": "12345",
+				"room_id": 678,
+				"config":  true,
+				"score":   3.14,
+			},
+		}
+
+		// Test string.
+		userID, ok := GetRuntimeStateValue[string](opts, "user_id")
+		assert.True(t, ok)
+		assert.Equal(t, "12345", userID)
+
+		// Test int.
+		roomID, ok := GetRuntimeStateValue[int](opts, "room_id")
+		assert.True(t, ok)
+		assert.Equal(t, 678, roomID)
+
+		// Test bool.
+		config, ok := GetRuntimeStateValue[bool](opts, "config")
+		assert.True(t, ok)
+		assert.Equal(t, true, config)
+
+		// Test float64.
+		score, ok := GetRuntimeStateValue[float64](opts, "score")
+		assert.True(t, ok)
+		assert.Equal(t, 3.14, score)
+	})
+
+	t.Run("type mismatch", func(t *testing.T) {
+		opts := &RunOptions{
+			RuntimeState: map[string]any{
+				"value": "hello",
+			},
+		}
+
+		// Try to get as int when it's actually string.
+		intVal, ok := GetRuntimeStateValue[int](opts, "value")
+		assert.False(t, ok)
+		assert.Equal(t, 0, intVal)
+
+		// Try to get as string when it's actually int.
+		opts.RuntimeState["number"] = 42
+		strVal, ok := GetRuntimeStateValue[string](opts, "number")
+		assert.False(t, ok)
+		assert.Equal(t, "", strVal)
+	})
+
+	t.Run("slice type", func(t *testing.T) {
+		opts := &RunOptions{
+			RuntimeState: map[string]any{
+				"tags": []string{"tag1", "tag2", "tag3"},
+			},
+		}
+
+		tags, ok := GetRuntimeStateValue[[]string](opts, "tags")
+		assert.True(t, ok)
+		assert.Equal(t, []string{"tag1", "tag2", "tag3"}, tags)
+	})
+
+	t.Run("map type", func(t *testing.T) {
+		opts := &RunOptions{
+			RuntimeState: map[string]any{
+				"metadata": map[string]string{
+					"key1": "value1",
+					"key2": "value2",
+				},
+			},
+		}
+
+		metadata, ok := GetRuntimeStateValue[map[string]string](opts, "metadata")
+		assert.True(t, ok)
+		assert.Equal(t, "value1", metadata["key1"])
+		assert.Equal(t, "value2", metadata["key2"])
+	})
+
+	t.Run("complex struct type", func(t *testing.T) {
+		type UserContext struct {
+			UserID   string
+			RoomID   int
+			Metadata map[string]string
+		}
+
+		ctx := UserContext{
+			UserID: "user-123",
+			RoomID: 456,
+			Metadata: map[string]string{
+				"key1": "value1",
+			},
+		}
+		opts := &RunOptions{
+			RuntimeState: map[string]any{
+				"user_context": ctx,
+			},
+		}
+
+		retrieved, ok := GetRuntimeStateValue[UserContext](opts, "user_context")
+		require.True(t, ok)
+		assert.Equal(t, ctx.UserID, retrieved.UserID)
+		assert.Equal(t, ctx.RoomID, retrieved.RoomID)
+		assert.Equal(t, ctx.Metadata, retrieved.Metadata)
+	})
+}
+
 func TestWithInvocationTransferInfo(t *testing.T) {
 	transferInfo := &TransferInfo{
 		TargetAgentName: "target-agent",

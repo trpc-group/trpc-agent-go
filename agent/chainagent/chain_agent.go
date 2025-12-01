@@ -134,7 +134,9 @@ func (a *ChainAgent) executeChainRun(
 	a.setupInvocation(invocation)
 
 	// Handle before agent callbacks.
-	if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+	var shouldReturn bool
+	ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+	if shouldReturn {
 		return
 	}
 
@@ -142,10 +144,9 @@ func (a *ChainAgent) executeChainRun(
 	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan)
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil {
-		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
 	}
 	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage)
-
 }
 
 // setupInvocation prepares the invocation for execution.
@@ -156,16 +157,19 @@ func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
+// Returns the updated context and whether execution should stop early.
 func (a *ChainAgent) handleBeforeAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) bool {
+) (context.Context, bool) {
 	if a.agentCallbacks == nil {
-		return false
+		return ctx, false
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+		Invocation: invocation,
+	})
 	if err != nil {
 		// Send error event.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
@@ -174,18 +178,22 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	if customResponse != nil {
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	return false // Continue execution
+	return ctx, false // Continue execution
 }
 
 // executeSubAgents runs all sub-agents in sequence.
@@ -254,9 +262,18 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent *event.Event,
 ) *event.Event {
 
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation:        invocation,
+		Error:             nil,
+		FullResponseEvent: fullRespEvent,
+	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -266,12 +283,12 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response.
 		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		)
 	}
 	agent.EmitEvent(ctx, invocation, eventChan, evt)

@@ -10,7 +10,7 @@ replace (
 
 require (
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (
@@ -22,7 +22,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
-	github.com/panjf2000/ants/v2 v2.9.0 // indirect
+	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -40,6 +40,7 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/net v0.34.0 // indirect
+	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240822170219-fc7c04adadcd // indirect
@@ -47,5 +48,5 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
-	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-00010101000000-000000000000 // indirect
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-20251126064502-c8c2594d2519 // indirect
 )

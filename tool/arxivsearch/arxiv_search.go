@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch/internal/arxiv"
@@ -156,7 +157,7 @@ func (t *ToolSet) search(ctx context.Context, req searchRequest) ([]article, err
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 	articles := make([]article, 0, len(results))
-	var pdfReader *pdf.Reader
+	var pdfReader reader.Reader
 	if req.ReadArxivPapers {
 		pdfReader = pdf.New()
 	}

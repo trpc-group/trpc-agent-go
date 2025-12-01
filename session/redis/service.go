@@ -21,7 +21,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -105,41 +104,21 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
-	var redisClient redis.UniversalClient
-	var err error
-	builder := storage.GetClientBuilder()
-
-	// if instance name set, and url not set, use instance name to create redis client
-	if opts.url == "" && opts.instanceName != "" {
-		builderOpts, ok := storage.GetRedisInstance(opts.instanceName)
-		if !ok {
-			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
-		}
-		redisClient, err = builder(builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
-		}
-		s := &Service{
-			opts:         opts,
-			redisClient:  redisClient,
-			sessionTTL:   opts.sessionTTL,
-			appStateTTL:  opts.appStateTTL,
-			userStateTTL: opts.userStateTTL,
-		}
-		if opts.enableAsyncPersist {
-			s.startAsyncPersistWorker()
-		}
-		// Always start async summary workers by default.
-		s.startAsyncSummaryWorker()
-		return s, nil
-	}
-
-	redisClient, err = builder(
+	builderOpts := []storage.ClientBuilderOpt{
 		storage.WithClientBuilderURL(opts.url),
 		storage.WithExtraOptions(opts.extraOptions...),
-	)
+	}
+	// if instance name set, and url not set, use instance name to create redis client
+	if opts.url == "" && opts.instanceName != "" {
+		var ok bool
+		if builderOpts, ok = storage.GetRedisInstance(opts.instanceName); !ok {
+			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
+		}
+	}
+
+	redisClient, err := storage.GetClientBuilder()(builderOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("create redis client from url failed: %w", err)
+		return nil, fmt.Errorf("create redis client failed: %w", err)
 	}
 
 	s := &Service{
@@ -389,6 +368,76 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 	return userStateMap, nil
 }
 
+// UpdateSessionState updates the session-level state directly without appending an event.
+// This is useful for state initialization, correction, or synchronization scenarios
+// where event history is not needed.
+// Keys with app: or user: prefixes are not allowed (use UpdateAppState/UpdateUserState instead).
+// Keys with temp: prefix are allowed as they represent session-scoped ephemeral state.
+func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+
+	// Validate: disallow app: and user: prefixes
+	for k := range state {
+		if strings.HasPrefix(k, session.StateAppPrefix) {
+			return fmt.Errorf("redis session service update session state failed: %s is not allowed, use UpdateAppState instead", k)
+		}
+		if strings.HasPrefix(k, session.StateUserPrefix) {
+			return fmt.Errorf("redis session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
+		}
+	}
+
+	// Get current session state
+	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	if err == redis.Nil {
+		return fmt.Errorf("redis session service update session state failed: session not found")
+	}
+	if err != nil {
+		return fmt.Errorf("redis session service update session state failed: get session state: %w", err)
+	}
+
+	// Unmarshal current state
+	sessState := &SessionState{}
+	if err := json.Unmarshal(stateBytes, sessState); err != nil {
+		return fmt.Errorf("redis session service update session state failed: unmarshal state: %w", err)
+	}
+
+	// Initialize state map if nil
+	if sessState.State == nil {
+		sessState.State = make(session.StateMap)
+	}
+
+	// Merge new state into current state (allow temp: prefix and unprefixed keys)
+	for k, v := range state {
+		sessState.State[k] = v
+	}
+
+	// Update timestamp
+	sessState.UpdatedAt = time.Now()
+
+	// Marshal updated state
+	updatedStateBytes, err := json.Marshal(sessState)
+	if err != nil {
+		return fmt.Errorf("redis session service update session state failed: marshal state: %w", err)
+	}
+
+	// Update session state in Redis
+	pipe := s.redisClient.TxPipeline()
+	pipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
+
+	// Refresh TTL if configured
+	if s.sessionTTL > 0 {
+		pipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("redis session service update session state failed: %w", err)
+	}
+
+	return nil
+}
+
 // DeleteUserState deletes the state by target scope and key.
 func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	if err := userKey.CheckUserKey(); err != nil {
@@ -488,9 +537,7 @@ func (s *Service) AppendTrackEvent(
 				panic(r)
 			}
 		}()
-		trackKey := getTrackKey(key, trackEvent.Track)
-		n := len(s.trackEventChans)
-		index := int(murmur3.Sum32([]byte(trackKey))) % n
+		index := sess.Hash % len(s.trackEventChans)
 		select {
 		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
 		case <-ctx.Done():
@@ -746,15 +793,7 @@ func (s *Service) getEventsList(
 ) ([][]event.Event, error) {
 	pipe := s.redisClient.Pipeline()
 	for _, key := range sessionKeys {
-		zrangeBy := &redis.ZRangeBy{
-			Min: fmt.Sprintf("%d", afterTime.UnixNano()),
-			Max: fmt.Sprintf("%d", time.Now().UnixNano()),
-		}
-		if limit > 0 {
-			zrangeBy.Offset = 0
-			zrangeBy.Count = int64(limit)
-		}
-		pipe.ZRevRangeByScore(ctx, getEventKey(key), zrangeBy)
+		pipe.ZRange(ctx, getEventKey(key), 0, -1)
 	}
 	cmds, err := pipe.Exec(ctx)
 	if err != nil && err != redis.Nil {
@@ -771,14 +810,14 @@ func (s *Service) getEventsList(
 		if err != nil {
 			return nil, fmt.Errorf("process event cmd failed: %w", err)
 		}
-
-		// reverse events to get chronological order (oldest first)
-		if len(events) > 1 {
-			for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-				events[i], events[j] = events[j], events[i]
-			}
+		sess := &session.Session{
+			Events: events,
 		}
-		sessEventsList = append(sessEventsList, events)
+		if limit <= 0 {
+			limit = s.opts.sessionEventLimit
+		}
+		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+		sessEventsList = append(sessEventsList, sess.Events)
 	}
 	return sessEventsList, nil
 }
@@ -1001,9 +1040,6 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			Score:  float64(event.Timestamp.UnixNano()),
 			Member: eventBytes,
 		})
-		if s.opts.sessionEventLimit > 0 {
-			txPipe.ZRemRangeByRank(ctx, getEventKey(key), 0, -(int64(s.opts.sessionEventLimit) + 1))
-		}
 		// Set TTL for session state and event list if configured
 		if s.sessionTTL > 0 {
 			txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)

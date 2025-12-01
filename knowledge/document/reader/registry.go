@@ -15,92 +15,61 @@ import (
 	"sync"
 )
 
-// Constructor is a function that creates a new Reader instance.
-type Constructor func() Reader
+// Builder is a function that creates a new Reader instance with options.
+type Builder func(opts ...Option) Reader
 
 // Registry manages registration of document readers.
 type Registry struct {
-	mu          sync.RWMutex
-	readers     map[string]Constructor // extension -> constructor
-	initialized map[string]Reader      // cache of initialized readers
+	mu      sync.RWMutex
+	readers map[string]Builder // extension -> builder
 }
 
 // globalRegistry is the singleton registry instance.
 var globalRegistry = &Registry{
-	readers:     make(map[string]Constructor),
-	initialized: make(map[string]Reader),
+	readers: make(map[string]Builder),
 }
 
-// RegisterReader registers a reader constructor for specific file extensions.
+// RegisterReader registers a reader builder for specific file extensions.
 // Extensions should include the dot prefix (e.g., ".pdf", ".txt").
-func RegisterReader(extensions []string, constructor Constructor) {
+func RegisterReader(extensions []string, builder Builder) {
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
 
 	for _, ext := range extensions {
 		// Normalize extension to lowercase.
 		normalizedExt := strings.ToLower(ext)
-		globalRegistry.readers[normalizedExt] = constructor
+		globalRegistry.readers[normalizedExt] = builder
 	}
 }
 
-// GetReader returns a reader for the given file extension.
+// GetReader returns a new reader instance for the given file extension with options.
 // The extension should include the dot prefix (e.g., ".pdf").
 // Returns nil and false if no reader is registered for the extension.
-func GetReader(extension string) (Reader, bool) {
+func GetReader(extension string, opts ...Option) (Reader, bool) {
 	globalRegistry.mu.RLock()
+	defer globalRegistry.mu.RUnlock()
+
 	normalizedExt := strings.ToLower(extension)
-
-	// Check if we have a cached instance.
-	if reader, exists := globalRegistry.initialized[normalizedExt]; exists {
-		globalRegistry.mu.RUnlock()
-		return reader, true
-	}
-
-	// Check if we have a constructor.
-	constructor, exists := globalRegistry.readers[normalizedExt]
+	builder, exists := globalRegistry.readers[normalizedExt]
 	if !exists {
-		globalRegistry.mu.RUnlock()
 		return nil, false
 	}
 
-	// Release read lock before creating instance to avoid holding lock during construction.
-	globalRegistry.mu.RUnlock()
-
-	// Create a new instance without holding any lock.
-	reader := constructor()
-
-	// Acquire write lock to cache the instance.
-	globalRegistry.mu.Lock()
-	defer globalRegistry.mu.Unlock()
-
-	// Double-check that another goroutine didn't already create it.
-	if cachedReader, exists := globalRegistry.initialized[normalizedExt]; exists {
-		return cachedReader, true
-	}
-
-	globalRegistry.initialized[normalizedExt] = reader
-	return reader, true
+	// Create a new instance with options
+	return builder(opts...), true
 }
 
 // GetAllReaders returns all registered readers as a map of file type to reader.
 // The returned map uses simplified type names (e.g., "text", "pdf") as keys.
-func GetAllReaders() map[string]Reader {
+// Each call creates new reader instances with the provided options.
+func GetAllReaders(opts ...Option) map[string]Reader {
 	globalRegistry.mu.RLock()
+	defer globalRegistry.mu.RUnlock()
 
-	// Build a list of extensions and constructors to process.
-	type readerInfo struct {
-		ext         string
-		constructor Constructor
-		typeName    string
-		cached      Reader
-		hasCached   bool
-	}
-
-	var toProcess []readerInfo
+	result := make(map[string]Reader)
 	processedTypes := make(map[string]bool)
 
-	for ext, constructor := range globalRegistry.readers {
+	for ext, builder := range globalRegistry.readers {
 		typeName := extensionToType(ext)
 
 		// Skip if we've already processed this type.
@@ -109,34 +78,8 @@ func GetAllReaders() map[string]Reader {
 		}
 		processedTypes[typeName] = true
 
-		reader, hasCached := globalRegistry.initialized[ext]
-		toProcess = append(toProcess, readerInfo{
-			ext:         ext,
-			constructor: constructor,
-			typeName:    typeName,
-			cached:      reader,
-			hasCached:   hasCached,
-		})
-	}
-
-	globalRegistry.mu.RUnlock()
-
-	// Process each reader without holding the lock.
-	result := make(map[string]Reader)
-	for _, info := range toProcess {
-		if info.hasCached {
-			result[info.typeName] = info.cached
-		} else {
-			// Create a new instance without holding any lock.
-			reader := info.constructor()
-
-			// Cache it for future use.
-			globalRegistry.mu.Lock()
-			globalRegistry.initialized[info.ext] = reader
-			globalRegistry.mu.Unlock()
-
-			result[info.typeName] = reader
-		}
+		// Create a new instance with options
+		result[typeName] = builder(opts...)
 	}
 	return result
 }
@@ -182,6 +125,5 @@ func ClearRegistry() {
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
 
-	globalRegistry.readers = make(map[string]Constructor)
-	globalRegistry.initialized = make(map[string]Reader)
+	globalRegistry.readers = make(map[string]Builder)
 }

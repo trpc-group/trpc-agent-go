@@ -1213,12 +1213,28 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 		result = append(result, openai.ChatCompletionToolParam{
 			Function: openai.FunctionDefinitionParam{
 				Name:        declaration.Name,
-				Description: openai.String(declaration.Description),
+				Description: openai.String(buildToolDescription(declaration)),
 				Parameters:  parameters,
 			},
 		})
 	}
 	return result
+}
+
+// buildToolDescription builds the description for a tool.
+// It appends the output schema to the description.
+func buildToolDescription(declaration *tool.Declaration) string {
+	desc := declaration.Description
+	if declaration.OutputSchema == nil {
+		return desc
+	}
+	schemaJSON, err := json.Marshal(declaration.OutputSchema)
+	if err != nil {
+		log.Errorf("marshal output schema for tool %s: %v", declaration.Name, err)
+		return desc
+	}
+	desc += "\nOutput schema: " + string(schemaJSON)
+	return desc
 }
 
 // handleStreamingResponse handles streaming chat completion responses.
@@ -1252,7 +1268,12 @@ func (m *Model) handleStreamingResponse(
 		// Always accumulate for correctness (tool call deltas are assembled later),
 		// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
 		if !m.hasReasoningContent(chunk.Choices) {
-			acc.AddChunk(chunk)
+			// Sanitize chunks before feeding them into the upstream accumulator to
+			// avoid known panics when JSON.ToolCalls is marked present but the
+			// typed ToolCalls slice is empty, especially on finish_reason chunks.
+			sanitizedChunk := sanitizeChunkForAccumulator(chunk)
+
+			acc.AddChunk(sanitizedChunk)
 			if m.accumulateChunkUsage != nil {
 				accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
 				usage := inverseOPENAISKDAddChunkUsage(accUsage, chunkUsage)
@@ -1302,6 +1323,44 @@ func (m *Model) handleStreamingResponse(
 		}
 		m.chatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, stream.Err())
 	}
+}
+
+// sanitizeChunkForAccumulator returns a defensive copy of the given chunk that
+// avoids structures known to cause panics in the upstream OpenAI SDK
+// accumulator. In particular, it clears JSON.ToolCalls metadata when it is
+// marked present but the typed ToolCalls slice is empty on a finish_reason
+// chunk, which would otherwise lead to an out-of-range access in
+// chatCompletionResponseState.update.
+func sanitizeChunkForAccumulator(chunk openai.ChatCompletionChunk) openai.ChatCompletionChunk {
+	if len(chunk.Choices) == 0 {
+		return chunk
+	}
+
+	choice := chunk.Choices[0]
+	delta := choice.Delta
+
+	// Only sanitize the specific pattern that is known to be unsafe for the
+	// accumulator:
+	//   - finish_reason is set (e.g. "tool_calls" or "stop")
+	//   - JSON.ToolCalls is marked present
+	//   - but the typed ToolCalls slice is empty
+	if choice.FinishReason == "" ||
+		!delta.JSON.ToolCalls.Valid() ||
+		len(delta.ToolCalls) != 0 {
+		return chunk
+	}
+
+	sanitized := chunk
+	sanitized.Choices = make([]openai.ChatCompletionChunkChoice, len(chunk.Choices))
+	copy(sanitized.Choices, chunk.Choices)
+
+	// Clear the JSON metadata for ToolCalls on the first choice only. This
+	// preserves finish_reason and usage semantics while preventing the
+	// accumulator from treating this as a tool-call delta that must have at
+	// least one element.
+	sanitized.Choices[0].Delta.JSON.ToolCalls = respjson.Field{}
+
+	return sanitized
 }
 
 // updateToolCallIndexMapping updates the tool call index mapping.
@@ -1363,6 +1422,14 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 // 5. Check usage - if valid, don't skip
 // 6. Otherwise, skip
 func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
+	// Chunks that carry a finish reason are meaningful and should not be
+	// skipped, even if they have no content or usage. This ensures that
+	// streaming clients can observe termination semantics.
+	if len(chunk.Choices) > 0 &&
+		chunk.Choices[0].FinishReason != "" {
+		return false
+	}
+
 	// No choices available, don't skip (let it be processed normally).
 	if len(chunk.Choices) == 0 {
 		return false
@@ -1639,6 +1706,14 @@ func (m *Model) createFinalResponse(
 		// If there are tool calls, add them to the final response.
 		if hasToolCall && i == 0 { // Usually only the first choice contains tool calls.
 			finalResponse.Choices[i].Message.ToolCalls = accumulatedToolCalls
+		}
+
+		// Propagate finish reason from the accumulated choice so that the final
+		// aggregated response exposes the same termination semantics as the
+		// underlying provider.
+		if choice.FinishReason != "" {
+			finishReason := choice.FinishReason
+			finalResponse.Choices[i].FinishReason = &finishReason
 		}
 	}
 

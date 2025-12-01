@@ -400,7 +400,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, &a.genConfig)
 
-	flowEventChan, err := a.executeAgentFlow(ctx, invocation)
+	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
 		// Check if this is a custom response error (early return)
 		var customErr *haveCustomResponseError
@@ -419,31 +419,37 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
-// Returns the event channel and any error that occurred.
-func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+// Returns the updated context, event channel, and any error that occurred.
+func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invocation) (context.Context, <-chan *event.Event, error) {
 	if a.agentCallbacks != nil {
-		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+			Invocation: invocation,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("before agent callback failed: %w", err)
+			return ctx, nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
-		if customResponse != nil {
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
+		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
-			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
-			return nil, &haveCustomResponseError{EventChan: eventChan}
+			return ctx, nil, &haveCustomResponseError{EventChan: eventChan}
 		}
 	}
 
 	// Use the underlying flow to execute the agent logic.
 	flowEventChan, err := a.flow.Run(ctx, invocation)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 
-	return flowEventChan, nil
+	return ctx, flowEventChan, nil
 
 }
 
@@ -537,7 +543,15 @@ func (a *LLMAgent) wrapEventChannel(
 
 		// After all events are processed, run after agent callbacks
 		if a.agentCallbacks != nil {
-			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, agentErr)
+			result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+				Invocation:        invocation,
+				Error:             agentErr,
+				FullResponseEvent: fullRespEvent,
+			})
+			// Use the context from result if provided.
+			if result != nil && result.Context != nil {
+				ctx = result.Context
+			}
 			var evt *event.Event
 			if err != nil {
 				// Send error event.
@@ -547,9 +561,9 @@ func (a *LLMAgent) wrapEventChannel(
 					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
-			} else if customResponse != nil {
+			} else if result != nil && result.CustomResponse != nil {
 				// Create an event from the custom response.
-				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			}
 			if evt != nil {
 				fullRespEvent = evt
