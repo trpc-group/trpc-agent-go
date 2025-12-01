@@ -158,34 +158,22 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		}
 	}
 
-	var pgClient storage.Client
-	var err error
-	builder := storage.GetClientBuilder()
-
+	builderOpts := []storage.ClientBuilderOpt{
+		storage.WithClientConnString(buildConnString(opts)),
+		storage.WithExtraOptions(opts.extraOptions...),
+	}
 	// Priority: direct connection settings > instance name
 	// If direct connection settings are provided, use them
-	if opts.host != "" {
-		connString := buildConnString(opts)
-		pgClient, err = builder(
-			context.Background(),
-			storage.WithClientConnString(connString),
-			storage.WithExtraOptions(opts.extraOptions...),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create postgres client from connection settings failed: %w", err)
-		}
-	} else if opts.instanceName != "" {
+	if opts.host == "" && opts.instanceName != "" {
 		// Otherwise, use instance name if provided
-		builderOpts, ok := storage.GetPostgresInstance(opts.instanceName)
-		if !ok {
+		var ok bool
+		if builderOpts, ok = storage.GetPostgresInstance(opts.instanceName); !ok {
 			return nil, fmt.Errorf("postgres instance %s not found", opts.instanceName)
 		}
-		pgClient, err = builder(context.Background(), builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("either connection settings (host, port, etc.) or instance name must be provided")
+	}
+	pgClient, err := storage.GetClientBuilder()(context.Background(), builderOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("create postgres client failed: %w", err)
 	}
 
 	s := &Service{
