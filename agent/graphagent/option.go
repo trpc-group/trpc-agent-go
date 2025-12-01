@@ -41,20 +41,20 @@ const (
 type MessageFilterMode int
 
 const (
-	// FullPrefix includes all messages, equivalent to TimelineFilterAll + BranchFilterModePrefix.
-	FullPrefix MessageFilterMode = iota
-	// CurrentRequest includes only messages within the current request cycle,
+	// PrefixAll includes all messages, equivalent to TimelineFilterAll + BranchFilterModePrefix.
+	PrefixAll MessageFilterMode = iota
+	// PrefixRequest includes only messages within the current request cycle,
 	// equivalent to TimelineFilterCurrentRequest + BranchFilterModePrefix.
-	CurrentRequest
-	//CurrentInvocation includes only messages within the current invocation session,
+	PrefixRequest
+	//PrefixInvocation includes only messages within the current invocation session,
 	// equivalent to TimelineFilterCurrentInvocation + BranchFilterModePrefix.
-	CurrentInvocation
-	// IsolatedRequest includes only messages within the current request cycle,
+	PrefixInvocation
+	// ExactRequest includes only messages within the current request cycle,
 	// equivalent to TimelineFilterCurrentRequest + BranchFilterModeExact.
-	IsolatedRequest
-	// IsolatedInvocation includes only messages within the current invocation session,
+	ExactRequest
+	// ExactInvocation includes only messages within the current invocation session,
 	// equivalent to TimelineFilterCurrentInvocation + BranchFilterModeExact.
-	IsolatedInvocation
+	ExactInvocation
 )
 
 // Option is a function that configures a GraphAgent.
@@ -144,19 +144,19 @@ func WithMessageBranchFilterMode(mode string) Option {
 func WithMessageFilterMode(mode MessageFilterMode) Option {
 	return func(opts *Options) {
 		switch mode {
-		case FullPrefix:
+		case PrefixAll:
 			opts.messageBranchFilterMode = BranchFilterModePrefix
 			opts.messageTimelineFilterMode = TimelineFilterAll
-		case CurrentRequest:
+		case PrefixRequest:
 			opts.messageBranchFilterMode = BranchFilterModePrefix
 			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
-		case CurrentInvocation:
+		case PrefixInvocation:
 			opts.messageBranchFilterMode = BranchFilterModePrefix
 			opts.messageTimelineFilterMode = TimelineFilterCurrentInvocation
-		case IsolatedRequest:
+		case ExactRequest:
 			opts.messageBranchFilterMode = BranchFilterModeExact
 			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
-		case IsolatedInvocation:
+		case ExactInvocation:
 			opts.messageBranchFilterMode = BranchFilterModeExact
 			opts.messageTimelineFilterMode = TimelineFilterCurrentInvocation
 		default:
