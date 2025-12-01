@@ -63,43 +63,22 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
-	builder := storage.GetClientBuilder()
-	var (
-		redisClient redis.UniversalClient
-		err         error
-	)
+	builderOpts := []storage.ClientBuilderOpt{
+		storage.WithClientBuilderURL(opts.url),
+		storage.WithExtraOptions(opts.extraOptions...),
+	}
 
 	// if instance name set, and url not set, use instance name to create redis client
 	if opts.url == "" && opts.instanceName != "" {
-		builderOpts, ok := storage.GetRedisInstance(opts.instanceName)
-		if !ok {
+		var ok bool
+		if builderOpts, ok = storage.GetRedisInstance(opts.instanceName); !ok {
 			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
 		}
-		redisClient, err = builder(builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
-		}
-
-		// Test connection with Ping to ensure Redis is accessible.
-		ctx, cancel := context.WithTimeout(context.Background(), defaultConnectionTimeout)
-		defer cancel()
-		if err := redisClient.Ping(ctx).Err(); err != nil {
-			return nil, fmt.Errorf("redis connection test failed: %w", err)
-		}
-
-		return &Service{
-			opts:        opts,
-			redisClient: redisClient,
-			cachedTools: make(map[string]tool.Tool),
-		}, nil
 	}
 
-	redisClient, err = builder(
-		storage.WithClientBuilderURL(opts.url),
-		storage.WithExtraOptions(opts.extraOptions...),
-	)
+	redisClient, err := storage.GetClientBuilder()(builderOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("create redis client from url failed: %w", err)
+		return nil, fmt.Errorf("create redis client failed: %w", err)
 	}
 
 	// Test connection with Ping to ensure Redis is accessible.
