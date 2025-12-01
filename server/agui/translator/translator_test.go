@@ -243,7 +243,7 @@ func TestGraphModelMetadataProducesText(t *testing.T) {
 	tr, ok := New("thread", "run").(*translator)
 	assert.True(t, ok)
 
-	meta := graph.ModelExecutionMetadata{Output: "hello from graph"}
+	meta := graph.ModelExecutionMetadata{Output: "hello from graph", ResponseID: "resp-1"}
 	b, _ := json.Marshal(meta)
 	evt := &agentevent.Event{
 		ID:         "evt-model",
@@ -254,10 +254,45 @@ func TestGraphModelMetadataProducesText(t *testing.T) {
 	assert.Len(t, evts, 3) // start + content + end
 	start, ok := evts[0].(*aguievents.TextMessageStartEvent)
 	assert.True(t, ok)
-	assert.Equal(t, "evt-model", start.MessageID)
+	assert.Equal(t, meta.ResponseID, start.MessageID)
 	content, ok := evts[1].(*aguievents.TextMessageContentEvent)
 	assert.True(t, ok)
 	assert.Equal(t, "hello from graph", content.Delta)
+}
+
+func TestGraphModelEventsDeduplicatedByResponseID(t *testing.T) {
+	tr := New("thread", "run")
+
+	rsp := &model.Response{
+		ID:     "resp-1",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "graph output",
+			},
+		}},
+		Done: true,
+	}
+	first, err := tr.Translate(&agentevent.Event{Response: rsp})
+	assert.NoError(t, err)
+	assert.NotEmpty(t, first)
+
+	meta := graph.ModelExecutionMetadata{
+		Output:     "graph output",
+		ResponseID: rsp.ID,
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+	graphEvt := &agentevent.Event{
+		ID: "dup-graph",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyModel: raw,
+		},
+	}
+	dups, err := tr.Translate(graphEvt)
+	assert.NoError(t, err)
+	assert.Len(t, dups, 0)
 }
 
 func TestGraphToolMetadataStartCompleteAndSkipDuplicateToolResponse(t *testing.T) {
@@ -647,13 +682,37 @@ func TestToolNilResponse(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestGraphToolEventsSkippedWhenResponseIDPresent(t *testing.T) {
+func TestGraphToolEventsDeduplicatedByToolID(t *testing.T) {
 	tr := New("thread", "run")
+
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "transfer_to_agent",
+			Arguments: []byte(`{"agent_name":"math-graph","message":"计算"}`),
+		},
+	}
+	callEvent := &agentevent.Event{
+		Response: &model.Response{
+			ID:     "resp-123",
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{toolCall},
+				},
+			}},
+		},
+	}
+
+	first, err := tr.Translate(callEvent)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, first)
 
 	meta := graph.ToolExecutionMetadata{
 		ToolName:   "generate_experiment_report",
-		ToolID:     "call-1",
-		ResponseID: "resp-123",
+		ToolID:     toolCall.ID,
+		ResponseID: callEvent.Response.ID,
 		Phase:      graph.ToolExecutionPhaseStart,
 		Input:      `{"exp_group_id":1}`,
 	}
@@ -672,7 +731,7 @@ func TestGraphToolEventsSkippedWhenResponseIDPresent(t *testing.T) {
 	assert.Len(t, translated, 0)
 }
 
-func TestTranslateSubagentGraph(t *testing.T) {
+func TestTranslateSubagentGraph_Stream(t *testing.T) {
 	translator := New("thread", "run")
 
 	const (
@@ -851,4 +910,163 @@ func TestTranslateSubagentGraph(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "thread", runFinished.ThreadID())
 	assert.Equal(t, "run", runFinished.RunID())
+}
+
+func TestTranslateSubagentGraph_NonStream(t *testing.T) {
+	translator := New("thread", "run")
+
+	const (
+		chatResponseID        = "c4ee0e1b-4cd2-4d82-b17f-c58a59c9670b"
+		transferToolCallID    = "call_00_287uVx8smsOO32bh1Eo8uTqL"
+		transferResultEventID = "6922b48d-394a-40d5-b335-9486438417e3"
+		graphResponseID       = "17e29cd5-c36a-4060-8783-753fcdee95b1"
+		calculatorToolCallID  = "call_00_zP4ACTLaYJs8vKlyX4ggjesm"
+	)
+
+	chatEvent := &agentevent.Event{
+		ID: "d4663c7f-7bd4-46f6-aa10-75e4bd75a0af",
+		Response: &model.Response{
+			ID:     chatResponseID,
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "我来帮你计算这个数学表达式。让我把这个问题转给专门处理数学计算的工具。",
+					ToolCalls: []model.ToolCall{{
+						ID: transferToolCallID,
+						Function: model.FunctionDefinitionParam{
+							Name:      "transfer_to_agent",
+							Arguments: []byte(`{"agent_name": "math-graph", "message": "计算123+456*456"}`),
+						},
+					}},
+				},
+			}},
+			Done: true,
+		},
+	}
+
+	transferResult := &agentevent.Event{
+		ID: transferResultEventID,
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					Content:  `{"success":true,"message":"Transfer initiated to agent 'math-graph'","target_agent":"math-graph","transfer_type":"agent_handoff"}`,
+					ToolID:   transferToolCallID,
+					ToolName: "transfer_to_agent",
+				},
+			}},
+		},
+	}
+
+	graphModelMeta, err := json.Marshal(graph.ModelExecutionMetadata{
+		ModelName:  "deepseek-chat",
+		NodeID:     "A",
+		ResponseID: graphResponseID,
+		Phase:      graph.ModelExecutionPhaseComplete,
+		Output:     "我来帮你计算这个数学表达式。根据运算优先级，乘法应该先于加法进行。\n\n首先计算乘法部分：456 × 456",
+	})
+	assert.NoError(t, err)
+	graphModelEvent := &agentevent.Event{
+		ID: "0703a61c-a841-48cb-b129-4d59b9796421",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyModel: graphModelMeta,
+		},
+	}
+
+	toolMetaStart, err := json.Marshal(graph.ToolExecutionMetadata{
+		ToolName:   "calculator",
+		ToolID:     calculatorToolCallID,
+		ResponseID: graphResponseID,
+		Phase:      graph.ToolExecutionPhaseStart,
+		Input:      `{"operation": "multiply", "a": 456, "b": 456}`,
+	})
+	assert.NoError(t, err)
+	graphToolEvent := &agentevent.Event{
+		ID: "d576cef8-e004-4f8b-91f1-b8acaf66ee6f",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyTool: toolMetaStart,
+		},
+	}
+
+	toolResult := &agentevent.Event{
+		ID: "0ab06378-28d1-4964-8e45-d691c41bfff3",
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   calculatorToolCallID,
+					ToolName: "calculator",
+					Content:  `{"operation":"multiply","a":456,"b":456,"result":207936}`,
+				},
+			}},
+		},
+	}
+
+	runCompletion := &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+
+	events := []*agentevent.Event{
+		chatEvent,
+		transferResult,
+		graphModelEvent,
+		graphToolEvent,
+		toolResult,
+		runCompletion,
+	}
+
+	var translated []aguievents.Event
+	for _, evt := range events {
+		evs, err := translator.Translate(evt)
+		assert.NoError(t, err)
+		translated = append(translated, evs...)
+	}
+
+	assert.NotEmpty(t, translated)
+	var (
+		chatStarts         int
+		graphStarts        int
+		transferToolStarts int
+		calcToolStarts     int
+		runFinished        int
+	)
+
+	for _, ev := range translated {
+		switch v := ev.(type) {
+		case *aguievents.TextMessageStartEvent:
+			switch v.MessageID {
+			case chatResponseID:
+				chatStarts++
+			case graphResponseID:
+				graphStarts++
+			}
+		case *aguievents.ToolCallStartEvent:
+			switch v.ToolCallID {
+			case transferToolCallID:
+				transferToolStarts++
+				if assert.NotNil(t, v.ParentMessageID) {
+					assert.Equal(t, chatResponseID, *v.ParentMessageID)
+				}
+			case calculatorToolCallID:
+				calcToolStarts++
+				if assert.NotNil(t, v.ParentMessageID) {
+					assert.Equal(t, graphResponseID, *v.ParentMessageID)
+				}
+			}
+		case *aguievents.RunFinishedEvent:
+			runFinished++
+		}
+	}
+
+	assert.Equal(t, 1, chatStarts)
+	assert.Equal(t, 1, graphStarts)
+	assert.Equal(t, 1, transferToolStarts)
+	assert.Equal(t, 1, calcToolStarts)
+	assert.Equal(t, 1, runFinished)
 }

@@ -32,8 +32,12 @@ type Translator interface {
 // New creates a new event translator.
 func New(threadID, runID string) Translator {
 	return &translator{
-		threadID: threadID,
-		runID:    runID,
+		threadID:         threadID,
+		runID:            runID,
+		lastMessageID:    "",
+		receivingMessage: false,
+		seenResponseIDs:  make(map[string]struct{}),
+		seenToolCallIDs:  make(map[string]struct{}),
 	}
 }
 
@@ -43,6 +47,8 @@ type translator struct {
 	runID            string
 	lastMessageID    string
 	receivingMessage bool
+	seenResponseIDs  map[string]struct{}
+	seenToolCallIDs  map[string]struct{}
 }
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
@@ -52,6 +58,8 @@ func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, err
 	}
 
 	var events []aguievents.Event
+	hasGraphDelta := event.StateDelta != nil &&
+		(len(event.StateDelta[graph.MetadataKeyModel]) > 0 || len(event.StateDelta[graph.MetadataKeyTool]) > 0)
 
 	// GraphAgent emits model/tool metadata via StateDelta instead of raw tool_calls.
 	events = append(events, t.graphModelEvents(event)...)
@@ -59,7 +67,7 @@ func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, err
 
 	rsp := event.Response
 	if rsp == nil {
-		if len(events) > 0 {
+		if len(events) > 0 || hasGraphDelta {
 			return events, nil
 		}
 		return nil, errors.New("event response is nil")
@@ -104,6 +112,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 	if rsp == nil || len(rsp.Choices) == 0 {
 		return nil, nil
 	}
+	t.recordResponseID(rsp.ID)
 	var events []aguievents.Event
 	// Different message ID means a new message.
 	if t.lastMessageID != rsp.ID {
@@ -166,6 +175,7 @@ func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, err
 	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
 		for _, toolCall := range choice.Message.ToolCalls {
+			t.recordToolCallID(toolCall.ID)
 			// Tool Call Start Event.
 			startOpt := []aguievents.ToolCallStartOption{aguievents.WithParentMessageID(rsp.ID)}
 			toolCallStartEvent := aguievents.NewToolCallStartEvent(toolCall.ID, toolCall.Function.Name, startOpt...)
@@ -224,18 +234,22 @@ func (t *translator) graphModelEvents(evt *agentevent.Event) []aguievents.Event 
 	if meta.Output == "" {
 		return nil
 	}
+	responseID := meta.ResponseID
+	if t.hasSeenResponseID(responseID) {
+		return nil
+	}
 	var events []aguievents.Event
-	if t.receivingMessage && t.lastMessageID != "" {
+	if t.receivingMessage && t.lastMessageID != responseID {
 		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
 		t.receivingMessage = false
 	}
-	msgID := evt.ID
 	events = append(events,
-		aguievents.NewTextMessageStartEvent(msgID, aguievents.WithRole(model.RoleAssistant.String())),
-		aguievents.NewTextMessageContentEvent(msgID, meta.Output),
-		aguievents.NewTextMessageEndEvent(msgID),
+		aguievents.NewTextMessageStartEvent(responseID, aguievents.WithRole(model.RoleAssistant.String())),
+		aguievents.NewTextMessageContentEvent(responseID, meta.Output),
+		aguievents.NewTextMessageEndEvent(responseID),
 	)
-	t.lastMessageID = msgID
+	t.lastMessageID = responseID
+	t.recordResponseID(responseID)
 	return events
 }
 
@@ -255,6 +269,9 @@ func (t *translator) graphToolEvents(evt *agentevent.Event) []aguievents.Event {
 			aguievents.WithRunID(t.runID),
 		)}
 	}
+	if t.hasSeenToolCallID(meta.ToolID) {
+		return nil
+	}
 
 	switch meta.Phase {
 	case graph.ToolExecutionPhaseStart:
@@ -265,8 +282,27 @@ func (t *translator) graphToolEvents(evt *agentevent.Event) []aguievents.Event {
 			events = append(events, aguievents.NewToolCallArgsEvent(meta.ToolID, meta.Input))
 		}
 		events = append(events, aguievents.NewToolCallEndEvent(meta.ToolID))
+		t.recordToolCallID(meta.ToolID)
 		return events
 	default:
 		return nil
 	}
+}
+
+func (t *translator) recordResponseID(id string) {
+	t.seenResponseIDs[id] = struct{}{}
+}
+
+func (t *translator) hasSeenResponseID(id string) bool {
+	_, ok := t.seenResponseIDs[id]
+	return ok
+}
+
+func (t *translator) recordToolCallID(id string) {
+	t.seenToolCallIDs[id] = struct{}{}
+}
+
+func (t *translator) hasSeenToolCallID(id string) bool {
+	_, ok := t.seenToolCallIDs[id]
+	return ok
 }

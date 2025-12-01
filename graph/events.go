@@ -234,6 +234,8 @@ type ModelExecutionMetadata struct {
 	ModelName string `json:"modelName"`
 	// NodeID is the unique identifier of the node.
 	NodeID string `json:"nodeId"`
+	// ResponseID is the response/message ID for this model output.
+	ResponseID string `json:"responseId,omitempty"`
 	// Phase is the execution phase.
 	Phase ModelExecutionPhase `json:"phase"`
 	// StartTime is when the execution started.
@@ -494,6 +496,7 @@ type ModelEventOptions struct {
 	InvocationID string
 	ModelName    string
 	NodeID       string
+	ResponseID   string
 	Phase        ModelExecutionPhase
 	StartTime    time.Time
 	EndTime      time.Time
@@ -695,6 +698,13 @@ func WithToolEventError(err error) ToolEventOption {
 func WithToolEventIncludeResponse(include bool) ToolEventOption {
 	return func(opts *ToolEventOptions) {
 		opts.IncludeResponse = include
+	}
+}
+
+// WithModelEventResponseID sets the response ID for model events.
+func WithModelEventResponseID(responseID string) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.ResponseID = responseID
 	}
 }
 
@@ -1156,6 +1166,7 @@ func NewModelExecutionEvent(opts ...ModelEventOption) *event.Event {
 	metadata := ModelExecutionMetadata{
 		ModelName:    options.ModelName,
 		NodeID:       options.NodeID,
+		ResponseID:   options.ResponseID,
 		Phase:        options.Phase,
 		StartTime:    options.StartTime,
 		EndTime:      options.EndTime,

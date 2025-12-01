@@ -839,12 +839,26 @@ func (r *llmRunner) executeModel(
 	})
 	endTime := time.Now()
 	var modelOutput string
+	var responseID string
 	if err == nil && result != nil {
 		if finalResponse, ok := result.(*model.Response); ok && len(finalResponse.Choices) > 0 {
 			modelOutput = finalResponse.Choices[0].Message.Content
+			responseID = finalResponse.ID
 		}
 	}
-	emitModelCompleteEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
+	emitModelCompleteEvent(
+		ctx,
+		eventChan,
+		invocationID,
+		modelName,
+		nodeID,
+		modelInput,
+		modelOutput,
+		responseID,
+		startTime,
+		endTime,
+		err,
+	)
 	return result, err
 }
 
@@ -1459,7 +1473,7 @@ func emitModelStartEvent(
 func emitModelCompleteEvent(
 	ctx context.Context,
 	eventChan chan<- *event.Event,
-	invocationID, modelName, nodeID, modelInput, modelOutput string,
+	invocationID, modelName, nodeID, modelInput, modelOutput, responseID string,
 	startTime, endTime time.Time,
 	err error,
 ) {
@@ -1477,6 +1491,7 @@ func emitModelCompleteEvent(
 		WithModelEventInput(modelInput),
 		WithModelEventOutput(modelOutput),
 		WithModelEventError(err),
+		WithModelEventResponseID(responseID),
 	)
 
 	invocation, _ := agent.InvocationFromContext(ctx)
