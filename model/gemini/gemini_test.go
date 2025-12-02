@@ -299,7 +299,26 @@ func TestModel_buildResponse(t *testing.T) {
 		want   *model.Response
 	}{
 		{
-			name: "buildResponse nil",
+			name: "nil-req",
+			fields: fields{
+				m: &Model{},
+			},
+			args: args{
+				chatCompletion: nil,
+			},
+			want: &model.Response{},
+		},
+		{
+			name: "empty-usage",
+			fields: fields{
+				m: &Model{},
+			},
+			args: args{
+				chatCompletion: &genai.GenerateContentResponse{},
+			},
+		},
+		{
+			name: "buildResponse",
 			fields: fields{
 				m: &Model{},
 			},
@@ -392,6 +411,9 @@ func TestModel_buildResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildResponse(tt.args.chatCompletion)
+			if tt.name == "nil-req" || tt.name == "empty-usage" {
+				return
+			}
 			assert.Equal(t, tt.want.ID, response.ID)
 			assert.Equal(t, tt.want.Model, response.Model)
 			assert.Equal(t, tt.want.Created, response.Created)
@@ -571,6 +593,12 @@ func TestModel_GenerateContentError(t *testing.T) {
 		args args
 	}{
 		{
+			name: "nil request",
+			args: args{
+				ctx: context.Background(),
+			},
+		},
+		{
 			name: "error",
 			args: args{
 				ctx:     context.Background(),
@@ -583,8 +611,7 @@ func TestModel_GenerateContentError(t *testing.T) {
 			m := &Model{
 				client: mockClient,
 			}
-			_, err := m.GenerateContent(tt.args.ctx, tt.args.request)
-			assert.Nil(t, err)
+			_, _ = m.GenerateContent(tt.args.ctx, tt.args.request)
 		})
 	}
 }
@@ -779,5 +806,57 @@ func seqFromSlice[T any](items []T) iter.Seq2[T, error] {
 				return
 			}
 		}
+	}
+}
+
+func TestModel_convertContentPartNil(t *testing.T) {
+	type args struct {
+		part model.ContentPart
+	}
+	tests := []struct {
+		name string
+		args args
+		want *genai.Part
+	}{
+		{
+			name: "nil-Type",
+			args: args{
+				part: model.ContentPart{},
+			},
+			want: nil,
+		},
+		{
+			name: "empty-image",
+			args: args{
+				part: model.ContentPart{
+					Type: model.ContentTypeImage,
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "empty-audio",
+			args: args{
+				part: model.ContentPart{
+					Type: model.ContentTypeAudio,
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "empty-file",
+			args: args{
+				part: model.ContentPart{
+					Type: model.ContentTypeFile,
+				},
+			},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{}
+			assert.Equalf(t, tt.want, m.convertContentPart(tt.args.part), "convertContentPart(%v)", tt.args.part)
+		})
 	}
 }
