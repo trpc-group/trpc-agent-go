@@ -159,10 +159,10 @@ TIPS:
 
 Config:
 - `llmagent.WithMessageFilterMode(MessageFilterMode)`:
-  - `FullContext`: Includes historical messages and messages generated in the current request, filtered by prefix matching with the branch.
-  - `RequestContext`: Only includes messages generated in the current request, filtered by prefix matching with the branch.
-  - `IsolatedRequest`: Only includes messages generated in the current request, filtered by exact matching with the branch.
-  - `IsolatedInvocation`: Only includes messages generated in the current Invocation context, filtered by exact matching with the branch.
+  - `FullContext`: Includes historical messages and messages generated in the current request, filtered by prefix matching with the filterKey.
+  - `RequestContext`: Only includes messages generated in the current request, filtered by prefix matching with the filterKey.
+  - `IsolatedRequest`: Only includes messages generated in the current request, filtered by exact matching with the filterKey.
+  - `IsolatedInvocation`: Only includes messages generated in the current Invocation context, filtered by exact matching with the filterKey.
 
 Recommended Usage Examples (These examples are simplified configurations based on advanced usage):
 
