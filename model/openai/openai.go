@@ -285,12 +285,6 @@ func New(name string, opts ...Option) *Model {
 
 	client := openai.NewClient(clientOpts...)
 
-	// Set default batch completion window if not specified.
-	batchCompletionWindow := o.BatchCompletionWindow
-	if batchCompletionWindow == "" {
-		batchCompletionWindow = defaultBatchCompletionWindow
-	}
-
 	// Provide defaults at construction time when token tailoring is enabled.
 	// These are best-effort defaults; user-provided counter/strategy always take priority.
 	if o.MaxInputTokens > 0 {
@@ -316,7 +310,7 @@ func New(name string, opts ...Option) *Model {
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
 		variantConfig:              variantConfigs[o.Variant],
-		batchCompletionWindow:      batchCompletionWindow,
+		batchCompletionWindow:      o.BatchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
 		enableTokenTailoring:       o.EnableTokenTailoring,

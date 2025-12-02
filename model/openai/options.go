@@ -98,8 +98,9 @@ type options struct {
 
 var (
 	defaultOptions = options{
-		Variant:           VariantOpenAI, // The default variant is VariantOpenAI.
-		ChannelBufferSize: defaultChannelBufferSize,
+		Variant:               VariantOpenAI, // The default variant is VariantOpenAI.
+		ChannelBufferSize:     defaultChannelBufferSize,
+		BatchCompletionWindow: defaultBatchCompletionWindow,
 	}
 )
 
@@ -235,6 +236,9 @@ func WithVariant(variant Variant) Option {
 // WithBatchCompletionWindow sets the batch completion window.
 func WithBatchCompletionWindow(window openai.BatchNewParamsCompletionWindow) Option {
 	return func(opts *options) {
+		if window == "" {
+			window = defaultBatchCompletionWindow
+		}
 		opts.BatchCompletionWindow = window
 	}
 }
