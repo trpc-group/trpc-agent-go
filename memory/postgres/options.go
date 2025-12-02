@@ -36,21 +36,10 @@ var (
 	defaultOptions = ServiceOpts{
 		tableName:    "memories",
 		memoryLimit:  imemory.DefaultMemoryLimit,
-		toolCreators: make(map[string]memory.ToolCreator),
-		enabledTools: make(map[string]bool),
+		toolCreators: imemory.AllToolCreators,
+		enabledTools: imemory.DefaultEnabledTools,
 	}
 )
-
-func init() {
-	// Copy all tool creators.
-	for name, creator := range imemory.AllToolCreators {
-		defaultOptions.toolCreators[name] = creator
-	}
-	// Enable default tools.
-	for name, enabled := range imemory.DefaultEnabledTools {
-		defaultOptions.enabledTools[name] = enabled
-	}
-}
 
 // ServiceOpts is the options for the postgres memory service.
 type ServiceOpts struct {
