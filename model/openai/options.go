@@ -372,6 +372,27 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 // requirements.
 func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	return func(opts *options) {
+		if config == nil {
+			return
+		}
+		if config.ProtocolOverheadTokens <= 0 {
+			config.ProtocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
+		}
+		if config.ReserveOutputTokens <= 0 {
+			config.ReserveOutputTokens = imodel.DefaultReserveOutputTokens
+		}
+		if config.SafetyMarginRatio <= 0 {
+			config.SafetyMarginRatio = imodel.DefaultSafetyMarginRatio
+		}
+		if config.InputTokensFloor <= 0 {
+			config.InputTokensFloor = imodel.DefaultInputTokensFloor
+		}
+		if config.OutputTokensFloor <= 0 {
+			config.OutputTokensFloor = imodel.DefaultOutputTokensFloor
+		}
+		if config.MaxInputTokensRatio <= 0 {
+			config.MaxInputTokensRatio = imodel.DefaultMaxInputTokensRatio
+		}
 		opts.TokenTailoringConfig = config
 	}
 }
