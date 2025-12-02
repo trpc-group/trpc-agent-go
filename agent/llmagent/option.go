@@ -53,15 +53,16 @@ const (
 type MessageFilterMode int
 
 const (
-	// FullContext includes all messages, equivalent to TimelineFilterAll + BranchFilterModePrefix.
+	// FullContext Includes all messages with prefix matching (including historical messages).
+	// equivalent to TimelineFilterAll + BranchFilterModePrefix.
 	FullContext MessageFilterMode = iota
-	// RequestContext includes only messages within the current request cycle,
+	// RequestContext includes only messages from the current request cycle that match the branch prefix.
 	// equivalent to TimelineFilterCurrentRequest + BranchFilterModePrefix.
 	RequestContext
-	// IsolatedRequest includes only messages within the current request cycle,
+	// IsolatedRequest includes only messages from the current request cycle that exactly match the branch.
 	// equivalent to TimelineFilterCurrentRequest + BranchFilterModeExact.
 	IsolatedRequest
-	// IsolatedInvocation includes only messages within the current invocation session,
+	// IsolatedInvocation includes only messages from current invocation session that exactly match the branch,
 	// equivalent to TimelineFilterCurrentInvocation + BranchFilterModeExact.
 	IsolatedInvocation
 )
