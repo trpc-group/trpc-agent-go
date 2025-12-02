@@ -78,6 +78,10 @@ type Options struct {
 	messageBranchFilterMode string
 }
 
+var (
+	defaultOptions = Options{ChannelBufferSize: defaultChannelBufferSize}
+)
+
 // WithDescription sets the description of the agent.
 func WithDescription(description string) Option {
 	return func(opts *Options) {
