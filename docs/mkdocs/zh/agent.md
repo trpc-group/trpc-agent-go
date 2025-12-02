@@ -169,14 +169,14 @@ taskagentB := llmagent.New(
   "coordinator",
   llmagent.WithModel(modelInstance),
   // 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）
-  llmagent.WithMessageFilterMode(llmagent.FullContext)
+  llmagent.WithMessageFilterMode(llmagent.FullContext),
   // 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
-  llmagent.WithMessageFilterMode(llmagent.RequestContext)
+  llmagent.WithMessageFilterMode(llmagent.RequestContext),
   // 仅对taskagentB当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
-  llmagent.WithMessageFilterMode(llmagent.IsolatedRequest)
+  llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
   // agent执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3 -> taskagentB-invocation4(当前执行阶段)
   // 仅对taskagentB当前taskagentB-invocation4期间生成的消息可见（不包含自己的历史会话消息以及taskagentB-invocation2期间生成的消息）
-  llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation)
+  llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation),
 )
 
 // 循环执行taskagentA、taskagentB
