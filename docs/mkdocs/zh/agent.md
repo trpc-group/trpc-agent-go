@@ -136,11 +136,11 @@ if err != nil {
 ### 消息可见性选项
 当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
 在与model交互时仅将可见的内容输入给模型。
-`TIPS:`
+TIPS:
  - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
  - invocation.Message在任何场景下均可见
 
-`配置:`
+配置:
 - `llmagent.WithMessageFilterMode(MessageFilterMode)`:
   - `FullContext`: 所有能通过branch做前缀匹配的消息
   - `RequestContext`: 仅包含当前请求周期内通过filterKey前缀匹配的消息
