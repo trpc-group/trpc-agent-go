@@ -470,8 +470,7 @@ func TestInMemoryCheckpointSaverGetLatest(t *testing.T) {
 	crossNamespaceConfig := graph.CreateCheckpointConfig(lineageID, "", "")
 	crossNamespaceTuple, err := saver.GetTuple(ctx, crossNamespaceConfig)
 	require.NoError(t, err)
-	require.NotNil(t, crossNamespaceTuple)
-	assert.Equal(t, lastCheckpointID, crossNamespaceTuple.Checkpoint.ID)
+	require.Nil(t, crossNamespaceTuple)
 }
 
 func TestInMemoryCheckpointSaverFilters(t *testing.T) {

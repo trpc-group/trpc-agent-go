@@ -44,16 +44,8 @@ import (
 )
 
 func main() {
-    ctx := context.Background()
-
     // 1. Create LLM model
-    llm, err := openai.NewModel(
-        openai.WithAPIKey("your-api-key"),
-        openai.WithModelName("gpt-4"),
-    )
-    if err != nil {
-        panic(err)
-    }
+    llm := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
     // 2. (Optional) Create summarizer - automatically compress long conversation history
     summarizer := summary.NewSummarizer(
@@ -77,7 +69,7 @@ func main() {
     agent := llmagent.New(
         "my-agent",
         llmagent.WithModel(llm),
-        llmagent.WithSystemPrompt("You are a helpful assistant"),
+        llmagent.WithInstruction("You are a helpful assistant"),
         llmagent.WithAddSessionSummary(true), // Optional: enable summary injection to context
         // Note: WithAddSessionSummary(true) ignores WithMaxHistoryRuns configuration
         // Summary includes all history, incremental events fully retained
@@ -91,6 +83,7 @@ func main() {
     )
 
     // 6. First conversation
+    ctx := context.Background()
     userMsg1 := model.NewUserMessage("My name is Alice")
     eventChan, err := r.Run(ctx, "user123", "session-001", userMsg1)
     if err != nil {
@@ -735,6 +728,20 @@ CREATE TABLE session_events (
     deleted_at TIMESTAMP
 );
 
+-- Track events table.
+CREATE TABLE session_track_events (
+    id BIGSERIAL PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    track VARCHAR(255) NOT NULL,
+    event JSONB NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+
 -- Session summaries table
 CREATE TABLE session_summaries (
     id BIGSERIAL PRIMARY KEY,
@@ -1108,13 +1115,7 @@ import (
 )
 
 // Create LLM model for summarization.
-summaryModel, err := openai.NewModel(
-    openai.WithAPIKey("your-api-key"),
-    openai.WithModelName("gpt-4"),
-)
-if err != nil {
-    panic(err)
-}
+summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
 // Create summarizer with trigger conditions.
 summarizer := summary.NewSummarizer(
@@ -1434,10 +1435,7 @@ func main() {
     ctx := context.Background()
 
     // Create LLM model for both chat and summarization.
-    llm, _ := openai.NewModel(
-        openai.WithAPIKey("your-api-key"),
-        openai.WithModelName("gpt-4"),
-    )
+    llm := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
     // Create summarizer with flexible trigger conditions.
     summarizer := summary.NewSummarizer(
