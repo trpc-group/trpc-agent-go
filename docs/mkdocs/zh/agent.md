@@ -134,13 +134,18 @@ if err != nil {
 ```
 
 ### 消息可见性选项
-当前Agent可根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理时，可以通过相关选项配置管理。
-在与model交互时仅将可见的内容输入给模型。（invocation.Message在任何场景下均可见）
+当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
+在与model交互时仅将可见的内容输入给模型。
+`TIPS:`
+ - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
+ - invocation.Message在任何场景下均可见
+
+`配置:`
 - `llmagent.WithMessageFilterMode(MessageFilterMode)`:
-  - `FullContext`: 包含历史消息以及当前请求中所生成的消息，并通过branch做前缀匹配过滤
-  - `RequestContext`: 仅当前请求中所生成的消息，并通过branch做前缀匹配过滤
-  - `IsolatedRequest`: 仅当前请求中所生成的消息，并通过branch完全匹配过滤
-  - `IsolatedInvocation`: 仅当前Invocation上下文所生成的消息，并通过branch完全匹配过滤
+  - `FullContext`: 所有能通过branch做前缀匹配的消息
+  - `RequestContext`: 仅包含当前请求周期内通过filterKey前缀匹配的消息
+  - `IsolatedRequest`: 仅包含当前请求周期内通过filterKey完全匹配的消息
+  - `IsolatedInvocation`: 仅包含当前invocation周期内通过filterKey完全匹配的消息
 
 推荐用法示例（该用法仅基于高级用法基础之上做了简化配置）:
 
@@ -194,7 +199,9 @@ if err != nil {
 
 高阶用法示例：
 可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`控制当前agent对历史消息与其他agent生成的消息可见性。
-当前agent在与模型交互时，最终将同时满足两个条件的消息输入给模型。（invocation.Message在任何场景下均可见）
+当前agent在与模型交互时，最终将同时满足两个条件的消息输入给模型。
+
+`配置:`
 - `WithMessageTimelineFilterMode`: 时间维度可见性控制
   - `TimelineFilterAll`: 包含历史消息以及当前请求中所生成的消息
   - `TimelineFilterCurrentRequest`: 仅包含当前请求(一次runner.Run为一次请求)中所生成的消息
