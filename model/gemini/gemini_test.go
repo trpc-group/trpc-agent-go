@@ -1,11 +1,16 @@
 package gemini
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"iter"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	gomock "go.uber.org/mock/gomock"
 	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -396,5 +401,365 @@ func TestModel_buildResponse(t *testing.T) {
 			assert.Equal(t, tt.want.Choices[0].Delta.Content, response.Choices[0].Delta.Content)
 			assert.Equal(t, tt.want.Choices[0].Delta.Role, response.Choices[0].Delta.Role)
 		})
+	}
+}
+
+func TestNew(t *testing.T) {
+	config := &model.TokenTailoringConfig{
+		ProtocolOverheadTokens: 1024,
+		ReserveOutputTokens:    4096,
+		InputTokensFloor:       2048,
+		OutputTokensFloor:      512,
+		SafetyMarginRatio:      0.15,
+		MaxInputTokensRatio:    0.90,
+	}
+	type args struct {
+		ctx  context.Context
+		name string
+		opts []Option
+	}
+	tests := []struct {
+		name string
+		args args
+		want *Model
+	}{
+		{
+			name: "success",
+			args: args{
+				ctx:  context.Background(),
+				name: "gemini-pro",
+				opts: []Option{
+					WithTokenTailoringConfig(config),
+					WithMaxInputTokens(10),
+				},
+			},
+			want: &Model{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(tt.args.ctx, tt.args.name, tt.args.opts...)
+			assert.NotNil(t, err)
+		})
+	}
+}
+
+// MockClient is a mock of Client interface.
+type MockClient struct {
+	ctrl     *gomock.Controller
+	recorder *MockClientMockRecorder
+	isgomock struct{}
+}
+
+// MockClientMockRecorder is the mock recorder for MockClient.
+type MockClientMockRecorder struct {
+	mock *MockClient
+}
+
+// NewMockClient creates a new mock instance.
+func NewMockClient(ctrl *gomock.Controller) *MockClient {
+	mock := &MockClient{ctrl: ctrl}
+	mock.recorder = &MockClientMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockClient) EXPECT() *MockClientMockRecorder {
+	return m.recorder
+}
+
+// Models mocks base method.
+func (m *MockClient) Models() Models {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Models")
+	ret0, _ := ret[0].(Models)
+	return ret0
+}
+
+// Models indicates an expected call of Models.
+func (mr *MockClientMockRecorder) Models() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Models", reflect.TypeOf((*MockClient)(nil).Models))
+}
+
+// MockModels is a mock of Models interface.
+type MockModels struct {
+	ctrl     *gomock.Controller
+	recorder *MockModelsMockRecorder
+	isgomock struct{}
+}
+
+// MockModelsMockRecorder is the mock recorder for MockModels.
+type MockModelsMockRecorder struct {
+	mock *MockModels
+}
+
+// NewMockModels creates a new mock instance.
+func NewMockModels(ctrl *gomock.Controller) *MockModels {
+	mock := &MockModels{ctrl: ctrl}
+	mock.recorder = &MockModelsMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockModels) EXPECT() *MockModelsMockRecorder {
+	return m.recorder
+}
+
+// GenerateContent mocks base method.
+func (m *MockModels) GenerateContent(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GenerateContent", ctx, model, contents, config)
+	ret0, _ := ret[0].(*genai.GenerateContentResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GenerateContent indicates an expected call of GenerateContent.
+func (mr *MockModelsMockRecorder) GenerateContent(ctx, model, contents, config any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GenerateContent", reflect.TypeOf((*MockModels)(nil).GenerateContent), ctx, model, contents, config)
+}
+
+// GenerateContentStream mocks base method.
+func (m *MockModels) GenerateContentStream(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) iter.Seq2[*genai.GenerateContentResponse, error] {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GenerateContentStream", ctx, model, contents, config)
+	ret0, _ := ret[0].(iter.Seq2[*genai.GenerateContentResponse, error])
+	return ret0
+}
+
+// GenerateContentStream indicates an expected call of GenerateContentStream.
+func (mr *MockModelsMockRecorder) GenerateContentStream(ctx, model, contents, config any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GenerateContentStream", reflect.TypeOf((*MockModels)(nil).GenerateContentStream), ctx, model, contents, config)
+}
+
+func TestModel_GenerateContentError(t *testing.T) {
+	subText := "subText"
+	req := &model.Request{
+		Messages: []model.Message{
+			{
+				Role:    model.RoleAssistant,
+				Content: "text",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: &subText,
+					},
+				},
+			},
+		},
+	}
+	err := errors.New("error")
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// 创建 Mock
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(nil, err).AnyTimes()
+	type args struct {
+		ctx     context.Context
+		request *model.Request
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "error",
+			args: args{
+				ctx:     context.Background(),
+				request: req,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{
+				client: mockClient,
+			}
+			_, err := m.GenerateContent(tt.args.ctx, tt.args.request)
+			assert.Nil(t, err)
+		})
+	}
+}
+
+func TestModel_GenerateContentNoStream(t *testing.T) {
+	subText := "subText"
+	now := time.Now()
+	req := &model.Request{
+		Messages: []model.Message{
+			{
+				Role:    model.RoleAssistant,
+				Content: "text",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: &subText,
+					},
+				},
+			},
+		},
+	}
+	resp := &genai.GenerateContentResponse{
+		ResponseID:   "1",
+		CreateTime:   now,
+		ModelVersion: "pro-v1",
+		Candidates: []*genai.Candidate{
+			{
+				Content: &genai.Content{
+					Parts: []*genai.Part{
+						{
+							Text: "",
+						},
+						{
+							Text: "Answer",
+						},
+					},
+				},
+				FinishReason: genai.FinishReason("finishReason"),
+			},
+		},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        1,
+			CandidatesTokenCount:    1,
+			TotalTokenCount:         2,
+			CachedContentTokenCount: 1,
+		},
+	}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// 创建 Mock
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(resp, nil).AnyTimes()
+	type args struct {
+		ctx     context.Context
+		request *model.Request
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "no-stream",
+			args: args{
+				ctx:     context.Background(),
+				request: req,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{
+				client: mockClient,
+			}
+			_, err := m.GenerateContent(tt.args.ctx, tt.args.request)
+			assert.Nil(t, err)
+		})
+	}
+}
+
+func TestModel_GenerateContentStreaming(t *testing.T) {
+	subText := "subText"
+	now := time.Now()
+	req := &model.Request{
+		Messages: []model.Message{
+			{
+				Role:    model.RoleAssistant,
+				Content: "text",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: &subText,
+					},
+				},
+			},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+	resp := &genai.GenerateContentResponse{
+		ResponseID:   "1",
+		CreateTime:   now,
+		ModelVersion: "pro-v1",
+		Candidates: []*genai.Candidate{
+			{
+				Content: &genai.Content{
+					Parts: []*genai.Part{
+						{
+							Text: "",
+						},
+						{
+							Text: "Answer",
+						},
+					},
+				},
+				FinishReason: genai.FinishReason("finishReason"),
+			},
+		},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        1,
+			CandidatesTokenCount:    1,
+			TotalTokenCount:         2,
+			CachedContentTokenCount: 1,
+		},
+	}
+	ctrl := gomock.NewController(t)
+
+	// 创建 Mock
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{resp, resp})).AnyTimes()
+	type args struct {
+		ctx     context.Context
+		request *model.Request
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "stream",
+			args: args{
+				ctx:     context.Background(),
+				request: req,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{
+				client:                 mockClient,
+				enableTokenTailoring:   true,
+				protocolOverheadTokens: 1,
+			}
+			_, err := m.GenerateContent(tt.args.ctx, tt.args.request)
+			assert.Nil(t, err)
+		})
+	}
+	ctrl.Finish()
+}
+
+func seqFromSlice[T any](items []T) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		for _, item := range items {
+			if !yield(item, nil) {
+				return
+			}
+		}
 	}
 }

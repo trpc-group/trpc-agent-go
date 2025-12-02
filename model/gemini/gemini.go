@@ -58,7 +58,7 @@ type ChatStreamCompleteCallbackFunc func(
 
 // Model implements the model.Model interface for Gemini API.
 type Model struct {
-	client                     *genai.Client
+	client                     Client
 	name                       string
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
@@ -133,7 +133,7 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 		return nil, err
 	}
 	return &Model{
-		client:                     client,
+		client:                     &clientWrapper{client: client},
 		name:                       name,
 		protocolOverheadTokens:     protocolOverhead,
 		reserveOutputTokens:        reserveOutput,
@@ -193,7 +193,7 @@ func (m *Model) handleNonStreamingResponse(
 	responseChan chan<- *model.Response,
 	generateConfig *genai.GenerateContentConfig,
 ) {
-	chatCompletion, err := m.client.Models.GenerateContent(
+	chatCompletion, err := m.client.Models().GenerateContent(
 		ctx, m.name, chatRequest, generateConfig)
 	if err != nil {
 		errorResponse := &model.Response{
@@ -229,7 +229,7 @@ func (m *Model) handleStreamingResponse(
 	responseChan chan<- *model.Response,
 	generateConfig *genai.GenerateContentConfig,
 ) {
-	chatCompletion := m.client.Models.GenerateContentStream(
+	chatCompletion := m.client.Models().GenerateContentStream(
 		ctx, m.name, chatRequest, generateConfig)
 	acc := &Accumulator{}
 	for chunk := range chatCompletion {
