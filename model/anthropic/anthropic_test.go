@@ -729,9 +729,9 @@ func (f rtFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(
 
 func Test_HandleNonStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 	// Mock HTTP client to return a fixed Anthropic message JSON body.
-	orig := DefaultNewHTTPClient
-	t.Cleanup(func() { DefaultNewHTTPClient = orig })
-	DefaultNewHTTPClient = func(_ ...HTTPClientOption) HTTPClient {
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
 		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			body := `{
                 "id":"msg1",
@@ -814,9 +814,9 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 		"",
 	}, "\n")
 
-	orig := DefaultNewHTTPClient
-	t.Cleanup(func() { DefaultNewHTTPClient = orig })
-	DefaultNewHTTPClient = func(_ ...HTTPClientOption) HTTPClient {
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
 		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			h := make(http.Header)
 			h.Set("Content-Type", "text/event-stream")
@@ -902,9 +902,9 @@ func Test_HTTPClientOptions_AndAnthropicClientOptions(t *testing.T) {
 }
 
 func Test_HandleNonStreamingResponse_ErrorPath_NoNetwork(t *testing.T) {
-	orig := DefaultNewHTTPClient
-	t.Cleanup(func() { DefaultNewHTTPClient = orig })
-	DefaultNewHTTPClient = func(_ ...HTTPClientOption) HTTPClient {
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
 		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: 500,
