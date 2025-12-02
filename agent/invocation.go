@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -605,15 +606,10 @@ func GetStateValue[T any](inv *Invocation, key string) (T, bool) {
 	if inv == nil {
 		return zero, false
 	}
-	val, ok := inv.GetState(key)
-	if !ok {
-		return zero, false
-	}
-	typedVal, ok := val.(T)
-	if !ok {
-		return zero, false
-	}
-	return typedVal, true
+	inv.stateMu.RLock()
+	defer inv.stateMu.RUnlock()
+
+	return util.GetMapValue[string, T](inv.state, key)
 }
 
 // GetOrCreateTimingInfo gets or creates timing info for this invocation.
@@ -666,6 +662,8 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	select {
 	case <-ch:
 	case <-time.After(timeout):
+		log.Infof("[AddNoticeChannelAndWait]: Wait for notification message timeout. key: %s, timeout: %d(s)",
+			key, int64(timeout/time.Second))
 		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
 	case <-ctx.Done():
 		return ctx.Err()
@@ -706,6 +704,7 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 
 	ch, ok := inv.noticeChanMap[key]
 	if !ok {
+		log.Warnf("notice channel not found for %s", key)
 		return fmt.Errorf("notice channel not found for %s", key)
 	}
 
