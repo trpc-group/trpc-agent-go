@@ -187,3 +187,99 @@ func TestLLMAgent_UserTools_EmptyCase(t *testing.T) {
 		t.Errorf("framework tools should be in all tools even when no user tools")
 	}
 }
+
+type dynamicToolSet struct {
+	name  string
+	tools []tool.Tool
+}
+
+func (d *dynamicToolSet) Tools(_ context.Context) []tool.Tool {
+	return d.tools
+}
+
+func (d *dynamicToolSet) Close() error {
+	return nil
+}
+
+func (d *dynamicToolSet) Name() string {
+	return d.name
+}
+
+func TestLLMAgent_RefreshToolSetsOnRun(t *testing.T) {
+	staticTool := dummyTool{
+		decl: &tool.Declaration{Name: "static_tool"},
+	}
+
+	dyn := &dynamicToolSet{
+		name: "dyn",
+		tools: []tool.Tool{
+			dummyTool{
+				decl: &tool.Declaration{Name: "dynamic_tool_v1"},
+			},
+		},
+	}
+
+	agent := New(
+		"dynamic-agent",
+		WithTools([]tool.Tool{staticTool}),
+		WithToolSets([]tool.ToolSet{dyn}),
+		WithRefreshToolSetsOnRun(true),
+	)
+
+	toolsV1 := agent.Tools()
+
+	foundStatic := false
+	foundDynV1 := false
+
+	for _, tl := range toolsV1 {
+		switch tl.Declaration().Name {
+		case "static_tool":
+			foundStatic = true
+		case "dyn_dynamic_tool_v1":
+			foundDynV1 = true
+		}
+	}
+
+	if !foundStatic || !foundDynV1 {
+		t.Fatalf(
+			"expected static_tool and dyn_dynamic_tool_v1, got %+v",
+			toolsV1,
+		)
+	}
+
+	dyn.tools = []tool.Tool{
+		dummyTool{
+			decl: &tool.Declaration{Name: "dynamic_tool_v2"},
+		},
+	}
+
+	toolsV2 := agent.Tools()
+
+	foundDynV2 := false
+	for _, tl := range toolsV2 {
+		switch tl.Declaration().Name {
+		case "static_tool":
+			foundStatic = true
+		case "dyn_dynamic_tool_v2":
+			foundDynV2 = true
+		}
+	}
+
+	if !foundStatic || !foundDynV2 {
+		t.Fatalf(
+			"expected static_tool and dyn_dynamic_tool_v2 after refresh, got %+v",
+			toolsV2,
+		)
+	}
+
+	userTools := agent.UserTools()
+	for _, tl := range userTools {
+		name := tl.Declaration().Name
+		if name == "knowledge_search" || name == "transfer_to_agent" {
+			t.Fatalf(
+				"framework tool %s should not appear in user tools",
+				name,
+			)
+		}
+	}
+}

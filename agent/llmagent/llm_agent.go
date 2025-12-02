@@ -331,17 +331,20 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 	allTools := make([]tool.Tool, 0, len(options.Tools))
 	allTools = append(allTools, options.Tools...)
 
-	// Add tools from each toolset with automatic namespacing.
-	// Tools from WithToolSets are also user tools (user explicitly added them).
-	ctx := context.Background()
-	for _, toolSet := range options.ToolSets {
-		// Create named toolset wrapper to avoid name conflicts.
-		namedToolSet := itool.NewNamedToolSet(toolSet)
-		setTools := namedToolSet.Tools(ctx)
-		for _, t := range setTools {
-			allTools = append(allTools, t)
-			// Mark toolset tools as user tools.
-			userToolNames[t.Declaration().Name] = true
+	// Add tools from each toolset with automatic namespacing when using
+	// static ToolSets. Tools from WithToolSets are also user tools
+	// (user explicitly added them).
+	if !options.RefreshToolSetsOnRun {
+		ctx := context.Background()
+		for _, toolSet := range options.ToolSets {
+			// Create named toolset wrapper to avoid name conflicts.
+			namedToolSet := itool.NewNamedToolSet(toolSet)
+			setTools := namedToolSet.Tools(ctx)
+			for _, t := range setTools {
+				allTools = append(allTools, t)
+				// Mark toolset tools as user tools.
+				userToolNames[t.Declaration().Name] = true
+			}
 		}
 	}
 
@@ -590,8 +593,35 @@ func (a *LLMAgent) Info() agent.Info {
 // Tools implements the agent.Agent interface.
 // It returns the list of tools available to the agent, including transfer tools.
 func (a *LLMAgent) Tools() []tool.Tool {
+	baseTools := a.tools
+
+	// When RefreshToolSetsOnRun is enabled, rebuild tools from ToolSets
+	// for each call to keep ToolSet-provided tools in sync with their
+	// underlying dynamic source (for example, MCP ListTools).
+	if a.option.RefreshToolSetsOnRun && len(a.option.ToolSets) > 0 {
+		ctx := context.Background()
+
+		dynamicTools := make([]tool.Tool, 0)
+		for _, toolSet := range a.option.ToolSets {
+			namedToolSet := itool.NewNamedToolSet(toolSet)
+			setTools := namedToolSet.Tools(ctx)
+			dynamicTools = append(dynamicTools, setTools...)
+		}
+
+		if len(dynamicTools) > 0 {
+			combined := make(
+				[]tool.Tool,
+				0,
+				len(baseTools)+len(dynamicTools),
+			)
+			combined = append(combined, baseTools...)
+			combined = append(combined, dynamicTools...)
+			baseTools = combined
+		}
+	}
+
 	if len(a.subAgents) == 0 {
-		return a.tools
+		return baseTools
 	}
 
 	// Create agent info for sub-agents.
@@ -601,7 +631,7 @@ func (a *LLMAgent) Tools() []tool.Tool {
 	}
 
 	transferTool := transfer.New(agentInfos)
-	return append(a.tools, transferTool)
+	return append(baseTools, transferTool)
 }
 
 // SubAgents returns the list of sub-agents for this agent.
@@ -633,26 +663,63 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 //
 // This method is used by the tool filtering logic to distinguish user tools from framework tools.
 func (a *LLMAgent) UserTools() []tool.Tool {
-	// Filter user tools from all tools
-	userTools := make([]tool.Tool, 0, len(a.userToolNames))
-	for _, t := range a.tools {
-		if a.userToolNames[t.Declaration().Name] {
+	// When ToolSets are static, user tool tracking is based on the
+	// snapshot captured at construction time.
+	if !a.option.RefreshToolSetsOnRun {
+		userTools := make([]tool.Tool, 0, len(a.userToolNames))
+		for _, t := range a.tools {
+			if a.userToolNames[t.Declaration().Name] {
+				userTools = append(userTools, t)
+			}
+		}
+		return userTools
+	}
+
+	// When ToolSets are refreshed on each run, user tools include:
+	//   - Tools from WithTools (tracked in userToolNames)
+	//   - Tools coming from ToolSets (wrapped as NamedTool)
+	// Framework tools (knowledge_search, transfer_to_agent, etc.)
+	// remain excluded.
+	allTools := a.Tools()
+	userTools := make([]tool.Tool, 0, len(allTools))
+
+	for _, t := range allTools {
+		name := t.Declaration().Name
+
+		if a.userToolNames[name] {
+			userTools = append(userTools, t)
+			continue
+		}
+
+		if _, ok := t.(*itool.NamedTool); ok {
 			userTools = append(userTools, t)
 		}
 	}
+
 	return userTools
 }
 
 // FilterTools filters the list of tools based on the provided filter function.
 func (a *LLMAgent) FilterTools(ctx context.Context) []tool.Tool {
-	filteredTools := make([]tool.Tool, 0, len(a.tools))
+	allTools := a.Tools()
+	filteredTools := make([]tool.Tool, 0, len(allTools))
 
-	for _, t := range a.Tools() {
-		if !a.userToolNames[t.Declaration().Name] {
+	for _, t := range allTools {
+		name := t.Declaration().Name
+
+		isUserTool := a.userToolNames[name]
+		if a.option.RefreshToolSetsOnRun {
+			if _, ok := t.(*itool.NamedTool); ok {
+				isUserTool = true
+			}
+		}
+
+		if !isUserTool {
 			filteredTools = append(filteredTools, t)
 			continue
 		}
-		// Apply user tool filter
+
+		// Apply user tool filter when configured.
 		if a.option.toolFilter == nil || a.option.toolFilter(ctx, t) {
 			filteredTools = append(filteredTools, t)
 		}

@@ -166,6 +166,13 @@ type Options struct {
 	//   - Configured with non-empty: use the provided message.
 	DefaultTransferMessage *string
 
+	// RefreshToolSetsOnRun controls whether tools from ToolSets are
+	// refreshed from the underlying ToolSet on each run.
+	// When false (default), tools from ToolSets are resolved once at
+	// construction time. When true, the agent will call ToolSet.Tools
+	// again when building the tools list for each invocation.
+	RefreshToolSetsOnRun bool
+
 	// SkillsRepository enables Agent Skills if non-nil.
 	SkillsRepository          skill.Repository
 	messageTimelineFilterMode string
@@ -248,6 +255,18 @@ func WithTools(tools []tool.Tool) Option {
 func WithToolSets(toolSets []tool.ToolSet) Option {
 	return func(opts *Options) {
 		opts.ToolSets = toolSets
+	}
+}
+
+// WithRefreshToolSetsOnRun controls whether tools from ToolSets are
+// refreshed from the underlying ToolSet on each run.
+// When enabled, the agent will call ToolSet.Tools again when building
+// the tools list for each invocation instead of using a fixed snapshot.
+// This is useful when ToolSets provide a dynamic tool list (for example,
+// MCP ToolSets that support ListTools at runtime).
+func WithRefreshToolSetsOnRun(refresh bool) Option {
+	return func(opts *Options) {
+		opts.RefreshToolSetsOnRun = refresh
 	}
 }
 
