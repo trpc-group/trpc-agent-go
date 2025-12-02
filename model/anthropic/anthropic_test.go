@@ -76,6 +76,10 @@ func TestWithHeaders_AppendsOptions(t *testing.T) {
 	headers["X-Custom"] = "changed"
 	WithHeaders(map[string]string{"User-Agent": "test-agent"})(o)
 	assert.Len(t, o.anthropicClientOptions, 3, "expected additional headers to append")
+
+	opts1 := &options{}
+	WithHeaders(nil)(opts1)
+	assert.Len(t, opts1.anthropicClientOptions, 0, "expected no headers to be applied")
 }
 
 func Test_Model_GenerateContent_NilRequest(t *testing.T) {

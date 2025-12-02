@@ -1392,6 +1392,20 @@ func TestWithHeaders_AppendsOptions(t *testing.T) {
 	source["X-Custom"] = "changed"
 	WithHeaders(map[string]string{"X-Another": "extra"})(opts)
 	assert.Len(t, opts.OpenAIOptions, 4, "expected additional headers to append")
+
+	opts1 := &options{}
+	WithHeaders(nil)(opts1)
+	assert.Len(t, opts1.OpenAIOptions, 0, "expected no headers to be applied")
+
+}
+
+func TestWithShowToolCallDelta(t *testing.T) {
+	opts := &options{}
+	WithShowToolCallDelta(true)(opts)
+	assert.True(t, opts.ShowToolCallDelta, "expected showToolCallDelta to be true")
+
+	WithShowToolCallDelta(false)(opts)
+	assert.False(t, opts.ShowToolCallDelta, "expected showToolCallDelta to be false")
 }
 
 func TestConvertSystemMessageContent(t *testing.T) {
@@ -2655,6 +2669,10 @@ func TestWithBatchCompletionWindow(t *testing.T) {
 	WithBatchCompletionWindow(window)(opts)
 
 	assert.Equal(t, window, opts.BatchCompletionWindow, "expected BatchCompletionWindow to be set")
+
+	opts1 := &options{}
+	WithBatchCompletionWindow("")(opts1)
+	assert.Equal(t, openai.BatchNewParamsCompletionWindow(defaultBatchCompletionWindow), opts1.BatchCompletionWindow, "expected BatchCompletionWindow to be set")
 }
 
 // TestWithBatchMetadata tests the WithBatchMetadata option.
