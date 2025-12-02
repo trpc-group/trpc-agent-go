@@ -35,12 +35,13 @@ type serviceOpts struct {
 
 func (o serviceOpts) clone() serviceOpts {
 	opts := o
-	opts.toolCreators = make(map[string]memory.ToolCreator)
-	opts.enabledTools = make(map[string]bool)
 
+	opts.toolCreators = make(map[string]memory.ToolCreator, len(o.toolCreators))
 	for name, toolCreator := range o.toolCreators {
 		opts.toolCreators[name] = toolCreator
 	}
+
+	opts.enabledTools = make(map[string]bool, len(o.enabledTools))
 	for name, enabled := range o.enabledTools {
 		opts.enabledTools[name] = enabled
 	}
