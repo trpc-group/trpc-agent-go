@@ -104,12 +104,6 @@ type options struct {
 	accumulateChunkUsage AccumulateChunkUsage
 }
 
-func (o options) clone() options {
-	opts := o
-	*opts.TokenTailoringConfig = *o.TokenTailoringConfig
-	return opts
-}
-
 var (
 	defaultOptions = options{
 		Variant:               VariantOpenAI, // The default variant is VariantOpenAI.

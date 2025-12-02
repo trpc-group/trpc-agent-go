@@ -86,12 +86,6 @@ type options struct {
 	tokenTailoringConfig *model.TokenTailoringConfig
 }
 
-func (o options) clone() options {
-	opts := o
-	*opts.tokenTailoringConfig = *o.tokenTailoringConfig
-	return opts
-}
-
 var (
 	defaultOptions = options{
 		channelBufferSize: defaultChannelBufferSize,

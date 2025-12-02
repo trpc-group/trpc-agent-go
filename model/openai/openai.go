@@ -212,7 +212,7 @@ type Model struct {
 
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
-	o := defaultOptions.clone()
+	o := defaultOptions
 	for _, opt := range opts {
 		opt(&o)
 	}

@@ -60,7 +60,7 @@ type Model struct {
 
 // New creates a new Anthropic model adapter.
 func New(name string, opts ...Option) *Model {
-	o := defaultOptions.clone()
+	o := defaultOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
