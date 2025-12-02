@@ -92,6 +92,11 @@ const (
 	KeyGenAIRequestTemperature = "gen_ai.request.temperature"
 	// KeyGenAIRequestTopP is the attribute key for top-p sampling parameter.
 	KeyGenAIRequestTopP = "gen_ai.request.top_p"
+
+	// KeyGenAIRequestThinkingEnabled is the attribute key for thinking enabled parameter.
+	// Note: This is a custom attribute not defined in OpenTelemetry semantic conventions for GenAI.
+	KeyGenAIRequestThinkingEnabled = "gen_ai.request.thinking_enabled"
+
 	// KeyGenAISystemInstructions is the attribute key for system instructions.
 	KeyGenAISystemInstructions = "gen_ai.system_instructions"
 	// KeyGenAITokenType is the attribute key for token type.
