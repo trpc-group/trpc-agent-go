@@ -1910,8 +1910,50 @@ func createEvent(requestID, invocationID, filterKey, content string, timestamp t
 			},
 		}
 	}
-
 	return evt
+}
+
+func TestContentRequestProcessor_IncludeContentsNoneSkipsHistory(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Author: "user",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "old message",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+	)
+	inv.RunOptions = agent.RunOptions{
+		RuntimeState: map[string]any{
+			"include_contents": "none",
+		},
+	}
+
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	if len(req.Messages) != 1 {
+		t.Fatalf("expected only invocation message, got %d messages", len(req.Messages))
+	}
+	msg := req.Messages[0]
+	if msg.Role != model.RoleUser || msg.Content != "current" {
+		t.Fatalf("unexpected message: %+v", msg)
+	}
 }
 
 func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
