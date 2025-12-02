@@ -28,11 +28,6 @@ import (
 
 var _ memory.Service = (*Service)(nil)
 
-const (
-	// defaultDBInitTimeout is the default timeout for database initialization.
-	defaultDBInitTimeout = 30 * time.Second
-)
-
 // Service is the mysql memory service.
 // Storage structure:
 //
@@ -50,20 +45,7 @@ type Service struct {
 
 // NewService creates a new mysql memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
-	opts := ServiceOpts{
-		tableName:    "memories",
-		memoryLimit:  imemory.DefaultMemoryLimit,
-		toolCreators: make(map[string]memory.ToolCreator),
-		enabledTools: make(map[string]bool),
-	}
-	// Copy all tool creators.
-	for name, creator := range imemory.AllToolCreators {
-		opts.toolCreators[name] = creator
-	}
-	// Enable default tools.
-	for name, enabled := range imemory.DefaultEnabledTools {
-		opts.enabledTools[name] = enabled
-	}
+	opts := defaultOptions
 	for _, option := range options {
 		option(&opts)
 	}

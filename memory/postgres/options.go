@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -25,6 +26,31 @@ const (
 	defaultDatabase = "trpc-agent-go-pgmemory"
 	defaultSSLMode  = "disable"
 )
+
+const (
+	// defaultDBInitTimeout is the default timeout for database initialization.
+	defaultDBInitTimeout = 30 * time.Second
+)
+
+var (
+	defaultOptions = ServiceOpts{
+		tableName:    "memories",
+		memoryLimit:  imemory.DefaultMemoryLimit,
+		toolCreators: make(map[string]memory.ToolCreator),
+		enabledTools: make(map[string]bool),
+	}
+)
+
+func init() {
+	// Copy all tool creators.
+	for name, creator := range imemory.AllToolCreators {
+		defaultOptions.toolCreators[name] = creator
+	}
+	// Enable default tools.
+	for name, enabled := range imemory.DefaultEnabledTools {
+		defaultOptions.enabledTools[name] = enabled
+	}
+}
 
 // ServiceOpts is the options for the postgres memory service.
 type ServiceOpts struct {
