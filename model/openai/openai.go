@@ -39,10 +39,6 @@ import (
 const (
 	functionToolType string = "function"
 
-	// defaultChannelBufferSize is the default channel buffer size.
-	defaultChannelBufferSize = 256
-	// defaultBatchCompletionWindow is the default batch completion window.
-	defaultBatchCompletionWindow = "24h"
 	// defaultBatchEndpoint is the default batch endpoint.
 	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
 	//nolint:gosec
@@ -52,15 +48,6 @@ const (
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
 	defaultQwenBaseURL string = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
-
-var (
-	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
-	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
-	inputTokensFloor       = imodel.DefaultInputTokensFloor
-	outputTokensFloor      = imodel.DefaultOutputTokensFloor
-	safetyMarginRatio      = imodel.DefaultSafetyMarginRatio
-	maxInputTokensRatio    = imodel.DefaultMaxInputTokensRatio
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -225,39 +212,9 @@ type Model struct {
 
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
-	o := defaultOptions
+	o := defaultOptions.clone()
 	for _, opt := range opts {
 		opt(&o)
-	}
-
-	// Initialize token tailoring budget parameters with defaults.
-	protocolOverhead := protocolOverheadTokens
-	reserveOutput := reserveOutputTokens
-	inputFloor := inputTokensFloor
-	outputFloor := outputTokensFloor
-	safetyMargin := safetyMarginRatio
-	maxInputRatio := maxInputTokensRatio
-
-	// Apply custom token tailoring config if provided.
-	if o.TokenTailoringConfig != nil {
-		if o.TokenTailoringConfig.ProtocolOverheadTokens > 0 {
-			protocolOverhead = o.TokenTailoringConfig.ProtocolOverheadTokens
-		}
-		if o.TokenTailoringConfig.ReserveOutputTokens > 0 {
-			reserveOutput = o.TokenTailoringConfig.ReserveOutputTokens
-		}
-		if o.TokenTailoringConfig.InputTokensFloor > 0 {
-			inputFloor = o.TokenTailoringConfig.InputTokensFloor
-		}
-		if o.TokenTailoringConfig.OutputTokensFloor > 0 {
-			outputFloor = o.TokenTailoringConfig.OutputTokensFloor
-		}
-		if o.TokenTailoringConfig.SafetyMarginRatio > 0 {
-			safetyMargin = o.TokenTailoringConfig.SafetyMarginRatio
-		}
-		if o.TokenTailoringConfig.MaxInputTokensRatio > 0 {
-			maxInputRatio = o.TokenTailoringConfig.MaxInputTokensRatio
-		}
 	}
 
 	// Set default API key and base URL if not specified.
@@ -317,12 +274,12 @@ func New(name string, opts ...Option) *Model {
 		tokenCounter:               o.TokenCounter,
 		tailoringStrategy:          o.TailoringStrategy,
 		maxInputTokens:             o.MaxInputTokens,
-		protocolOverheadTokens:     protocolOverhead,
-		reserveOutputTokens:        reserveOutput,
-		inputTokensFloor:           inputFloor,
-		outputTokensFloor:          outputFloor,
-		safetyMarginRatio:          safetyMargin,
-		maxInputTokensRatio:        maxInputRatio,
+		protocolOverheadTokens:     o.TokenTailoringConfig.ProtocolOverheadTokens,
+		reserveOutputTokens:        o.TokenTailoringConfig.ReserveOutputTokens,
+		inputTokensFloor:           o.TokenTailoringConfig.InputTokensFloor,
+		outputTokensFloor:          o.TokenTailoringConfig.OutputTokensFloor,
+		safetyMarginRatio:          o.TokenTailoringConfig.SafetyMarginRatio,
+		maxInputTokensRatio:        o.TokenTailoringConfig.MaxInputTokensRatio,
 		accumulateChunkUsage:       o.accumulateChunkUsage,
 	}
 }

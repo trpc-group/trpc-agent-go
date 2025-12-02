@@ -31,15 +31,6 @@ import (
 
 const functionToolType = "function"
 
-var (
-	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
-	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
-	inputTokensFloor       = imodel.DefaultInputTokensFloor
-	outputTokensFloor      = imodel.DefaultOutputTokensFloor
-	safetyMarginRatio      = imodel.DefaultSafetyMarginRatio
-	maxInputTokensRatio    = imodel.DefaultMaxInputTokensRatio
-)
-
 // Model implements the model.Model interface for Anthropic API.
 type Model struct {
 	client                     anthropic.Client
@@ -69,39 +60,9 @@ type Model struct {
 
 // New creates a new Anthropic model adapter.
 func New(name string, opts ...Option) *Model {
-	o := defaultOptions
+	o := defaultOptions.clone()
 	for _, opt := range opts {
 		opt(&o)
-	}
-
-	// Initialize token tailoring budget parameters with defaults.
-	protocolOverhead := protocolOverheadTokens
-	reserveOutput := reserveOutputTokens
-	inputFloor := inputTokensFloor
-	outputFloor := outputTokensFloor
-	safetyMargin := safetyMarginRatio
-	maxInputRatio := maxInputTokensRatio
-
-	// Apply custom token tailoring config if provided.
-	if o.tokenTailoringConfig != nil {
-		if o.tokenTailoringConfig.ProtocolOverheadTokens > 0 {
-			protocolOverhead = o.tokenTailoringConfig.ProtocolOverheadTokens
-		}
-		if o.tokenTailoringConfig.ReserveOutputTokens > 0 {
-			reserveOutput = o.tokenTailoringConfig.ReserveOutputTokens
-		}
-		if o.tokenTailoringConfig.InputTokensFloor > 0 {
-			inputFloor = o.tokenTailoringConfig.InputTokensFloor
-		}
-		if o.tokenTailoringConfig.OutputTokensFloor > 0 {
-			outputFloor = o.tokenTailoringConfig.OutputTokensFloor
-		}
-		if o.tokenTailoringConfig.SafetyMarginRatio > 0 {
-			safetyMargin = o.tokenTailoringConfig.SafetyMarginRatio
-		}
-		if o.tokenTailoringConfig.MaxInputTokensRatio > 0 {
-			maxInputRatio = o.tokenTailoringConfig.MaxInputTokensRatio
-		}
 	}
 
 	var clientOpts []option.RequestOption
@@ -141,12 +102,12 @@ func New(name string, opts ...Option) *Model {
 		tokenCounter:               o.tokenCounter,
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
-		protocolOverheadTokens:     protocolOverhead,
-		reserveOutputTokens:        reserveOutput,
-		inputTokensFloor:           inputFloor,
-		outputTokensFloor:          outputFloor,
-		safetyMarginRatio:          safetyMargin,
-		maxInputTokensRatio:        maxInputRatio,
+		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
+		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
+		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
+		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
+		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
+		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 	}
 }
 

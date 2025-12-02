@@ -16,9 +16,12 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 )
 
-const defaultChannelBufferSize = 256
+const (
+	defaultChannelBufferSize = 256
+)
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
 type ChatRequestCallbackFunc func(
@@ -83,9 +86,23 @@ type options struct {
 	tokenTailoringConfig *model.TokenTailoringConfig
 }
 
+func (o options) clone() options {
+	opts := o
+	*opts.tokenTailoringConfig = *o.tokenTailoringConfig
+	return opts
+}
+
 var (
 	defaultOptions = options{
 		channelBufferSize: defaultChannelBufferSize,
+		tokenTailoringConfig: &model.TokenTailoringConfig{
+			ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
+			ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+			SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
+			InputTokensFloor:       imodel.DefaultInputTokensFloor,
+			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
+			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+		},
 	}
 )
 
@@ -229,6 +246,27 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 // requirements.
 func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	return func(opts *options) {
+		if config == nil {
+			return
+		}
+		if config.ProtocolOverheadTokens <= 0 {
+			config.ProtocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
+		}
+		if config.ReserveOutputTokens <= 0 {
+			config.ReserveOutputTokens = imodel.DefaultReserveOutputTokens
+		}
+		if config.SafetyMarginRatio <= 0 {
+			config.SafetyMarginRatio = imodel.DefaultSafetyMarginRatio
+		}
+		if config.InputTokensFloor <= 0 {
+			config.InputTokensFloor = imodel.DefaultInputTokensFloor
+		}
+		if config.OutputTokensFloor <= 0 {
+			config.OutputTokensFloor = imodel.DefaultOutputTokensFloor
+		}
+		if config.MaxInputTokensRatio <= 0 {
+			config.MaxInputTokensRatio = imodel.DefaultMaxInputTokensRatio
+		}
 		opts.tokenTailoringConfig = config
 	}
 }

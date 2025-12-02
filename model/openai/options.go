@@ -16,6 +16,14 @@ import (
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+)
+
+const (
+	// defaultChannelBufferSize is the default channel buffer size.
+	defaultChannelBufferSize = 256
+	// defaultBatchCompletionWindow is the default batch completion window.
+	defaultBatchCompletionWindow = "24h"
 )
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -96,11 +104,25 @@ type options struct {
 	accumulateChunkUsage AccumulateChunkUsage
 }
 
+func (o options) clone() options {
+	opts := o
+	*opts.TokenTailoringConfig = *o.TokenTailoringConfig
+	return opts
+}
+
 var (
 	defaultOptions = options{
 		Variant:               VariantOpenAI, // The default variant is VariantOpenAI.
 		ChannelBufferSize:     defaultChannelBufferSize,
 		BatchCompletionWindow: defaultBatchCompletionWindow,
+		TokenTailoringConfig: &model.TokenTailoringConfig{
+			ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
+			ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+			SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
+			InputTokensFloor:       imodel.DefaultInputTokensFloor,
+			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
+			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+		},
 	}
 )
 
