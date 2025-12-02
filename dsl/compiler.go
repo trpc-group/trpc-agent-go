@@ -1585,7 +1585,10 @@ func (c *Compiler) createMCPToolSet(config map[string]interface{}) (tool.ToolSet
 	// Build MCP options
 	var mcpOpts []mcp.ToolSetOption
 
-	// Extract tool filter (optional)
+	// Extract tool filter (optional). The DSL exposes tool_filter as a simple
+	// list of tool names. At runtime this is mapped to the newer
+	// WithToolFilterFunc + NewIncludeToolNamesFilter APIs so that only the
+	// listed tools are exposed from this ToolSet.
 	if toolFilterVal, ok := config["tool_filter"]; ok {
 		if toolFilterList, ok := toolFilterVal.([]interface{}); ok {
 			toolNames := make([]string, 0, len(toolFilterList))
@@ -1595,7 +1598,7 @@ func (c *Compiler) createMCPToolSet(config map[string]interface{}) (tool.ToolSet
 				}
 			}
 			if len(toolNames) > 0 {
-				mcpOpts = append(mcpOpts, mcp.WithToolFilter(mcp.NewIncludeFilter(toolNames...)))
+				mcpOpts = append(mcpOpts, mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter(toolNames...)))
 			}
 		}
 	}
