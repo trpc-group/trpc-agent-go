@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
