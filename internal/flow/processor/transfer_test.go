@@ -98,6 +98,8 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	require.Len(t, evts, 3)
 	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
 	require.Equal(t, "child", evts[1].Author)
+	// Successful transfer should end the original invocation when configured.
+	require.True(t, inv.EndInvocation)
 }
 
 func TestTransferResponseProc_Target404(t *testing.T) {
@@ -114,4 +116,255 @@ func TestTransferResponseProc_Target404(t *testing.T) {
 	evt := <-out
 	require.NotNil(t, evt.Error)
 	require.Equal(t, model.ErrorTypeFlowError, evt.Error.Type)
+	// Even on target missing, the invocation should end to avoid re-entry.
+	require.True(t, inv.EndInvocation)
+}
+
+func TestTransferResponseProc_ToolResponsePersistenceError(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	// Use zero-value Invocation so waitForEventPersistence fails when creating notice channel.
+	inv := &agent.Invocation{
+		InvocationID: "inv-tool",
+		AgentName:    "parent",
+		TransferInfo: &agent.TransferInfo{
+			TargetAgentName:     "child",
+			ToolResponseEventID: "evt-tool",
+		},
+	}
+	rsp := &model.Response{ID: "r-tool", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 1)
+
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+
+	evt := <-out
+	require.NotNil(t, evt)
+	require.Equal(t, model.ObjectTypeError, evt.Object)
+	require.NotNil(t, evt.Error)
+	require.Equal(t, "Transfer failed: waiting for tool response persistence timed out", evt.Error.Message)
+	// Error during tool.response persistence should end the invocation.
+	require.True(t, inv.EndInvocation)
+}
+
+func TestTransferResponseProc_TransferEventPersistenceError(t *testing.T) {
+	target := &mockAgent{name: "child", emit: false}
+	parent := &parentAgent{child: target}
+
+	// Zero-value Invocation with valid Agent; ToolResponseEventID is empty so the
+	// first waitForEventPersistence returns nil, while the second will fail when
+	// creating a notice channel.
+	inv := &agent.Invocation{
+		InvocationID: "inv-transfer",
+		AgentName:    "parent",
+		Agent:        parent,
+		TransferInfo: &agent.TransferInfo{
+			TargetAgentName:     "child",
+			ToolResponseEventID: "",
+		},
+	}
+
+	rsp := &model.Response{ID: "r-transfer", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 4)
+
+	proc := NewTransferResponseProcessor(true)
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+
+	var sawTransfer, sawError bool
+	var errEvt *event.Event
+	for e := range out {
+		if e.Object == model.ObjectTypeTransfer {
+			sawTransfer = true
+		}
+		if e.Error != nil && e.Error.Type == model.ErrorTypeFlowError {
+			sawError = true
+			errEvt = e
+		}
+	}
+
+	require.True(t, sawTransfer, "expected transfer event before error")
+	require.True(t, sawError, "expected error event due to transfer event persistence failure")
+	require.NotNil(t, errEvt)
+	require.Equal(t, "Transfer failed: waiting for transfer event persistence timed out", errEvt.Error.Message)
+	// Error during transfer event persistence should end the invocation.
+	require.True(t, inv.EndInvocation)
+}
+
+func TestTransferResponseProc_TransferEchoPersistenceError(t *testing.T) {
+	target := &mockAgent{name: "child", emit: false}
+	parent := &parentAgent{child: target}
+
+	// ToolResponseEventID empty so the first waitForEventPersistence is a no-op.
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(parent),
+		agent.WithInvocationID("inv-echo"),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{
+			TargetAgentName:     "child",
+			Message:             "hi",
+			ToolResponseEventID: "",
+		}),
+	)
+
+	rsp := &model.Response{ID: "r-echo", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 8)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	proc := NewTransferResponseProcessor(true)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, out)
+		close(out)
+	}()
+
+	var sawTransfer bool
+	var errEvt *event.Event
+
+	for e := range out {
+		// The first transfer event (ObjectTypeTransfer, no error) should succeed.
+		if !sawTransfer && e.Object == model.ObjectTypeTransfer && e.Error == nil {
+			sawTransfer = true
+			key := agent.GetAppendEventNoticeKey(e.ID)
+			// Give ProcessResponse time to enter waitForEventPersistence before notifying.
+			time.Sleep(20 * time.Millisecond)
+			_ = inv.NotifyCompletion(context.Background(), key)
+			continue
+		}
+		// We expect a flow error when echo event persistence fails.
+		if e.Error != nil && e.Error.Type == model.ErrorTypeFlowError {
+			errEvt = e
+		}
+	}
+
+	wg.Wait()
+	require.True(t, sawTransfer, "expected transfer event before echo persistence error")
+	// When the context is cancelled before the error event can be emitted,
+	// errEvt can be nil. If we did receive the error event, validate its message.
+	if errEvt != nil {
+		require.Equal(t, "Transfer failed: waiting for transfer echo persistence timed out", errEvt.Error.Message)
+	}
+	// Error during echo persistence (or its context) should also end the invocation.
+	require.True(t, inv.EndInvocation)
+}
+
+// Verify that when endInvocationAfterTransfer is false, the processor
+// does not mark the invocation as ended even after a successful transfer.
+func TestTransferResponseProc_EndInvocationFalse(t *testing.T) {
+	target := &mockAgent{name: "child", emit: true}
+	parent := &parentAgent{child: target}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(parent),
+		agent.WithInvocationID("inv"),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{TargetAgentName: "child", Message: "hi"}),
+	)
+
+	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
+	out := make(chan *event.Event, 10)
+	proc := NewTransferResponseProcessor(false)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+		close(out)
+	}()
+
+	for e := range out {
+		if e.RequiresCompletion {
+			_ = inv.NotifyCompletion(context.Background(), agent.GetAppendEventNoticeKey(e.ID))
+		}
+	}
+	wg.Wait()
+	// endInvocationAfterTransfer=false => EndInvocation should remain false.
+	require.False(t, inv.EndInvocation)
+}
+
+
+func TestWaitForEventPersistence_NilInvocation(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	err := proc.waitForEventPersistence(context.Background(), nil, "evt-1")
+	require.NoError(t, err)
+}
+
+func TestWaitForEventPersistence_EmptyEventID(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	inv := agent.NewInvocation()
+	err := proc.waitForEventPersistence(context.Background(), inv, "")
+	require.NoError(t, err)
+}
+
+func TestWaitForEventPersistence_DeadlineAlreadyExceeded(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	inv := agent.NewInvocation()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	err := proc.waitForEventPersistence(ctx, inv, "evt-2")
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestWaitForEventPersistence_NoticeChannelCreateFailed(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	// Use a zero-value Invocation to simulate missing noticeMu so that
+	// AddNoticeChannelAndWait returns an internal error.
+	inv := &agent.Invocation{}
+
+	err := proc.waitForEventPersistence(context.Background(), inv, "evt-3")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "notice channel create failed")
+}
+
+func TestWaitForEventPersistence_TimeoutOrContextError(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	inv := agent.NewInvocation()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := proc.waitForEventPersistence(ctx, inv, "evt-4")
+	require.Error(t, err)
+}
+
+// Verify that a failed transfer does not re-enter wait logic on subsequent responses.
+func TestTransferResponseProc_FailedThenNoReentry(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	inv := &agent.Invocation{
+		InvocationID: "inv-fail-retry",
+		AgentName:    "parent",
+		TransferInfo: &agent.TransferInfo{
+			TargetAgentName:     "child",
+			ToolResponseEventID: "evt-stale",
+		},
+	}
+	rsp := &model.Response{ID: "r-fail", Created: time.Now().Unix(), Model: "m"}
+
+	// First call: will fail on waitForEventPersistence due to zero-value Invocation
+	// (noticeMu is nil), emit one error event, and mark EndInvocation.
+	out1 := make(chan *event.Event, 1)
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out1)
+	close(out1)
+
+	var evt1 *event.Event
+	for e := range out1 {
+		evt1 = e
+	}
+	require.NotNil(t, evt1)
+	require.NotNil(t, inv)
+	require.True(t, inv.EndInvocation)
+	require.Nil(t, inv.TransferInfo, "TransferInfo should be cleared after failed transfer")
+
+	// Second call with the same invocation should be a no-op (no events).
+	out2 := make(chan *event.Event, 1)
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out2)
+	close(out2)
+	var count int
+	for range out2 {
+		count++
+	}
+	require.Equal(t, 0, count, "Subsequent calls should not emit events when TransferInfo is cleared")
 }

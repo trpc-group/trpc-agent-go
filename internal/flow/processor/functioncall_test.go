@@ -1633,6 +1633,65 @@ func (m *mockTransferAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+func TestHandleFunctionCallsAndSendEvent_SetsTransferInfoForTransferTool(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	// Invocation starts without TransferInfo and should be populated.
+	inv := agent.NewInvocation()
+	inv.AgentName = "test-agent"
+
+	tools := map[string]tool.Tool{
+		transfer.TransferToolName: &mockCallableTool{
+			declaration: &tool.Declaration{
+				Name:        transfer.TransferToolName,
+				Description: "transfer tool",
+			},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	rsp := &model.Response{
+		Model: "test-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      transfer.TransferToolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	evtCh := make(chan *event.Event, 1)
+	ev, err := p.handleFunctionCallsAndSendEvent(ctx, inv, rsp, tools, evtCh)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+
+	// The returned event should be tagged as transfer and require completion.
+	require.Equal(t, TransferTag, ev.Tag)
+	require.True(t, ev.RequiresCompletion)
+
+	// TransferInfo should be created and capture the tool response event ID.
+	require.NotNil(t, inv.TransferInfo)
+	require.Equal(t, ev.ID, inv.TransferInfo.ToolResponseEventID)
+
+	// The same event should also be emitted to the channel.
+	select {
+	case chEv := <-evtCh:
+		require.Equal(t, ev.ID, chEv.ID)
+	default:
+		t.Fatalf("expected function response event to be emitted")
+	}
+}
+
 func TestHandleFunctionCallsAndSendEvent_StopErrorEmitsErrorEvent(t *testing.T) {
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)

@@ -60,6 +60,18 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	transferInfo := invocation.TransferInfo
+	// Always clear the pending transfer info after processing and mark the
+	// current invocation as ended (subject to endInvocationAfterTransfer) so
+	// that failed transfers do not cause subsequent responses to re-enter this
+	// logic and wait on stale event IDs indefinitely.
+	defer func() {
+		if invocation == nil {
+			return
+		}
+		invocation.TransferInfo = nil
+		invocation.EndInvocation = p.endInvocationAfterTransfer
+	}()
+
 	targetAgentName := transferInfo.TargetAgentName
 
 	// Ensure the transfer tool.response has been persisted before proceeding.
@@ -199,17 +211,13 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
 	}
 
-	// Clear the transfer info and end the original invocation to stop further LLM calls.
 	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
 	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
-	invocation.TransferInfo = nil
-	invocation.EndInvocation = p.endInvocationAfterTransfer
 }
 
 // waitForEventPersistence waits for the runner to append the specified event to the session.
-func (p *TransferResponseProcessor) waitForEventPersistence(
-	ctx context.Context, inv *agent.Invocation, eventID string,
-) error {
+func (p *TransferResponseProcessor) waitForEventPersistence(ctx context.Context, inv *agent.Invocation,
+	eventID string) error {
 	if inv == nil || eventID == "" {
 		return nil
 	}
@@ -220,9 +228,5 @@ func (p *TransferResponseProcessor) waitForEventPersistence(
 			return ctx.Err()
 		}
 	}
-	return inv.AddNoticeChannelAndWait(
-		ctx,
-		agent.GetAppendEventNoticeKey(eventID),
-		timeout,
-	)
+	return inv.AddNoticeChannelAndWait(ctx, agent.GetAppendEventNoticeKey(eventID), timeout)
 }
