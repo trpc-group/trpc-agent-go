@@ -55,11 +55,11 @@ const (
 		"lineage_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, ts, " +
 		"checkpoint_json, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)"
 
-	sqliteSelectLatest = "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_id " +
+	sqliteSelectLatest = "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_ns, checkpoint_id " +
 		"FROM checkpoints WHERE lineage_id = ? AND checkpoint_ns = ? " +
 		"ORDER BY ts DESC LIMIT 1"
 
-	sqliteSelectByID = "SELECT checkpoint_json, metadata_json, parent_checkpoint_id " +
+	sqliteSelectByID = "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_ns, checkpoint_id " +
 		"FROM checkpoints WHERE lineage_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? LIMIT 1"
 
 	sqliteSelectIDsAsc = "SELECT checkpoint_id, ts FROM checkpoints " +
@@ -151,53 +151,17 @@ type checkpointRow struct {
 
 func (s *Saver) queryCheckpointData(ctx context.Context, lineageID, checkpointNS,
 	checkpointID string) (*checkpointRow, error) {
-
+	var row *sql.Row
 	if checkpointID == "" {
-		// Get latest checkpoint. When namespace is empty, search across all namespaces.
-		if checkpointNS == "" {
-			// Cross-namespace latest
-			row := s.db.QueryRowContext(ctx,
-				"SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_id, checkpoint_ns FROM checkpoints WHERE lineage_id = ? ORDER BY ts DESC LIMIT 1",
-				lineageID,
-			)
-			var r checkpointRow
-			if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.checkpointID, &r.namespace); err != nil {
-				return nil, fmt.Errorf("select latest (cross-ns): %w", err)
-			}
-			return &r, nil
-		}
-		// Latest within specific namespace
-		row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
-		var r checkpointRow
-		if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.checkpointID); err != nil {
-			return nil, fmt.Errorf("select latest: %w", err)
-		}
-		r.namespace = checkpointNS
-		return &r, nil
+		row = s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
+	} else {
+		row = s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
 	}
 
-	// Get specific checkpoint.
-	if checkpointNS == "" {
-		// Cross-namespace lookup by ID
-		row := s.db.QueryRowContext(ctx,
-			"SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_ns FROM checkpoints WHERE lineage_id = ? AND checkpoint_id = ? LIMIT 1",
-			lineageID, checkpointID,
-		)
-		var r checkpointRow
-		if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.namespace); err != nil {
-			return nil, fmt.Errorf("select by id (cross-ns): %w", err)
-		}
-		r.checkpointID = checkpointID
-		return &r, nil
-	}
-
-	row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
 	var r checkpointRow
-	if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID); err != nil {
-		return nil, fmt.Errorf("select by id: %w", err)
+	if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.namespace, &r.checkpointID); err != nil {
+		return nil, fmt.Errorf("select checkpoint failed: %w", err)
 	}
-	r.checkpointID = checkpointID
-	r.namespace = checkpointNS
 	return &r, nil
 }
 

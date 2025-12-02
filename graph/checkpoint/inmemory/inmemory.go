@@ -105,20 +105,8 @@ func (s *Saver) findLatestTuple(namespaces map[string]map[string]*graph.Checkpoi
 
 	var latestTuple *graph.CheckpointTuple
 	var latestTime time.Time
-
-	if namespace == "" {
-		// Search across all namespaces
-		for _, nsCheckpoints := range namespaces {
-			tuple := s.findLatestInMap(nsCheckpoints, &latestTime)
-			if tuple != nil {
-				latestTuple = tuple
-			}
-		}
-	} else {
-		// Search in specific namespace
-		if checkpoints, exists := namespaces[namespace]; exists {
-			latestTuple = s.findLatestInMap(checkpoints, &latestTime)
-		}
+	if checkpoints, exists := namespaces[namespace]; exists {
+		latestTuple = s.findLatestInMap(checkpoints, &latestTime)
 	}
 	return latestTuple
 }
@@ -156,21 +144,10 @@ func (s *Saver) getSpecificCheckpoint(lineageID, namespace,
 // findCheckpointByID finds a checkpoint by ID.
 func (s *Saver) findCheckpointByID(namespaces map[string]map[string]*graph.CheckpointTuple,
 	namespace, checkpointID string) *graph.CheckpointTuple {
-
-	if namespace == "" {
-		// Search across all namespaces
-		for _, nsCheckpoints := range namespaces {
-			if tuple, exists := nsCheckpoints[checkpointID]; exists {
-				return tuple
-			}
-		}
-		return nil
-	}
-
-	// Search in specific namespace
 	if checkpoints, exists := namespaces[namespace]; exists {
 		return checkpoints[checkpointID]
 	}
+
 	return nil
 }
 

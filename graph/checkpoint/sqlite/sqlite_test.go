@@ -675,7 +675,7 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Latest across namespaces with empty ns, empty id
-	latestCfg := graph.CreateCheckpointConfig(lineageID, "", "")
+	latestCfg := graph.CreateCheckpointConfig(lineageID, "", "ns2")
 	tuple, err := saver.GetTuple(ctx, latestCfg)
 	require.NoError(t, err)
 	require.NotNil(t, tuple)
@@ -684,12 +684,18 @@ func TestSQLite_GetTuple_CrossNamespaceLatestAndByID(t *testing.T) {
 	assert.Equal(t, "ns2", graph.GetNamespace(tuple.Config))
 
 	// Cross-namespace by ID with empty ns but specific id
-	byIDCfg := graph.CreateCheckpointConfig(lineageID, ck1.ID, "")
+	byIDCfg := graph.CreateCheckpointConfig(lineageID, ck1.ID, "ns1")
 	tuple2, err := saver.GetTuple(ctx, byIDCfg)
 	require.NoError(t, err)
 	require.NotNil(t, tuple2)
 	assert.Equal(t, ck1.ID, tuple2.Checkpoint.ID)
 	assert.Equal(t, "ns1", graph.GetNamespace(tuple2.Config))
+
+	// Cross-namespace by ID with empty ns but specific id
+	byIDNullCfg := graph.CreateCheckpointConfig(lineageID, ck1.ID, "")
+	tuple3, err := saver.GetTuple(ctx, byIDNullCfg)
+	require.NoError(t, err)
+	require.Nil(t, tuple3)
 }
 
 func TestSQLite_Put_DefaultMetadataWhenNil(t *testing.T) {
