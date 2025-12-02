@@ -590,13 +590,14 @@ func (a *LLMAgent) Info() agent.Info {
 // Tools implements the agent.Agent interface.
 // It returns the list of tools available to the agent, including transfer tools.
 func (a *LLMAgent) Tools() []tool.Tool {
-	if len(a.subAgents) == 0 {
+	subAgents := a.SubAgents()
+	if len(subAgents) == 0 {
 		return a.tools
 	}
 
 	// Create agent info for sub-agents.
-	agentInfos := make([]agent.Info, len(a.subAgents))
-	for i, subAgent := range a.subAgents {
+	agentInfos := make([]agent.Info, len(subAgents))
+	for i, subAgent := range subAgents {
 		agentInfos[i] = subAgent.Info()
 	}
 
@@ -606,12 +607,24 @@ func (a *LLMAgent) Tools() []tool.Tool {
 
 // SubAgents returns the list of sub-agents for this agent.
 func (a *LLMAgent) SubAgents() []agent.Agent {
-	return a.subAgents
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if len(a.subAgents) == 0 {
+		return nil
+	}
+
+	subAgents := make([]agent.Agent, len(a.subAgents))
+	copy(subAgents, a.subAgents)
+	return subAgents
 }
 
 // FindSubAgent finds a sub-agent by name.
 // Returns nil if no sub-agent with the given name is found.
 func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	for _, subAgent := range a.subAgents {
 		if subAgent.Info().Name == name {
 			return subAgent
@@ -666,6 +679,15 @@ func (a *LLMAgent) FilterTools(ctx context.Context) []tool.Tool {
 // This allows the agent to execute code blocks in different environments.
 func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
 	return a.codeExecutor
+}
+
+// SetSubAgents replaces the sub-agents for this agent in a
+// concurrency-safe way. This enables dynamic sub-agent discovery
+// from registries without recreating the agent instance.
+func (a *LLMAgent) SetSubAgents(subAgents []agent.Agent) {
+	a.mu.Lock()
+	a.subAgents = subAgents
+	a.mu.Unlock()
 }
 
 // SetModel sets the model for this agent in a concurrency-safe way.

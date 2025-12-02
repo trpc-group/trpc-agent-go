@@ -430,6 +430,59 @@ coordinatorAgent := llmagent.New(
 )
 ```
 
+#### 动态 SubAgent 发现（结合 A2A）
+
+在真实系统中，SubAgent 往往是通过 A2A 协议暴露的远程 Agent，
+它们的列表会随着时间变化（例如从注册中心动态上下线）。
+
+为支持这一场景，`LLMAgent` 实现了 `agent.SubAgentConfigurator`
+接口，可以在运行时刷新 SubAgent 列表，而无需重建协调者：
+
+```go
+import (
+    "fmt"
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
+)
+
+func refreshSubAgents(ctx context.Context, ag agent.Agent) error {
+    cfg, ok := ag.(agent.SubAgentConfigurator)
+    if !ok {
+        return fmt.Errorf("agent does not support dynamic SubAgents")
+    }
+
+    // 1. 从注册中心或配置源发现远程 Agent。
+    urls := []string{
+        "http://localhost:8087/",
+        "http://localhost:8088/",
+    }
+
+    // 2. 为每个远程 Agent 构建 A2AAgent 代理。
+    subAgents := make([]agent.Agent, 0, len(urls))
+    for _, url := range urls {
+        a2, err := a2aagent.New(a2aagent.WithAgentCardURL(url))
+        if err != nil {
+            // 生产环境中建议记录日志并跳过失败项。
+            continue
+        }
+        subAgents = append(subAgents, a2)
+    }
+
+    // 3. 原子性地替换协调者上的 SubAgents。
+    cfg.SetSubAgents(subAgents)
+    return nil
+}
+```
+
+这种模式可以让你：
+
+- 与任意注册中心集成（服务发现、数据库、配置文件等）
+- 动态增加或移除远程 SubAgent
+- 保持 `Runner` 和会话管理逻辑不变，因为协调者始终是同一
+  个 Agent 实例
+
 #### Agent委托架构
 
 ```

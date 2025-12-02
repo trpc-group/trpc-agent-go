@@ -431,6 +431,61 @@ coordinatorAgent := llmagent.New(
 )
 ```
 
+#### Dynamic SubAgent Discovery (with A2A)
+
+In real systems, SubAgents are often remote Agents exposed through
+the A2A protocol. Their list may change over time (for example when
+new services are registered in a central registry).
+
+To support this, `LLMAgent` implements the `agent.SubAgentConfigurator`
+interface. You can refresh its SubAgents at runtime without recreating
+the coordinator:
+
+```go
+import (
+    "fmt"
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
+)
+
+func refreshSubAgents(ctx context.Context, ag agent.Agent) error {
+    cfg, ok := ag.(agent.SubAgentConfigurator)
+    if !ok {
+        return fmt.Errorf("agent does not support dynamic SubAgents")
+    }
+
+    // 1. Discover remote Agents from your registry or config source.
+    urls := []string{
+        "http://localhost:8087/",
+        "http://localhost:8088/",
+    }
+
+    // 2. Build A2AAgent proxies for each remote Agent.
+    subAgents := make([]agent.Agent, 0, len(urls))
+    for _, url := range urls {
+        a2, err := a2aagent.New(a2aagent.WithAgentCardURL(url))
+        if err != nil {
+            // In production you may want to log and skip failures.
+            continue
+        }
+        subAgents = append(subAgents, a2)
+    }
+
+    // 3. Atomically replace SubAgents on the coordinator.
+    cfg.SetSubAgents(subAgents)
+    return nil
+}
+```
+
+This pattern lets you:
+
+- Integrate with any registry (service discovery, database, config file)
+- Dynamically add or remove remote SubAgents
+- Keep `Runner` and session logic unchanged, since the coordinator
+  remains the same Agent instance
+
 #### Agent Transfer Architecture
 
 ```

@@ -71,6 +71,48 @@ func TestLLMAgent_SubAgents(t *testing.T) {
 	}
 }
 
+// TestLLMAgent_SetSubAgents verifies that SetSubAgents replaces the
+// sub-agent list and updates FindSubAgent results.
+func TestLLMAgent_SetSubAgents(t *testing.T) {
+	sub1 := &mockAgent{name: "sub1"}
+	sub2 := &mockAgent{name: "sub2"}
+
+	agt := New("main", WithSubAgents([]agent.Agent{sub1}))
+
+	require.Equal(t, 1, len(agt.SubAgents()))
+	require.NotNil(t, agt.FindSubAgent("sub1"))
+	require.Nil(t, agt.FindSubAgent("sub2"))
+
+	agt.SetSubAgents([]agent.Agent{sub2})
+
+	subAgents := agt.SubAgents()
+	require.Equal(t, 1, len(subAgents))
+	require.Equal(t, "sub2", subAgents[0].Info().Name)
+	require.Nil(t, agt.FindSubAgent("sub1"))
+	found := agt.FindSubAgent("sub2")
+	require.NotNil(t, found)
+	require.Equal(t, "sub2", found.Info().Name)
+}
+
+// TestLLMAgent_SubAgentsReturnsCopy ensures that callers cannot mutate
+// the internal sub-agent slice through the returned value.
+func TestLLMAgent_SubAgentsReturnsCopy(t *testing.T) {
+	sub := &mockAgent{name: "sub"}
+	agt := New("main", WithSubAgents([]agent.Agent{sub}))
+
+	subAgents := agt.SubAgents()
+	require.Equal(t, 1, len(subAgents))
+	require.NotNil(t, subAgents[0])
+
+	// Mutate the returned slice.
+	subAgents[0] = nil
+
+	// Fetch again and ensure internal state is intact.
+	subAgents2 := agt.SubAgents()
+	require.Equal(t, 1, len(subAgents2))
+	require.NotNil(t, subAgents2[0])
+}
+
 // Test that buildRequestProcessors wires AddSessionSummary into
 // ContentRequestProcessor correctly.
 func TestBuildRequestProcessors_AddSessionSummaryWiring(t *testing.T) {
