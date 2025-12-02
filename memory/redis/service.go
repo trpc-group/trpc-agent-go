@@ -46,7 +46,7 @@ type Service struct {
 
 // NewService creates a new redis memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
-	opts := defaultOptions
+	opts := defaultOptions.clone()
 	for _, option := range options {
 		option(&opts)
 	}

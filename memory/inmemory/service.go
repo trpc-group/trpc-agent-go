@@ -53,7 +53,7 @@ type MemoryService struct {
 
 // NewMemoryService creates a new in-memory memory service.
 func NewMemoryService(options ...ServiceOpt) *MemoryService {
-	opts := defaultOptions
+	opts := defaultOptions.clone()
 	// Apply user options.
 	for _, option := range options {
 		option(&opts)

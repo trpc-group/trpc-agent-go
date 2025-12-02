@@ -82,6 +82,21 @@ type ServiceOpts struct {
 	schema string
 }
 
+func (o ServiceOpts) clone() ServiceOpts {
+	opts := o
+	opts.toolCreators = make(map[string]memory.ToolCreator)
+	opts.enabledTools = make(map[string]bool)
+
+	for name, toolCreator := range o.toolCreators {
+		opts.toolCreators[name] = toolCreator
+	}
+	for name, enabled := range o.enabledTools {
+		opts.enabledTools[name] = enabled
+	}
+
+	return opts
+}
+
 // ServiceOpt is the option for the postgres memory service.
 type ServiceOpt func(*ServiceOpts)
 
