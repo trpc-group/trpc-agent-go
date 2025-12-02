@@ -160,7 +160,7 @@ func (s *Saver) queryCheckpointData(ctx context.Context, lineageID, checkpointNS
 
 	var r checkpointRow
 	if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.namespace, &r.checkpointID); err != nil {
-		return nil, fmt.Errorf("select by id: %w", err)
+		return nil, fmt.Errorf("select checkpoint failed: %w", err)
 	}
 	return &r, nil
 }
