@@ -40,7 +40,10 @@ func New(r trunner.Runner, opt ...Option) Runner {
 	var tracker track.Tracker
 	if opts.SessionService != nil {
 		var err error
-		tracker, err = track.New(opts.SessionService)
+		tracker, err = track.New(opts.SessionService,
+			track.WithAggregatorFactory(opts.AggregatorFactory),
+			track.WithAggregationOption(opts.AggregationOption...),
+		)
 		if err != nil {
 			log.Warnf("agui: tracker disabled: %v", err)
 		}
@@ -133,6 +136,11 @@ func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguieve
 	threadID := input.threadID
 	runID := input.runID
 	if input.enableTrack {
+		defer func() {
+			if err := r.tracker.Flush(ctx, input.key); err != nil {
+				log.Warnf("agui run: threadID: %s, runID: %s, flush track events: %v", threadID, runID, err)
+			}
+		}()
 		if err := r.recordUserMessage(ctx, input.key, &input.userMessage); err != nil {
 			log.Warnf("agui run: threadID: %s, runID: %s, record user message failed, disable tracking: %v",
 				threadID, runID, err)

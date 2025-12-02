@@ -14,6 +14,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -27,6 +28,8 @@ type Options struct {
 	AppName            string                // AppName is the name of the application.
 	SessionService     session.Service       // SessionService is the session service.
 	RunOptionResolver  RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
+	AggregatorFactory  aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
+	AggregationOption  []aggregator.Option   // AggregationOption is the aggregation options for each run.
 }
 
 // NewOptions creates a new options instance.
@@ -36,6 +39,7 @@ func NewOptions(opt ...Option) *Options {
 		TranslatorFactory: defaultTranslatorFactory,
 		RunAgentInputHook: defaultRunAgentInputHook,
 		RunOptionResolver: defaultRunOptionResolver,
+		AggregatorFactory: aggregator.New,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -94,6 +98,20 @@ func WithAppName(n string) Option {
 func WithSessionService(s session.Service) Option {
 	return func(o *Options) {
 		o.SessionService = s
+	}
+}
+
+// WithAggregationOption forwards aggregator options to the runner-level factory.
+func WithAggregationOption(option ...aggregator.Option) Option {
+	return func(o *Options) {
+		o.AggregationOption = append(o.AggregationOption, option...)
+	}
+}
+
+// WithAggregatorFactory sets the aggregator factory used for tracking.
+func WithAggregatorFactory(factory aggregator.Factory) Option {
+	return func(o *Options) {
+		o.AggregatorFactory = factory
 	}
 }
 

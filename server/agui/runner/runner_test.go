@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestNew(t *testing.T) {
@@ -168,6 +169,35 @@ func TestRunRunOptionResolverError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve run option")
 	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunFlushesTracker(t *testing.T) {
+	recorder := &flushRecorder{}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		tracker:           recorder,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	collectEvents(t, ch)
+	assert.GreaterOrEqual(t, recorder.appendCount, 1)
+	assert.Equal(t, 1, recorder.flushCount)
 }
 
 func TestRunRunOptionResolverOptions(t *testing.T) {
@@ -698,6 +728,25 @@ func (f *fakeTranslator) Translate(evt *agentevent.Event) ([]aguievents.Event, e
 	out := f.events[0]
 	f.events = f.events[1:]
 	return out, nil
+}
+
+type flushRecorder struct {
+	appendCount int
+	flushCount  int
+}
+
+func (f *flushRecorder) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
+	f.appendCount++
+	return nil
+}
+
+func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
+	f.flushCount++
+	return nil
 }
 
 type fakeRunner struct {

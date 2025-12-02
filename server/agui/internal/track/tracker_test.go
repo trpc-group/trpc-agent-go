@@ -18,6 +18,7 @@ import (
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -202,6 +203,91 @@ func TestTrackerGetEventsSuccess(t *testing.T) {
 	start, ok := parsed.(*aguievents.TextMessageStartEvent)
 	require.True(t, ok)
 	require.Equal(t, first.MessageID, start.MessageID)
+}
+
+func TestTrackerAggregatesTextContent(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
+		aguievents.WithRole("assistant"))))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hel")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "lo")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageEndEvent("msg")))
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 3)
+
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
+	require.NoError(t, err)
+	content, ok := parsed.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "hello", content.Delta)
+}
+
+func TestTrackerAggregationDisabled(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
+		aguievents.WithRole("assistant"))))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hel")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "lo")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageEndEvent("msg")))
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 4)
+
+	firstPayload, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
+	require.NoError(t, err)
+	firstContent, ok := firstPayload.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "hel", firstContent.Delta)
+
+	secondPayload, err := aguievents.EventFromJSON(trackEvents.Events[2].Payload)
+	require.NoError(t, err)
+	secondContent, ok := secondPayload.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "lo", secondContent.Delta)
+}
+
+func TestTrackerFlushPersistsPendingAggregation(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
+		aguievents.WithRole("assistant"))))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hi ")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "there")))
+
+	require.NoError(t, tracker.Flush(ctx, key))
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
+	require.NoError(t, err)
+	content, ok := parsed.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "hi there", content.Delta)
 }
 
 type serviceWithoutTrack struct{}
