@@ -12,9 +12,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.17.0
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v0.6.0
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.6.0
 )
 
 require (
@@ -46,4 +45,5 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
 )

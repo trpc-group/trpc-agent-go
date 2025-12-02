@@ -187,7 +187,7 @@ func TestCheckpointManager_BranchToNewLineage_FromLatestCrossNS(t *testing.T) {
 
 	// Branch to new lineage without specifying namespace or checkpointID (use latest across namespaces)
 	newLineage := "ln-cross-new"
-	b, err := cm.BranchToNewLineage(ctx, lineage, "", "", newLineage, "nsX")
+	b, err := cm.BranchToNewLineage(ctx, lineage, "ns2", "", newLineage, "nsX")
 	require.NoError(t, err)
 	require.NotNil(t, b)
 	// The branched checkpoint should be forked from the latest; some implementations may omit source_checkpoint id
