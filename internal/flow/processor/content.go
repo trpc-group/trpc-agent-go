@@ -168,9 +168,23 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
+	// Honor per-invocation include_contents flag from runtime state when
+	// present. This allows callers (including GraphAgent subgraphs) to
+	// disable seeding session history for specific runs without changing
+	// the processor configuration.
+	includeMode := ""
+	if invocation.RunOptions.RuntimeState != nil {
+		if v, ok := invocation.RunOptions.RuntimeState["include_contents"]; ok {
+			if s, ok2 := v.(string); ok2 {
+				includeMode = strings.ToLower(s)
+			}
+		}
+	}
+	skipHistory := includeMode == "none"
+
 	// 2) Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
-	if invocation.Session != nil {
+	if !skipHistory && invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
 		if p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {

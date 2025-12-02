@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	checkpointinmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
+	checkpointredis "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis"
 	checkpointsqlite "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -46,7 +47,6 @@ const (
 	defaultAppName       = "interrupt-workflow"
 	defaultDBPath        = "interrupt-checkpoints.db"
 	defaultLineagePrefix = "interrupt-demo"
-	defaultNamespace     = ""
 
 	// State keys for the workflow.
 	stateKeyCounter   = "counter"
@@ -93,9 +93,11 @@ var (
 	modelName = flag.String("model", defaultModelName,
 		"Name of the model to use")
 	storage = flag.String("storage", "memory",
-		"Storage type: 'memory' or 'sqlite'")
+		"Storage type: 'memory' or 'sqlite' or 'redis'")
 	dbPath = flag.String("db", defaultDBPath,
 		"Path to SQLite database file (only used with -storage=sqlite)")
+	redisClientURL = flag.String("redis-url", "redis://localhost:6379",
+		"Redis client URL (only used with -storage=redis)")
 	verbose = flag.Bool("verbose", false,
 		"Enable verbose output")
 	interactiveMode = flag.Bool("interactive", true,
@@ -109,6 +111,7 @@ type interruptWorkflow struct {
 	modelName        string
 	storageType      string
 	dbPath           string
+	redisClientURL   string
 	verbose          bool
 	logger           agentlog.Logger
 	runner           runner.Runner
@@ -153,7 +156,7 @@ func main() {
 			time.Now().Unix())
 	}
 	workflow.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
-	workflow.currentNamespace = defaultNamespace
+	workflow.currentNamespace = "interrupt-demo"
 
 	if err := workflow.run(); err != nil {
 		fmt.Printf("❌ Workflow failed: %v\n", err)
@@ -207,6 +210,12 @@ func (w *interruptWorkflow) setup() error {
 		w.saver = saver
 	case "memory":
 		w.saver = checkpointinmemory.NewSaver()
+	case "redis":
+		saver, err := checkpointredis.NewSaver(checkpointredis.WithRedisClientURL(w.redisClientURL))
+		if err != nil {
+			return fmt.Errorf("failed to create Redis saver: %w", err)
+		}
+		w.saver = saver
 	default:
 		return fmt.Errorf("unsupported storage type: %s", w.storageType)
 	}
@@ -637,7 +646,6 @@ func (w *interruptWorkflow) startInteractiveMode(ctx context.Context) error {
 func (w *interruptWorkflow) runWorkflow(ctx context.Context, lineageID string, waitForInterrupt bool) error {
 	startTime := time.Now()
 	w.currentLineageID = lineageID
-	w.currentNamespace = defaultNamespace
 
 	w.logger.Infof("Starting workflow execution: lineage_id=%s, namespace=%s, wait_for_interrupt=%v", lineageID, w.currentNamespace, waitForInterrupt)
 
@@ -737,7 +745,6 @@ func (w *interruptWorkflow) runWorkflow(ctx context.Context, lineageID string, w
 // resumeWorkflow resumes execution from a checkpoint.
 func (w *interruptWorkflow) resumeWorkflow(ctx context.Context, lineageID, checkpointID, userInput string) error {
 	w.currentLineageID = lineageID
-	w.currentNamespace = defaultNamespace
 
 	// Check if the lineage exists before attempting resume.
 	config := graph.NewCheckpointConfig(lineageID).WithNamespace(w.currentNamespace)
