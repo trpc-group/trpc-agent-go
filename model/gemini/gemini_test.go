@@ -662,6 +662,13 @@ func TestModel_GenerateContentNoStream(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &Model{
 				client: mockClient,
+				chatRequestCallback: func(ctx context.Context, chatRequest []*genai.Content) {
+					return
+				},
+				chatResponseCallback: func(ctx context.Context, chatRequest []*genai.Content,
+					generateConfig *genai.GenerateContentConfig, chatResponse *genai.GenerateContentResponse) {
+					return
+				},
 			}
 			_, err := m.GenerateContent(tt.args.ctx, tt.args.request)
 			assert.Nil(t, err)
@@ -746,6 +753,17 @@ func TestModel_GenerateContentStreaming(t *testing.T) {
 				client:                 mockClient,
 				enableTokenTailoring:   true,
 				protocolOverheadTokens: 1,
+				chatChunkCallback: func(ctx context.Context, chatRequest []*genai.Content,
+					generateConfig *genai.GenerateContentConfig, chatResponse *genai.GenerateContentResponse) {
+					return
+				},
+				chatStreamCompleteCallback: func(ctx context.Context, chatRequest []*genai.Content,
+					generateConfig *genai.GenerateContentConfig, chatResponse *model.Response) {
+					return
+				},
+				chatRequestCallback: func(ctx context.Context, chatRequest []*genai.Content) {
+					return
+				},
 			}
 			_, err := m.GenerateContent(tt.args.ctx, tt.args.request)
 			assert.Nil(t, err)
