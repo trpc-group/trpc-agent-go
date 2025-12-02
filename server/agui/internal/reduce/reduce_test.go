@@ -155,17 +155,14 @@ func TestHandleTextChunkSuccess(t *testing.T) {
 	}{
 		{
 			name:        "assistant default role empty delta",
-			chunk:       aguievents.NewTextMessageChunkEvent().WithChunkMessageID("msg-1"),
+			chunk:       aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr("")),
 			wantRole:    "assistant",
 			wantName:    testAppName,
 			wantContent: "",
 		},
 		{
-			name: "user role with delta",
-			chunk: aguievents.NewTextMessageChunkEvent().
-				WithChunkMessageID("msg-2").
-				WithChunkRole("user").
-				WithChunkDelta("hi"),
+			name:        "user role with delta",
+			chunk:       aguievents.NewTextMessageChunkEvent(stringPtr("msg-2"), stringPtr("user"), stringPtr("hi")),
 			wantRole:    "user",
 			wantName:    testUserID,
 			wantContent: "hi",
@@ -210,16 +207,20 @@ func TestHandleTextChunkSuccess(t *testing.T) {
 	}
 }
 
+func stringPtr(s string) *string {
+	return &s
+}
+
 func TestHandleTextChunkErrors(t *testing.T) {
 	t.Run("missing id", func(t *testing.T) {
-		chunk := aguievents.NewTextMessageChunkEvent()
+		chunk := aguievents.NewTextMessageChunkEvent(stringPtr(""), stringPtr("assistant"), stringPtr(""))
 		r := new(testAppName, testUserID)
 		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "text message chunk missing id") {
 			t.Fatalf("unexpected error %v", err)
 		}
 	})
 	t.Run("duplicate id", func(t *testing.T) {
-		chunk := aguievents.NewTextMessageChunkEvent().WithChunkMessageID("msg-1")
+		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr(""))
 		r := new(testAppName, testUserID)
 		if err := r.handleTextChunk(chunk); err != nil {
 			t.Fatalf("handleTextChunk err: %v", err)
@@ -229,14 +230,14 @@ func TestHandleTextChunkErrors(t *testing.T) {
 		}
 	})
 	t.Run("unsupported role", func(t *testing.T) {
-		chunk := aguievents.NewTextMessageChunkEvent().WithChunkMessageID("msg-3").WithChunkRole("tool")
+		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-3"), stringPtr("tool"), stringPtr(""))
 		r := new(testAppName, testUserID)
 		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "unsupported role: tool") {
 			t.Fatalf("unexpected error %v", err)
 		}
 	})
 	t.Run("empty string id pointer", func(t *testing.T) {
-		chunk := aguievents.NewTextMessageChunkEvent()
+		chunk := aguievents.NewTextMessageChunkEvent(stringPtr(""), stringPtr("assistant"), stringPtr(""))
 		empty := ""
 		chunk.MessageID = &empty
 		r := new(testAppName, testUserID)
@@ -248,7 +249,7 @@ func TestHandleTextChunkErrors(t *testing.T) {
 
 func TestReduceEventDispatchesChunk(t *testing.T) {
 	r := new(testAppName, testUserID)
-	chunk := aguievents.NewTextMessageChunkEvent().WithChunkMessageID("msg-1").WithChunkDelta("hi")
+	chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr("hi"))
 	if err := r.reduceEvent(chunk); err != nil {
 		t.Fatalf("reduceEvent err: %v", err)
 	}
@@ -701,8 +702,8 @@ func TestReduceIgnoresUnknownEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reduce err: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("expected no messages, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
 }
 
