@@ -60,4 +60,3 @@ func TestGetADKMetadataKey(t *testing.T) {
 		})
 	}
 }
-
