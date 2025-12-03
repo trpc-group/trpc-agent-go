@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -174,7 +175,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	// the processor configuration.
 	includeMode := ""
 	if invocation.RunOptions.RuntimeState != nil {
-		if v, ok := invocation.RunOptions.RuntimeState["include_contents"]; ok {
+		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents]; ok {
 			if s, ok2 := v.(string); ok2 {
 				includeMode = strings.ToLower(s)
 			}
@@ -182,17 +183,24 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 	skipHistory := includeMode == "none"
 
-	// 2) Append per-filter messages from session events when allowed.
+	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
 	if !skipHistory && invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
 		if p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
-			// Prepend session summary as a system message if enabled and available.
+			// Add session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Prepend to the front of messages.
-				req.Messages = append([]model.Message{*msg}, req.Messages...)
+				// Merge existing system messages first, then merge summary into the single system message.
+				req.Messages = p.mergeSystemMessages(req.Messages)
+				if len(req.Messages) > 0 && req.Messages[0].Role == model.RoleSystem {
+					// Merge summary into the existing system message.
+					req.Messages[0].Content += "\n\n" + msg.Content
+				} else {
+					// No system message exists, prepend new system message.
+					req.Messages = append([]model.Message{*msg}, req.Messages...)
+				}
 				summaryUpdatedAt = updatedAt
 			}
 		}
@@ -340,6 +348,44 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 		return messages
 	}
 	return merged
+}
+
+// mergeSystemMessages merges all consecutive system messages at the beginning of the message list
+// into a single system message to ensure API compatibility.
+func (p *ContentRequestProcessor) mergeSystemMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	var systemContents []string
+	var result []model.Message
+
+	// Collect all system messages at the beginning
+	for _, msg := range messages {
+		if msg.Role == model.RoleSystem {
+			systemContents = append(systemContents, msg.Content)
+		} else {
+			break
+		}
+	}
+
+	// If we have system messages, merge them into one
+	if len(systemContents) > 0 {
+		mergedContent := strings.Join(systemContents, "\n\n")
+		mergedSystemMsg := model.Message{
+			Role:    model.RoleSystem,
+			Content: mergedContent,
+		}
+		result = append(result, mergedSystemMsg)
+	}
+
+	// Add the remaining non-system messages
+	startIdx := len(systemContents)
+	if startIdx < len(messages) {
+		result = append(result, messages[startIdx:]...)
+	}
+
+	return result
 }
 
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
