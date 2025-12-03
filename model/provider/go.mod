@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/model/provider
 
-go 1.24.10
+go 1.24.0
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
@@ -12,9 +12,9 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.16.0
 	github.com/openai/openai-go v1.12.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
-	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go v0.6.0
+	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.6.0
+	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.6.0
 )
 
 require (
