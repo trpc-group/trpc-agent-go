@@ -9,8 +9,8 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go v0.6.0
+	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v0.0.0
 )
 
 require (
