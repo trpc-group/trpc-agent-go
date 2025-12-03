@@ -30,6 +30,8 @@ const (
 	testFirstToolSetName      = "set_one"
 	testSecondToolSetName     = "set_two"
 	testPrefixedKnowledgeTail = "_knowledge_search"
+	testFilterAgentName       = "filter-agent"
+	testSubAgentName          = "sub-agent"
 )
 
 // minimalKnowledge implements knowledge.Knowledge with no-op behaviors for unit tests.
@@ -366,5 +368,179 @@ func TestLLMAgent_SetToolSets_ReplacesAll(t *testing.T) {
 	}
 	if !hasTwo {
 		t.Fatalf("expected tool %q after SetToolSets", prefixTwo)
+	}
+}
+
+func TestLLMAgent_FilterTools_NoFilterReturnsAll(t *testing.T) {
+	ctx := context.Background()
+
+	userTool1 := dummyTool{
+		decl: &tool.Declaration{Name: testUserToolNameOne},
+	}
+	userTool2 := dummyTool{
+		decl: &tool.Declaration{Name: testUserToolNameTwo},
+	}
+
+	agent := New(
+		testFilterAgentName,
+		WithTools([]tool.Tool{userTool1, userTool2}),
+	)
+
+	allTools := agent.Tools()
+	if len(allTools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(allTools))
+	}
+
+	filtered := agent.FilterTools(ctx)
+	if len(filtered) != len(allTools) {
+		t.Fatalf("expected %d filtered tools, got %d",
+			len(allTools), len(filtered))
+	}
+
+	seen := map[string]bool{}
+	for _, tl := range filtered {
+		seen[tl.Declaration().Name] = true
+	}
+	if !seen[testUserToolNameOne] || !seen[testUserToolNameTwo] {
+		t.Fatalf("expected both user tools in filtered set, got %v",
+			seen)
+	}
+}
+
+func TestLLMAgent_FilterTools_RespectsUserFilterOnly(t *testing.T) {
+	ctx := context.Background()
+
+	userTool1 := dummyTool{
+		decl: &tool.Declaration{Name: testUserToolNameOne},
+	}
+	userTool2 := dummyTool{
+		decl: &tool.Declaration{Name: testUserToolNameTwo},
+	}
+	kb := &minimalKnowledge{}
+	subAgent := New(testSubAgentName)
+
+	filterFunc := func(ctx context.Context,
+		tl tool.Tool) bool {
+		return tl.Declaration().Name == testUserToolNameTwo
+	}
+
+	agent := New(
+		testFilterAgentName,
+		WithTools([]tool.Tool{userTool1, userTool2}),
+		WithKnowledge(kb),
+		WithSubAgents([]agent.Agent{subAgent}),
+		WithToolFilter(filterFunc),
+	)
+
+	filtered := agent.FilterTools(ctx)
+
+	seenUser := map[string]bool{}
+	seenKnowledge := false
+	seenTransfer := false
+	for _, tl := range filtered {
+		name := tl.Declaration().Name
+		switch name {
+		case testUserToolNameOne, testUserToolNameTwo:
+			seenUser[name] = true
+		case testKnowledgeToolName:
+			seenKnowledge = true
+		case testTransferToolName:
+			seenTransfer = true
+		}
+	}
+
+	if seenUser[testUserToolNameOne] {
+		t.Fatalf("user tool %q should have been filtered out",
+			testUserToolNameOne)
+	}
+	if !seenUser[testUserToolNameTwo] {
+		t.Fatalf("user tool %q should have been kept",
+			testUserToolNameTwo)
+	}
+	if !seenKnowledge {
+		t.Fatalf("framework knowledge tool %q must always pass filter",
+			testKnowledgeToolName)
+	}
+	if !seenTransfer {
+		t.Fatalf("framework transfer tool %q must always pass filter",
+			testTransferToolName)
+	}
+}
+
+func TestLLMAgent_AddToolSet_NilDoesNothing(t *testing.T) {
+	baseTool := dummyTool{
+		decl: &tool.Declaration{Name: testUserToolNameOne},
+	}
+	llmAgent := New(
+		"add-nil",
+		WithTools([]tool.Tool{baseTool}),
+	)
+
+	beforeTools := llmAgent.Tools()
+	if len(llmAgent.option.ToolSets) != 0 {
+		t.Fatalf("expected no toolsets before AddToolSet")
+	}
+
+	llmAgent.AddToolSet(nil)
+
+	afterTools := llmAgent.Tools()
+	if len(afterTools) != len(beforeTools) {
+		t.Fatalf("expected tools unchanged, before=%d after=%d",
+			len(beforeTools), len(afterTools))
+	}
+	if len(llmAgent.option.ToolSets) != 0 {
+		t.Fatalf("expected no toolsets after AddToolSet(nil)")
+	}
+}
+
+func TestLLMAgent_AddToolSet_ReplacesByName(t *testing.T) {
+	firstToolSet := &dummyToolSet{name: testDynamicToolSetName}
+	llmAgent := New(
+		"add-replace",
+		WithToolSets([]tool.ToolSet{firstToolSet}),
+	)
+
+	if len(llmAgent.option.ToolSets) != 1 {
+		t.Fatalf("expected 1 toolset, got %d",
+			len(llmAgent.option.ToolSets))
+	}
+	original := llmAgent.option.ToolSets[0]
+
+	replacement := &dummyToolSet{name: testDynamicToolSetName}
+	llmAgent.AddToolSet(replacement)
+
+	if len(llmAgent.option.ToolSets) != 1 {
+		t.Fatalf("expected 1 toolset after replace, got %d",
+			len(llmAgent.option.ToolSets))
+	}
+	if llmAgent.option.ToolSets[0] != replacement {
+		t.Fatalf("expected toolset to be replaced with new value")
+	}
+	if llmAgent.option.ToolSets[0] == original {
+		t.Fatalf("expected original toolset to be replaced")
+	}
+}
+
+func TestLLMAgent_SetToolSets_ClearsWhenEmpty(t *testing.T) {
+	toolSet := &dummyToolSet{name: testDynamicToolSetName}
+	llmAgent := New(
+		"set-clear",
+		WithToolSets([]tool.ToolSet{toolSet}),
+	)
+
+	if len(llmAgent.option.ToolSets) == 0 {
+		t.Fatalf("expected toolsets before clear")
+	}
+
+	beforeCount := len(llmAgent.Tools())
+	llmAgent.SetToolSets(nil)
+
+	if llmAgent.option.ToolSets != nil {
+		t.Fatalf("expected option.ToolSets to be nil after clear")
+	}
+	afterCount := len(llmAgent.Tools())
+	if afterCount >= beforeCount {
+		t.Fatalf("expected fewer tools after clearing toolsets, "+
+			"before=%d after=%d", beforeCount, afterCount)
 	}
 }
