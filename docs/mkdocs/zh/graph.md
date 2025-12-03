@@ -1718,9 +1718,9 @@ TIPS:
 ```go
 subgraphAgentA := graphagent.New(
     "subgraphA", subgraph,
-    // 对parrentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 生成的所有消息可见（包含同一sessionID的历史会话消息）
+    // 对parentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 生成的所有消息可见（包含同一sessionID的历史会话消息）
     graphagent.WithMessageFilterMode(graphagent.FullContext),
-    // 对parrentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+    // 对parentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
     graphagent.WithMessageFilterMode(graphagent.RequestContext),
     // 仅对subgraphAgentA 当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
     graphagent.WithMessageFilterMode(graphagent.IsolatedRequest),
@@ -1730,9 +1730,9 @@ subgraphAgentA := graphagent.New(
 
 subgraphAgentB := graphagent.New(
     "subgraphB", subgraph,
-    // 对parrentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 生成的所有消息可见（包含同一sessionID的历史会话消息）
+    // 对parentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 生成的所有消息可见（包含同一sessionID的历史会话消息）
     graphagent.WithMessageFilterMode(graphagent.FullContext),
-    // 对parrentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+    // 对parentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
     graphagent.WithMessageFilterMode(graphagent.RequestContext),
     // 仅对subgraphAgentB（包含task1、task2分别生成的消息）当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
     graphagent.WithMessageFilterMode(graphagent.IsolatedRequest),
@@ -1764,7 +1764,7 @@ graph, err := sg.Compile()
 if err != nil {
     log.Fatalf("Failed to Compile state graph, err: %w", err)
 }
-parrentAgent := graphagent.New(
+parentAgent := graphagent.New(
     "subgraph", graph,
     // subagent
     graphagent.WithSubAgents(subgraphAgent)
