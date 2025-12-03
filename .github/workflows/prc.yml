@@ -131,9 +131,19 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v3
         with:
-          version: latest 
+          version: latest
           only-new-issues: true
           args: --timeout=10m
+  check-examples-go-mod:
+    name: check examples go.mod
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Check examples go.mod and go.sum
+        run: bash .github/scripts/check-examples-go-mod.sh
   typos:
     name: typos
     runs-on: ubuntu-latest
