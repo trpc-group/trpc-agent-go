@@ -1701,6 +1701,7 @@ sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 和 branch2 会并行执行
 TIPS:
  - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
  - invocation.Message在任何场景下均可见
+ - 相关配置仅控制State[graph.StateKeyMessages]的初始值
 
 配置:
 - `graphagent.WithMessageFilterMode(MessageFilterMode)`:
@@ -1709,8 +1710,66 @@ TIPS:
   - `IsolatedRequest`: 仅包含当前请求周期内通过filterKey完全匹配的消息
   - `IsolatedInvocation`: 仅包含当前invocation周期内通过filterKey完全匹配的消息
 
-推荐用法示例（该用法仅基于高级用法基础之上做了简化配置）:
+推荐用法示例（该用法仅基于高阶用法基础之上做了配置简化）: 
 
+案例1: 对graphAgent消息可见性控制
+```go
+subgraphAgentA := graphagent.New(
+    "subgraphA", subgraph,
+    // 对parrentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 生成的所有消息可见（包含同一sessionID的历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.FullContext),
+    // 对parrentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.RequestContext),
+    // 仅对subgraphAgentA 当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.IsolatedRequest),
+    // 仅对subgraphAgentA当前invocation期间生成的消息可见(此示例中subgraphAgentA仅执行一次， 效果等价于graphagent.IsolatedRequest)
+    graphagent.WithMessageFilterMode(graphagent.IsolatedInvocation),
+)
+
+subgraphAgentB := graphagent.New(
+    "subgraphB", subgraph,
+    // 对parrentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 生成的所有消息可见（包含同一sessionID的历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.FullContext),
+    // 对parrentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.RequestContext),
+    // 仅对subgraphAgentB（包含task1、task2分别生成的消息）当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.IsolatedRequest),
+    // 仅对subgraphAgentB 当前Invocation中生成的消息可见，不包含历史消息（task1与task2执行期间生成的消息互不可见）。
+    graphagent.WithMessageFilterMode(graphagent.IsolatedInvocation),
+)
+
+sg.AddAgentNode("subgraphA")
+sg.AddNode("fanout", func(ctx context.Context, state graph.State) (any, error) {
+    return []*graph.Command{
+        {
+            GoTo: "subgraph",
+            Update: graph.State{
+                "task": "task 1"
+            },
+        },
+        {
+            GoTo: "subgraph",
+            Update: graph.State{
+                "task": "task 2"
+            },
+        },
+    }, nil
+})
+sg.AddAgentNode("subgraphB")
+sg.AddEdge("subgraphA", "fanout")
+sg.SetEntryPoint(subgraphA)
+graph, err := sg.Compile()
+if err != nil {
+    log.Fatalf("Failed to Compile state graph, err: %w", err)
+}
+parrentAgent := graphagent.New(
+    "subgraph", graph,
+    // subagent
+    graphagent.WithSubAgents(subgraphAgent)
+)
+```
+
+案例2: 对节点Agent消息可见性控制
 ```go
 taskagentA := llmagent.New(
   "taskagentA",

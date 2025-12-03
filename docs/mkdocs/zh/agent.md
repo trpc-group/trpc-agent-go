@@ -143,7 +143,7 @@ TIPS:
 
 配置:
 - `llmagent.WithMessageFilterMode(MessageFilterMode)`:
-  - `FullContext`: 所有能通过filerKey做前缀匹配的消息
+  - `FullContext`: 所有能通过filterKey做前缀匹配的消息
   - `RequestContext`: 仅包含当前请求周期内通过filterKey前缀匹配的消息
   - `IsolatedRequest`: 仅包含当前请求周期内通过filterKey完全匹配的消息
   - `IsolatedInvocation`: 仅包含当前invocation周期内通过filterKey完全匹配的消息
@@ -227,14 +227,14 @@ llmAgent := llmagent.New(
     //  - llmagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
     //  - llmagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
     //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
-    llmagent.WithMessageTimelineFilterMode(llmagent.BranchFilterModeAll),
+    llmagent.WithMessageTimelineFilterMode(llmagent.TimelineFilterAll),
     // 分支维度过滤条件
     // 默认值: llmagent.BranchFilterModePrefix
     // 可选值:
     //  - llmagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
     //  - llmagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
     //  - llmagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
-    llmagent.WithMessageBranchFilterMode(llmagent.TimelineFilterAll),
+    llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModePrefix),
 )
 ```
 
