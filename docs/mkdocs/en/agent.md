@@ -155,7 +155,8 @@ When interacting with the model, only the visible content is passed as input.
 
 TIPS:
 - Messages from different sessionIDs are never visible to each other under any circumstances. The following control strategies only apply to messages sharing the same sessionID.
-- invocation.Message always visible regardless of the configuration.
+- Invocation.Message always visible regardless of the configuration.
+- When the option is not configured, the default value is FullContext.
 
 Config:
 - `llmagent.WithMessageFilterMode(MessageFilterMode)`:

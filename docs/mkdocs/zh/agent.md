@@ -140,6 +140,7 @@ if err != nil {
 TIPS:
  - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
  - invocation.Message在任何场景下均可见
+ - 未配置选项时，默认值为FullContext
 
 配置:
 - `llmagent.WithMessageFilterMode(MessageFilterMode)`:
