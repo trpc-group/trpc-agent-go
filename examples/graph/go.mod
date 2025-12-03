@@ -9,7 +9,7 @@ replace (
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
-	go.uber.org/zap v1.27.1
+	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/redis v0.0.0
