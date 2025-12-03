@@ -246,8 +246,8 @@ func newSessionEvent(author string, msg model.Message) event.Event {
 	}
 }
 
-// Test that session summary is inserted after existing system messages.
-func TestProcessRequest_SessionSummary_AfterSystemMessages(t *testing.T) {
+// Test that session summary is merged into the last system message.
+func TestProcessRequest_SessionSummary_MergeWithSystemMessages(t *testing.T) {
 	// Create session with summary
 	sess := &session.Session{
 		Summaries: map[string]*session.Summary{
@@ -276,14 +276,12 @@ func TestProcessRequest_SessionSummary_AfterSystemMessages(t *testing.T) {
 	p1 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p1.ProcessRequest(context.Background(), inv1, req1, nil)
 
-	// Should have 3 messages: system, summary (system), user
-	require.Equal(t, 3, len(req1.Messages))
+	// Should have 2 messages: merged system, user
+	require.Equal(t, 2, len(req1.Messages))
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
-	require.Equal(t, "existing system prompt", req1.Messages[0].Content)
-	require.Equal(t, model.RoleSystem, req1.Messages[1].Role)
-	require.Equal(t, "Session summary content", req1.Messages[1].Content)
-	require.Equal(t, model.RoleUser, req1.Messages[2].Role)
-	require.Equal(t, "user question", req1.Messages[2].Content)
+	require.Equal(t, "existing system prompt\n\nSession summary content", req1.Messages[0].Content)
+	require.Equal(t, model.RoleUser, req1.Messages[1].Role)
+	require.Equal(t, "user question", req1.Messages[1].Content)
 
 	// Test case 2: Request has only user message (no system message)
 	req2 := &model.Request{
@@ -302,7 +300,7 @@ func TestProcessRequest_SessionSummary_AfterSystemMessages(t *testing.T) {
 	p2 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p2.ProcessRequest(context.Background(), inv2, req2, nil)
 
-	// Should have 2 messages: summary (system), user
+	// Should have 2 messages: new system, user
 	require.Equal(t, 2, len(req2.Messages))
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
 	require.Equal(t, "Session summary content", req2.Messages[0].Content)
@@ -328,16 +326,100 @@ func TestProcessRequest_SessionSummary_AfterSystemMessages(t *testing.T) {
 	p3 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p3.ProcessRequest(context.Background(), inv3, req3, nil)
 
-	// Should have 4 messages: system1, system2, summary (system), user
-	require.Equal(t, 4, len(req3.Messages))
+	// Should have 2 messages: merged system (system1 + system2 + summary), user
+	require.Equal(t, 2, len(req3.Messages))
 	require.Equal(t, model.RoleSystem, req3.Messages[0].Role)
-	require.Equal(t, "system 1", req3.Messages[0].Content)
-	require.Equal(t, model.RoleSystem, req3.Messages[1].Role)
-	require.Equal(t, "system 2", req3.Messages[1].Content)
-	require.Equal(t, model.RoleSystem, req3.Messages[2].Role)
-	require.Equal(t, "Session summary content", req3.Messages[2].Content)
-	require.Equal(t, model.RoleUser, req3.Messages[3].Role)
-	require.Equal(t, "user question", req3.Messages[3].Content)
+	require.Equal(t, "system 1\n\nsystem 2\n\nSession summary content", req3.Messages[0].Content)
+	require.Equal(t, model.RoleUser, req3.Messages[1].Role)
+	require.Equal(t, "user question", req3.Messages[1].Content)
+}
+
+func TestContentRequestProcessor_mergeSystemMessages(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	tests := []struct {
+		name     string
+		input    []model.Message
+		expected []model.Message
+	}{
+		{
+			name:     "no messages",
+			input:    []model.Message{},
+			expected: []model.Message{},
+		},
+		{
+			name: "no system messages",
+			input: []model.Message{
+				model.NewUserMessage("hello"),
+				model.NewAssistantMessage("hi"),
+			},
+			expected: []model.Message{
+				model.NewUserMessage("hello"),
+				model.NewAssistantMessage("hi"),
+			},
+		},
+		{
+			name: "single system message",
+			input: []model.Message{
+				model.NewSystemMessage("system prompt"),
+				model.NewUserMessage("hello"),
+			},
+			expected: []model.Message{
+				model.NewSystemMessage("system prompt"),
+				model.NewUserMessage("hello"),
+			},
+		},
+		{
+			name: "multiple system messages",
+			input: []model.Message{
+				model.NewSystemMessage("system 1"),
+				model.NewSystemMessage("system 2"),
+				model.NewSystemMessage("system 3"),
+				model.NewUserMessage("hello"),
+			},
+			expected: []model.Message{
+				model.Message{Role: model.RoleSystem, Content: "system 1\n\nsystem 2\n\nsystem 3"},
+				model.NewUserMessage("hello"),
+			},
+		},
+		{
+			name: "system messages with empty content",
+			input: []model.Message{
+				model.NewSystemMessage(""),
+				model.NewSystemMessage("system 2"),
+				model.NewSystemMessage(""),
+				model.NewUserMessage("hello"),
+			},
+			expected: []model.Message{
+				model.Message{Role: model.RoleSystem, Content: "\n\nsystem 2\n\n"},
+				model.NewUserMessage("hello"),
+			},
+		},
+		{
+			name: "system messages not at beginning",
+			input: []model.Message{
+				model.NewSystemMessage("system 1"),
+				model.NewUserMessage("hello"),
+				model.NewSystemMessage("system 2"), // This should not be merged
+			},
+			expected: []model.Message{
+				model.NewSystemMessage("system 1"),
+				model.NewUserMessage("hello"),
+				model.NewSystemMessage("system 2"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := p.mergeSystemMessages(tt.input)
+			require.Equal(t, len(tt.expected), len(result))
+			for i, expectedMsg := range tt.expected {
+				require.Equal(t, expectedMsg.Role, result[i].Role)
+				require.Equal(t, expectedMsg.Content, result[i].Content)
+			}
+		})
+	}
 }
 
 func newSessionEventWithBranch(author, filterKey, branch string, msg model.Message) event.Event {
