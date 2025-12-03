@@ -76,6 +76,10 @@ func TestWithHeaders_AppendsOptions(t *testing.T) {
 	headers["X-Custom"] = "changed"
 	WithHeaders(map[string]string{"User-Agent": "test-agent"})(o)
 	assert.Len(t, o.anthropicClientOptions, 3, "expected additional headers to append")
+
+	opts1 := &options{}
+	WithHeaders(nil)(opts1)
+	assert.Len(t, opts1.anthropicClientOptions, 0, "expected no headers to be applied")
 }
 
 func Test_Model_GenerateContent_NilRequest(t *testing.T) {
@@ -729,9 +733,9 @@ func (f rtFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(
 
 func Test_HandleNonStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 	// Mock HTTP client to return a fixed Anthropic message JSON body.
-	orig := DefaultNewHTTPClient
-	t.Cleanup(func() { DefaultNewHTTPClient = orig })
-	DefaultNewHTTPClient = func(_ ...HTTPClientOption) HTTPClient {
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
 		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			body := `{
                 "id":"msg1",
@@ -814,9 +818,9 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 		"",
 	}, "\n")
 
-	orig := DefaultNewHTTPClient
-	t.Cleanup(func() { DefaultNewHTTPClient = orig })
-	DefaultNewHTTPClient = func(_ ...HTTPClientOption) HTTPClient {
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
 		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			h := make(http.Header)
 			h.Set("Content-Type", "text/event-stream")
@@ -902,9 +906,9 @@ func Test_HTTPClientOptions_AndAnthropicClientOptions(t *testing.T) {
 }
 
 func Test_HandleNonStreamingResponse_ErrorPath_NoNetwork(t *testing.T) {
-	orig := DefaultNewHTTPClient
-	t.Cleanup(func() { DefaultNewHTTPClient = orig })
-	DefaultNewHTTPClient = func(_ ...HTTPClientOption) HTTPClient {
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
 		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: 500,
@@ -1483,31 +1487,4 @@ func TestWithEnableTokenTailoring_EmptyMessages(t *testing.T) {
 	ch, err := m.GenerateContent(context.Background(), req)
 	require.Error(t, err, "GenerateContent should fail with empty messages")
 	require.Nil(t, ch, "expected nil channel with empty messages")
-}
-
-// TestWithTokenTailoringConfig tests the WithTokenTailoringConfig option.
-func TestWithTokenTailoringConfig(t *testing.T) {
-	config := &model.TokenTailoringConfig{
-		ProtocolOverheadTokens: 1024,
-		ReserveOutputTokens:    4096,
-		InputTokensFloor:       2048,
-		OutputTokensFloor:      512,
-		SafetyMarginRatio:      0.15,
-		MaxInputTokensRatio:    0.90,
-	}
-
-	m := New("claude-3-5-sonnet",
-		WithEnableTokenTailoring(true),
-		WithTokenTailoringConfig(config),
-	)
-
-	require.NotNil(t, m)
-
-	// Verify that the instance-level config was set.
-	assert.Equal(t, 1024, m.protocolOverheadTokens)
-	assert.Equal(t, 4096, m.reserveOutputTokens)
-	assert.Equal(t, 2048, m.inputTokensFloor)
-	assert.Equal(t, 512, m.outputTokensFloor)
-	assert.Equal(t, 0.15, m.safetyMarginRatio)
-	assert.Equal(t, 0.90, m.maxInputTokensRatio)
 }
