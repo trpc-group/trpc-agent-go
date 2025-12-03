@@ -912,6 +912,7 @@ searchfilter.Equal("topic", "programming")
 > - `metadata.` 前缀用于区分元数据字段和系统字段（如 `id`、`name`、`content` 等）
 > - 如果通过 `WithMetadataField()` 自定义了元数据字段名，仍然使用 `metadata.` 前缀，框架会自动转换为实际的字段名
 > - 系统字段（`id`、`name`、`content`、`created_at`、`updated_at`）直接使用字段名，无需前缀
+> - 通过 `WithDocBuilder` 自定义的表字段（如 `status`、`priority` 等额外列）直接使用字段名，无需前缀
 
 ##### 常用过滤器辅助函数
 
@@ -931,6 +932,10 @@ searchfilter.Between("metadata.date", min, max)          // metadata.date BETWEE
 // 系统字段不需要前缀
 searchfilter.Equal("id", "doc-123")                      // id = "doc-123"
 searchfilter.In("name", "doc1", "doc2")                  // name IN ("doc1", "doc2")
+
+// 自定义表字段（通过 WithDocBuilder 添加的额外列）不需要前缀
+searchfilter.NotEqual("status", "deleted")               // status != "deleted"
+searchfilter.GreaterThanOrEqual("priority", 3)           // priority >= 3
 
 // 逻辑操作符
 searchfilter.And(conditions...)               // AND 组合

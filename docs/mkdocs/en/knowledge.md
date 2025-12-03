@@ -914,6 +914,7 @@ searchfilter.Equal("topic", "programming")
 > - The `metadata.` prefix distinguishes metadata fields from system fields (e.g., `id`, `name`, `content`)
 > - If you customized the metadata field name via `WithMetadataField()`, still use the `metadata.` prefix; the framework will automatically convert it to the actual field name
 > - System fields (`id`, `name`, `content`, `created_at`, `updated_at`) use the field name directly without prefix
+> - Custom table columns added via `WithDocBuilder` (e.g., `status`, `priority`) use the field name directly without prefix
 
 ##### Common Filter Helper Functions
 
@@ -933,6 +934,10 @@ searchfilter.Between("metadata.date", min, max)          // metadata.date BETWEE
 // System fields don't need prefix
 searchfilter.Equal("id", "doc-123")                      // id = "doc-123"
 searchfilter.In("name", "doc1", "doc2")                  // name IN ("doc1", "doc2")
+
+// Custom table columns (added via WithDocBuilder) don't need prefix
+searchfilter.NotEqual("status", "deleted")               // status != "deleted"
+searchfilter.GreaterThanOrEqual("priority", 3)           // priority >= 3
 
 // Logical operators
 searchfilter.And(conditions...)               // AND combination
