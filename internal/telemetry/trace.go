@@ -124,6 +124,7 @@ var (
 	KeyGenAIRequestTopP             = semconvtrace.KeyGenAIRequestTopP
 	KeyGenAISystemInstructions      = semconvtrace.KeyGenAISystemInstructions
 	KeyGenAITokenType               = semconvtrace.KeyGenAITokenType
+	KeyGenAIRequestThinkingEnabled  = semconvtrace.KeyGenAIRequestThinkingEnabled
 
 	KeyGenAIToolName          = semconvtrace.KeyGenAIToolName
 	KeyGenAIToolDescription   = semconvtrace.KeyGenAIToolDescription
@@ -259,6 +260,9 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		}
 		if tp := genConfig.TopP; tp != nil {
 			span.SetAttributes(attribute.Float64(KeyGenAIRequestTopP, *tp))
+		}
+		if te := genConfig.ThinkingEnabled; te != nil {
+			span.SetAttributes(attribute.Bool(KeyGenAIRequestThinkingEnabled, *te))
 		}
 	}
 
@@ -400,6 +404,9 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	}
 	if tp := genConfig.TopP; tp != nil {
 		attrs = append(attrs, attribute.Float64(KeyGenAIRequestTopP, *tp))
+	}
+	if te := genConfig.ThinkingEnabled; te != nil {
+		attrs = append(attrs, attribute.Bool(KeyGenAIRequestThinkingEnabled, *te))
 	}
 
 	// Add request body

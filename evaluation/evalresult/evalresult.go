@@ -15,6 +15,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -63,8 +64,18 @@ type EvalMetricResult struct {
 	EvalStatus status.EvalStatus `json:"evalStatus,omitempty"`
 	// Threshold that was used.
 	Threshold float64 `json:"threshold,omitempty"`
+	// Criterion contains the criterion used for this metric evaluation.
+	Criterion *criterion.Criterion `json:"criterion,omitempty"`
 	// Details contains additional metric-specific information.
-	Details map[string]any `json:"details,omitempty"`
+	Details *EvalMetricResultDetails `json:"details,omitempty"`
+}
+
+// EvalMetricResultDetails contains additional metric-specific information.
+type EvalMetricResultDetails struct {
+	// Reason is the reason for the metric evaluation result.
+	Reason string `json:"reason,omitempty"`
+	// Score is the score for the metric evaluation result.
+	Score float64 `json:"score,omitempty"`
 }
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.

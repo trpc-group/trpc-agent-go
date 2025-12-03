@@ -129,7 +129,7 @@ func (r *reducer) reduceEvent(evt aguievents.Event) error {
 	case *aguievents.ToolCallResultEvent:
 		return r.handleToolResult(e)
 	default:
-		return nil
+		return r.handleActivity(e)
 	}
 }
 
