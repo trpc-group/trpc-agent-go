@@ -11,10 +11,12 @@ package runner
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -30,6 +32,7 @@ type Options struct {
 	RunOptionResolver  RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
 	AggregatorFactory  aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
 	AggregationOption  []aggregator.Option   // AggregationOption is the aggregation options for each run.
+	FlushInterval      time.Duration
 }
 
 // NewOptions creates a new options instance.
@@ -40,6 +43,7 @@ func NewOptions(opt ...Option) *Options {
 		RunAgentInputHook: defaultRunAgentInputHook,
 		RunOptionResolver: defaultRunOptionResolver,
 		AggregatorFactory: aggregator.New,
+		FlushInterval:     track.DefaultFlushInterval,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -112,6 +116,12 @@ func WithAggregationOption(option ...aggregator.Option) Option {
 func WithAggregatorFactory(factory aggregator.Factory) Option {
 	return func(o *Options) {
 		o.AggregatorFactory = factory
+	}
+}
+
+func WithFlushInterval(d time.Duration) Option {
+	return func(o *Options) {
+		o.FlushInterval = d
 	}
 }
 

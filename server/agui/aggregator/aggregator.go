@@ -13,6 +13,7 @@ package aggregator
 import (
 	"context"
 	"strings"
+	"sync"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 )
@@ -38,6 +39,7 @@ func New(opt ...Option) Aggregator {
 
 // aggregator merges adjacent text content events before persistence.
 type aggregator struct {
+	mu            sync.Mutex
 	enabled       bool            // enabled indicates whether aggregation is active.
 	lastMessageID string          // lastMessageID tracks the message being buffered.
 	buffer        strings.Builder // buffer stores concatenated deltas for the buffered message.
@@ -48,6 +50,8 @@ func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguiev
 	if !a.enabled {
 		return []aguievents.Event{event}, nil
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	switch e := event.(type) {
 	case *aguievents.TextMessageContentEvent:
 		return a.handleTextContent(e), nil
@@ -63,6 +67,8 @@ func (a *aggregator) Flush(context.Context) ([]aguievents.Event, error) {
 	if !a.enabled {
 		return nil, nil
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.flush(), nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/google/uuid"
@@ -43,6 +44,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		tracker, err = track.New(opts.SessionService,
 			track.WithAggregatorFactory(opts.AggregatorFactory),
 			track.WithAggregationOption(opts.AggregationOption...),
+			track.WithFlushInterval(opts.FlushInterval),
 		)
 		if err != nil {
 			log.Warnf("agui: tracker disabled: %v", err)
@@ -57,6 +59,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		runAgentInputHook:  opts.RunAgentInputHook,
 		runOptionResolver:  opts.RunOptionResolver,
 		tracker:            tracker,
+		runningSessions:    sync.Map{},
 	}
 	return run
 }
@@ -71,6 +74,7 @@ type runner struct {
 	runAgentInputHook  RunAgentInputHook
 	runOptionResolver  RunOptionResolver
 	tracker            track.Tracker
+	runningSessions    sync.Map
 }
 
 type runInput struct {
@@ -126,12 +130,16 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator:  r.translatorFactory(runAgentInput),
 		enableTrack: r.tracker != nil,
 	}
+	if _, ok := r.runningSessions.LoadOrStore(input.key, struct{}{}); ok {
+		return nil, fmt.Errorf("session is already running: %v", input.key)
+	}
 	events := make(chan aguievents.Event)
 	go r.run(ctx, input, events)
 	return events, nil
 }
 
 func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguievents.Event) {
+	defer r.runningSessions.Delete(input.key)
 	defer close(events)
 	threadID := input.threadID
 	runID := input.runID
