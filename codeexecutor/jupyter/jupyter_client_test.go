@@ -140,7 +140,7 @@ func (t jupyterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res.Header.MsgType = "status"
-	res.Content = map[string]interface{}{"execution_state": "idle"}
+	res.Content = map[string]any{"execution_state": "idle"}
 	ws.WriteJSON(res)
 }
 
@@ -218,13 +218,13 @@ func Test_waitForReady(t *testing.T) {
 
 func Test_sendMessage(t *testing.T) {
 	cli := newInvalidClient()
-	_, err := cli.sendMessage(map[string]interface{}{}, "test", "test")
+	_, err := cli.sendMessage(map[string]any{}, "test", "test")
 	assert.Error(t, err)
 
 	srv := newServer(t)
 	defer srv.Close()
 
-	_, err = srv.cli.sendMessage(map[string]interface{}{}, "test", "test")
+	_, err = srv.cli.sendMessage(map[string]any{}, "test", "test")
 	assert.NoError(t, err)
 }
 

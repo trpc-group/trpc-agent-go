@@ -104,7 +104,7 @@ func (c *CustomRequestConverter) ConvertToDifyRequest(
 
 	req := &difySDK.ChatMessageRequest{
 		Query:  invocation.Message.Content,
-		Inputs: make(map[string]interface{}),
+		Inputs: make(map[string]any),
 	}
 
 	// Set user ID
@@ -138,8 +138,8 @@ func (c *CustomRequestConverter) ConvertToDifyRequest(
 }
 
 // extractUserPreferences extracts user preferences from runtime state
-func extractUserPreferences(state map[string]any) map[string]interface{} {
-	prefs := make(map[string]interface{})
+func extractUserPreferences(state map[string]any) map[string]any {
+	prefs := make(map[string]any)
 
 	// Extract common preferences
 	if lang, ok := state["user_language"]; ok {
