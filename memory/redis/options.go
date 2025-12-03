@@ -14,6 +14,14 @@ import (
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
+var (
+	defaultOptions = ServiceOpts{
+		memoryLimit:  imemory.DefaultMemoryLimit,
+		toolCreators: imemory.AllToolCreators,
+		enabledTools: imemory.DefaultEnabledTools,
+	}
+)
+
 // ServiceOpts is the options for the redis memory service.
 type ServiceOpts struct {
 	url          string
@@ -24,6 +32,22 @@ type ServiceOpts struct {
 	toolCreators map[string]memory.ToolCreator
 	enabledTools map[string]bool
 	extraOptions []any
+}
+
+func (o ServiceOpts) clone() ServiceOpts {
+	opts := o
+
+	opts.toolCreators = make(map[string]memory.ToolCreator, len(o.toolCreators))
+	for name, toolCreator := range o.toolCreators {
+		opts.toolCreators[name] = toolCreator
+	}
+
+	opts.enabledTools = make(map[string]bool, len(o.enabledTools))
+	for name, enabled := range o.enabledTools {
+		opts.enabledTools[name] = enabled
+	}
+
+	return opts
 }
 
 // ServiceOpt is the option for the redis memory service.

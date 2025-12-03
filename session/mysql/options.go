@@ -16,6 +16,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
+const (
+	defaultSessionEventLimit     = 1000
+	defaultChanBufferSize        = 100
+	defaultAsyncPersisterNum     = 10
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
+
+	defaultAsyncPersistTimeout = 10 * time.Second
+
+	defaultAsyncSummaryNum  = 3
+	defaultSummaryQueueSize = 100
+)
+
 // ServiceOpts is the options for the MySQL session service.
 type ServiceOpts struct {
 	sessionEventLimit int
@@ -53,6 +65,16 @@ type ServiceOpts struct {
 
 // ServiceOpt is the option for the MySQL session service.
 type ServiceOpt func(*ServiceOpts)
+
+var (
+	defaultOptions = ServiceOpts{
+		sessionEventLimit: defaultSessionEventLimit,
+		asyncPersisterNum: defaultAsyncPersisterNum,
+		asyncSummaryNum:   defaultAsyncSummaryNum,
+		summaryQueueSize:  defaultSummaryQueueSize,
+		softDelete:        true, // default: enable soft delete
+	}
+)
 
 // WithSessionEventLimit sets the limit of events in a session.
 func WithSessionEventLimit(limit int) ServiceOpt {
