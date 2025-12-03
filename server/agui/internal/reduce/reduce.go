@@ -339,6 +339,78 @@ func (r *reducer) handleToolResult(e *aguievents.ToolCallResultEvent) error {
 	return nil
 }
 
+// handleActivity handles the activity event.
+func (r *reducer) handleActivity(e aguievents.Event) error {
+	activity := &aguievents.Message{Role: "activity"}
+	switch e := e.(type) {
+	case *aguievents.StepStartedEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"stepName": e.StepName,
+		}
+	case *aguievents.StepFinishedEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"stepName": e.StepName,
+		}
+	case *aguievents.StateSnapshotEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"snapshot": e.Snapshot,
+		}
+	case *aguievents.StateDeltaEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"delta": e.Delta,
+		}
+	case *aguievents.MessagesSnapshotEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"messages": e.Messages,
+		}
+	case *aguievents.ActivitySnapshotEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"messageId":    e.MessageID,
+			"activityType": e.ActivityType,
+			"content":      e.Content,
+			"replace":      e.Replace,
+		}
+	case *aguievents.ActivityDeltaEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"messageId":    e.MessageID,
+			"activityType": e.ActivityType,
+			"patch":        e.Patch,
+		}
+	case *aguievents.CustomEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"name":  e.Name,
+			"value": e.Value,
+		}
+	case *aguievents.RawEvent:
+		activity.ID = e.ID()
+		activity.ActivityType = string(e.Type())
+		activity.ActivityContent = map[string]any{
+			"source": e.Source,
+			"event":  e.Event,
+		}
+	default:
+		return nil
+	}
+	r.messages = append(r.messages, activity)
+	return nil
+}
+
 // finalize finalizes the message snapshots.
 func (r *reducer) finalize() error {
 	for id, state := range r.texts {
