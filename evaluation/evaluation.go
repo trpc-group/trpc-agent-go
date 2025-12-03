@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -92,7 +93,7 @@ type EvaluationCaseResult struct {
 	EvalCaseID      string                         `json:"evalId"`          // EvalCaseID identifies the evaluation case.
 	OverallStatus   status.EvalStatus              `json:"overallStatus"`   // OverallStatus summarizes the overall status of case across runs.
 	EvalCaseResults []*evalresult.EvalCaseResult   `json:"evalCaseResults"` // EvalCaseResults stores the per-run results for this case.
-	MetricResults   []*evalresult.EvalMetricResult `json:"metricsResults"`  // MetricResults lists aggregated metric outcomes across runs.
+	MetricResults   []*evalresult.EvalMetricResult `json:"metricResults"`   // MetricResults lists aggregated metric outcomes across runs.
 }
 
 // Evaluate evaluates agent against the specified eval set across multiple runs.
@@ -195,6 +196,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		count     int
 		score     float64
 		threshold float64
+		criterion *criterion.Criterion
 	}
 	// Group metrics results by metric name.
 	aggregatedMetrics := make(map[string]*aggregatedMetric)
@@ -208,24 +210,26 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 			}
 			aggregatedMetrics[metric.MetricName].count++
 			aggregatedMetrics[metric.MetricName].score += metric.Score
+			aggregatedMetrics[metric.MetricName].criterion = metric.Criterion
 		}
 	}
 	// Aggregate metrics results by metric name.
-	metricsResults := make([]*evalresult.EvalMetricResult, 0, len(aggregatedMetrics))
+	metricResults := make([]*evalresult.EvalMetricResult, 0, len(aggregatedMetrics))
 	for name, aggregatedMetric := range aggregatedMetrics {
 		average := aggregatedMetric.score / float64(aggregatedMetric.count)
 		evalStatus := status.EvalStatusFailed
 		if average >= aggregatedMetric.threshold {
 			evalStatus = status.EvalStatusPassed
 		}
-		metricsResults = append(metricsResults, &evalresult.EvalMetricResult{
+		metricResults = append(metricResults, &evalresult.EvalMetricResult{
 			MetricName: name,
 			Score:      average,
 			EvalStatus: evalStatus,
 			Threshold:  aggregatedMetric.threshold,
+			Criterion:  aggregatedMetric.criterion,
 		})
 	}
-	status, err := istatus.SummarizeMetricsStatus(metricsResults)
+	status, err := istatus.SummarizeMetricsStatus(metricResults)
 	if err != nil {
 		return nil, fmt.Errorf("summarize metrics status: %w", err)
 	}
@@ -233,7 +237,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		EvalCaseID:      caseID,
 		OverallStatus:   status,
 		EvalCaseResults: runs,
-		MetricResults:   metricsResults,
+		MetricResults:   metricResults,
 	}, nil
 }
 
