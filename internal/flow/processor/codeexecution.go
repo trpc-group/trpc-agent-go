@@ -97,7 +97,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 				},
 			},
 		}),
-		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		event.WithObject(model.ObjectTypePostprocessingCodeExecutionResult),
 	))
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
 	rsp.Choices[0].Message.Content = ""
