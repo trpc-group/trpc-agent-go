@@ -1707,7 +1707,7 @@ TIPS:
 
 配置:
 - `graphagent.WithMessageFilterMode(MessageFilterMode)`:
-  - `FullContext`: 所有能通过filerKey做前缀匹配的消息
+  - `FullContext`: 所有能通过filterKey做前缀匹配的消息
   - `RequestContext`: 仅包含当前请求周期内通过filterKey前缀匹配的消息
   - `IsolatedRequest`: 仅包含当前请求周期内通过filterKey完全匹配的消息
   - `IsolatedInvocation`: 仅包含当前invocation周期内通过filterKey完全匹配的消息
