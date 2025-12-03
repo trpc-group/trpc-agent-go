@@ -1,0 +1,584 @@
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+// Package dsl provides shared helpers for constructing NodeFunc implementations
+// for builtin components. These helpers are used both by the DSL compiler
+// (DSL‑run) and by code generation (codegen‑run) to ensure that builtin node
+// behavior is defined in a single place.
+package dsl
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/cel"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+// NewLLMAgentNodeFuncFromConfig creates a NodeFunc for a builtin.llmagent node
+// given its ID, configuration and model/tool registries. It is a refactoring
+// of the compiler's createLLMAgentNodeFunc method so that codegen can reuse
+// the same behavior.
+func NewLLMAgentNodeFuncFromConfig(
+	nodeID string,
+	cfg map[string]any,
+	modelRegistry *registry.ModelRegistry,
+	toolRegistry *registry.ToolRegistry,
+) (graph.NodeFunc, error) {
+	if nodeID == "" {
+		return nil, fmt.Errorf("nodeID is required for NewLLMAgentNodeFuncFromConfig")
+	}
+
+	modelName, ok := cfg["model_name"].(string)
+	if !ok || modelName == "" {
+		return nil, fmt.Errorf("model_name is required for builtin.llmagent")
+	}
+
+	if modelRegistry == nil {
+		return nil, fmt.Errorf("model registry is not set")
+	}
+
+	llmModel, err := modelRegistry.Get(modelName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get model %q from registry: %w", modelName, err)
+	}
+
+	instruction := ""
+	if inst, ok := cfg["instruction"].(string); ok {
+		instruction = inst
+	}
+
+	description := ""
+	if desc, ok := cfg["description"].(string); ok {
+		description = desc
+	}
+
+	// Resolve tools from registry (if provided).
+	var tools []tool.Tool
+	if toolRegistry != nil {
+		if toolsConfig, ok := cfg["tools"]; ok {
+			switch v := toolsConfig.(type) {
+			case []interface{}:
+				for _, toolNameInterface := range v {
+					if toolName, ok := toolNameInterface.(string); ok {
+						if t, err := toolRegistry.Get(toolName); err == nil {
+							tools = append(tools, t)
+						}
+					}
+				}
+			case []string:
+				for _, toolName := range v {
+					if t, err := toolRegistry.Get(toolName); err == nil {
+						tools = append(tools, t)
+					}
+				}
+			}
+		}
+	}
+
+	// Resolve MCP toolsets from config (if any).
+	var mcpToolSets []tool.ToolSet
+	if mcpToolsConfig, ok := cfg["mcp_tools"]; ok {
+		if mcpToolsList, ok := mcpToolsConfig.([]interface{}); ok {
+			for _, mcpToolInterface := range mcpToolsList {
+				mcpToolConfig, ok := mcpToolInterface.(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				rawServerURL, ok := mcpToolConfig["server_url"].(string)
+				serverURL := strings.TrimSpace(rawServerURL)
+				if !ok || serverURL == "" {
+					log.Warnf("builtin.llmagent: skipping MCP tool config without server_url")
+					continue
+				}
+
+				transport := "streamable_http"
+				if t, ok := mcpToolConfig["transport"].(string); ok && strings.TrimSpace(t) != "" {
+					transport = strings.TrimSpace(t)
+				}
+				if transport != "streamable_http" && transport != "sse" {
+					log.Warnf("builtin.llmagent: skipping MCP tool config with unsupported transport %q", transport)
+					continue
+				}
+
+				var headers map[string]any
+				if h, ok := mcpToolConfig["headers"].(map[string]any); ok && len(h) > 0 {
+					headers = h
+				}
+
+				var toolFilter []interface{}
+				if allowed, ok := mcpToolConfig["allowed_tools"]; ok {
+					switch v := allowed.(type) {
+					case []interface{}:
+						for _, elem := range v {
+							if name, ok := elem.(string); ok && strings.TrimSpace(name) != "" {
+								toolFilter = append(toolFilter, strings.TrimSpace(name))
+							}
+						}
+					case []string:
+						for _, name := range v {
+							if strings.TrimSpace(name) != "" {
+								toolFilter = append(toolFilter, strings.TrimSpace(name))
+							}
+						}
+					}
+				}
+
+				cfgMap := map[string]any{
+					"transport":  transport,
+					"server_url": serverURL,
+				}
+				if headers != nil {
+					cfgMap["headers"] = headers
+				}
+				if len(toolFilter) > 0 {
+					cfgMap["tool_filter"] = toolFilter
+				}
+
+				if toolSet, err := CreateMCPToolSet(cfgMap); err == nil {
+					mcpToolSets = append(mcpToolSets, toolSet)
+				} else {
+					log.Warnf("builtin.llmagent: failed to create MCP toolset for server %q: %v", serverURL, err)
+				}
+			}
+		}
+	}
+
+	var structuredOutput map[string]any
+	if so, ok := cfg["structured_output"].(map[string]any); ok {
+		structuredOutput = so
+	}
+
+	var genConfig model.GenerationConfig
+	hasGenConfig := false
+
+	if temperature, ok := cfg["temperature"].(float64); ok {
+		genConfig.Temperature = &temperature
+		hasGenConfig = true
+	}
+
+	if maxTokens, ok := cfg["max_tokens"].(float64); ok {
+		tokens := int(maxTokens)
+		genConfig.MaxTokens = &tokens
+		hasGenConfig = true
+	}
+
+	if topP, ok := cfg["top_p"].(float64); ok {
+		genConfig.TopP = &topP
+		hasGenConfig = true
+	}
+
+	if stopRaw, ok := cfg["stop"]; ok {
+		switch v := stopRaw.(type) {
+		case []interface{}:
+			stop := make([]string, 0, len(v))
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					stop = append(stop, s)
+				}
+			}
+			if len(stop) > 0 {
+				genConfig.Stop = stop
+				hasGenConfig = true
+			}
+		case []string:
+			if len(v) > 0 {
+				genConfig.Stop = append([]string(nil), v...)
+				hasGenConfig = true
+			}
+		}
+	}
+
+	if presence, ok := cfg["presence_penalty"].(float64); ok {
+		genConfig.PresencePenalty = &presence
+		hasGenConfig = true
+	}
+	if freq, ok := cfg["frequency_penalty"].(float64); ok {
+		genConfig.FrequencyPenalty = &freq
+		hasGenConfig = true
+	}
+
+	if re, ok := cfg["reasoning_effort"].(string); ok && re != "" {
+		genConfig.ReasoningEffort = &re
+		hasGenConfig = true
+	}
+
+	if thinkingEnabled, ok := cfg["thinking_enabled"].(bool); ok {
+		genConfig.ThinkingEnabled = &thinkingEnabled
+		hasGenConfig = true
+	}
+	if thinkingTokensRaw, ok := cfg["thinking_tokens"].(float64); ok {
+		tokens := int(thinkingTokensRaw)
+		genConfig.ThinkingTokens = &tokens
+		hasGenConfig = true
+	}
+
+	if stream, ok := cfg["stream"].(bool); ok {
+		genConfig.Stream = stream
+		hasGenConfig = true
+	}
+
+	return func(ctx context.Context, state graph.State) (interface{}, error) {
+		var opts []llmagent.Option
+
+		opts = append(opts, llmagent.WithModel(llmModel))
+
+		if instruction != "" {
+			opts = append(opts, llmagent.WithInstruction(instruction))
+		}
+
+		if description != "" {
+			opts = append(opts, llmagent.WithDescription(description))
+		}
+
+		if len(tools) > 0 {
+			opts = append(opts, llmagent.WithTools(tools))
+		}
+
+		if len(mcpToolSets) > 0 {
+			opts = append(opts, llmagent.WithToolSets(mcpToolSets))
+		}
+
+		if len(structuredOutput) > 0 {
+			opts = append(opts, llmagent.WithOutputSchema(structuredOutput))
+			opts = append(opts, llmagent.WithOutputKey("output_parsed"))
+		}
+
+		if hasGenConfig {
+			opts = append(opts, llmagent.WithGenerationConfig(genConfig))
+		}
+
+		agentName := fmt.Sprintf("llmagent_%s_%s", nodeID, modelName)
+		llmAgent := llmagent.New(agentName, opts...)
+
+		parentInvocation, ok := agent.InvocationFromContext(ctx)
+		if !ok || parentInvocation == nil {
+			return nil, fmt.Errorf("invocation not found in context")
+		}
+
+		var parentEventChan chan<- *event.Event
+		if execCtx, exists := state[graph.StateKeyExecContext]; exists {
+			if execContext, ok := execCtx.(*graph.ExecutionContext); ok {
+				parentEventChan = execContext.EventChan
+			}
+		}
+
+		var userInput string
+		if input, exists := state[graph.StateKeyUserInput]; exists {
+			if inputStr, ok := input.(string); ok {
+				userInput = inputStr
+			}
+		}
+
+		var sessionData *session.Session
+		if sess, exists := state[graph.StateKeySession]; exists {
+			if sessData, ok := sess.(*session.Session); ok {
+				sessionData = sessData
+			}
+		}
+
+		var invocation *agent.Invocation
+		if parentInvocation != nil {
+			invocation = parentInvocation.Clone(
+				agent.WithInvocationAgent(llmAgent),
+				agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+				agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
+			)
+		} else {
+			invocation = agent.NewInvocation(
+				agent.WithInvocationAgent(llmAgent),
+				agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+				agent.WithInvocationSession(sessionData),
+				agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
+			)
+		}
+
+		subCtx := agent.NewInvocationContext(ctx, invocation)
+
+		agentEventChan, err := llmAgent.Run(subCtx, invocation)
+		if err != nil {
+			return nil, fmt.Errorf("failed to run LLM agent: %w", err)
+		}
+
+		var lastResponse string
+		var messages []model.Message
+		var outputParsed any
+		hasOutputParsed := false
+
+		for {
+			ev, ok := <-agentEventChan
+			if !ok {
+				goto done
+			}
+
+			if ev.Error != nil {
+				return nil, fmt.Errorf("LLM agent error: %s", ev.Error.Message)
+			}
+
+			if ev.RequiresCompletion {
+				completionID := agent.GetAppendEventNoticeKey(ev.ID)
+				if err := invocation.NotifyCompletion(subCtx, completionID); err != nil {
+					log.Warnf("builtin.llmagent: failed to notify completion for %s: %v", completionID, err)
+				}
+			}
+
+			if parentEventChan != nil {
+				if err := event.EmitEvent(ctx, parentEventChan, ev); err != nil {
+					return nil, fmt.Errorf("failed to forward event: %w", err)
+				}
+			}
+
+			if ev.Response != nil {
+				for _, ch := range ev.Response.Choices {
+					if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
+						lastResponse = ch.Message.Content
+					}
+				}
+				if len(ev.Response.Choices) > 0 {
+					messages = append(messages, ev.Response.Choices[0].Message)
+				}
+			}
+		}
+
+	done:
+		// When structured_output is configured, try to extract the first JSON
+		// object/array from the final assistant response and treat it as the
+		// structured result. This mirrors the internal OutputResponseProcessor
+		// behavior but keeps everything within the DSL layer so that both
+		// DSL‑run and codegen‑run can rely on node_structured[<id>].output_parsed.
+		if structuredOutput != nil && strings.TrimSpace(lastResponse) != "" {
+			if jsonText, ok := extractFirstJSONObjectFromText(lastResponse); ok {
+				var parsed any
+				if err := json.Unmarshal([]byte(jsonText), &parsed); err != nil {
+					log.Warnf("builtin.llmagent[%s]: failed to parse structured output JSON: %v", nodeID, err)
+				} else {
+					outputParsed = parsed
+					hasOutputParsed = true
+				}
+			}
+		}
+
+		result := graph.State{}
+		if lastResponse != "" {
+			result[graph.StateKeyLastResponse] = lastResponse
+		}
+		if len(messages) > 0 {
+			result[graph.StateKeyMessages] = messages
+		}
+		if hasOutputParsed {
+			// Merge with existing node_structured cache (if any) to avoid
+			// clobbering structured outputs from other nodes.
+			nodeStructured := map[string]any{}
+			if existingRaw, ok := state["node_structured"]; ok {
+				if existingMap, ok := existingRaw.(map[string]any); ok && existingMap != nil {
+					for k, v := range existingMap {
+						nodeStructured[k] = v
+					}
+				}
+			}
+			nodeStructured[nodeID] = map[string]any{
+				"output_parsed": outputParsed,
+			}
+			result["node_structured"] = nodeStructured
+		}
+		if len(result) == 0 {
+			return nil, nil
+		}
+		return result, nil
+	}, nil
+}
+
+// NewUserApprovalNodeFuncFromConfig creates a NodeFunc for a builtin.user_approval
+// node given its ID and configuration. It mirrors the compiler's
+// createUserApprovalNodeFunc behavior.
+func NewUserApprovalNodeFuncFromConfig(nodeID string, cfg map[string]any) (graph.NodeFunc, error) {
+	if nodeID == "" {
+		return nil, fmt.Errorf("nodeID is required for NewUserApprovalNodeFuncFromConfig")
+	}
+
+	message := "Please approve this action (yes/no):"
+	if msg, ok := cfg["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		message = msg
+	}
+
+	autoApprove := false
+	if v, ok := cfg["auto_approve"].(bool); ok {
+		autoApprove = v
+	}
+
+	interruptKey := nodeID
+
+	return func(ctx context.Context, state graph.State) (any, error) {
+		if autoApprove {
+			return graph.State{
+				"approval_result": "approve",
+			}, nil
+		}
+
+		payload := map[string]any{
+			"message": message,
+			"node_id": nodeID,
+		}
+
+		resumeValue, err := graph.Interrupt(ctx, state, interruptKey, payload)
+		if err != nil {
+			return nil, err
+		}
+
+		decisionRaw, _ := resumeValue.(string)
+		decision := strings.ToLower(strings.TrimSpace(decisionRaw))
+
+		normalized := "reject"
+		if decision == "approve" || decision == "yes" || decision == "y" {
+			normalized = "approve"
+		}
+
+		return graph.State{
+			"approval_result": normalized,
+		}, nil
+	}, nil
+}
+
+// NewBuiltinConditionFunc creates a ConditionalFunc for a builtin CEL-based
+// condition. It mirrors the compiler's createBuiltinCondition behavior and is
+// shared between the compiler and codegen so that conditional routing logic is
+// defined in a single place.
+func NewBuiltinConditionFunc(fromNodeID string, cond Condition) (graph.ConditionalFunc, error) {
+	if len(cond.Cases) == 0 {
+		return nil, fmt.Errorf("builtin condition requires at least one case")
+	}
+
+	// Create a local copy of cases to avoid capturing a mutable slice from the caller.
+	cases := make([]Case, len(cond.Cases))
+	copy(cases, cond.Cases)
+
+	return func(ctx context.Context, state graph.State) (string, error) {
+		input := buildNodeInputView(state, fromNodeID)
+
+		for idx, kase := range cases {
+			expr := strings.TrimSpace(kase.Predicate.Expression)
+			if expr == "" {
+				continue
+			}
+
+			ok, err := dslcel.EvalBool(expr, state, input)
+			if err != nil {
+				return "", fmt.Errorf("failed to evaluate builtin case %d: %w", idx, err)
+			}
+			if ok {
+				log.Debugf("[COND] builtin case matched index=%d name=%q target=%q", idx, kase.Name, kase.Target)
+				if kase.Target == "" {
+					return "", fmt.Errorf("builtin case %d has empty target", idx)
+				}
+				return kase.Target, nil
+			}
+		}
+
+		if cond.Default != "" {
+			log.Debugf("[COND] builtin no case matched, using default target=%q", cond.Default)
+			return cond.Default, nil
+		}
+		return "", fmt.Errorf("no builtin case matched and no default specified")
+	}, nil
+}
+
+// CreateMCPToolSet is a helper that constructs an MCP ToolSet from DSL
+// configuration. It is shared by the compiler and by NewLLMAgentNodeFuncFromConfig.
+func CreateMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
+	transport, ok := config["transport"].(string)
+	if !ok || transport == "" {
+		return nil, fmt.Errorf("transport is required in MCP tool config")
+	}
+
+	connConfig := mcp.ConnectionConfig{
+		Transport: transport,
+	}
+
+	timeout := 10 * time.Second
+	if timeoutVal, ok := config["timeout"]; ok {
+		switch v := timeoutVal.(type) {
+		case float64:
+			timeout = time.Duration(v) * time.Second
+		case int:
+			timeout = time.Duration(v) * time.Second
+		}
+	}
+	connConfig.Timeout = timeout
+
+	switch transport {
+	case "stdio":
+		command, ok := config["command"].(string)
+		if !ok || command == "" {
+			return nil, fmt.Errorf("command is required for stdio transport")
+		}
+		connConfig.Command = command
+
+		if argsVal, ok := config["args"]; ok {
+			if argsList, ok := argsVal.([]interface{}); ok {
+				args := make([]string, 0, len(argsList))
+				for _, arg := range argsList {
+					if argStr, ok := arg.(string); ok {
+						args = append(args, argStr)
+					}
+				}
+				connConfig.Args = args
+			}
+		}
+
+	case "streamable_http", "sse":
+		serverURL, ok := config["server_url"].(string)
+		if !ok || serverURL == "" {
+			return nil, fmt.Errorf("server_url is required for %s transport", transport)
+		}
+		connConfig.ServerURL = serverURL
+
+		if headersVal, ok := config["headers"]; ok {
+			if headersMap, ok := headersVal.(map[string]interface{}); ok {
+				headers := make(map[string]string)
+				for k, v := range headersMap {
+					if vStr, ok := v.(string); ok {
+						headers[k] = vStr
+					}
+				}
+				connConfig.Headers = headers
+			}
+		}
+
+	default:
+		return nil, fmt.Errorf("unsupported transport type: %s", transport)
+	}
+
+	var mcpOpts []mcp.ToolSetOption
+
+	if toolFilterVal, ok := config["tool_filter"]; ok {
+		if toolFilterList, ok := toolFilterVal.([]interface{}); ok {
+			toolNames := make([]string, 0, len(toolFilterList))
+			for _, name := range toolFilterList {
+				if nameStr, ok := name.(string); ok {
+					toolNames = append(toolNames, nameStr)
+				}
+			}
+			if len(toolNames) > 0 {
+				mcpOpts = append(mcpOpts, mcp.WithToolFilterFunc(tool.NewIncludeToolNamesFilter(toolNames...)))
+			}
+		}
+	}
+
+	return mcp.NewMCPToolSet(connConfig, mcpOpts...), nil
+}
