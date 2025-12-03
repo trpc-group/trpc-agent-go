@@ -34,17 +34,86 @@ func TestContextHelpersUseContextDefault(t *testing.T) {
 	ctx := context.Background()
 
 	original := log.ContextDefault
-	defer func() {
+	log.ContextDefault = &countLogger{}
+	t.Cleanup(func() {
 		log.ContextDefault = original
-	}()
+	})
 
-	logger := &countLogger{}
-	log.ContextDefault = logger
+	logger, ok := log.ContextDefault.(*countLogger)
+	if !ok {
+		t.Fatalf("ContextDefault is not *countLogger")
+	}
 
+	log.DebugContext(ctx, "test")
+	log.DebugfContext(ctx, "test %s", "value")
 	log.InfoContext(ctx, "test")
+	log.InfofContext(ctx, "test %s", "value")
+	log.WarnContext(ctx, "test")
+	log.WarnfContext(ctx, "test %s", "value")
+	log.ErrorContext(ctx, "test")
+	log.ErrorfContext(ctx, "test %s", "value")
+	log.FatalContext(ctx, "test")
+	log.FatalfContext(ctx, "test %s", "value")
 
+	if logger.debugCalls != 1 {
+		t.Fatalf(
+			"DebugContext should call Debug once; got %d",
+			logger.debugCalls,
+		)
+	}
+	if logger.debugfCalls != 1 {
+		t.Fatalf(
+			"DebugfContext should call Debugf once; got %d",
+			logger.debugfCalls,
+		)
+	}
 	if logger.infoCalls != 1 {
-		t.Fatalf("expected infoCalls=1, got %d", logger.infoCalls)
+		t.Fatalf(
+			"InfoContext should call Info once; got %d",
+			logger.infoCalls,
+		)
+	}
+	if logger.infofCalls != 1 {
+		t.Fatalf(
+			"InfofContext should call Infof once; got %d",
+			logger.infofCalls,
+		)
+	}
+	if logger.warnCalls != 1 {
+		t.Fatalf(
+			"WarnContext should call Warn once; got %d",
+			logger.warnCalls,
+		)
+	}
+	if logger.warnfCalls != 1 {
+		t.Fatalf(
+			"WarnfContext should call Warnf once; got %d",
+			logger.warnfCalls,
+		)
+	}
+	if logger.errorCalls != 1 {
+		t.Fatalf(
+			"ErrorContext should call Error once; got %d",
+			logger.errorCalls,
+		)
+	}
+	if logger.errorfCalls != 1 {
+		t.Fatalf(
+			"ErrorfContext should call Errorf once; got %d",
+			logger.errorfCalls,
+		)
+	}
+	if logger.fatalCalls != 1 {
+		t.Fatalf(
+			"FatalContext should call Fatal once; got %d",
+			logger.fatalCalls,
+		)
+	}
+	if logger.fatalfCalls != 1 {
+		t.Fatalf(
+			"FatalfContext should call Fatalf once; got %d",
+			logger.fatalfCalls,
+		)
 	}
 }
 
@@ -62,21 +131,57 @@ func (*noopLogger) Fatal(args ...any)                 {}
 func (*noopLogger) Fatalf(format string, args ...any) {}
 
 type countLogger struct {
-	infoCalls int
+	debugCalls  int
+	debugfCalls int
+	infoCalls   int
+	infofCalls  int
+	warnCalls   int
+	warnfCalls  int
+	errorCalls  int
+	errorfCalls int
+	fatalCalls  int
+	fatalfCalls int
 }
 
-func (*countLogger) Debug(args ...any)                 {}
-func (*countLogger) Debugf(format string, args ...any) {}
+func (c *countLogger) Debug(args ...any) {
+	c.debugCalls++
+}
+
+func (c *countLogger) Debugf(format string, args ...any) {
+	c.debugfCalls++
+}
+
 func (c *countLogger) Info(args ...any) {
 	if len(args) == 0 {
 		return
 	}
 	c.infoCalls++
 }
-func (*countLogger) Infof(format string, args ...any)  {}
-func (*countLogger) Warn(args ...any)                  {}
-func (*countLogger) Warnf(format string, args ...any)  {}
-func (*countLogger) Error(args ...any)                 {}
-func (*countLogger) Errorf(format string, args ...any) {}
-func (*countLogger) Fatal(args ...any)                 {}
-func (*countLogger) Fatalf(format string, args ...any) {}
+
+func (c *countLogger) Infof(format string, args ...any) {
+	c.infofCalls++
+}
+
+func (c *countLogger) Warn(args ...any) {
+	c.warnCalls++
+}
+
+func (c *countLogger) Warnf(format string, args ...any) {
+	c.warnfCalls++
+}
+
+func (c *countLogger) Error(args ...any) {
+	c.errorCalls++
+}
+
+func (c *countLogger) Errorf(format string, args ...any) {
+	c.errorfCalls++
+}
+
+func (c *countLogger) Fatal(args ...any) {
+	c.fatalCalls++
+}
+
+func (c *countLogger) Fatalf(format string, args ...any) {
+	c.fatalfCalls++
+}
