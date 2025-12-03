@@ -10,6 +10,7 @@
 package translator
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -23,10 +24,10 @@ import (
 func TestTranslateNilEvent(t *testing.T) {
 	translator := New("thread", "run")
 
-	_, err := translator.Translate(nil)
+	_, err := translator.Translate(context.Background(), nil)
 	assert.Error(t, err)
 
-	_, err = translator.Translate(&agentevent.Event{})
+	_, err = translator.Translate(context.Background(), &agentevent.Event{})
 	assert.Error(t, err)
 }
 
@@ -34,7 +35,7 @@ func TestTranslateErrorResponse(t *testing.T) {
 	translator := New("thread", "run")
 	rsp := &model.Response{Error: &model.ResponseError{Message: "boom"}}
 
-	events, err := translator.Translate(&agentevent.Event{Response: rsp})
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: rsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 1)
 	runErr, ok := events[0].(*aguievents.RunErrorEvent)
@@ -249,7 +250,7 @@ func TestGraphModelMetadataProducesText(t *testing.T) {
 		ID:         "evt-model",
 		StateDelta: map[string][]byte{graph.MetadataKeyModel: b},
 	}
-	evts, err := tr.Translate(evt)
+	evts, err := tr.Translate(context.Background(), evt)
 	assert.NoError(t, err)
 	assert.Len(t, evts, 3) // start + content + end
 	start, ok := evts[0].(*aguievents.TextMessageStartEvent)
@@ -274,7 +275,7 @@ func TestGraphModelEventsDeduplicatedByResponseID(t *testing.T) {
 		}},
 		Done: true,
 	}
-	first, err := tr.Translate(&agentevent.Event{Response: rsp})
+	first, err := tr.Translate(context.Background(), &agentevent.Event{Response: rsp})
 	assert.NoError(t, err)
 	assert.NotEmpty(t, first)
 
@@ -290,7 +291,7 @@ func TestGraphModelEventsDeduplicatedByResponseID(t *testing.T) {
 			graph.MetadataKeyModel: raw,
 		},
 	}
-	dups, err := tr.Translate(graphEvt)
+	dups, err := tr.Translate(context.Background(), graphEvt)
 	assert.NoError(t, err)
 	assert.Len(t, dups, 0)
 }
@@ -315,14 +316,14 @@ func TestGraphToolMetadataStartCompleteAndSkipDuplicateToolResponse(t *testing.T
 	bDone, _ := json.Marshal(metaComplete)
 
 	startEvt := &agentevent.Event{ID: "evt-start", StateDelta: map[string][]byte{graph.MetadataKeyTool: bStart}}
-	evs, err := tr.Translate(startEvt)
+	evs, err := tr.Translate(context.Background(), startEvt)
 	assert.NoError(t, err)
 	assert.Len(t, evs, 3) // start + args + end
 
 	doneEvt := &agentevent.Event{ID: "evt-done", StateDelta: map[string][]byte{graph.MetadataKeyTool: bDone}}
 	// Provide dummy response to avoid nil-response error when metadata has no events.
 	doneEvt.Response = &model.Response{Choices: []model.Choice{{}}}
-	evs2, err := tr.Translate(doneEvt)
+	evs2, err := tr.Translate(context.Background(), doneEvt)
 	assert.NoError(t, err)
 	assert.Len(t, evs2, 0) // complete ignored; rely on tool.response
 
@@ -338,7 +339,7 @@ func TestGraphToolMetadataStartCompleteAndSkipDuplicateToolResponse(t *testing.T
 			}},
 		},
 	}
-	evs3, err := tr.Translate(toolRsp)
+	evs3, err := tr.Translate(context.Background(), toolRsp)
 	assert.NoError(t, err)
 	assert.Len(t, evs3, 1) // result from tool.response; end already emitted at start phase
 	result, ok := evs3[0].(*aguievents.ToolCallResultEvent)
@@ -439,7 +440,7 @@ func TestTranslateToolCallResponseIncludesAllEvents(t *testing.T) {
 		},
 	}
 
-	events, err := translator.Translate(&agentevent.Event{Response: rsp})
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: rsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 6)
 
@@ -480,7 +481,7 @@ func TestTranslateFullResponse(t *testing.T) {
 		Done: true,
 	}
 
-	events, err := translator.Translate(&agentevent.Event{Response: rsp})
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: rsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 3)
 
@@ -510,7 +511,7 @@ func TestTranslateRunCompletionResponse(t *testing.T) {
 		IsPartial: true,
 	}
 
-	events, err := translator.Translate(&agentevent.Event{Response: chunkRsp})
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: chunkRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 2)
 
@@ -524,7 +525,7 @@ func TestTranslateRunCompletionResponse(t *testing.T) {
 		Done:   true,
 	}
 
-	events, err = translator.Translate(&agentevent.Event{Response: runCompletionRsp})
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: runCompletionRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 2)
 
@@ -539,7 +540,7 @@ func TestTranslateRunCompletionResponse(t *testing.T) {
 func TestTranslateToolResultResponse(t *testing.T) {
 	translator := New("thread", "run")
 
-	_, err := translator.Translate(&agentevent.Event{Response: &model.Response{
+	_, err := translator.Translate(context.Background(), &agentevent.Event{Response: &model.Response{
 		ID:     "msg-1",
 		Object: model.ObjectTypeChatCompletionChunk,
 		Choices: []model.Choice{{
@@ -548,7 +549,7 @@ func TestTranslateToolResultResponse(t *testing.T) {
 	}})
 	assert.NoError(t, err)
 
-	events, err := translator.Translate(&agentevent.Event{
+	events, err := translator.Translate(context.Background(), &agentevent.Event{
 		ID: "evt-tool-1",
 		Response: &model.Response{
 			Choices: []model.Choice{{
@@ -575,7 +576,7 @@ func TestTranslateSequentialEvents(t *testing.T) {
 			Message: model.Message{Role: model.RoleAssistant, Content: "hi"},
 		}},
 	}
-	events, err := translator.Translate(&agentevent.Event{Response: chunkRsp})
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: chunkRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 3)
 	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), events[0])
@@ -594,7 +595,7 @@ func TestTranslateSequentialEvents(t *testing.T) {
 			},
 		}},
 	}
-	events, err = translator.Translate(&agentevent.Event{Response: toolCallRsp})
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: toolCallRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 3)
 	assert.IsType(t, (*aguievents.ToolCallStartEvent)(nil), events[0])
@@ -606,7 +607,7 @@ func TestTranslateSequentialEvents(t *testing.T) {
 			Message: model.Message{ToolID: "call-1", Content: "success"},
 		}},
 	}
-	events, err = translator.Translate(&agentevent.Event{ID: "evt-call-1-result", Response: toolResultRsp})
+	events, err = translator.Translate(context.Background(), &agentevent.Event{ID: "evt-call-1-result", Response: toolResultRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 1)
 	res, ok := events[0].(*aguievents.ToolCallResultEvent)
@@ -622,7 +623,7 @@ func TestTranslateSequentialEvents(t *testing.T) {
 		}},
 		Done: true,
 	}
-	events, err = translator.Translate(&agentevent.Event{Response: finalRsp})
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: finalRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 3)
 	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), events[0])
@@ -634,7 +635,7 @@ func TestTranslateSequentialEvents(t *testing.T) {
 		Object: model.ObjectTypeRunnerCompletion,
 		Done:   true,
 	}
-	events, err = translator.Translate(&agentevent.Event{Response: runCompletionRsp})
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: runCompletionRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 1)
 	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), events[0])
@@ -658,7 +659,7 @@ func TestParallelToolCallResultEvents(t *testing.T) {
 			},
 		},
 	}
-	events, err := translator.Translate(&agentevent.Event{Response: toolResultRsp})
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: toolResultRsp})
 	assert.NoError(t, err)
 	assert.Len(t, events, 2)
 	res1, ok := events[0].(*aguievents.ToolCallResultEvent)
@@ -705,7 +706,7 @@ func TestGraphToolEventsDeduplicatedByToolID(t *testing.T) {
 		},
 	}
 
-	first, err := tr.Translate(callEvent)
+	first, err := tr.Translate(context.Background(), callEvent)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, first)
 
@@ -726,7 +727,7 @@ func TestGraphToolEventsDeduplicatedByToolID(t *testing.T) {
 		},
 	}
 
-	translated, err := tr.Translate(evt)
+	translated, err := tr.Translate(context.Background(), evt)
 	assert.NoError(t, err)
 	assert.Len(t, translated, 0)
 }
@@ -830,7 +831,7 @@ func TestTranslateSubagentGraph_Stream(t *testing.T) {
 
 	var translated []aguievents.Event
 	for _, evt := range events {
-		evs, err := translator.Translate(evt)
+		evs, err := translator.Translate(context.Background(), evt)
 		assert.NoError(t, err)
 		translated = append(translated, evs...)
 	}
@@ -1025,7 +1026,7 @@ func TestTranslateSubagentGraph_NonStream(t *testing.T) {
 
 	var translated []aguievents.Event
 	for _, evt := range events {
-		evs, err := translator.Translate(evt)
+		evs, err := translator.Translate(context.Background(), evt)
 		assert.NoError(t, err)
 		translated = append(translated, evs...)
 	}

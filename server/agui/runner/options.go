@@ -57,7 +57,7 @@ func WithUserIDResolver(u UserIDResolver) Option {
 }
 
 // TranslatorFactory is a function that creates a translator for an AG-UI run.
-type TranslatorFactory func(input *adapter.RunAgentInput) translator.Translator
+type TranslatorFactory func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator
 
 // WithTranslatorFactory sets the translator factory.
 func WithTranslatorFactory(factory TranslatorFactory) Option {
@@ -113,7 +113,7 @@ func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (s
 }
 
 // defaultTranslatorFactory is the default translator factory.
-func defaultTranslatorFactory(input *adapter.RunAgentInput) translator.Translator {
+func defaultTranslatorFactory(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
 	return translator.New(input.ThreadID, input.RunID)
 }
 
