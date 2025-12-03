@@ -25,9 +25,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
-
-	// "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/session/redis"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	_ "trpc.group/trpc-go/trpc-agent-go/session/postgres"
+	_ "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
 var (
@@ -45,12 +45,7 @@ func main() {
 	// New Agent.
 	agent := newAgent()
 	// New Session Service.
-	sessionService, err := redis.NewService(
-		redis.WithRedisClientURL("redis://localhost:6379"),
-	)
-	if err != nil {
-		log.Fatalf("failed to create redis session service: %v", err)
-	}
+	sessionService := inmemory.NewSessionService()
 	// New Runner.
 	runner := runner.NewRunner(appName, agent, runner.WithSessionService(sessionService))
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)

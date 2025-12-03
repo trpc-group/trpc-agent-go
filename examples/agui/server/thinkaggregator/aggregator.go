@@ -31,7 +31,7 @@ func newAggregator(ctx context.Context, opt ...aggregator.Option) aggregator.Agg
 func (c *thinkAggregator) Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if custom, ok := event.(*aguievents.CustomEvent); ok && custom.Type() == "think" {
+	if custom, ok := event.(*aguievents.CustomEvent); ok && custom.Name == string(thinkEventTypeContent) {
 		flushed, err := c.inner.Flush(ctx)
 		if err != nil {
 			return nil, err
@@ -48,7 +48,7 @@ func (c *thinkAggregator) Append(ctx context.Context, event aguievents.Event) ([
 	if c.think.Len() == 0 {
 		return events, nil
 	}
-	think := aguievents.NewCustomEvent("think", aguievents.WithValue(c.think.String()))
+	think := aguievents.NewCustomEvent(string(thinkEventTypeContent), aguievents.WithValue(c.think.String()))
 	c.think.Reset()
 	out := make([]aguievents.Event, 0, len(events)+1)
 	out = append(out, think)
@@ -64,7 +64,7 @@ func (c *thinkAggregator) Flush(ctx context.Context) ([]aguievents.Event, error)
 		return nil, err
 	}
 	if c.think.Len() > 0 {
-		think := aguievents.NewCustomEvent("think", aguievents.WithValue(c.think.String()))
+		think := aguievents.NewCustomEvent(string(thinkEventTypeContent), aguievents.WithValue(c.think.String()))
 		c.think.Reset()
 		events = append([]aguievents.Event{think}, events...)
 	}
