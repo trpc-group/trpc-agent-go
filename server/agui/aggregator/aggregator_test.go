@@ -21,7 +21,7 @@ func TestAggregatorMergesSameMessage(t *testing.T) {
 	ctx := context.Background()
 	agg := New()
 
-	events, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "hel"))
+	events, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "hello"))
 	require.NoError(t, err)
 	require.Nil(t, events)
 
