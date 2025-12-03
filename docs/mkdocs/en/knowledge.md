@@ -694,6 +694,14 @@ err := kb.Load(ctx,
 
 The Knowledge system provides powerful filter functionality that allows precise search based on document metadata. This includes both static filters and intelligent filters.
 
+> **Important: Filter Field Naming Convention**
+>
+> When using filters, **metadata fields should use the `metadata.` prefix**:
+> - The `metadata.` prefix distinguishes metadata fields from system fields (e.g., `id`, `name`, `content`)
+> - Whether using `WithKnowledgeFilter()`, `tool.WithFilter()`, or `searchfilter.Equal()`, metadata fields should include the `metadata.` prefix
+> - If you customized the metadata field name via `WithMetadataField()`, still use the `metadata.` prefix; the framework will automatically convert it to the actual field name
+> - Custom table columns added via `WithDocBuilder` (e.g., `status`, `priority`) use the field name directly without prefix
+
 ### Basic Filters
 
 Basic filters support two configuration methods: Agent-level fixed filters and Runner-level runtime filters.
@@ -709,8 +717,8 @@ llmAgent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "documentation",
-        "topic":    "programming",
+        "metadata.category": "documentation",
+        "metadata.topic":    "programming",
     }),
 )
 ```
@@ -729,9 +737,9 @@ eventCh, err := runner.Run(
     sessionID,
     message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "user_level": "premium",     // Filter by user level
-        "region":     "china",       // Filter by region
-        "language":   "zh",          // Filter by language
+        "metadata.user_level": "premium",     // Filter by user level
+        "metadata.region":     "china",       // Filter by region
+        "metadata.language":   "zh",          // Filter by language
     }),
 )
 ```
@@ -744,8 +752,8 @@ llmAgent := llmagent.New(
     "assistant",
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "general",
-        "source":   "internal",
+        "metadata.category": "general",
+        "metadata.source":   "internal",
     }),
 )
 
@@ -753,16 +761,16 @@ llmAgent := llmagent.New(
 eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "source": "external",  // Will be overridden by Agent-level "internal"
-        "topic":  "api",       // Add new filter condition (not in Agent-level)
+        "metadata.source": "external",  // Will be overridden by Agent-level "internal"
+        "metadata.topic":  "api",       // Add new filter condition (not in Agent-level)
     }),
 )
 
 // Final effective filter:
 // {
-//     "category": "general",   // From Agent-level
-//     "source":   "internal",  // From Agent-level (overrode Runner-level "external")
-//     "topic":    "api",       // From Runner-level (added)
+//     "metadata.category": "general",   // From Agent-level
+//     "metadata.source":   "internal",  // From Agent-level (overrode Runner-level "external")
+//     "metadata.topic":    "api",       // From Runner-level (added)
 // }
 ```
 
@@ -829,8 +837,8 @@ llmAgent := llmagent.New(
     llmagent.WithKnowledge(kb),
     // Agent-level metadata filter
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "source":   "official",      // Official source
-        "category": "documentation", // Documentation category
+        "metadata.source":   "official",      // Official source
+        "metadata.category": "documentation", // Documentation category
     }),
     // Agent-level complex condition filter (metadata fields use metadata. prefix)
     llmagent.WithKnowledgeConditionedFilter(
@@ -843,8 +851,8 @@ eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     // Runner-level metadata filter
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "region":   "china",  // China region
-        "language": "zh",     // Chinese language
+        "metadata.region":   "china",  // China region
+        "metadata.language": "zh",     // Chinese language
     }),
     // Runner-level complex condition filter
     agent.WithKnowledgeConditionedFilter(
@@ -856,13 +864,13 @@ eventCh, err := runner.Run(
 // Example: User asks "find API related docs", LLM might generate {"field": "metadata.topic", "value": "api"}
 
 // Final effective filter conditions (all combined with AND):
-// source = "official" AND 
-// category = "documentation" AND 
-// status = "published" AND
-// region = "china" AND 
-// language = "zh" AND 
-// priority > 5 AND
-// topic = "api"
+// metadata.source = "official" AND 
+// metadata.category = "documentation" AND 
+// metadata.status = "published" AND
+// metadata.region = "china" AND 
+// metadata.language = "zh" AND 
+// metadata.priority > 5 AND
+// metadata.topic = "api"
 //
 // i.e., must satisfy all conditions at all levels
 ```
@@ -875,7 +883,7 @@ searchTool := tool.NewKnowledgeSearchTool(
     kb,
     // Agent-level metadata filter
     tool.WithFilter(map[string]interface{}{
-        "source": "official",
+        "metadata.source": "official",
     }),
     // Agent-level complex condition filter (metadata fields use metadata. prefix)
     tool.WithConditionedFilter(
@@ -897,25 +905,6 @@ llmAgent := llmagent.New(
 // i.e., must be official source AND topic is either programming or LLM
 ```
 
-##### Filter Field Naming Convention
-
-When using `FilterCondition`, **metadata fields must use the `metadata.` prefix**:
-
-```go
-// ✅ Correct: Use metadata. prefix
-searchfilter.Equal("metadata.topic", "programming")
-searchfilter.Equal("metadata.category", "documentation")
-
-// ❌ Wrong: Missing metadata. prefix
-searchfilter.Equal("topic", "programming")
-```
-
-> **Notes**:
-> - The `metadata.` prefix distinguishes metadata fields from system fields (e.g., `id`, `name`, `content`)
-> - If you customized the metadata field name via `WithMetadataField()`, still use the `metadata.` prefix; the framework will automatically convert it to the actual field name
-> - System fields (`id`, `name`, `content`, `created_at`, `updated_at`) use the field name directly without prefix
-> - Custom table columns added via `WithDocBuilder` (e.g., `status`, `priority`) use the field name directly without prefix
-
 ##### Common Filter Helper Functions
 
 ```go
@@ -930,10 +919,6 @@ searchfilter.In("metadata.category", values...)          // metadata.category IN
 searchfilter.NotIn("metadata.type", values...)           // metadata.type NOT IN (...)
 searchfilter.Like("metadata.title", pattern)             // metadata.title LIKE pattern
 searchfilter.Between("metadata.date", min, max)          // metadata.date BETWEEN min AND max
-
-// System fields don't need prefix
-searchfilter.Equal("id", "doc-123")                      // id = "doc-123"
-searchfilter.In("name", "doc1", "doc2")                  // name IN ("doc1", "doc2")
 
 // Custom table columns (added via WithDocBuilder) don't need prefix
 searchfilter.NotEqual("status", "deleted")               // status != "deleted"

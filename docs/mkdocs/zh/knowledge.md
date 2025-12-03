@@ -692,6 +692,14 @@ err := kb.Load(ctx,
 
 Knowledge 系统提供了强大的过滤器功能，允许基于文档元数据进行精准搜索。这包括静态过滤器和智能过滤器两种模式。
 
+> **重要：过滤器字段命名规范**
+>
+> 在使用过滤器时，**元数据字段建议使用 `metadata.` 前缀**：
+> - `metadata.` 前缀用于区分元数据字段和系统字段（如 `id`、`name`、`content` 等）
+> - 无论是 `WithKnowledgeFilter()`、`tool.WithFilter()` 还是 `searchfilter.Equal()` 等，元数据字段都建议加 `metadata.` 前缀
+> - 如果通过 `WithMetadataField()` 自定义了元数据字段名，仍然使用 `metadata.` 前缀，框架会自动转换为实际的字段名
+> - 通过 `WithDocBuilder` 自定义的表字段（如 `status`、`priority` 等额外列）直接使用字段名，无需前缀
+
 ### 基础过滤器
 
 基础过滤器支持两种设置方式：Agent 级别的固定过滤器和 Runner 级别的运行时过滤器。
@@ -707,8 +715,8 @@ llmAgent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "documentation",
-        "topic":    "programming",
+        "metadata.category": "documentation",
+        "metadata.topic":    "programming",
     }),
 )
 ```
@@ -727,9 +735,9 @@ eventCh, err := runner.Run(
     sessionID,
     message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "user_level": "premium",     // 根据用户级别过滤
-        "region":     "china",       // 根据地区过滤
-        "language":   "zh",          // 根据语言过滤
+        "metadata.user_level": "premium",     // 根据用户级别过滤
+        "metadata.region":     "china",       // 根据地区过滤
+        "metadata.language":   "zh",          // 根据语言过滤
     }),
 )
 ```
@@ -742,8 +750,8 @@ llmAgent := llmagent.New(
     "assistant",
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "general",
-        "source":   "internal",
+        "metadata.category": "general",
+        "metadata.source":   "internal",
     }),
 )
 
@@ -751,16 +759,16 @@ llmAgent := llmagent.New(
 eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "source": "external",  // 会被 Agent 级的 "internal" 覆盖
-        "topic":  "api",       // 新增过滤条件（Agent 级没有此键）
+        "metadata.source": "external",  // 会被 Agent 级的 "internal" 覆盖
+        "metadata.topic":  "api",       // 新增过滤条件（Agent 级没有此键）
     }),
 )
 
 // 最终生效的过滤器：
 // {
-//     "category": "general",   // 来自 Agent 级
-//     "source":   "internal",  // 来自 Agent 级（覆盖了 Runner 级的 "external"）
-//     "topic":    "api",       // 来自 Runner 级（新增）
+//     "metadata.category": "general",   // 来自 Agent 级
+//     "metadata.source":   "internal",  // 来自 Agent 级（覆盖了 Runner 级的 "external"）
+//     "metadata.topic":    "api",       // 来自 Runner 级（新增）
 // }
 ```
 
@@ -827,8 +835,8 @@ llmAgent := llmagent.New(
     llmagent.WithKnowledge(kb),
     // Agent 级元数据过滤器
     llmagent.WithKnowledgeFilter(map[string]any{
-        "source":   "official",      // 官方来源
-        "category": "documentation", // 文档类别
+        "metadata.source":   "official",      // 官方来源
+        "metadata.category": "documentation", // 文档类别
     }),
     // Agent 级复杂条件过滤器（元数据字段使用 metadata. 前缀）
     llmagent.WithKnowledgeConditionedFilter(
@@ -841,8 +849,8 @@ eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     // Runner 级元数据过滤器
     agent.WithKnowledgeFilter(map[string]any{
-        "region":   "china",  // 中国区域
-        "language": "zh",     // 中文
+        "metadata.region":   "china",  // 中国区域
+        "metadata.language": "zh",     // 中文
     }),
     // Runner 级复杂条件过滤器
     agent.WithKnowledgeConditionedFilter(
@@ -873,7 +881,7 @@ searchTool := tool.NewKnowledgeSearchTool(
     kb,
     // Agent 级元数据过滤器
     tool.WithFilter(map[string]any{
-        "source": "official",
+        "metadata.source": "official",
     }),
     // Agent 级复杂条件过滤器（元数据字段使用 metadata. 前缀）
     tool.WithConditionedFilter(
@@ -895,25 +903,6 @@ llmAgent := llmagent.New(
 // 即：必须是官方来源，且主题是编程或 LLM
 ```
 
-##### 过滤器字段命名规范
-
-使用 `FilterCondition` 时，**元数据字段必须使用 `metadata.` 前缀**：
-
-```go
-// ✅ 正确：使用 metadata. 前缀
-searchfilter.Equal("metadata.topic", "programming")
-searchfilter.Equal("metadata.category", "documentation")
-
-// ❌ 错误：缺少 metadata. 前缀
-searchfilter.Equal("topic", "programming")
-```
-
-> **说明**：
-> - `metadata.` 前缀用于区分元数据字段和系统字段（如 `id`、`name`、`content` 等）
-> - 如果通过 `WithMetadataField()` 自定义了元数据字段名，仍然使用 `metadata.` 前缀，框架会自动转换为实际的字段名
-> - 系统字段（`id`、`name`、`content`、`created_at`、`updated_at`）直接使用字段名，无需前缀
-> - 通过 `WithDocBuilder` 自定义的表字段（如 `status`、`priority` 等额外列）直接使用字段名，无需前缀
-
 ##### 常用过滤器辅助函数
 
 ```go
@@ -928,10 +917,6 @@ searchfilter.In("metadata.category", values...)          // metadata.category IN
 searchfilter.NotIn("metadata.type", values...)           // metadata.type NOT IN (...)
 searchfilter.Like("metadata.title", pattern)             // metadata.title LIKE pattern
 searchfilter.Between("metadata.date", min, max)          // metadata.date BETWEEN min AND max
-
-// 系统字段不需要前缀
-searchfilter.Equal("id", "doc-123")                      // id = "doc-123"
-searchfilter.In("name", "doc1", "doc2")                  // name IN ("doc1", "doc2")
 
 // 自定义表字段（通过 WithDocBuilder 添加的额外列）不需要前缀
 searchfilter.NotEqual("status", "deleted")               // status != "deleted"
