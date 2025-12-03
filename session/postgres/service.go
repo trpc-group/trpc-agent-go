@@ -31,22 +31,6 @@ import (
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
 
-const (
-	defaultSessionEventLimit     = 1000
-	defaultChanBufferSize        = 100
-	defaultAsyncPersisterNum     = 10
-	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
-	defaultAsyncPersistTimeout   = 5 * time.Second
-
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
-
-	defaultHost     = "localhost"
-	defaultPort     = 5432
-	defaultDatabase = "trpc-agent-go-pgsession"
-	defaultSSLMode  = "disable"
-)
-
 // SessionState is the state of a session.
 type SessionState struct {
 	ID        string           `json:"id"`
@@ -134,19 +118,7 @@ func buildConnString(opts ServiceOpts) string {
 
 // NewService creates a new postgres session service.
 func NewService(options ...ServiceOpt) (*Service, error) {
-	opts := ServiceOpts{
-		sessionEventLimit:  defaultSessionEventLimit,
-		sessionTTL:         0,
-		appStateTTL:        0,
-		userStateTTL:       0,
-		asyncPersisterNum:  defaultAsyncPersisterNum,
-		enableAsyncPersist: false,
-		asyncSummaryNum:    defaultAsyncSummaryNum,
-		summaryQueueSize:   defaultSummaryQueueSize,
-		summaryJobTimeout:  30 * time.Second,
-		softDelete:         true, // Enable soft delete by default
-		cleanupInterval:    0,
-	}
+	opts := defaultOptions
 	for _, option := range options {
 		option(&opts)
 	}

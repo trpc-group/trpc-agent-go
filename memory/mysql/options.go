@@ -13,9 +13,24 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+)
+
+const (
+	// defaultDBInitTimeout is the default timeout for database initialization.
+	defaultDBInitTimeout = 30 * time.Second
+)
+
+var (
+	defaultOptions = ServiceOpts{
+		tableName:    "memories",
+		memoryLimit:  imemory.DefaultMemoryLimit,
+		toolCreators: imemory.AllToolCreators,
+		enabledTools: imemory.DefaultEnabledTools,
+	}
 )
 
 // ServiceOpts is the options for the mysql memory service.
@@ -34,6 +49,22 @@ type ServiceOpts struct {
 	// skipDBInit skips database initialization (table creation).
 	// Useful when user doesn't have DDL permissions or when tables are managed externally.
 	skipDBInit bool
+}
+
+func (o ServiceOpts) clone() ServiceOpts {
+	opts := o
+
+	opts.toolCreators = make(map[string]memory.ToolCreator, len(o.toolCreators))
+	for name, toolCreator := range o.toolCreators {
+		opts.toolCreators[name] = toolCreator
+	}
+
+	opts.enabledTools = make(map[string]bool, len(o.enabledTools))
+	for name, enabled := range o.enabledTools {
+		opts.enabledTools[name] = enabled
+	}
+
+	return opts
 }
 
 // ServiceOpt is the option for the mysql memory service.

@@ -32,16 +32,6 @@ var (
 	_ session.TrackService = (*Service)(nil)
 )
 
-const (
-	defaultSessionEventLimit   = 1000
-	defaultAsyncPersistTimeout = 2 * time.Second
-	defaultChanBufferSize      = 100
-	defaultAsyncPersisterNum   = 10
-
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
-)
-
 // SessionState is the state of a session.
 type SessionState struct {
 	ID        string           `json:"id"`
@@ -89,17 +79,7 @@ type summaryJob struct {
 
 // NewService creates a new redis session service.
 func NewService(options ...ServiceOpt) (*Service, error) {
-	opts := ServiceOpts{
-		sessionEventLimit:  defaultSessionEventLimit,
-		sessionTTL:         0,
-		appStateTTL:        0,
-		userStateTTL:       0,
-		asyncPersisterNum:  defaultAsyncPersisterNum,
-		enableAsyncPersist: false,
-		asyncSummaryNum:    defaultAsyncSummaryNum,
-		summaryQueueSize:   defaultSummaryQueueSize,
-		summaryJobTimeout:  30 * time.Second,
-	}
+	opts := defaultOptions
 	for _, option := range options {
 		option(&opts)
 	}

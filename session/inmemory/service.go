@@ -22,14 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const (
-	defaultSessionEventLimit     = 1000
-	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
-
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
-)
-
 // stateWithTTL wraps state data with expiration time.
 type stateWithTTL struct {
 	data      session.StateMap
@@ -115,13 +107,7 @@ type summaryJob struct {
 
 // NewSessionService creates a new in-memory session service.
 func NewSessionService(options ...ServiceOpt) *SessionService {
-	opts := serviceOpts{
-		sessionEventLimit: defaultSessionEventLimit,
-		cleanupInterval:   0,
-		asyncSummaryNum:   defaultAsyncSummaryNum,
-		summaryQueueSize:  defaultSummaryQueueSize,
-		summaryJobTimeout: 30 * time.Second,
-	}
+	opts := defaultOptions
 	for _, option := range options {
 		option(&opts)
 	}

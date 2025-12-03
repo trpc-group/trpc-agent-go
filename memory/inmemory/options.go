@@ -7,7 +7,8 @@
 //
 //
 
-package redis
+// Package inmemory provides in-memory memory service implementation.
+package inmemory
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -15,26 +16,24 @@ import (
 )
 
 var (
-	defaultOptions = ServiceOpts{
+	defaultOptions = serviceOpts{
 		memoryLimit:  imemory.DefaultMemoryLimit,
 		toolCreators: imemory.AllToolCreators,
 		enabledTools: imemory.DefaultEnabledTools,
 	}
 )
 
-// ServiceOpts is the options for the redis memory service.
-type ServiceOpts struct {
-	url          string
-	instanceName string
-	memoryLimit  int
-
-	// Tool related settings.
+// serviceOpts contains options for memory service.
+type serviceOpts struct {
+	// memoryLimit is the limit of memories per user.
+	memoryLimit int
+	// toolCreators are functions to build tools after service creation.
 	toolCreators map[string]memory.ToolCreator
+	// enabledTools are the names of tools to enable.
 	enabledTools map[string]bool
-	extraOptions []any
 }
 
-func (o ServiceOpts) clone() ServiceOpts {
+func (o serviceOpts) clone() serviceOpts {
 	opts := o
 
 	opts.toolCreators = make(map[string]memory.ToolCreator, len(o.toolCreators))
@@ -50,28 +49,12 @@ func (o ServiceOpts) clone() ServiceOpts {
 	return opts
 }
 
-// ServiceOpt is the option for the redis memory service.
-type ServiceOpt func(*ServiceOpts)
-
-// WithRedisClientURL creates a redis client from URL and sets it to the service.
-func WithRedisClientURL(url string) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		opts.url = url
-	}
-}
-
-// WithRedisInstance uses a redis instance from storage.
-// Note: WithRedisClientURL has higher priority than WithRedisInstance.
-// If both are specified, WithRedisClientURL will be used.
-func WithRedisInstance(instanceName string) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		opts.instanceName = instanceName
-	}
-}
+// ServiceOpt is the option for the in-memory memory service.
+type ServiceOpt func(*serviceOpts)
 
 // WithMemoryLimit sets the limit of memories per user.
 func WithMemoryLimit(limit int) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.memoryLimit = limit
 	}
 }
@@ -80,7 +63,8 @@ func WithMemoryLimit(limit int) ServiceOpt {
 // The tool will be enabled by default.
 // If the tool name is invalid or creator is nil, this option will do nothing.
 func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
+		// If the tool name is invalid or creator is nil, do nothing.
 		if !imemory.IsValidToolName(toolName) || creator == nil {
 			return
 		}
@@ -92,18 +76,11 @@ func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 // WithToolEnabled sets which tool is enabled.
 // If the tool name is invalid, this option will do nothing.
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
+		// If the tool name is invalid, do nothing.
 		if !imemory.IsValidToolName(toolName) {
 			return
 		}
 		opts.enabledTools[toolName] = enabled
-	}
-}
-
-// WithExtraOptions sets the extra options for the redis session service.
-// this option mainly used for the customized redis client builder, it will be passed to the builder.
-func WithExtraOptions(extraOptions ...any) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		opts.extraOptions = append(opts.extraOptions, extraOptions...)
 	}
 }
