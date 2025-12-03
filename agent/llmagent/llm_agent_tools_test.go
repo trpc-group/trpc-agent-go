@@ -19,6 +19,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	testToolNameA             = "a"
+	testDummyToolSetName      = "dummy"
+	testUserToolNameOne       = "user_tool_1"
+	testUserToolNameTwo       = "user_tool_2"
+	testTransferToolName      = "transfer_to_agent"
+	testKnowledgeToolName     = "knowledge_search"
+	testDynamicToolSetName    = "dynamic"
+	testFirstToolSetName      = "set_one"
+	testSecondToolSetName     = "set_two"
+	testPrefixedKnowledgeTail = "_knowledge_search"
+)
+
 // minimalKnowledge implements knowledge.Knowledge with no-op behaviors for unit tests.
 type minimalKnowledge struct{}
 
@@ -50,8 +63,10 @@ func (d dummyTool) Call(_ context.Context, _ []byte) (any, error) { return nil, 
 func (d dummyTool) Declaration() *tool.Declaration                { return d.decl }
 
 func TestRegisterTools_Combinations(t *testing.T) {
-	base := []tool.Tool{dummyTool{decl: &tool.Declaration{Name: "a"}}}
-	sets := []tool.ToolSet{dummyToolSet{name: "dummy"}}
+	base := []tool.Tool{
+		dummyTool{decl: &tool.Declaration{Name: testToolNameA}},
+	}
+	sets := []tool.ToolSet{dummyToolSet{name: testDummyToolSetName}}
 	kb := &minimalKnowledge{}
 
 	// with tools, toolset and knowledge and nil memory.
@@ -66,12 +81,12 @@ func TestRegisterTools_Combinations(t *testing.T) {
 	}
 
 	// User tool from WithTools should be tracked
-	if !userToolNames["a"] {
+	if !userToolNames[testToolNameA] {
 		t.Errorf("expected tool 'a' to be tracked as user tool")
 	}
 
 	// Knowledge search tool should NOT be tracked as user tool
-	if userToolNames["knowledge_search"] {
+	if userToolNames[testKnowledgeToolName] {
 		t.Errorf("knowledge_search should not be tracked as user tool")
 	}
 }
@@ -83,7 +98,7 @@ func TestLLMAgent_Tools_IncludesTransferWhenSubAgents(t *testing.T) {
 	ts := agt.Tools()
 	foundTransfer := false
 	for _, tl := range ts {
-		if tl.Declaration().Name == "transfer_to_agent" {
+		if tl.Declaration().Name == testTransferToolName {
 			foundTransfer = true
 			break
 		}
@@ -95,8 +110,12 @@ func TestLLMAgent_Tools_IncludesTransferWhenSubAgents(t *testing.T) {
 
 func TestLLMAgent_UserTools(t *testing.T) {
 	// Create agent with user tools, toolsets, knowledge, and subagents
-	userTool1 := dummyTool{decl: &tool.Declaration{Name: "user_tool_1"}}
-	userTool2 := dummyTool{decl: &tool.Declaration{Name: "user_tool_2"}}
+	userTool1 := dummyTool{
+		decl: &tool.Declaration{Name: testUserToolNameOne},
+	}
+	userTool2 := dummyTool{
+		decl: &tool.Declaration{Name: testUserToolNameTwo},
+	}
 	toolSet := dummyToolSet{name: "test_toolset"}
 	kb := &minimalKnowledge{}
 	subAgent := New("sub-agent")
@@ -132,9 +151,9 @@ func TestLLMAgent_UserTools(t *testing.T) {
 	foundUserTool2 := false
 	for _, tool := range userTools {
 		switch tool.Declaration().Name {
-		case "user_tool_1":
+		case testUserToolNameOne:
 			foundUserTool1 = true
-		case "user_tool_2":
+		case testUserToolNameTwo:
 			foundUserTool2 = true
 		}
 	}
@@ -146,7 +165,7 @@ func TestLLMAgent_UserTools(t *testing.T) {
 	// Verify that framework tools are NOT in user tools
 	for _, tool := range userTools {
 		name := tool.Declaration().Name
-		if name == "knowledge_search" || name == "transfer_to_agent" {
+		if name == testKnowledgeToolName || name == testTransferToolName {
 			t.Errorf("framework tool %s should not be in user tools", name)
 		}
 	}
@@ -176,14 +195,176 @@ func TestLLMAgent_UserTools_EmptyCase(t *testing.T) {
 	foundTransfer := false
 	for _, tool := range allTools {
 		switch tool.Declaration().Name {
-		case "knowledge_search":
+		case testKnowledgeToolName:
 			foundKnowledge = true
-		case "transfer_to_agent":
+		case testTransferToolName:
 			foundTransfer = true
 		}
 	}
 
 	if !foundKnowledge || !foundTransfer {
 		t.Errorf("framework tools should be in all tools even when no user tools")
+	}
+}
+
+func TestLLMAgent_AddToolSet_DynamicTools(t *testing.T) {
+	baseTool := dummyTool{
+		decl: &tool.Declaration{Name: testUserToolNameOne},
+	}
+	agent := New("dynamic-agent",
+		WithTools([]tool.Tool{baseTool}),
+	)
+
+	initialTools := agent.Tools()
+	if len(initialTools) != 1 {
+		t.Fatalf("expected 1 tool before add, got %d",
+			len(initialTools))
+	}
+
+	toolSet := dummyToolSet{name: testDynamicToolSetName}
+	agent.AddToolSet(toolSet)
+
+	tools := agent.Tools()
+	if len(tools) <= len(initialTools) {
+		t.Fatalf("expected more tools after add, got %d",
+			len(tools))
+	}
+
+	prefixedName := testDynamicToolSetName + testPrefixedKnowledgeTail
+	foundPrefixed := false
+	for _, tl := range tools {
+		if tl.Declaration().Name == prefixedName {
+			foundPrefixed = true
+			break
+		}
+	}
+	if !foundPrefixed {
+		t.Fatalf("expected tool %q after adding toolset",
+			prefixedName)
+	}
+
+	userTools := agent.UserTools()
+	foundUserBase := false
+	foundUserFromSet := false
+	for _, tl := range userTools {
+		switch tl.Declaration().Name {
+		case testUserToolNameOne:
+			foundUserBase = true
+		case prefixedName:
+			foundUserFromSet = true
+		}
+	}
+	if !foundUserBase || !foundUserFromSet {
+		t.Fatalf("expected base and toolset tools in userTools")
+	}
+}
+
+func TestLLMAgent_RemoveToolSet_ByName(t *testing.T) {
+	toolSetOne := dummyToolSet{name: testFirstToolSetName}
+	toolSetTwo := dummyToolSet{name: testSecondToolSetName}
+
+	agent := New("remove-agent",
+		WithToolSets([]tool.ToolSet{toolSetOne, toolSetTwo}),
+	)
+
+	toolsBefore := agent.Tools()
+
+	prefixOne := testFirstToolSetName + testPrefixedKnowledgeTail
+	prefixTwo := testSecondToolSetName + testPrefixedKnowledgeTail
+
+	hasOne := false
+	hasTwo := false
+	for _, tl := range toolsBefore {
+		switch tl.Declaration().Name {
+		case prefixOne:
+			hasOne = true
+		case prefixTwo:
+			hasTwo = true
+		}
+	}
+	if !hasOne || !hasTwo {
+		t.Fatalf("expected tools %q and %q before remove",
+			prefixOne, prefixTwo)
+	}
+
+	removed := agent.RemoveToolSet(testFirstToolSetName)
+	if !removed {
+		t.Fatalf("expected RemoveToolSet to remove %q",
+			testFirstToolSetName)
+	}
+
+	toolsAfter := agent.Tools()
+	hasOne = false
+	hasTwo = false
+	for _, tl := range toolsAfter {
+		switch tl.Declaration().Name {
+		case prefixOne:
+			hasOne = true
+		case prefixTwo:
+			hasTwo = true
+		}
+	}
+	if hasOne {
+		t.Fatalf("expected tool %q to be removed", prefixOne)
+	}
+	if !hasTwo {
+		t.Fatalf("expected tool %q to remain", prefixTwo)
+	}
+
+	removedAgain := agent.RemoveToolSet(testFirstToolSetName)
+	if removedAgain {
+		t.Fatalf("expected second RemoveToolSet(%q) to be false",
+			testFirstToolSetName)
+	}
+}
+
+func TestLLMAgent_SetToolSets_ReplacesAll(t *testing.T) {
+	toolSetOne := dummyToolSet{name: testFirstToolSetName}
+	toolSetTwo := dummyToolSet{name: testSecondToolSetName}
+
+	agent := New("set-agent",
+		WithToolSets([]tool.ToolSet{toolSetOne}),
+	)
+
+	toolsBefore := agent.Tools()
+	prefixOne := testFirstToolSetName + testPrefixedKnowledgeTail
+	prefixTwo := testSecondToolSetName + testPrefixedKnowledgeTail
+
+	hasOne := false
+	hasTwo := false
+	for _, tl := range toolsBefore {
+		switch tl.Declaration().Name {
+		case prefixOne:
+			hasOne = true
+		case prefixTwo:
+			hasTwo = true
+		}
+	}
+	if !hasOne {
+		t.Fatalf("expected tool %q before SetToolSets", prefixOne)
+	}
+	if hasTwo {
+		t.Fatalf("did not expect tool %q before SetToolSets", prefixTwo)
+	}
+
+	agent.SetToolSets([]tool.ToolSet{toolSetTwo})
+
+	toolsAfter := agent.Tools()
+	hasOne = false
+	hasTwo = false
+	for _, tl := range toolsAfter {
+		switch tl.Declaration().Name {
+		case prefixOne:
+			hasOne = true
+		case prefixTwo:
+			hasTwo = true
+		}
+	}
+	if hasOne {
+		t.Fatalf("expected tool %q to be removed after SetToolSets",
+			prefixOne)
+	}
+	if !hasTwo {
+		t.Fatalf("expected tool %q after SetToolSets", prefixTwo)
 	}
 }
