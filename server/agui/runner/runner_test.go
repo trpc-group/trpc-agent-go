@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 func TestNew(t *testing.T) {
@@ -198,6 +199,48 @@ func TestRunFlushesTracker(t *testing.T) {
 	collectEvents(t, ch)
 	assert.GreaterOrEqual(t, recorder.appendCount, 1)
 	assert.Equal(t, 1, recorder.flushCount)
+}
+
+func TestNewWithSessionServiceEnablesTracker(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying, WithSessionService(inmemory.NewSessionService()))
+	run, ok := r.(*runner)
+	assert.True(t, ok)
+	assert.NotNil(t, run.tracker)
+}
+
+func TestRunRejectsConcurrentSession(t *testing.T) {
+	ch := make(chan *agentevent.Event)
+	underlying := &fakeRunner{
+		run: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return ch, nil
+		},
+	}
+	r := New(underlying).(*runner)
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+
+	events1, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	go collectEvents(t, events1)
+
+	events2, err := r.Run(context.Background(), input)
+	assert.Nil(t, events2)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "session is already running")
+
+	close(ch)
+	collectEvents(t, events1)
 }
 
 func TestRunRunOptionResolverOptions(t *testing.T) {

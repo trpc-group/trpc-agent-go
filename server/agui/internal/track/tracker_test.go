@@ -12,6 +12,7 @@ package track
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -290,6 +291,46 @@ func TestTrackerFlushPersistsPendingAggregation(t *testing.T) {
 	require.Equal(t, "hi there", content.Delta)
 }
 
+func TestTrackerFlushReturnsAggregatorError(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	agg := &stubAggregator{flushErr: errors.New("flush fail")}
+	tracker, err := New(svc, WithAggregatorFactory(func(opt ...aggregator.Option) aggregator.Aggregator {
+		return agg
+	}))
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "aggregator flush: flush fail")
+}
+
+func TestTrackerFlushPeriodically(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	svc := inmemory.NewSessionService()
+	agg := &stubAggregator{flushCh: make(chan struct{}, 2)}
+	tracker, err := New(svc,
+		WithAggregatorFactory(func(opt ...aggregator.Option) aggregator.Aggregator {
+			return agg
+		}),
+		WithFlushInterval(10*time.Millisecond),
+	)
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hi")))
+
+	select {
+	case <-agg.flushCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("expected periodic flush")
+	}
+}
+
 type serviceWithoutTrack struct{}
 
 func (serviceWithoutTrack) CreateSession(ctx context.Context, key session.Key, state session.StateMap, opts ...session.Option) (*session.Session, error) {
@@ -354,6 +395,31 @@ func (serviceWithoutTrack) GetSessionSummaryText(ctx context.Context, sess *sess
 
 func (serviceWithoutTrack) Close() error {
 	return nil
+}
+
+type stubAggregator struct {
+	mu       sync.Mutex
+	flushErr error
+	flushCh  chan struct{}
+}
+
+func (s *stubAggregator) Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error) {
+	return []aguievents.Event{event}, nil
+}
+
+func (s *stubAggregator) Flush(ctx context.Context) ([]aguievents.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flushCh != nil {
+		select {
+		case s.flushCh <- struct{}{}:
+		default:
+		}
+	}
+	if s.flushErr != nil {
+		return nil, s.flushErr
+	}
+	return nil, nil
 }
 
 type hookSessionService struct {
