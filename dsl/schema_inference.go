@@ -197,7 +197,7 @@ func (si *SchemaInference) InferSchemaAndUsage(graphDef *Graph) (*graph.StateSch
 // buildSchemaFromParams constructs a StateSchema from a collected parameter map.
 // It is intentionally focused on execution semantics and does not attach any
 // editor-facing usage information.
-func (si *SchemaInference) buildSchemaFromParams(paramMap map[string]*ParameterInfo) *graph.StateSchema {
+func (si *SchemaInference) buildSchemaFromParams(paramMap map[string]*parameterInfo) *graph.StateSchema {
 	schema := graph.NewStateSchema()
 	// Add framework built-in fields first.
 	si.addBuiltinFields(schema)
@@ -219,7 +219,7 @@ func (si *SchemaInference) buildSchemaFromParams(paramMap map[string]*ParameterI
 // buildUsageFromParams constructs FieldUsage information from a collected
 // parameter map. It is used by higher layers (e.g., editors) to drive
 // variable pickers and type hints.
-func (si *SchemaInference) buildUsageFromParams(paramMap map[string]*ParameterInfo) map[string]FieldUsage {
+func (si *SchemaInference) buildUsageFromParams(paramMap map[string]*parameterInfo) map[string]FieldUsage {
 	usage := make(map[string]FieldUsage, len(paramMap))
 
 	for name, param := range paramMap {
@@ -260,8 +260,8 @@ func (si *SchemaInference) buildUsageFromParams(paramMap map[string]*ParameterIn
 
 // buildParameterMap collects all input/output parameters from components and DSL NodeIO
 // into a map keyed by state field name.
-func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*ParameterInfo, error) {
-	parameterMap := make(map[string]*ParameterInfo)
+func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*parameterInfo, error) {
+	parameterMap := make(map[string]*parameterInfo)
 
 	for _, node := range graphDef.Nodes {
 		engine := node.EngineNode
@@ -306,8 +306,9 @@ func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*Param
 	return parameterMap, nil
 }
 
-// ParameterInfo holds information about a parameter during inference.
-type ParameterInfo struct {
+// parameterInfo holds information about a parameter during inference.
+// It is internal to SchemaInference and not part of the public API.
+type parameterInfo struct {
 	Name        string
 	GoType      reflect.Type
 	Reducer     string
@@ -320,7 +321,7 @@ type ParameterInfo struct {
 }
 
 // addParameter adds a parameter to the parameter map.
-func (si *SchemaInference) addParameter(paramMap map[string]*ParameterInfo, param registry.ParameterSchema, source string) error {
+func (si *SchemaInference) addParameter(paramMap map[string]*parameterInfo, param registry.ParameterSchema, source string) error {
 	existing, exists := paramMap[param.Name]
 
 	if !exists {
@@ -333,7 +334,7 @@ func (si *SchemaInference) addParameter(paramMap map[string]*ParameterInfo, para
 
 		kind, schemaRef := classifyGoType(param.GoType, param.Name)
 
-		paramMap[param.Name] = &ParameterInfo{
+		paramMap[param.Name] = &parameterInfo{
 			Name:        param.Name,
 			GoType:      param.GoType,
 			Reducer:     param.Reducer,
@@ -368,7 +369,7 @@ func (si *SchemaInference) addParameter(paramMap map[string]*ParameterInfo, para
 
 // addDSLOutputs adds output parameters from DSL node outputs configuration.
 // This handles output remapping specified in the graph DSL.
-func (si *SchemaInference) addDSLOutputs(node Node, paramMap map[string]*ParameterInfo) error {
+func (si *SchemaInference) addDSLOutputs(node Node, paramMap map[string]*parameterInfo) error {
 	engine := node.EngineNode
 
 	if len(engine.Outputs) == 0 {
@@ -540,7 +541,7 @@ func (si *SchemaInference) getReducer(reducerName string) graph.StateReducer {
 	}
 }
 
-func (si *SchemaInference) attachComponentContext(graphDef *Graph, paramMap map[string]*ParameterInfo) {
+func (si *SchemaInference) attachComponentContext(graphDef *Graph, paramMap map[string]*parameterInfo) {
 	if graphDef == nil {
 		return
 	}
@@ -564,14 +565,14 @@ func (si *SchemaInference) attachComponentContext(graphDef *Graph, paramMap map[
 // with JSONSchema and precise writers. LLMAgent no longer exposes a global
 // output_parsed in StateSchema, so this hook is intentionally a no-op kept for
 // potential future extensions.
-func (si *SchemaInference) attachLLMAgentStructuredOutput(graphDef *Graph, paramMap map[string]*ParameterInfo, nodeByID map[string]Node) {
+func (si *SchemaInference) attachLLMAgentStructuredOutput(graphDef *Graph, paramMap map[string]*parameterInfo, nodeByID map[string]Node) {
 	_ = graphDef
 	_ = paramMap
 	_ = nodeByID
 }
 
 // attachEndStructuredOutput enriches end_structured_output usage when builtin.end declares an output_schema.
-func (si *SchemaInference) attachEndStructuredOutput(graphDef *Graph, paramMap map[string]*ParameterInfo, nodeByID map[string]Node) {
+func (si *SchemaInference) attachEndStructuredOutput(graphDef *Graph, paramMap map[string]*parameterInfo, nodeByID map[string]Node) {
 	endNodesWithSchema := make(map[string]map[string]any)
 
 	for _, node := range graphDef.Nodes {

@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"strings"
 
-	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/cel"
+	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
