@@ -23,8 +23,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const defaultChannelBufferSize = 256
-
 // ChainAgent is an agent that runs its sub-agents in sequence.
 type ChainAgent struct {
 	name              string
@@ -33,52 +31,12 @@ type ChainAgent struct {
 	agentCallbacks    *agent.Callbacks
 }
 
-// Option configures ChainAgent settings using the functional options pattern.
-// This type is exported to allow external packages to create custom options.
-type Option func(*Options)
-
-// Options contains all configuration options for ChainAgent.
-// This struct is exported to allow external packages to inspect or modify options.
-type Options struct {
-	subAgents         []agent.Agent
-	channelBufferSize int
-	agentCallbacks    *agent.Callbacks
-}
-
-// WithSubAgents sets the sub-agents that will be executed in sequence.
-// The agents will run one after another, with each agent's output potentially
-// influencing the next agent's execution.
-func WithSubAgents(subAgents []agent.Agent) Option {
-	return func(o *Options) { o.subAgents = subAgents }
-}
-
-// WithChannelBufferSize sets the buffer size for the event channel.
-// This controls how many events can be buffered before blocking.
-// Default is 256 if not specified.
-func WithChannelBufferSize(size int) Option {
-	return func(o *Options) {
-		if size < 0 {
-			size = defaultChannelBufferSize
-		}
-		o.channelBufferSize = size
-	}
-}
-
-// WithAgentCallbacks attaches lifecycle callbacks to the chain agent.
-// These callbacks allow custom logic to be executed before and after
-// the chain agent runs.
-func WithAgentCallbacks(cb *agent.Callbacks) Option {
-	return func(o *Options) { o.agentCallbacks = cb }
-}
-
 // New creates a new ChainAgent with the given name and options.
 // ChainAgent executes its sub-agents sequentially, passing events through
 // as they are generated. Each sub-agent can see the events from previous agents.
 func New(name string, opts ...Option) *ChainAgent {
 	// Apply options
-	cfg := Options{
-		channelBufferSize: defaultChannelBufferSize,
-	}
+	cfg := defaultOptions
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
@@ -134,7 +92,9 @@ func (a *ChainAgent) executeChainRun(
 	a.setupInvocation(invocation)
 
 	// Handle before agent callbacks.
-	if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+	var shouldReturn bool
+	ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+	if shouldReturn {
 		return
 	}
 
@@ -142,10 +102,9 @@ func (a *ChainAgent) executeChainRun(
 	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan)
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil {
-		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
 	}
 	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage)
-
 }
 
 // setupInvocation prepares the invocation for execution.
@@ -156,16 +115,19 @@ func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
+// Returns the updated context and whether execution should stop early.
 func (a *ChainAgent) handleBeforeAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) bool {
+) (context.Context, bool) {
 	if a.agentCallbacks == nil {
-		return false
+		return ctx, false
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+		Invocation: invocation,
+	})
 	if err != nil {
 		// Send error event.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
@@ -174,18 +136,22 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	if customResponse != nil {
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	return false // Continue execution
+	return ctx, false // Continue execution
 }
 
 // executeSubAgents runs all sub-agents in sequence.
@@ -254,9 +220,18 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent *event.Event,
 ) *event.Event {
 
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation:        invocation,
+		Error:             nil,
+		FullResponseEvent: fullRespEvent,
+	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -266,12 +241,12 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response.
 		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		)
 	}
 	agent.EmitEvent(ctx, invocation, eventChan, evt)

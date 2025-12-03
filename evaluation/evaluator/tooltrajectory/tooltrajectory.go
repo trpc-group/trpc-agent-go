@@ -12,6 +12,7 @@ package tooltrajectory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -19,7 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // toolTrajectoryEvaluator is a tool trajectory evaluator implementation for evaluator.
@@ -44,6 +44,9 @@ func (e *toolTrajectoryEvaluator) Description() string {
 // Evaluate compares tool usage trajectories between actual and expected invocations.
 func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
+	if evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.ToolTrajectory == nil {
+		return nil, errors.New("tool trajectory criterion not configured")
+	}
 	if len(actuals) != len(expecteds) {
 		return nil, fmt.Errorf("tooltrajectory: actual invocations (%d) and expected invocations (%d) count mismatch",
 			len(actuals), len(expecteds))
@@ -54,9 +57,10 @@ func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context, actuals, expecte
 		actual := actuals[i]
 		expected := expecteds[i]
 		score := 0.0
+		reason := ""
 		ok, err := toolCallsMatch(actual, expected, evalMetric.Criterion.ToolTrajectory)
 		if err != nil {
-			log.Errorf("tool trajectory mismatch: %v", err)
+			reason = err.Error()
 		} else if ok {
 			score = 1.0
 		}
@@ -66,6 +70,10 @@ func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context, actuals, expecte
 			ExpectedInvocation: expected,
 			Score:              score,
 			Status:             status,
+			Details: &evaluator.PerInvocationDetails{
+				Reason: reason,
+				Score:  score,
+			},
 		})
 		totalScore += score
 	}
@@ -91,9 +99,6 @@ func (e *toolTrajectoryEvaluator) statusForScore(score float64, evalMetric *metr
 
 func toolCallsMatch(actual, expected *evalset.Invocation,
 	criterion *ctooltrajectory.ToolTrajectoryCriterion) (bool, error) {
-	if criterion == nil {
-		return false, fmt.Errorf("criterion is nil")
-	}
 	ok, err := criterion.Match(actual, expected)
 	if err != nil {
 		return false, fmt.Errorf("tool trajectory mismatch: %w", err)

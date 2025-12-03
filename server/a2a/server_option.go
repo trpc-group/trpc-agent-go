@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
@@ -68,10 +67,9 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 	}
 	userID := r.Header.Get(d.userIDHeader)
 	if userID == "" {
-		log.Warnf("UserID(Header %s) not set, you will use anonymous user, "+
-			"you can use WithUserIDHeader in A2AAgent and A2AServer to specified the header that transfer user info.",
+		log.Debugf("UserID(Header %s) not set, will be generated from context ID. "+
+			"You can use WithUserIDHeader in A2AAgent and A2AServer to specify the header that transfers user info.",
 			d.userIDHeader)
-		userID = uuid.New().String()
 	}
 	return &auth.User{ID: userID}, nil
 }
@@ -91,6 +89,7 @@ type options struct {
 	errorHandler        ErrorHandler
 	debugLogging        bool
 	userIDHeader        string
+	adkCompatibility    bool
 }
 
 // Option is a function that configures a Server.
@@ -209,6 +208,17 @@ func WithDebugLogging(debug bool) Option {
 func WithErrorHandler(handler ErrorHandler) Option {
 	return func(opts *options) {
 		opts.errorHandler = handler
+	}
+}
+
+// WithADKCompatibility enables ADK compatibility mode.
+// When enabled, metadata keys in A2A messages will use the "adk_" prefix
+// (e.g., "adk_app_name", "adk_user_id", "adk_session_id") to be compatible
+// with ADK (Agent Development Kit) Python implementation.
+// This allows trpc-agent-go servers to interoperate with ADK clients.
+func WithADKCompatibility(enabled bool) Option {
+	return func(opts *options) {
+		opts.adkCompatibility = enabled
 	}
 }
 

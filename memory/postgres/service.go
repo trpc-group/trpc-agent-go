@@ -29,11 +29,6 @@ import (
 
 var _ memory.Service = (*Service)(nil)
 
-const (
-	// defaultDBInitTimeout is the default timeout for database initialization.
-	defaultDBInitTimeout = 30 * time.Second
-)
-
 // Service is the postgres memory service.
 // Storage structure:
 //
@@ -51,54 +46,29 @@ type Service struct {
 
 // NewService creates a new postgres memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
-	opts := ServiceOpts{
-		tableName:    "memories",
-		memoryLimit:  imemory.DefaultMemoryLimit,
-		toolCreators: make(map[string]memory.ToolCreator),
-		enabledTools: make(map[string]bool),
-	}
-	// Copy all tool creators.
-	for name, creator := range imemory.AllToolCreators {
-		opts.toolCreators[name] = creator
-	}
-	// Enable default tools.
-	for name, enabled := range imemory.DefaultEnabledTools {
-		opts.enabledTools[name] = enabled
-	}
+	opts := defaultOptions.clone()
 	for _, option := range options {
 		option(&opts)
 	}
 
-	var db storage.Client
-	var err error
-	builder := storage.GetClientBuilder()
-
+	builderOpts := []storage.ClientBuilderOpt{
+		storage.WithClientConnString(buildConnString(opts)),
+		storage.WithExtraOptions(opts.extraOptions...),
+	}
 	// Priority: direct connection settings > instance name
 	// If direct connection settings are provided, use them.
-	if opts.host != "" {
-		connString := buildConnString(opts)
-		db, err = builder(
-			context.Background(),
-			storage.WithClientConnString(connString),
-			storage.WithExtraOptions(opts.extraOptions...),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create postgres client from connection settings failed: %w", err)
-		}
-	} else if opts.instanceName != "" {
+	if opts.host == "" && opts.instanceName != "" {
 		// Otherwise, use instance name if provided.
-		builderOpts, ok := storage.GetPostgresInstance(opts.instanceName)
-		if !ok {
+		var ok bool
+		if builderOpts, ok = storage.GetPostgresInstance(opts.instanceName); !ok {
 			return nil, fmt.Errorf("postgres instance %s not found", opts.instanceName)
 		}
-		db, err = builder(context.Background(), builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create postgres client from instance name failed: %w", err)
-		}
-	} else {
-		return nil, fmt.Errorf("either connection settings (host, port, etc.) or instance name must be provided")
 	}
 
+	db, err := storage.GetClientBuilder()(context.Background(), builderOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("create postgres client failed: %w", err)
+	}
 	// Build full table name with schema.
 	fullTableName := sqldb.BuildTableNameWithSchema(opts.schema, "", opts.tableName)
 

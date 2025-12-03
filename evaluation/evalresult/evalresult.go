@@ -70,6 +70,14 @@ type EvalMetricResult struct {
 	Details *EvalMetricResultDetails `json:"details,omitempty"`
 }
 
+// EvalMetricResultDetails contains additional metric-specific information.
+type EvalMetricResultDetails struct {
+	// Reason is the reason for the metric evaluation result.
+	Reason string `json:"reason,omitempty"`
+	// Score is the score for the metric evaluation result.
+	Score float64 `json:"score,omitempty"`
+}
+
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
 // It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalMetricResultPerInvocation struct {
@@ -85,11 +93,6 @@ type EvalMetricResultPerInvocation struct {
 // It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type ScoreResult struct {
 	Score float64 `json:"score,omitempty"`
-}
-
-// EvalMetricResultDetails contains additional metric-specific information.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
-type EvalMetricResultDetails struct {
 }
 
 // Manager defines the interface for managing evaluation results.

@@ -33,7 +33,10 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
           "metricName": "tool_trajectory_avg_score",
           "score": 0.9,
           "evalStatus": 1,
-          "threshold": 0.8
+          "threshold": 0.8,
+          "details": {
+            "reason": "trajectory matched"
+          }
         }
       ],
       "evalMetricResultPerInvocation": [
@@ -128,7 +131,10 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
               "metricName": "tool_trajectory_avg_score",
               "score": 0.9,
               "evalStatus": 1,
-              "threshold": 0.8
+              "threshold": 0.8,
+              "details": {
+                "reason": "per invocation matched"
+              }
             }
           ]
         }
@@ -163,6 +169,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, 0.9, overallMetric.Score)
 	assert.Equal(t, status.EvalStatusPassed, overallMetric.EvalStatus)
 	assert.Equal(t, 0.8, overallMetric.Threshold)
+	assert.Equal(t, "trajectory matched", overallMetric.Details.Reason)
 
 	perInvocation := caseResult.EvalMetricResultPerInvocation[0]
 	assert.NotNil(t, perInvocation.ActualInvocation)
@@ -176,6 +183,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, 0.9, perMetric.Score)
 	assert.Equal(t, status.EvalStatusPassed, perMetric.EvalStatus)
 	assert.Equal(t, 0.8, perMetric.Threshold)
+	assert.Equal(t, "per invocation matched", perMetric.Details.Reason)
 
 	encoded, marshalErr := json.Marshal(result)
 	assert.NoError(t, marshalErr)

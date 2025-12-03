@@ -721,6 +721,7 @@ func (r *llmRunner) executeOneShotStage(
 		StateKeyMessages:        ops,
 		StateKeyOneShotMessages: []model.Message(nil), // Clear one-shot messages after execution.
 		StateKeyLastResponse:    asst.Content,
+		StateKeyLastResponseID:  extractResponseID(result),
 		StateKeyNodeResponses: map[string]any{
 			r.nodeID: asst.Content,
 		},
@@ -760,6 +761,9 @@ func (r *llmRunner) executeUserInputStage(
 		StateKeyMessages:     ops,
 		StateKeyUserInput:    "", // Clear user input after execution.
 		StateKeyLastResponse: asst.Content,
+		StateKeyLastResponseID: func() string {
+			return extractResponseID(result)
+		}(),
 		StateKeyNodeResponses: map[string]any{
 			r.nodeID: asst.Content,
 		},
@@ -784,6 +788,9 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 		return State{
 			StateKeyMessages:     AppendMessages{Items: []model.Message{*asst}},
 			StateKeyLastResponse: asst.Content,
+			StateKeyLastResponseID: func() string {
+				return extractResponseID(result)
+			}(),
 			StateKeyNodeResponses: map[string]any{
 				r.nodeID: asst.Content,
 			},
@@ -832,12 +839,26 @@ func (r *llmRunner) executeModel(
 	})
 	endTime := time.Now()
 	var modelOutput string
+	var responseID string
 	if err == nil && result != nil {
 		if finalResponse, ok := result.(*model.Response); ok && len(finalResponse.Choices) > 0 {
 			modelOutput = finalResponse.Choices[0].Message.Content
+			responseID = finalResponse.ID
 		}
 	}
-	emitModelCompleteEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
+	emitModelCompleteEvent(
+		ctx,
+		eventChan,
+		invocationID,
+		modelName,
+		nodeID,
+		modelInput,
+		modelOutput,
+		responseID,
+		startTime,
+		endTime,
+		err,
+	)
 	return result, err
 }
 
@@ -871,6 +892,14 @@ func extractAssistantMessage(result any) *model.Message {
 		return &response.Choices[0].Message
 	}
 	return nil
+}
+
+// extractResponseID extracts response ID from model result.
+func extractResponseID(result any) string {
+	if response, ok := result.(*model.Response); ok {
+		return response.ID
+	}
+	return ""
 }
 
 // ensureSystemHead ensures system prompt is at the head if provided.
@@ -922,7 +951,7 @@ type modelResponseConfig struct {
 }
 
 // processModelResponse processes a single model response.
-func processModelResponse(ctx context.Context, config modelResponseConfig) (*event.Event, error) {
+func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
 	if config.ModelCallbacks != nil {
 		// Convert response.Error to Go error for callback.
 		var modelErr error
@@ -930,22 +959,31 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (*eve
 			modelErr = fmt.Errorf("%s: %s", config.Response.Error.Type, config.Response.Error.Message)
 		}
 
-		customResponse, err := config.ModelCallbacks.RunAfterModel(ctx, config.Request, config.Response, modelErr)
+		args := &model.AfterModelArgs{
+			Request:  config.Request,
+			Response: config.Response,
+			Error:    modelErr,
+		}
+		result, err := config.ModelCallbacks.RunAfterModel(ctx, args)
 		if err != nil {
 			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return nil, fmt.Errorf("callback after model error: %w", err)
+			return ctx, nil, fmt.Errorf("callback after model error: %w", err)
 		}
-		if customResponse != nil {
-			config.Response = customResponse
+		// Use the context from result if provided for subsequent operations.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
+		if result != nil && result.CustomResponse != nil {
+			config.Response = result.CustomResponse
 		}
 	}
 	var llmEvent *event.Event
+	author := config.LLMModel.Info().Name
+	if config.NodeID != "" {
+		author = config.NodeID
+	}
+	llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
 	if config.EventChan != nil && !config.Response.Done {
-		author := config.LLMModel.Info().Name
-		if config.NodeID != "" {
-			author = config.NodeID
-		}
-		llmEvent = event.NewResponseEvent(config.InvocationID, author, config.Response)
 		invocation, ok := agent.InvocationFromContext(ctx)
 		if !ok {
 			invocation = agent.NewInvocation(
@@ -956,14 +994,14 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (*eve
 		}
 
 		if err := agent.EmitEvent(ctx, invocation, config.EventChan, llmEvent); err != nil {
-			return nil, err
+			return ctx, nil, err
 		}
 	}
 	if config.Response.Error != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", config.Response.Error.Message))
-		return nil, fmt.Errorf("model API error: %s", config.Response.Error.Message)
+		return ctx, nil, fmt.Errorf("model API error: %s", config.Response.Error.Message)
 	}
-	return llmEvent, nil
+	return ctx, llmEvent, nil
 }
 
 func runModel(
@@ -971,7 +1009,7 @@ func runModel(
 	modelCallbacks *model.Callbacks,
 	llmModel model.Model,
 	request *model.Request,
-) (<-chan *model.Response, error) {
+) (context.Context, <-chan *model.Response, error) {
 	ctx, span := trace.Tracer.Start(ctx, "run_model")
 	defer span.End()
 
@@ -981,25 +1019,30 @@ func runModel(
 	)
 
 	if modelCallbacks != nil {
-		customResponse, err := modelCallbacks.RunBeforeModel(ctx, request)
+		args := &model.BeforeModelArgs{Request: request}
+		result, err := modelCallbacks.RunBeforeModel(ctx, args)
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return nil, fmt.Errorf("callback before model error: %w", err)
+			return ctx, nil, fmt.Errorf("callback before model error: %w", err)
 		}
-		if customResponse != nil {
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
+		if result != nil && result.CustomResponse != nil {
 			responseChan := make(chan *model.Response, 1)
-			responseChan <- customResponse
+			responseChan <- result.CustomResponse
 			close(responseChan)
-			return responseChan, nil
+			return ctx, responseChan, nil
 		}
 	}
 	// Generate content.
 	responseChan, err := llmModel.GenerateContent(ctx, request)
 	if err != nil {
 		span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-		return nil, fmt.Errorf("failed to generate content: %w", err)
+		return ctx, nil, fmt.Errorf("failed to generate content: %w", err)
 	}
-	return responseChan, nil
+	return ctx, responseChan, nil
 }
 
 // NewToolsNodeFunc creates a NodeFunc that uses the tools package directly.
@@ -1315,6 +1358,7 @@ func buildAgentInvocationWithStateAndScope(
 //   - t: the tool implementation to execute
 //
 // Returns:
+//   - context.Context: the updated context from callbacks (if any)
 //   - any: the result from tool execution or custom callback result
 //   - []byte: the modified arguments after before-tool callbacks (for telemetry)
 //   - error: any error that occurred during execution
@@ -1323,35 +1367,58 @@ func runTool(
 	toolCall model.ToolCall,
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
-) (any, []byte, error) {
+) (context.Context, any, []byte, error) {
 	if toolCallbacks != nil {
-		customResult, err := toolCallbacks.RunBeforeTool(
-			ctx, toolCall.Function.Name, t.Declaration(), &toolCall.Function.Arguments)
-		if err != nil {
-			return nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
+		args := &tool.BeforeToolArgs{
+			ToolName:    toolCall.Function.Name,
+			Declaration: t.Declaration(),
+			Arguments:   toolCall.Function.Arguments,
 		}
-		if customResult != nil {
-			return customResult, toolCall.Function.Arguments, nil
+		result, err := toolCallbacks.RunBeforeTool(ctx, args)
+		if err != nil {
+			return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
+		}
+		// Use the context from result if provided.
+		if result != nil && result.Context != nil {
+			ctx = result.Context
+		}
+		if result != nil && result.CustomResult != nil {
+			return ctx, result.CustomResult, toolCall.Function.Arguments, nil
+		}
+		if result != nil && result.ModifiedArguments != nil {
+			toolCall.Function.Arguments = result.ModifiedArguments
 		}
 	}
 	if callableTool, ok := t.(tool.CallableTool); ok {
 		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
-		if err != nil {
-			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
-		}
+		// Run after tool callbacks if they exist.
+		// If the tool returns an error, the callback function will still execute to allow the user to handle the error.
 		if toolCallbacks != nil {
-			customResult, err := toolCallbacks.RunAfterTool(
-				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
-			if err != nil {
-				return nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", err)
+			args := &tool.AfterToolArgs{
+				ToolName:    toolCall.Function.Name,
+				Declaration: t.Declaration(),
+				Arguments:   toolCall.Function.Arguments,
+				Result:      result,
+				Error:       err,
 			}
-			if customResult != nil {
-				return customResult, toolCall.Function.Arguments, nil
+			afterResult, afterErr := toolCallbacks.RunAfterTool(ctx, args)
+			if afterErr != nil {
+				return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", afterErr)
+			}
+			// Use the context from result if provided for subsequent operations.
+			if afterResult != nil && afterResult.Context != nil {
+				ctx = afterResult.Context
+			}
+			if afterResult != nil && afterResult.CustomResult != nil {
+				return ctx, afterResult.CustomResult, toolCall.Function.Arguments, nil
 			}
 		}
-		return result, toolCall.Function.Arguments, nil
+		if err != nil {
+			return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
+		}
+		return ctx, result, toolCall.Function.Arguments, nil
 	}
-	return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+	return ctx, nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 
 // extractModelInput extracts the model input from state and instruction.
@@ -1406,7 +1473,7 @@ func emitModelStartEvent(
 func emitModelCompleteEvent(
 	ctx context.Context,
 	eventChan chan<- *event.Event,
-	invocationID, modelName, nodeID, modelInput, modelOutput string,
+	invocationID, modelName, nodeID, modelInput, modelOutput, responseID string,
 	startTime, endTime time.Time,
 	err error,
 ) {
@@ -1424,6 +1491,7 @@ func emitModelCompleteEvent(
 		WithModelEventInput(modelInput),
 		WithModelEventOutput(modelOutput),
 		WithModelEventError(err),
+		WithModelEventResponseID(responseID),
 	)
 
 	invocation, _ := agent.InvocationFromContext(ctx)
@@ -1445,9 +1513,14 @@ type modelExecutionConfig struct {
 	Span           oteltrace.Span
 }
 
+const (
+	errMsgNoModelResponse = "no response received from model"
+	errMsgNoModelChoices  = "model returned no choices"
+)
+
 // executeModelWithEvents executes the model with event processing.
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
-	responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
+	ctx, responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
 	if err != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 		return nil, fmt.Errorf("failed to run model: %w", err)
@@ -1481,7 +1554,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		}
 		response.Usage.TimingInfo = timingInfo
 
-		lastEvent, err = processModelResponse(ctx, modelResponseConfig{
+		ctx, lastEvent, err = processModelResponse(ctx, modelResponseConfig{
 			Response:       response,
 			ModelCallbacks: config.ModelCallbacks,
 			EventChan:      config.EventChan,
@@ -1506,8 +1579,18 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		finalResponse = response
 	}
 	if finalResponse == nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", "no response received from model"))
-		return nil, errors.New("no response received from model")
+		config.Span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgNoModelResponse,
+		))
+		return nil, errors.New(errMsgNoModelResponse)
+	}
+	if len(finalResponse.Choices) == 0 {
+		config.Span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgNoModelChoices,
+		))
+		return nil, errors.New(errMsgNoModelChoices)
 	}
 	if len(finalResponse.Choices[0].Message.ToolCalls) < len(toolCalls) {
 		finalResponse.Choices[0].Message.ToolCalls = toolCalls
@@ -1682,12 +1765,16 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Extract current node ID from state for event authoring.
 	var nodeID string
+	var responseID string
 	sessInfo := &session.Session{}
 	if state := config.State; state != nil {
 		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
 			if id, ok := nodeIDData.(string); ok {
 				nodeID = id
 			}
+		}
+		if rid, ok := state[StateKeyLastResponseID].(string); ok {
+			responseID = rid
 		}
 		if sess, ok := state[StateKeySession]; ok {
 			if s, ok := sess.(*session.Session); ok && s != nil {
@@ -1700,12 +1787,12 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Execute the tool with callbacks and get modified arguments.
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
-	result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
 
 	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
 		ctx, config.EventChan, config.InvocationID, name, id, nodeID,
-		startTime, modifiedArgs,
+		startTime, modifiedArgs, responseID,
 	)
 
 	var interruptErr *InterruptError
@@ -1727,6 +1814,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Result:       result,
 		Error:        eventErr,
 		Arguments:    modifiedArgs,
+		ResponseID:   responseID,
 	})
 	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
@@ -1765,6 +1853,7 @@ func emitToolStartEvent(
 	invocationID, toolName, toolID, nodeID string,
 	startTime time.Time,
 	arguments []byte,
+	responseID string,
 ) {
 	if eventChan == nil {
 		return
@@ -1774,6 +1863,7 @@ func emitToolStartEvent(
 		WithToolEventInvocationID(invocationID),
 		WithToolEventToolName(toolName),
 		WithToolEventToolID(toolID),
+		WithToolEventResponseID(responseID),
 		WithToolEventNodeID(nodeID),
 		WithToolEventPhase(ToolExecutionPhaseStart),
 		WithToolEventStartTime(startTime),
@@ -1791,6 +1881,7 @@ type toolCompleteEventConfig struct {
 	ToolName     string
 	ToolID       string
 	NodeID       string
+	ResponseID   string
 	StartTime    time.Time
 	Result       any
 	Error        error
@@ -1815,6 +1906,7 @@ func emitToolCompleteEvent(ctx context.Context, config toolCompleteEventConfig) 
 		WithToolEventInvocationID(config.InvocationID),
 		WithToolEventToolName(config.ToolName),
 		WithToolEventToolID(config.ToolID),
+		WithToolEventResponseID(config.ResponseID),
 		WithToolEventNodeID(config.NodeID),
 		WithToolEventPhase(ToolExecutionPhaseComplete),
 		WithToolEventStartTime(config.StartTime),
@@ -1852,6 +1944,10 @@ func MessagesStateSchema() *StateSchema {
 		Reducer: DefaultReducer,
 	})
 	schema.AddField(StateKeyLastResponse, StateField{
+		Type:    reflect.TypeOf(""),
+		Reducer: DefaultReducer,
+	})
+	schema.AddField(StateKeyLastResponseID, StateField{
 		Type:    reflect.TypeOf(""),
 		Reducer: DefaultReducer,
 	})

@@ -18,11 +18,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -1169,7 +1171,7 @@ func TestProcessModelResponse_ErrorPassing(t *testing.T) {
 
 			dummyModel := &mockModel{name: "test-model"}
 
-			_, err := processModelResponse(context.Background(), modelResponseConfig{
+			_, _, err := processModelResponse(context.Background(), modelResponseConfig{
 				Response:       tt.response,
 				ModelCallbacks: cbs,
 				EventChan:      make(chan *event.Event, 1),
@@ -1221,4 +1223,162 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 
 func (m *mockModel) Info() model.Info {
 	return model.Info{Name: m.name}
+}
+
+// stubModel returns a single response then closes channel.
+type stubModel struct {
+	resp *model.Response
+}
+
+func (s *stubModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- s.resp
+	close(ch)
+	return ch, nil
+}
+
+func (s *stubModel) Info() model.Info {
+	return model.Info{Name: "stub"}
+}
+
+func newRunner(respID string) *llmRunner {
+	return &llmRunner{
+		llmModel: &stubModel{
+			resp: &model.Response{
+				ID: respID,
+				Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleAssistant, Content: "ok"},
+				}},
+				Done: true,
+			},
+		},
+		generationConfig: model.GenerationConfig{Stream: true},
+	}
+}
+
+func TestLLMRunnerSetsLastResponseID(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	tests := []struct {
+		name   string
+		run    func(r *llmRunner) (State, error)
+		expect string
+	}{
+		{
+			name: "one-shot",
+			run: func(r *llmRunner) (State, error) {
+				res, err := r.executeOneShotStage(ctx, State{}, []model.Message{model.NewUserMessage("hi")}, span)
+				require.NoError(t, err)
+				return res.(State), nil
+			},
+			expect: "resp-one",
+		},
+		{
+			name: "user-input",
+			run: func(r *llmRunner) (State, error) {
+				res, err := r.executeUserInputStage(ctx, State{StateKeyUserInput: "hi"}, "hi", span)
+				require.NoError(t, err)
+				return res.(State), nil
+			},
+			expect: "resp-user",
+		},
+		{
+			name: "history",
+			run: func(r *llmRunner) (State, error) {
+				res, err := r.executeHistoryStage(ctx, State{StateKeyMessages: []model.Message{}}, span)
+				require.NoError(t, err)
+				return res.(State), nil
+			},
+			expect: "resp-hist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := newRunner(tt.expect)
+			state, err := tt.run(runner)
+			require.NoError(t, err)
+			require.Equal(t, tt.expect, state[StateKeyLastResponseID])
+		})
+	}
+}
+
+func TestExecuteSingleToolCallPropagatesResponseID(t *testing.T) {
+	tests := []struct {
+		name   string
+		state  State
+		expect string
+	}{
+		{
+			name: "with-response-id",
+			state: State{
+				StateKeyCurrentNodeID:  "node-1",
+				StateKeyLastResponseID: "resp-123",
+			},
+			expect: "resp-123",
+		},
+		{
+			name:   "missing-response-id",
+			state:  State{StateKeyCurrentNodeID: "node-2"},
+			expect: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, span := trace.Tracer.Start(context.Background(), "tool")
+			defer span.End()
+
+			ch := make(chan *event.Event, 2)
+			_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+				ToolCall: model.ToolCall{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "echo",
+						Arguments: []byte(`{"x":1}`),
+					},
+				},
+				Tools: map[string]tool.Tool{
+					"echo": &blockingTool{name: "echo", result: map[string]int{"x": 1}},
+				},
+				InvocationID: "inv-1",
+				EventChan:    ch,
+				Span:         span,
+				State:        tt.state,
+			})
+			require.NoError(t, err)
+
+			events := []*event.Event{<-ch, <-ch}
+			if len(ch) != 0 {
+				t.Fatalf("expected channel to be drained")
+			}
+
+			seenPhases := map[ToolExecutionPhase]bool{}
+			for _, evt := range events {
+				raw := evt.StateDelta[MetadataKeyTool]
+				require.NotEmpty(t, raw)
+
+				var meta ToolExecutionMetadata
+				require.NoError(t, json.Unmarshal(raw, &meta))
+				require.Equal(t, tt.expect, meta.ResponseID)
+				seenPhases[meta.Phase] = true
+			}
+			require.True(t, seenPhases[ToolExecutionPhaseStart])
+			require.True(t, seenPhases[ToolExecutionPhaseComplete])
+		})
+	}
+}
+
+func TestExtractResponseIDNonResponse(t *testing.T) {
+	require.Equal(t, "", extractResponseID(struct{}{}))
+	require.Equal(t, "", extractResponseID(nil))
+}
+
+func TestMessagesStateSchemaIncludesLastResponseID(t *testing.T) {
+	schema := MessagesStateSchema()
+	field, ok := schema.Fields[StateKeyLastResponseID]
+	require.True(t, ok, "StateKeyLastResponseID should be present")
+	require.Equal(t, reflect.TypeOf(""), field.Type)
+	require.NotNil(t, field.Reducer)
 }

@@ -22,14 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const (
-	defaultSessionEventLimit     = 1000
-	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
-
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
-)
-
 // stateWithTTL wraps state data with expiration time.
 type stateWithTTL struct {
 	data      session.StateMap
@@ -115,13 +107,7 @@ type summaryJob struct {
 
 // NewSessionService creates a new in-memory session service.
 func NewSessionService(options ...ServiceOpt) *SessionService {
-	opts := serviceOpts{
-		sessionEventLimit: defaultSessionEventLimit,
-		cleanupInterval:   0,
-		asyncSummaryNum:   defaultAsyncSummaryNum,
-		summaryQueueSize:  defaultSummaryQueueSize,
-		summaryJobTimeout: 30 * time.Second,
-	}
+	opts := defaultOptions
 	for _, option := range options {
 		option(&opts)
 	}
@@ -478,6 +464,65 @@ func (s *SessionService) UpdateUserState(ctx context.Context, userKey session.Us
 	return nil
 }
 
+// UpdateSessionState updates the session-level state directly without appending an event.
+// This is useful for state initialization, correction, or synchronization scenarios
+// where event history is not needed.
+// Keys with app: or user: prefixes are not allowed (use UpdateAppState/UpdateUserState instead).
+// Keys with temp: prefix are allowed as they represent session-scoped ephemeral state.
+func (s *SessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+
+	app := s.getOrCreateAppSessions(key.AppName)
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	// Find the session
+	userSessions, userExists := app.sessions[key.UserID]
+	if !userExists {
+		return fmt.Errorf("memory session service update session state failed: user not found")
+	}
+
+	sessWithTTL, sessExists := userSessions[key.SessionID]
+	if !sessExists {
+		return fmt.Errorf("memory session service update session state failed: session not found")
+	}
+
+	// Check if session is expired
+	if isExpired(sessWithTTL.expiredAt) {
+		return fmt.Errorf("memory session service update session state failed: session expired")
+	}
+
+	// Validate: disallow app: and user: prefixes
+	for k := range state {
+		if strings.HasPrefix(k, session.StateAppPrefix) {
+			return fmt.Errorf("memory session service update session state failed: %s is not allowed, use UpdateAppState instead", k)
+		}
+		if strings.HasPrefix(k, session.StateUserPrefix) {
+			return fmt.Errorf("memory session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
+		}
+	}
+
+	// Update session state (allow temp: prefix and unprefixed keys)
+	for k, v := range state {
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		sessWithTTL.session.State[k] = copiedValue
+	}
+
+	// Update timestamp
+	sessWithTTL.session.UpdatedAt = time.Now()
+
+	// Refresh TTL if configured
+	if s.opts.sessionTTL > 0 {
+		sessWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
+	}
+
+	return nil
+}
+
 // DeleteUserState deletes the user state.
 func (s *SessionService) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	if err := userKey.CheckUserKey(); err != nil {
@@ -723,7 +768,7 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 		sess.EventMu.Lock()
 		sess.Events = append(sess.Events, *e)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
-			sess.Events = sess.Events[len(sess.Events)-s.opts.sessionEventLimit:]
+			sess.ApplyEventFiltering(session.WithEventNum(s.opts.sessionEventLimit))
 		}
 		sess.EventMu.Unlock()
 	}

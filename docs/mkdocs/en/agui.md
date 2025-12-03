@@ -98,7 +98,7 @@ type customTranslator struct {
     inner translator.Translator
 }
 
-func (t *customTranslator) Translate(evt *agentevent.Event) ([]aguievents.Event, error) {
+func (t *customTranslator) Translate(ctx context.Context, evt *agentevent.Event) ([]aguievents.Event, error) {
     out, err := t.inner.Translate(evt)
     if err != nil {
         return nil, err
@@ -119,7 +119,7 @@ func buildCustomPayload(evt *agentevent.Event) map[string]any {
     }
 }
 
-factory := func(input *adapter.RunAgentInput) translator.Translator {
+factory := func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
     return &customTranslator{inner: translator.New(input.ThreadID, input.RunID)}
 }
 

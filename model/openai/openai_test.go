@@ -11,6 +11,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,7 +27,9 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/stretchr/testify/assert"
@@ -240,6 +243,25 @@ type stubTool struct{ decl *tool.Declaration }
 func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, nil }
 func (s stubTool) Declaration() *tool.Declaration                { return s.decl }
 
+type stubLogger struct {
+	errorfCalled bool
+	errorfMsg    string
+}
+
+func (stubLogger) Debug(args ...any)                 {}
+func (stubLogger) Debugf(format string, args ...any) {}
+func (stubLogger) Info(args ...any)                  {}
+func (stubLogger) Infof(format string, args ...any)  {}
+func (stubLogger) Warn(args ...any)                  {}
+func (stubLogger) Warnf(format string, args ...any)  {}
+func (stubLogger) Error(args ...any)                 {}
+func (l *stubLogger) Errorf(format string, args ...any) {
+	l.errorfCalled = true
+	l.errorfMsg = fmt.Sprintf(format, args...)
+}
+func (stubLogger) Fatal(args ...any)                 {}
+func (stubLogger) Fatalf(format string, args ...any) {}
+
 // TestModel_convertMessages verifies that messages are converted to the
 // openai-go request format with the expected roles and fields.
 func TestModel_convertMessages(t *testing.T) {
@@ -319,6 +341,85 @@ func TestModel_convertTools(t *testing.T) {
 	require.True(t, fn.Description.Valid() && fn.Description.Value == toolDesc, "function description mismatch")
 
 	require.False(t, reflect.ValueOf(fn.Parameters).IsZero(), "expected parameters to be populated from schema")
+}
+
+func TestBuildToolDescription_AppendsOutputSchema(t *testing.T) {
+	schema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"result": {Type: "string"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "example",
+		Description:  "base",
+		OutputSchema: schema,
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Contains(t, desc, "base", "expected base description to be preserved")
+	assert.Contains(t, desc, "Output schema:", "expected output schema label to be present")
+	assert.Contains(t, desc, `"result"`, "expected output schema to be present in description")
+}
+
+func TestBuildToolDescription_MarshalError(t *testing.T) {
+	logger := &stubLogger{}
+	originalLogger := agentlog.Default
+	agentlog.Default = logger
+	defer func() { agentlog.Default = originalLogger }()
+
+	decl := &tool.Declaration{
+		Name:        "invalid",
+		Description: "desc",
+		OutputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: func() {},
+		},
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "desc", desc, "description should fall back when marshal fails")
+	assert.True(t, logger.errorfCalled, "expected marshal error to be logged")
+	assert.Contains(t, logger.errorfMsg, "marshal output schema", "expected marshal error message")
+}
+
+func TestBuildToolDescription_NoOutputSchema(t *testing.T) {
+	decl := &tool.Declaration{
+		Name:        "example",
+		Description: "only desc",
+	}
+
+	desc := buildToolDescription(decl)
+
+	assert.Equal(t, "only desc", desc, "description should remain unchanged without output schema")
+}
+
+func TestConvertTools_UsesOutputSchemaInDescription(t *testing.T) {
+	m := New("dummy")
+	outputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"value": {Type: "number"},
+		},
+	}
+	decl := &tool.Declaration{
+		Name:         "tool1",
+		Description:  "desc",
+		InputSchema:  &tool.Schema{Type: "object"},
+		OutputSchema: outputSchema,
+	}
+
+	params := m.convertTools(map[string]tool.Tool{
+		decl.Name: stubTool{decl: decl},
+	})
+
+	require.Len(t, params, 1)
+	expectedDesc := buildToolDescription(decl)
+	require.True(t, params[0].Function.Description.Valid(), "function description should be set")
+	assert.Equal(t, expectedDesc, params[0].Function.Description.Value)
+	assert.Contains(t, params[0].Function.Description.Value, `"value"`, "output schema JSON should be embedded")
 }
 
 // TestModel_Callbacks tests that callback functions are properly called with
@@ -1291,6 +1392,20 @@ func TestWithHeaders_AppendsOptions(t *testing.T) {
 	source["X-Custom"] = "changed"
 	WithHeaders(map[string]string{"X-Another": "extra"})(opts)
 	assert.Len(t, opts.OpenAIOptions, 4, "expected additional headers to append")
+
+	opts1 := &options{}
+	WithHeaders(nil)(opts1)
+	assert.Len(t, opts1.OpenAIOptions, 0, "expected no headers to be applied")
+
+}
+
+func TestWithShowToolCallDelta(t *testing.T) {
+	opts := &options{}
+	WithShowToolCallDelta(true)(opts)
+	assert.True(t, opts.ShowToolCallDelta, "expected showToolCallDelta to be true")
+
+	WithShowToolCallDelta(false)(opts)
+	assert.False(t, opts.ShowToolCallDelta, "expected showToolCallDelta to be false")
 }
 
 func TestConvertSystemMessageContent(t *testing.T) {
@@ -2554,6 +2669,10 @@ func TestWithBatchCompletionWindow(t *testing.T) {
 	WithBatchCompletionWindow(window)(opts)
 
 	assert.Equal(t, window, opts.BatchCompletionWindow, "expected BatchCompletionWindow to be set")
+
+	opts1 := &options{}
+	WithBatchCompletionWindow("")(opts1)
+	assert.Equal(t, openai.BatchNewParamsCompletionWindow(defaultBatchCompletionWindow), opts1.BatchCompletionWindow, "expected BatchCompletionWindow to be set")
 }
 
 // TestWithBatchMetadata tests the WithBatchMetadata option.
@@ -3722,6 +3841,18 @@ func TestEmptyChunkHandling(t *testing.T) {
 		assert.True(t, m.shouldSkipEmptyChunk(chunk))
 	})
 
+	t.Run("shouldSkipEmptyChunk with finish reason", func(t *testing.T) {
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					FinishReason: "stop",
+				},
+			},
+		}
+		// Should not skip chunks that only carry a finish reason.
+		assert.False(t, m.shouldSkipEmptyChunk(chunk))
+	})
+
 	t.Run("shouldSuppressChunk with empty delta", func(t *testing.T) {
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -3799,6 +3930,37 @@ func TestEmptyChunkHandling(t *testing.T) {
 	})
 }
 
+// TestCreateFinalResponseFinishReason verifies that finish reasons from the
+// accumulated choices are propagated to the final aggregated response.
+func TestCreateFinalResponseFinishReason(t *testing.T) {
+	m := &Model{}
+
+	var acc openai.ChatCompletionAccumulator
+	chunk := openai.ChatCompletionChunk{
+		ID:    "acc-id",
+		Model: "test-model",
+		Choices: []openai.ChatCompletionChunkChoice{
+			{
+				Index: 0,
+				Delta: openai.ChatCompletionChunkChoiceDelta{
+					Content: "Hello",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	acc.AddChunk(chunk)
+
+	finalResponse := m.createFinalResponse(
+		acc, false, nil, "")
+	require.NotNil(t, finalResponse)
+	require.Len(t, finalResponse.Choices, 1)
+	require.NotNil(t, finalResponse.Choices[0].FinishReason)
+	assert.Equal(t, "stop",
+		*finalResponse.Choices[0].FinishReason)
+}
+
 // TestToolCallIndexMapping tests the tool call index mapping functionality.
 func TestToolCallIndexMapping(t *testing.T) {
 	m := New("test-model")
@@ -3847,6 +4009,121 @@ func TestToolCallIndexMapping(t *testing.T) {
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 		assert.Empty(t, idToIndexMap)
 	})
+}
+
+// TestChatCompletionAccumulator_ToolCallsEmpty_Panics verifies that the
+// upstream openai-go accumulator panics when JSON.ToolCalls is marked
+// present but the typed ToolCalls slice is empty. This documents the
+// panic behavior that our framework needs to defensively guard against.
+func TestChatCompletionAccumulator_ToolCallsEmpty_Panics(t *testing.T) {
+	// This JSON mimics a streaming chunk where the provider sends an empty
+	// tool_calls array together with a tool_calls finish_reason.
+	raw := []byte(`{
+		"id": "test",
+		"object": "chat.completion.chunk",
+		"created": 1699200000,
+		"model": "gpt-3.5-turbo",
+		"choices": [
+			{
+				"index": 0,
+				"delta": {
+					"tool_calls": []
+				},
+				"finish_reason": "tool_calls"
+			}
+		]
+	}`)
+
+	var chunk openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal(raw, &chunk), "failed to unmarshal test chunk")
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("expected panic when adding chunk with JSON.ToolCalls valid and empty ToolCalls slice, but no panic occurred")
+		}
+	}()
+
+	var acc openai.ChatCompletionAccumulator
+	acc.AddChunk(chunk)
+}
+
+// TestSanitizeChunkForAccumulator_FinishReasonToolCalls verifies that
+// sanitizeChunkForAccumulator clears JSON.ToolCalls metadata for chunks
+// that have a finish_reason and an empty ToolCalls slice, which would
+// otherwise cause the upstream accumulator to panic.
+func TestSanitizeChunkForAccumulator_FinishReasonToolCalls(t *testing.T) {
+	raw := []byte(`{
+		"id": "test",
+		"object": "chat.completion.chunk",
+		"created": 1699200000,
+		"model": "gpt-3.5-turbo",
+		"choices": [
+			{
+				"index": 0,
+				"delta": {
+					"content": "",
+					"tool_calls": []
+				},
+				"finish_reason": "tool_calls"
+			}
+		]
+	}`)
+
+	var chunk openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal(raw, &chunk))
+	require.Len(t, chunk.Choices, 1)
+	require.Equal(t, "tool_calls", chunk.Choices[0].FinishReason)
+	require.True(t, chunk.Choices[0].Delta.JSON.ToolCalls.Valid())
+	require.Len(t, chunk.Choices[0].Delta.ToolCalls, 0)
+
+	sanitized := sanitizeChunkForAccumulator(chunk)
+
+	// Original chunk should remain unchanged.
+	require.True(t, chunk.Choices[0].Delta.JSON.ToolCalls.Valid())
+
+	// Sanitized chunk should have ToolCalls metadata cleared but still carry
+	// the same finish_reason and an empty typed ToolCalls slice.
+	require.Len(t, sanitized.Choices, 1)
+	assert.Equal(t, "tool_calls", sanitized.Choices[0].FinishReason)
+	assert.False(t, sanitized.Choices[0].Delta.JSON.ToolCalls.Valid())
+	assert.Len(t, sanitized.Choices[0].Delta.ToolCalls, 0)
+}
+
+// TestSanitizeChunkForAccumulator_NoFinishReason ensures that chunks without
+// a finish_reason are left untouched even if they carry an empty ToolCalls
+// array, since these are safe for the accumulator (it will use the content
+// branch instead of the tool_calls branch).
+func TestSanitizeChunkForAccumulator_NoFinishReason(t *testing.T) {
+	raw := []byte(`{
+		"id": "test",
+		"object": "chat.completion.chunk",
+		"created": 1699200000,
+		"model": "gpt-3.5-turbo",
+		"choices": [
+			{
+				"index": 0,
+				"delta": {
+					"content": "hello",
+					"tool_calls": []
+				},
+				"finish_reason": null
+			}
+		]
+	}`)
+
+	var chunk openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal(raw, &chunk))
+	require.Len(t, chunk.Choices, 1)
+	require.Equal(t, "", chunk.Choices[0].FinishReason)
+	require.True(t, chunk.Choices[0].Delta.JSON.ToolCalls.Valid())
+	require.Len(t, chunk.Choices[0].Delta.ToolCalls, 0)
+
+	sanitized := sanitizeChunkForAccumulator(chunk)
+
+	// Chunks without finish_reason should not be modified.
+	assert.Equal(t, chunk, sanitized)
+	assert.True(t, sanitized.Choices[0].Delta.JSON.ToolCalls.Valid())
+	assert.Len(t, sanitized.Choices[0].Delta.ToolCalls, 0)
 }
 
 // TestStreamingCallbackIntegration tests the integration of streaming callbacks.
@@ -4055,33 +4332,6 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 	})
 }
 
-// TestWithTokenTailoringConfig tests the WithTokenTailoringConfig option.
-func TestWithTokenTailoringConfig(t *testing.T) {
-	config := &model.TokenTailoringConfig{
-		ProtocolOverheadTokens: 1024,
-		ReserveOutputTokens:    4096,
-		InputTokensFloor:       2048,
-		OutputTokensFloor:      512,
-		SafetyMarginRatio:      0.15,
-		MaxInputTokensRatio:    0.90,
-	}
-
-	m := New("deepseek-chat",
-		WithEnableTokenTailoring(true),
-		WithTokenTailoringConfig(config),
-	)
-
-	require.NotNil(t, m)
-
-	// Verify that the instance-level config was set.
-	assert.Equal(t, 1024, m.protocolOverheadTokens)
-	assert.Equal(t, 4096, m.reserveOutputTokens)
-	assert.Equal(t, 2048, m.inputTokensFloor)
-	assert.Equal(t, 512, m.outputTokensFloor)
-	assert.Equal(t, 0.15, m.safetyMarginRatio)
-	assert.Equal(t, 0.90, m.maxInputTokensRatio)
-}
-
 func TestQwen(t *testing.T) {
 	var testKey = "qwen-key"
 	t.Setenv(qwenAPIKeyName, testKey)
@@ -4225,6 +4475,131 @@ func TestModel_buildChatRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, got1 := tt.model.buildChatRequest(tt.args.request)
 			assert.Equalf(t, len(tt.want1), len(got1), "buildChatRequest(%v)", tt.args.request)
+		})
+	}
+}
+
+func TestWithTokenTailoringConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		inputConfig *model.TokenTailoringConfig
+		initialOpts *options
+		wantCfg     *model.TokenTailoringConfig
+	}{
+		{
+			name:        "nil config",
+			inputConfig: nil,
+			initialOpts: &options{
+				TokenTailoringConfig: &model.TokenTailoringConfig{ProtocolOverheadTokens: 5},
+			},
+			wantCfg: &model.TokenTailoringConfig{ProtocolOverheadTokens: 5},
+		},
+		{
+			name:        "nil config - 1",
+			inputConfig: nil,
+			initialOpts: &options{},
+			wantCfg:     nil,
+		},
+		{
+			name: "empty value config",
+			inputConfig: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 0,
+				ReserveOutputTokens:    0,
+				SafetyMarginRatio:      0,
+				InputTokensFloor:       0,
+				OutputTokensFloor:      0,
+				MaxInputTokensRatio:    0,
+			},
+			initialOpts: &options{},
+			wantCfg: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
+				ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+				SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
+				InputTokensFloor:       imodel.DefaultInputTokensFloor,
+				OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
+				MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+			},
+		},
+		{
+			name: "partial value config",
+			inputConfig: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 15,
+				ReserveOutputTokens:    0,
+				SafetyMarginRatio:      0.2,
+				InputTokensFloor:       0,
+				OutputTokensFloor:      250,
+				MaxInputTokensRatio:    0,
+			},
+			initialOpts: &options{},
+			wantCfg: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 15,
+				ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+				SafetyMarginRatio:      0.2,
+				InputTokensFloor:       imodel.DefaultInputTokensFloor,
+				OutputTokensFloor:      250,
+				MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+			},
+		},
+		{
+			name: "all value config",
+			inputConfig: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 20,
+				ReserveOutputTokens:    30,
+				SafetyMarginRatio:      0.3,
+				InputTokensFloor:       300,
+				OutputTokensFloor:      400,
+				MaxInputTokensRatio:    2.0,
+			},
+			initialOpts: &options{},
+			wantCfg: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 20,
+				ReserveOutputTokens:    30,
+				SafetyMarginRatio:      0.3,
+				InputTokensFloor:       300,
+				OutputTokensFloor:      400,
+				MaxInputTokensRatio:    2.0,
+			},
+		},
+		{
+			name: "nil initialOpts",
+			inputConfig: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 0,
+				ReserveOutputTokens:    0,
+			},
+			initialOpts: &options{
+				TokenTailoringConfig: &model.TokenTailoringConfig{
+					ProtocolOverheadTokens: 5,
+					ReserveOutputTokens:    10,
+				},
+			},
+			wantCfg: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
+				ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+				SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
+				InputTokensFloor:       imodel.DefaultInputTokensFloor,
+				OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
+				MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opt := WithTokenTailoringConfig(tt.inputConfig)
+			opt(tt.initialOpts)
+
+			if tt.wantCfg == nil {
+				assert.Nil(t, tt.initialOpts.TokenTailoringConfig, "expectation TokenTailoringConfig is nil")
+			} else {
+				require.NotNil(t, tt.initialOpts.TokenTailoringConfig, "TokenTailoringConfig is not nil")
+
+				assert.Equal(t, tt.wantCfg.ProtocolOverheadTokens, tt.initialOpts.TokenTailoringConfig.ProtocolOverheadTokens, "ProtocolOverheadTokensinconsistent")
+				assert.Equal(t, tt.wantCfg.ReserveOutputTokens, tt.initialOpts.TokenTailoringConfig.ReserveOutputTokens, "ReserveOutputTokensinconsistent")
+				assert.Equal(t, tt.wantCfg.SafetyMarginRatio, tt.initialOpts.TokenTailoringConfig.SafetyMarginRatio, "SafetyMarginRatio inconsistent")
+				assert.Equal(t, tt.wantCfg.InputTokensFloor, tt.initialOpts.TokenTailoringConfig.InputTokensFloor, "InputTokensFloor inconsistent")
+				assert.Equal(t, tt.wantCfg.OutputTokensFloor, tt.initialOpts.TokenTailoringConfig.OutputTokensFloor, "OutputTokensFloor inconsistent")
+				assert.Equal(t, tt.wantCfg.MaxInputTokensRatio, tt.initialOpts.TokenTailoringConfig.MaxInputTokensRatio, "MaxInputTokensRatioinconsistent")
+			}
 		})
 	}
 }

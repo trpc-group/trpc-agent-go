@@ -76,6 +76,9 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+
+    // 如需支持 PDF 文件，需手动引入 PDF reader（独立 go.mod，避免引入不必要的第三方依赖）
+    // _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 )
 
 func main() {
@@ -1217,6 +1220,9 @@ import (
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+
+    // 如需支持 PDF 文件，需手动引入 PDF reader（独立 go.mod，避免引入不必要的第三方依赖）
+    // _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 )
 
 func main() {
@@ -1553,3 +1559,15 @@ go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
      - 确认文件存在且后缀受支持（.md/.txt/.pdf/.csv/.json/.docx 等）；
      - 目录源是否需要 `WithRecursive(true)`；
      - 使用 `WithFileExtensions` 做白名单过滤。
+
+7. **PDF 文件读取支持**
+
+   - 说明：由于 PDF reader 依赖第三方库，为避免主模块引入不必要的依赖，PDF reader 采用独立 `go.mod` 管理。
+   - 使用方式：如需支持 PDF 文件读取，需在代码中手动引入 PDF reader 包进行注册：
+     ```go
+     import (
+         // 引入 PDF reader 以支持 .pdf 文件解析
+         _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
+     )
+     ```
+   - 注意：其他格式（.txt/.md/.csv/.json 等）的 reader 已自动注册，无需手动引入。

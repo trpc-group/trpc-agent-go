@@ -10,6 +10,7 @@
 package reduce
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,161 @@ func TestBuildMessagesHappyPath(t *testing.T) {
 	}
 	if tool.ToolCallID == nil || *tool.ToolCallID != "tool-call-1" {
 		t.Fatalf("unexpected tool call reference %v", tool.ToolCallID)
+	}
+}
+
+func TestReduceReturnsMessagesOnReduceError(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),
+		aguievents.NewTextMessageContentEvent("user-1", "hello"),
+		aguievents.NewTextMessageEndEvent("user-1"),
+		aguievents.NewTextMessageContentEvent("user-1", "!"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	if err == nil || !strings.Contains(err.Error(), "reduce: text message content after end: user-1") {
+		t.Fatalf("unexpected error %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Content == nil || *msgs[0].Content != "hello" {
+		t.Fatalf("unexpected content %v", msgs[0].Content)
+	}
+}
+
+func TestReduceReturnsMessagesOnFinalizeError(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),
+		aguievents.NewTextMessageContentEvent("user-1", "hello"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	if err == nil || !strings.Contains(err.Error(), "finalize: text message user-1 not closed") {
+		t.Fatalf("unexpected error %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Content != nil {
+		t.Fatalf("expected nil content, got %v", msgs[0].Content)
+	}
+}
+
+func TestHandleTextChunkSuccess(t *testing.T) {
+	tests := []struct {
+		name        string
+		chunk       *aguievents.TextMessageChunkEvent
+		wantRole    string
+		wantName    string
+		wantContent string
+	}{
+		{
+			name:        "assistant default role empty delta",
+			chunk:       aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr("")),
+			wantRole:    "assistant",
+			wantName:    testAppName,
+			wantContent: "",
+		},
+		{
+			name:        "user role with delta",
+			chunk:       aguievents.NewTextMessageChunkEvent(stringPtr("msg-2"), stringPtr("user"), stringPtr("hi")),
+			wantRole:    "user",
+			wantName:    testUserID,
+			wantContent: "hi",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := new(testAppName, testUserID)
+			if err := r.handleTextChunk(tt.chunk); err != nil {
+				t.Fatalf("handleTextChunk err: %v", err)
+			}
+			if err := r.finalize(); err != nil {
+				t.Fatalf("finalize err: %v", err)
+			}
+			if len(r.messages) != 1 {
+				t.Fatalf("expected 1 message, got %d", len(r.messages))
+			}
+			msg := r.messages[0]
+			if msg.Role != tt.wantRole {
+				t.Fatalf("unexpected role %q", msg.Role)
+			}
+			if msg.Name == nil || *msg.Name != tt.wantName {
+				t.Fatalf("unexpected name %v", msg.Name)
+			}
+			if msg.Content == nil || *msg.Content != tt.wantContent {
+				t.Fatalf("unexpected content %v", msg.Content)
+			}
+			state, ok := r.texts[*tt.chunk.MessageID]
+			if !ok {
+				t.Fatalf("expected text state for %s", *tt.chunk.MessageID)
+			}
+			if state.phase != textEnded {
+				t.Fatalf("unexpected phase %v", state.phase)
+			}
+			if got := state.content.String(); got != tt.wantContent {
+				t.Fatalf("unexpected builder content %q", got)
+			}
+			if state.index != 0 {
+				t.Fatalf("unexpected state index %d", state.index)
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
+
+func TestHandleTextChunkErrors(t *testing.T) {
+	t.Run("missing id", func(t *testing.T) {
+		chunk := aguievents.NewTextMessageChunkEvent(stringPtr(""), stringPtr("assistant"), stringPtr(""))
+		r := new(testAppName, testUserID)
+		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "text message chunk missing id") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+	t.Run("duplicate id", func(t *testing.T) {
+		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr(""))
+		r := new(testAppName, testUserID)
+		if err := r.handleTextChunk(chunk); err != nil {
+			t.Fatalf("handleTextChunk err: %v", err)
+		}
+		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "duplicate text message chunk: msg-1") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+	t.Run("unsupported role", func(t *testing.T) {
+		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-3"), stringPtr("tool"), stringPtr(""))
+		r := new(testAppName, testUserID)
+		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "unsupported role: tool") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+	t.Run("empty string id pointer", func(t *testing.T) {
+		chunk := aguievents.NewTextMessageChunkEvent(stringPtr(""), stringPtr("assistant"), stringPtr(""))
+		empty := ""
+		chunk.MessageID = &empty
+		r := new(testAppName, testUserID)
+		if err := r.handleTextChunk(chunk); err == nil || !strings.Contains(err.Error(), "text message chunk missing id") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+}
+
+func TestReduceEventDispatchesChunk(t *testing.T) {
+	r := new(testAppName, testUserID)
+	chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr("hi"))
+	if err := r.reduceEvent(chunk); err != nil {
+		t.Fatalf("reduceEvent err: %v", err)
+	}
+	if err := r.finalize(); err != nil {
+		t.Fatalf("finalize err: %v", err)
+	}
+	if len(r.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(r.messages))
+	}
+	if r.messages[0].Content == nil || *r.messages[0].Content != "hi" {
+		t.Fatalf("unexpected content %v", r.messages[0].Content)
 	}
 }
 
@@ -547,8 +703,147 @@ func TestReduceIgnoresUnknownEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reduce err: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("expected no messages, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+}
+
+func TestHandleActivityAllCases(t *testing.T) {
+	stepStarted := aguievents.NewStepStartedEvent("prep")
+	stepFinished := aguievents.NewStepFinishedEvent("cleanup")
+	stateSnapshot := aguievents.NewStateSnapshotEvent(map[string]any{"status": "ok"})
+	stateDeltaOps := []aguievents.JSONPatchOperation{{Op: "add", Path: "/count", Value: 1}}
+	stateDelta := aguievents.NewStateDeltaEvent(stateDeltaOps)
+	messageSnapshotEvent := aguievents.NewMessagesSnapshotEvent([]aguievents.Message{
+		{ID: "msg-1", Role: "assistant"},
+	})
+	activitySnapshot := aguievents.NewActivitySnapshotEvent("activity-1", "PLAN", map[string]any{"status": "draft"}).WithReplace(false)
+	activityDeltaOps := []aguievents.JSONPatchOperation{{Op: "replace", Path: "/status", Value: "done"}}
+	activityDelta := aguievents.NewActivityDeltaEvent("activity-2", "PLAN", activityDeltaOps)
+	customEvent := aguievents.NewCustomEvent("custom-event", aguievents.WithValue(map[string]any{"k": "v"}))
+	rawEvent := aguievents.NewRawEvent(map[string]any{"raw": true}, aguievents.WithSource("unit-test"))
+	runStarted := aguievents.NewRunStartedEvent("thread-1", "run-1")
+
+	tests := []struct {
+		name        string
+		event       aguievents.Event
+		wantID      string
+		wantType    string
+		wantContent map[string]any
+	}{
+		{
+			name:        "step started",
+			event:       stepStarted,
+			wantID:      stepStarted.ID(),
+			wantType:    string(stepStarted.Type()),
+			wantContent: map[string]any{"stepName": stepStarted.StepName},
+		},
+		{
+			name:        "step finished",
+			event:       stepFinished,
+			wantID:      stepFinished.ID(),
+			wantType:    string(stepFinished.Type()),
+			wantContent: map[string]any{"stepName": stepFinished.StepName},
+		},
+		{
+			name:        "state snapshot",
+			event:       stateSnapshot,
+			wantID:      stateSnapshot.ID(),
+			wantType:    string(stateSnapshot.Type()),
+			wantContent: map[string]any{"snapshot": stateSnapshot.Snapshot},
+		},
+		{
+			name:        "state delta",
+			event:       stateDelta,
+			wantID:      stateDelta.ID(),
+			wantType:    string(stateDelta.Type()),
+			wantContent: map[string]any{"delta": stateDelta.Delta},
+		},
+		{
+			name:        "messages snapshot",
+			event:       messageSnapshotEvent,
+			wantID:      messageSnapshotEvent.ID(),
+			wantType:    string(messageSnapshotEvent.Type()),
+			wantContent: map[string]any{"messages": messageSnapshotEvent.Messages},
+		},
+		{
+			name:     "activity snapshot",
+			event:    activitySnapshot,
+			wantID:   activitySnapshot.ID(),
+			wantType: string(activitySnapshot.Type()),
+			wantContent: map[string]any{
+				"messageId":    activitySnapshot.MessageID,
+				"activityType": activitySnapshot.ActivityType,
+				"content":      activitySnapshot.Content,
+				"replace":      activitySnapshot.Replace,
+			},
+		},
+		{
+			name:     "activity delta",
+			event:    activityDelta,
+			wantID:   activityDelta.ID(),
+			wantType: string(activityDelta.Type()),
+			wantContent: map[string]any{
+				"messageId":    activityDelta.MessageID,
+				"activityType": activityDelta.ActivityType,
+				"patch":        activityDelta.Patch,
+			},
+		},
+		{
+			name:     "custom event",
+			event:    customEvent,
+			wantID:   customEvent.ID(),
+			wantType: string(customEvent.Type()),
+			wantContent: map[string]any{
+				"name":  customEvent.Name,
+				"value": customEvent.Value,
+			},
+		},
+		{
+			name:     "raw event",
+			event:    rawEvent,
+			wantID:   rawEvent.ID(),
+			wantType: string(rawEvent.Type()),
+			wantContent: map[string]any{
+				"source": rawEvent.Source,
+				"event":  rawEvent.Event,
+			},
+		},
+		{
+			name:        "default passthrough",
+			event:       runStarted,
+			wantID:      runStarted.GetBaseEvent().ID(),
+			wantType:    string(runStarted.Type()),
+			wantContent: map[string]any{"content": runStarted},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := new(testAppName, testUserID)
+			if err := r.handleActivity(tt.event); err != nil {
+				t.Fatalf("handleActivity err: %v", err)
+			}
+			if len(r.messages) != 1 {
+				t.Fatalf("expected 1 activity message, got %d", len(r.messages))
+			}
+			msg := r.messages[0]
+			if msg.Role != "activity" {
+				t.Fatalf("unexpected role %q", msg.Role)
+			}
+			if msg.ID != tt.wantID {
+				t.Fatalf("unexpected id %q", msg.ID)
+			}
+			if msg.ActivityType != tt.wantType {
+				t.Fatalf("unexpected activity type %q", msg.ActivityType)
+			}
+			if msg.Content != nil {
+				t.Fatalf("expected nil text content, got %v", msg.Content)
+			}
+			if !reflect.DeepEqual(msg.ActivityContent, tt.wantContent) {
+				t.Fatalf("unexpected activity content %+v", msg.ActivityContent)
+			}
+		})
 	}
 }
 

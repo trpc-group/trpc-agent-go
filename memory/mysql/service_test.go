@@ -180,14 +180,6 @@ func TestNewService_DSNPriority(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestNewService_MissingDSNAndInstance tests that service creation fails when neither DSN nor instanceName is provided.
-func TestNewService_MissingDSNAndInstance(t *testing.T) {
-	service, err := NewService()
-	require.Error(t, err)
-	assert.Nil(t, service)
-	assert.Contains(t, err.Error(), "either dsn or instance name must be provided")
-}
-
 // TestNewService_WithSkipDBInit tests that skipDBInit option skips database initialization.
 func TestNewService_WithSkipDBInit(t *testing.T) {
 	mockDB, mock := setupMockDB(t)

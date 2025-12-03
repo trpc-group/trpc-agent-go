@@ -14,9 +14,9 @@ replace (
 require (
 	github.com/google/uuid v1.6.0
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (
@@ -34,7 +34,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
-	github.com/panjf2000/ants/v2 v2.9.0 // indirect
+	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect

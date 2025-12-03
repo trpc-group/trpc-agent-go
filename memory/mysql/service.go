@@ -15,7 +15,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -28,11 +27,6 @@ import (
 )
 
 var _ memory.Service = (*Service)(nil)
-
-const (
-	// defaultDBInitTimeout is the default timeout for database initialization.
-	defaultDBInitTimeout = 30 * time.Second
-)
 
 // Service is the mysql memory service.
 // Storage structure:
@@ -51,51 +45,26 @@ type Service struct {
 
 // NewService creates a new mysql memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
-	opts := ServiceOpts{
-		tableName:    "memories",
-		memoryLimit:  imemory.DefaultMemoryLimit,
-		toolCreators: make(map[string]memory.ToolCreator),
-		enabledTools: make(map[string]bool),
-	}
-	// Copy all tool creators.
-	for name, creator := range imemory.AllToolCreators {
-		opts.toolCreators[name] = creator
-	}
-	// Enable default tools.
-	for name, enabled := range imemory.DefaultEnabledTools {
-		opts.enabledTools[name] = enabled
-	}
+	opts := defaultOptions.clone()
 	for _, option := range options {
 		option(&opts)
 	}
 
-	// Create MySQL client
-	builder := storage.GetClientBuilder()
-	var db storage.Client
-	var err error
-
+	builderOpts := []storage.ClientBuilderOpt{
+		storage.WithClientBuilderDSN(opts.dsn),
+		storage.WithExtraOptions(opts.extraOptions...),
+	}
 	// Priority: dsn > instanceName.
-	if opts.dsn != "" {
-		// Method 1: Use DSN directly (recommended).
-		db, err = builder(
-			storage.WithClientBuilderDSN(opts.dsn),
-			storage.WithExtraOptions(opts.extraOptions...),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create mysql client from dsn failed: %w", err)
-		}
-	} else if opts.instanceName != "" {
-		// Method 2: Use pre-registered MySQL instance.
-		builderOpts, ok := storage.GetMySQLInstance(opts.instanceName)
-		if !ok {
+	if opts.dsn == "" && opts.instanceName != "" {
+		var ok bool
+		if builderOpts, ok = storage.GetMySQLInstance(opts.instanceName); !ok {
 			return nil, fmt.Errorf("mysql instance %s not found", opts.instanceName)
 		}
-		db, err = builder(builderOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create mysql client from instance name failed: %w", err)
-		}
-	} else {
-		return nil, errors.New("either dsn or instance name must be provided")
+	}
+
+	db, err := storage.GetClientBuilder()(builderOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("create mysql client failed: %w", err)
 	}
 
 	s := &Service{

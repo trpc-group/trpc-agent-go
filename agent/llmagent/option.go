@@ -53,9 +53,10 @@ var (
 	defaultOptions = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
 		EndInvocationAfterTransfer: true,
-		// Default to preserving same-branch lineage so assistant/tool roles
-		// from parent/child branches are retained for downstream agents.
-		PreserveSameBranch: true,
+		// Default to rewriting same-branch lineage events to user context so
+		// that downstream agents see a consolidated user message stream unless
+		// explicitly opted into preserving assistant/tool roles.
+		PreserveSameBranch: false,
 	}
 )
 
@@ -145,7 +146,8 @@ type Options struct {
 	// belong to the same invocation branch lineage (ancestor/descendant).
 	// When true, messages emitted within the same branch tree will not be
 	// rewritten into user context, keeping their original roles intact.
-	// Default is true (correct-by-default for multi-agent flows).
+	// Default is false, so same-branch events are merged into user context
+	// unless explicitly opted into preserving roles.
 	PreserveSameBranch bool
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
@@ -433,7 +435,7 @@ func WithMaxHistoryRuns(maxRuns int) Option {
 // WithPreserveSameBranch controls whether messages from the same invocation
 // branch lineage (ancestor/descendant) should preserve their original roles
 // instead of being rewritten into user context when used as history.
-// Default is true.
+// Default is false.
 func WithPreserveSameBranch(preserve bool) Option {
 	return func(opts *Options) {
 		opts.PreserveSameBranch = preserve

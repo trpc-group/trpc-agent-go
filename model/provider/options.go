@@ -14,6 +14,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
@@ -39,6 +40,7 @@ type Options struct {
 	TokenTailoringConfig *model.TokenTailoringConfig // TokenTailoringConfig customizes token tailoring budget parameters for all providers.
 	OpenAIOption         []openai.Option             // OpenAIOption stores additional OpenAI options.
 	AnthropicOption      []anthropic.Option          // AnthropicOption stores additional Anthropic options.
+	GeminiOption         []gemini.Option             // GeminiOption stores additional Gemini options.
 }
 
 // Callbacks collects provider specific callback hooks.
@@ -59,6 +61,14 @@ type Callbacks struct {
 	AnthropicChatChunk anthropic.ChatChunkCallbackFunc
 	// AnthropicStreamComplete runs after an Anthropic streaming session completes.
 	AnthropicStreamComplete anthropic.ChatStreamCompleteCallbackFunc
+	// GeminiChatRequest runs before dispatching a chat request to Gemini providers.
+	GeminiChatRequest gemini.ChatRequestCallbackFunc
+	// GeminiChatResponse runs after receiving a full chat response from Gemini providers.
+	GeminiChatResponse gemini.ChatResponseCallbackFunc
+	// GeminiChatChunk runs for each streaming chunk from Gemini providers.
+	GeminiChatChunk gemini.ChatChunkCallbackFunc
+	// GeminiStreamComplete runs after an Gemini streaming session completes.
+	GeminiStreamComplete gemini.ChatStreamCompleteCallbackFunc
 }
 
 // WithAPIKey records the API key for the provider.
@@ -211,5 +221,12 @@ func WithOpenAIOption(opt ...openai.Option) Option {
 func WithAnthropicOption(opt ...anthropic.Option) Option {
 	return func(o *Options) {
 		o.AnthropicOption = append(o.AnthropicOption, opt...)
+	}
+}
+
+// WithGeminiOption appends raw Gemini options.
+func WithGeminiOption(opt ...gemini.Option) Option {
+	return func(o *Options) {
+		o.GeminiOption = append(o.GeminiOption, opt...)
 	}
 }

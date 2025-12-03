@@ -20,12 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const defaultChannelBufferSize = 256
-
-// EscalationFunc is a callback function that determines if an event should
-// trigger escalation (stop the cycle). Return true to stop the cycle.
-type EscalationFunc func(*event.Event) bool
-
 // CycleAgent is an agent that runs its sub-agents in a loop.
 // When a sub-agent generates an event with escalation or max_iterations are
 // reached, the cycle agent will stop.
@@ -38,65 +32,11 @@ type CycleAgent struct {
 	escalationFunc    EscalationFunc // Injectable escalation logic
 }
 
-// Option configures CycleAgent settings using the functional options pattern.
-// This type is exported to allow external packages to create custom options.
-type Option func(*Options)
-
-// Options contains all configuration options for CycleAgent.
-// This struct is exported to allow external packages to inspect or modify options.
-type Options struct {
-	subAgents         []agent.Agent
-	maxIterations     *int
-	channelBufferSize int
-	agentCallbacks    *agent.Callbacks
-	escalationFunc    EscalationFunc
-}
-
-// WithSubAgents sets the sub-agents that will be executed in a loop.
-// The agents will run repeatedly until an escalation condition is met
-// or the maximum number of iterations is reached.
-func WithSubAgents(sub []agent.Agent) Option {
-	return func(o *Options) { o.subAgents = sub }
-}
-
-// WithMaxIterations sets the maximum number of loop iterations.
-// If not set, the loop will continue until an escalation condition is met.
-// This prevents infinite loops in case escalation detection fails.
-func WithMaxIterations(max int) Option {
-	return func(o *Options) { o.maxIterations = &max }
-}
-
-// WithChannelBufferSize sets the buffer size for the event channel.
-// This controls how many events can be buffered before blocking.
-// Default is 256 if not specified.
-func WithChannelBufferSize(size int) Option {
-	return func(o *Options) {
-		if size < 0 {
-			size = defaultChannelBufferSize
-		}
-		o.channelBufferSize = size
-	}
-}
-
-// WithAgentCallbacks attaches lifecycle callbacks to the cycle agent.
-// These callbacks allow custom logic to be executed before and after
-// the cycle agent runs.
-func WithAgentCallbacks(cb *agent.Callbacks) Option {
-	return func(o *Options) { o.agentCallbacks = cb }
-}
-
-// WithEscalationFunc sets a custom function to detect escalation conditions.
-// This function determines when the loop should stop based on events.
-// If not set, a default escalation detection is used.
-func WithEscalationFunc(f EscalationFunc) Option {
-	return func(o *Options) { o.escalationFunc = f }
-}
-
 // New creates a new CycleAgent with the given name and options.
 // CycleAgent executes its sub-agents in a loop until an escalation condition
 // is met or the maximum number of iterations is reached.
 func New(name string, opts ...Option) *CycleAgent {
-	cfg := Options{channelBufferSize: defaultChannelBufferSize}
+	cfg := defaultOptions
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
@@ -181,16 +121,19 @@ func (a *CycleAgent) setupInvocation(invocation *agent.Invocation) {
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
+// Returns the updated context and whether execution should stop early.
 func (a *CycleAgent) handleBeforeAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) bool {
+) (context.Context, bool) {
 	if a.agentCallbacks == nil {
-		return false
+		return ctx, false
 	}
 
-	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	result, err := a.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
+		Invocation: invocation,
+	})
 	if err != nil {
 		// Send error event.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
@@ -199,18 +142,22 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	if customResponse != nil {
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response and then close.
 		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		))
-		return true // Indicates early return
+		return ctx, true // Indicates early return
 	}
-	return false // Continue execution
+	return ctx, false // Continue execution
 }
 
 // runSubAgent executes a single sub-agent and forwards its events.
@@ -219,6 +166,7 @@ func (a *CycleAgent) runSubAgent(
 	subAgent agent.Agent,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent **event.Event,
 ) bool {
 	// Create a proper invocation for the sub-agent with correct attribution.
 	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
@@ -241,6 +189,9 @@ func (a *CycleAgent) runSubAgent(
 
 	// Forward events from the sub-agent and check for escalation.
 	for subEvent := range subEventChan {
+		if subEvent != nil && subEvent.Response != nil && !subEvent.Response.IsPartial {
+			*fullRespEvent = subEvent
+		}
 		if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 			return true
 		}
@@ -259,6 +210,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent **event.Event,
 ) bool {
 	for _, subAgent := range a.subAgents {
 		// Check if context was cancelled.
@@ -267,7 +219,7 @@ func (a *CycleAgent) runSubAgentsLoop(
 		}
 
 		// Run the sub-agent.
-		if a.runSubAgent(ctx, subAgent, invocation, eventChan) {
+		if a.runSubAgent(ctx, subAgent, invocation, eventChan, fullRespEvent) {
 			return true // Indicates escalation or early return
 		}
 
@@ -284,12 +236,21 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+	fullRespEvent *event.Event,
 ) {
 	if a.agentCallbacks == nil {
 		return
 	}
 
-	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation:        invocation,
+		Error:             nil,
+		FullResponseEvent: fullRespEvent,
+	})
+	// Use the context from result if provided.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
@@ -299,12 +260,12 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+	} else if result != nil && result.CustomResponse != nil {
 		// Create an event from the custom response.
 		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
-			customResponse,
+			result.CustomResponse,
 		)
 	}
 
@@ -323,11 +284,14 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		defer close(eventChan)
 
 		// Handle before agent callbacks.
-		if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+		var shouldReturn bool
+		ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
+		if shouldReturn {
 			return
 		}
 
 		var timesLooped int
+		var fullRespEvent *event.Event
 
 		// Main loop: continue until max iterations or escalation.
 		for a.maxIterations == nil || timesLooped < *a.maxIterations {
@@ -336,8 +300,8 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 				return
 			}
 
-			// Run sub-agents loop.
-			if a.runSubAgentsLoop(ctx, invocation, eventChan) {
+			// Run sub-agents loop and collect full response event.
+			if a.runSubAgentsLoop(ctx, invocation, eventChan, &fullRespEvent) {
 				break // Escalation or early return
 			}
 
@@ -345,7 +309,7 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		}
 
 		// Handle after agent callbacks.
-		a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+		a.handleAfterAgentCallbacks(ctx, invocation, eventChan, fullRespEvent)
 	}()
 
 	return eventChan, nil

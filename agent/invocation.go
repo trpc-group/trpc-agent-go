@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -137,6 +138,35 @@ func WithRuntimeState(state map[string]any) RunOption {
 	return func(opts *RunOptions) {
 		opts.RuntimeState = state
 	}
+}
+
+// GetRuntimeStateValue retrieves a typed value from the runtime state.
+//
+// Returns the typed value and true if the key exists and the type matches,
+// or the zero value and false otherwise.
+//
+// Example:
+//
+//	if userID, ok := GetRuntimeStateValue[string](&inv.RunOptions, "user_id"); ok {
+//	    log.Printf("User ID: %s", userID)
+//	}
+//	if roomID, ok := GetRuntimeStateValue[int](&inv.RunOptions, "room_id"); ok {
+//	    log.Printf("Room ID: %d", roomID)
+//	}
+func GetRuntimeStateValue[T any](opts *RunOptions, key string) (T, bool) {
+	var zero T
+	if opts == nil || opts.RuntimeState == nil {
+		return zero, false
+	}
+	val, ok := opts.RuntimeState[key]
+	if !ok {
+		return zero, false
+	}
+	typedVal, ok := val.(T)
+	if !ok {
+		return zero, false
+	}
+	return typedVal, true
 }
 
 // WithKnowledgeFilter sets the metadata filter for the RunOptions.
@@ -488,7 +518,7 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		agentName = inv.AgentName
 		requestID = inv.RunOptions.RequestID
 	}
-	log.Debugf("[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: %d, current length: %d, branch: %s, agent name:%s",
+	log.Tracef("[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: %d, current length: %d, branch: %s, agent name:%s",
 		requestID, cap(ch), len(ch), e.Branch, agentName)
 	return event.EmitEvent(ctx, ch, e)
 }
@@ -558,6 +588,30 @@ func (inv *Invocation) GetState(key string) (any, bool) {
 	return value, ok
 }
 
+// GetStateValue retrieves a typed value from the invocation state.
+//
+// Returns the typed value and true if the key exists and the type matches,
+// or the zero value and false otherwise.
+//
+// Example:
+//
+//	if startTime, ok := GetStateValue[time.Time](inv, "agent:start_time"); ok {
+//	    duration := time.Since(startTime)
+//	}
+//	if requestID, ok := GetStateValue[string](inv, "middleware:request_id"); ok {
+//	    log.Printf("Request ID: %s", requestID)
+//	}
+func GetStateValue[T any](inv *Invocation, key string) (T, bool) {
+	var zero T
+	if inv == nil {
+		return zero, false
+	}
+	inv.stateMu.RLock()
+	defer inv.stateMu.RUnlock()
+
+	return util.GetMapValue[string, T](inv.state, key)
+}
+
 // GetOrCreateTimingInfo gets or creates timing info for this invocation.
 // Only the first LLM call will create and populate timing info; subsequent calls reuse it.
 // This ensures timing metrics only reflect the first LLM call in scenarios with multiple calls (e.g., tool calls).
@@ -608,6 +662,8 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	select {
 	case <-ch:
 	case <-time.After(timeout):
+		log.Infof("[AddNoticeChannelAndWait]: Wait for notification message timeout. key: %s, timeout: %d(s)",
+			key, int64(timeout/time.Second))
 		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
 	case <-ctx.Done():
 		return ctx.Err()
@@ -648,6 +704,7 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 
 	ch, ok := inv.noticeChanMap[key]
 	if !ok {
+		log.Warnf("notice channel not found for %s", key)
 		return fmt.Errorf("notice channel not found for %s", key)
 	}
 
