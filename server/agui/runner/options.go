@@ -32,7 +32,7 @@ type Options struct {
 	RunOptionResolver  RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
 	AggregatorFactory  aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
 	AggregationOption  []aggregator.Option   // AggregationOption is the aggregation options for each run.
-	FlushInterval      time.Duration
+	FlushInterval      time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
 }
 
 // NewOptions creates a new options instance.
@@ -119,6 +119,7 @@ func WithAggregatorFactory(factory aggregator.Factory) Option {
 	}
 }
 
+// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *Options) {
 		o.FlushInterval = d
@@ -150,7 +151,7 @@ func defaultRunAgentInputHook(ctx context.Context, input *adapter.RunAgentInput)
 	return input, nil
 }
 
-// defaultRunnerOptionResolver is the default runner option resolver.
+// defaultRunOptionResolver is the default run option resolver.
 func defaultRunOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
 	return nil, nil
 }

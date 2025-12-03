@@ -104,7 +104,7 @@ func TestTrackerAppendEventErrors(t *testing.T) {
 		tracker, err := New(svc)
 		require.NoError(t, err)
 		err = tracker.AppendEvent(ctx, validKey, aguievents.NewRunStartedEvent("thread", "run"))
-		require.ErrorContains(t, err, "append event: append broke")
+		require.ErrorContains(t, err, "persist events: append track event")
 	})
 }
 

@@ -41,7 +41,7 @@ type Tracker interface {
 type tracker struct {
 	sessionService    session.Service               // sessionService handles session lifecycle.
 	trackService      session.TrackService          // trackService persists track events.
-	mu                sync.Mutex                    // mu guards aggregators.
+	mu                sync.Mutex                    // mu guards the sessionStates map.
 	aggregatorFactory aggregator.Factory            // aggregatorFactory builds aggregators for new sessions.
 	aggregationOption []aggregator.Option           // aggregationOption applies to newly built aggregators.
 	sessionStates     map[session.Key]*sessionState // sessionStates stores the state of each session.
@@ -52,7 +52,7 @@ type tracker struct {
 type sessionState struct {
 	mu         sync.Mutex            // mu guards the aggregator and the done channel.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
-	done       chan struct{}         // done is closed when the session is flushed.
+	done       chan struct{}         // done is closed when the session state is removed.
 }
 
 // New creates a new tracker.
@@ -169,7 +169,7 @@ func (t *tracker) ensureSessionExists(ctx context.Context, key session.Key) (*se
 	return sess, nil
 }
 
-// getAggregator returns the cached aggregator for the session, creating one when missing.
+// getSessionState returns the cached session state for the key, creating one when missing.
 func (t *tracker) getSessionState(ctx context.Context, key session.Key) *sessionState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -188,7 +188,7 @@ func (t *tracker) getSessionState(ctx context.Context, key session.Key) *session
 	return state
 }
 
-// deleteAggregator removes the cached aggregator for the session key.
+// deleteSessionState removes the cached session state for the session key.
 func (t *tracker) deleteSessionState(key session.Key) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
