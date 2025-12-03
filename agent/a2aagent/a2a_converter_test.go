@@ -158,20 +158,25 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setupFunc(&tc)
-			event, err := converter.ConvertToEvent(tc.result, tc.agentName, tc.invocation)
-			tc.validateFunc(t, event, err)
+			events, err := converter.ConvertToEvents(tc.result, tc.agentName, tc.invocation)
+			// For backward compatibility, pass the first event to validateFunc
+			var evt *event.Event
+			if len(events) > 0 {
+				evt = events[len(events)-1] // Use last event (final response)
+			}
+			tc.validateFunc(t, evt, err)
 		})
 	}
 }
 
-func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
+func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 	type testCase struct {
 		name         string
 		result       protocol.StreamingMessageEvent
 		agentName    string
 		invocation   *agent.Invocation
 		setupFunc    func(tc *testCase)
-		validateFunc func(t *testing.T, event *event.Event, err error)
+		validateFunc func(t *testing.T, events []*event.Event, err error)
 	}
 
 	tests := []testCase{
@@ -185,18 +190,19 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				InvocationID: "test-id",
 			},
 			setupFunc: func(tc *testCase) {},
-			validateFunc: func(t *testing.T, event *event.Event, err error) {
+			validateFunc: func(t *testing.T, events []*event.Event, err error) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
-				if event == nil {
-					t.Fatal("expected event, got nil")
+				if len(events) == 0 {
+					t.Fatal("expected at least one event, got none")
 				}
-				if event.Author != "test-agent" {
-					t.Errorf("expected author 'test-agent', got %s", event.Author)
+				evt := events[0]
+				if evt.Author != "test-agent" {
+					t.Errorf("expected author 'test-agent', got %s", evt.Author)
 				}
-				if event.InvocationID != "test-id" {
-					t.Errorf("expected invocation ID 'test-id', got %s", event.InvocationID)
+				if evt.InvocationID != "test-id" {
+					t.Errorf("expected invocation ID 'test-id', got %s", evt.InvocationID)
 				}
 			},
 		},
@@ -215,30 +221,31 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				InvocationID: "test-id",
 			},
 			setupFunc: func(tc *testCase) {},
-			validateFunc: func(t *testing.T, event *event.Event, err error) {
+			validateFunc: func(t *testing.T, events []*event.Event, err error) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
-				if event == nil {
-					t.Fatal("expected event, got nil")
+				if len(events) == 0 {
+					t.Fatal("expected at least one event, got none")
 				}
-				if event.Response == nil {
+				evt := events[0]
+				if evt.Response == nil {
 					t.Fatal("expected response, got nil")
 				}
-				if !event.Response.IsPartial {
+				if !evt.Response.IsPartial {
 					t.Error("expected IsPartial to be true for streaming")
 				}
-				if event.Response.Done {
+				if evt.Response.Done {
 					t.Error("expected Done to be false for streaming")
 				}
-				if len(event.Response.Choices) != 1 {
-					t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
+				if len(evt.Response.Choices) != 1 {
+					t.Errorf("expected 1 choice, got %d", len(evt.Response.Choices))
 				}
-				if event.Response.ID != "stream-1" {
-					t.Errorf("expected response ID 'stream-1', got %s", event.Response.ID)
+				if evt.Response.ID != "stream-1" {
+					t.Errorf("expected response ID 'stream-1', got %s", evt.Response.ID)
 				}
-				if event.Response.Object != model.ObjectTypeChatCompletionChunk {
-					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, event.Response.Object)
+				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
 				}
 			},
 		},
@@ -261,21 +268,22 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				InvocationID: "test-id",
 			},
 			setupFunc: func(tc *testCase) {},
-			validateFunc: func(t *testing.T, event *event.Event, err error) {
+			validateFunc: func(t *testing.T, events []*event.Event, err error) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
-				if event == nil {
-					t.Fatal("expected event, got nil")
+				if len(events) == 0 {
+					t.Fatal("expected at least one event, got none")
 				}
-				if event.Response == nil {
+				evt := events[0]
+				if evt.Response == nil {
 					t.Fatal("expected response, got nil")
 				}
-				if event.Response.ID != "artifact-1" {
-					t.Errorf("expected response ID 'artifact-1', got %s", event.Response.ID)
+				if evt.Response.ID != "artifact-1" {
+					t.Errorf("expected response ID 'artifact-1', got %s", evt.Response.ID)
 				}
-				if event.Response.Object != model.ObjectTypeChatCompletionChunk {
-					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, event.Response.Object)
+				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
 				}
 			},
 		},
@@ -301,21 +309,22 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				InvocationID: "test-id",
 			},
 			setupFunc: func(tc *testCase) {},
-			validateFunc: func(t *testing.T, event *event.Event, err error) {
+			validateFunc: func(t *testing.T, events []*event.Event, err error) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
-				if event == nil {
-					t.Fatal("expected event, got nil")
+				if len(events) == 0 {
+					t.Fatal("expected at least one event, got none")
 				}
-				if event.Response == nil {
+				evt := events[0]
+				if evt.Response == nil {
 					t.Fatal("expected response, got nil")
 				}
-				if event.Response.ID != "status-1" {
-					t.Errorf("expected response ID 'status-1', got %s", event.Response.ID)
+				if evt.Response.ID != "status-1" {
+					t.Errorf("expected response ID 'status-1', got %s", evt.Response.ID)
 				}
-				if event.Response.Object != model.ObjectTypeChatCompletionChunk {
-					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, event.Response.Object)
+				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
 				}
 			},
 		},
@@ -336,21 +345,22 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 				InvocationID: "test-id",
 			},
 			setupFunc: func(tc *testCase) {},
-			validateFunc: func(t *testing.T, event *event.Event, err error) {
+			validateFunc: func(t *testing.T, events []*event.Event, err error) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
-				if event == nil {
-					t.Fatal("expected event, got nil")
+				if len(events) == 0 {
+					t.Fatal("expected at least one event, got none")
 				}
-				if event.Response == nil {
+				evt := events[0]
+				if evt.Response == nil {
 					t.Fatal("expected response, got nil")
 				}
-				if event.Response.ID != "artifact-99" {
-					t.Errorf("expected response ID 'artifact-99', got %s", event.Response.ID)
+				if evt.Response.ID != "artifact-99" {
+					t.Errorf("expected response ID 'artifact-99', got %s", evt.Response.ID)
 				}
-				if event.Response.Object != model.ObjectTypeChatCompletionChunk {
-					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, event.Response.Object)
+				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
 				}
 			},
 		},
@@ -361,8 +371,8 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvent(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setupFunc(&tc)
-			event, err := converter.ConvertStreamingToEvent(tc.result, tc.agentName, tc.invocation)
-			tc.validateFunc(t, event, err)
+			events, err := converter.ConvertStreamingToEvents(tc.result, tc.agentName, tc.invocation)
+			tc.validateFunc(t, events, err)
 		})
 	}
 }
@@ -1250,8 +1260,8 @@ func TestProcessDataPartInto_ADKMetadataKey(t *testing.T) {
 				},
 			},
 			validateFunc: func(t *testing.T, result *parseResult) {
-				if result.getContent() != "" {
-					t.Errorf("expected empty content, got %s", result.getContent())
+				if result.textContent != "" {
+					t.Errorf("expected empty content, got %s", result.textContent)
 				}
 				if len(result.toolCalls) > 0 {
 					t.Errorf("expected no tool calls, got %v", result.toolCalls)
@@ -1271,8 +1281,8 @@ func TestProcessDataPartInto_ADKMetadataKey(t *testing.T) {
 				Metadata: nil,
 			},
 			validateFunc: func(t *testing.T, result *parseResult) {
-				if result.getContent() != "" {
-					t.Errorf("expected empty content, got %s", result.getContent())
+				if result.textContent != "" {
+					t.Errorf("expected empty content, got %s", result.textContent)
 				}
 				if len(result.toolCalls) > 0 {
 					t.Errorf("expected no tool calls, got %v", result.toolCalls)
@@ -1294,8 +1304,8 @@ func TestProcessDataPartInto_ADKMetadataKey(t *testing.T) {
 				},
 			},
 			validateFunc: func(t *testing.T, result *parseResult) {
-				if result.getContent() != "" {
-					t.Errorf("expected empty content, got %s", result.getContent())
+				if result.textContent != "" {
+					t.Errorf("expected empty content, got %s", result.textContent)
 				}
 				if len(result.toolCalls) > 0 {
 					t.Errorf("expected no tool calls, got %v", result.toolCalls)

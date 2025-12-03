@@ -252,32 +252,37 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 				return
 			}
 
-			evt, err := r.eventConverter.ConvertStreamingToEvent(streamEvent, r.name, invocation)
+			events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
 			if err != nil {
 				r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
 				return
 			}
 
-			// Aggregate content from delta
-			if evt.Response != nil && len(evt.Response.Choices) > 0 {
-				if evt.Response.ID != "" {
-					responseID = evt.Response.ID
+			for _, evt := range events {
+				if evt == nil {
+					continue
 				}
-				if r.streamingRespHandler != nil {
-					content, err := r.streamingRespHandler(evt.Response)
-					if err != nil {
-						r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
-						return
+				// Aggregate content from delta
+				if evt.Response != nil && len(evt.Response.Choices) > 0 {
+					if evt.Response.ID != "" {
+						responseID = evt.Response.ID
 					}
-					if content != "" {
-						aggregatedContentBuilder.WriteString(content)
+					if r.streamingRespHandler != nil {
+						content, err := r.streamingRespHandler(evt.Response)
+						if err != nil {
+							r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
+							return
+						}
+						if content != "" {
+							aggregatedContentBuilder.WriteString(content)
+						}
+					} else if evt.Response.Choices[0].Delta.Content != "" {
+						aggregatedContentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
 					}
-				} else if evt.Response.Choices[0].Delta.Content != "" {
-					aggregatedContentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
 				}
-			}
 
-			agent.EmitEvent(ctx, invocation, eventChan, evt)
+				agent.EmitEvent(ctx, invocation, eventChan, evt)
+			}
 		}
 
 		agent.EmitEvent(ctx, invocation, eventChan, event.New(
@@ -339,15 +344,18 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 			return
 		}
 
-		// Try custom event converters first
+		// Convert A2A response to multiple events
 		msgResult := protocol.MessageResult{Result: result.Result}
-		evt, err := r.eventConverter.ConvertToEvent(msgResult, r.name, invocation)
+		events, err := r.eventConverter.ConvertToEvents(msgResult, r.name, invocation)
 		if err != nil {
 			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
 			return
 		}
 
-		agent.EmitEvent(ctx, invocation, eventChan, evt)
+		// Emit all events
+		for _, evt := range events {
+			agent.EmitEvent(ctx, invocation, eventChan, evt)
+		}
 	}()
 	return eventChan, nil
 }
