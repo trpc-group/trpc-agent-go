@@ -68,6 +68,7 @@ def create_agent() -> Agent:
 
 IMPORTANT: When writing Python code, you MUST use print() to output results. 
 The code executor only captures stdout, so any result you want to see must be printed.
+
 IMPORTANT: After code execution results are shown, provide a final text answer 
 to the user. Do NOT generate more code unless the user asks for it.
 
@@ -82,9 +83,6 @@ Example - CORRECT:
 result = [1, 2, 3]
 print(result)  # This will show the output
 ```
-
-IMPORTANT: After code execution results are shown, provide a final text answer 
-to the user. Do NOT generate more code unless the user asks for it.
 """,
         model=model,
         code_executor=code_executor,
