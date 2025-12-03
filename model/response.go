@@ -37,8 +37,10 @@ const (
 	ObjectTypePreprocessingPlanning = "preprocessing.planning"
 	// ObjectTypePostprocessingPlanning is the object type for planning postprocessing events.
 	ObjectTypePostprocessingPlanning = "postprocessing.planning"
-
+	// ObjectTypePostprocessingCodeExecution is the object type for code execution postprocessing events.
 	ObjectTypePostprocessingCodeExecution = "postprocessing.code_execution"
+	// ObjectTypePostprocessingCodeExecutionResult is the object type for code execution postprocessing result events.
+	ObjectTypePostprocessingCodeExecutionResult = "postprocessing.code_execution_Result"
 	// ObjectTypeTransfer is the object type for agent transfer events.
 	ObjectTypeTransfer = "agent.transfer"
 	// ObjectTypeRunnerCompletion is the object type for runner completion events.

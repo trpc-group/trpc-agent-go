@@ -1086,104 +1086,12 @@ func TestBuildRespEvent_MixedContent(t *testing.T) {
 	}
 }
 
-// TestConvertDataPartToToolCall tests the tool call conversion function
-func TestConvertDataPartToToolCall(t *testing.T) {
+// TestProcessFunctionResponse tests the function response processing
+func TestProcessFunctionResponse(t *testing.T) {
 	type testCase struct {
 		name         string
 		dataPart     *protocol.DataPart
-		validateFunc func(t *testing.T, toolCall *model.ToolCall)
-	}
-
-	tests := []testCase{
-		{
-			name: "valid tool call",
-			dataPart: &protocol.DataPart{
-				Data: map[string]any{
-					"id":   "call-1",
-					"type": "function",
-					"name": "get_weather",
-					"args": `{"location": "NYC"}`,
-				},
-			},
-			validateFunc: func(t *testing.T, toolCall *model.ToolCall) {
-				if toolCall == nil {
-					t.Fatal("expected tool call, got nil")
-				}
-				if toolCall.ID != "call-1" {
-					t.Errorf("expected ID 'call-1', got %s", toolCall.ID)
-				}
-				if toolCall.Type != "function" {
-					t.Errorf("expected type 'function', got %s", toolCall.Type)
-				}
-				if toolCall.Function.Name != "get_weather" {
-					t.Errorf("expected name 'get_weather', got %s", toolCall.Function.Name)
-				}
-				if string(toolCall.Function.Arguments) != `{"location": "NYC"}` {
-					t.Errorf("expected args '{\"location\": \"NYC\"}', got %s", string(toolCall.Function.Arguments))
-				}
-			},
-		},
-		{
-			name: "missing function name",
-			dataPart: &protocol.DataPart{
-				Data: map[string]any{
-					"id":   "call-2",
-					"type": "function",
-					"args": `{"x": 10}`,
-				},
-			},
-			validateFunc: func(t *testing.T, toolCall *model.ToolCall) {
-				if toolCall != nil {
-					t.Errorf("expected nil for missing name, got %v", toolCall)
-				}
-			},
-		},
-		{
-			name: "invalid data type",
-			dataPart: &protocol.DataPart{
-				Data: "not a map",
-			},
-			validateFunc: func(t *testing.T, toolCall *model.ToolCall) {
-				if toolCall != nil {
-					t.Errorf("expected nil for invalid data, got %v", toolCall)
-				}
-			},
-		},
-		{
-			name: "partial fields",
-			dataPart: &protocol.DataPart{
-				Data: map[string]any{
-					"name": "search",
-				},
-			},
-			validateFunc: func(t *testing.T, toolCall *model.ToolCall) {
-				if toolCall == nil {
-					t.Fatal("expected tool call, got nil")
-				}
-				if toolCall.Function.Name != "search" {
-					t.Errorf("expected name 'search', got %s", toolCall.Function.Name)
-				}
-				if toolCall.ID != "" {
-					t.Errorf("expected empty ID, got %s", toolCall.ID)
-				}
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			toolCall := convertDataPartToToolCall(tc.dataPart)
-			tc.validateFunc(t, toolCall)
-		})
-	}
-}
-
-// TestConvertDataPartToToolResponse tests the tool response conversion function
-func TestConvertDataPartToToolResponse(t *testing.T) {
-	type testCase struct {
-		name         string
-		dataPart     *protocol.DataPart
-		validateFunc func(t *testing.T, content string)
+		validateFunc func(t *testing.T, content, id, name string)
 	}
 
 	tests := []testCase{
@@ -1196,9 +1104,15 @@ func TestConvertDataPartToToolResponse(t *testing.T) {
 					"response": "Sunny, 72°F",
 				},
 			},
-			validateFunc: func(t *testing.T, content string) {
+			validateFunc: func(t *testing.T, content, id, name string) {
 				if content != "Sunny, 72°F" {
 					t.Errorf("expected 'Sunny, 72°F', got %s", content)
+				}
+				if id != "call-1" {
+					t.Errorf("expected id 'call-1', got %s", id)
+				}
+				if name != "get_weather" {
+					t.Errorf("expected name 'get_weather', got %s", name)
 				}
 			},
 		},
@@ -1210,9 +1124,12 @@ func TestConvertDataPartToToolResponse(t *testing.T) {
 					"name": "get_weather",
 				},
 			},
-			validateFunc: func(t *testing.T, content string) {
+			validateFunc: func(t *testing.T, content, id, name string) {
 				if content != "" {
 					t.Errorf("expected empty content, got %s", content)
+				}
+				if id != "call-2" {
+					t.Errorf("expected id 'call-2', got %s", id)
 				}
 			},
 		},
@@ -1221,9 +1138,12 @@ func TestConvertDataPartToToolResponse(t *testing.T) {
 			dataPart: &protocol.DataPart{
 				Data: "not a map",
 			},
-			validateFunc: func(t *testing.T, content string) {
+			validateFunc: func(t *testing.T, content, id, name string) {
 				if content != "" {
 					t.Errorf("expected empty content, got %s", content)
+				}
+				if id != "" {
+					t.Errorf("expected empty id, got %s", id)
 				}
 			},
 		},
@@ -1234,7 +1154,7 @@ func TestConvertDataPartToToolResponse(t *testing.T) {
 					"response": 12345,
 				},
 			},
-			validateFunc: func(t *testing.T, content string) {
+			validateFunc: func(t *testing.T, content, id, name string) {
 				if content != "" {
 					t.Errorf("expected empty content for non-string response, got %s", content)
 				}
@@ -1244,18 +1164,18 @@ func TestConvertDataPartToToolResponse(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := convertDataPartToToolResponse(tc.dataPart)
-			tc.validateFunc(t, result)
+			content, id, name := processFunctionResponse(tc.dataPart)
+			tc.validateFunc(t, content, id, name)
 		})
 	}
 }
 
-// TestProcessDataPart_ADKMetadataKey tests handling of ADK-compatible metadata keys
-func TestProcessDataPart_ADKMetadataKey(t *testing.T) {
+// TestProcessDataPartInto_ADKMetadataKey tests handling of ADK-compatible metadata keys
+func TestProcessDataPartInto_ADKMetadataKey(t *testing.T) {
 	type testCase struct {
 		name         string
 		dataPart     protocol.Part
-		validateFunc func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo)
+		validateFunc func(t *testing.T, result *parseResult)
 	}
 
 	tests := []testCase{
@@ -1272,18 +1192,19 @@ func TestProcessDataPart_ADKMetadataKey(t *testing.T) {
 					"adk_type": "function_call", // Using ADK-compatible key
 				},
 			},
-			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
-				if toolCall == nil {
-					t.Fatal("expected tool call, got nil")
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if len(result.toolCalls) == 0 {
+					t.Fatal("expected tool call, got none")
 				}
+				toolCall := result.toolCalls[0]
 				if toolCall.ID != "call-adk-1" {
 					t.Errorf("expected ID 'call-adk-1', got %s", toolCall.ID)
 				}
 				if toolCall.Function.Name != "get_weather" {
 					t.Errorf("expected name 'get_weather', got %s", toolCall.Function.Name)
 				}
-				if toolResp != nil {
-					t.Errorf("expected nil tool response, got %v", toolResp)
+				if len(result.toolResponses) > 0 {
+					t.Errorf("expected no tool response, got %v", result.toolResponses)
 				}
 			},
 		},
@@ -1299,21 +1220,21 @@ func TestProcessDataPart_ADKMetadataKey(t *testing.T) {
 					"adk_type": "function_response", // Using ADK-compatible key
 				},
 			},
-			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
-				if content != "Beijing: Sunny, 20°C" {
-					t.Errorf("expected content 'Beijing: Sunny, 20°C', got %s", content)
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if len(result.toolResponses) == 0 {
+					t.Fatal("expected tool response, got nil")
 				}
-				if toolResp == nil {
-					t.Fatal("expected tool response info, got nil")
+				if result.toolResponses[0].content != "Beijing: Sunny, 20°C" {
+					t.Errorf("expected content 'Beijing: Sunny, 20°C', got %s", result.toolResponses[0].content)
 				}
-				if toolResp.id != "call-adk-2" {
-					t.Errorf("expected tool response ID 'call-adk-2', got %s", toolResp.id)
+				if result.toolResponses[0].id != "call-adk-2" {
+					t.Errorf("expected tool response ID 'call-adk-2', got %s", result.toolResponses[0].id)
 				}
-				if toolResp.name != "get_weather" {
-					t.Errorf("expected tool response name 'get_weather', got %s", toolResp.name)
+				if result.toolResponses[0].name != "get_weather" {
+					t.Errorf("expected tool response name 'get_weather', got %s", result.toolResponses[0].name)
 				}
-				if toolCall != nil {
-					t.Errorf("expected nil tool call, got %v", toolCall)
+				if len(result.toolCalls) > 0 {
+					t.Errorf("expected no tool calls, got %v", result.toolCalls)
 				}
 			},
 		},
@@ -1328,15 +1249,15 @@ func TestProcessDataPart_ADKMetadataKey(t *testing.T) {
 					"other_key": "other_value",
 				},
 			},
-			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
-				if content != "" {
-					t.Errorf("expected empty content, got %s", content)
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.getContent() != "" {
+					t.Errorf("expected empty content, got %s", result.getContent())
 				}
-				if toolCall != nil {
-					t.Errorf("expected nil tool call, got %v", toolCall)
+				if len(result.toolCalls) > 0 {
+					t.Errorf("expected no tool calls, got %v", result.toolCalls)
 				}
-				if toolResp != nil {
-					t.Errorf("expected nil tool response, got %v", toolResp)
+				if len(result.toolResponses) > 0 {
+					t.Errorf("expected no tool response, got %v", result.toolResponses)
 				}
 			},
 		},
@@ -1349,15 +1270,15 @@ func TestProcessDataPart_ADKMetadataKey(t *testing.T) {
 				},
 				Metadata: nil,
 			},
-			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
-				if content != "" {
-					t.Errorf("expected empty content, got %s", content)
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.getContent() != "" {
+					t.Errorf("expected empty content, got %s", result.getContent())
 				}
-				if toolCall != nil {
-					t.Errorf("expected nil tool call, got %v", toolCall)
+				if len(result.toolCalls) > 0 {
+					t.Errorf("expected no tool calls, got %v", result.toolCalls)
 				}
-				if toolResp != nil {
-					t.Errorf("expected nil tool response, got %v", toolResp)
+				if len(result.toolResponses) > 0 {
+					t.Errorf("expected no tool response, got %v", result.toolResponses)
 				}
 			},
 		},
@@ -1372,42 +1293,42 @@ func TestProcessDataPart_ADKMetadataKey(t *testing.T) {
 					"type": 12345, // Non-string type value
 				},
 			},
-			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
-				if content != "" {
-					t.Errorf("expected empty content, got %s", content)
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.getContent() != "" {
+					t.Errorf("expected empty content, got %s", result.getContent())
 				}
-				if toolCall != nil {
-					t.Errorf("expected nil tool call, got %v", toolCall)
+				if len(result.toolCalls) > 0 {
+					t.Errorf("expected no tool calls, got %v", result.toolCalls)
 				}
-				if toolResp != nil {
-					t.Errorf("expected nil tool response, got %v", toolResp)
+				if len(result.toolResponses) > 0 {
+					t.Errorf("expected no tool response, got %v", result.toolResponses)
 				}
 			},
 		},
 		{
-			name: "standard type key takes precedence over adk_type",
+			name: "adk_type takes precedence over standard type key",
 			dataPart: &protocol.DataPart{
 				Data: map[string]any{
-					"id":   "call-precedence",
-					"type": "function",
-					"name": "test_func",
-					"args": `{"x": 1}`,
+					"id":       "resp-precedence",
+					"name":     "test_func",
+					"response": `{"result": "ok"}`,
 				},
 				Metadata: map[string]any{
-					"type":     "function_call",     // Standard key
-					"adk_type": "function_response", // ADK key (should be ignored)
+					"type":     "function_call",     // Standard key (should be ignored)
+					"adk_type": "function_response", // ADK key (takes precedence)
 				},
 			},
-			validateFunc: func(t *testing.T, content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
-				// Should process as function_call, not function_response
-				if toolCall == nil {
-					t.Fatal("expected tool call, got nil")
+			validateFunc: func(t *testing.T, result *parseResult) {
+				// Should process as function_response, not function_call
+				// This matches Python trpc-agent behavior where adk_type is checked first
+				if len(result.toolCalls) > 0 {
+					t.Errorf("expected no tool calls (adk_type should take precedence), got %v", result.toolCalls)
 				}
-				if toolCall.Function.Name != "test_func" {
-					t.Errorf("expected name 'test_func', got %s", toolCall.Function.Name)
+				if len(result.toolResponses) == 0 {
+					t.Fatal("expected tool response, got nil")
 				}
-				if toolResp != nil {
-					t.Errorf("expected nil tool response (standard key should take precedence), got %v", toolResp)
+				if result.toolResponses[0].name != "test_func" {
+					t.Errorf("expected name 'test_func', got %s", result.toolResponses[0].name)
 				}
 			},
 		},
@@ -1415,8 +1336,9 @@ func TestProcessDataPart_ADKMetadataKey(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			content, toolCall, toolResp := processDataPart(tc.dataPart)
-			tc.validateFunc(t, content, toolCall, toolResp)
+			result := &parseResult{}
+			processDataPart(tc.dataPart, result)
+			tc.validateFunc(t, result)
 		})
 	}
 }
