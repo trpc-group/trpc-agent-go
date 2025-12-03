@@ -29,6 +29,7 @@ import (
 	"github.com/openai/openai-go/packages/respjson"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/stretchr/testify/assert"
@@ -1391,6 +1392,20 @@ func TestWithHeaders_AppendsOptions(t *testing.T) {
 	source["X-Custom"] = "changed"
 	WithHeaders(map[string]string{"X-Another": "extra"})(opts)
 	assert.Len(t, opts.OpenAIOptions, 4, "expected additional headers to append")
+
+	opts1 := &options{}
+	WithHeaders(nil)(opts1)
+	assert.Len(t, opts1.OpenAIOptions, 0, "expected no headers to be applied")
+
+}
+
+func TestWithShowToolCallDelta(t *testing.T) {
+	opts := &options{}
+	WithShowToolCallDelta(true)(opts)
+	assert.True(t, opts.ShowToolCallDelta, "expected showToolCallDelta to be true")
+
+	WithShowToolCallDelta(false)(opts)
+	assert.False(t, opts.ShowToolCallDelta, "expected showToolCallDelta to be false")
 }
 
 func TestConvertSystemMessageContent(t *testing.T) {
@@ -2654,6 +2669,10 @@ func TestWithBatchCompletionWindow(t *testing.T) {
 	WithBatchCompletionWindow(window)(opts)
 
 	assert.Equal(t, window, opts.BatchCompletionWindow, "expected BatchCompletionWindow to be set")
+
+	opts1 := &options{}
+	WithBatchCompletionWindow("")(opts1)
+	assert.Equal(t, openai.BatchNewParamsCompletionWindow(defaultBatchCompletionWindow), opts1.BatchCompletionWindow, "expected BatchCompletionWindow to be set")
 }
 
 // TestWithBatchMetadata tests the WithBatchMetadata option.
@@ -4313,33 +4332,6 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 	})
 }
 
-// TestWithTokenTailoringConfig tests the WithTokenTailoringConfig option.
-func TestWithTokenTailoringConfig(t *testing.T) {
-	config := &model.TokenTailoringConfig{
-		ProtocolOverheadTokens: 1024,
-		ReserveOutputTokens:    4096,
-		InputTokensFloor:       2048,
-		OutputTokensFloor:      512,
-		SafetyMarginRatio:      0.15,
-		MaxInputTokensRatio:    0.90,
-	}
-
-	m := New("deepseek-chat",
-		WithEnableTokenTailoring(true),
-		WithTokenTailoringConfig(config),
-	)
-
-	require.NotNil(t, m)
-
-	// Verify that the instance-level config was set.
-	assert.Equal(t, 1024, m.protocolOverheadTokens)
-	assert.Equal(t, 4096, m.reserveOutputTokens)
-	assert.Equal(t, 2048, m.inputTokensFloor)
-	assert.Equal(t, 512, m.outputTokensFloor)
-	assert.Equal(t, 0.15, m.safetyMarginRatio)
-	assert.Equal(t, 0.90, m.maxInputTokensRatio)
-}
-
 func TestQwen(t *testing.T) {
 	var testKey = "qwen-key"
 	t.Setenv(qwenAPIKeyName, testKey)
@@ -4483,6 +4475,131 @@ func TestModel_buildChatRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, got1 := tt.model.buildChatRequest(tt.args.request)
 			assert.Equalf(t, len(tt.want1), len(got1), "buildChatRequest(%v)", tt.args.request)
+		})
+	}
+}
+
+func TestWithTokenTailoringConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		inputConfig *model.TokenTailoringConfig
+		initialOpts *options
+		wantCfg     *model.TokenTailoringConfig
+	}{
+		{
+			name:        "nil config",
+			inputConfig: nil,
+			initialOpts: &options{
+				TokenTailoringConfig: &model.TokenTailoringConfig{ProtocolOverheadTokens: 5},
+			},
+			wantCfg: &model.TokenTailoringConfig{ProtocolOverheadTokens: 5},
+		},
+		{
+			name:        "nil config - 1",
+			inputConfig: nil,
+			initialOpts: &options{},
+			wantCfg:     nil,
+		},
+		{
+			name: "empty value config",
+			inputConfig: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 0,
+				ReserveOutputTokens:    0,
+				SafetyMarginRatio:      0,
+				InputTokensFloor:       0,
+				OutputTokensFloor:      0,
+				MaxInputTokensRatio:    0,
+			},
+			initialOpts: &options{},
+			wantCfg: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
+				ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+				SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
+				InputTokensFloor:       imodel.DefaultInputTokensFloor,
+				OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
+				MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+			},
+		},
+		{
+			name: "partial value config",
+			inputConfig: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 15,
+				ReserveOutputTokens:    0,
+				SafetyMarginRatio:      0.2,
+				InputTokensFloor:       0,
+				OutputTokensFloor:      250,
+				MaxInputTokensRatio:    0,
+			},
+			initialOpts: &options{},
+			wantCfg: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 15,
+				ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+				SafetyMarginRatio:      0.2,
+				InputTokensFloor:       imodel.DefaultInputTokensFloor,
+				OutputTokensFloor:      250,
+				MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+			},
+		},
+		{
+			name: "all value config",
+			inputConfig: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 20,
+				ReserveOutputTokens:    30,
+				SafetyMarginRatio:      0.3,
+				InputTokensFloor:       300,
+				OutputTokensFloor:      400,
+				MaxInputTokensRatio:    2.0,
+			},
+			initialOpts: &options{},
+			wantCfg: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 20,
+				ReserveOutputTokens:    30,
+				SafetyMarginRatio:      0.3,
+				InputTokensFloor:       300,
+				OutputTokensFloor:      400,
+				MaxInputTokensRatio:    2.0,
+			},
+		},
+		{
+			name: "nil initialOpts",
+			inputConfig: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: 0,
+				ReserveOutputTokens:    0,
+			},
+			initialOpts: &options{
+				TokenTailoringConfig: &model.TokenTailoringConfig{
+					ProtocolOverheadTokens: 5,
+					ReserveOutputTokens:    10,
+				},
+			},
+			wantCfg: &model.TokenTailoringConfig{
+				ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
+				ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+				SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
+				InputTokensFloor:       imodel.DefaultInputTokensFloor,
+				OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
+				MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opt := WithTokenTailoringConfig(tt.inputConfig)
+			opt(tt.initialOpts)
+
+			if tt.wantCfg == nil {
+				assert.Nil(t, tt.initialOpts.TokenTailoringConfig, "expectation TokenTailoringConfig is nil")
+			} else {
+				require.NotNil(t, tt.initialOpts.TokenTailoringConfig, "TokenTailoringConfig is not nil")
+
+				assert.Equal(t, tt.wantCfg.ProtocolOverheadTokens, tt.initialOpts.TokenTailoringConfig.ProtocolOverheadTokens, "ProtocolOverheadTokensinconsistent")
+				assert.Equal(t, tt.wantCfg.ReserveOutputTokens, tt.initialOpts.TokenTailoringConfig.ReserveOutputTokens, "ReserveOutputTokensinconsistent")
+				assert.Equal(t, tt.wantCfg.SafetyMarginRatio, tt.initialOpts.TokenTailoringConfig.SafetyMarginRatio, "SafetyMarginRatio inconsistent")
+				assert.Equal(t, tt.wantCfg.InputTokensFloor, tt.initialOpts.TokenTailoringConfig.InputTokensFloor, "InputTokensFloor inconsistent")
+				assert.Equal(t, tt.wantCfg.OutputTokensFloor, tt.initialOpts.TokenTailoringConfig.OutputTokensFloor, "OutputTokensFloor inconsistent")
+				assert.Equal(t, tt.wantCfg.MaxInputTokensRatio, tt.initialOpts.TokenTailoringConfig.MaxInputTokensRatio, "MaxInputTokensRatioinconsistent")
+			}
 		})
 	}
 }
