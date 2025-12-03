@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -174,7 +175,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	// the processor configuration.
 	includeMode := ""
 	if invocation.RunOptions.RuntimeState != nil {
-		if v, ok := invocation.RunOptions.RuntimeState["include_contents"]; ok {
+		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents]; ok {
 			if s, ok2 := v.(string); ok2 {
 				includeMode = strings.ToLower(s)
 			}
@@ -182,17 +183,25 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 	skipHistory := includeMode == "none"
 
-	// 2) Append per-filter messages from session events when allowed.
+	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
 	if !skipHistory && invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
 		if p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
-			// Prepend session summary as a system message if enabled and available.
+			// Add session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Prepend to the front of messages.
-				req.Messages = append([]model.Message{*msg}, req.Messages...)
+				// Insert summary after existing system messages, or prepend if none exist.
+				insertIdx := 0
+				for i, existingMsg := range req.Messages {
+					if existingMsg.Role == model.RoleSystem {
+						insertIdx = i + 1
+					} else {
+						break
+					}
+				}
+				req.Messages = append(req.Messages[:insertIdx], append([]model.Message{*msg}, req.Messages[insertIdx:]...)...)
 				summaryUpdatedAt = updatedAt
 			}
 		}

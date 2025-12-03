@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -243,6 +244,100 @@ func newSessionEvent(author string, msg model.Message) event.Event {
 		},
 		Author: author,
 	}
+}
+
+// Test that session summary is inserted after existing system messages.
+func TestProcessRequest_SessionSummary_AfterSystemMessages(t *testing.T) {
+	// Create session with summary
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   "Session summary content",
+				UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	// Test case 1: Request has system message followed by user message
+	req1 := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("existing system prompt"),
+			model.NewUserMessage("user question"),
+		},
+	}
+
+	inv1 := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewUserMessage("current request")),
+	)
+	inv1.AgentName = "test-agent"
+
+	p1 := NewContentRequestProcessor(WithAddSessionSummary(true))
+	p1.ProcessRequest(context.Background(), inv1, req1, nil)
+
+	// Should have 3 messages: system, summary (system), user
+	require.Equal(t, 3, len(req1.Messages))
+	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
+	require.Equal(t, "existing system prompt", req1.Messages[0].Content)
+	require.Equal(t, model.RoleSystem, req1.Messages[1].Role)
+	require.Equal(t, "Session summary content", req1.Messages[1].Content)
+	require.Equal(t, model.RoleUser, req1.Messages[2].Role)
+	require.Equal(t, "user question", req1.Messages[2].Content)
+
+	// Test case 2: Request has only user message (no system message)
+	req2 := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("user question"),
+		},
+	}
+
+	inv2 := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewUserMessage("current request")),
+	)
+	inv2.AgentName = "test-agent"
+
+	p2 := NewContentRequestProcessor(WithAddSessionSummary(true))
+	p2.ProcessRequest(context.Background(), inv2, req2, nil)
+
+	// Should have 2 messages: summary (system), user
+	require.Equal(t, 2, len(req2.Messages))
+	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
+	require.Equal(t, "Session summary content", req2.Messages[0].Content)
+	require.Equal(t, model.RoleUser, req2.Messages[1].Role)
+	require.Equal(t, "user question", req2.Messages[1].Content)
+
+	// Test case 3: Request has multiple system messages
+	req3 := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system 1"),
+			model.NewSystemMessage("system 2"),
+			model.NewUserMessage("user question"),
+		},
+	}
+
+	inv3 := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewUserMessage("current request")),
+	)
+	inv3.AgentName = "test-agent"
+
+	p3 := NewContentRequestProcessor(WithAddSessionSummary(true))
+	p3.ProcessRequest(context.Background(), inv3, req3, nil)
+
+	// Should have 4 messages: system1, system2, summary (system), user
+	require.Equal(t, 4, len(req3.Messages))
+	require.Equal(t, model.RoleSystem, req3.Messages[0].Role)
+	require.Equal(t, "system 1", req3.Messages[0].Content)
+	require.Equal(t, model.RoleSystem, req3.Messages[1].Role)
+	require.Equal(t, "system 2", req3.Messages[1].Content)
+	require.Equal(t, model.RoleSystem, req3.Messages[2].Role)
+	require.Equal(t, "Session summary content", req3.Messages[2].Content)
+	require.Equal(t, model.RoleUser, req3.Messages[3].Role)
+	require.Equal(t, "user question", req3.Messages[3].Content)
 }
 
 func newSessionEventWithBranch(author, filterKey, branch string, msg model.Message) event.Event {
