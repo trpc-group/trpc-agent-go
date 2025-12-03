@@ -1702,6 +1702,7 @@ TIPS:
  - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
  - invocation.Message在任何场景下均可见
  - 相关配置仅控制State[graph.StateKeyMessages]的初始值
+ - Agent node生成的消息filterKey为subAgent name, 因此使用`IsolatedRequest`或`IsolatedInvocation`过滤时对当前graphAgent不可见
 
 配置:
 - `graphagent.WithMessageFilterMode(MessageFilterMode)`:
