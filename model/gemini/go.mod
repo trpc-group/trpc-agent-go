@@ -1,20 +1,14 @@
-module trpc.group/trpc-go/trpc-agent-go/model/provider
+module trpc.group/trpc-go/trpc-agent-go/model/gemini
 
 go 1.24.10
 
-replace (
-	trpc.group/trpc-go/trpc-agent-go => ../../
-	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
-	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
-)
+replace trpc.group/trpc-go/trpc-agent-go => ../../
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.16.0
-	github.com/openai/openai-go v1.12.0
 	github.com/stretchr/testify v1.11.1
+	go.uber.org/mock v0.6.0
+	google.golang.org/genai v1.36.0
 	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
-	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -31,10 +25,6 @@ require (
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
-	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/tidwall/sjson v1.2.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.63.0 // indirect
 	go.opentelemetry.io/otel v1.38.0 // indirect
@@ -46,7 +36,6 @@ require (
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
-	google.golang.org/genai v1.36.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251124214823-79d6a2a48846 // indirect
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
