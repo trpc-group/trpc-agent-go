@@ -22,7 +22,7 @@ const DefaultFlushInterval = time.Second
 type options struct {
 	aggregatorFactory aggregator.Factory  // aggregatorFactory builds aggregators for tracking.
 	aggregationOption []aggregator.Option // aggregationOption forwards options to the factory.
-	flushInterval     time.Duration
+	flushInterval     time.Duration       // flushInterval is the interval for flushing the session state.
 }
 
 // newOptions creates a new options instance.
