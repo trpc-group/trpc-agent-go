@@ -215,7 +215,7 @@ func TestTrackerAggregatesTextContent(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
 		aguievents.WithRole("assistant"))))
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hello")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hel")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "lo")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageEndEvent("msg")))
 
@@ -241,7 +241,7 @@ func TestTrackerAggregationDisabled(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
 		aguievents.WithRole("assistant"))))
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hello")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hel")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "lo")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageEndEvent("msg")))
 
@@ -255,7 +255,7 @@ func TestTrackerAggregationDisabled(t *testing.T) {
 	require.NoError(t, err)
 	firstContent, ok := firstPayload.(*aguievents.TextMessageContentEvent)
 	require.True(t, ok)
-	require.Equal(t, "hello", firstContent.Delta)
+	require.Equal(t, "hel", firstContent.Delta)
 
 	secondPayload, err := aguievents.EventFromJSON(trackEvents.Events[2].Payload)
 	require.NoError(t, err)
@@ -295,9 +295,13 @@ func TestTrackerFlushReturnsAggregatorError(t *testing.T) {
 	ctx := context.Background()
 	svc := inmemory.NewSessionService()
 	agg := &stubAggregator{flushErr: errors.New("flush fail")}
-	tracker, err := New(svc, WithAggregatorFactory(func(opt ...aggregator.Option) aggregator.Aggregator {
-		return agg
-	}))
+	tracker, err := New(svc,
+		WithAggregatorFactory(
+			func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
+				return agg
+			},
+		),
+	)
 	require.NoError(t, err)
 
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
@@ -314,7 +318,7 @@ func TestTrackerFlushPeriodically(t *testing.T) {
 	svc := inmemory.NewSessionService()
 	agg := &stubAggregator{flushCh: make(chan struct{}, 2)}
 	tracker, err := New(svc,
-		WithAggregatorFactory(func(opt ...aggregator.Option) aggregator.Aggregator {
+		WithAggregatorFactory(func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
 			return agg
 		}),
 		WithFlushInterval(10*time.Millisecond),

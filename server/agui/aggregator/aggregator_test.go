@@ -19,9 +19,9 @@ import (
 
 func TestAggregatorMergesSameMessage(t *testing.T) {
 	ctx := context.Background()
-	agg := New()
+	agg := New(ctx)
 
-	events, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "hello"))
+	events, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "hel"))
 	require.NoError(t, err)
 	require.Nil(t, events)
 
@@ -43,7 +43,7 @@ func TestAggregatorMergesSameMessage(t *testing.T) {
 
 func TestAggregatorFlushOnMessageChange(t *testing.T) {
 	ctx := context.Background()
-	agg := New()
+	agg := New(ctx)
 
 	firstFlush, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("first", "hi"))
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestAggregatorFlushOnMessageChange(t *testing.T) {
 
 func TestAggregatorFlushesBeforeNonTextEvent(t *testing.T) {
 	ctx := context.Background()
-	agg := New()
+	agg := New(ctx)
 
 	_, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "abc"))
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestAggregatorFlushesBeforeNonTextEvent(t *testing.T) {
 func TestAggregatorDisabledPassThrough(t *testing.T) {
 	ctx := context.Background()
 	content := aguievents.NewTextMessageContentEvent("msg", "data")
-	agg := New(WithEnabled(false))
+	agg := New(ctx, WithEnabled(false))
 
 	events, err := agg.Append(ctx, content)
 	require.NoError(t, err)

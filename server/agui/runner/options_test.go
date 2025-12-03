@@ -117,9 +117,9 @@ func TestWithSessionService(t *testing.T) {
 
 func TestWithAggregationOptionsAndFactory(t *testing.T) {
 	customCalled := false
-	customFactory := func(opt ...aggregator.Option) aggregator.Aggregator {
+	customFactory := func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
 		customCalled = true
-		return aggregator.New(opt...)
+		return aggregator.New(ctx, opt...)
 	}
 	opts := NewOptions(
 		WithAggregationOption(aggregator.WithEnabled(false)),
@@ -128,7 +128,7 @@ func TestWithAggregationOptionsAndFactory(t *testing.T) {
 	)
 
 	assert.Equal(t, time.Second, opts.FlushInterval)
-	agg := opts.AggregatorFactory(opts.AggregationOption...)
+	agg := opts.AggregatorFactory(context.Background(), opts.AggregationOption...)
 	assert.True(t, customCalled)
 
 	events, err := agg.Append(context.Background(), aguievents.NewTextMessageContentEvent("msg", "hi"))

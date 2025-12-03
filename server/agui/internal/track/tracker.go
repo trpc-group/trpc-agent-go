@@ -177,7 +177,7 @@ func (t *tracker) getSessionState(ctx context.Context, key session.Key) *session
 		return state
 	}
 	state := &sessionState{
-		aggregator: t.aggregatorFactory(t.aggregationOption...),
+		aggregator: t.aggregatorFactory(ctx, t.aggregationOption...),
 		done:       make(chan struct{}),
 	}
 	t.sessionStates[key] = state

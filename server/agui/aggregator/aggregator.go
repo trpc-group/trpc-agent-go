@@ -27,10 +27,10 @@ type Aggregator interface {
 }
 
 // Factory creates a new Aggregator instance.
-type Factory func(opt ...Option) Aggregator
+type Factory func(ctx context.Context, opt ...Option) Aggregator
 
 // New creates a new aggregator with the given options.
-func New(opt ...Option) Aggregator {
+func New(ctx context.Context, opt ...Option) Aggregator {
 	opts := newOptions(opt...)
 	return &aggregator{
 		enabled: opts.enabled,
