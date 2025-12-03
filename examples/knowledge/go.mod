@@ -20,7 +20,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-20250917031858-f0ddbd5b2cb4
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface v0.0.0-20251119113046-0cbdb93921df
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama v0.0.0-20251111070215-8fe58a4f2ffa
-	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
