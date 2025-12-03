@@ -21,11 +21,11 @@ func TestAggregatorMergesSameMessage(t *testing.T) {
 	ctx := context.Background()
 	agg := New(ctx)
 
-	events, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "hel"))
+	events, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "hello"))
 	require.NoError(t, err)
 	require.Nil(t, events)
 
-	events, err = agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "lo"))
+	events, err = agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "world"))
 	require.NoError(t, err)
 	require.Nil(t, events)
 
@@ -34,7 +34,7 @@ func TestAggregatorMergesSameMessage(t *testing.T) {
 	require.Len(t, flushed, 1)
 	content, ok := flushed[0].(*aguievents.TextMessageContentEvent)
 	require.True(t, ok)
-	require.Equal(t, "hello", content.Delta)
+	require.Equal(t, "helloworld", content.Delta)
 
 	flushed, err = agg.Flush(ctx)
 	require.NoError(t, err)
