@@ -195,6 +195,151 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 若返回错误，则会发送 `RunError` 事件；返回 `nil` 则表示不追加任何 `RunOption`。
 
+### Session 存储与事件聚合
+
+在构造 AG-UI Runner 时传入 `SessionService`，实时对话产生的事件会通过 `SessionService` 写入会话，便于后续通过 `MessagesSnapshot` 回放历史记录。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+sessionService := inmemory.NewSessionService()
+
+server, err := agui.New(
+    runner,
+    agui.WithPath("/agui"),
+    agui.WithMessagesSnapshotPath("/history"),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(userIDResolver)),
+)
+```
+
+在流式响应场景下，同一条回复通常会包含多个增量文本事件，如果将它们全部直接写入会话，会给 `SessionService` 带来较大压力。
+
+为了解决上述问题，框架会先对事件进行聚合，再写入会话。此外，默认每秒定时刷新一次，每次刷新将当前的聚合结果写入会话。
+
+- `aggregator.WithEnabled(true)` 用于控制是否开启事件聚合，默认为开启状态。开启后，会将连续且具有相同 `messageId` 的文本事件进行聚合；关闭时则不对 AG-UI 事件做聚合。
+- `aguirunner.WithFlushInterval(time.Second)` 用于控制事件聚合结果的定时刷新间隔，默认为 1 秒。设置为 0 时表示不开启定时刷新功能。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+sessionService := inmemory.NewSessionService()
+
+server, err := agui.New(
+    runner,
+    agui.WithPath("/agui"),
+    agui.WithMessagesSnapshotPath("/history"),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithUserIDResolver(userIDResolver),
+        aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // 开启事件聚合，默认开启
+        aguirunner.WithFlushInterval(time.Second),                      // 设置事件聚合结果的定时刷新间隔，默认 1 秒
+    ),
+)
+```
+
+如果需要更复杂的聚合策略，可以实现 `aggregator.Aggregator` 并通过自定义工厂注入。
+
+例如，在兼容默认文本聚合的同时，将类型为 `"think"` 的自定义事件内容累计后再落库。
+
+```go
+import (
+	"context"
+	"strings"
+	"sync"
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+type customAggregator struct {
+	mu    sync.Mutex
+	inner aggregator.Aggregator
+	think strings.Builder
+}
+
+func (c *customAggregator) Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if custom, ok := event.(*aguievents.CustomEvent); ok && custom.Type == "think" {
+		flushed, err := c.inner.Flush(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if v, ok := custom.Value.(string); ok {
+			c.think.WriteString(v)
+		}
+		return flushed, nil
+	}
+	events, err := c.inner.Append(ctx, event)
+	if err != nil {
+		return nil, err
+	}
+	if c.think.Len() == 0 {
+		return events, nil
+	}
+	think := aguievents.NewCustomEvent("think", aguievents.WithValue(c.think.String()))
+	c.think.Reset()
+	out := make([]aguievents.Event, 0, len(events)+1)
+	out = append(out, think)
+	out = append(out, events...)
+	return out, nil
+}
+
+func (c *customAggregator) Flush(ctx context.Context) ([]aguievents.Event, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	events, err := c.inner.Flush(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if c.think.Len() > 0 {
+		think := aguievents.NewCustomEvent("think", aguievents.WithValue(c.think.String()))
+		c.think.Reset()
+		events = append([]aguievents.Event{think}, events...)
+	}
+	return events, nil
+}
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+sessionService := inmemory.NewSessionService()
+
+server, err := agui.New(
+    runner,
+    agui.WithPath("/agui"),
+    agui.WithMessagesSnapshotPath("/history"),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithUserIDResolver(userIDResolver),
+        aguirunner.WithAggregatorFactory(func(opt ...aggregator.Option) aggregator.Aggregator {
+            return &customAggregator{inner: aggregator.New(opt...)}
+        }),
+    ),
+)
+```
+
 ### 事件翻译回调
 
 AG-UI 提供了事件翻译的回调机制，便于在事件翻译流程的前后插入自定义逻辑。
