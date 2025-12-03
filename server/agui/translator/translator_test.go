@@ -22,7 +22,7 @@ import (
 )
 
 func TestTranslateNilEvent(t *testing.T) {
-	translator := New("thread", "run")
+	translator := New(context.Background(), "thread", "run")
 
 	_, err := translator.Translate(context.Background(), nil)
 	assert.Error(t, err)
@@ -32,7 +32,7 @@ func TestTranslateNilEvent(t *testing.T) {
 }
 
 func TestTranslateErrorResponse(t *testing.T) {
-	translator := New("thread", "run")
+	translator := New(context.Background(), "thread", "run")
 	rsp := &model.Response{Error: &model.ResponseError{Message: "boom"}}
 
 	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: rsp})
@@ -45,7 +45,7 @@ func TestTranslateErrorResponse(t *testing.T) {
 }
 
 func TestTextMessageEventStreamingAndCompletion(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 
 	firstChunk := &model.Response{
@@ -78,7 +78,7 @@ func TestTextMessageEventStreamingAndCompletion(t *testing.T) {
 }
 
 func TestTextMessageEventStreamInterruptedByNewMessage(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 
 	firstChunk := &model.Response{
@@ -121,7 +121,7 @@ func TestTextMessageEventStreamInterruptedByNewMessage(t *testing.T) {
 }
 
 func TestTextMessageEventStreamInterruptedByNewMessage_NonStream(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 
 	firstChunk := &model.Response{
@@ -168,7 +168,7 @@ func TestTextMessageEventStreamInterruptedByNewMessage_NonStream(t *testing.T) {
 }
 
 func TestTextMessageEventNonStream(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 
 	nonStreamRsp := &model.Response{
@@ -198,7 +198,7 @@ func TestTextMessageEventNonStream(t *testing.T) {
 }
 
 func TestTextMessageEventEmptyChatCompletionContent(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	rsp := &model.Response{
 		ID:      "final-empty",
@@ -214,7 +214,7 @@ func TestTextMessageEventEmptyChatCompletionContent(t *testing.T) {
 }
 
 func TestTextMessageEventEmptyChunkDoesNotChangeState(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	rsp := &model.Response{
 		ID:     "chunk-empty",
@@ -232,7 +232,7 @@ func TestTextMessageEventEmptyChunkDoesNotChangeState(t *testing.T) {
 }
 
 func TestTextMessageEventInvalidObject(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	rsp := &model.Response{ID: "bad", Object: "unknown", Choices: []model.Choice{{}}}
 
@@ -241,7 +241,7 @@ func TestTextMessageEventInvalidObject(t *testing.T) {
 }
 
 func TestGraphModelMetadataProducesText(t *testing.T) {
-	tr, ok := New("thread", "run").(*translator)
+	tr, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 
 	meta := graph.ModelExecutionMetadata{Output: "hello from graph", ResponseID: "resp-1"}
@@ -262,7 +262,7 @@ func TestGraphModelMetadataProducesText(t *testing.T) {
 }
 
 func TestGraphModelEventsDeduplicatedByResponseID(t *testing.T) {
-	tr := New("thread", "run")
+	tr := New(context.Background(), "thread", "run")
 
 	rsp := &model.Response{
 		ID:     "resp-1",
@@ -297,7 +297,7 @@ func TestGraphModelEventsDeduplicatedByResponseID(t *testing.T) {
 }
 
 func TestGraphToolMetadataStartCompleteAndSkipDuplicateToolResponse(t *testing.T) {
-	tr, ok := New("thread", "run").(*translator)
+	tr, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 
 	metaStart := graph.ToolExecutionMetadata{
@@ -348,7 +348,7 @@ func TestGraphToolMetadataStartCompleteAndSkipDuplicateToolResponse(t *testing.T
 }
 
 func TestTextMessageEventEmptyResponse(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	events, err := translator.textMessageEvent(nil)
 	assert.Empty(t, events)
@@ -359,7 +359,7 @@ func TestTextMessageEventEmptyResponse(t *testing.T) {
 }
 
 func TestToolCallAndResultEvents(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	callRsp := &model.Response{
 		ID: "msg-tool",
@@ -405,7 +405,7 @@ func TestToolCallAndResultEvents(t *testing.T) {
 }
 
 func TestToolResultEventDoesNotEmitEnd(t *testing.T) {
-	tr, ok := New("thread", "run").(*translator)
+	tr, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	rsp := &model.Response{
 		Choices: []model.Choice{{
@@ -424,7 +424,7 @@ func TestToolResultEventDoesNotEmitEnd(t *testing.T) {
 }
 
 func TestTranslateToolCallResponseIncludesAllEvents(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	rsp := &model.Response{
 		ID:     "msg-tool",
@@ -470,7 +470,7 @@ func TestTranslateToolCallResponseIncludesAllEvents(t *testing.T) {
 }
 
 func TestTranslateFullResponse(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	rsp := &model.Response{
 		ID:     "final",
@@ -500,7 +500,7 @@ func TestTranslateFullResponse(t *testing.T) {
 }
 
 func TestTranslateRunCompletionResponse(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	chunkRsp := &model.Response{
 		ID:     "msg-1",
@@ -538,7 +538,7 @@ func TestTranslateRunCompletionResponse(t *testing.T) {
 }
 
 func TestTranslateToolResultResponse(t *testing.T) {
-	translator := New("thread", "run")
+	translator := New(context.Background(), "thread", "run")
 
 	_, err := translator.Translate(context.Background(), &agentevent.Event{Response: &model.Response{
 		ID:     "msg-1",
@@ -567,7 +567,7 @@ func TestTranslateToolResultResponse(t *testing.T) {
 }
 
 func TestTranslateSequentialEvents(t *testing.T) {
-	translator := New("thread", "run")
+	translator := New(context.Background(), "thread", "run")
 
 	chunkRsp := &model.Response{
 		ID:     "msg-1",
@@ -648,7 +648,7 @@ func TestFormatToolCallArguments(t *testing.T) {
 }
 
 func TestParallelToolCallResultEvents(t *testing.T) {
-	translator := New("thread", "run")
+	translator := New(context.Background(), "thread", "run")
 	toolResultRsp := &model.Response{
 		Choices: []model.Choice{
 			{
@@ -673,7 +673,7 @@ func TestParallelToolCallResultEvents(t *testing.T) {
 }
 
 func TestToolNilResponse(t *testing.T) {
-	translator, ok := New("thread", "run").(*translator)
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
 	events, err := translator.toolCallEvent(nil)
 	assert.Empty(t, events)
@@ -684,7 +684,7 @@ func TestToolNilResponse(t *testing.T) {
 }
 
 func TestGraphToolEventsDeduplicatedByToolID(t *testing.T) {
-	tr := New("thread", "run")
+	tr := New(context.Background(), "thread", "run")
 
 	toolCall := model.ToolCall{
 		ID: "call-1",
@@ -733,7 +733,7 @@ func TestGraphToolEventsDeduplicatedByToolID(t *testing.T) {
 }
 
 func TestTranslateSubagentGraph_Stream(t *testing.T) {
-	translator := New("thread", "run")
+	translator := New(context.Background(), "thread", "run")
 
 	const (
 		chatMessageID      = "chat-msg"
@@ -916,7 +916,7 @@ func TestTranslateSubagentGraph_Stream(t *testing.T) {
 }
 
 func TestTranslateSubagentGraph_NonStream(t *testing.T) {
-	translator := New("thread", "run")
+	translator := New(context.Background(), "thread", "run")
 
 	const (
 		chatResponseID        = "c4ee0e1b-4cd2-4d82-b17f-c58a59c9670b"

@@ -33,7 +33,7 @@ func TestNew(t *testing.T) {
 	assert.NotNil(t, runner.runAgentInputHook)
 	trans := runner.translatorFactory(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NotNil(t, trans)
-	assert.IsType(t, translator.New("", ""), trans)
+	assert.IsType(t, translator.New(context.Background(), "", ""), trans)
 	assert.NotNil(t, runner.runOptionResolver)
 
 	userID, err := runner.userIDResolver(context.Background(),

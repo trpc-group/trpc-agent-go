@@ -114,7 +114,7 @@ func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (s
 
 // defaultTranslatorFactory is the default translator factory.
 func defaultTranslatorFactory(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
-	return translator.New(input.ThreadID, input.RunID)
+	return translator.New(ctx, input.ThreadID, input.RunID)
 }
 
 // defaultRunAgentInputHook returns the input unchanged.

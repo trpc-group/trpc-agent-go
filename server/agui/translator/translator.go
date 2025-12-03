@@ -31,7 +31,7 @@ type Translator interface {
 }
 
 // New creates a new event translator.
-func New(threadID, runID string) Translator {
+func New(ctx context.Context, threadID, runID string) Translator {
 	return &translator{
 		threadID:         threadID,
 		runID:            runID,

@@ -34,7 +34,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	input := &adapter.RunAgentInput{ThreadID: "thread-1", RunID: "run-1"}
 	tr := opts.TranslatorFactory(context.Background(), input)
 	assert.NotNil(t, tr)
-	assert.IsType(t, translator.New("", ""), tr)
+	assert.IsType(t, translator.New(context.Background(), "", ""), tr)
 
 	assert.NotNil(t, opts.RunAgentInputHook)
 	modified, err := opts.RunAgentInputHook(context.Background(), input)
@@ -64,7 +64,7 @@ func TestWithUserIDResolver(t *testing.T) {
 }
 
 func TestWithTranslatorFactory(t *testing.T) {
-	customTranslator := translator.New("custom-thread", "custom-run")
+	customTranslator := translator.New(context.Background(), "custom-thread", "custom-run")
 	factoryCalled := false
 	opts := NewOptions(
 		WithTranslatorFactory(
