@@ -88,15 +88,15 @@ type reactTranslator struct {
 	receivingMessage bool
 }
 
-func newReactTranslator(input *adapter.RunAgentInput) translator.Translator {
+func newReactTranslator(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
 	return &reactTranslator{
 		inner: translator.New(input.ThreadID, input.RunID),
 	}
 }
 
 // Translate routes AG-UI events through a small state machine to rebuild final answers and custom sections for React UI consumption.
-func (t *reactTranslator) Translate(event *event.Event) ([]aguievents.Event, error) {
-	events, err := t.inner.Translate(event)
+func (t *reactTranslator) Translate(ctx context.Context, event *event.Event) ([]aguievents.Event, error) {
+	events, err := t.inner.Translate(ctx, event)
 	if err != nil {
 		return nil, err
 	}

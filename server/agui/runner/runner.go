@@ -120,7 +120,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		userID:      userID,
 		userMessage: runAgentInput.Messages[len(runAgentInput.Messages)-1],
 		runOption:   runOption,
-		translator:  r.translatorFactory(runAgentInput),
+		translator:  r.translatorFactory(ctx, runAgentInput),
 		enableTrack: r.tracker != nil,
 	}
 	events := make(chan aguievents.Event)
@@ -156,7 +156,7 @@ func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguieve
 				aguievents.WithRunID(runID)), input)
 			return
 		}
-		aguiEvents, err := input.translator.Translate(customEvent)
+		aguiEvents, err := input.translator.Translate(ctx, customEvent)
 		if err != nil {
 			log.Errorf("agui run: threadID: %s, runID: %s, translate event: %v", threadID, runID, err)
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),

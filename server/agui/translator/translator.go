@@ -11,6 +11,7 @@
 package translator
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,11 +27,11 @@ import (
 // Translator translates trpc-agent-go events to AG-UI events.
 type Translator interface {
 	// Translate translates a trpc-agent-go event to AG-UI events.
-	Translate(event *agentevent.Event) ([]aguievents.Event, error)
+	Translate(ctx context.Context, event *agentevent.Event) ([]aguievents.Event, error)
 }
 
 // New creates a new event translator.
-func New(threadID, runID string) Translator {
+func New(ctx context.Context, threadID, runID string) Translator {
 	return &translator{
 		threadID:         threadID,
 		runID:            runID,
@@ -52,7 +53,7 @@ type translator struct {
 }
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
-func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, error) {
+func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]aguievents.Event, error) {
 	if event == nil {
 		return nil, errors.New("event is nil")
 	}
