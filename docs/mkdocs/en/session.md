@@ -986,6 +986,21 @@ CREATE TABLE session_events (
     KEY idx_session_events (app_name, user_id, session_id, deleted_at, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Session track events table
+CREATE TABLE session_track_events (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    track VARCHAR(255) NOT NULL,
+    event JSON NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL,
+    deleted_at TIMESTAMP NULL,
+    KEY idx_session_track_events (app_name, user_id, session_id, track, deleted_at, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Session summaries table
 CREATE TABLE session_summaries (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
