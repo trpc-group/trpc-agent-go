@@ -26,6 +26,7 @@ import (
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	_ "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 	_ "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 	_ "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
