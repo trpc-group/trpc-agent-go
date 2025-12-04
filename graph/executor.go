@@ -258,9 +258,12 @@ func (e *Executor) executeGraph(
 
 	execState = e.processResumeCommand(execState, initialState)
 
+	// Build execution context (including per-execution channels) from the prepared state.
 	execCtx := e.buildExecutionContext(
 		eventChan, invocation.InvocationID, execState, resumed, lastCkpt,
 	)
+	// Initialize per-execution input channels from the prepared state.
+	e.initializeChannels(execCtx, execState, true)
 	if len(restoredPending) > 0 {
 		execCtx.pendingWrites = append(execCtx.pendingWrites[:0], restoredPending...)
 	}
@@ -300,7 +303,6 @@ func (e *Executor) prepareCheckpointAndState(
 ) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
 	if e.checkpointSaver == nil {
 		execState := e.initializeState(initialState)
-		e.initializeChannels(execState, true)
 		return execState, nil, false, 0, nil, nil
 	}
 	return e.resumeOrInitWithSaver(ctx, initialState, invocation)
@@ -339,7 +341,6 @@ func (e *Executor) resumeOrInitWithSaver(
 	if err != nil || tuple == nil || tuple.Checkpoint == nil {
 		log.Debug("No checkpoint found, starting fresh")
 		execState := e.initializeState(initialState)
-		e.initializeChannels(execState, true)
 		return execState, checkpointConfig, false, 0, nil, nil
 	}
 
@@ -353,7 +354,6 @@ func (e *Executor) resumeOrInitWithSaver(
 		log.Debugf("Resuming from step %d", resumedStep)
 	}
 	lastCheckpoint := tuple.Checkpoint
-	e.initializeChannels(restored, true)
 	if tuple.Config != nil {
 		checkpointConfig = tuple.Config
 	}
@@ -449,6 +449,7 @@ func (e *Executor) buildExecutionContext(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
 ) *ExecutionContext {
+	// Restore per-node versionsSeen from the last checkpoint if present.
 	versionsSeen := make(map[string]map[string]int64)
 	if resumed && lastCheckpoint != nil && lastCheckpoint.VersionsSeen != nil {
 		for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
@@ -462,7 +463,17 @@ func (e *Executor) buildExecutionContext(
 			len(versionsSeen),
 		)
 	}
-	return &ExecutionContext{
+
+	// Build per-execution channels from the graph's static channel definitions.
+	channelManager := channel.NewChannelManager()
+	for name, ch := range e.graph.getAllChannels() {
+		if ch == nil {
+			continue
+		}
+		channelManager.AddChannel(name, ch.Behavior)
+	}
+
+	execCtx := &ExecutionContext{
 		Graph:          e.graph,
 		State:          state,
 		EventChan:      eventChan,
@@ -470,7 +481,20 @@ func (e *Executor) buildExecutionContext(
 		resumed:        resumed,
 		versionsSeen:   versionsSeen,
 		lastCheckpoint: lastCheckpoint,
+		channels:       channelManager,
 	}
+
+	// For resumed executions, seed channel versions from the last checkpoint so
+	// version-based triggering semantics can continue to function correctly.
+	if resumed && lastCheckpoint != nil && lastCheckpoint.ChannelVersions != nil {
+		for name, version := range lastCheckpoint.ChannelVersions {
+			if ch, ok := execCtx.channels.GetChannel(name); ok && ch != nil {
+				ch.Version = version
+			}
+		}
+	}
+
+	return execCtx
 }
 
 // runBspLoop runs the BSP execution loop from the given start step.
@@ -602,12 +626,13 @@ func (e *Executor) createCheckpointAndSave(
 	copy(pendingWrites, execCtx.pendingWrites)
 	execCtx.pendingWrites = nil // Clear after copying.
 
-	// Track new versions for channels that were updated.
+	// Track new versions for channels that were updated on this execution.
 	newVersions := make(map[string]int64)
-	channels := e.graph.getAllChannels()
-	for channelName, channel := range channels {
-		if channel.IsAvailable() {
-			newVersions[channelName] = channel.Version
+	if execCtx != nil && execCtx.channels != nil {
+		for channelName, ch := range execCtx.channels.GetAllChannels() {
+			if ch.IsAvailable() {
+				newVersions[channelName] = ch.Version
+			}
 		}
 	}
 
@@ -623,10 +648,10 @@ func (e *Executor) createCheckpointAndSave(
 			checkpoint.NextNodes = []string{entryPoint}
 			log.Debugf("Initial checkpoint - setting NextNodes to entry point: %v", checkpoint.NextNodes)
 		}
-		checkpoint.NextChannels = e.getNextChannels()
+		checkpoint.NextChannels = e.getNextChannels(execCtx)
 	} else {
-		checkpoint.NextNodes = e.getNextNodes(execCtx.State)
-		checkpoint.NextChannels = e.getNextChannels()
+		checkpoint.NextNodes = e.getNextNodes(execCtx)
+		checkpoint.NextChannels = e.getNextChannels(execCtx)
 	}
 
 	// Use PutFull for atomic storage.
@@ -645,7 +670,7 @@ func (e *Executor) createCheckpointAndSave(
 	}
 	// Successfully saved checkpoint.
 	// Clear step marks after checkpoint creation.
-	e.clearChannelStepMarks()
+	e.clearChannelStepMarks(execCtx)
 
 	// Update external config with the new checkpoint_id.
 	*config = updatedConfig
@@ -659,6 +684,9 @@ func (e *Executor) applyPendingWrites(ctx context.Context, invocation *agent.Inv
 	if len(writes) == 0 {
 		return
 	}
+	if execCtx == nil || execCtx.channels == nil {
+		return
+	}
 	// Sort writes by sequence number for deterministic replay.
 	sortedWrites := make([]PendingWrite, len(writes))
 	copy(sortedWrites, writes)
@@ -666,8 +694,7 @@ func (e *Executor) applyPendingWrites(ctx context.Context, invocation *agent.Inv
 		return sortedWrites[i].Sequence < sortedWrites[j].Sequence
 	})
 	for _, w := range sortedWrites {
-		ch, _ := e.graph.getChannel(w.Channel)
-		if ch != nil {
+		if ch, ok := execCtx.channels.GetChannel(w.Channel); ok && ch != nil {
 			ch.Update([]any{w.Value}, -1)
 			// Emit channel update event to mirror live execution behavior.
 			e.emitChannelUpdateEvent(ctx, invocation, execCtx, w.Channel, ch.Behavior, e.getTriggeredNodes(w.Channel))
@@ -720,9 +747,6 @@ func (e *Executor) resumeFromCheckpoint(
 		state[k] = v
 	}
 
-	// Initialize channels with the restored state
-	e.initializeChannels(state, false)
-
 	// Apply pending writes if available, otherwise use NextChannels as fallback
 	log.Debugf("resumeFromCheckpoint: PendingWrites=%d, NextNodes=%v, NextChannels=%v",
 		len(tuple.PendingWrites), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels)
@@ -734,6 +758,8 @@ func (e *Executor) resumeFromCheckpoint(
 			EventChan:    make(chan *event.Event, 100),
 			InvocationID: "resume-replay",
 		}
+		// Initialize per-execution channels for replay (without seeding values).
+		e.initializeChannels(tempExecCtx, state, false)
 		e.applyPendingWrites(ctx, invocation, tempExecCtx, tuple.PendingWrites)
 		log.Debugf("Applied %d pending writes", len(tuple.PendingWrites))
 	} else if len(tuple.Checkpoint.NextNodes) > 0 {
@@ -744,10 +770,23 @@ func (e *Executor) resumeFromCheckpoint(
 		state[StateKeyNextNodes] = tuple.Checkpoint.NextNodes
 		// Added NextNodes to state
 	} else if len(tuple.Checkpoint.NextChannels) > 0 {
-		// Fallback: use NextChannels to trigger frontier when no pending writes
+		// Fallback: use NextChannels to trigger frontier when no pending writes.
+		// Reuse a temporary execution context so that we only affect per-run channels.
+		tempExecCtx := &ExecutionContext{
+			State:        state,
+			EventChan:    make(chan *event.Event, 100),
+			InvocationID: "resume-nextchannels",
+		}
+		// Seed channel definitions and versions from the checkpoint.
+		tempExecCtx = e.buildExecutionContext(
+			tempExecCtx.EventChan,
+			tempExecCtx.InvocationID,
+			state,
+			true,
+			tuple.Checkpoint,
+		)
 		for _, chName := range tuple.Checkpoint.NextChannels {
-			if ch, ok := e.graph.getChannel(chName); ok && ch != nil {
-				// Use a marker value to trigger the channel
+			if ch, ok := tempExecCtx.channels.GetChannel(chName); ok && ch != nil {
 				ch.Update([]any{"resume-trigger"}, -1)
 			}
 		}
@@ -777,15 +816,18 @@ func (e *Executor) initializeState(initialState State) State {
 
 // initializeChannels initializes channels with input state.
 // If updateChannels is false, only registers channels without triggering updates.
-func (e *Executor) initializeChannels(state State, updateChannels bool) {
-	// Create input channels for each state key.
-	for key := range state {
+// Channels are created on the per-execution channel manager stored in the
+// ExecutionContext to avoid sharing mutable channel state across runs.
+func (e *Executor) initializeChannels(execCtx *ExecutionContext, state State, updateChannels bool) {
+	if execCtx == nil || execCtx.channels == nil {
+		return
+	}
+	for key, val := range state {
 		channelName := fmt.Sprintf("%s%s", ChannelInputPrefix, key)
-		e.graph.addChannel(channelName, channel.BehaviorLastValue)
+		execCtx.channels.AddChannel(channelName, channel.BehaviorLastValue)
 		if updateChannels {
-			channel, _ := e.graph.getChannel(channelName)
-			if channel != nil {
-				channel.Update([]any{state[key]}, -1)
+			if ch, ok := execCtx.channels.GetChannel(channelName); ok && ch != nil {
+				ch.Update([]any{val}, -1)
 			}
 		}
 	}
@@ -880,7 +922,10 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 		return tasks
 	}
 
-	channels := e.graph.getAllChannels()
+	if execCtx.channels == nil {
+		return tasks
+	}
+	channels := execCtx.channels.GetAllChannels()
 	triggerToNodes := e.graph.getTriggerToNodes()
 
 	// Track which nodes we've already scheduled to avoid duplicates.
@@ -920,9 +965,9 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 	}
 
 	// Acknowledge all available channels after planning.
-	for _, channel := range channels {
-		if channel.IsAvailable() {
-			channel.Acknowledge()
+	for _, ch := range channels {
+		if ch.IsAvailable() {
+			ch.Acknowledge()
 		}
 	}
 
@@ -937,13 +982,18 @@ func (e *Executor) planBasedOnAvailabilityTriggers(
 ) []*Task {
 	var tasks []*Task
 
+	if execCtx.channels == nil {
+		return tasks
+	}
+	channels := execCtx.channels.GetAllChannels()
+
 	for channelName, nodeIDs := range triggerToNodes {
-		channel, _ := e.graph.getChannel(channelName)
-		if channel == nil {
+		ch, ok := channels[channelName]
+		if !ok || ch == nil {
 			continue
 		}
 
-		if !channel.IsAvailable() {
+		if !ch.IsAvailable() {
 			continue
 		}
 
@@ -958,7 +1008,7 @@ func (e *Executor) planBasedOnAvailabilityTriggers(
 		}
 
 		// Mark channel as consumed for this step.
-		channel.Acknowledge()
+		ch.Acknowledge()
 	}
 
 	return tasks
@@ -2032,11 +2082,12 @@ func (e *Executor) handleCommandRouting(ctx context.Context, invocation *agent.I
 	// Create trigger channel for the target node (including self).
 	triggerChannel := fmt.Sprintf("%s%s", ChannelTriggerPrefix, targetNode)
 	e.graph.addNodeTrigger(triggerChannel, targetNode)
-
-	// Write to the channel to trigger the target node.
-	ch, _ := e.graph.getChannel(triggerChannel)
-	if ch != nil {
-		ch.Update([]any{channelUpdateMarker}, -1)
+	if execCtx != nil && execCtx.channels != nil {
+		// Ensure the per-execution channel exists and write to it.
+		execCtx.channels.AddChannel(triggerChannel, channel.BehaviorLastValue)
+		if ch, ok := execCtx.channels.GetChannel(triggerChannel); ok && ch != nil {
+			ch.Update([]any{channelUpdateMarker}, -1)
+		}
 	}
 
 	// Emit channel update event.
@@ -2046,23 +2097,27 @@ func (e *Executor) handleCommandRouting(ctx context.Context, invocation *agent.I
 // processChannelWrites processes the channel writes for a task.
 func (e *Executor) processChannelWrites(ctx context.Context, invocation *agent.Invocation,
 	execCtx *ExecutionContext, taskID string, writes []channelWriteEntry) {
+	if execCtx == nil || execCtx.channels == nil {
+		return
+	}
 	for _, write := range writes {
-		ch, _ := e.graph.getChannel(write.Channel)
-		if ch != nil {
-			ch.Update([]any{write.Value}, -1)
-
-			// Emit channel update event.
-			e.emitChannelUpdateEvent(ctx, invocation, execCtx, write.Channel, ch.Behavior, e.getTriggeredNodes(write.Channel))
-			// Accumulate into pendingWrites to be saved with the next checkpoint.
-			execCtx.pendingMu.Lock()
-			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
-				Channel:  write.Channel,
-				Value:    write.Value,
-				TaskID:   taskID,
-				Sequence: execCtx.seq.Add(1), // Use atomic increment for deterministic replay
-			})
-			execCtx.pendingMu.Unlock()
+		ch, ok := execCtx.channels.GetChannel(write.Channel)
+		if !ok || ch == nil {
+			continue
 		}
+		ch.Update([]any{write.Value}, -1)
+
+		// Emit channel update event.
+		e.emitChannelUpdateEvent(ctx, invocation, execCtx, write.Channel, ch.Behavior, e.getTriggeredNodes(write.Channel))
+		// Accumulate into pendingWrites to be saved with the next checkpoint.
+		execCtx.pendingMu.Lock()
+		execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
+			Channel:  write.Channel,
+			Value:    write.Value,
+			TaskID:   taskID,
+			Sequence: execCtx.seq.Add(1), // Use atomic increment for deterministic replay
+		})
+		execCtx.pendingMu.Unlock()
 	}
 }
 
@@ -2186,7 +2241,7 @@ func (e *Executor) updateChannels(ctx context.Context, invocation *agent.Invocat
 
 // emitUpdateStepEvent emits the update step event.
 func (e *Executor) emitUpdateStepEvent(ctx context.Context, invocation *agent.Invocation, execCtx *ExecutionContext, step int) {
-	updatedChannels := e.getUpdatedChannels()
+	updatedChannels := e.getUpdatedChannels(execCtx)
 	updateEvent := NewPregelStepEvent(
 		WithPregelEventInvocationID(execCtx.InvocationID),
 		WithPregelEventStepNumber(step),
@@ -2216,15 +2271,9 @@ func (e *Executor) emitStateUpdateEvent(ctx context.Context, invocation *agent.I
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, stateEvent)
 }
 
-// getUpdatedChannels returns a list of updated channel names.
-func (e *Executor) getUpdatedChannels() []string {
-	var updated []string
-	for name, channel := range e.graph.getAllChannels() {
-		if channel.IsAvailable() {
-			updated = append(updated, name)
-		}
-	}
-	return updated
+// getUpdatedChannels returns a list of updated channel names for this execution.
+func (e *Executor) getUpdatedChannels(execCtx *ExecutionContext) []string {
+	return e.getNextChannels(execCtx)
 }
 
 // selectRetryPolicy selects the first matching retry policy for the given error.
@@ -2244,14 +2293,8 @@ func (e *Executor) selectRetryPolicy(err error, policies []RetryPolicy) (bool, R
 }
 
 // getUpdatedChannelsInStep returns a list of channels updated in the current step.
-func (e *Executor) getUpdatedChannelsInStep(step int) []string {
-	var updated []string
-	for name, channel := range e.graph.getAllChannels() {
-		if channel.IsUpdatedInStep(step) {
-			updated = append(updated, name)
-		}
-	}
-	return updated
+func (e *Executor) getUpdatedChannelsInStep(execCtx *ExecutionContext, step int) []string {
+	return e.getNextChannelsInStep(execCtx, step)
 }
 
 // getTriggeredNodes returns the list of nodes triggered by a channel.
@@ -2288,6 +2331,10 @@ func (e *Executor) processConditionalEdges(
 	// Deduplicate results to avoid double triggers.
 	seen := make(map[string]bool)
 	for _, r := range result.NextNodes {
+		// Skip empty branch keys; they are treated as no-op.
+		if r == "" {
+			continue
+		}
 		if seen[r] {
 			continue
 		}
@@ -2332,13 +2379,15 @@ func (e *Executor) processConditionalResult(
 	e.graph.addNodeTrigger(channelName, target)
 
 	// Trigger the target by writing to the channel.
-	ch, ok := e.graph.getChannel(channelName)
-	if ok && ch != nil {
-		ch.Update([]any{channelUpdateMarker}, -1)
-		e.emitChannelUpdateEvent(ctx, invocation, execCtx, channelName,
-			channel.BehaviorLastValue, []string{target})
-	} else {
-		log.Warnf("❌ Step %d: Failed to get channel %s", step, channelName)
+	if execCtx != nil && execCtx.channels != nil {
+		execCtx.channels.AddChannel(channelName, channel.BehaviorLastValue)
+		if ch, ok := execCtx.channels.GetChannel(channelName); ok && ch != nil {
+			ch.Update([]any{channelUpdateMarker}, -1)
+			e.emitChannelUpdateEvent(ctx, invocation, execCtx, channelName,
+				channel.BehaviorLastValue, []string{target})
+		} else {
+			log.Warnf("❌ Step %d: Failed to get channel %s", step, channelName)
+		}
 	}
 	return nil
 }
@@ -2379,7 +2428,7 @@ func (e *Executor) handleInterrupt(
 		// IMPORTANT: For internal interrupts (from graph.Interrupt within a node),
 		// the interrupted node needs to be re-executed to complete its work.
 		// We must include it in NextNodes.
-		nextNodes := e.getNextNodes(execCtx.State)
+		nextNodes := e.getNextNodes(execCtx)
 
 		// Ensure the interrupted node is included
 		hasNode := false
@@ -2393,7 +2442,7 @@ func (e *Executor) handleInterrupt(
 			nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
 		}
 		checkpoint.NextNodes = nextNodes
-		checkpoint.NextChannels = e.getNextChannels()
+		checkpoint.NextChannels = e.getNextChannels(execCtx)
 
 		// Store the interrupt checkpoint using PutFull for consistency
 		// Use a new context to ensure checkpoint saves even if main context is canceled.
@@ -2450,12 +2499,13 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 	// No deep copy is required here
 	channelValues := state.safeClone()
 
-	// Create channel versions from current channel states
+	// Create channel versions from current channel states (per execution).
 	channelVersions := make(map[string]int64)
-	channels := e.graph.getAllChannels()
-	for channelName, channel := range channels {
-		if channel.IsAvailable() {
-			channelVersions[channelName] = channel.Version
+	if execCtx != nil && execCtx.channels != nil {
+		for channelName, ch := range execCtx.channels.GetAllChannels() {
+			if ch.IsAvailable() {
+				channelVersions[channelName] = ch.Version
+			}
 		}
 	}
 
@@ -2477,21 +2527,24 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 
 	// Use step-specific channels if step is provided, otherwise fallback to all available
 	if step >= 0 {
-		checkpoint.UpdatedChannels = e.getUpdatedChannelsInStep(step)
+		checkpoint.UpdatedChannels = e.getUpdatedChannelsInStep(execCtx, step)
 	} else {
-		checkpoint.UpdatedChannels = e.getUpdatedChannels()
+		checkpoint.UpdatedChannels = e.getUpdatedChannels(execCtx)
 	}
 	return checkpoint
 }
 
 // getNextNodes determines which nodes should be executed next based on the current state.
-func (e *Executor) getNextNodes(state State) []string {
+func (e *Executor) getNextNodes(execCtx *ExecutionContext) []string {
 	var nextNodes []string
+	if execCtx == nil || execCtx.channels == nil {
+		return nextNodes
+	}
+	channels := execCtx.channels.GetAllChannels()
 	// Check for nodes that are ready to execute based on channel triggers
 	triggerToNodes := e.graph.getTriggerToNodes()
 	for channelName, nodeIDs := range triggerToNodes {
-		channel, _ := e.graph.getChannel(channelName)
-		if channel != nil && channel.IsAvailable() {
+		if ch, ok := channels[channelName]; ok && ch != nil && ch.IsAvailable() {
 			nextNodes = append(nextNodes, nodeIDs...)
 		}
 	}
@@ -2508,13 +2561,13 @@ func (e *Executor) getNextNodes(state State) []string {
 }
 
 // getNextChannels determines which channels should be triggered next.
-func (e *Executor) getNextChannels() []string {
+func (e *Executor) getNextChannels(execCtx *ExecutionContext) []string {
 	var nextChannels []string
-
-	// Get all channels that are available
-	channels := e.graph.getAllChannels()
-	for channelName, channel := range channels {
-		if channel.IsAvailable() {
+	if execCtx == nil || execCtx.channels == nil {
+		return nextChannels
+	}
+	for channelName, ch := range execCtx.channels.GetAllChannels() {
+		if ch.IsAvailable() {
 			nextChannels = append(nextChannels, channelName)
 		}
 	}
@@ -2522,13 +2575,13 @@ func (e *Executor) getNextChannels() []string {
 }
 
 // getNextChannelsInStep determines which channels were updated in the current step.
-func (e *Executor) getNextChannelsInStep(step int) []string {
+func (e *Executor) getNextChannelsInStep(execCtx *ExecutionContext, step int) []string {
 	var nextChannels []string
-
-	// Get channels that were updated in the current step
-	channels := e.graph.getAllChannels()
-	for channelName, channel := range channels {
-		if channel.IsUpdatedInStep(step) {
+	if execCtx == nil || execCtx.channels == nil {
+		return nextChannels
+	}
+	for channelName, ch := range execCtx.channels.GetAllChannels() {
+		if ch.IsUpdatedInStep(step) {
 			nextChannels = append(nextChannels, channelName)
 		}
 	}
@@ -2536,10 +2589,12 @@ func (e *Executor) getNextChannelsInStep(step int) []string {
 }
 
 // clearChannelStepMarks clears the step marks for all channels after checkpoint creation.
-func (e *Executor) clearChannelStepMarks() {
-	channels := e.graph.getAllChannels()
-	for _, channel := range channels {
-		channel.ClearStepMark()
+func (e *Executor) clearChannelStepMarks(execCtx *ExecutionContext) {
+	if execCtx == nil || execCtx.channels == nil {
+		return
+	}
+	for _, ch := range execCtx.channels.GetAllChannels() {
+		ch.ClearStepMark()
 	}
 }
 
@@ -2560,11 +2615,14 @@ func (e *Executor) updateVersionsSeen(execCtx *ExecutionContext, nodeID string, 
 	}
 
 	// Record current version of all trigger channels this node has seen.
-	channels := e.graph.getAllChannels()
+	if execCtx.channels == nil {
+		return
+	}
+	channels := execCtx.channels.GetAllChannels()
 	for _, trigger := range triggers {
-		if channel, exists := channels[trigger]; exists {
-			execCtx.versionsSeen[nodeID][trigger] = channel.Version
-			log.Debugf("Node %s saw channel %s version %d", nodeID, trigger, channel.Version)
+		if ch, exists := channels[trigger]; exists && ch != nil {
+			execCtx.versionsSeen[nodeID][trigger] = ch.Version
+			log.Debugf("Node %s saw channel %s version %d", nodeID, trigger, ch.Version)
 		}
 	}
 }

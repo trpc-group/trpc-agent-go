@@ -111,7 +111,7 @@ func TestExecutor_VersionBasedPlanning(t *testing.T) {
 	ec := exec.buildExecutionContext(make(chan *event.Event, 1), "inv-pln", State{}, true, last)
 
 	// Make trigger channel available and version > seen
-	channels := exec.graph.getAllChannels()
+	channels := ec.channels.GetAllChannels()
 	for name, ch := range channels {
 		if strings.HasPrefix(name, "branch:to:b") {
 			ch.Update([]any{"x"}, 1) // Version becomes 1
@@ -151,17 +151,23 @@ func TestExecutor_GetNextChannelsInStep_And_ClearMarks_And_UpdateVersionsSeen(t 
 	c.Update([]any{"v"}, 5)
 
 	exec := &Executor{graph: g}
+	// Build execution context so per-run channels are created from definitions.
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+	// Mark the corresponding per-run channel as updated in step 5.
+	perRunCh, ok2 := ec.channels.GetChannel("branch:to:x")
+	require.True(t, ok2)
+	perRunCh.Update([]any{"v"}, 5)
+
 	// getNextChannelsInStep should include our channel
-	got := exec.getNextChannelsInStep(5)
+	got := exec.getNextChannelsInStep(ec, 5)
 	require.Contains(t, got, "branch:to:x")
 	// clear marks
-	exec.clearChannelStepMarks()
-	require.False(t, c.IsUpdatedInStep(5))
+	exec.clearChannelStepMarks(ec)
+	require.False(t, perRunCh.IsUpdatedInStep(5))
 
 	// updateVersionsSeen should record current version for triggers
-	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
 	exec.updateVersionsSeen(ec, "nodeA", []string{"branch:to:x"})
-	require.Equal(t, c.Version, ec.versionsSeen["nodeA"]["branch:to:x"])
+	require.Equal(t, perRunCh.Version, ec.versionsSeen["nodeA"]["branch:to:x"])
 }
 
 // mock saver for createCheckpoint
@@ -279,10 +285,11 @@ func TestExecutor_ResumeFromCheckpoint_NextChannelsFallback(t *testing.T) {
 	// State should not contain next nodes key in this fallback path.
 	require.NotContains(t, st, StateKeyNextNodes)
 
-	// The channel should have been updated once by the fallback.
+	// The Graph-level channel definition should remain untouched; the fallback
+	// only updates per-execution channels to avoid cross-run interference.
 	ch, _ := g.getChannel(ChannelBranchPrefix + "A")
 	require.NotNil(t, ch)
-	require.Equal(t, int64(1), ch.Version)
+	require.Equal(t, int64(0), ch.Version)
 }
 
 // Verify restoreStateFromCheckpoint fills schema defaults and zero values
@@ -436,12 +443,17 @@ func TestExecutor_GetNextNodes_Dedup(t *testing.T) {
 	g.addChannel("branch:to:dup2", ichannel.BehaviorLastValue)
 	g.addNodeTrigger("branch:to:dup", "dup")
 	g.addNodeTrigger("branch:to:dup2", "dup")
-	c1, _ := g.getChannel("branch:to:dup")
-	c2, _ := g.getChannel("branch:to:dup2")
-	c1.Update([]any{"v"}, 1)
-	c2.Update([]any{"v"}, 1)
 	exec := &Executor{graph: g}
-	nodes := exec.getNextNodes(State{})
+	// Build execution context and mark per-run channels available.
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+	if ch1, ok := ec.channels.GetChannel("branch:to:dup"); ok && ch1 != nil {
+		ch1.Update([]any{"v"}, 1)
+	}
+	if ch2, ok := ec.channels.GetChannel("branch:to:dup2"); ok && ch2 != nil {
+		ch2.Update([]any{"v"}, 1)
+	}
+
+	nodes := exec.getNextNodes(ec)
 	// dedup should keep only one instance of "dup"
 	count := 0
 	for _, n := range nodes {
@@ -497,16 +509,18 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 	// Setup trigger mapping for nodeX
 	g.addChannel("branch:to:nodeX", ichannel.BehaviorLastValue)
 	g.addNodeTrigger("branch:to:nodeX", "nodeX")
-	// Set channel available
-	chX, _ := g.getChannel("branch:to:nodeX")
-	chX.Update([]any{"v"}, 1)
 	exec := &Executor{graph: g}
+	// Build execution context so per-run channels are created and mark them
+	// as available.
+	ec := exec.buildExecutionContext(nil, "inv", State{"a": 1}, false, nil)
+	if chX, ok := ec.channels.GetChannel("branch:to:nodeX"); ok && chX != nil {
+		chX.Update([]any{"v"}, 1)
+	}
 	// getNextNodes should include nodeX
-	n := exec.getNextNodes(State{})
+	n := exec.getNextNodes(ec)
 	require.Contains(t, n, "nodeX")
 
 	// buildTaskStateCopy with overlay
-	ec := exec.buildExecutionContext(nil, "inv", State{"a": 1}, false, nil)
 	tsk := &Task{NodeID: "nodeX", Overlay: State{"b": 2}}
 	st := exec.buildTaskStateCopy(ec, tsk)
 	require.Equal(t, 1, st["a"])

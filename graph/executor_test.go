@@ -1946,14 +1946,25 @@ func TestProcessConditionalEdges_DedupMulti(t *testing.T) {
 
 	exec, err := NewExecutor(g)
 	require.NoError(t, err)
-	execCtx := &ExecutionContext{Graph: g, State: State{}, EventChan: make(chan *event.Event, 16)}
+	// Build a full execution context so that conditional edges create
+	// per-run channels on the ExecutionContext instead of mutating the
+	// shared Graph definition.
+	execCtx := exec.buildExecutionContext(
+		make(chan *event.Event, 16),
+		"inv-cond-dedup",
+		State{},
+		false,
+		nil,
+	)
 
 	// Process and verify only one update per target channel.
 	require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, "start", 0))
-	chB, _ := g.getChannel("branch:to:B")
-	chC, _ := g.getChannel("branch:to:C")
-	require.NotNil(t, chB)
-	require.NotNil(t, chC)
+	// The dynamic branch channels should exist only on the per-execution
+	// channel manager and each receive a single update.
+	chB, okB := execCtx.channels.GetChannel(ChannelBranchPrefix + "B")
+	chC, okC := execCtx.channels.GetChannel(ChannelBranchPrefix + "C")
+	require.True(t, okB)
+	require.True(t, okC)
 	require.Equal(t, int64(1), chB.Version)
 	require.Equal(t, int64(1), chC.Version)
 }
@@ -2075,29 +2086,29 @@ func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
 	exec, err := NewExecutor(g)
 	require.NoError(t, err)
 
-	execCtx := &ExecutionContext{
-		Graph:        g,
-		State:        State{},
-		EventChan:    make(chan *event.Event, 8),
-		InvocationID: "inv-multi-skip",
-	}
+	execCtx := exec.buildExecutionContext(
+		make(chan *event.Event, 8),
+		"inv-multi-skip",
+		State{},
+		false,
+		nil,
+	)
 
 	require.NoError(t, exec.processConditionalEdges(
 		context.Background(), nil, execCtx, nodeStart, 0,
 	))
 
 	// Expect channels only for B and C, one update each.
-	chB, okB := g.getChannel(ChannelBranchPrefix + nodeB)
-	chC, okC := g.getChannel(ChannelBranchPrefix + nodeC)
+	chB, okB := execCtx.channels.GetChannel(ChannelBranchPrefix + nodeB)
+	chC, okC := execCtx.channels.GetChannel(ChannelBranchPrefix + nodeC)
 	require.True(t, okB)
 	require.True(t, okC)
 	require.Equal(t, int64(1), chB.Version)
 	require.Equal(t, int64(1), chC.Version)
 
 	// No channel should be created for empty branch key.
-	if _, ok := g.getChannel(ChannelBranchPrefix + ""); !ok {
-		t.Fatalf("expected channel for empty branch key created")
-	}
+	_, okEmpty := execCtx.channels.GetChannel(ChannelBranchPrefix + "")
+	require.False(t, okEmpty, "expected no channel for empty branch key")
 }
 
 // minimalNoopNode returns a trivial node function for building test graphs.
