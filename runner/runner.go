@@ -319,7 +319,10 @@ func (r *runner) handleEventPersistence(
 	// Trigger summarization only after final assistant responses.
 	// Skip user messages, tool calls, and tool results to ensure summary
 	// always contains complete Q&A pairs (including tool call round-trips).
-	if agentEvent.IsUserMessage() || agentEvent.IsToolCallResponse() || agentEvent.IsToolResultResponse() {
+	if agentEvent.IsUserMessage() ||
+		agentEvent.IsToolCallResponse() ||
+		agentEvent.IsToolResultResponse() ||
+		!agentEvent.IsValidContent() {
 		return
 	}
 
