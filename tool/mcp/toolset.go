@@ -109,7 +109,7 @@ func (ts *ToolSet) Tools(ctx context.Context) []tool.Tool {
 	result := make([]tool.Tool, 0, len(ts.tools))
 	for _, t := range ts.tools {
 		// All tools created by newMCPTool implement CallableTool, so this should always succeed
-		result = append(result, t.(tool.Tool))
+		result = append(result, t)
 	}
 	return result
 }
@@ -544,7 +544,7 @@ func (m *mcpSessionManager) recreateSession(ctx context.Context) error {
 	// Use singleflight to ensure only one reconnection happens at a time
 	// If multiple goroutines call this simultaneously, only one will execute,
 	// and others will wait for the result
-	_, err, _ := m.reconnectGroup.Do("reconnect", func() (interface{}, error) {
+	_, err, _ := m.reconnectGroup.Do("reconnect", func() (any, error) {
 		return nil, m.doRecreateSession(ctx)
 	})
 	return err

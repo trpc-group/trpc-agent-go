@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package gemini
 
 import (
@@ -690,11 +699,9 @@ func TestModel_GenerateContentNoStream(t *testing.T) {
 			m := &Model{
 				client: mockClient,
 				chatRequestCallback: func(ctx context.Context, chatRequest []*genai.Content) {
-					return
 				},
 				chatResponseCallback: func(ctx context.Context, chatRequest []*genai.Content,
 					generateConfig *genai.GenerateContentConfig, chatResponse *genai.GenerateContentResponse) {
-					return
 				},
 			}
 			_, err := m.GenerateContent(tt.args.ctx, tt.args.request)
@@ -782,14 +789,11 @@ func TestModel_GenerateContentStreaming(t *testing.T) {
 				protocolOverheadTokens: 1,
 				chatChunkCallback: func(ctx context.Context, chatRequest []*genai.Content,
 					generateConfig *genai.GenerateContentConfig, chatResponse *genai.GenerateContentResponse) {
-					return
 				},
 				chatStreamCompleteCallback: func(ctx context.Context, chatRequest []*genai.Content,
 					generateConfig *genai.GenerateContentConfig, chatResponse *model.Response) {
-					return
 				},
 				chatRequestCallback: func(ctx context.Context, chatRequest []*genai.Content) {
-					return
 				},
 			}
 			_, err := m.GenerateContent(tt.args.ctx, tt.args.request)

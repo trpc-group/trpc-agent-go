@@ -31,7 +31,7 @@ import (
 // testingInterface defines the common interface between *testing.T and *testing.B
 type testingInterface interface {
 	Helper()
-	Fatalf(format string, args ...interface{})
+	Fatalf(format string, args ...any)
 }
 
 // newTestPDF programmatically generates a small PDF containing the text

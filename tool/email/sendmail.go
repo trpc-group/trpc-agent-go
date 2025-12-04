@@ -1,18 +1,25 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package email
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/log"
-
 	gomail "github.com/wneessen/go-mail"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
-
-	"net/mail"
 )
 
 const (
@@ -31,6 +38,7 @@ type sendMailRequest struct {
 	Extra    ExtraData `json:"extra" jsonschema:"description=extra data of the mail. optional. default is empty."`
 }
 
+// Mail represents a mail to be sent.
 type Mail struct {
 	ToEmail string `json:"to_email" jsonschema:"description=send to email."`
 	Subject string `json:"subject" jsonschema:"description=subject of the mail"`
@@ -43,6 +51,7 @@ type Auth struct {
 	Password string `json:"password" jsonschema:"description=password of the mail."`
 }
 
+// ExtraData represents extra data for the mail.
 type ExtraData struct {
 	SvrAddr string `json:"svr_addr" jsonschema:"description=server address of the mail. optional. default is empty."`
 	Port    int    `json:"port" jsonschema:"description=port of the mail. optional. default is empty."`

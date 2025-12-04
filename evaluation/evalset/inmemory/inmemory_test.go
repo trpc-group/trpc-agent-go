@@ -53,7 +53,7 @@ func TestManager(t *testing.T) {
 		SessionInput: &evalset.SessionInput{
 			AppName: "app",
 			UserID:  "user1",
-			State:   map[string]interface{}{"premium": true},
+			State:   map[string]any{"premium": true},
 		},
 		Conversation: []*evalset.Invocation{
 			{InvocationID: "inv1"},
@@ -82,7 +82,7 @@ func TestManager(t *testing.T) {
 		EvalID: "case1",
 		SessionInput: &evalset.SessionInput{
 			AppName: "app-updated",
-			State:   map[string]interface{}{"level": 2},
+			State:   map[string]any{"level": 2},
 		},
 		Conversation: []*evalset.Invocation{
 			{InvocationID: "inv1"},
@@ -97,7 +97,7 @@ func TestManager(t *testing.T) {
 	updatedCase, err := mgr.GetCase(ctx, "app", "set1", "case1")
 	assert.NoError(t, err)
 	assert.Equal(t, "app-updated", updatedCase.SessionInput.AppName)
-	assert.Equal(t, map[string]interface{}{"level": 2}, updatedCase.SessionInput.State)
+	assert.Equal(t, map[string]any{"level": 2}, updatedCase.SessionInput.State)
 	assert.Len(t, updatedCase.Conversation, 2)
 
 	evalSetAfterUpdate, err := mgr.Get(ctx, "app", "set1")
@@ -109,7 +109,7 @@ func TestManager(t *testing.T) {
 		EvalID: "case2",
 		SessionInput: &evalset.SessionInput{
 			AppName: "app",
-			State:   map[string]interface{}{"role": "tester"},
+			State:   map[string]any{"role": "tester"},
 		},
 	}
 	err = mgr.AddCase(ctx, "app", "set1", secondCase)
@@ -206,7 +206,7 @@ func TestManagerValidationAndErrors(t *testing.T) {
 	err = mgr.UpdateCase(ctx, "ghost", "set", &evalset.EvalCase{
 		EvalID: "case",
 		SessionInput: &evalset.SessionInput{
-			State: map[string]interface{}{"k": "v"},
+			State: map[string]any{"k": "v"},
 		},
 	})
 	assert.NoError(t, err)

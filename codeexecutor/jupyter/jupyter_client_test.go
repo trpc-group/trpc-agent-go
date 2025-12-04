@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package jupyter
 
 import (
@@ -131,7 +140,7 @@ func (t jupyterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res.Header.MsgType = "status"
-	res.Content = map[string]interface{}{"execution_state": "idle"}
+	res.Content = map[string]any{"execution_state": "idle"}
 	ws.WriteJSON(res)
 }
 
@@ -209,13 +218,13 @@ func Test_waitForReady(t *testing.T) {
 
 func Test_sendMessage(t *testing.T) {
 	cli := newInvalidClient()
-	_, err := cli.sendMessage(map[string]interface{}{}, "test", "test")
+	_, err := cli.sendMessage(map[string]any{}, "test", "test")
 	assert.Error(t, err)
 
 	srv := newServer(t)
 	defer srv.Close()
 
-	_, err = srv.cli.sendMessage(map[string]interface{}{}, "test", "test")
+	_, err = srv.cli.sendMessage(map[string]any{}, "test", "test")
 	assert.NoError(t, err)
 }
 

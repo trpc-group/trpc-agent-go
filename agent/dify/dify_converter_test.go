@@ -615,7 +615,7 @@ func (c *customTestRequestConverter) ConvertToDifyRequest(
 ) (*dify.ChatMessageRequest, error) {
 	req := &dify.ChatMessageRequest{
 		Query: "CUSTOM: " + invocation.Message.Content,
-		Inputs: map[string]interface{}{
+		Inputs: map[string]any{
 			"custom_metadata": "added_by_converter",
 		},
 	}

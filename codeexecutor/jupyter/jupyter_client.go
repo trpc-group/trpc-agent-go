@@ -69,8 +69,8 @@ type executionMessage struct {
 		MsgType string `json:"msg_type"`
 		MsgID   string `json:"msg_id"`
 	} `json:"header"`
-	Content      map[string]interface{} `json:"content"`
-	Metadata     map[string]interface{} `json:"metadata"`
+	Content      map[string]any `json:"content"`
+	Metadata     map[string]any `json:"metadata"`
 	ParentHeader struct {
 		MsgID string `json:"msg_id"`
 	} `json:"parent_header"`
@@ -243,7 +243,7 @@ func (c *Client) startKernel(kernelName string) (string, error) {
 }
 
 func (c *Client) waitForReady() (bool, error) {
-	msgID, err := c.sendMessage(map[string]interface{}{}, "shell", "kernel_info_request")
+	msgID, err := c.sendMessage(map[string]any{}, "shell", "kernel_info_request")
 	if err != nil {
 		return false, err
 	}
@@ -267,11 +267,11 @@ func (c *Client) waitForReady() (bool, error) {
 }
 
 // sendMessage sends a message to the kernel
-func (c *Client) sendMessage(content map[string]interface{}, channel string, messageType string) (string, error) {
+func (c *Client) sendMessage(content map[string]any, channel string, messageType string) (string, error) {
 	timestamp := time.Now().Format(time.RFC3339)
 	messageID := uuid.New().String()
-	message := map[string]interface{}{
-		"header": map[string]interface{}{
+	message := map[string]any{
+		"header": map[string]any{
 			"username": "trpc-agent-go",
 			"version":  "5.0",
 			"session":  c.sessionID,
@@ -279,10 +279,10 @@ func (c *Client) sendMessage(content map[string]interface{}, channel string, mes
 			"msg_type": messageType,
 			"date":     timestamp,
 		},
-		"parent_header": map[string]interface{}{},
-		"metadata":      map[string]interface{}{},
+		"parent_header": map[string]any{},
+		"metadata":      map[string]any{},
 		"content":       content,
-		"buffers":       []interface{}{},
+		"buffers":       []any{},
 		"channel":       channel,
 	}
 	if c.ws == nil {
@@ -297,11 +297,11 @@ func (c *Client) sendMessage(content map[string]interface{}, channel string, mes
 
 // runCode executes the given code, now only return text output
 func (c *Client) runCode(code string) (string, error) {
-	msgID, err := c.sendMessage(map[string]interface{}{
+	msgID, err := c.sendMessage(map[string]any{
 		"code":             code,
 		"silent":           false,
 		"store_history":    true,
-		"user_expressions": map[string]interface{}{},
+		"user_expressions": map[string]any{},
 		"allow_stdin":      false,
 		"stop_on_error":    true,
 	}, "shell", "execute_request")

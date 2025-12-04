@@ -358,7 +358,7 @@ func TestFunctionDefinitionParam_MarshalJSON(t *testing.T) {
 			require.NoError(t, err)
 
 			// Parse the result to check structure
-			var result map[string]interface{}
+			var result map[string]any
 			err = json.Unmarshal(jsonData, &result)
 			require.NoError(t, err)
 
