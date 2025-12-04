@@ -208,7 +208,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		// When summary is present, ensure messages start with user role to comply with API requirements.
 		if !summaryUpdatedAt.IsZero() {
 			messages = p.trimLeadingNonUserMessages(messages)
-			// If trimLeadingNonUserMessages results in empty messages, add invocation.Message
+			// For Defense, summary exists
+			// If trimLeadingNonUserMessages results in empty messages(user message summarized to system prompt), add invocation.Message
 			if len(messages) == 0 && invocation.Message.Content != "" {
 				messages = append(messages, invocation.Message)
 			}
