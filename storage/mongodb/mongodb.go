@@ -39,6 +39,11 @@ func GetClientBuilder() clientBuilder {
 	return globalBuilder
 }
 
+// mongoConnector is the function used to connect to MongoDB.
+var mongoConnector = func(ctx context.Context, opts ...*options.ClientOptions) (*mongo.Client, error) {
+	return mongo.Connect(ctx, opts...)
+}
+
 // defaultClientBuilder is the default mongodb client builder.
 // It creates a native MongoDB client using the official Go driver.
 func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) (Client, error) {
@@ -55,7 +60,7 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 	clientOpts := options.Client().ApplyURI(o.URI)
 
 	// Connect to MongoDB
-	client, err := mongo.Connect(ctx, clientOpts)
+	client, err := mongoConnector(ctx, clientOpts)
 	if err != nil {
 		return nil, fmt.Errorf("mongodb: connect failed: %w", err)
 	}
@@ -66,7 +71,7 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 		return nil, fmt.Errorf("mongodb: ping failed: %w", err)
 	}
 
-	return &defaultClient{client: client}, nil
+	return newDefaultClient(client), nil
 }
 
 // RegisterMongoDBInstance registers a mongodb instance with the given options.
@@ -121,9 +126,27 @@ type Client interface {
 	Disconnect(ctx context.Context) error
 }
 
+// session defines the interface for MongoDB session operations.
+type session interface {
+	EndSession(ctx context.Context)
+	WithTransaction(ctx context.Context, fn func(sc mongo.SessionContext) (interface{}, error),
+		opts ...*options.TransactionOptions) (interface{}, error)
+}
+
 // defaultClient wraps *mongo.Client to implement the Client interface.
 type defaultClient struct {
-	client *mongo.Client
+	client       *mongo.Client
+	startSession func(opts ...*options.SessionOptions) (session, error)
+}
+
+// newDefaultClient creates a new defaultClient with the given mongo.Client.
+func newDefaultClient(client *mongo.Client) *defaultClient {
+	return &defaultClient{
+		client: client,
+		startSession: func(opts ...*options.SessionOptions) (session, error) {
+			return client.StartSession(opts...)
+		},
+	}
 }
 
 // InsertOne implements Client.InsertOne.
@@ -171,7 +194,7 @@ func (c *defaultClient) CountDocuments(ctx context.Context, database string, col
 // Transaction implements Client.Transaction.
 func (c *defaultClient) Transaction(ctx context.Context, sf func(sc mongo.SessionContext) error,
 	tOpts []*options.TransactionOptions, opts ...*options.SessionOptions) error {
-	session, err := c.client.StartSession(opts...)
+	session, err := c.startSession(opts...)
 	if err != nil {
 		return fmt.Errorf("mongodb: start session failed: %w", err)
 	}
