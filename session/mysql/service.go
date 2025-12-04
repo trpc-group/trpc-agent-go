@@ -59,6 +59,10 @@ type Service struct {
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
+
+	// hooks for session operations.
+	appendEventHooks []session.AppendEventHook
+	getSessionHooks  []session.GetSessionHook
 }
 
 type sessionEventPair struct {
@@ -119,6 +123,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		tableSessionSummaries: tableSessionSummaries,
 		tableAppStates:        tableAppStates,
 		tableUserStates:       tableUserStates,
+		appendEventHooks:      opts.appendEventHooks,
+		getSessionHooks:       opts.getSessionHooks,
 	}
 
 	// Initialize database if needed
@@ -296,20 +302,34 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
-	if err != nil {
-		return nil, fmt.Errorf("mysql session service get session state failed: %w", err)
-	}
 
-	// Refresh session TTL if configured and session exists
-	if sess != nil && s.sessionTTL > 0 {
-		if err := s.refreshSessionTTL(ctx, key); err != nil {
-			log.Warnf("failed to refresh session TTL: %v", err)
-			// Don't fail the GetSession call, just log the warning
+	final := func() (*session.Session, error) {
+		sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+		if err != nil {
+			return nil, fmt.Errorf("mysql session service get session state failed: %w", err)
 		}
+
+		// Refresh session TTL if configured and session exists
+		if sess != nil && s.sessionTTL > 0 {
+			if err := s.refreshSessionTTL(ctx, key); err != nil {
+				log.Warnf("failed to refresh session TTL: %v", err)
+				// Don't fail the GetSession call, just log the warning
+			}
+		}
+		return sess, nil
 	}
 
-	return sess, nil
+	// Run GetSession hooks if configured
+	if len(s.getSessionHooks) > 0 {
+		hctx := &session.GetSessionContext{
+			Context: ctx,
+			Key:     key,
+			Options: opt,
+		}
+		return session.RunGetSessionHooks(s.getSessionHooks, hctx, final)
+	}
+
+	return final()
 }
 
 // ListSessions lists all sessions by user scope of session key.
@@ -567,7 +587,7 @@ func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, 
 func (s *Service) AppendEvent(
 	ctx context.Context,
 	sess *session.Session,
-	event *event.Event,
+	e *event.Event,
 	opts ...session.Option,
 ) error {
 	key := session.Key{
@@ -578,8 +598,33 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+
+	// Run AppendEvent hooks if configured
+	if len(s.appendEventHooks) > 0 {
+		hctx := &session.AppendEventContext{
+			Context: ctx,
+			Session: sess,
+			Event:   e,
+			Key:     key,
+		}
+		return session.RunAppendEventHooks(s.appendEventHooks, hctx, func() error {
+			return s.appendEventInternal(ctx, sess, hctx.Event, key, opts...)
+		})
+	}
+
+	return s.appendEventInternal(ctx, sess, e, key, opts...)
+}
+
+// appendEventInternal is the internal implementation of AppendEvent.
+func (s *Service) appendEventInternal(
+	ctx context.Context,
+	sess *session.Session,
+	e *event.Event,
+	key session.Key,
+	opts ...session.Option,
+) error {
 	// update user session with the given event
-	sess.UpdateUserSession(event, opts...)
+	sess.UpdateUserSession(e, opts...)
 
 	// persist event to MySQL asynchronously
 	if s.opts.enableAsyncPersist {
@@ -596,14 +641,14 @@ func (s *Service) AppendEvent(
 		// Hash key to determine which worker channel to use
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, event); err != nil {
+	if err := s.addEvent(ctx, key, e); err != nil {
 		return fmt.Errorf("mysql session service append event failed: %w", err)
 	}
 

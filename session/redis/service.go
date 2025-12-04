@@ -58,6 +58,9 @@ type Service struct {
 	persistWg       sync.WaitGroup           // wait group for persist workers
 	summaryWg       sync.WaitGroup           // wait group for summary workers
 	once            sync.Once                // ensure Close is called only once
+	// hooks for session operations
+	appendEventHooks []session.AppendEventHook
+	getSessionHooks  []session.GetSessionHook
 }
 
 type sessionEventPair struct {
@@ -102,11 +105,13 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	s := &Service{
-		opts:         opts,
-		redisClient:  redisClient,
-		sessionTTL:   opts.sessionTTL,
-		appStateTTL:  opts.appStateTTL,
-		userStateTTL: opts.userStateTTL,
+		opts:             opts,
+		redisClient:      redisClient,
+		sessionTTL:       opts.sessionTTL,
+		appStateTTL:      opts.appStateTTL,
+		userStateTTL:     opts.userStateTTL,
+		appendEventHooks: opts.appendEventHooks,
+		getSessionHooks:  opts.getSessionHooks,
 	}
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
@@ -197,7 +202,26 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+
+	final := func() (*session.Session, error) {
+		return s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+	}
+
+	// Run GetSession hooks if configured
+	if len(s.getSessionHooks) > 0 {
+		hctx := &session.GetSessionContext{
+			Context: ctx,
+			Key:     key,
+			Options: opt,
+		}
+		sess, err := session.RunGetSessionHooks(s.getSessionHooks, hctx, final)
+		if err != nil {
+			return nil, fmt.Errorf("redis session service get session state failed: %w", err)
+		}
+		return sess, nil
+	}
+
+	sess, err := final()
 	if err != nil {
 		return nil, fmt.Errorf("redis session service get session state failed: %w", err)
 	}
@@ -456,8 +480,33 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+
+	// Run AppendEvent hooks if configured
+	if len(s.appendEventHooks) > 0 {
+		hctx := &session.AppendEventContext{
+			Context: ctx,
+			Session: sess,
+			Event:   event,
+			Key:     key,
+		}
+		return session.RunAppendEventHooks(s.appendEventHooks, hctx, func() error {
+			return s.appendEventInternal(ctx, sess, hctx.Event, key, opts...)
+		})
+	}
+
+	return s.appendEventInternal(ctx, sess, event, key, opts...)
+}
+
+// appendEventInternal is the internal implementation of AppendEvent.
+func (s *Service) appendEventInternal(
+	ctx context.Context,
+	sess *session.Session,
+	e *event.Event,
+	key session.Key,
+	opts ...session.Option,
+) error {
 	// update user session with the given event
-	sess.UpdateUserSession(event, opts...)
+	sess.UpdateUserSession(e, opts...)
 
 	// persist event to redis asynchronously
 	if s.opts.enableAsyncPersist {
@@ -473,14 +522,14 @@ func (s *Service) AppendEvent(
 
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, event); err != nil {
+	if err := s.addEvent(ctx, key, e); err != nil {
 		return fmt.Errorf("redis session service append event failed: %w", err)
 	}
 
