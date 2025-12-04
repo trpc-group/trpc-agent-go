@@ -137,7 +137,6 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 	)
 	stateEvent.RequiresCompletion = true
 	completionID := agent.GetAppendEventNoticeKey(stateEvent.ID)
-	timeout := WaitEventTimeout(ctx, EventCompletionTimeout)
 	if ch := invocation.AddNoticeChannel(ctx, completionID); ch == nil {
 		log.Warnf("Failed to add notice channel for completion ID %s: nil channel.", completionID)
 		return
@@ -150,6 +149,7 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 
 	// Ensure that the state delta is synchronized to the local session before executing the next agent.
 	// maybe the next agent need to use delta state before executing the flow.
+	timeout := WaitEventTimeout(ctx, EventCompletionTimeout)
 	if err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout); err != nil {
 		log.Warnf("Failed to wait for completion ID %s: %v", completionID, err)
 	}
