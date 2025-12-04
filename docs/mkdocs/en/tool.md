@@ -512,7 +512,9 @@ agent := llmagent.New("ai-assistant",
         calculatorTool, timeTool, searchTool,
     }),
     // Add ToolSets (ToolSet interface).
-    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        stdioToolSet, sseToolSet, streamableToolSet,
+    }),
 )
 ```
 
@@ -577,7 +579,9 @@ agent := llmagent.New("ai-assistant",
     llmagent.WithTools([]tool.Tool{
         calculatorTool, timeTool, searchTool,
     }),
-    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        stdioToolSet, sseToolSet, streamableToolSet,
+    }),
     llmagent.WithToolFilter(filter),
 )
 ```
@@ -620,7 +624,9 @@ agent := llmagent.New("ai-assistant",
     llmagent.WithTools([]tool.Tool{
         calculatorTool, timeTool, searchTool,
     }),
-    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        stdioToolSet, sseToolSet, streamableToolSet,
+    }),
     llmagent.WithToolFilter(filter),
 ```
 
@@ -757,6 +763,53 @@ Tool 2: get_population       [====] 50ms
 Tool 3: get_time                  [====] 50ms
 Total time: ~150ms (executed sequentially)
 ```
+
+### Dynamic ToolSet Management (Runtime)
+
+`WithToolSets` is a **static** configuration: it wires ToolSets when constructing the Agent. In many real‑world scenarios you also need to **add, remove, or replace ToolSets at runtime** without recreating the Agent.
+
+LLMAgent exposes three methods for this:
+
+- `AddToolSet(toolSet tool.ToolSet)` — add or replace a ToolSet by `ToolSet.Name()`.
+- `RemoveToolSet(name string) bool` — remove all ToolSets whose `Name()` matches `name`.
+- `SetToolSets(toolSets []tool.ToolSet)` — replace all ToolSets with the provided slice.
+
+These methods are concurrency‑safe and automatically recompute:
+
+- Aggregated tools (direct tools + ToolSets + knowledge tools + skill tools)
+- User tool tracking (used by the smart filtering logic above)
+
+**Typical usage pattern:**
+
+```go
+// 1. Create Agent with base tools only.
+agent := llmagent.New("dynamic-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools([]tool.Tool{calculatorTool}),
+)
+
+// 2. Later, attach an MCP ToolSet at runtime.
+mcpToolSet := mcp.NewMCPToolSet(connectionConfig)
+if err := mcpToolSet.Init(ctx); err != nil {
+    return fmt.Errorf("failed to init MCP ToolSet: %w", err)
+}
+agent.AddToolSet(mcpToolSet)
+
+// 3. Replace all ToolSets from configuration (declarative control plane).
+toolSetsFromConfig := []tool.ToolSet{mcpToolSet, fileToolSet}
+agent.SetToolSets(toolSetsFromConfig)
+
+// 4. Remove a ToolSet by name (e.g., feature rollback).
+removed := agent.RemoveToolSet(mcpToolSet.Name())
+if !removed {
+    log.Printf("ToolSet %q not found", mcpToolSet.Name())
+}
+```
+
+Runtime ToolSet updates integrate seamlessly with the **tool filtering** logic described earlier:
+
+- Tools coming from `WithTools` or any ToolSet (including dynamically added ones) are treated as **user tools** and are subject to `WithToolFilter` and per‑run filters.
+- Framework tools such as `transfer_to_agent`, `knowledge_search`, and `agentic_knowledge_search` remain **never filtered** and are always available.
 
 ## Quick Start
 

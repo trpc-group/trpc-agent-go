@@ -70,6 +70,61 @@ func TestBuilderAddFunctionNode(t *testing.T) {
 	}
 }
 
+func TestWithToolSets_EmptyClearsNodeToolSets(t *testing.T) {
+	stateGraph := NewStateGraph(NewStateSchema())
+
+	stateGraph.AddNode("n",
+		func(ctx context.Context,
+			state State) (any, error) {
+			return state, nil
+		},
+		WithToolSets(nil),
+	)
+
+	node := stateGraph.graph.nodes["n"]
+	if node == nil {
+		t.Fatalf("expected node n to exist")
+	}
+	if node.toolSets != nil {
+		t.Fatalf("expected toolSets to be nil for empty input")
+	}
+}
+
+func TestWithToolSets_CopiesSlice(t *testing.T) {
+	stateGraph := NewStateGraph(NewStateSchema())
+
+	originalToolSets := []tool.ToolSet{
+		&simpleToolSet{name: "simple"},
+	}
+
+	stateGraph.AddNode("n",
+		func(ctx context.Context,
+			state State) (any, error) {
+			return state, nil
+		},
+		WithToolSets(originalToolSets),
+	)
+
+	node := stateGraph.graph.nodes["n"]
+	if node == nil {
+		t.Fatalf("expected node n to exist")
+	}
+	if len(node.toolSets) != 1 {
+		t.Fatalf("expected 1 toolset on node, got %d",
+			len(node.toolSets))
+	}
+
+	snapshot := node.toolSets[0]
+	originalToolSets[0] = &simpleToolSet{name: "updated"}
+
+	if node.toolSets[0] != snapshot {
+		t.Fatalf("expected node toolset reference to be stable")
+	}
+	if node.toolSets[0] == originalToolSets[0] {
+		t.Fatalf("expected node toolsets slice to be copied")
+	}
+}
+
 // blockingTool is a test tool that blocks until allowed, reporting start and
 // optionally respecting context cancellation.
 type blockingTool struct {
