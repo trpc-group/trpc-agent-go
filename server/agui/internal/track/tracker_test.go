@@ -12,12 +12,14 @@ package track
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -103,7 +105,7 @@ func TestTrackerAppendEventErrors(t *testing.T) {
 		tracker, err := New(svc)
 		require.NoError(t, err)
 		err = tracker.AppendEvent(ctx, validKey, aguievents.NewRunStartedEvent("thread", "run"))
-		require.ErrorContains(t, err, "append event: append broke")
+		require.ErrorContains(t, err, "persist events: append track event")
 	})
 }
 
@@ -204,6 +206,135 @@ func TestTrackerGetEventsSuccess(t *testing.T) {
 	require.Equal(t, first.MessageID, start.MessageID)
 }
 
+func TestTrackerAggregatesTextContent(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
+		aguievents.WithRole("assistant"))))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hello")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "world")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageEndEvent("msg")))
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 3)
+
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
+	require.NoError(t, err)
+	content, ok := parsed.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "helloworld", content.Delta)
+}
+
+func TestTrackerAggregationDisabled(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
+		aguievents.WithRole("assistant"))))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hello")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "world")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageEndEvent("msg")))
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 4)
+
+	firstPayload, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
+	require.NoError(t, err)
+	firstContent, ok := firstPayload.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "hello", firstContent.Delta)
+
+	secondPayload, err := aguievents.EventFromJSON(trackEvents.Events[2].Payload)
+	require.NoError(t, err)
+	secondContent, ok := secondPayload.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "world", secondContent.Delta)
+}
+
+func TestTrackerFlushPersistsPendingAggregation(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
+		aguievents.WithRole("assistant"))))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hi ")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "there")))
+
+	require.NoError(t, tracker.Flush(ctx, key))
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
+	require.NoError(t, err)
+	content, ok := parsed.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "hi there", content.Delta)
+}
+
+func TestTrackerFlushReturnsAggregatorError(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	agg := &stubAggregator{flushErr: errors.New("flush fail")}
+	tracker, err := New(svc,
+		WithAggregatorFactory(
+			func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
+				return agg
+			},
+		),
+	)
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "aggregator flush: flush fail")
+}
+
+func TestTrackerFlushPeriodically(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	svc := inmemory.NewSessionService()
+	agg := &stubAggregator{flushCh: make(chan struct{}, 2)}
+	tracker, err := New(svc,
+		WithAggregatorFactory(func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
+			return agg
+		}),
+		WithFlushInterval(10*time.Millisecond),
+	)
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hi")))
+
+	select {
+	case <-agg.flushCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("expected periodic flush")
+	}
+}
+
 type serviceWithoutTrack struct{}
 
 func (serviceWithoutTrack) CreateSession(ctx context.Context, key session.Key, state session.StateMap, opts ...session.Option) (*session.Session, error) {
@@ -268,6 +399,31 @@ func (serviceWithoutTrack) GetSessionSummaryText(ctx context.Context, sess *sess
 
 func (serviceWithoutTrack) Close() error {
 	return nil
+}
+
+type stubAggregator struct {
+	mu       sync.Mutex
+	flushErr error
+	flushCh  chan struct{}
+}
+
+func (s *stubAggregator) Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error) {
+	return []aguievents.Event{event}, nil
+}
+
+func (s *stubAggregator) Flush(ctx context.Context) ([]aguievents.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flushCh != nil {
+		select {
+		case s.flushCh <- struct{}{}:
+		default:
+		}
+	}
+	if s.flushErr != nil {
+		return nil, s.flushErr
+	}
+	return nil, nil
 }
 
 type hookSessionService struct {
