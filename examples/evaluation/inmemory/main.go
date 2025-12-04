@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package main
 
 import (
@@ -152,7 +161,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 							{
 								ID:   "tool_use_1",
 								Name: "calculator",
-								Args: map[string]interface{}{
+								Args: map[string]any{
 									"operation": "add",
 									"a":         2.0,
 									"b":         3.0,
@@ -163,7 +172,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 							{
 								ID:   "tool_use_1",
 								Name: "calculator",
-								Response: map[string]interface{}{
+								Response: map[string]any{
 									"a":         2.0,
 									"b":         3.0,
 									"operation": "add",
@@ -205,7 +214,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 							{
 								ID:   "tool_use_2",
 								Name: "calculator",
-								Args: map[string]interface{}{
+								Args: map[string]any{
 									"operation": "multiply",
 									"a":         6.0,
 									"b":         7.0,
@@ -216,7 +225,7 @@ func prepareEvalSet(ctx context.Context, evalSetManager evalset.Manager) error {
 							{
 								ID:   "tool_use_2",
 								Name: "calculator",
-								Response: map[string]interface{}{
+								Response: map[string]any{
 									"a":         6.0,
 									"b":         7.0,
 									"operation": "multiply",

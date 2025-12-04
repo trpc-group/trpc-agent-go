@@ -686,7 +686,7 @@ func TestToolCallbacks_ContextPropagation(t *testing.T) {
 	})
 
 	// Register after callback that reads the context value.
-	var capturedValue interface{}
+	var capturedValue any
 	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
 		// Read the value from context.
 		capturedValue = ctx.Value(testKey)

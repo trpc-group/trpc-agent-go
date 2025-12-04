@@ -434,7 +434,7 @@ func (w *errorResponseWriter) Write(p []byte) (int, error) {
 }
 
 func (w *errorResponseWriter) Flush() {
-	if flusher, ok := interface{}(w.ResponseRecorder).(http.Flusher); ok {
+	if flusher, ok := any(w.ResponseRecorder).(http.Flusher); ok {
 		flusher.Flush()
 	}
 }

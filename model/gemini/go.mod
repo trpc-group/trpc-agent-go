@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/model/gemini
 
-go 1.24.10
+go 1.24.0
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
