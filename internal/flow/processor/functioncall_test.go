@@ -1648,6 +1648,8 @@ func TestHandleFunctionCallsAndSendEvent_SetsTransferInfoForTransferTool(t *test
 				Description: "transfer tool",
 			},
 			callFn: func(_ context.Context, _ []byte) (any, error) {
+				// Simulate real transfer tool setting TransferInfo on invocation.
+				inv.TransferInfo = &agent.TransferInfo{TargetAgentName: "child"}
 				return map[string]any{"ok": true}, nil
 			},
 		},

@@ -156,17 +156,12 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		return nil, err
 	}
 
-	if functionResponseEvent != nil && hasTransferToolCall(llmResponse) {
+	if functionResponseEvent != nil && hasTransferToolCall(llmResponse) && invocation.TransferInfo != nil {
 		functionResponseEvent.Tag = TransferTag
 		functionResponseEvent.RequiresCompletion = true
-		if invocation != nil {
-			completionKey := agent.GetAppendEventNoticeKey(functionResponseEvent.ID)
-			invocation.AddNoticeChannel(ctx, completionKey)
-			if invocation.TransferInfo == nil {
-				invocation.TransferInfo = &agent.TransferInfo{}
-			}
-			invocation.TransferInfo.ToolResponseEventID = functionResponseEvent.ID
-		}
+		completionKey := agent.GetAppendEventNoticeKey(functionResponseEvent.ID)
+		invocation.AddNoticeChannel(ctx, completionKey)
+		invocation.TransferInfo.ToolResponseEventID = functionResponseEvent.ID
 	}
 
 	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
