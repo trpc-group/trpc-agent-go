@@ -7,6 +7,7 @@
 //
 //
 
+// Package jupyter provides a Jupyter code executor.
 package jupyter
 
 import (

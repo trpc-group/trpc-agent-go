@@ -90,7 +90,7 @@ type reactTranslator struct {
 
 func newReactTranslator(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
 	return &reactTranslator{
-		inner: translator.New(input.ThreadID, input.RunID),
+		inner: translator.New(ctx, input.ThreadID, input.RunID),
 	}
 }
 
