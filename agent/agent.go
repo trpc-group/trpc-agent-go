@@ -82,13 +82,13 @@ type Agent interface {
 	FindSubAgent(name string) Agent
 }
 
-// SubAgentConfigurator is implemented by agents that support updating
+// SubAgentSetter is implemented by agents that support updating
 // their sub-agent list at runtime.
 //
 // This is useful when sub-agents are discovered dynamically from a
 // registry or other configuration source and you want to refresh the
 // main agent without recreating it.
-type SubAgentConfigurator interface {
+type SubAgentSetter interface {
 	// SetSubAgents replaces the sub-agent list available to this agent.
 	// Implementations should be safe to call while the agent is serving
 	// requests so dynamic discovery can run in the background.

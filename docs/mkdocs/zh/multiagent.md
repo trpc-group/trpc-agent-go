@@ -435,7 +435,7 @@ coordinatorAgent := llmagent.New(
 在真实系统中，SubAgent 往往是通过 A2A 协议暴露的远程 Agent，
 它们的列表会随着时间变化（例如从注册中心动态上下线）。
 
-为支持这一场景，`LLMAgent` 实现了 `agent.SubAgentConfigurator`
+为支持这一场景，`LLMAgent` 实现了 `agent.SubAgentSetter`
 接口，可以在运行时刷新 SubAgent 列表，而无需重建协调者：
 
 ```go
@@ -448,7 +448,7 @@ import (
 )
 
 func refreshSubAgents(ctx context.Context, ag agent.Agent) error {
-    cfg, ok := ag.(agent.SubAgentConfigurator)
+    cfg, ok := ag.(agent.SubAgentSetter)
     if !ok {
         return fmt.Errorf("agent does not support dynamic SubAgents")
     }

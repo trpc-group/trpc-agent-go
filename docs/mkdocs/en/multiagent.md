@@ -437,7 +437,7 @@ In real systems, SubAgents are often remote Agents exposed through
 the A2A protocol. Their list may change over time (for example when
 new services are registered in a central registry).
 
-To support this, `LLMAgent` implements the `agent.SubAgentConfigurator`
+To support this, `LLMAgent` implements the `agent.SubAgentSetter`
 interface. You can refresh its SubAgents at runtime without recreating
 the coordinator:
 
@@ -451,7 +451,7 @@ import (
 )
 
 func refreshSubAgents(ctx context.Context, ag agent.Agent) error {
-    cfg, ok := ag.(agent.SubAgentConfigurator)
+    cfg, ok := ag.(agent.SubAgentSetter)
     if !ok {
         return fmt.Errorf("agent does not support dynamic SubAgents")
     }
