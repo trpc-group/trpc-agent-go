@@ -11,33 +11,33 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-    - name: Build
-      run: go build -v ./...
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Build
+        run: go build -v ./...
   discover-go-modules:
     name: discover go modules
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-    - uses: actions/checkout@v3
-    - id: set-matrix
-      shell: bash
-      run: |
-        set -euo pipefail
-        mapfile -t modules < <(find . -name go.mod \
-          -not -path "./.resource/*" \
-          -not -path "./docs/*" \
-          -not -path "./examples/*" | sort)
-        if [ "${#modules[@]}" -eq 0 ]; then
-          echo "matrix={\"module\":[]}" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        matrix=$(printf '%s\n' "${modules[@]}" | sed 's|^\./||' | jq -R -s -c 'split("\n") | map(select(length>0))')
-        echo "matrix={\"module\":${matrix}}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v3
+      - id: set-matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t modules < <(find . -name go.mod \
+            -not -path "./.resource/*" \
+            -not -path "./docs/*" \
+            -not -path "./examples/*" | sort)
+          if [ "${#modules[@]}" -eq 0 ]; then
+            echo "matrix={\"module\":[]}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          matrix=$(printf '%s\n' "${modules[@]}" | sed 's|^\./||' | jq -R -s -c 'split("\n") | map(select(length>0))')
+          echo "matrix={\"module\":${matrix}}" >> "$GITHUB_OUTPUT"
   test-go-modules:
     name: go test (${{ matrix.module }})
     runs-on: ubuntu-latest
@@ -46,87 +46,87 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover-go-modules.outputs.matrix) }}
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-    - name: Prepare module metadata
-      id: module-info
-      shell: bash
-      run: |
-        set -euo pipefail
-        module='${{ matrix.module }}'
-        if [ -z "${module}" ]; then
-          echo "empty module path" >&2
-          exit 1
-        fi
-        rel="${module#./}"
-        if [ "${rel}" = "go.mod" ]; then
-          readable="root"
-        else
-          readable="${rel%/go.mod}"
-        fi
-        safe="${readable//\//_}"
-        safe="${safe//./_}"
-        if [ -z "${safe}" ]; then
-          safe="root"
-        fi
-        echo "safe_name=${safe}" >> "$GITHUB_OUTPUT"
-    - name: Test module
-      shell: bash
-      run: bash .github/scripts/run-go-tests.sh --module "${{ matrix.module }}"
-    - name: Prepare coverage artifact
-      shell: bash
-      run: mv coverage.out "coverage-${{ steps.module-info.outputs.safe_name }}.out"
-    - name: Upload coverage artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: coverage-${{ steps.module-info.outputs.safe_name }}
-        path: coverage-${{ steps.module-info.outputs.safe_name }}.out
-        if-no-files-found: error
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Prepare module metadata
+        id: module-info
+        shell: bash
+        run: |
+          set -euo pipefail
+          module='${{ matrix.module }}'
+          if [ -z "${module}" ]; then
+            echo "empty module path" >&2
+            exit 1
+          fi
+          rel="${module#./}"
+          if [ "${rel}" = "go.mod" ]; then
+            readable="root"
+          else
+            readable="${rel%/go.mod}"
+          fi
+          safe="${readable//\//_}"
+          safe="${safe//./_}"
+          if [ -z "${safe}" ]; then
+            safe="root"
+          fi
+          echo "safe_name=${safe}" >> "$GITHUB_OUTPUT"
+      - name: Test module
+        shell: bash
+        run: bash .github/scripts/run-go-tests.sh --module "${{ matrix.module }}"
+      - name: Prepare coverage artifact
+        shell: bash
+        run: mv coverage.out "coverage-${{ steps.module-info.outputs.safe_name }}.out"
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ steps.module-info.outputs.safe_name }}
+          path: coverage-${{ steps.module-info.outputs.safe_name }}.out
+          if-no-files-found: error
   coverage:
     name: coverage
     runs-on: ubuntu-latest
     needs: test-go-modules
     steps:
-    - uses: actions/checkout@v3
-    - name: Download coverage artifacts
-      uses: actions/download-artifact@v4
-      with:
-        pattern: coverage-*
-        merge-multiple: true
-        path: coverage-artifacts
-    - name: Combine coverage reports
-      shell: bash
-      run: |
-        set -euo pipefail
-        mapfile -t files < <(find coverage-artifacts -maxdepth 1 -type f -name 'coverage-*.out' | sort)
-        if [ "${#files[@]}" -eq 0 ]; then
-          echo "no coverage files found" >&2
-          exit 1
-        fi
-        cp "${files[0]}" coverage.out
-        for file in "${files[@]:1}"; do
-          tail -n +2 "${file}" >> coverage.out
-        done
-    - name: Upload merged coverage artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: coverage-merged
-        path: coverage.out
-    - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v5
-      with:
-        files: coverage.out
-        flags: unittests
-        token: ${{ secrets.CODECOV_TOKEN }}
+      - uses: actions/checkout@v3
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+          path: coverage-artifacts
+      - name: Combine coverage reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find coverage-artifacts -maxdepth 1 -type f -name 'coverage-*.out' | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no coverage files found" >&2
+            exit 1
+          fi
+          cp "${files[0]}" coverage.out
+          for file in "${files[@]:1}"; do
+            tail -n +2 "${file}" >> coverage.out
+          done
+      - name: Upload merged coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-merged
+          path: coverage.out
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.out
+          flags: unittests
+          token: ${{ secrets.CODECOV_TOKEN }}
   golangci:
     name: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: "1.21"
       - uses: actions/checkout@v3
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v3
@@ -153,7 +153,8 @@ jobs:
       - name: Check license headers
         run: |
           echo "::group::Checking license headers in Go files"
-          missing_files=""
+
+          missing_count=0
           while IFS= read -r file; do
             if [ -z "$file" ]; then continue; fi
 
@@ -163,20 +164,21 @@ jobs:
             fi
 
             # Check for OpenTelemetry + Tencent dual license header
-            if head -n 20 "$file" | grep -Fq "Copyright The OpenTelemetry Authors" && head -n 20 "$file" | grep -Fq "Copyright (C) 2025 Tencent"; then
+            if head -n 20 "$file" | grep -Fq "Copyright The OpenTelemetry Authors" && \
+               head -n 20 "$file" | grep -Fq "Copyright (C) 2025 Tencent"; then
               continue
             fi
 
-            missing_files="${missing_files}${file}\n"
+            echo "::error file=$file::Missing proper license header"
+            missing_count=$((missing_count + 1))
           done < <(git ls-files '*.go' | grep -Ev '(^vendor/|^third_party/|^out/|^build/|stub/)')
 
-          if [ -n "$missing_files" ]; then
-            echo "::error::Found Go files missing proper license headers:"
-            echo -e "$missing_files"
+          if [ "$missing_count" -gt 0 ]; then
+            echo "::error::Found $missing_count Go files missing proper license headers"
             echo ""
-            echo "Please ensure all Go files have appropriate license headers."
-            echo "For most files, use: Tencent standard license header"
-            echo "For telemetry/tracetransform files: OpenTelemetry + Tencent dual header"
+            echo "Please ensure all Go files have appropriate license headers:"
+            echo "- For most files: Tencent standard license header"
+            echo "- For telemetry/tracetransform files: OpenTelemetry + Tencent dual header"
             exit 1
           else
             echo "✓ All Go files have proper license headers"
@@ -189,27 +191,27 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: "1.21"
       - name: Check examples go.mod and go.sum
         run: bash .github/scripts/check-examples-go-mod.sh
   typos:
     name: typos
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: typos 
-      uses: crate-ci/typos@master
+      - uses: actions/checkout@v3
+      - name: typos
+        uses: crate-ci/typos@master
   go-apidiff:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-      with:
-        fetch-depth: 0 
-    - uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-    - uses: joelanford/go-apidiff@main 
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - uses: joelanford/go-apidiff@main
   docs-build:
     name: docs-build
     runs-on: ubuntu-latest
@@ -217,11 +219,11 @@ jobs:
       run:
         working-directory: docs
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    - name: Install MkDocs dependencies
-      run: pip install -r mkdocs/assets/requirements.txt
-    - name: Build documentation
-      run: mkdocs build --strict
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install MkDocs dependencies
+        run: pip install -r mkdocs/assets/requirements.txt
+      - name: Build documentation
+        run: mkdocs build --strict
