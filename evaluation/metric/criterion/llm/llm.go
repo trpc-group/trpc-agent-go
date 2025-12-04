@@ -14,7 +14,19 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // LLMCriterion configures an LLM judge for evaluation.
 type LLMCriterion struct {
+	Rubrics    []*Rubric          `json:"rubrics,omitempty"`
 	JudgeModel *JudgeModelOptions `json:"judgeModel,omitempty"` // JudgeModel holds configuration for the judge model.
+}
+
+type Rubric struct {
+	ID          string         `json:"id,omitempty"`
+	Content     *RubricContent `json:"content,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Type        string         `json:"type,omitempty"`
+}
+
+type RubricContent struct {
+	Text string `json:"text,omitempty"`
 }
 
 // JudgeModelOptions captures model and generation configuration for the judge.
@@ -39,6 +51,7 @@ type JudgeModelOptions struct {
 func New(providerName, modelName string, opt ...Option) *LLMCriterion {
 	opts := newOptions(opt...)
 	return &LLMCriterion{
+		Rubrics: opts.rubrics,
 		JudgeModel: &JudgeModelOptions{
 			ProviderName: providerName,
 			ModelName:    modelName,

@@ -7,8 +7,7 @@
 //
 //
 
-// Package finalresponse implements an LLM judge for final responses.
-package finalresponse
+package rubicresponse
 
 import (
 	"context"
@@ -25,8 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// finalResponseEvaluator evaluates final responses via an LLM judge.
-type finalResponseEvaluator struct {
+type rubicResponseEvaluator struct {
 	llmBaseEvaluator      llm.LLMEvaluator
 	messagesConstructor   messagesconstructor.MessagesConstructor
 	responsescorer        responsescorer.ResponseScorer
@@ -34,10 +32,10 @@ type finalResponseEvaluator struct {
 	invocationsAggregator invocationsaggregator.InvocationsAggregator
 }
 
-// New builds the final response evaluator.
+// New builds the rubic response evaluator.
 func New(opt ...Option) evaluator.Evaluator {
 	opts := newOptions(opt...)
-	e := &finalResponseEvaluator{
+	e := &rubicResponseEvaluator{
 		messagesConstructor:   opts.messagesConstructor,
 		responsescorer:        opts.responsescorer,
 		samplesAggregator:     opts.samplesAggregator,
@@ -47,42 +45,35 @@ func New(opt ...Option) evaluator.Evaluator {
 	return e
 }
 
-// Name returns the evaluator identifier.
-func (e *finalResponseEvaluator) Name() string {
-	return "llm_final_response"
+func (e *rubicResponseEvaluator) Name() string {
+	return "llm_rubic_response"
 }
 
-// Description describes the evaluator purpose.
-func (e *finalResponseEvaluator) Description() string {
-	return "LLM judge for final responses"
+func (e *rubicResponseEvaluator) Description() string {
+	return "LLM rubic response evaluator"
 }
 
-// Evaluate runs LLM-based evaluation on final responses.
-func (e *finalResponseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
+func (e *rubicResponseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return e.llmBaseEvaluator.Evaluate(ctx, actuals, expecteds, evalMetric)
 }
 
-// ConstructMessages builds judge prompts from actual and expected responses.
-func (e *finalResponseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
+func (e *rubicResponseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	return e.messagesConstructor.ConstructMessages(ctx, actual, expected, evalMetric)
 }
 
-// ScoreBasedOnResponse converts judge feedback to a numeric score.
-func (e *finalResponseEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
+func (e *rubicResponseEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error) {
 	return e.responsescorer.ScoreBasedOnResponse(ctx, response, evalMetric)
 }
 
-// AggregateSamples resolves multiple judge samples to one invocation result.
-func (e *finalResponseEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
+func (e *rubicResponseEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
 	return e.samplesAggregator.AggregateSamples(ctx, samples, evalMetric)
 }
 
-// AggregateInvocations summarizes per-invocation results into an overall score.
-func (e *finalResponseEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
+func (e *rubicResponseEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
 	return e.invocationsAggregator.AggregateInvocations(ctx, results, evalMetric)
 }

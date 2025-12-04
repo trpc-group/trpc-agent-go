@@ -17,6 +17,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -26,16 +30,10 @@ import (
 // LLMEvaluator defines the LLM-backed evaluator contract.
 type LLMEvaluator interface {
 	evaluator.Evaluator
-	// ConstructMessages builds prompts for the judge model.
-	ConstructMessages(actual, expected *evalset.Invocation, evalMetric *metric.EvalMetric) ([]model.Message, error)
-	// ScoreBasedOnResponse extracts a score from the judge response.
-	ScoreBasedOnResponse(resp *model.Response, evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error)
-	// AggregateSamples summarizes multiple sample scores for one invocation.
-	AggregateSamples(samples []*evaluator.PerInvocationResult,
-		evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error)
-	// AggregateInvocations aggregates per-invocation results into the final evaluation.
-	AggregateInvocations(results []*evaluator.PerInvocationResult,
-		evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error)
+	messagesconstructor.MessagesConstructor
+	responsescorer.ResponseScorer
+	samplesaggregator.SamplesAggregator
+	invocationsaggregator.InvocationsAggregator
 }
 
 // LLMBaseEvaluator hosts shared orchestration logic for LLM evaluators.
@@ -79,7 +77,7 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 	for i := range actuals {
 		actual := actuals[i]
 		expected := expecteds[i]
-		messages, err := r.ConstructMessages(actual, expected, evalMetric)
+		messages, err := r.ConstructMessages(ctx, actual, expected, evalMetric)
 		if err != nil {
 			return nil, fmt.Errorf("construct messages: %w", err)
 		}
@@ -90,7 +88,7 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 			if err != nil {
 				return nil, fmt.Errorf("judge model response: %w", err)
 			}
-			score, err := r.ScoreBasedOnResponse(response, evalMetric)
+			score, err := r.ScoreBasedOnResponse(ctx, response, evalMetric)
 			if err != nil {
 				return nil, fmt.Errorf("score based on response: %w", err)
 			}
@@ -103,39 +101,44 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 				ExpectedInvocation: expected,
 				Score:              score.Score,
 				Status:             evalStatus,
+				Details: &evaluator.PerInvocationDetails{
+					Reason:       score.Reason,
+					Score:        score.Score,
+					RubricScores: score.RubricScores,
+				},
 			})
 		}
-		perInvocationResult, err := r.AggregateSamples(samples, evalMetric)
+		perInvocationResult, err := r.AggregateSamples(ctx, samples, evalMetric)
 		if err != nil {
 			return nil, fmt.Errorf("aggregate samples: %w", err)
 		}
 		results = append(results, perInvocationResult)
 	}
-	return r.AggregateInvocations(results, evalMetric)
+	return r.AggregateInvocations(ctx, results, evalMetric)
 }
 
 // AggregateInvocations delegates invocation aggregation to the concrete evaluator.
-func (r *LLMBaseEvaluator) AggregateInvocations(results []*evaluator.PerInvocationResult,
+func (r *LLMBaseEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
-	return r.LLMEvaluator.AggregateInvocations(results, evalMetric)
+	return r.LLMEvaluator.AggregateInvocations(ctx, results, evalMetric)
 }
 
 // AggregateSamples delegates sample aggregation to the concrete evaluator.
-func (r *LLMBaseEvaluator) AggregateSamples(samples []*evaluator.PerInvocationResult,
+func (r *LLMBaseEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
-	return r.LLMEvaluator.AggregateSamples(samples, evalMetric)
+	return r.LLMEvaluator.AggregateSamples(ctx, samples, evalMetric)
 }
 
 // ScoreBasedOnResponse delegates response scoring to the concrete evaluator.
-func (r *LLMBaseEvaluator) ScoreBasedOnResponse(resp *model.Response,
+func (r *LLMBaseEvaluator) ScoreBasedOnResponse(ctx context.Context, resp *model.Response,
 	evalMetric *metric.EvalMetric) (*evalresult.ScoreResult, error) {
-	return r.LLMEvaluator.ScoreBasedOnResponse(resp, evalMetric)
+	return r.LLMEvaluator.ScoreBasedOnResponse(ctx, resp, evalMetric)
 }
 
 // ConstructMessages delegates prompt construction to the concrete evaluator.
-func (r *LLMBaseEvaluator) ConstructMessages(actual, expected *evalset.Invocation,
+func (r *LLMBaseEvaluator) ConstructMessages(ctx context.Context, actual, expected *evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
-	return r.LLMEvaluator.ConstructMessages(actual, expected, evalMetric)
+	return r.LLMEvaluator.ConstructMessages(ctx, actual, expected, evalMetric)
 }
 
 // judgeModelResponse calls the judge model and returns the final response.

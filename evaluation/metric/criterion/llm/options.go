@@ -20,6 +20,7 @@ var (
 
 // options captures judge model configuration overrides.
 type options struct {
+	rubrics     []*Rubric               // rubrics is the list of rubrics to use.
 	baseURL     string                  // baseURL is a custom base URL for the judge model.
 	apiKey      string                  // apiKey is the credential for the judge model provider.
 	extraFields map[string]any          // extraFields holds provider-specific extras.
@@ -45,6 +46,13 @@ func newOptions(opt ...Option) *options {
 
 // Option configures judge model settings.
 type Option func(*options)
+
+// WithRubrics sets the list of rubrics to use.
+func WithRubrics(rubrics []*Rubric) Option {
+	return func(o *options) {
+		o.rubrics = rubrics
+	}
+}
 
 // WithBaseURL sets a custom base URL for the judge model endpoint.
 func WithBaseURL(baseURL string) Option {
