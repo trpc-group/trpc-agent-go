@@ -10,15 +10,18 @@
 // Package metric provides evaluation metrics.
 package metric
 
-import "context"
+import (
+	"context"
+
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+)
 
 // EvalMetric represents a metric used to evaluate a particular aspect of an eval case.
 // It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type EvalMetric struct {
-	// MetricName identifies the metric.
-	MetricName string `json:"metricName,omitempty"`
-	// Threshold value for this metric.
-	Threshold float64 `json:"threshold,omitempty"`
+	MetricName string               `json:"metricName,omitempty"` // MetricName identifies the metric.
+	Threshold  float64              `json:"threshold,omitempty"`  // Threshold value for this metric.
+	Criterion  *criterion.Criterion `json:"criterion,omitempty"`  // Evaluation criterion used by the metric.
 }
 
 // Manager defines the interface for managing evaluation metrics.
