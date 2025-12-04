@@ -703,8 +703,8 @@ func TestReduceIgnoresUnknownEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reduce err: %v", err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if len(msgs) != 0 {
+		t.Fatalf("expected no messages, got %d", len(msgs))
 	}
 }
 
@@ -727,6 +727,7 @@ func TestHandleActivityAllCases(t *testing.T) {
 	tests := []struct {
 		name        string
 		event       aguievents.Event
+		wantCount   int
 		wantID      string
 		wantType    string
 		wantContent map[string]any
@@ -734,6 +735,7 @@ func TestHandleActivityAllCases(t *testing.T) {
 		{
 			name:        "step started",
 			event:       stepStarted,
+			wantCount:   1,
 			wantID:      stepStarted.ID(),
 			wantType:    string(stepStarted.Type()),
 			wantContent: map[string]any{"stepName": stepStarted.StepName},
@@ -741,6 +743,7 @@ func TestHandleActivityAllCases(t *testing.T) {
 		{
 			name:        "step finished",
 			event:       stepFinished,
+			wantCount:   1,
 			wantID:      stepFinished.ID(),
 			wantType:    string(stepFinished.Type()),
 			wantContent: map[string]any{"stepName": stepFinished.StepName},
@@ -748,6 +751,7 @@ func TestHandleActivityAllCases(t *testing.T) {
 		{
 			name:        "state snapshot",
 			event:       stateSnapshot,
+			wantCount:   1,
 			wantID:      stateSnapshot.ID(),
 			wantType:    string(stateSnapshot.Type()),
 			wantContent: map[string]any{"snapshot": stateSnapshot.Snapshot},
@@ -755,6 +759,7 @@ func TestHandleActivityAllCases(t *testing.T) {
 		{
 			name:        "state delta",
 			event:       stateDelta,
+			wantCount:   1,
 			wantID:      stateDelta.ID(),
 			wantType:    string(stateDelta.Type()),
 			wantContent: map[string]any{"delta": stateDelta.Delta},
@@ -762,15 +767,17 @@ func TestHandleActivityAllCases(t *testing.T) {
 		{
 			name:        "messages snapshot",
 			event:       messageSnapshotEvent,
+			wantCount:   1,
 			wantID:      messageSnapshotEvent.ID(),
 			wantType:    string(messageSnapshotEvent.Type()),
 			wantContent: map[string]any{"messages": messageSnapshotEvent.Messages},
 		},
 		{
-			name:     "activity snapshot",
-			event:    activitySnapshot,
-			wantID:   activitySnapshot.ID(),
-			wantType: string(activitySnapshot.Type()),
+			name:      "activity snapshot",
+			event:     activitySnapshot,
+			wantCount: 1,
+			wantID:    activitySnapshot.ID(),
+			wantType:  string(activitySnapshot.Type()),
 			wantContent: map[string]any{
 				"messageId":    activitySnapshot.MessageID,
 				"activityType": activitySnapshot.ActivityType,
@@ -779,10 +786,11 @@ func TestHandleActivityAllCases(t *testing.T) {
 			},
 		},
 		{
-			name:     "activity delta",
-			event:    activityDelta,
-			wantID:   activityDelta.ID(),
-			wantType: string(activityDelta.Type()),
+			name:      "activity delta",
+			event:     activityDelta,
+			wantCount: 1,
+			wantID:    activityDelta.ID(),
+			wantType:  string(activityDelta.Type()),
 			wantContent: map[string]any{
 				"messageId":    activityDelta.MessageID,
 				"activityType": activityDelta.ActivityType,
@@ -790,20 +798,22 @@ func TestHandleActivityAllCases(t *testing.T) {
 			},
 		},
 		{
-			name:     "custom event",
-			event:    customEvent,
-			wantID:   customEvent.ID(),
-			wantType: string(customEvent.Type()),
+			name:      "custom event",
+			event:     customEvent,
+			wantCount: 1,
+			wantID:    customEvent.ID(),
+			wantType:  string(customEvent.Type()),
 			wantContent: map[string]any{
 				"name":  customEvent.Name,
 				"value": customEvent.Value,
 			},
 		},
 		{
-			name:     "raw event",
-			event:    rawEvent,
-			wantID:   rawEvent.ID(),
-			wantType: string(rawEvent.Type()),
+			name:      "raw event",
+			event:     rawEvent,
+			wantCount: 1,
+			wantID:    rawEvent.ID(),
+			wantType:  string(rawEvent.Type()),
 			wantContent: map[string]any{
 				"source": rawEvent.Source,
 				"event":  rawEvent.Event,
@@ -812,6 +822,7 @@ func TestHandleActivityAllCases(t *testing.T) {
 		{
 			name:        "default passthrough",
 			event:       runStarted,
+			wantCount:   0,
 			wantID:      runStarted.GetBaseEvent().ID(),
 			wantType:    string(runStarted.Type()),
 			wantContent: map[string]any{"content": runStarted},
@@ -824,8 +835,11 @@ func TestHandleActivityAllCases(t *testing.T) {
 			if err := r.handleActivity(tt.event); err != nil {
 				t.Fatalf("handleActivity err: %v", err)
 			}
-			if len(r.messages) != 1 {
-				t.Fatalf("expected 1 activity message, got %d", len(r.messages))
+			if len(r.messages) != tt.wantCount {
+				t.Fatalf("expected %d activity messages, got %d", tt.wantCount, len(r.messages))
+			}
+			if len(r.messages) == 0 {
+				return
 			}
 			msg := r.messages[0]
 			if msg.Role != "activity" {
