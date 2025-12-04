@@ -64,9 +64,6 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// that failed transfers do not cause subsequent responses to re-enter this
 	// logic and wait on stale event IDs indefinitely.
 	defer func() {
-		if invocation == nil {
-			return
-		}
 		invocation.TransferInfo = nil
 		invocation.EndInvocation = p.endInvocationAfterTransfer
 	}()
