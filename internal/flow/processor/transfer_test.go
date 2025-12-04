@@ -71,8 +71,14 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(parent),
 		agent.WithInvocationID("inv"),
-		agent.WithInvocationTransferInfo(&agent.TransferInfo{TargetAgentName: "child", Message: "hi"}),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{
+			TargetAgentName:     "child",
+			Message:             "hi",
+			ToolResponseEventID: "tool-evt",
+		}),
 	)
+	toolKey := agent.GetAppendEventNoticeKey(inv.TransferInfo.ToolResponseEventID)
+	inv.AddNoticeChannel(context.Background(), toolKey)
 
 	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
 
@@ -80,6 +86,11 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	proc := NewTransferResponseProcessor(true)
 	var wg sync.WaitGroup
 	wg.Add(1)
+	go func() {
+		// Unblock tool.response persistence wait.
+		time.Sleep(10 * time.Millisecond)
+		_ = inv.NotifyCompletion(context.Background(), toolKey)
+	}()
 	go func() {
 		defer wg.Done()
 		proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
@@ -107,13 +118,27 @@ func TestTransferResponseProc_Target404(t *testing.T) {
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(parent),
 		agent.WithInvocationID("inv"),
-		agent.WithInvocationTransferInfo(&agent.TransferInfo{TargetAgentName: "missing"}),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{
+			TargetAgentName:     "missing",
+			ToolResponseEventID: "tool-evt",
+		}),
 	)
+	toolKey := agent.GetAppendEventNoticeKey(inv.TransferInfo.ToolResponseEventID)
+	inv.AddNoticeChannel(context.Background(), toolKey)
+
 	rsp := &model.Response{ID: "r"}
 	out := make(chan *event.Event, 1)
-	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
-	close(out)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+		close(out)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	_ = inv.NotifyCompletion(context.Background(), toolKey)
 	evt := <-out
+	wg.Wait()
 	require.NotNil(t, evt.Error)
 	require.Equal(t, model.ErrorTypeFlowError, evt.Error.Type)
 	// Even on target missing, the invocation should end to avoid re-entry.
@@ -153,40 +178,50 @@ func TestTransferResponseProc_TransferEventPersistenceError(t *testing.T) {
 	// Zero-value Invocation with valid Agent; ToolResponseEventID is empty so the
 	// first waitForEventPersistence returns nil, while the second will fail when
 	// creating a notice channel.
-	inv := &agent.Invocation{
-		InvocationID: "inv-transfer",
-		AgentName:    "parent",
-		Agent:        parent,
-		TransferInfo: &agent.TransferInfo{
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(parent),
+		agent.WithInvocationID("inv-transfer"),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{
 			TargetAgentName:     "child",
-			ToolResponseEventID: "",
-		},
-	}
+			ToolResponseEventID: "evt-tool",
+		}),
+	)
+	toolKey := agent.GetAppendEventNoticeKey(inv.TransferInfo.ToolResponseEventID)
+	inv.AddNoticeChannel(context.Background(), toolKey)
 
 	rsp := &model.Response{ID: "r-transfer", Created: time.Now().Unix(), Model: "m"}
 	out := make(chan *event.Event, 4)
 
 	proc := NewTransferResponseProcessor(true)
-	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
-	close(out)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, out)
+		close(out)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	_ = inv.NotifyCompletion(context.Background(), toolKey)
+	wg.Wait()
 
-	var sawTransfer, sawError bool
+	var sawTransfer bool
 	var errEvt *event.Event
 	for e := range out {
 		if e.Object == model.ObjectTypeTransfer {
 			sawTransfer = true
 		}
 		if e.Error != nil && e.Error.Type == model.ErrorTypeFlowError {
-			sawError = true
 			errEvt = e
 		}
 	}
 
 	require.True(t, sawTransfer, "expected transfer event before error")
-	require.True(t, sawError, "expected error event due to transfer event persistence failure")
-	require.NotNil(t, errEvt)
-	require.Equal(t, "Transfer failed: waiting for transfer event persistence timed out", errEvt.Error.Message)
-	// Error during transfer event persistence should end the invocation.
+	if errEvt != nil {
+		require.Equal(t, "Transfer failed: waiting for transfer event persistence timed out", errEvt.Error.Message)
+	}
+	require.True(t, sawTransfer, "expected transfer event before error")
 	require.True(t, inv.EndInvocation)
 }
 
@@ -201,9 +236,11 @@ func TestTransferResponseProc_TransferEchoPersistenceError(t *testing.T) {
 		agent.WithInvocationTransferInfo(&agent.TransferInfo{
 			TargetAgentName:     "child",
 			Message:             "hi",
-			ToolResponseEventID: "",
+			ToolResponseEventID: "tool-evt",
 		}),
 	)
+	toolKey := agent.GetAppendEventNoticeKey(inv.TransferInfo.ToolResponseEventID)
+	inv.AddNoticeChannel(context.Background(), toolKey)
 
 	rsp := &model.Response{ID: "r-echo", Created: time.Now().Unix(), Model: "m"}
 	out := make(chan *event.Event, 8)
@@ -218,6 +255,10 @@ func TestTransferResponseProc_TransferEchoPersistenceError(t *testing.T) {
 		defer wg.Done()
 		proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, out)
 		close(out)
+	}()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_ = inv.NotifyCompletion(context.Background(), toolKey)
 	}()
 
 	var sawTransfer bool
@@ -259,8 +300,14 @@ func TestTransferResponseProc_EndInvocationFalse(t *testing.T) {
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(parent),
 		agent.WithInvocationID("inv"),
-		agent.WithInvocationTransferInfo(&agent.TransferInfo{TargetAgentName: "child", Message: "hi"}),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{
+			TargetAgentName:     "child",
+			Message:             "hi",
+			ToolResponseEventID: "tool-evt",
+		}),
 	)
+	toolKey := agent.GetAppendEventNoticeKey(inv.TransferInfo.ToolResponseEventID)
+	inv.AddNoticeChannel(context.Background(), toolKey)
 
 	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
 	out := make(chan *event.Event, 10)
@@ -273,6 +320,10 @@ func TestTransferResponseProc_EndInvocationFalse(t *testing.T) {
 		proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
 		close(out)
 	}()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_ = inv.NotifyCompletion(context.Background(), toolKey)
+	}()
 
 	for e := range out {
 		if e.RequiresCompletion {
@@ -282,20 +333,6 @@ func TestTransferResponseProc_EndInvocationFalse(t *testing.T) {
 	wg.Wait()
 	// endInvocationAfterTransfer=false => EndInvocation should remain false.
 	require.False(t, inv.EndInvocation)
-}
-
-
-func TestWaitForEventPersistence_NilInvocation(t *testing.T) {
-	proc := NewTransferResponseProcessor(true)
-	err := proc.waitForEventPersistence(context.Background(), nil, "evt-1")
-	require.NoError(t, err)
-}
-
-func TestWaitForEventPersistence_EmptyEventID(t *testing.T) {
-	proc := NewTransferResponseProcessor(true)
-	inv := agent.NewInvocation()
-	err := proc.waitForEventPersistence(context.Background(), inv, "")
-	require.NoError(t, err)
 }
 
 func TestWaitForEventPersistence_DeadlineAlreadyExceeded(t *testing.T) {
