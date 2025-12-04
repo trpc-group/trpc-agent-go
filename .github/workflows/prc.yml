@@ -134,6 +134,22 @@ jobs:
           version: latest
           only-new-issues: true
           args: --timeout=10m
+      - name: Check for interface{} usage
+        run: |
+          echo "::group::Checking for interface{} usage (should use 'any' instead)"
+          files=$(gofmt -r 'interface{} -> any' -l .)
+          if [ -n "$files" ]; then
+            echo "::error::Found interface{} usage. Please use 'any' instead of 'interface{}'."
+            echo "Files that need to be updated:"
+            echo "$files"
+            echo ""
+            echo "You can fix this by running:"
+            echo "  gofmt -w -r 'interface{} -> any' ."
+            exit 1
+          else
+            echo "✓ No interface{} usage found - all files use 'any'"
+          fi
+          echo "::endgroup::"
   check-examples-go-mod:
     name: check examples go.mod
     runs-on: ubuntu-latest
