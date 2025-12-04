@@ -185,6 +185,16 @@ jobs:
           go-version: "1.21"
       - name: Check examples go.mod and go.sum
         run: bash .github/scripts/check-examples-go-mod.sh
+      - name: Build examples
+        run: |
+          echo "::group::Building examples"
+          cd examples
+          if ! go build ./...; then
+            echo "::error::Failed to build examples. Please check dependencies and imports."
+            exit 1
+          fi
+          echo "✓ All examples build successfully"
+          echo "::endgroup::"
   typos:
     name: typos
     runs-on: ubuntu-latest
