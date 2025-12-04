@@ -17,6 +17,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
+const (
+	defaultSessionEventLimit     = 1000
+	defaultChanBufferSize        = 100
+	defaultAsyncPersisterNum     = 10
+	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
+	defaultAsyncPersistTimeout   = 5 * time.Second
+
+	defaultAsyncSummaryNum  = 3
+	defaultSummaryQueueSize = 100
+
+	defaultHost     = "localhost"
+	defaultPort     = 5432
+	defaultDatabase = "trpc-agent-go-pgsession"
+	defaultSSLMode  = "disable"
+)
+
 // ServiceOpts is the options for the postgres session service.
 type ServiceOpts struct {
 	sessionEventLimit int
@@ -60,6 +76,22 @@ type ServiceOpts struct {
 
 // ServiceOpt is the option for the postgres session service.
 type ServiceOpt func(*ServiceOpts)
+
+var (
+	defaultOptions = ServiceOpts{
+		sessionEventLimit:  defaultSessionEventLimit,
+		sessionTTL:         0,
+		appStateTTL:        0,
+		userStateTTL:       0,
+		asyncPersisterNum:  defaultAsyncPersisterNum,
+		enableAsyncPersist: false,
+		asyncSummaryNum:    defaultAsyncSummaryNum,
+		summaryQueueSize:   defaultSummaryQueueSize,
+		summaryJobTimeout:  30 * time.Second,
+		softDelete:         true, // Enable soft delete by default
+		cleanupInterval:    0,
+	}
+)
 
 // WithSessionEventLimit sets the limit of events in a session.
 func WithSessionEventLimit(limit int) ServiceOpt {

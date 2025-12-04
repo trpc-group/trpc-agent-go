@@ -61,7 +61,13 @@ func TestAddLLMNode_ToolSetInjection_And_ModelEventInput(t *testing.T) {
 	cm := &captureModel{}
 	sg := NewStateGraph(schema)
 	// Inject toolset via node options
-	sg.AddLLMNode("llm", cm, "inst", nil, WithToolSets([]tool.ToolSet{&simpleToolSet{"simple"}}))
+	sg.AddLLMNode(
+		"llm",
+		cm,
+		"inst",
+		nil,
+		WithToolSets([]tool.ToolSet{&simpleToolSet{"simple"}}),
+	)
 	// Ensure node type is LLM
 	n, ok := sg.graph.nodes["llm"]
 	require.True(t, ok)

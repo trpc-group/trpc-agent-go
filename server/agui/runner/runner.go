@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/google/uuid"
@@ -40,7 +41,11 @@ func New(r trunner.Runner, opt ...Option) Runner {
 	var tracker track.Tracker
 	if opts.SessionService != nil {
 		var err error
-		tracker, err = track.New(opts.SessionService)
+		tracker, err = track.New(opts.SessionService,
+			track.WithAggregatorFactory(opts.AggregatorFactory),
+			track.WithAggregationOption(opts.AggregationOption...),
+			track.WithFlushInterval(opts.FlushInterval),
+		)
 		if err != nil {
 			log.Warnf("agui: tracker disabled: %v", err)
 		}
@@ -54,6 +59,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		runAgentInputHook:  opts.RunAgentInputHook,
 		runOptionResolver:  opts.RunOptionResolver,
 		tracker:            tracker,
+		runningSessions:    sync.Map{},
 	}
 	return run
 }
@@ -68,6 +74,7 @@ type runner struct {
 	runAgentInputHook  RunAgentInputHook
 	runOptionResolver  RunOptionResolver
 	tracker            track.Tracker
+	runningSessions    sync.Map
 }
 
 type runInput struct {
@@ -120,8 +127,11 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		userID:      userID,
 		userMessage: runAgentInput.Messages[len(runAgentInput.Messages)-1],
 		runOption:   runOption,
-		translator:  r.translatorFactory(runAgentInput),
+		translator:  r.translatorFactory(ctx, runAgentInput),
 		enableTrack: r.tracker != nil,
+	}
+	if _, ok := r.runningSessions.LoadOrStore(input.key, struct{}{}); ok {
+		return nil, fmt.Errorf("session is already running: %v", input.key)
 	}
 	events := make(chan aguievents.Event)
 	go r.run(ctx, input, events)
@@ -129,10 +139,16 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 }
 
 func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguievents.Event) {
+	defer r.runningSessions.Delete(input.key)
 	defer close(events)
 	threadID := input.threadID
 	runID := input.runID
 	if input.enableTrack {
+		defer func() {
+			if err := r.tracker.Flush(ctx, input.key); err != nil {
+				log.Warnf("agui run: threadID: %s, runID: %s, flush track events: %v", threadID, runID, err)
+			}
+		}()
 		if err := r.recordUserMessage(ctx, input.key, &input.userMessage); err != nil {
 			log.Warnf("agui run: threadID: %s, runID: %s, record user message failed, disable tracking: %v",
 				threadID, runID, err)
@@ -156,7 +172,7 @@ func (r *runner) run(ctx context.Context, input *runInput, events chan<- aguieve
 				aguievents.WithRunID(runID)), input)
 			return
 		}
-		aguiEvents, err := input.translator.Translate(customEvent)
+		aguiEvents, err := input.translator.Translate(ctx, customEvent)
 		if err != nil {
 			log.Errorf("agui run: threadID: %s, runID: %s, translate event: %v", threadID, runID, err)
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),

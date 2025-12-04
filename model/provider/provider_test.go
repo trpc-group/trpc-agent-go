@@ -16,15 +16,19 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/ollama/ollama/api"
 	openaisdk "github.com/openai/openai-go"
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
+	"trpc.group/trpc-go/trpc-agent-go/model/ollama"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
@@ -302,6 +306,10 @@ func TestGetProvider(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, provider)
 
+	provider, ok = Get("gemini")
+	assert.True(t, ok)
+	assert.NotNil(t, provider)
+
 	provider, ok = Get("not-exist")
 	assert.False(t, ok)
 	assert.Nil(t, provider)
@@ -370,6 +378,50 @@ func TestModelWithAllOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, modelInstance)
 	assert.Equal(t, "claude", modelInstance.Info().Name)
+
+	modelInstance, err = Model(
+		"gemini",
+		"gemini-pro",
+		WithChannelBufferSize(128),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(2048),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+		WithTokenTailoringConfig(config),
+		WithCallbacks(Callbacks{
+			GeminiChatChunk:      nil,
+			GeminiChatRequest:    nil,
+			GeminiStreamComplete: nil,
+			GeminiChatResponse:   nil,
+		}),
+		WithGeminiOption(gemini.WithGeminiClientConfig(nil)),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, modelInstance)
+
+	modelInstance, err = Model(
+		"ollama",
+		"llama3.2:latest",
+		WithBaseURL("https://test.example.com"),
+		WithChannelBufferSize(128),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(2048),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+		WithTokenTailoringConfig(config),
+		WithCallbacks(
+			Callbacks{
+				OllamaChatRequest:    ollama.ChatRequestCallbackFunc(func(context.Context, *api.ChatRequest) {}),
+				OllamaChatResponse:   ollama.ChatResponseCallbackFunc(func(context.Context, *api.ChatRequest, *api.ChatResponse) {}),
+				OllamaChatChunk:      ollama.ChatChunkCallbackFunc(func(context.Context, *api.ChatRequest, *api.ChatResponse) {}),
+				OllamaStreamComplete: ollama.ChatStreamCompleteCallbackFunc(func(context.Context, *api.ChatRequest, error) {}),
+			},
+		),
+		WithOllamaOption(ollama.WithKeepAlive(10*time.Second)),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, modelInstance)
+	assert.Equal(t, "llama3.2:latest", modelInstance.Info().Name)
 }
 
 func readStringField(obj any, name string) string {

@@ -51,4 +51,14 @@ type PerInvocationResult struct {
 	Score float64 `json:"score,omitempty"`
 	// Status indicates the evaluation status of the invocation.
 	Status status.EvalStatus `json:"status,omitempty"`
+	// Details contains additional evaluator-specific information.
+	Details *PerInvocationDetails `json:"details,omitempty"`
+}
+
+// PerInvocationDetails contains additional evaluator-specific information.
+type PerInvocationDetails struct {
+	// Reason is the reason for the invocation evaluation result.
+	Reason string `json:"reason,omitempty"`
+	// Score is the score for the invocation evaluation result.
+	Score float64 `json:"score,omitempty"`
 }

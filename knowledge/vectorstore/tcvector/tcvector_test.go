@@ -181,7 +181,7 @@ func (m *mockClient) GetRebuildCalls() int {
 
 // Implementation of storage.ClientInterface methods
 
-func (m *mockClient) Upsert(ctx context.Context, db, collection string, docs interface{}, params ...*tcvectordb.UpsertDocumentParams) (*tcvectordb.UpsertDocumentResult, error) {
+func (m *mockClient) Upsert(ctx context.Context, db, collection string, docs any, params ...*tcvectordb.UpsertDocumentParams) (*tcvectordb.UpsertDocumentResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -638,7 +638,7 @@ func (m *mockIndexInterface) Options() tcvectordb.ClientOption {
 	return tcvectordb.ClientOption{}
 }
 
-func (m *mockIndexInterface) Request(ctx context.Context, req, res interface{}) error {
+func (m *mockIndexInterface) Request(ctx context.Context, req, res any) error {
 	return nil
 }
 
@@ -652,7 +652,7 @@ func (m *mockCollectionInterface) Options() tcvectordb.ClientOption {
 	return tcvectordb.ClientOption{}
 }
 
-func (m *mockCollectionInterface) Request(ctx context.Context, req, res interface{}) error {
+func (m *mockCollectionInterface) Request(ctx context.Context, req, res any) error {
 	return nil
 }
 

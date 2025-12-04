@@ -108,7 +108,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 	assert.NotNil(t, firstCase.SessionInput)
 	assert.Equal(t, "demo-app", firstCase.SessionInput.AppName)
 	assert.Equal(t, "user-42", firstCase.SessionInput.UserID)
-	assert.Equal(t, map[string]interface{}{"language": "en", "isPremium": true}, firstCase.SessionInput.State)
+	assert.Equal(t, map[string]any{"language": "en", "isPremium": true}, firstCase.SessionInput.State)
 	assert.NotNil(t, firstCase.CreationTimestamp)
 	assert.WithinDuration(t, time.Unix(1700000200, 0).UTC(), firstCase.CreationTimestamp.Time, time.Nanosecond)
 
@@ -127,19 +127,19 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 	assert.NotNil(t, firstInvocation.IntermediateData)
 	assert.Len(t, firstInvocation.IntermediateData.ToolUses, 1)
 	assert.Equal(t, "calculator", firstInvocation.IntermediateData.ToolUses[0].Name)
-	assert.Equal(t, map[string]interface{}{"operation": "add", "a": float64(1), "b": float64(2)},
+	assert.Equal(t, map[string]any{"operation": "add", "a": float64(1), "b": float64(2)},
 		firstInvocation.IntermediateData.ToolUses[0].Args)
 
 	assert.Len(t, firstInvocation.IntermediateData.ToolResponses, 1)
-	expectedToolResponse := map[string]interface{}{"result": float64(3)}
+	expectedToolResponse := map[string]any{"result": float64(3)}
 	assert.Equal(t, "calculator", firstInvocation.IntermediateData.ToolResponses[0].Name)
 	assert.Equal(t, expectedToolResponse, firstInvocation.IntermediateData.ToolResponses[0].Response)
 
-	expectedIntermediateResponses := [][]interface{}{
+	expectedIntermediateResponses := [][]any{
 		{
 			"assistant",
-			[]interface{}{
-				map[string]interface{}{"text": "Let me compute that."},
+			[]any{
+				map[string]any{"text": "Let me compute that."},
 			},
 		},
 	}
