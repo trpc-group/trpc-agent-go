@@ -12,11 +12,17 @@ package processor
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+	// EventCompletionTimeout is the timeout for event completion signaling.
+	EventCompletionTimeout = 5 * time.Second
 )
 
 // BasicRequestProcessor implements the basic request processing logic.
@@ -88,4 +94,12 @@ func (p *BasicRequestProcessor) ProcessRequest(
 		log.Debugf("Basic request processor: context cancelled")
 	}
 
+}
+
+// WaitEventTimeout waits for the event to be completed.
+func WaitEventTimeout(ctx context.Context, timeout time.Duration) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return timeout
 }

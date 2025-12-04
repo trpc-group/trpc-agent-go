@@ -59,7 +59,28 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	transferInfo := invocation.TransferInfo
+	// Always clear the pending transfer info after processing and mark the
+	// current invocation as ended (subject to endInvocationAfterTransfer) so
+	// that failed transfers do not cause subsequent responses to re-enter this
+	// logic and wait on stale event IDs indefinitely.
+	defer func() {
+		invocation.TransferInfo = nil
+		invocation.EndInvocation = p.endInvocationAfterTransfer
+	}()
+
 	targetAgentName := transferInfo.TargetAgentName
+
+	// Ensure the transfer tool.response has been persisted before proceeding.
+	if err := p.waitForEventPersistence(ctx, invocation, transferInfo.ToolResponseEventID); err != nil {
+		log.Errorf("Transfer response processor: transfer tool response not persisted: %v", err)
+		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			"Transfer failed: waiting for tool response persistence timed out",
+		))
+		return
+	}
 
 	// Look up the target agent from the current agent's sub-agents.
 	var targetAgent agent.Agent
@@ -86,6 +107,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		event.WithObject(model.ObjectTypeTransfer),
 		event.WithTag(TransferTag),
 	)
+	transferEvent.RequiresCompletion = true
 	transferEvent.Response = &model.Response{
 		ID:        "transfer-" + rsp.ID,
 		Object:    model.ObjectTypeTransfer,
@@ -102,9 +124,21 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			},
 		},
 	}
+	agentNoticeKey := agent.GetAppendEventNoticeKey(transferEvent.ID)
+	invocation.AddNoticeChannel(ctx, agentNoticeKey)
 
 	// Send transfer event.
 	if err := agent.EmitEvent(ctx, invocation, ch, transferEvent); err != nil {
+		return
+	}
+	if err := p.waitForEventPersistence(ctx, invocation, transferEvent.ID); err != nil {
+		log.Errorf("Transfer response processor: transfer event not persisted: %v", err)
+		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			"Transfer failed: waiting for transfer event persistence timed out",
+		))
 		return
 	}
 
@@ -124,12 +158,28 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		}
 		// Always emit a transfer message echo for visibility and traceability.
 		// Use tag so UIs can filter internal delegation messages without breaking event alignment.
-		agent.EmitEvent(ctx, targetInvocation, ch, event.NewResponseEvent(
+		echoEvent := event.NewResponseEvent(
 			targetInvocation.InvocationID,
 			targetAgent.Info().Name,
 			&model.Response{Choices: []model.Choice{{Message: targetInvocation.Message}}},
 			event.WithTag(TransferTag),
-		))
+		)
+		echoEvent.RequiresCompletion = true
+		echoNoticeKey := agent.GetAppendEventNoticeKey(echoEvent.ID)
+		invocation.AddNoticeChannel(ctx, echoNoticeKey)
+		if err := agent.EmitEvent(ctx, targetInvocation, ch, echoEvent); err != nil {
+			return
+		}
+		if err := p.waitForEventPersistence(ctx, invocation, echoEvent.ID); err != nil {
+			log.Errorf("Transfer response processor: transfer echo not persisted: %v", err)
+			agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				model.ErrorTypeFlowError,
+				"Transfer failed: waiting for transfer echo persistence timed out",
+			))
+			return
+		}
 	}
 
 	// Actually call the target agent's Run method with the target invocation in context
@@ -157,9 +207,13 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
 	}
 
-	// Clear the transfer info and end the original invocation to stop further LLM calls.
 	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
 	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
-	invocation.TransferInfo = nil
-	invocation.EndInvocation = p.endInvocationAfterTransfer
+}
+
+// waitForEventPersistence waits for the runner to append the specified event to the session.
+func (p *TransferResponseProcessor) waitForEventPersistence(ctx context.Context, inv *agent.Invocation,
+	eventID string) error {
+	timeout := WaitEventTimeout(ctx, EventCompletionTimeout)
+	return inv.AddNoticeChannelAndWait(ctx, agent.GetAppendEventNoticeKey(eventID), timeout)
 }
