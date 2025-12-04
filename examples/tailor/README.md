@@ -380,7 +380,7 @@ m, err := provider.Model(
 )
 ```
 
-This approach allows easy switching between different providers (OpenAI and Anthropic) with the same configuration interface.
+This approach allows easy switching between different providers (OpenAI, Anthropic, Ollama) with the same configuration interface.
 
 ## Performance Notes
 

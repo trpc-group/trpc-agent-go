@@ -15,11 +15,13 @@ import (
 	"testing"
 
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/ollama/ollama/api"
 	openaisdk "github.com/openai/openai-go"
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+	"trpc.group/trpc-go/trpc-agent-go/model/ollama"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
@@ -91,6 +93,12 @@ func TestWithCallbacksAllocatesAndOverwrites(t *testing.T) {
 	cb2 := Callbacks{
 		AnthropicChatChunk: anthropic.ChatChunkCallbackFunc(func(context.Context, *anthropicsdk.MessageNewParams, *anthropicsdk.MessageStreamEventUnion) {}),
 	}
+	cb3 := Callbacks{
+		OllamaChatRequest:    ollama.ChatRequestCallbackFunc(func(context.Context, *api.ChatRequest) {}),
+		OllamaChatResponse:   ollama.ChatResponseCallbackFunc(func(context.Context, *api.ChatRequest, *api.ChatResponse) {}),
+		OllamaChatChunk:      ollama.ChatChunkCallbackFunc(func(context.Context, *api.ChatRequest, *api.ChatResponse) {}),
+		OllamaStreamComplete: ollama.ChatStreamCompleteCallbackFunc(func(context.Context, *api.ChatRequest, error) {}),
+	}
 
 	WithCallbacks(cb1)(opts)
 	first := opts.Callbacks
@@ -102,6 +110,10 @@ func TestWithCallbacksAllocatesAndOverwrites(t *testing.T) {
 	assert.Equal(t, first, opts.Callbacks)
 	assert.NotNil(t, opts.Callbacks.AnthropicChatChunk)
 	assert.NotNil(t, opts.Callbacks.OpenAIChatRequest)
+
+	WithCallbacks(cb3)(opts)
+	assert.Equal(t, first, opts.Callbacks)
+	assert.NotNil(t, opts.Callbacks.OllamaChatChunk)
 }
 
 func TestWithOpenAIOption(t *testing.T) {

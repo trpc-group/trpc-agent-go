@@ -11,7 +11,7 @@ This example shows how to wire the provider abstraction into `llmagent` so you c
 
 ## Features
 
-- **Provider swap**: `-provider openai` (default) or `-provider anthropic` with matching model names.
+- **Provider swap**: `-provider openai` (default) or `-provider anthropic`, `-provider ollama` with matching model names.
 - **Model selection**: `-model deepseek-chat` by default; pass any provider-supported model ID.
 - **Streaming toggle**: `-stream=true|false` directly maps to `GenerationConfig.Stream`.
 - **Provider options**: Override API key, base URL, channel buffer size, and token tailoring knobs via CLI flags which feed directly into `provider.Options`.
@@ -23,7 +23,7 @@ This example shows how to wire the provider abstraction into `llmagent` so you c
 
 ## CLI Flags
 
-- `-provider`: Provider backend (`openai` or `anthropic`).
+- `-provider`: Provider backend (`openai`, `anthropic`, `ollama`).
 - `-model`: Model name understood by the selected provider.
 - `-stream`: Whether to request streaming responses from the provider.
 - `-api-key`: Inline API key override (otherwise falls back to provider defaults/env vars).
@@ -67,6 +67,9 @@ export OPENAI_BASE_URL="https://api.deepseek.com/v1"  # Optional for non-OpenAI 
 # Anthropic
 export ANTHROPIC_AUTH_TOKEN="your-anthropic-key"
 export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"  # Optional for non-Anthropic hosts
+
+# Ollama
+export OLLAMA_HOST="http://localhost:11434"  # Optional, default is http://localhost:11434
 ```
 
 > Flags always take precedence over environment variables. Leave the flags unset to keep the default provider behavior.
