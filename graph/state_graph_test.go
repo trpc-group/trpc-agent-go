@@ -1437,3 +1437,203 @@ func TestMessagesStateSchemaIncludesLastResponseID(t *testing.T) {
 	require.Equal(t, reflect.TypeOf(""), field.Type)
 	require.NotNil(t, field.Reducer)
 }
+
+const (
+	testToolSetName       = "set"
+	testToolBaseName      = "echo"
+	testNamespacedToolKey = testToolSetName + "_" + testToolBaseName
+)
+
+type simpleTool struct {
+	name string
+}
+
+func (s *simpleTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+
+func (s *simpleTool) Call(ctx context.Context, _ []byte) (any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+type countingToolSet struct {
+	name  string
+	calls int
+}
+
+func (s *countingToolSet) Tools(ctx context.Context) []tool.Tool {
+	s.calls++
+	return []tool.Tool{&simpleTool{name: testToolBaseName}}
+}
+
+func (s *countingToolSet) Close() error { return nil }
+
+func (s *countingToolSet) Name() string { return s.name }
+
+type recordingModel struct {
+	lastTools map[string]tool.Tool
+}
+
+func (m *recordingModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.lastTools = req.Tools
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *recordingModel) Info() model.Info {
+	return model.Info{Name: "recording"}
+}
+
+func TestAddLLMNode_StaticToolSets(t *testing.T) {
+	schema := MessagesStateSchema()
+	rm := &recordingModel{}
+	sg := NewStateGraph(schema)
+	ts := &countingToolSet{name: testToolSetName}
+
+	sg.AddLLMNode(
+		"llm",
+		rm,
+		"inst",
+		nil,
+		WithToolSets([]tool.ToolSet{ts}),
+	)
+
+	n := sg.graph.nodes["llm"]
+	require.NotNil(t, n)
+
+	state := State{StateKeyUserInput: "hi"}
+
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	_, err = n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, ts.calls)
+}
+
+func TestAddLLMNode_RefreshToolSetsOnRun(t *testing.T) {
+	schema := MessagesStateSchema()
+	rm := &recordingModel{}
+	sg := NewStateGraph(schema)
+	ts := &countingToolSet{name: testToolSetName}
+
+	sg.AddLLMNode(
+		"llm",
+		rm,
+		"inst",
+		nil,
+		WithToolSets([]tool.ToolSet{ts}),
+		WithRefreshToolSetsOnRun(true),
+	)
+
+	n := sg.graph.nodes["llm"]
+	require.NotNil(t, n)
+
+	state := State{StateKeyUserInput: "hi"}
+
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+	firstTools := rm.lastTools
+	require.NotNil(t, firstTools)
+	require.NotEmpty(t, firstTools)
+
+	_, err = n.Function(context.Background(), state)
+	require.NoError(t, err)
+	secondTools := rm.lastTools
+	require.NotNil(t, secondTools)
+	require.NotEmpty(t, secondTools)
+
+	require.Equal(t, 2, ts.calls)
+}
+
+func TestNewToolsNodeFunc_StaticToolSets(t *testing.T) {
+	schema := MessagesStateSchema()
+	sg := NewStateGraph(schema)
+	ts := &countingToolSet{name: testToolSetName}
+
+	sg.AddToolsNode(
+		"tools",
+		nil,
+		WithToolSets([]tool.ToolSet{ts}),
+	)
+
+	n := sg.graph.nodes["tools"]
+	require.NotNil(t, n)
+
+	messages := []model.Message{
+		model.NewUserMessage("hi"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      testNamespacedToolKey,
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+	}
+
+	state := State{StateKeyMessages: messages}
+
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	_, err = n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, ts.calls)
+}
+
+func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
+	schema := MessagesStateSchema()
+	sg := NewStateGraph(schema)
+	ts := &countingToolSet{name: testToolSetName}
+
+	sg.AddToolsNode(
+		"tools",
+		nil,
+		WithToolSets([]tool.ToolSet{ts}),
+		WithRefreshToolSetsOnRun(true),
+	)
+
+	n := sg.graph.nodes["tools"]
+	require.NotNil(t, n)
+
+	messages := []model.Message{
+		model.NewUserMessage("hi"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      testNamespacedToolKey,
+					Arguments: []byte(`{}`),
+				},
+			}},
+		},
+	}
+
+	state := State{StateKeyMessages: messages}
+
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	_, err = n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	require.Equal(t, 2, ts.calls)
+}

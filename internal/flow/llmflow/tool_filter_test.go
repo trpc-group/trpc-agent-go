@@ -33,9 +33,10 @@ func (m *mockTool) Call(context.Context, []byte) (any, error) {
 
 // mockAgentWithUserTools implements agent.Agent and UserToolsProvider.
 type mockAgentWithUserTools struct {
-	allTools  []tool.Tool
-	userTools []tool.Tool
-	name      string
+	allTools       []tool.Tool
+	userTools      []tool.Tool
+	name           string
+	toolsCallCount int
 }
 
 func (m *mockAgentWithUserTools) Run(context.Context, *agent.Invocation) (<-chan *event.Event, error) {
@@ -45,6 +46,7 @@ func (m *mockAgentWithUserTools) Run(context.Context, *agent.Invocation) (<-chan
 }
 
 func (m *mockAgentWithUserTools) Tools() []tool.Tool {
+	m.toolsCallCount++
 	return m.allTools
 }
 
@@ -90,6 +92,69 @@ func (m *mockAgentWithoutUserTools) SubAgents() []agent.Agent {
 
 func (m *mockAgentWithoutUserTools) FindSubAgent(string) agent.Agent {
 	return nil
+}
+
+// TestGetFilteredTools_CachesPerInvocation verifies that the tool list is
+// computed once per invocation and then reused, even if the underlying
+// agent tools or filter change. This ensures tool stability within a
+// single agent.Run.
+func TestGetFilteredTools_CachesPerInvocation(t *testing.T) {
+	f := New(nil, nil, Options{})
+
+	userToolV1 := &mockTool{name: "user_tool_v1"}
+	userToolV2 := &mockTool{name: "user_tool_v2"}
+
+	mockAgent := &mockAgentWithUserTools{
+		name:      "test-agent",
+		allTools:  []tool.Tool{userToolV1},
+		userTools: []tool.Tool{userToolV1},
+	}
+
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions.ToolFilter = tool.NewIncludeToolNamesFilter(
+		"user_tool_v1",
+	)
+
+	ctx := context.Background()
+	first := f.getFilteredTools(ctx, inv)
+
+	if len(first) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(first))
+	}
+	if first[0].Declaration().Name != "user_tool_v1" {
+		t.Fatalf(
+			"expected user_tool_v1 on first call, got %s",
+			first[0].Declaration().Name,
+		)
+	}
+
+	// Change the agent tools and filter to simulate a dynamic ToolSet.
+	mockAgent.allTools = []tool.Tool{userToolV2}
+	mockAgent.userTools = []tool.Tool{userToolV2}
+	inv.RunOptions.ToolFilter = tool.NewIncludeToolNamesFilter(
+		"user_tool_v2",
+	)
+
+	second := f.getFilteredTools(ctx, inv)
+
+	if len(second) != 1 {
+		t.Fatalf("expected cached 1 tool, got %d", len(second))
+	}
+	if second[0].Declaration().Name != "user_tool_v1" {
+		t.Fatalf(
+			"expected cached user_tool_v1 on second call, got %s",
+			second[0].Declaration().Name,
+		)
+	}
+
+	if mockAgent.toolsCallCount != 1 {
+		t.Fatalf(
+			"expected Tools() to be called once, got %d",
+			mockAgent.toolsCallCount,
+		)
+	}
 }
 
 // TestGetFilteredTools_NoFilter tests that all tools are returned when no filter is set.

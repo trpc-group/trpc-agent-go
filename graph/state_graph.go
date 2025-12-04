@@ -102,6 +102,17 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithRefreshToolSetsOnRun controls whether tools from ToolSets are
+// refreshed from the underlying ToolSet on each node run.
+// When false (default), tools from ToolSets are resolved once when the
+// node is created. When true, the graph will call ToolSet.Tools again
+// when building the tools map for each execution.
+func WithRefreshToolSetsOnRun(refresh bool) Option {
+	return func(node *Node) {
+		node.refreshToolSetsOnRun = refresh
+	}
+}
+
 // WithEnableParallelTools enables parallel tool execution for a Tools node.
 // When enabled, if the last assistant message contains multiple tool calls,
 // they will be executed concurrently and their responses will be merged in
@@ -404,9 +415,16 @@ func (sg *StateGraph) AddLLMNode(
 		opt(node)
 	}
 	// Build LLM-specific options from node config
-	llmOptsForFunc := []LLMNodeFuncOption{WithLLMNodeID(id), WithLLMToolSets(node.toolSets)}
+	llmOptsForFunc := []LLMNodeFuncOption{
+		WithLLMNodeID(id),
+		WithLLMRefreshToolSetsOnRun(node.refreshToolSetsOnRun),
+		WithLLMToolSets(node.toolSets),
+	}
 	if node.llmGenerationConfig != nil {
-		llmOptsForFunc = append(llmOptsForFunc, WithLLMGenerationConfig(*node.llmGenerationConfig))
+		llmOptsForFunc = append(
+			llmOptsForFunc,
+			WithLLMGenerationConfig(*node.llmGenerationConfig),
+		)
 	}
 	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, llmOptsForFunc...)
 	// Add LLM node type option
@@ -625,22 +643,62 @@ func WithLLMNodeID(nodeID string) LLMNodeFuncOption {
 	}
 }
 
+// WithLLMRefreshToolSetsOnRun controls whether tools from ToolSets are
+// refreshed from the underlying ToolSet on each LLM node run.
+func WithLLMRefreshToolSetsOnRun(refresh bool) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.refreshToolSetsOnRun = refresh
+	}
+}
+
+func mergeToolsWithToolSets(
+	ctx context.Context,
+	base map[string]tool.Tool,
+	toolSets []tool.ToolSet,
+) map[string]tool.Tool {
+	if len(toolSets) == 0 {
+		return base
+	}
+	out := make(map[string]tool.Tool, len(base))
+	for name, t := range base {
+		out[name] = t
+	}
+	for _, toolSet := range toolSets {
+		namedToolSet := itool.NewNamedToolSet(toolSet)
+		setTools := namedToolSet.Tools(ctx)
+		for _, t := range setTools {
+			name := t.Declaration().Name
+			if _, ok := out[name]; ok {
+				log.Warnf(
+					"tool %s already exists at %s toolset, "+
+						"will be overridden",
+					name, toolSet.Name(),
+				)
+			}
+			out[name] = t
+		}
+	}
+	return out
+}
+
 // WithLLMToolSets sets the tool sets for the LLM node function.
 func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 	return func(runner *llmRunner) {
+		if len(toolSets) == 0 {
+			return
+		}
+		if runner.refreshToolSetsOnRun {
+			runner.toolSets = append(runner.toolSets, toolSets...)
+			return
+		}
 		if runner.tools == nil {
 			runner.tools = make(map[string]tool.Tool)
 		}
-		for _, toolSet := range toolSets {
-			// Create named toolset wrapper to avoid name conflicts
-			namedToolSet := itool.NewNamedToolSet(toolSet)
-			for _, t := range namedToolSet.Tools(context.Background()) {
-				if _, ok := runner.tools[t.Declaration().Name]; ok {
-					log.Warnf("tool %s already exists at %s toolset, will be overridden", t.Declaration().Name, toolSet.Name())
-				}
-				runner.tools[t.Declaration().Name] = t
-			}
-		}
+		runner.tools = mergeToolsWithToolSets(
+			context.Background(),
+			runner.tools,
+			toolSets,
+		)
 	}
 }
 
@@ -684,11 +742,13 @@ func NewLLMNodeFunc(
 // llmRunner encapsulates LLM execution dependencies to avoid long parameter
 // lists.
 type llmRunner struct {
-	llmModel         model.Model
-	instruction      string
-	tools            map[string]tool.Tool
-	nodeID           string
-	generationConfig model.GenerationConfig
+	llmModel             model.Model
+	instruction          string
+	tools                map[string]tool.Tool
+	toolSets             []tool.ToolSet
+	refreshToolSetsOnRun bool
+	nodeID               string
+	generationConfig     model.GenerationConfig
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -813,9 +873,13 @@ func (r *llmRunner) executeModel(
 	span oteltrace.Span,
 	instructionUsed string,
 ) (any, error) {
+	tools := r.tools
+	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
+		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
+	}
 	request := &model.Request{
 		Messages:         messages,
-		Tools:            r.tools,
+		Tools:            tools,
 		GenerationConfig: r.generationConfig,
 	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
@@ -1062,12 +1126,16 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	if tools == nil {
 		tools = make(map[string]tool.Tool)
 	}
-	for _, toolSet := range node.toolSets {
-		// Create named toolset wrapper to avoid name conflicts
-		namedToolSet := itool.NewNamedToolSet(toolSet)
-		for _, t := range namedToolSet.Tools(context.Background()) {
-			tools[t.Declaration().Name] = t
-		}
+	baseTools := tools
+	var staticTools map[string]tool.Tool
+	if node.refreshToolSetsOnRun {
+		staticTools = baseTools
+	} else {
+		staticTools = mergeToolsWithToolSets(
+			context.Background(),
+			baseTools,
+			node.toolSets,
+		)
 	}
 	// Capture whether to execute tools in parallel.
 	parallel := node.enableParallelTools
@@ -1085,10 +1153,19 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 		// Extract execution context for event emission.
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 
+		effectiveTools := staticTools
+		if node.refreshToolSetsOnRun && len(node.toolSets) > 0 {
+			effectiveTools = mergeToolsWithToolSets(
+				ctx,
+				baseTools,
+				node.toolSets,
+			)
+		}
+
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
 			ToolCalls:      toolCalls,
-			Tools:          tools,
+			Tools:          effectiveTools,
 			InvocationID:   invocationID,
 			EventChan:      eventChan,
 			Span:           span,
