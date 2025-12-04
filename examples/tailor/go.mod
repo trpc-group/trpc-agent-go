@@ -1,6 +1,8 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/tailor
 
-go 1.24.4
+go 1.24.10
+
+toolchain go1.24.11
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..
@@ -52,6 +54,6 @@ require (
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5-0.20251023030722-7f02b57fd14a // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.6.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.6.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519 // indirect
+	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.0.0-20251203120347-0b4d62cb115d // indirect
 )
