@@ -68,7 +68,7 @@ The routing uses `AddToolsConditionalEdges("assistant", "tools", "finish")` so t
 From the repository root:
 
 ```bash
-cd trpc-agent-go3/examples/graph/mcptool
+cd examples/graph/mcptool
 ```
 
 Set your OpenAI‑compatible model endpoint (for example, DeepSeek):
