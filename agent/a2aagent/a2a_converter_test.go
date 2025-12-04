@@ -1353,6 +1353,531 @@ func TestProcessDataPartInto_ADKMetadataKey(t *testing.T) {
 	}
 }
 
+// TestProcessExecutableCode tests processing of executable code DataParts
+func TestProcessExecutableCode(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataPart *protocol.DataPart
+		expected string
+	}{
+		{
+			name: "ADK mode - code field",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"code":     "print('hello')",
+					"language": "python",
+				},
+			},
+			expected: "print('hello')",
+		},
+		{
+			name: "non-ADK mode - content field",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"content": "console.log('hello')",
+				},
+			},
+			expected: "console.log('hello')",
+		},
+		{
+			name: "both fields - code takes precedence",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"code":    "primary code",
+					"content": "fallback content",
+				},
+			},
+			expected: "primary code",
+		},
+		{
+			name: "invalid data type",
+			dataPart: &protocol.DataPart{
+				Data: "not a map",
+			},
+			expected: "",
+		},
+		{
+			name: "empty data",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{},
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := processExecutableCode(tt.dataPart)
+			if result != tt.expected {
+				t.Errorf("processExecutableCode() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestProcessCodeExecutionResult tests processing of code execution result DataParts
+func TestProcessCodeExecutionResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataPart *protocol.DataPart
+		expected string
+	}{
+		{
+			name: "ADK mode - output field",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"output":  "hello world",
+					"outcome": "OUTCOME_OK",
+				},
+			},
+			expected: "hello world",
+		},
+		{
+			name: "non-ADK mode - content field",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"content": "execution result",
+				},
+			},
+			expected: "execution result",
+		},
+		{
+			name: "both fields - output takes precedence",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"output":  "primary output",
+					"content": "fallback content",
+				},
+			},
+			expected: "primary output",
+		},
+		{
+			name: "invalid data type",
+			dataPart: &protocol.DataPart{
+				Data: "not a map",
+			},
+			expected: "",
+		},
+		{
+			name: "empty data",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{},
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := processCodeExecutionResult(tt.dataPart)
+			if result != tt.expected {
+				t.Errorf("processCodeExecutionResult() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestBuildRespEvent_CodeExecution tests handling of code execution DataParts
+func TestBuildRespEvent_CodeExecution(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{
+		InvocationID: "test-id",
+	}
+
+	tests := []struct {
+		name         string
+		msg          *protocol.Message
+		isStreaming  bool
+		validateFunc func(t *testing.T, evt *event.Event)
+	}{
+		{
+			name: "executable code - non-streaming",
+			msg: &protocol.Message{
+				MessageID: "msg-ce-1",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"code":     "print('test')",
+							"language": "python",
+						},
+						Metadata: map[string]any{
+							"type": "executable_code",
+						},
+					},
+				},
+			},
+			isStreaming: false,
+			validateFunc: func(t *testing.T, evt *event.Event) {
+				if evt == nil {
+					t.Fatal("expected event, got nil")
+				}
+				if evt.Response == nil {
+					t.Fatal("expected response, got nil")
+				}
+				if len(evt.Response.Choices) != 1 {
+					t.Errorf("expected 1 choice, got %d", len(evt.Response.Choices))
+				}
+				choice := evt.Response.Choices[0]
+				if choice.Message.Content != "print('test')" {
+					t.Errorf("expected content 'print('test')', got %s", choice.Message.Content)
+				}
+				if evt.Response.Object != model.ObjectTypePostprocessingCodeExecution {
+					t.Errorf("expected object type %s, got %s", model.ObjectTypePostprocessingCodeExecution, evt.Response.Object)
+				}
+			},
+		},
+		{
+			name: "code execution result - non-streaming",
+			msg: &protocol.Message{
+				MessageID: "msg-cer-1",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"output":  "test output",
+							"outcome": "OUTCOME_OK",
+						},
+						Metadata: map[string]any{
+							"type": "code_execution_result",
+						},
+					},
+				},
+			},
+			isStreaming: false,
+			validateFunc: func(t *testing.T, evt *event.Event) {
+				if evt == nil {
+					t.Fatal("expected event, got nil")
+				}
+				if evt.Response == nil {
+					t.Fatal("expected response, got nil")
+				}
+				choice := evt.Response.Choices[0]
+				if choice.Message.Content != "test output" {
+					t.Errorf("expected content 'test output', got %s", choice.Message.Content)
+				}
+				if evt.Response.Object != model.ObjectTypePostprocessingCodeExecutionResult {
+					t.Errorf("expected object type %s, got %s", model.ObjectTypePostprocessingCodeExecutionResult, evt.Response.Object)
+				}
+			},
+		},
+		{
+			name: "executable code - streaming",
+			msg: &protocol.Message{
+				MessageID: "msg-ce-stream",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"content": "streaming code",
+						},
+						Metadata: map[string]any{
+							"type": "executable_code",
+						},
+					},
+				},
+			},
+			isStreaming: true,
+			validateFunc: func(t *testing.T, evt *event.Event) {
+				if evt == nil {
+					t.Fatal("expected event, got nil")
+				}
+				if evt.Response == nil {
+					t.Fatal("expected response, got nil")
+				}
+				if !evt.Response.IsPartial {
+					t.Error("expected IsPartial to be true for streaming")
+				}
+				choice := evt.Response.Choices[0]
+				if choice.Delta.Content != "streaming code" {
+					t.Errorf("expected delta content 'streaming code', got %s", choice.Delta.Content)
+				}
+			},
+		},
+		{
+			name: "code execution with ADK metadata key",
+			msg: &protocol.Message{
+				MessageID: "msg-ce-adk",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"code":     "adk code",
+							"language": "python",
+						},
+						Metadata: map[string]any{
+							"adk_type": "executable_code",
+						},
+					},
+				},
+			},
+			isStreaming: false,
+			validateFunc: func(t *testing.T, evt *event.Event) {
+				if evt == nil {
+					t.Fatal("expected event, got nil")
+				}
+				choice := evt.Response.Choices[0]
+				if choice.Message.Content != "adk code" {
+					t.Errorf("expected content 'adk code', got %s", choice.Message.Content)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			evt := converter.buildRespEvent(tc.isStreaming, tc.msg, "test-agent", invocation)
+			tc.validateFunc(t, evt)
+		})
+	}
+}
+
+// TestExtractObjectType tests the object type extraction logic
+func TestExtractObjectType(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   *parseResult
+		expected string
+	}{
+		{
+			name: "with objectType from metadata",
+			result: &parseResult{
+				objectType: "custom.object.type",
+			},
+			expected: "custom.object.type",
+		},
+		{
+			name: "with tool calls",
+			result: &parseResult{
+				toolCalls: []model.ToolCall{{ID: "call-1"}},
+			},
+			expected: model.ObjectTypeChatCompletion,
+		},
+		{
+			name: "with code execution",
+			result: &parseResult{
+				codeExecution: "some code",
+			},
+			expected: model.ObjectTypePostprocessingCodeExecution,
+		},
+		{
+			name: "with code execution result",
+			result: &parseResult{
+				codeExecutionResult: "some output",
+			},
+			expected: model.ObjectTypePostprocessingCodeExecutionResult,
+		},
+		{
+			name: "objectType takes precedence over inferred type",
+			result: &parseResult{
+				objectType:    "explicit.type",
+				codeExecution: "some code",
+			},
+			expected: "explicit.type",
+		},
+		{
+			name:     "empty result",
+			result:   &parseResult{},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractObjectType(tt.result)
+			if result != tt.expected {
+				t.Errorf("extractObjectType() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestParseA2AMessageParts_CodeExecution tests parsing of code execution parts
+func TestParseA2AMessageParts_CodeExecution(t *testing.T) {
+	tests := []struct {
+		name         string
+		msg          *protocol.Message
+		validateFunc func(t *testing.T, result *parseResult)
+	}{
+		{
+			name: "executable code part",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"code":     "print('hello')",
+							"language": "python",
+						},
+						Metadata: map[string]any{
+							"type": "executable_code",
+						},
+					},
+				},
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.codeExecution != "print('hello')" {
+					t.Errorf("expected codeExecution 'print('hello')', got %s", result.codeExecution)
+				}
+				if result.codeExecutionResult != "" {
+					t.Errorf("expected empty codeExecutionResult, got %s", result.codeExecutionResult)
+				}
+			},
+		},
+		{
+			name: "code execution result part",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"output":  "hello world",
+							"outcome": "OUTCOME_OK",
+						},
+						Metadata: map[string]any{
+							"type": "code_execution_result",
+						},
+					},
+				},
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.codeExecutionResult != "hello world" {
+					t.Errorf("expected codeExecutionResult 'hello world', got %s", result.codeExecutionResult)
+				}
+				if result.codeExecution != "" {
+					t.Errorf("expected empty codeExecution, got %s", result.codeExecution)
+				}
+			},
+		},
+		{
+			name: "mixed text and code execution",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "Here is the code: "},
+					&protocol.DataPart{
+						Data: map[string]any{
+							"code": "x = 1 + 1",
+						},
+						Metadata: map[string]any{
+							"type": "executable_code",
+						},
+					},
+				},
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.textContent != "Here is the code: " {
+					t.Errorf("expected textContent 'Here is the code: ', got %s", result.textContent)
+				}
+				if result.codeExecution != "x = 1 + 1" {
+					t.Errorf("expected codeExecution 'x = 1 + 1', got %s", result.codeExecution)
+				}
+			},
+		},
+		{
+			name: "object type from message metadata",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "content"},
+				},
+				Metadata: map[string]any{
+					"object_type": "postprocessing.code_execution",
+				},
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.objectType != "postprocessing.code_execution" {
+					t.Errorf("expected objectType 'postprocessing.code_execution', got %s", result.objectType)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseA2AMessageParts(tt.msg)
+			tt.validateFunc(t, result)
+		})
+	}
+}
+
+// TestConvertToEvents_WithHistory tests conversion of Task with history containing code execution
+func TestConvertToEvents_WithHistory(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{
+		InvocationID: "test-id",
+	}
+
+	task := &protocol.Task{
+		ID:        "task-1",
+		ContextID: "ctx-1",
+		History: []protocol.Message{
+			{
+				MessageID: "hist-1",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"id":   "call-1",
+							"type": "function",
+							"name": "execute_code",
+							"args": `{"code": "print('hi')"}`,
+						},
+						Metadata: map[string]any{
+							"type": "function_call",
+						},
+					},
+				},
+			},
+			{
+				MessageID: "hist-2",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"id":       "call-1",
+							"name":     "execute_code",
+							"response": "hi",
+						},
+						Metadata: map[string]any{
+							"type": "function_response",
+						},
+					},
+				},
+			},
+		},
+		Artifacts: []protocol.Artifact{
+			{
+				ArtifactID: "artifact-1",
+				Parts:      []protocol.Part{&protocol.TextPart{Text: "Final response"}},
+			},
+		},
+	}
+
+	result := protocol.MessageResult{Result: task}
+	events, err := converter.ConvertToEvents(result, "test-agent", invocation)
+
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error: %v", err)
+	}
+
+	// Should have 3 events: 2 from history + 1 from artifact
+	if len(events) != 3 {
+		t.Errorf("expected 3 events, got %d", len(events))
+	}
+
+	// First event should be tool call
+	if len(events[0].Response.Choices) > 0 && len(events[0].Response.Choices[0].Message.ToolCalls) == 0 {
+		t.Error("expected first event to have tool calls")
+	}
+
+	// Second event should be tool response
+	if len(events[1].Response.Choices) > 0 && events[1].Response.Choices[0].Message.Role != model.RoleTool {
+		t.Errorf("expected second event to be tool response, got role %s", events[1].Response.Choices[0].Message.Role)
+	}
+
+	// Last event should be marked as done
+	if !events[2].Done {
+		t.Error("expected last event to be marked as done")
+	}
+}
+
 // Helper function to create string pointer
 func stringPtr(s string) *string {
 	return &s
