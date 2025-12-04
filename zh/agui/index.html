@@ -1119,6 +1119,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#session" class="md-nav__link">
+    <span class="md-ellipsis">
+      Session 存储与事件聚合
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_5" class="md-nav__link">
     <span class="md-ellipsis">
       消息快照
@@ -1342,6 +1351,15 @@
   <a href="#runagentinput-hook" class="md-nav__link">
     <span class="md-ellipsis">
       RunAgentInput Hook
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session" class="md-nav__link">
+    <span class="md-ellipsis">
+      Session 存储与事件聚合
     </span>
   </a>
   
@@ -1847,22 +1865,8 @@
 <li>返回自定义的 <code>*adapter.RunAgentInput</code> 会覆盖原始输入；返回 <code>nil</code> 表示使用原输入。</li>
 <li>返回错误会中止本次请求，客户端会收到 <code>RunError</code> 事件。</li>
 </ul>
-<h3 id="_5">消息快照</h3>
-<p>消息快照用于在页面初始化或断线重连时恢复历史对话，通过 <code>agui.WithMessagesSnapshotEnabled(true)</code> 控制功能是否开启，默认关闭。启用该能力后，AG-UI 会同时提供聊天路由和消息快照路由：</p>
-<ul>
-<li>聊天路由默认是 <code>/</code>，可通过 <code>agui.WithPath</code> 自定义；</li>
-<li>消息快照路由默认是 <code>/history</code>， 可通过 <code>WithMessagesSnapshotPath</code> 自定义，负责返回 <code>RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED</code> 的事件流。</li>
-</ul>
-<p>启用消息快照功能时需要配置下列参数：</p>
-<ul>
-<li><code>agui.WithMessagesSnapshotEnabled(true)</code> 启用消息快照功能；</li>
-<li><code>agui.WithMessagesSnapshotPath</code> 设置消息快照路由的自定义路径，默认为 <code>/history</code>；</li>
-<li><code>agui.WithAppName(name)</code> 指定应用名；</li>
-<li><code>agui.WithSessionService(service)</code> 注入 <code>session.Service</code> 用于查询历史事件；</li>
-<li><code>aguirunner.WithUserIDResolver(resolver)</code> 自定义 <code>userID</code> 解析逻辑，默认恒为 <code>"user"</code>。</li>
-</ul>
-<p>框架在处理消息快照请求时会从 AG-UI 请求体 <code>RunAgentInput</code> 中解析 <code>threadId</code> 作为 <code>SessionID</code>，结合自定义 <code>UserIDResolver</code> 得到 <code>userID</code>，再与 <code>appName</code> 组装得到 <code>session.Key</code>，然后通过 <code>session.Service</code> 查询 <code>Session</code>。将 <code>Session</code> 中存储的事件 <code>Session.Events</code> 转换为 AG-UI 消息并封装成 <code>MESSAGES_SNAPSHOT</code> 事件，同时发送配套的 <code>RUN_STARTED</code>、<code>RUN_FINISHED</code> 事件。</p>
-<p>代码示例如下：</p>
+<h3 id="session">Session 存储与事件聚合</h3>
+<p>在构造 AG-UI Runner 时传入 <code>SessionService</code>，实时对话产生的事件会通过 <code>SessionService</code> 写入会话，便于后续通过 <code>MessagesSnapshot</code> 回放历史记录。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
@@ -1881,58 +1885,32 @@
 <span class="normal"><a href="#__codelineno-7-16">16</a></span>
 <span class="normal"><a href="#__codelineno-7-17">17</a></span>
 <span class="normal"><a href="#__codelineno-7-18">18</a></span>
-<span class="normal"><a href="#__codelineno-7-19">19</a></span>
-<span class="normal"><a href="#__codelineno-7-20">20</a></span>
-<span class="normal"><a href="#__codelineno-7-21">21</a></span>
-<span class="normal"><a href="#__codelineno-7-22">22</a></span>
-<span class="normal"><a href="#__codelineno-7-23">23</a></span>
-<span class="normal"><a href="#__codelineno-7-24">24</a></span>
-<span class="normal"><a href="#__codelineno-7-25">25</a></span>
-<span class="normal"><a href="#__codelineno-7-26">26</a></span>
-<span class="normal"><a href="#__codelineno-7-27">27</a></span>
-<span class="normal"><a href="#__codelineno-7-28">28</a></span>
-<span class="normal"><a href="#__codelineno-7-29">29</a></span>
-<span class="normal"><a href="#__codelineno-7-30">30</a></span>
-<span class="normal"><a href="#__codelineno-7-31">31</a></span>
-<span class="normal"><a href="#__codelineno-7-32">32</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
+<span class="normal"><a href="#__codelineno-7-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
 </span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
 </span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="p">)</span>
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="nx">resolver</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ForwardedProps</span><span class="p">[</span><span class="s">&quot;userId&quot;</span><span class="p">].(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">user</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;anonymous&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="p">}</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">),</span><span class="w">                    </span><span class="c1">// 自定义聊天路由，默认为 &quot;/&quot;</span>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">),</span><span class="w">              </span><span class="c1">// 设置 AppName，用于构造 Session Key</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span><span class="w">   </span><span class="c1">// 设置 Session Service，用于查询 Session</span>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">    </span><span class="c1">// 开启消息快照功能</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// 设置消息快照路由，默认为 &quot;/history&quot;</span>
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span>
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithUserIDResolver</span><span class="p">(</span><span class="nx">resolver</span><span class="p">),</span><span class="w"> </span><span class="c1">// 自定义 UserID 解析逻辑</span>
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="p">)</span>
-</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create agui server failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="p">}</span>
-</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">&quot;127.0.0.1:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Handler</span><span class="p">());</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;server stopped with error: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32"></a><span class="p">}</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/agui&quot;</span><span class="p">),</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="nx">appName</span><span class="p">),</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithUserIDResolver</span><span class="p">(</span><span class="nx">userIDResolver</span><span class="p">)),</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>完整的示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot">examples/agui/messagessnapshot</a>。</p>
-<p>AG-UI 的 MessagesSnapshotEvent 事件格式可见 <a href="https://docs.ag-ui.com/concepts/messages">messages</a>。</p>
-<h3 id="basepath">设置路由前缀 BasePath</h3>
-<p><code>agui.WithBasePath</code> 设置 AG-UI 服务的基础路由前缀，默认值为 <code>/</code>，用于在统一前缀下挂载聊天路由与消息快照路由，避免与现有服务冲突.</p>
-<p><code>agui.WithPath</code> 与 <code>agui.WithMessagesSnapshotPath</code> 仅定义基础路径下的子路由，框架会通过 <code>url.JoinPath</code> 将它们与基础路径拼接成最终可访问的路由.</p>
-<p>使用示例如下所示</p>
+<p>在流式响应场景下，同一条回复通常会包含多个增量文本事件，如果将它们全部直接写入会话，会给 <code>SessionService</code> 带来较大压力。</p>
+<p>为了解决上述问题，框架会先对事件进行聚合，再写入会话。此外，默认每秒定时刷新一次，每次刷新将当前的聚合结果写入会话。</p>
+<ul>
+<li><code>aggregator.WithEnabled(true)</code> 用于控制是否开启事件聚合，默认为开启状态。开启后，会将连续且具有相同 <code>messageId</code> 的文本事件进行聚合；关闭时则不对 AG-UI 事件做聚合。</li>
+<li><code>aguirunner.WithFlushInterval(time.Second)</code> 用于控制事件聚合结果的定时刷新间隔，默认为 1 秒。设置为 0 时表示不开启定时刷新功能。</li>
+</ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
@@ -1942,16 +1920,359 @@
 <span class="normal"><a href="#__codelineno-8-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-8-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-8-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-8-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithBasePath</span><span class="p">(</span><span class="s">&quot;/agui&quot;</span><span class="p">),</span><span class="w">                </span><span class="c1">// 设置 AG-UI 前缀路由</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">),</span><span class="w">                    </span><span class="c1">// 设置聊天路由，默认为 &quot;/&quot;</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">    </span><span class="c1">// 开启消息快照功能</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// 设置消息快照路由，默认为 &quot;/history&quot;</span>
+<span class="normal"><a href="#__codelineno-8-10">10</a></span>
+<span class="normal"><a href="#__codelineno-8-11">11</a></span>
+<span class="normal"><a href="#__codelineno-8-12">12</a></span>
+<span class="normal"><a href="#__codelineno-8-13">13</a></span>
+<span class="normal"><a href="#__codelineno-8-14">14</a></span>
+<span class="normal"><a href="#__codelineno-8-15">15</a></span>
+<span class="normal"><a href="#__codelineno-8-16">16</a></span>
+<span class="normal"><a href="#__codelineno-8-17">17</a></span>
+<span class="normal"><a href="#__codelineno-8-18">18</a></span>
+<span class="normal"><a href="#__codelineno-8-19">19</a></span>
+<span class="normal"><a href="#__codelineno-8-20">20</a></span>
+<span class="normal"><a href="#__codelineno-8-21">21</a></span>
+<span class="normal"><a href="#__codelineno-8-22">22</a></span>
+<span class="normal"><a href="#__codelineno-8-23">23</a></span>
+<span class="normal"><a href="#__codelineno-8-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator&quot;</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
 </span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="p">)</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create agui server failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="p">}</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/agui&quot;</span><span class="p">),</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="nx">appName</span><span class="p">),</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithUserIDResolver</span><span class="p">(</span><span class="nx">userIDResolver</span><span class="p">),</span>
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithAggregationOption</span><span class="p">(</span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">WithEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">)),</span><span class="w"> </span><span class="c1">// 开启事件聚合，默认开启</span>
+</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithFlushInterval</span><span class="p">(</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span><span class="w">                      </span><span class="c1">// 设置事件聚合结果的定时刷新间隔，默认 1 秒</span>
+</span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果需要更复杂的聚合策略，可以实现 <code>aggregator.Aggregator</code> 并通过自定义工厂注入。需要注意的是，虽然每个会话都会单独创建一个聚合器，省去了跨会话的状态维护和并发处理，但聚合方法本身仍有可能被并发调用，因此仍需妥善处理并发。</p>
+<p>例如，在兼容默认文本聚合的同时，将类型为 <code>"think"</code> 的自定义事件内容累计后再落库。</p>
+<p>完整示例代码可见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/thinkaggregator">examples/agui/server/thinkaggregator</a></p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">  1</a></span>
+<span class="normal"><a href="#__codelineno-9-2">  2</a></span>
+<span class="normal"><a href="#__codelineno-9-3">  3</a></span>
+<span class="normal"><a href="#__codelineno-9-4">  4</a></span>
+<span class="normal"><a href="#__codelineno-9-5">  5</a></span>
+<span class="normal"><a href="#__codelineno-9-6">  6</a></span>
+<span class="normal"><a href="#__codelineno-9-7">  7</a></span>
+<span class="normal"><a href="#__codelineno-9-8">  8</a></span>
+<span class="normal"><a href="#__codelineno-9-9">  9</a></span>
+<span class="normal"><a href="#__codelineno-9-10"> 10</a></span>
+<span class="normal"><a href="#__codelineno-9-11"> 11</a></span>
+<span class="normal"><a href="#__codelineno-9-12"> 12</a></span>
+<span class="normal"><a href="#__codelineno-9-13"> 13</a></span>
+<span class="normal"><a href="#__codelineno-9-14"> 14</a></span>
+<span class="normal"><a href="#__codelineno-9-15"> 15</a></span>
+<span class="normal"><a href="#__codelineno-9-16"> 16</a></span>
+<span class="normal"><a href="#__codelineno-9-17"> 17</a></span>
+<span class="normal"><a href="#__codelineno-9-18"> 18</a></span>
+<span class="normal"><a href="#__codelineno-9-19"> 19</a></span>
+<span class="normal"><a href="#__codelineno-9-20"> 20</a></span>
+<span class="normal"><a href="#__codelineno-9-21"> 21</a></span>
+<span class="normal"><a href="#__codelineno-9-22"> 22</a></span>
+<span class="normal"><a href="#__codelineno-9-23"> 23</a></span>
+<span class="normal"><a href="#__codelineno-9-24"> 24</a></span>
+<span class="normal"><a href="#__codelineno-9-25"> 25</a></span>
+<span class="normal"><a href="#__codelineno-9-26"> 26</a></span>
+<span class="normal"><a href="#__codelineno-9-27"> 27</a></span>
+<span class="normal"><a href="#__codelineno-9-28"> 28</a></span>
+<span class="normal"><a href="#__codelineno-9-29"> 29</a></span>
+<span class="normal"><a href="#__codelineno-9-30"> 30</a></span>
+<span class="normal"><a href="#__codelineno-9-31"> 31</a></span>
+<span class="normal"><a href="#__codelineno-9-32"> 32</a></span>
+<span class="normal"><a href="#__codelineno-9-33"> 33</a></span>
+<span class="normal"><a href="#__codelineno-9-34"> 34</a></span>
+<span class="normal"><a href="#__codelineno-9-35"> 35</a></span>
+<span class="normal"><a href="#__codelineno-9-36"> 36</a></span>
+<span class="normal"><a href="#__codelineno-9-37"> 37</a></span>
+<span class="normal"><a href="#__codelineno-9-38"> 38</a></span>
+<span class="normal"><a href="#__codelineno-9-39"> 39</a></span>
+<span class="normal"><a href="#__codelineno-9-40"> 40</a></span>
+<span class="normal"><a href="#__codelineno-9-41"> 41</a></span>
+<span class="normal"><a href="#__codelineno-9-42"> 42</a></span>
+<span class="normal"><a href="#__codelineno-9-43"> 43</a></span>
+<span class="normal"><a href="#__codelineno-9-44"> 44</a></span>
+<span class="normal"><a href="#__codelineno-9-45"> 45</a></span>
+<span class="normal"><a href="#__codelineno-9-46"> 46</a></span>
+<span class="normal"><a href="#__codelineno-9-47"> 47</a></span>
+<span class="normal"><a href="#__codelineno-9-48"> 48</a></span>
+<span class="normal"><a href="#__codelineno-9-49"> 49</a></span>
+<span class="normal"><a href="#__codelineno-9-50"> 50</a></span>
+<span class="normal"><a href="#__codelineno-9-51"> 51</a></span>
+<span class="normal"><a href="#__codelineno-9-52"> 52</a></span>
+<span class="normal"><a href="#__codelineno-9-53"> 53</a></span>
+<span class="normal"><a href="#__codelineno-9-54"> 54</a></span>
+<span class="normal"><a href="#__codelineno-9-55"> 55</a></span>
+<span class="normal"><a href="#__codelineno-9-56"> 56</a></span>
+<span class="normal"><a href="#__codelineno-9-57"> 57</a></span>
+<span class="normal"><a href="#__codelineno-9-58"> 58</a></span>
+<span class="normal"><a href="#__codelineno-9-59"> 59</a></span>
+<span class="normal"><a href="#__codelineno-9-60"> 60</a></span>
+<span class="normal"><a href="#__codelineno-9-61"> 61</a></span>
+<span class="normal"><a href="#__codelineno-9-62"> 62</a></span>
+<span class="normal"><a href="#__codelineno-9-63"> 63</a></span>
+<span class="normal"><a href="#__codelineno-9-64"> 64</a></span>
+<span class="normal"><a href="#__codelineno-9-65"> 65</a></span>
+<span class="normal"><a href="#__codelineno-9-66"> 66</a></span>
+<span class="normal"><a href="#__codelineno-9-67"> 67</a></span>
+<span class="normal"><a href="#__codelineno-9-68"> 68</a></span>
+<span class="normal"><a href="#__codelineno-9-69"> 69</a></span>
+<span class="normal"><a href="#__codelineno-9-70"> 70</a></span>
+<span class="normal"><a href="#__codelineno-9-71"> 71</a></span>
+<span class="normal"><a href="#__codelineno-9-72"> 72</a></span>
+<span class="normal"><a href="#__codelineno-9-73"> 73</a></span>
+<span class="normal"><a href="#__codelineno-9-74"> 74</a></span>
+<span class="normal"><a href="#__codelineno-9-75"> 75</a></span>
+<span class="normal"><a href="#__codelineno-9-76"> 76</a></span>
+<span class="normal"><a href="#__codelineno-9-77"> 77</a></span>
+<span class="normal"><a href="#__codelineno-9-78"> 78</a></span>
+<span class="normal"><a href="#__codelineno-9-79"> 79</a></span>
+<span class="normal"><a href="#__codelineno-9-80"> 80</a></span>
+<span class="normal"><a href="#__codelineno-9-81"> 81</a></span>
+<span class="normal"><a href="#__codelineno-9-82"> 82</a></span>
+<span class="normal"><a href="#__codelineno-9-83"> 83</a></span>
+<span class="normal"><a href="#__codelineno-9-84"> 84</a></span>
+<span class="normal"><a href="#__codelineno-9-85"> 85</a></span>
+<span class="normal"><a href="#__codelineno-9-86"> 86</a></span>
+<span class="normal"><a href="#__codelineno-9-87"> 87</a></span>
+<span class="normal"><a href="#__codelineno-9-88"> 88</a></span>
+<span class="normal"><a href="#__codelineno-9-89"> 89</a></span>
+<span class="normal"><a href="#__codelineno-9-90"> 90</a></span>
+<span class="normal"><a href="#__codelineno-9-91"> 91</a></span>
+<span class="normal"><a href="#__codelineno-9-92"> 92</a></span>
+<span class="normal"><a href="#__codelineno-9-93"> 93</a></span>
+<span class="normal"><a href="#__codelineno-9-94"> 94</a></span>
+<span class="normal"><a href="#__codelineno-9-95"> 95</a></span>
+<span class="normal"><a href="#__codelineno-9-96"> 96</a></span>
+<span class="normal"><a href="#__codelineno-9-97"> 97</a></span>
+<span class="normal"><a href="#__codelineno-9-98"> 98</a></span>
+<span class="normal"><a href="#__codelineno-9-99"> 99</a></span>
+<span class="normal"><a href="#__codelineno-9-100">100</a></span>
+<span class="normal"><a href="#__codelineno-9-101">101</a></span>
+<span class="normal"><a href="#__codelineno-9-102">102</a></span>
+<span class="normal"><a href="#__codelineno-9-103">103</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="nx">aguievents</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events&quot;</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator&quot;</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="p">)</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="kd">type</span><span class="w"> </span><span class="nx">thinkAggregator</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="nx">mu</span><span class="w">    </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">    </span><span class="nx">inner</span><span class="w"> </span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">Aggregator</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="nx">think</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Builder</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="p">}</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="kd">func</span><span class="w"> </span><span class="nx">newAggregator</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">opt</span><span class="w"> </span><span class="o">...</span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">Aggregator</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">thinkAggregator</span><span class="p">{</span><span class="nx">inner</span><span class="p">:</span><span class="w"> </span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">opt</span><span class="o">...</span><span class="p">)}</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="p">}</span>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a>
+</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a>
+</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">thinkAggregator</span><span class="p">)</span><span class="w"> </span><span class="nx">Append</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="c1">// 通过互斥锁保证内部聚合器和 think 缓冲区的并发安全，避免多个事件并发追加时出现竞态条件。</span>
+</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a><span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">mu</span><span class="p">.</span><span class="nx">Lock</span><span class="p">()</span>
+</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">mu</span><span class="p">.</span><span class="nx">Unlock</span><span class="p">()</span>
+</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a>
+</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26"></a><span class="w">    </span><span class="c1">// 针对自定义的 &quot;think&quot; 事件类型，采取“只累计不立刻下发”的策略：</span>
+</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27"></a><span class="w">    </span><span class="c1">// 1. 先强制刷新 inner，将之前累积的普通事件完整输出；</span>
+</span><span id="__span-9-28"><a id="__codelineno-9-28" name="__codelineno-9-28"></a><span class="w">    </span><span class="c1">// 2. 当前的 think 内容只累加到缓冲区，不立即返回；</span>
+</span><span id="__span-9-29"><a id="__codelineno-9-29" name="__codelineno-9-29"></a><span class="w">    </span><span class="c1">// 这样可以保证 think 片段之间不会被普通事件打断，且之前的普通事件先于新的思考内容输出。</span>
+</span><span id="__span-9-30"><a id="__codelineno-9-30" name="__codelineno-9-30"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">custom</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.(</span><span class="o">*</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">CustomEvent</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">custom</span><span class="p">.</span><span class="nx">Name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">thinkEventTypeContent</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-31"><a id="__codelineno-9-31" name="__codelineno-9-31"></a><span class="w">        </span><span class="nx">flushed</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">inner</span><span class="p">.</span><span class="nx">Flush</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-9-32"><a id="__codelineno-9-32" name="__codelineno-9-32"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-33"><a id="__codelineno-9-33" name="__codelineno-9-33"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-9-34"><a id="__codelineno-9-34" name="__codelineno-9-34"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-9-35"><a id="__codelineno-9-35" name="__codelineno-9-35"></a><span class="w">        </span><span class="c1">// 仅在值为字符串时参与累积，避免不符合预期类型的数据污染缓冲区。</span>
+</span><span id="__span-9-36"><a id="__codelineno-9-36" name="__codelineno-9-36"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">v</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">custom</span><span class="p">.</span><span class="nx">Value</span><span class="p">.(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-37"><a id="__codelineno-9-37" name="__codelineno-9-37"></a><span class="w">            </span><span class="nx">c</span><span class="p">.</span><span class="nx">think</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="nx">v</span><span class="p">)</span>
+</span><span id="__span-9-38"><a id="__codelineno-9-38" name="__codelineno-9-38"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-9-39"><a id="__codelineno-9-39" name="__codelineno-9-39"></a><span class="w">        </span><span class="c1">// 当前 think 事件只参与内部累积，不立刻对外可见，返回的是之前 inner 已有的聚合结果。</span>
+</span><span id="__span-9-40"><a id="__codelineno-9-40" name="__codelineno-9-40"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">flushed</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-9-41"><a id="__codelineno-9-41" name="__codelineno-9-41"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-9-42"><a id="__codelineno-9-42" name="__codelineno-9-42"></a>
+</span><span id="__span-9-43"><a id="__codelineno-9-43" name="__codelineno-9-43"></a><span class="w">    </span><span class="c1">// 非 think 事件走默认的 inner 聚合逻辑，保证原有文本聚合行为不被破坏。</span>
+</span><span id="__span-9-44"><a id="__codelineno-9-44" name="__codelineno-9-44"></a><span class="w">    </span><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">inner</span><span class="p">.</span><span class="nx">Append</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">)</span>
+</span><span id="__span-9-45"><a id="__codelineno-9-45" name="__codelineno-9-45"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-46"><a id="__codelineno-9-46" name="__codelineno-9-46"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-9-47"><a id="__codelineno-9-47" name="__codelineno-9-47"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-9-48"><a id="__codelineno-9-48" name="__codelineno-9-48"></a>
+</span><span id="__span-9-49"><a id="__codelineno-9-49" name="__codelineno-9-49"></a><span class="w">    </span><span class="c1">// 若尚无累积的 think 内容，直接返回 inner 的聚合结果，无需额外封装。</span>
+</span><span id="__span-9-50"><a id="__codelineno-9-50" name="__codelineno-9-50"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">think</span><span class="p">.</span><span class="nx">Len</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-51"><a id="__codelineno-9-51" name="__codelineno-9-51"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-9-52"><a id="__codelineno-9-52" name="__codelineno-9-52"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-9-53"><a id="__codelineno-9-53" name="__codelineno-9-53"></a>
+</span><span id="__span-9-54"><a id="__codelineno-9-54" name="__codelineno-9-54"></a><span class="w">    </span><span class="c1">// 若存在已累积的 think 内容，则在当前批次事件前插入一个聚合后的 think 事件：</span>
+</span><span id="__span-9-55"><a id="__codelineno-9-55" name="__codelineno-9-55"></a><span class="w">    </span><span class="c1">// 1. 将缓冲区内容打包成一个整体的 CustomEvent；</span>
+</span><span id="__span-9-56"><a id="__codelineno-9-56" name="__codelineno-9-56"></a><span class="w">    </span><span class="c1">// 2. 清空缓冲区，避免重复下发；</span>
+</span><span id="__span-9-57"><a id="__codelineno-9-57" name="__codelineno-9-57"></a><span class="w">    </span><span class="c1">// 3. 将该 think 事件放在当前 events 之前，保持时间顺序：先输出完整思考，再输出后续事件。</span>
+</span><span id="__span-9-58"><a id="__codelineno-9-58" name="__codelineno-9-58"></a><span class="w">    </span><span class="nx">think</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">NewCustomEvent</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">thinkEventTypeContent</span><span class="p">),</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">WithValue</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">think</span><span class="p">.</span><span class="nx">String</span><span class="p">()))</span>
+</span><span id="__span-9-59"><a id="__codelineno-9-59" name="__codelineno-9-59"></a><span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">think</span><span class="p">.</span><span class="nx">Reset</span><span class="p">()</span>
+</span><span id="__span-9-60"><a id="__codelineno-9-60" name="__codelineno-9-60"></a>
+</span><span id="__span-9-61"><a id="__codelineno-9-61" name="__codelineno-9-61"></a><span class="w">    </span><span class="nx">out</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">make</span><span class="p">([]</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-9-62"><a id="__codelineno-9-62" name="__codelineno-9-62"></a><span class="w">    </span><span class="nx">out</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">out</span><span class="p">,</span><span class="w"> </span><span class="nx">think</span><span class="p">)</span>
+</span><span id="__span-9-63"><a id="__codelineno-9-63" name="__codelineno-9-63"></a><span class="w">    </span><span class="nx">out</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">out</span><span class="p">,</span><span class="w"> </span><span class="nx">events</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-9-64"><a id="__codelineno-9-64" name="__codelineno-9-64"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">out</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-9-65"><a id="__codelineno-9-65" name="__codelineno-9-65"></a><span class="p">}</span>
+</span><span id="__span-9-66"><a id="__codelineno-9-66" name="__codelineno-9-66"></a>
+</span><span id="__span-9-67"><a id="__codelineno-9-67" name="__codelineno-9-67"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">thinkAggregator</span><span class="p">)</span><span class="w"> </span><span class="nx">Flush</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-68"><a id="__codelineno-9-68" name="__codelineno-9-68"></a><span class="w">    </span><span class="c1">// Flush 同样需要保证内聚合器与 think 缓冲的并发安全。</span>
+</span><span id="__span-9-69"><a id="__codelineno-9-69" name="__codelineno-9-69"></a><span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">mu</span><span class="p">.</span><span class="nx">Lock</span><span class="p">()</span>
+</span><span id="__span-9-70"><a id="__codelineno-9-70" name="__codelineno-9-70"></a><span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">mu</span><span class="p">.</span><span class="nx">Unlock</span><span class="p">()</span>
+</span><span id="__span-9-71"><a id="__codelineno-9-71" name="__codelineno-9-71"></a>
+</span><span id="__span-9-72"><a id="__codelineno-9-72" name="__codelineno-9-72"></a><span class="w">    </span><span class="c1">// 先刷新 inner，确保所有普通事件按照其自身的聚合策略输出。</span>
+</span><span id="__span-9-73"><a id="__codelineno-9-73" name="__codelineno-9-73"></a><span class="w">    </span><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">inner</span><span class="p">.</span><span class="nx">Flush</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-9-74"><a id="__codelineno-9-74" name="__codelineno-9-74"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-75"><a id="__codelineno-9-75" name="__codelineno-9-75"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-9-76"><a id="__codelineno-9-76" name="__codelineno-9-76"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-9-77"><a id="__codelineno-9-77" name="__codelineno-9-77"></a>
+</span><span id="__span-9-78"><a id="__codelineno-9-78" name="__codelineno-9-78"></a><span class="w">    </span><span class="c1">// 若 think 缓冲区中仍有未输出的内容，</span>
+</span><span id="__span-9-79"><a id="__codelineno-9-79" name="__codelineno-9-79"></a><span class="w">    </span><span class="c1">// 则将其封装为一个聚合后的 think 事件并插入当前批次的最前面，</span>
+</span><span id="__span-9-80"><a id="__codelineno-9-80" name="__codelineno-9-80"></a><span class="w">    </span><span class="c1">// 保证聚合后的思考内容不会被后续刷新产生的事件打乱顺序。</span>
+</span><span id="__span-9-81"><a id="__codelineno-9-81" name="__codelineno-9-81"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">think</span><span class="p">.</span><span class="nx">Len</span><span class="p">()</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-82"><a id="__codelineno-9-82" name="__codelineno-9-82"></a><span class="w">        </span><span class="nx">think</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">NewCustomEvent</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">thinkEventTypeContent</span><span class="p">),</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">WithValue</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">think</span><span class="p">.</span><span class="nx">String</span><span class="p">()))</span>
+</span><span id="__span-9-83"><a id="__codelineno-9-83" name="__codelineno-9-83"></a><span class="w">        </span><span class="nx">c</span><span class="p">.</span><span class="nx">think</span><span class="p">.</span><span class="nx">Reset</span><span class="p">()</span>
+</span><span id="__span-9-84"><a id="__codelineno-9-84" name="__codelineno-9-84"></a><span class="w">        </span><span class="nx">events</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">([]</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">{</span><span class="nx">think</span><span class="p">},</span><span class="w"> </span><span class="nx">events</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-9-85"><a id="__codelineno-9-85" name="__codelineno-9-85"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-9-86"><a id="__codelineno-9-86" name="__codelineno-9-86"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-9-87"><a id="__codelineno-9-87" name="__codelineno-9-87"></a><span class="p">}</span>
+</span><span id="__span-9-88"><a id="__codelineno-9-88" name="__codelineno-9-88"></a>
+</span><span id="__span-9-89"><a id="__codelineno-9-89" name="__codelineno-9-89"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-9-90"><a id="__codelineno-9-90" name="__codelineno-9-90"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-9-91"><a id="__codelineno-9-91" name="__codelineno-9-91"></a>
+</span><span id="__span-9-92"><a id="__codelineno-9-92" name="__codelineno-9-92"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-9-93"><a id="__codelineno-9-93" name="__codelineno-9-93"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-9-94"><a id="__codelineno-9-94" name="__codelineno-9-94"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/agui&quot;</span><span class="p">),</span>
+</span><span id="__span-9-95"><a id="__codelineno-9-95" name="__codelineno-9-95"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span>
+</span><span id="__span-9-96"><a id="__codelineno-9-96" name="__codelineno-9-96"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-9-97"><a id="__codelineno-9-97" name="__codelineno-9-97"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="nx">appName</span><span class="p">),</span>
+</span><span id="__span-9-98"><a id="__codelineno-9-98" name="__codelineno-9-98"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-9-99"><a id="__codelineno-9-99" name="__codelineno-9-99"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span>
+</span><span id="__span-9-100"><a id="__codelineno-9-100" name="__codelineno-9-100"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithUserIDResolver</span><span class="p">(</span><span class="nx">userIDResolver</span><span class="p">),</span>
+</span><span id="__span-9-101"><a id="__codelineno-9-101" name="__codelineno-9-101"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithAggregatorFactory</span><span class="p">(</span><span class="nx">newAggregator</span><span class="p">),</span>
+</span><span id="__span-9-102"><a id="__codelineno-9-102" name="__codelineno-9-102"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-9-103"><a id="__codelineno-9-103" name="__codelineno-9-103"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_5">消息快照</h3>
+<p>消息快照用于在页面初始化或断线重连时恢复历史对话，通过 <code>agui.WithMessagesSnapshotEnabled(true)</code> 控制功能是否开启，默认关闭。启用该能力后，AG-UI 会同时提供聊天路由和消息快照路由：</p>
+<ul>
+<li>聊天路由默认是 <code>/</code>，可通过 <code>agui.WithPath</code> 自定义；</li>
+<li>消息快照路由默认是 <code>/history</code>， 可通过 <code>WithMessagesSnapshotPath</code> 自定义，负责返回 <code>RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED</code> 的事件流。</li>
+</ul>
+<p>启用消息快照功能时需要配置下列参数：</p>
+<ul>
+<li><code>agui.WithMessagesSnapshotEnabled(true)</code> 启用消息快照功能；</li>
+<li><code>agui.WithMessagesSnapshotPath</code> 设置消息快照路由的自定义路径，默认为 <code>/history</code>；</li>
+<li><code>agui.WithAppName(name)</code> 指定应用名；</li>
+<li><code>agui.WithSessionService(service)</code> 注入 <code>session.Service</code> 用于查询历史事件；</li>
+<li><code>aguirunner.WithUserIDResolver(resolver)</code> 自定义 <code>userID</code> 解析逻辑，默认恒为 <code>"user"</code>。</li>
+</ul>
+<p>框架在处理消息快照请求时会从 AG-UI 请求体 <code>RunAgentInput</code> 中解析 <code>threadId</code> 作为 <code>SessionID</code>，结合自定义 <code>UserIDResolver</code> 得到 <code>userID</code>，再与 <code>appName</code> 组装得到 <code>session.Key</code>，然后通过 <code>session.Service</code> 查询 <code>Session</code>。将 <code>Session</code> 中存储的事件 <code>Session.Events</code> 转换为 AG-UI 消息并封装成 <code>MESSAGES_SNAPSHOT</code> 事件，同时发送配套的 <code>RUN_STARTED</code>、<code>RUN_FINISHED</code> 事件。</p>
+<p>代码示例如下：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-10-10">10</a></span>
+<span class="normal"><a href="#__codelineno-10-11">11</a></span>
+<span class="normal"><a href="#__codelineno-10-12">12</a></span>
+<span class="normal"><a href="#__codelineno-10-13">13</a></span>
+<span class="normal"><a href="#__codelineno-10-14">14</a></span>
+<span class="normal"><a href="#__codelineno-10-15">15</a></span>
+<span class="normal"><a href="#__codelineno-10-16">16</a></span>
+<span class="normal"><a href="#__codelineno-10-17">17</a></span>
+<span class="normal"><a href="#__codelineno-10-18">18</a></span>
+<span class="normal"><a href="#__codelineno-10-19">19</a></span>
+<span class="normal"><a href="#__codelineno-10-20">20</a></span>
+<span class="normal"><a href="#__codelineno-10-21">21</a></span>
+<span class="normal"><a href="#__codelineno-10-22">22</a></span>
+<span class="normal"><a href="#__codelineno-10-23">23</a></span>
+<span class="normal"><a href="#__codelineno-10-24">24</a></span>
+<span class="normal"><a href="#__codelineno-10-25">25</a></span>
+<span class="normal"><a href="#__codelineno-10-26">26</a></span>
+<span class="normal"><a href="#__codelineno-10-27">27</a></span>
+<span class="normal"><a href="#__codelineno-10-28">28</a></span>
+<span class="normal"><a href="#__codelineno-10-29">29</a></span>
+<span class="normal"><a href="#__codelineno-10-30">30</a></span>
+<span class="normal"><a href="#__codelineno-10-31">31</a></span>
+<span class="normal"><a href="#__codelineno-10-32">32</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="p">)</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="nx">resolver</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ForwardedProps</span><span class="p">[</span><span class="s">&quot;userId&quot;</span><span class="p">].(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">user</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;anonymous&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="p">}</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">())</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">),</span><span class="w">                    </span><span class="c1">// 自定义聊天路由，默认为 &quot;/&quot;</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">),</span><span class="w">              </span><span class="c1">// 设置 AppName，用于构造 Session Key</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span><span class="w">   </span><span class="c1">// 设置 Session Service，用于查询 Session</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">    </span><span class="c1">// 开启消息快照功能</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// 设置消息快照路由，默认为 &quot;/history&quot;</span>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span>
+</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithUserIDResolver</span><span class="p">(</span><span class="nx">resolver</span><span class="p">),</span><span class="w"> </span><span class="c1">// 自定义 UserID 解析逻辑</span>
+</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-10-26"><a id="__codelineno-10-26" name="__codelineno-10-26"></a><span class="p">)</span>
+</span><span id="__span-10-27"><a id="__codelineno-10-27" name="__codelineno-10-27"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-28"><a id="__codelineno-10-28" name="__codelineno-10-28"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create agui server failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-10-29"><a id="__codelineno-10-29" name="__codelineno-10-29"></a><span class="p">}</span>
+</span><span id="__span-10-30"><a id="__codelineno-10-30" name="__codelineno-10-30"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">&quot;127.0.0.1:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Handler</span><span class="p">());</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-31"><a id="__codelineno-10-31" name="__codelineno-10-31"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;server stopped with error: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-10-32"><a id="__codelineno-10-32" name="__codelineno-10-32"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>完整的示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot">examples/agui/messagessnapshot</a>。</p>
+<p>AG-UI 的 MessagesSnapshotEvent 事件格式可见 <a href="https://docs.ag-ui.com/concepts/messages">messages</a>。</p>
+<h3 id="basepath">设置路由前缀 BasePath</h3>
+<p><code>agui.WithBasePath</code> 设置 AG-UI 服务的基础路由前缀，默认值为 <code>/</code>，用于在统一前缀下挂载聊天路由与消息快照路由，避免与现有服务冲突.</p>
+<p><code>agui.WithPath</code> 与 <code>agui.WithMessagesSnapshotPath</code> 仅定义基础路径下的子路由，框架会通过 <code>url.JoinPath</code> 将它们与基础路径拼接成最终可访问的路由.</p>
+<p>使用示例如下所示</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-11-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-11-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-11-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-11-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-11-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-11-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-11-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithBasePath</span><span class="p">(</span><span class="s">&quot;/agui&quot;</span><span class="p">),</span><span class="w">                </span><span class="c1">// 设置 AG-UI 前缀路由</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">),</span><span class="w">                    </span><span class="c1">// 设置聊天路由，默认为 &quot;/&quot;</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">    </span><span class="c1">// 开启消息快照功能</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// 设置消息快照路由，默认为 &quot;/history&quot;</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="p">)</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create agui server failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>此时聊天路由为 <code>/agui/chat</code>，用消息快照路由为 <code>/agui/history</code>。</p>
 <h2 id="_6">最佳实践</h2>
@@ -1968,37 +2289,37 @@
 <li>最后调用“关闭文档面板”工具</li>
 </ol>
 <p>转换为 AG-UI 事件流，大致形态如下：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-9-10">10</a></span>
-<span class="normal"><a href="#__codelineno-9-11">11</a></span>
-<span class="normal"><a href="#__codelineno-9-12">12</a></span>
-<span class="normal"><a href="#__codelineno-9-13">13</a></span>
-<span class="normal"><a href="#__codelineno-9-14">14</a></span>
-<span class="normal"><a href="#__codelineno-9-15">15</a></span>
-<span class="normal"><a href="#__codelineno-9-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a>打开文档面板工具
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>  → ToolCallStart
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a>  → ToolCallArgs
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a>  → ToolCallEnd
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a>  → ToolCallResult
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a>文档内容
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a>  → TextMessageStart
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a>  → TextMessageContent
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a>  → TextMessageEnd
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a>
-</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a>关闭文档面板工具
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a>  → ToolCallStart
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a>  → ToolCallArgs
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a>  → ToolCallEnd
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a>  → ToolCallResult
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-12-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-12-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-12-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-12-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-12-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-12-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-12-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-12-10">10</a></span>
+<span class="normal"><a href="#__codelineno-12-11">11</a></span>
+<span class="normal"><a href="#__codelineno-12-12">12</a></span>
+<span class="normal"><a href="#__codelineno-12-13">13</a></span>
+<span class="normal"><a href="#__codelineno-12-14">14</a></span>
+<span class="normal"><a href="#__codelineno-12-15">15</a></span>
+<span class="normal"><a href="#__codelineno-12-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a>打开文档面板工具
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a>  → ToolCallStart
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a>  → ToolCallArgs
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a>  → ToolCallEnd
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a>  → ToolCallResult
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a>文档内容
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a>  → TextMessageStart
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a>  → TextMessageContent
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a>  → TextMessageEnd
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a>关闭文档面板工具
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a>  → ToolCallStart
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a>  → ToolCallArgs
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a>  → ToolCallEnd
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a>  → ToolCallResult
 </span></code></pre></div></td></tr></table></div>
 </li>
 <li>
@@ -2034,7 +2355,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月3日 10:41:06 UTC">2025-12-03 10:41:06</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月4日 03:23:56 UTC">2025-12-04 03:23:56</span>
   </span>
 
     
