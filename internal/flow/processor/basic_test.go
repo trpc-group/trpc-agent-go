@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -101,4 +102,25 @@ func TestBasicReqProc_NilRequestAndInvocation(t *testing.T) {
 
 	// Nil invocation -> no event, but should not panic.
 	p.ProcessRequest(context.Background(), nil, &model.Request{}, ch)
+}
+
+func TestWaitEventTimeout_UsesDeadlineWhenPresent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	d := WaitEventTimeout(ctx, time.Second)
+	if d <= 0 {
+		t.Fatalf("expected positive duration, got %v", d)
+	}
+	if d > 100*time.Millisecond {
+		t.Fatalf("expected duration to respect ctx deadline, got %v", d)
+	}
+}
+
+func TestWaitEventTimeout_FallbackWhenNoDeadline(t *testing.T) {
+	fallback := 123 * time.Millisecond
+	d := WaitEventTimeout(context.Background(), fallback)
+	if d != fallback {
+		t.Fatalf("expected fallback %v, got %v", fallback, d)
+	}
 }

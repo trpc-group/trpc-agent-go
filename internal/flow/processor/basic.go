@@ -95,3 +95,11 @@ func (p *BasicRequestProcessor) ProcessRequest(
 	}
 
 }
+
+// WaitEventTimeout waits for the event to be completed.
+func WaitEventTimeout(ctx context.Context, timeout time.Duration) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return timeout
+}

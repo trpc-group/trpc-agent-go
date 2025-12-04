@@ -183,7 +183,8 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	// Wait for completion notice.
 	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
 	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
-	err := invocation.AddNoticeChannelAndWait(ctx, completionID, processor.EventCompletionTimeout)
+	timeout := processor.WaitEventTimeout(ctx, processor.EventCompletionTimeout)
+	err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
 	if errors.Is(err, context.Canceled) {
 		return err
 	}

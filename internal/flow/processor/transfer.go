@@ -11,7 +11,6 @@ package processor
 
 import (
 	"context"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -218,15 +217,6 @@ func (p *TransferResponseProcessor) ProcessResponse(
 // waitForEventPersistence waits for the runner to append the specified event to the session.
 func (p *TransferResponseProcessor) waitForEventPersistence(ctx context.Context, inv *agent.Invocation,
 	eventID string) error {
-	if inv == nil || eventID == "" {
-		return nil
-	}
-	timeout := EventCompletionTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		timeout = time.Until(deadline)
-		if timeout <= 0 {
-			return ctx.Err()
-		}
-	}
+	timeout := WaitEventTimeout(ctx, EventCompletionTimeout)
 	return inv.AddNoticeChannelAndWait(ctx, agent.GetAppendEventNoticeKey(eventID), timeout)
 }
