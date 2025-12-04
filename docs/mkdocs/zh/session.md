@@ -51,8 +51,8 @@ func main() {
     summarizer := summary.NewSummarizer(
         llm, // 使用相同的 LLM 模型生成摘要
         summary.WithChecksAny( // 任一条件满足即触发摘要
-            summary.CheckEventThreshold(20),           // 20 个事件后触发
-            summary.CheckTokenThreshold(4000),         // 4000 个 token 后触发
+            summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
+            summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
             summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
         ),
         summary.WithMaxSummaryWords(200), // 限制摘要在 200 字以内
@@ -197,8 +197,8 @@ import (
 summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithChecksAny(                         // 任一条件满足即触发
-        summary.CheckEventThreshold(20),           // 20 个事件后触发
-        summary.CheckTokenThreshold(4000),         // 4000 个 token 后触发
+        summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
+        summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
         summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
     ),
     summary.WithMaxSummaryWords(200),              // 限制摘要在 200 字以内
@@ -325,8 +325,9 @@ tRPC-Agent-Go 提供四种会话存储后端，满足不同场景需求：
 - **`WithUserStateTTL(ttl time.Duration)`**：设置用户级状态的 TTL。默认值为 0（不过期）。
 - **`WithCleanupInterval(interval time.Duration)`**：设置过期数据自动清理的间隔。默认值为 0（自动确定），如果配置了任何 TTL，默认清理间隔为 5 分钟。
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
-- **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 2。
+- **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 
 ### 基础配置示例
@@ -394,9 +395,12 @@ sessionService := inmemory.NewSessionService(
 - **`WithSessionTTL(ttl time.Duration)`**：设置会话状态和事件的 TTL。默认值为 0（不过期）。
 - **`WithAppStateTTL(ttl time.Duration)`**：设置应用级状态的 TTL。默认值为 0（不过期）。
 - **`WithUserStateTTL(ttl time.Duration)`**：设置用户级状态的 TTL。默认值为 0（不过期）。
+- **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
+- **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
-- **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 2。
+- **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 - **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项。
 
 ### 基础配置示例
@@ -510,20 +514,22 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 
 **异步持久化配置：**
 
-- **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 2。
-- **`WithPersistQueueSize(size int)`**：持久化任务队列大小。默认值为 1000。
+- **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
+- **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
+
 
 **摘要配置：**
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
-- **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 2。
+- **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 
 **Schema 和表配置：**
 
 - **`WithSchema(schema string)`**：指定 schema 名称。
 - **`WithTablePrefix(prefix string)`**：表名前缀。
-- **`WithSkipDBInit()`**：跳过自动建表。
+- **`WithSkipDBInit(skip bool)`**：跳过自动建表。
 
 ### 基础配置示例
 
@@ -563,7 +569,6 @@ sessionService, err := postgres.NewService(
 
     // 异步持久化配置
     postgres.WithAsyncPersisterNum(4),
-    postgres.WithPersistQueueSize(2000),
 )
 // 效果：
 // - 使用 SSL 加密连接
@@ -789,7 +794,7 @@ CREATE TABLE user_states (
 
 **连接配置：**
 
-- **`WithMySQLClientDSN(dsn string)`**：MySQL 链接配置
+- **`WithMySQLClientDSN(dsn string)`**：MySQL 连接配置
 - **`WithInstanceName(name string)`**：使用预配置的 MySQL 实例。
 
 **会话配置：**
@@ -803,19 +808,21 @@ CREATE TABLE user_states (
 
 **异步持久化配置：**
 
-- **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 2。
-- **`WithPersistQueueSize(size int)`**：持久化任务队列大小。默认值为 1000。
+- **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
+- **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
+
 
 **摘要配置：**
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
-- **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 2。
+- **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 
 **表配置：**
 
 - **`WithTablePrefix(prefix string)`**：表名前缀。
-- **`WithSkipDBInit()`**：跳过自动建表。
+- **`WithSkipDBInit(skip bool)`**：跳过自动建表。
 
 ### 基础配置示例
 
@@ -849,7 +856,6 @@ sessionService, err := mysql.NewService(
 
     // 异步持久化配置
     mysql.WithAsyncPersisterNum(4),
-    mysql.WithPersistQueueSize(2000),
 )
 // 效果：
 // - 会话 30 分钟无活动后过期
@@ -1119,8 +1125,8 @@ summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithChecksAny(                     // 任一条件满足即触发
-        summary.CheckEventThreshold(20),       // 20 个事件后触发
-        summary.CheckTokenThreshold(4000),     // 4000 个 token 后触发
+        summary.CheckEventThreshold(20),       // 超过 20 个事件后触发
+        summary.CheckTokenThreshold(4000),     // 超过 4000 个 token 后触发
         summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
     ),
     summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
@@ -1187,7 +1193,7 @@ llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
     llmagent.WithAddSessionSummary(true),   // 启用摘要注入
-    llmagent.WithMaxHistoryRuns(10),        // 配合使用（见下方说明）
+    llmagent.WithMaxHistoryRuns(10),        // 当AddSessionSummary=false时限制历史轮次
 )
 
 // 创建 Runner
@@ -1211,8 +1217,8 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 **触发时机：**
 
-- 事件数量达到阈值（`WithEventThreshold`）
-- Token 数量达到阈值（`WithTokenThreshold`）
+- 事件数量超过阈值（`WithEventThreshold`）
+- Token 数量超过阈值（`WithTokenThreshold`）
 - 距上次事件超过指定时间（`WithTimeThreshold`）
 - 满足自定义组合条件（`WithChecksAny` / `WithChecksAll`）
 
@@ -1364,8 +1370,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 **触发条件：**
 
-- **`WithEventThreshold(eventCount int)`**：当事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在 20 个事件后触发。
-- **`WithTokenThreshold(tokenCount int)`**：当总 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在 4000 个 token 后触发。
+- **`WithEventThreshold(eventCount int)`**：当事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在超过 20 个事件后触发。
+- **`WithTokenThreshold(tokenCount int)`**：当总 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在超过 4000 个 token 后触发。
 - **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
 
 **组合条件：**
@@ -1419,7 +1425,7 @@ summarizer := summary.NewSummarizer(
 - **`WithSummarizer(s summary.SessionSummarizer)`**：将摘要器注入到会话服务中。
 - **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 2。更多 worker 允许更高并发但消耗更多资源。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列的大小。默认为 100。更大的队列允许更多待处理任务但消耗更多内存。
-- **`WithSummaryJobTimeout(timeout time.Duration)`** _（仅内存模式）_：设置处理单个摘要任务的超时时间。默认为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置处理单个摘要任务的超时时间。默认为 30 秒。
 
 ### 手动触发摘要
 
@@ -1544,7 +1550,7 @@ func main() {
         "my-agent",
         llmagent.WithModel(llm),
         llmagent.WithAddSessionSummary(true),
-        llmagent.WithMaxHistoryRuns(10),
+        llmagent.WithMaxHistoryRuns(10),        // 当AddSessionSummary=false时限制历史轮次
     )
 
     // 创建 runner
