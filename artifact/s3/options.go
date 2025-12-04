@@ -48,8 +48,8 @@ type Config struct {
 	// Retries
 	MaxRetries int // Maximum number of retries
 
-	// Internal: injected client for testing
-	client client
+	// Internal: injected storage for testing
+	storage storage
 }
 
 // validate checks if the configuration is valid.
@@ -125,11 +125,11 @@ func WithRetries(n int) Option {
 	}
 }
 
-// withClient sets a custom S3 client implementation.
-// This is primarily used for testing with mock clients.
-func withClient(cl client) Option {
+// withStorage sets a custom storage implementation.
+// This is primarily used for testing with mock storage.
+func withStorage(s storage) Option {
 	return func(c *Config) {
-		c.client = cl
+		c.storage = s
 	}
 }
 

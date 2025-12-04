@@ -191,32 +191,32 @@ func TestWithRetries(t *testing.T) {
 	})
 }
 
-// TestWithClient tests the withClient option.
-// Injects a custom client implementation (primarily for testing).
-func TestWithClient(t *testing.T) {
-	t.Run("sets custom client", func(t *testing.T) {
+// TestWithStorage tests the withStorage option.
+// Injects a custom storage implementation (primarily for testing).
+func TestWithStorage(t *testing.T) {
+	t.Run("sets custom storage", func(t *testing.T) {
 		cfg := newConfig("bucket")
-		assert.Nil(t, cfg.client)
+		assert.Nil(t, cfg.storage)
 
-		mockClient := &mockTestClient{}
-		withClient(mockClient)(cfg)
-		assert.Equal(t, mockClient, cfg.client)
+		mockStorage := &mockTestStorage{}
+		withStorage(mockStorage)(cfg)
+		assert.Equal(t, mockStorage, cfg.storage)
 	})
 }
 
-// mockTestClient is a minimal client implementation for testing withClient
-type mockTestClient struct{}
+// mockTestStorage is a minimal storage implementation for testing withStorage.
+type mockTestStorage struct{}
 
-func (m *mockTestClient) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
+func (m *mockTestStorage) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
 	return nil
 }
-func (m *mockTestClient) GetObject(ctx context.Context, key string) ([]byte, string, error) {
+func (m *mockTestStorage) GetObject(ctx context.Context, key string) ([]byte, string, error) {
 	return nil, "", nil
 }
-func (m *mockTestClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+func (m *mockTestStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	return nil, nil
 }
-func (m *mockTestClient) DeleteObjects(ctx context.Context, keys []string) error {
+func (m *mockTestStorage) DeleteObjects(ctx context.Context, keys []string) error {
 	return nil
 }
 

@@ -34,16 +34,10 @@ import (
 //   - For regular session-scoped files:
 //     {app_name}/{user_id}/{session_id}/{filename}/{version}
 type Service struct {
-	client client
+	storage storage
 }
 
 // NewService creates a new S3 artifact service with optional configurations.
-//
-// Authentication credentials can be provided in multiple ways:
-//  1. Environment variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (recommended)
-//  2. AWS shared credentials file (~/.aws/credentials)
-//  3. Use WithCredentials() option to provide credentials directly
-//  4. Use withClient() to provide a pre-configured S3 client (for testing)
 //
 // Example usage:
 //
@@ -85,18 +79,18 @@ func NewService(bucket string, opts ...Option) (*Service, error) {
 		return nil, err
 	}
 
-	// Use injected client or create a new one
-	client := cfg.client
-	if client == nil {
+	// Use injected storage or create a new one
+	storage := cfg.storage
+	if storage == nil {
 		var err error
-		client, err = newS3Client(cfg)
+		storage, err = newStorageClient(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create S3 client: %w", err)
+			return nil, fmt.Errorf("failed to create storage client: %w", err)
 		}
 	}
 
 	return &Service{
-		client: client,
+		storage: storage,
 	}, nil
 }
 
@@ -126,7 +120,7 @@ func (s *Service) SaveArtifact(
 		contentType = "application/octet-stream"
 	}
 
-	if err := s.client.PutObject(ctx, objectKey, art.Data, contentType); err != nil {
+	if err := s.storage.PutObject(ctx, objectKey, art.Data, contentType); err != nil {
 		return 0, fmt.Errorf("failed to upload artifact: %w", err)
 	}
 
@@ -161,7 +155,7 @@ func (s *Service) LoadArtifact(
 	objectKey := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
 
 	// Download the artifact
-	data, contentType, err := s.client.GetObject(ctx, objectKey)
+	data, contentType, err := s.storage.GetObject(ctx, objectKey)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, nil // Artifact not found
@@ -190,7 +184,7 @@ func (s *Service) ListArtifactKeys(
 
 	// List session-scoped artifacts
 	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
-	sessionKeys, err := s.client.ListObjects(ctx, sessionPrefix)
+	sessionKeys, err := s.storage.ListObjects(ctx, sessionPrefix)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, fmt.Errorf("failed to list session artifacts: %w", err)
 	}
@@ -204,7 +198,7 @@ func (s *Service) ListArtifactKeys(
 
 	// List user-namespaced artifacts
 	userPrefix := iartifact.BuildUserNamespacePrefix(sessionInfo)
-	userKeys, err := s.client.ListObjects(ctx, userPrefix)
+	userKeys, err := s.storage.ListObjects(ctx, userPrefix)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, fmt.Errorf("failed to list user artifacts: %w", err)
 	}
@@ -234,7 +228,7 @@ func (s *Service) DeleteArtifact(
 ) error {
 	// Get all versions of the artifact
 	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
-	keys, err := s.client.ListObjects(ctx, prefix)
+	keys, err := s.storage.ListObjects(ctx, prefix)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil // Nothing to delete
@@ -247,7 +241,7 @@ func (s *Service) DeleteArtifact(
 	}
 
 	// Batch delete
-	if err := s.client.DeleteObjects(ctx, keys); err != nil {
+	if err := s.storage.DeleteObjects(ctx, keys); err != nil {
 		return fmt.Errorf("failed to delete artifact: %w", err)
 	}
 
@@ -261,7 +255,7 @@ func (s *Service) ListVersions(
 	filename string,
 ) ([]int, error) {
 	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
-	keys, err := s.client.ListObjects(ctx, prefix)
+	keys, err := s.storage.ListObjects(ctx, prefix)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return []int{}, nil

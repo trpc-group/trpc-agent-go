@@ -22,16 +22,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-// client defines the interface for S3 operations.
-// This interface is decoupled from the AWS SDK to facilitate testing
-// and potential alternative implementations.
-type client interface {
+// storage defines the internal interface for S3 operations.
+// This interface is decoupled from the AWS SDK to facilitate testing.
+type storage interface {
 	// PutObject uploads an object to the bucket.
 	PutObject(ctx context.Context, key string, data []byte, contentType string) error
 
 	// GetObject downloads an object from the bucket.
 	// Returns the object data, content type, and any error.
-	GetObject(ctx context.Context, key string) (data []byte, contentType string, err error)
+	GetObject(ctx context.Context, key string) ([]byte, string, error)
 
 	// ListObjects lists object keys with the given prefix.
 	ListObjects(ctx context.Context, prefix string) ([]string, error)
@@ -40,14 +39,23 @@ type client interface {
 	DeleteObjects(ctx context.Context, keys []string) error
 }
 
-// s3Client implements client using AWS SDK v2.
-type s3Client struct {
-	client *s3.Client
+// s3API defines the subset of AWS S3 API operations used by storageClient.
+// This interface allows mocking the AWS SDK in unit tests.
+type s3API interface {
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
+	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+}
+
+// storageClient implements storage using AWS SDK v2.
+type storageClient struct {
+	s3     s3API
 	bucket string
 }
 
-// newS3Client creates a new S3 client from the given configuration.
-func newS3Client(cfg *Config) (*s3Client, error) {
+// newStorageClient creates a new storage client from the given configuration.
+func newStorageClient(cfg *Config) (*storageClient, error) {
 	// Build AWS config options
 	var awsOpts []func(*config.LoadOptions) error
 
@@ -97,14 +105,14 @@ func newS3Client(cfg *Config) (*s3Client, error) {
 		})
 	}
 
-	return &s3Client{
-		client: s3.NewFromConfig(awsCfg, s3Opts...),
+	return &storageClient{
+		s3:     s3.NewFromConfig(awsCfg, s3Opts...),
 		bucket: cfg.Bucket,
 	}, nil
 }
 
 // PutObject uploads an object to S3.
-func (c *s3Client) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
+func (c *storageClient) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
@@ -115,7 +123,7 @@ func (c *s3Client) PutObject(ctx context.Context, key string, data []byte, conte
 		input.ContentType = aws.String(contentType)
 	}
 
-	_, err := c.client.PutObject(ctx, input)
+	_, err := c.s3.PutObject(ctx, input)
 	if err != nil {
 		return wrapError(err)
 	}
@@ -124,8 +132,8 @@ func (c *s3Client) PutObject(ctx context.Context, key string, data []byte, conte
 }
 
 // GetObject downloads an object from S3.
-func (c *s3Client) GetObject(ctx context.Context, key string) ([]byte, string, error) {
-	resp, err := c.client.GetObject(ctx, &s3.GetObjectInput{
+func (c *storageClient) GetObject(ctx context.Context, key string) ([]byte, string, error) {
+	resp, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
 	})
@@ -148,23 +156,28 @@ func (c *s3Client) GetObject(ctx context.Context, key string) ([]byte, string, e
 }
 
 // ListObjects lists object keys with the given prefix.
-func (c *s3Client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+func (c *storageClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	var keys []string
+	var continuationToken *string
 
-	paginator := s3.NewListObjectsV2Paginator(c.client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(c.bucket),
-		Prefix: aws.String(prefix),
-	})
-
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+	for {
+		output, err := c.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(c.bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
 		if err != nil {
 			return nil, wrapError(err)
 		}
 
-		for _, obj := range page.Contents {
+		for _, obj := range output.Contents {
 			keys = append(keys, aws.ToString(obj.Key))
 		}
+
+		if !aws.ToBool(output.IsTruncated) {
+			break
+		}
+		continuationToken = output.NextContinuationToken
 	}
 
 	return keys, nil
@@ -172,7 +185,7 @@ func (c *s3Client) ListObjects(ctx context.Context, prefix string) ([]string, er
 
 // DeleteObjects deletes multiple objects in a single batch request.
 // S3 allows up to 1000 objects per DeleteObjects request.
-func (c *s3Client) DeleteObjects(ctx context.Context, keys []string) error {
+func (c *storageClient) DeleteObjects(ctx context.Context, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -194,7 +207,7 @@ func (c *s3Client) DeleteObjects(ctx context.Context, keys []string) error {
 			}
 		}
 
-		_, err := c.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		_, err := c.s3.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: aws.String(c.bucket),
 			Delete: &types.Delete{
 				Objects: objectIDs,

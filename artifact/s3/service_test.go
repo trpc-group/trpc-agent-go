@@ -23,8 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 )
 
-// mockClient is a mock implementation of the client interface for testing.
-type mockClient struct {
+// mockStorage is a mock implementation of the storage interface for testing.
+type mockStorage struct {
 	mu      sync.RWMutex
 	objects map[string]*mockObject
 }
@@ -34,13 +34,13 @@ type mockObject struct {
 	contentType string
 }
 
-func newMockClient() *mockClient {
-	return &mockClient{
+func newMockClient() *mockStorage {
+	return &mockStorage{
 		objects: make(map[string]*mockObject),
 	}
 }
 
-func (m *mockClient) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
+func (m *mockStorage) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -51,7 +51,7 @@ func (m *mockClient) PutObject(ctx context.Context, key string, data []byte, con
 	return nil
 }
 
-func (m *mockClient) GetObject(ctx context.Context, key string) ([]byte, string, error) {
+func (m *mockStorage) GetObject(ctx context.Context, key string) ([]byte, string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -62,7 +62,7 @@ func (m *mockClient) GetObject(ctx context.Context, key string) ([]byte, string,
 	return append([]byte(nil), obj.data...), obj.contentType, nil
 }
 
-func (m *mockClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+func (m *mockStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -79,7 +79,7 @@ func (m *mockClient) ListObjects(ctx context.Context, prefix string) ([]string, 
 	return keys, nil
 }
 
-func (m *mockClient) DeleteObjects(ctx context.Context, keys []string) error {
+func (m *mockStorage) DeleteObjects(ctx context.Context, keys []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -91,11 +91,11 @@ func (m *mockClient) DeleteObjects(ctx context.Context, keys []string) error {
 
 // Test helpers
 
-func newTestService(t *testing.T) (*Service, *mockClient) {
+func newTestService(t *testing.T) (*Service, *mockStorage) {
 	mock := newMockClient()
 	svc, err := NewService("test-bucket",
 		WithRegion("us-east-1"),
-		withClient(mock),
+		withStorage(mock),
 	)
 	require.NoError(t, err)
 	return svc, mock
@@ -116,7 +116,7 @@ func TestNewService(t *testing.T) {
 		mock := newMockClient()
 		svc, err := NewService("my-bucket",
 			WithRegion("eu-west-1"),
-			withClient(mock),
+			withStorage(mock),
 		)
 		require.NoError(t, err)
 		assert.NotNil(t, svc)
@@ -125,7 +125,7 @@ func TestNewService(t *testing.T) {
 	t.Run("with empty bucket", func(t *testing.T) {
 		_, err := NewService("",
 			WithRegion("us-east-1"),
-			withClient(newMockClient()),
+			withStorage(newMockClient()),
 		)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "bucket is required")
@@ -140,7 +140,7 @@ func TestNewService(t *testing.T) {
 			WithSessionToken("token"),
 			WithPathStyle(),
 			WithRetries(5),
-			withClient(mock),
+			withStorage(mock),
 		)
 		require.NoError(t, err)
 		assert.NotNil(t, svc)
@@ -489,49 +489,49 @@ func TestExtractFilename(t *testing.T) {
 	}
 }
 
-// errorMockClient is a mock client that can be configured to return errors.
-type errorMockClient struct {
-	mockClient
+// errorMockStorage is a mock storage that can be configured to return errors.
+type errorMockStorage struct {
+	mockStorage
 	listObjectsErr   error
 	putObjectErr     error
 	getObjectErr     error
 	deleteObjectsErr error
 }
 
-func newErrorMockClient() *errorMockClient {
-	return &errorMockClient{
-		mockClient: mockClient{
+func newErrorMockStorage() *errorMockStorage {
+	return &errorMockStorage{
+		mockStorage: mockStorage{
 			objects: make(map[string]*mockObject),
 		},
 	}
 }
 
-func (m *errorMockClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+func (m *errorMockStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	if m.listObjectsErr != nil {
 		return nil, m.listObjectsErr
 	}
-	return m.mockClient.ListObjects(ctx, prefix)
+	return m.mockStorage.ListObjects(ctx, prefix)
 }
 
-func (m *errorMockClient) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
+func (m *errorMockStorage) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
 	if m.putObjectErr != nil {
 		return m.putObjectErr
 	}
-	return m.mockClient.PutObject(ctx, key, data, contentType)
+	return m.mockStorage.PutObject(ctx, key, data, contentType)
 }
 
-func (m *errorMockClient) GetObject(ctx context.Context, key string) ([]byte, string, error) {
+func (m *errorMockStorage) GetObject(ctx context.Context, key string) ([]byte, string, error) {
 	if m.getObjectErr != nil {
 		return nil, "", m.getObjectErr
 	}
-	return m.mockClient.GetObject(ctx, key)
+	return m.mockStorage.GetObject(ctx, key)
 }
 
-func (m *errorMockClient) DeleteObjects(ctx context.Context, keys []string) error {
+func (m *errorMockStorage) DeleteObjects(ctx context.Context, keys []string) error {
 	if m.deleteObjectsErr != nil {
 		return m.deleteObjectsErr
 	}
-	return m.mockClient.DeleteObjects(ctx, keys)
+	return m.mockStorage.DeleteObjects(ctx, keys)
 }
 
 func TestServiceErrorPaths(t *testing.T) {
@@ -540,10 +540,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	testErr := errors.New("test error")
 
 	t.Run("SaveArtifact returns error when ListVersions fails", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
@@ -555,10 +555,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("SaveArtifact returns error when PutObject fails", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.putObjectErr = testErr
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
@@ -570,10 +570,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("LoadArtifact returns error when ListVersions fails", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		_, err = svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
@@ -582,10 +582,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("LoadArtifact returns error when GetObject fails with non-NotFound error", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.getObjectErr = testErr
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		// First save an artifact so ListVersions returns a version
@@ -604,9 +604,9 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("LoadArtifact returns nil when GetObject returns NotFound", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		// Save an artifact first
@@ -624,10 +624,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("ListArtifactKeys returns error when listing session artifacts fails", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		_, err = svc.ListArtifactKeys(ctx, sessionInfo)
@@ -636,10 +636,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("DeleteArtifact returns error when ListObjects fails with non-NotFound error", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		err = svc.DeleteArtifact(ctx, sessionInfo, "test.txt")
@@ -648,10 +648,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("DeleteArtifact returns nil when ListObjects returns NotFound", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.listObjectsErr = ErrNotFound
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		err = svc.DeleteArtifact(ctx, sessionInfo, "test.txt")
@@ -659,9 +659,9 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("DeleteArtifact returns error when DeleteObjects fails", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		// Save an artifact first
@@ -679,10 +679,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("ListVersions returns empty slice when ListObjects returns NotFound", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.listObjectsErr = ErrNotFound
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		versions, err := svc.ListVersions(ctx, sessionInfo, "test.txt")
@@ -691,10 +691,10 @@ func TestServiceErrorPaths(t *testing.T) {
 	})
 
 	t.Run("ListVersions returns error when ListObjects fails with non-NotFound error", func(t *testing.T) {
-		mock := newErrorMockClient()
+		mock := newErrorMockStorage()
 		mock.listObjectsErr = testErr
 
-		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withClient(mock))
+		svc, err := NewService("test-bucket", WithRegion("us-east-1"), withStorage(mock))
 		require.NoError(t, err)
 
 		_, err = svc.ListVersions(ctx, sessionInfo, "test.txt")
