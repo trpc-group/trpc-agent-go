@@ -178,3 +178,172 @@ func TestWrapErrorPreservesOriginal(t *testing.T) {
 func strPtr(s string) *string {
 	return &s
 }
+
+func TestNewS3Client(t *testing.T) {
+	t.Run("creates client with minimal config", func(t *testing.T) {
+		cfg := &Config{
+			Bucket: "test-bucket",
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+		assert.Equal(t, "test-bucket", client.bucket)
+		assert.NotNil(t, client.client)
+	})
+
+	t.Run("creates client with region", func(t *testing.T) {
+		cfg := &Config{
+			Bucket: "test-bucket",
+			Region: "eu-west-1",
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+		assert.Equal(t, "test-bucket", client.bucket)
+	})
+
+	t.Run("creates client with custom endpoint", func(t *testing.T) {
+		cfg := &Config{
+			Bucket:   "test-bucket",
+			Endpoint: "http://localhost:9000",
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+		assert.Equal(t, "test-bucket", client.bucket)
+	})
+
+	t.Run("creates client with credentials", func(t *testing.T) {
+		cfg := &Config{
+			Bucket:          "test-bucket",
+			AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+			SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+		assert.Equal(t, "test-bucket", client.bucket)
+	})
+
+	t.Run("creates client with session token", func(t *testing.T) {
+		cfg := &Config{
+			Bucket:          "test-bucket",
+			AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+			SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+			SessionToken:    "FwoGZXIvYXdzEBYaDH...",
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+		assert.Equal(t, "test-bucket", client.bucket)
+	})
+
+	t.Run("creates client with path style enabled", func(t *testing.T) {
+		cfg := &Config{
+			Bucket:       "test-bucket",
+			Endpoint:     "http://localhost:9000",
+			UsePathStyle: true,
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+		assert.Equal(t, "test-bucket", client.bucket)
+	})
+
+	t.Run("creates client with max retries", func(t *testing.T) {
+		cfg := &Config{
+			Bucket:     "test-bucket",
+			MaxRetries: 5,
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+		assert.Equal(t, "test-bucket", client.bucket)
+	})
+
+	t.Run("creates client with all options combined", func(t *testing.T) {
+		cfg := &Config{
+			Bucket:          "my-bucket",
+			Region:          "us-west-2",
+			Endpoint:        "http://minio.local:9000",
+			AccessKeyID:     "minioadmin",
+			SecretAccessKey: "minioadmin",
+			SessionToken:    "",
+			UsePathStyle:    true,
+			MaxRetries:      3,
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+		assert.Equal(t, "my-bucket", client.bucket)
+		assert.NotNil(t, client.client)
+	})
+
+	t.Run("creates client with zero retries does not set retry config", func(t *testing.T) {
+		cfg := &Config{
+			Bucket:     "test-bucket",
+			MaxRetries: 0,
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+	})
+
+	t.Run("creates client with only access key does not set credentials", func(t *testing.T) {
+		// Only AccessKeyID without SecretAccessKey should not configure static credentials
+		cfg := &Config{
+			Bucket:      "test-bucket",
+			AccessKeyID: "AKIAIOSFODNN7EXAMPLE",
+			// SecretAccessKey is empty
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+	})
+
+	t.Run("creates client with only secret key does not set credentials", func(t *testing.T) {
+		// Only SecretAccessKey without AccessKeyID should not configure static credentials
+		cfg := &Config{
+			Bucket:          "test-bucket",
+			SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+			// AccessKeyID is empty
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+	})
+
+	t.Run("creates client with empty region uses default", func(t *testing.T) {
+		cfg := &Config{
+			Bucket: "test-bucket",
+			Region: "",
+		}
+
+		client, err := newS3Client(cfg)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+	})
+}
