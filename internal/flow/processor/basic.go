@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	// Timeout for event completion signaling.
+	// EventCompletionTimeout is the timeout for event completion signaling.
 	EventCompletionTimeout = 5 * time.Second
 )
 
