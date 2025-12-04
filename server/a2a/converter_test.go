@@ -1125,6 +1125,315 @@ func TestDefaultA2AMessageToAgentMessage_EdgeCases(t *testing.T) {
 	}
 }
 
+func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
+	tests := []struct {
+		name             string
+		adkCompatibility bool
+		event            *event.Event
+		checkResult      func(*testing.T, protocol.UnaryMessageResult)
+	}{
+		{
+			name:             "code execution event - ADK mode",
+			adkCompatibility: true,
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-ce-1",
+					Object: model.ObjectTypePostprocessingCodeExecution,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "print('hello world')",
+							},
+						},
+					},
+				},
+			},
+			checkResult: func(t *testing.T, result protocol.UnaryMessageResult) {
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					t.Errorf("Expected Message type, got %T", result)
+					return
+				}
+				if len(msg.Parts) == 0 {
+					t.Error("Expected at least one part")
+					return
+				}
+				part := msg.Parts[0]
+				if part.GetKind() != protocol.KindData {
+					t.Errorf("Expected DataPart kind, got %s", part.GetKind())
+					return
+				}
+				dataPart, ok := part.(protocol.DataPart)
+				if !ok {
+					dataPart2, ok2 := part.(*protocol.DataPart)
+					if !ok2 {
+						t.Errorf("Expected DataPart type, got %T", part)
+						return
+					}
+					dataPart = *dataPart2
+				}
+				if dataPart.Metadata == nil {
+					t.Error("Expected metadata")
+					return
+				}
+				if dataPart.Metadata["adk_type"] != "executable_code" {
+					t.Errorf("Expected adk_type 'executable_code', got %v", dataPart.Metadata["adk_type"])
+				}
+				data, ok := dataPart.Data.(map[string]any)
+				if !ok {
+					t.Errorf("Expected map data, got %T", dataPart.Data)
+					return
+				}
+				if data["code"] != "print('hello world')" {
+					t.Errorf("Expected code content, got %v", data["code"])
+				}
+			},
+		},
+		{
+			name:             "code execution event - non-ADK mode",
+			adkCompatibility: false,
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-ce-2",
+					Object: model.ObjectTypePostprocessingCodeExecution,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "print('hello')",
+							},
+						},
+					},
+				},
+			},
+			checkResult: func(t *testing.T, result protocol.UnaryMessageResult) {
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					t.Errorf("Expected Message type, got %T", result)
+					return
+				}
+				if len(msg.Parts) == 0 {
+					t.Error("Expected at least one part")
+					return
+				}
+				part := msg.Parts[0]
+				dataPart, ok := part.(protocol.DataPart)
+				if !ok {
+					dataPart2, ok2 := part.(*protocol.DataPart)
+					if !ok2 {
+						t.Errorf("Expected DataPart type, got %T", part)
+						return
+					}
+					dataPart = *dataPart2
+				}
+				if dataPart.Metadata["type"] != "executable_code" {
+					t.Errorf("Expected type 'executable_code', got %v", dataPart.Metadata["type"])
+				}
+				data, ok := dataPart.Data.(map[string]any)
+				if !ok {
+					t.Errorf("Expected map data, got %T", dataPart.Data)
+					return
+				}
+				if data["content"] != "print('hello')" {
+					t.Errorf("Expected content field in non-ADK mode, got %v", data)
+				}
+			},
+		},
+		{
+			name:             "code execution result event - ADK mode",
+			adkCompatibility: true,
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-cer-1",
+					Object: model.ObjectTypePostprocessingCodeExecutionResult,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "hello world",
+							},
+						},
+					},
+				},
+			},
+			checkResult: func(t *testing.T, result protocol.UnaryMessageResult) {
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					t.Errorf("Expected Message type, got %T", result)
+					return
+				}
+				if len(msg.Parts) == 0 {
+					t.Error("Expected at least one part")
+					return
+				}
+				part := msg.Parts[0]
+				dataPart, ok := part.(protocol.DataPart)
+				if !ok {
+					dataPart2, ok2 := part.(*protocol.DataPart)
+					if !ok2 {
+						t.Errorf("Expected DataPart type, got %T", part)
+						return
+					}
+					dataPart = *dataPart2
+				}
+				if dataPart.Metadata["adk_type"] != "code_execution_result" {
+					t.Errorf("Expected adk_type 'code_execution_result', got %v", dataPart.Metadata["adk_type"])
+				}
+				data, ok := dataPart.Data.(map[string]any)
+				if !ok {
+					t.Errorf("Expected map data, got %T", dataPart.Data)
+					return
+				}
+				if data["output"] != "hello world" {
+					t.Errorf("Expected output content, got %v", data["output"])
+				}
+			},
+		},
+		{
+			name:             "code execution result event - non-ADK mode",
+			adkCompatibility: false,
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-cer-2",
+					Object: model.ObjectTypePostprocessingCodeExecutionResult,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "execution output",
+							},
+						},
+					},
+				},
+			},
+			checkResult: func(t *testing.T, result protocol.UnaryMessageResult) {
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					t.Errorf("Expected Message type, got %T", result)
+					return
+				}
+				if len(msg.Parts) == 0 {
+					t.Error("Expected at least one part")
+					return
+				}
+				part := msg.Parts[0]
+				dataPart, ok := part.(protocol.DataPart)
+				if !ok {
+					dataPart2, ok2 := part.(*protocol.DataPart)
+					if !ok2 {
+						t.Errorf("Expected DataPart type, got %T", part)
+						return
+					}
+					dataPart = *dataPart2
+				}
+				if dataPart.Metadata["type"] != "code_execution_result" {
+					t.Errorf("Expected type 'code_execution_result', got %v", dataPart.Metadata["type"])
+				}
+				data, ok := dataPart.Data.(map[string]any)
+				if !ok {
+					t.Errorf("Expected map data, got %T", dataPart.Data)
+					return
+				}
+				if data["content"] != "execution output" {
+					t.Errorf("Expected content field, got %v", data)
+				}
+			},
+		},
+		{
+			name:             "code execution with empty content",
+			adkCompatibility: false,
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-ce-empty",
+					Object: model.ObjectTypePostprocessingCodeExecution,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "",
+							},
+						},
+					},
+				},
+			},
+			checkResult: func(t *testing.T, result protocol.UnaryMessageResult) {
+				if result != nil {
+					t.Errorf("Expected nil result for empty content, got %v", result)
+				}
+			},
+		},
+	}
+
+	ctx := context.Background()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
+			if err != nil {
+				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)
+				return
+			}
+			if tt.checkResult != nil {
+				tt.checkResult(t, result)
+			}
+		})
+	}
+}
+
+func TestIsCodeExecutionEvent(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    *event.Event
+		expected bool
+	}{
+		{
+			name: "code execution event",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypePostprocessingCodeExecution,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "code execution result event",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypePostprocessingCodeExecutionResult,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "regular chat completion",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "nil response",
+			event: &event.Event{
+				Response: nil,
+			},
+			expected: false,
+		},
+		{
+			name:     "nil event",
+			event:    nil,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isCodeExecutionEvent(tt.event)
+			if result != tt.expected {
+				t.Errorf("isCodeExecutionEvent() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestDefaultEventToA2AMessage_ADKCompatibility(t *testing.T) {
 	tests := []struct {
 		name             string

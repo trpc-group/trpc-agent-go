@@ -2527,10 +2527,12 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.NotNil(t, result.Result)
-	// Verify that parts from all events were collected
-	resultMsg, ok := result.Result.(*protocol.Message)
-	assert.True(t, ok)
-	assert.Equal(t, 3, len(resultMsg.Parts))
+	// When multiple events are returned, the result is a Task with history and artifacts
+	resultTask, ok := result.Result.(*protocol.Task)
+	assert.True(t, ok, "Expected *protocol.Task for multiple events, got %T", result.Result)
+	// History should contain first 2 messages, artifacts should contain the last message
+	assert.Equal(t, 2, len(resultTask.History))
+	assert.Equal(t, 1, len(resultTask.Artifacts))
 }
 
 // TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected
