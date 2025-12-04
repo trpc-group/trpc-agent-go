@@ -1,3 +1,13 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package util provides utility functions.
 package util
 
 import (
@@ -19,6 +29,7 @@ import (
 // VectorStoreType defines the type of vector store.
 type VectorStoreType string
 
+// Vector store type constants.
 const (
 	VectorStoreInMemory      VectorStoreType = "inmemory"
 	VectorStorePGVector      VectorStoreType = "pgvector"
@@ -104,6 +115,7 @@ func newElasticsearchStore() (vectorstore.VectorStore, error) {
 	)
 }
 
+// PrintEventWithToolCalls prints the event with tool calls.
 func PrintEventWithToolCalls(evt *event.Event) {
 	if evt.Error != nil {
 		log.Printf("❌ Event error: %v", evt.Error)
@@ -141,6 +153,7 @@ func PrintEventWithToolCalls(evt *event.Event) {
 	}
 }
 
+// GetEnvOrDefault retrieves the value of an environment variable or returns a default value if not set.
 func GetEnvOrDefault(key, defaultValue string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
