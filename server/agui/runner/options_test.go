@@ -13,10 +13,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -114,6 +117,27 @@ func TestWithAppName(t *testing.T) {
 func TestWithSessionService(t *testing.T) {
 	opts := NewOptions(WithSessionService(inmemory.NewSessionService()))
 	assert.NotNil(t, opts.SessionService)
+}
+
+func TestWithAggregationOptionsAndFactory(t *testing.T) {
+	customCalled := false
+	customFactory := func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
+		customCalled = true
+		return aggregator.New(ctx, opt...)
+	}
+	opts := NewOptions(
+		WithAggregationOption(aggregator.WithEnabled(false)),
+		WithAggregatorFactory(customFactory),
+		WithFlushInterval(time.Second),
+	)
+
+	assert.Equal(t, time.Second, opts.FlushInterval)
+	agg := opts.AggregatorFactory(context.Background(), opts.AggregationOption...)
+	assert.True(t, customCalled)
+
+	events, err := agg.Append(context.Background(), aguievents.NewTextMessageContentEvent("msg", "hi"))
+	assert.NoError(t, err)
+	assert.Len(t, events, 1) // disabled aggregation should pass through.
 }
 
 func TestWithRunOptionResolver(t *testing.T) {
