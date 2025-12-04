@@ -150,6 +150,38 @@ jobs:
             echo "✓ No interface{} usage found - all files use 'any'"
           fi
           echo "::endgroup::"
+      - name: Check license headers
+        run: |
+          echo "::group::Checking license headers in Go files"
+          missing_files=""
+          while IFS= read -r file; do
+            if [ -z "$file" ]; then continue; fi
+
+            # Check for standard Tencent license header
+            if head -n 20 "$file" | grep -Fq "Tencent is pleased to support the open source community by making trpc-agent-go available."; then
+              continue
+            fi
+
+            # Check for OpenTelemetry + Tencent dual license header
+            if head -n 20 "$file" | grep -Fq "Copyright The OpenTelemetry Authors" && head -n 20 "$file" | grep -Fq "Copyright (C) 2025 Tencent"; then
+              continue
+            fi
+
+            missing_files="${missing_files}${file}\n"
+          done < <(git ls-files '*.go' | grep -Ev '(^vendor/|^third_party/|^out/|^build/|stub/)')
+
+          if [ -n "$missing_files" ]; then
+            echo "::error::Found Go files missing proper license headers:"
+            echo -e "$missing_files"
+            echo ""
+            echo "Please ensure all Go files have appropriate license headers."
+            echo "For most files, use: Tencent standard license header"
+            echo "For telemetry/tracetransform files: OpenTelemetry + Tencent dual header"
+            exit 1
+          else
+            echo "✓ All Go files have proper license headers"
+          fi
+          echo "::endgroup::"
   check-examples-go-mod:
     name: check examples go.mod
     runs-on: ubuntu-latest
