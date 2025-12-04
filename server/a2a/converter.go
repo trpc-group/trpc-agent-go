@@ -69,20 +69,28 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 	for _, part := range message.Parts {
 		switch part.GetKind() {
 		case protocol.KindText:
-			p, ok := part.(*protocol.TextPart)
-			if !ok {
+			var textPart *protocol.TextPart
+			if p, ok := part.(*protocol.TextPart); ok {
+				textPart = p
+			} else if p, ok := part.(protocol.TextPart); ok {
+				textPart = &p
+			} else {
 				continue
 			}
 			// Only add to content string, not to contentParts
 			// to avoid duplication when converting back to A2A message
-			content += p.Text
+			content += textPart.Text
 		case protocol.KindFile:
-			f, ok := part.(*protocol.FilePart)
-			if !ok {
+			var filePart *protocol.FilePart
+			if f, ok := part.(*protocol.FilePart); ok {
+				filePart = f
+			} else if f, ok := part.(protocol.FilePart); ok {
+				filePart = &f
+			} else {
 				continue
 			}
 			// Convert FilePart to model.ContentPart
-			switch fileData := f.File.(type) {
+			switch fileData := filePart.File.(type) {
 			case *protocol.FileWithBytes:
 				// Handle file with bytes data
 				fileName := ""
@@ -121,11 +129,15 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 				})
 			}
 		case protocol.KindData:
-			d, ok := part.(*protocol.DataPart)
-			if !ok {
+			var dataPart *protocol.DataPart
+			if d, ok := part.(*protocol.DataPart); ok {
+				dataPart = d
+			} else if d, ok := part.(protocol.DataPart); ok {
+				dataPart = &d
+			} else {
 				continue
 			}
-			dataStr := fmt.Sprintf("%s", d.Data)
+			dataStr := fmt.Sprintf("%s", dataPart.Data)
 			contentParts = append(contentParts, model.ContentPart{
 				Type: model.ContentTypeText,
 				Text: &dataStr,
