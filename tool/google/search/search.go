@@ -106,7 +106,7 @@ func getDescFromPageMap(pageMap googleapi.RawMessage) (string, bool, error) {
 		descTag     = "description"
 		ogDescTag   = "og:description"
 	)
-	metaTags, ok := pages[metaTagsKey].([]interface{})
+	metaTags, ok := pages[metaTagsKey].([]any)
 	if !ok {
 		return "", false, nil
 	}

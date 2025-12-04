@@ -572,7 +572,7 @@ func TestWrapperCondFunc(t *testing.T) {
 func TestWrapperCondFunc_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name      string
-		inputFunc interface{}
+		inputFunc any
 	}{
 		{
 			name: "ConditionalFunc returning empty string",
