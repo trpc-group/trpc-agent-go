@@ -157,8 +157,10 @@ jobs:
           while IFS= read -r file; do
             if [ -z "$file" ]; then continue; fi
 
-            # Check for Tencent license header
-            if head -n 20 "$file" | grep -Fq "Tencent is pleased to support the open source community by making trpc-agent-go available."; then
+            # Check for Tencent license header (like artifacts.go format)
+            if head -n 10 "$file" | grep -q "Tencent is pleased to support the open source community" && \
+               head -n 10 "$file" | grep -q "trpc-agent-go is licensed under the Apache License" && \
+               head -n 10 "$file" | grep -q "Apache License Version 2.0."; then
               continue
             fi
 
