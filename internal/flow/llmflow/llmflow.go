@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
 
@@ -28,11 +27,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
-)
-
-const (
-	// Timeout for event completion signaling.
-	eventCompletionTimeout = 5 * time.Second
 )
 
 // Options contains configuration options for creating a Flow.
@@ -189,7 +183,7 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	// Wait for completion notice.
 	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
 	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
-	err := invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
+	err := invocation.AddNoticeChannelAndWait(ctx, completionID, processor.EventCompletionTimeout)
 	if errors.Is(err, context.Canceled) {
 		return err
 	}

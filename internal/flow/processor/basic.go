@@ -12,11 +12,17 @@ package processor
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+	// Timeout for event completion signaling.
+	EventCompletionTimeout = 5 * time.Second
 )
 
 // BasicRequestProcessor implements the basic request processing logic.

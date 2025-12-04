@@ -11,7 +11,6 @@ package processor
 
 import (
 	"context"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -221,12 +220,5 @@ func (p *TransferResponseProcessor) waitForEventPersistence(ctx context.Context,
 	if inv == nil || eventID == "" {
 		return nil
 	}
-	timeout := agent.WaitNoticeWithoutTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		timeout = time.Until(deadline)
-		if timeout <= 0 {
-			return ctx.Err()
-		}
-	}
-	return inv.AddNoticeChannelAndWait(ctx, agent.GetAppendEventNoticeKey(eventID), timeout)
+	return inv.AddNoticeChannelAndWait(ctx, agent.GetAppendEventNoticeKey(eventID), EventCompletionTimeout)
 }
