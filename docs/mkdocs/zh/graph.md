@@ -2181,13 +2181,14 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 
 常量均定义在 `graph/state.go` 与 `graph/keys.go`，建议通过常量引用，避免硬编码。
 
-#### 节点级回调与生成参数
+#### 节点级回调、工具与生成参数
 
 节点可通过可选项注册回调或参数（见 `graph/state_graph.go`）：
 
 - `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
 - LLM 节点可用 `graph.WithGenerationConfig`、`graph.WithModelCallbacks`
-- 工具相关：`graph.WithToolCallbacks`、`graph.WithToolSets`（除 `tools []tool.Tool` 外，再额外提供 ToolSet）
+- 工具相关：`graph.WithToolCallbacks`、`graph.WithToolSets`（除 `tools []tool.Tool` 外，再额外提供 ToolSet`）、
+  `graph.WithRefreshToolSetsOnRun`（在每次运行时从 ToolSet 重新构造工具列表，适合 MCP 等动态工具源）
 - Agent 节点可用 `graph.WithAgentNodeEventCallback`
 
 此外，`graph.WithName`/`graph.WithDescription` 可为节点添加友好的名称与描述；`graph.WithDestinations` 可声明潜在动态路由目标（仅用于静态校验/可视化）。
