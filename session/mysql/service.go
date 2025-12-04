@@ -29,18 +29,6 @@ import (
 
 var _ session.Service = (*Service)(nil)
 
-const (
-	defaultSessionEventLimit     = 1000
-	defaultChanBufferSize        = 100
-	defaultAsyncPersisterNum     = 10
-	defaultCleanupIntervalSecond = 5 * time.Minute // 5 min
-
-	defaultAsyncPersistTimeout = 10 * time.Second
-
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
-)
-
 // SessionState is the state of a session.
 type SessionState struct {
 	ID        string           `json:"id"`
@@ -89,14 +77,7 @@ type summaryJob struct {
 // It requires either a DSN (WithMySQLClientDSN) or an instance name (WithMySQLInstance).
 func NewService(options ...ServiceOpt) (*Service, error) {
 	// Apply default options
-	opts := ServiceOpts{
-		sessionEventLimit: defaultSessionEventLimit,
-		asyncPersisterNum: defaultAsyncPersisterNum,
-		asyncSummaryNum:   defaultAsyncSummaryNum,
-		summaryQueueSize:  defaultSummaryQueueSize,
-		softDelete:        true, // default: enable soft delete
-	}
-
+	opts := defaultOptions
 	for _, option := range options {
 		option(&opts)
 	}

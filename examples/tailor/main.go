@@ -20,7 +20,9 @@ import (
 	"strings"
 
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/ollama/ollama/api"
 	openaisdk "github.com/openai/openai-go"
+
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
@@ -28,7 +30,7 @@ import (
 )
 
 var (
-	flagProvider             = flag.String("provider", "openai", "Provider: openai or anthropic")
+	flagProvider             = flag.String("provider", "openai", "Name of the provider to use, openai/anthropic/ollama")
 	flagModel                = flag.String("model", "", "Model name (auto-detected if empty)")
 	flagEnableTokenTailoring = flag.Bool("enable-token-tailoring", true, "Enable automatic token tailoring based on model context window")
 	flagMaxInputTokens       = flag.Int("max-input-tokens", 0, "Max input tokens for token tailoring (0 = auto-calculate from context window)")
@@ -107,6 +109,8 @@ func getDefaultModel(provider string) string {
 	switch provider {
 	case "anthropic":
 		return "claude-3-5-sonnet"
+	case "ollama":
+		return "llama3.2:latest"
 	default:
 		return "deepseek-chat"
 	}
@@ -154,6 +158,27 @@ func buildModel(providerName, modelName string) (model.Model, error) {
 			AnthropicChatRequest: func(ctx context.Context, req *anthropicsdk.MessageNewParams) {
 				// Convert Anthropic messages back to model.Message for token counting.
 				messages := convertFromAnthropicMessages(req.Messages, req.System)
+				tokensAfter, _ := counter.CountTokensRange(ctx, messages, 0, len(messages))
+
+				// Display tailoring statistics.
+				if *flagMaxInputTokens > 0 {
+					fmt.Printf("\n✂️  [Tailoring] maxInputTokens=%d 📨 messages=%d 🎯 tokens=%d\n",
+						*flagMaxInputTokens, len(messages), tokensAfter)
+				} else {
+					fmt.Printf("\n✂️  [Tailoring] maxInputTokens=auto 📨 messages=%d 🎯 tokens=%d\n",
+						len(messages), tokensAfter)
+				}
+
+				// Show head and tail messages to visualize what was kept/removed.
+				fmt.Printf("📝 Messages (after tailoring, showing head + tail):\n%s",
+					summarizeMessagesHeadTail(messages, 5, 5))
+			},
+		}))
+	case "ollama":
+		opts = append(opts, provider.WithCallbacks(provider.Callbacks{
+			OllamaChatRequest: func(ctx context.Context, req *api.ChatRequest) {
+				// Convert Ollama messages back to model.Message for token counting.
+				messages := convertFromOllamaMessages(req.Messages)
 				tokensAfter, _ := counter.CountTokensRange(ctx, messages, 0, len(messages))
 
 				// Display tailoring statistics.

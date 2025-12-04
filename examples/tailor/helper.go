@@ -16,7 +16,9 @@ import (
 	"strings"
 
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/ollama/ollama/api"
 	openaisdk "github.com/openai/openai-go"
+
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -257,6 +259,28 @@ func convertFromAnthropicMessages(
 		messages = append(messages, m)
 	}
 
+	return messages
+}
+
+func convertFromOllamaMessages(ollamaMsgs []api.Message) []model.Message {
+	messages := make([]model.Message, 0, len(ollamaMsgs))
+	for _, msg := range ollamaMsgs {
+		var m model.Message
+		role := string(msg.Role)
+
+		content := msg.Content
+
+		switch role {
+		case "user":
+			m = model.NewUserMessage(content)
+		case "assistant":
+			m = model.NewAssistantMessage(content)
+		default:
+			continue
+		}
+
+		messages = append(messages, m)
+	}
 	return messages
 }
 

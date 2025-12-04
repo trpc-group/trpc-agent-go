@@ -2211,6 +2211,24 @@ Per‑node options (see `graph/state_graph.go`):
   `graph.WithRefreshToolSetsOnRun` (rebuild tools from ToolSets on each run for dynamic sources such as MCP)
 - Agent nodes: `graph.WithAgentNodeEventCallback`
 
+#### ToolSets in Graphs vs Agents
+
+`graph.WithToolSets` is a **per‑node, compile‑time** configuration. It attaches one or more `tool.ToolSet` instances to a specific LLM node when you build the graph:
+
+```go
+sg.AddLLMNode("llm",
+    model,
+    "inst",
+    tools,
+    graph.WithToolSets([]tool.ToolSet{mcpToolSet, fileToolSet}),
+)
+```
+
+Key points:
+
+- Graph structure (including node ToolSets) is **immutable** after `Compile()`. Changing ToolSets requires rebuilding the graph or providing a new `GraphAgent`.
+- Runtime‑level ToolSet changes should be handled at the Agent level (for example, `llmagent.AddToolSet`, `llmagent.RemoveToolSet`, `llmagent.SetToolSets`) or by swapping the underlying Agent used by a graph Agent node.
+
 Additionally, `graph.WithName`/`graph.WithDescription` add friendly labels; `graph.WithDestinations` declares potential dynamic destinations (for static checks/visualization only).
 
 ### LLM Input Rules: Three‑Stage Design
@@ -2364,8 +2382,11 @@ Good practice:
 
 - Per‑node options
 
-  - `graph.WithGenerationConfig`, `graph.WithModelCallbacks`, `graph.WithToolCallbacks`, `graph.WithToolSets`
-  - `graph.WithPreNodeCallback`, `graph.WithPostNodeCallback`, `graph.WithNodeErrorCallback`
+  - LLM/tools:
+    - `graph.WithGenerationConfig`, `graph.WithModelCallbacks`
+    - `graph.WithToolCallbacks`, `graph.WithToolSets`
+  - Callbacks:
+    - `graph.WithPreNodeCallback`, `graph.WithPostNodeCallback`, `graph.WithNodeErrorCallback`
 
 - Execution
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`

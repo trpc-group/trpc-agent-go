@@ -2191,6 +2191,24 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
   `graph.WithRefreshToolSetsOnRun`（在每次运行时从 ToolSet 重新构造工具列表，适合 MCP 等动态工具源）
 - Agent 节点可用 `graph.WithAgentNodeEventCallback`
 
+#### Graph 中的 ToolSet 与 Agent 的区别
+
+`graph.WithToolSets` 是**节点级、构图期**配置：在构建图时，把一个或多个 `tool.ToolSet` 绑定到特定的 LLM 节点，例如：
+
+```go
+sg.AddLLMNode("llm",
+    model,
+    "inst",
+    tools,
+    graph.WithToolSets([]tool.ToolSet{mcpToolSet, fileToolSet}),
+)
+```
+
+需要注意：
+
+- Graph 一旦 `Compile()`，结构（包括节点绑定的 ToolSet）就是**不可变的**。如果要调整某个节点的 ToolSet，需要重新构图或创建新的 `GraphAgent`。
+- 运行时希望动态增删 ToolSet，应该在 Agent 层处理（例如使用 `llmagent.AddToolSet`、`llmagent.RemoveToolSet`、`llmagent.SetToolSets`），或者替换 Graph 中 Agent 节点所使用的下游 Agent。
+
 此外，`graph.WithName`/`graph.WithDescription` 可为节点添加友好的名称与描述；`graph.WithDestinations` 可声明潜在动态路由目标（仅用于静态校验/可视化）。
 
 ### LLM 输入规则：三段式设计
@@ -2344,8 +2362,11 @@ stateGraph.
 
 - 节点级可选项
 
-  - `graph.WithGenerationConfig`、`graph.WithModelCallbacks`、`graph.WithToolCallbacks`、`graph.WithToolSets`
-  - `graph.WithPreNodeCallback`、`graph.WithPostNodeCallback`、`graph.WithNodeErrorCallback`
+  - LLM / 工具相关：
+    - `graph.WithGenerationConfig`、`graph.WithModelCallbacks`
+    - `graph.WithToolCallbacks`、`graph.WithToolSets`
+  - 回调相关：
+    - `graph.WithPreNodeCallback`、`graph.WithPostNodeCallback`、`graph.WithNodeErrorCallback`
 
 - 执行
   - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`

@@ -11,9 +11,12 @@ package runner
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -27,6 +30,9 @@ type Options struct {
 	AppName            string                // AppName is the name of the application.
 	SessionService     session.Service       // SessionService is the session service.
 	RunOptionResolver  RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
+	AggregatorFactory  aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
+	AggregationOption  []aggregator.Option   // AggregationOption is the aggregation options for each run.
+	FlushInterval      time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
 }
 
 // NewOptions creates a new options instance.
@@ -36,6 +42,8 @@ func NewOptions(opt ...Option) *Options {
 		TranslatorFactory: defaultTranslatorFactory,
 		RunAgentInputHook: defaultRunAgentInputHook,
 		RunOptionResolver: defaultRunOptionResolver,
+		AggregatorFactory: aggregator.New,
+		FlushInterval:     track.DefaultFlushInterval,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -57,7 +65,7 @@ func WithUserIDResolver(u UserIDResolver) Option {
 }
 
 // TranslatorFactory is a function that creates a translator for an AG-UI run.
-type TranslatorFactory func(input *adapter.RunAgentInput) translator.Translator
+type TranslatorFactory func(ctx context.Context, input *adapter.RunAgentInput) translator.Translator
 
 // WithTranslatorFactory sets the translator factory.
 func WithTranslatorFactory(factory TranslatorFactory) Option {
@@ -97,6 +105,27 @@ func WithSessionService(s session.Service) Option {
 	}
 }
 
+// WithAggregationOption forwards aggregator options to the runner-level factory.
+func WithAggregationOption(option ...aggregator.Option) Option {
+	return func(o *Options) {
+		o.AggregationOption = append(o.AggregationOption, option...)
+	}
+}
+
+// WithAggregatorFactory sets the aggregator factory used for tracking.
+func WithAggregatorFactory(factory aggregator.Factory) Option {
+	return func(o *Options) {
+		o.AggregatorFactory = factory
+	}
+}
+
+// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+func WithFlushInterval(d time.Duration) Option {
+	return func(o *Options) {
+		o.FlushInterval = d
+	}
+}
+
 // RunOptionResolver is a function that resolves the run options for an AG-UI run.
 type RunOptionResolver func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error)
 
@@ -113,8 +142,8 @@ func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (s
 }
 
 // defaultTranslatorFactory is the default translator factory.
-func defaultTranslatorFactory(input *adapter.RunAgentInput) translator.Translator {
-	return translator.New(input.ThreadID, input.RunID)
+func defaultTranslatorFactory(ctx context.Context, input *adapter.RunAgentInput) translator.Translator {
+	return translator.New(ctx, input.ThreadID, input.RunID)
 }
 
 // defaultRunAgentInputHook returns the input unchanged.
@@ -122,7 +151,7 @@ func defaultRunAgentInputHook(ctx context.Context, input *adapter.RunAgentInput)
 	return input, nil
 }
 
-// defaultRunnerOptionResolver is the default runner option resolver.
+// defaultRunOptionResolver is the default run option resolver.
 func defaultRunOptionResolver(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error) {
 	return nil, nil
 }

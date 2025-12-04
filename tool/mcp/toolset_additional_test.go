@@ -11,6 +11,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -92,6 +93,138 @@ func TestSessionManager_CallTool_ClientNil(t *testing.T) {
 	if !strings.Contains(err.Error(), "transport is closed") {
 		t.Errorf("Expected 'transport is closed' error, got: %v", err)
 	}
+}
+
+func TestSessionManager_CallTool_AppendsStructuredContent(t *testing.T) {
+	structured := map[string]any{"count": 1, "foo": "bar"}
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
+	manager.client = &stubConnector{
+		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if ctx == nil {
+				t.Fatal("context should not be nil")
+			}
+			if req.Params.Name != "test-tool" {
+				t.Fatalf("unexpected tool name: %s", req.Params.Name)
+			}
+			return &mcp.CallToolResult{
+				Content:           []mcp.Content{mcp.NewTextContent("original")},
+				StructuredContent: structured,
+			}, nil
+		},
+	}
+	manager.connected = true
+	manager.initialized = true
+
+	result, err := manager.callTool(context.Background(), "test-tool", map[string]any{"key": "value"})
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 content items, got %d", len(result))
+	}
+
+	original, ok := result[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("Expected first content to be TextContent, got %T", result[0])
+	}
+	if original.Text != "original" {
+		t.Fatalf("Expected original content to stay intact, got %q", original.Text)
+	}
+
+	structuredText, ok := result[1].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("Expected structured content to be appended as TextContent, got %T", result[1])
+	}
+
+	expectedJSON, err := json.Marshal(structured)
+	if err != nil {
+		t.Fatalf("Failed to marshal expected structured content: %v", err)
+	}
+	if structuredText.Text != string(expectedJSON) {
+		t.Fatalf("Expected structured content JSON %s, got %s", string(expectedJSON), structuredText.Text)
+	}
+}
+
+func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
+	badStructured := map[string]any{"ch": make(chan int)}
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
+	manager.client = &stubConnector{
+		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			_ = ctx
+			return &mcp.CallToolResult{
+				Content:           []mcp.Content{mcp.NewTextContent("partial")},
+				StructuredContent: badStructured,
+			}, nil
+		},
+	}
+	manager.connected = true
+	manager.initialized = true
+
+	result, err := manager.callTool(context.Background(), "test-tool", nil)
+	if err == nil {
+		t.Fatal("Expected error when marshaling structured content")
+	}
+	if !strings.Contains(err.Error(), "marshal structured content") {
+		t.Fatalf("Expected marshal structured content error, got %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("Expected original content to remain without appended structured content, got %d items", len(result))
+	}
+}
+
+// stubConnector implements mcp.Connector for testing.
+type stubConnector struct {
+	callToolFn func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error)
+}
+
+func (s *stubConnector) Initialize(_ context.Context, _ *mcp.InitializeRequest) (*mcp.InitializeResult, error) {
+	return nil, nil
+}
+
+func (s *stubConnector) Close() error {
+	return nil
+}
+
+func (s *stubConnector) GetState() mcp.State {
+	return mcp.StateInitialized
+}
+
+func (s *stubConnector) ListTools(_ context.Context, _ *mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+	return nil, nil
+}
+
+func (s *stubConnector) CallTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.callToolFn != nil {
+		return s.callToolFn(ctx, req)
+	}
+	return &mcp.CallToolResult{}, nil
+}
+
+func (s *stubConnector) ListPrompts(_ context.Context, _ *mcp.ListPromptsRequest) (*mcp.ListPromptsResult, error) {
+	return nil, nil
+}
+
+func (s *stubConnector) GetPrompt(_ context.Context, _ *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	return nil, nil
+}
+
+func (s *stubConnector) ListResources(_ context.Context, _ *mcp.ListResourcesRequest) (*mcp.ListResourcesResult, error) {
+	return nil, nil
+}
+
+func (s *stubConnector) ReadResource(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	return nil, nil
+}
+
+func (s *stubConnector) RegisterNotificationHandler(_ string, _ mcp.NotificationHandler) {}
+
+func (s *stubConnector) UnregisterNotificationHandler(_ string) {}
+
+func (s *stubConnector) SetRootsProvider(_ mcp.RootsProvider) {}
+
+func (s *stubConnector) SendRootsListChangedNotification(_ context.Context) error {
+	return nil
 }
 
 // TestSessionManager_CloseWhenNotConnected tests close when not connected
