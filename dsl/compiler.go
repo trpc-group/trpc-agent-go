@@ -362,37 +362,14 @@ func (c *Compiler) buildWhileExpansion(node Node, edges []Edge, nodeIDs map[stri
 	}
 
 	return &whileExpansion{
-		BodyEntry:           body.StartNodeID,
-		BodyExit:            body.ExitNodeID,
-		AfterNode:           afterNode,
-		Cond:                cfg.Condition,
-		BodyNodes:           body.Nodes,
-		BodyEdges:           body.Edges,
+		BodyEntry:            body.StartNodeID,
+		BodyExit:             body.ExitNodeID,
+		AfterNode:            afterNode,
+		Cond:                 cfg.Condition,
+		BodyNodes:            body.Nodes,
+		BodyEdges:            body.Edges,
 		BodyConditionalEdges: body.ConditionalEdges,
 	}, nil
-}
-
-// resolveStartSuccessor finds the unique successor of the builtin.start node
-// from the list of edges. It returns an error if there is no outgoing edge
-// or if multiple distinct successors are found.
-func resolveStartSuccessor(startNodeID string, edges []Edge) (string, error) {
-	var successor string
-	for _, edge := range edges {
-		if edge.Source != startNodeID {
-			continue
-		}
-		if successor == "" {
-			successor = edge.Target
-		} else if successor != edge.Target {
-			return "", fmt.Errorf("builtin.start node %s has multiple outgoing edges (%s, %s)", startNodeID, successor, edge.Target)
-		}
-	}
-
-	if successor == "" {
-		return "", fmt.Errorf("builtin.start node %s has no outgoing edge", startNodeID)
-	}
-
-	return successor, nil
 }
 
 // buildNodeInputView constructs the "input" object exposed to CEL expressions
@@ -431,7 +408,6 @@ func buildNodeInputView(state graph.State, nodeID string) map[string]any {
 
 	return input
 }
-
 
 // createNodeFunc creates a NodeFunc for an engine-level node instance.
 func (c *Compiler) createNodeFunc(node Node) (graph.NodeFunc, error) {
@@ -716,23 +692,21 @@ func (c *Compiler) createMCPNodeFunc(node Node) (graph.NodeFunc, error) {
 
 		// Build arguments object by evaluating params expressions (if configured).
 		args := make(map[string]any)
-		if params != nil {
-			for name, raw := range params {
-				exprMap, ok := raw.(map[string]any)
-				if !ok {
-					continue
-				}
-				exprStr, _ := exprMap["expression"].(string)
-				if strings.TrimSpace(exprStr) == "" {
-					continue
-				}
-
-				value, err := dslcel.Eval(exprStr, state, nil)
-				if err != nil {
-					return nil, fmt.Errorf("failed to evaluate MCP param %q: %w", name, err)
-				}
-				args[name] = value
+		for name, raw := range params {
+			exprMap, ok := raw.(map[string]any)
+			if !ok {
+				continue
 			}
+			exprStr, _ := exprMap["expression"].(string)
+			if strings.TrimSpace(exprStr) == "" {
+				continue
+			}
+
+			value, err := dslcel.Eval(exprStr, state, nil)
+			if err != nil {
+				return nil, fmt.Errorf("failed to evaluate MCP param %q: %w", name, err)
+			}
+			args[name] = value
 		}
 
 		payload, err := json.Marshal(args)
@@ -770,46 +744,6 @@ func (c *Compiler) createConditionalFunc(condEdge ConditionalEdge) (graph.Condit
 // createBuiltinCondition creates a condition function from a builtin structured condition.
 func (c *Compiler) createBuiltinCondition(condEdge ConditionalEdge) (graph.ConditionalFunc, error) {
 	return NewBuiltinConditionFunc(condEdge.From, condEdge.Condition)
-}
-
-// normalizeConditionVariable rewrites a human-friendly variable used in
-// builtin conditions into an internal state path. It is responsible for
-// mapping DSL-level shortcuts such as:
-//
-//   - "output_parsed.classification"
-//   - "input.output_parsed.classification"
-//
-// into concrete graph.State paths that include the source node ID, e.g.:
-//
-//   - "node_structured.<fromNodeID>.output_parsed.classification"
-//
-// This keeps the DSL syntax simple (no explicit node IDs) while allowing the
-// engine to store structured outputs in a per-node cache.
-func normalizeConditionVariable(variable string, fromNodeID string) string {
-	if variable == "" {
-		return variable
-	}
-
-	// Explicit state/nodes prefixes are left as-is.
-	if strings.HasPrefix(variable, "state.") || strings.HasPrefix(variable, "nodes.") {
-		return variable
-	}
-
-	// input.* refers to the structured output of the immediate upstream node.
-	if strings.HasPrefix(variable, "input.") {
-		if fromNodeID == "" {
-			// No upstream node context; fall back to original variable.
-			return strings.TrimPrefix(variable, "input.")
-		}
-		rest := strings.TrimPrefix(variable, "input.")
-		if rest == "" {
-			return variable
-		}
-		return "node_structured." + fromNodeID + "." + rest
-	}
-
-	// Fallback: treat as a plain state field name.
-	return variable
 }
 
 // applyOutputMapping applies output mapping from DSL node outputs configuration.
