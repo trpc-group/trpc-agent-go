@@ -106,6 +106,7 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 		userStateTTL:          serviceOpts.userStateTTL,
 		tableSessionStates:    "session_states",
 		tableSessionEvents:    "session_events",
+		tableSessionTracks:    "session_track_events",
 		tableSessionSummaries: "session_summaries",
 		tableAppStates:        "app_states",
 		tableUserStates:       "user_states",
@@ -374,6 +375,58 @@ func TestAppendEvent_Sync(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestAppendTrackEvent_Sync(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		State:   session.StateMap{},
+	}
+
+	trackEvent := &session.TrackEvent{
+		Track:     "agui",
+		Payload:   json.RawMessage(`{"delta":"hi"}`),
+		Timestamp: time.Now(),
+	}
+
+	sessState := &SessionState{
+		ID:    "test-session",
+		State: session.StateMap{},
+	}
+	stateBytes, _ := json.Marshal(sessState)
+	stateRows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT state, expires_at FROM session_states")).
+		WithArgs("test-app", "test-user", "test-session").
+		WillReturnRows(stateRows)
+
+	mock.ExpectBegin()
+
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, updated_at = ?, expires_at = ?")).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_track_events")).
+		WithArgs("test-app", "test-user", "test-session", "agui",
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mock.ExpectCommit()
+
+	err = s.AppendTrackEvent(ctx, sess, trackEvent)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDeleteSession_SoftDelete(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -397,6 +450,9 @@ func TestDeleteSession_SoftDelete(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
 		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
@@ -437,16 +493,22 @@ func TestCleanupExpiredSessions(t *testing.T) {
 					WillReturnResult(sqlmock.NewResult(0, 3))
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 					WillReturnResult(sqlmock.NewResult(0, 10))
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+					WillReturnResult(sqlmock.NewResult(0, 5))
 
 				mock.ExpectCommit()
 			} else {
 				mock.ExpectBegin()
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states WHERE expires_at IS NOT NULL AND expires_at <= ?")).
+					WithArgs(now).
 					WillReturnResult(sqlmock.NewResult(0, 5))
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_summaries")).
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_summaries WHERE expires_at IS NOT NULL AND expires_at <= ?")).
+					WithArgs(now).
 					WillReturnResult(sqlmock.NewResult(0, 3))
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events")).
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE")).
 					WillReturnResult(sqlmock.NewResult(0, 10))
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events WHERE")).
+					WillReturnResult(sqlmock.NewResult(0, 5))
 				mock.ExpectCommit()
 			}
 
@@ -656,8 +718,14 @@ func TestCleanupExpiredForUser(t *testing.T) {
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 					WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+					WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(0, 1))
 			} else {
 				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
+					WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events")).
 					WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(0, 1))
 			}
@@ -1034,6 +1102,47 @@ func TestGetSession_WithEvents(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetTrackEvents_WithLimit(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "session-1",
+	}
+	sessState := &SessionState{
+		State: session.StateMap{
+			"tracks": []byte(`["alpha"]`),
+		},
+	}
+
+	event := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"limited"`),
+		Timestamp: time.Now(),
+	}
+	eventBytes, _ := json.Marshal(event)
+	rows := sqlmock.NewRows([]string{"event"}).AddRow(eventBytes)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg(), 1).
+		WillReturnRows(rows)
+
+	result, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, 1, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	alpha := result[0]["alpha"]
+	require.Len(t, alpha, 1)
+	assert.Equal(t, json.RawMessage(`"limited"`), alpha[0].Payload)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCreateSession_ExistingExpired(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1405,6 +1514,8 @@ func TestCleanupExpiredData(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 		WillReturnResult(sqlmock.NewResult(0, 10))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 
 	// Mock cleanup app states
@@ -1442,6 +1553,8 @@ func TestCleanupExpiredSessions_HardDelete(t *testing.T) {
 		WithArgs(now).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE")).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events WHERE")).
 		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 
@@ -1512,6 +1625,11 @@ func TestDeleteSession_HardDelete(t *testing.T) {
 
 	// Mock hard delete session events
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ?")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock hard delete session track events
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events WHERE app_name = ? AND user_id = ? AND session_id = ?")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -1885,13 +2003,13 @@ func TestNewService_WithAllOptions(t *testing.T) {
 
 // mockDBInit mocks the database initialization process
 func mockDBInit(mock sqlmock.Sqlmock) {
-	// Mock: Create 5 tables
-	for i := 0; i < 5; i++ {
+	// Mock: Create 6 tables
+	for i := 0; i < 6; i++ {
 		mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
-	// Mock: Create 10 indexes
-	for i := 0; i < 10; i++ {
+	// Mock: Create 12 indexes
+	for i := 0; i < 12; i++ {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 }

@@ -101,6 +101,20 @@ func (s *Service) getSession(
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
 
+	trackEventsList, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, limit, afterTime)
+	if err != nil {
+		return nil, fmt.Errorf("get track events failed: %w", err)
+	}
+	if len(trackEventsList) > 0 && len(trackEventsList[0]) > 0 {
+		sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEventsList[0]))
+		for trackName, history := range trackEventsList[0] {
+			sess.Tracks[trackName] = &session.TrackEvents{
+				Track:  trackName,
+				Events: history,
+			}
+		}
+	}
+
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -177,6 +191,15 @@ func (s *Service) listSessions(
 		return nil, fmt.Errorf("get summaries list failed: %w", err)
 	}
 
+	// Batch load track events for all sessions.
+	trackEvents, err := s.getTrackEvents(ctx, sessionKeys, sessStates, limit, afterTime)
+	if err != nil {
+		return nil, fmt.Errorf("get track events: %w", err)
+	}
+	if len(trackEvents) != len(sessStates) {
+		return nil, fmt.Errorf("track events count mismatch: %d != %d", len(trackEvents), len(sessStates))
+	}
+
 	sessions := make([]*session.Session, 0, len(sessStates))
 	for i, sessState := range sessStates {
 		var summaries map[string]*session.Summary
@@ -191,6 +214,15 @@ func (s *Service) listSessions(
 			session.WithSessionCreatedAt(sessState.CreatedAt),
 			session.WithSessionUpdatedAt(sessState.UpdatedAt),
 		)
+		if len(trackEvents[i]) > 0 {
+			sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEvents[i]))
+			for trackName, history := range trackEvents[i] {
+				sess.Tracks[trackName] = &session.TrackEvents{
+					Track:  trackName,
+					Events: history,
+				}
+			}
+		}
 		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
 
@@ -277,6 +309,92 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	return nil
 }
 
+// addTrackEvent adds a track event to a session (MySQL syntax).
+func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	now := time.Now()
+
+	// Get current session state.
+	var stateBytes []byte
+	var currentExpiresAt sql.NullTime
+	err := s.mysqlClient.QueryRow(ctx,
+		[]any{&stateBytes, &currentExpiresAt},
+		fmt.Sprintf(`SELECT state, expires_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND deleted_at IS NULL`, s.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID)
+
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("session not found")
+	}
+	if err != nil {
+		return fmt.Errorf("get session state failed: %w", err)
+	}
+
+	var sessState SessionState
+	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
+		return fmt.Errorf("unmarshal session state failed: %w", err)
+	}
+
+	// Check if session is expired.
+	if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
+		log.Infof("appending track event to expired session (app=%s, user=%s, session=%s), will extend expires_at",
+			key.AppName, key.UserID, key.SessionID)
+	}
+
+	// Update session state.
+	sess := &session.Session{
+		ID:      key.SessionID,
+		AppName: key.AppName,
+		UserID:  key.UserID,
+		State:   sessState.State,
+	}
+	if err := sess.AppendTrackEvent(trackEvent); err != nil {
+		return err
+	}
+	sessState.State = sess.State
+	sessState.UpdatedAt = sess.UpdatedAt
+
+	updatedStateBytes, err := json.Marshal(sessState)
+	if err != nil {
+		return fmt.Errorf("marshal session state failed: %w", err)
+	}
+
+	eventBytes, err := json.Marshal(trackEvent)
+	if err != nil {
+		return fmt.Errorf("marshal track event failed: %w", err)
+	}
+
+	expiresAt := calculateExpiresAt(s.sessionTTL)
+
+	// Use transaction to update session state and insert track event.
+	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		// Update session state.
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
+			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
+			updatedStateBytes, sessState.UpdatedAt, expiresAt,
+			key.AppName, key.UserID, key.SessionID)
+		if err != nil {
+			return fmt.Errorf("update session state failed: %w", err)
+		}
+
+		// Insert track event.
+		_, err = tx.ExecContext(ctx,
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionTracks),
+			key.AppName, key.UserID, key.SessionID, trackEvent.Track, eventBytes,
+			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
+		if err != nil {
+			return fmt.Errorf("insert track event failed: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("store track event failed: %w", err)
+	}
+	return nil
+}
+
 // refreshSessionTTL updates the session's updated_at and expires_at timestamps.
 func (s *Service) refreshSessionTTL(ctx context.Context, key session.Key) error {
 	now := time.Now()
@@ -328,6 +446,15 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			if err != nil {
 				return err
 			}
+
+			// Soft delete session track events.
+			_, err = tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ?
+				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionTracks),
+				now, key.AppName, key.UserID, key.SessionID)
+			if err != nil {
+				return err
+			}
 		} else {
 			// Hard delete: permanently remove records
 
@@ -353,6 +480,15 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf(`DELETE FROM %s
 				 WHERE app_name = ? AND user_id = ? AND session_id = ?`, s.tableSessionEvents),
+				key.AppName, key.UserID, key.SessionID)
+			if err != nil {
+				return err
+			}
+
+			// Delete session track events.
+			_, err = tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s
+				 WHERE app_name = ? AND user_id = ? AND session_id = ?`, s.tableSessionTracks),
 				key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err
@@ -438,6 +574,100 @@ func (s *Service) getEventsList(
 	}
 
 	return result, nil
+}
+
+// getTrackEvents loads track events for multiple sessions in batch.
+func (s *Service) getTrackEvents(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	sessionStates []*SessionState,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+	if len(sessionStates) != len(sessionKeys) {
+		return nil, fmt.Errorf("session states count mismatch: %d != %d", len(sessionStates), len(sessionKeys))
+	}
+
+	type trackQuery struct {
+		sessionIdx int
+		track      session.Track
+		query      string
+		args       []any
+	}
+
+	queries := make([]*trackQuery, 0)
+	now := time.Now()
+	for i, key := range sessionKeys {
+		tracks, err := session.TracksFromState(sessionStates[i].State)
+		if err != nil {
+			return nil, fmt.Errorf("get track list failed: %w", err)
+		}
+		for _, track := range tracks {
+			var query string
+			var args []any
+			if limit > 0 {
+				query = fmt.Sprintf(`SELECT event FROM %s
+					WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
+					AND (expires_at IS NULL OR expires_at > ?)
+					AND created_at > ?
+					AND deleted_at IS NULL
+					ORDER BY created_at DESC
+					LIMIT ?`, s.tableSessionTracks)
+				args = []any{key.AppName, key.UserID, key.SessionID, track, now, afterTime, limit}
+			} else {
+				query = fmt.Sprintf(`SELECT event FROM %s
+					WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
+					AND (expires_at IS NULL OR expires_at > ?)
+					AND created_at > ?
+					AND deleted_at IS NULL
+					ORDER BY created_at DESC`, s.tableSessionTracks)
+				args = []any{key.AppName, key.UserID, key.SessionID, track, now, afterTime}
+			}
+			queries = append(queries, &trackQuery{
+				sessionIdx: i,
+				track:      track,
+				query:      query,
+				args:       args,
+			})
+		}
+	}
+
+	results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
+	for _, q := range queries {
+		events := make([]session.TrackEvent, 0)
+		err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+			var eventBytes []byte
+			if err := rows.Scan(&eventBytes); err != nil {
+				return err
+			}
+			var evt session.TrackEvent
+			if err := json.Unmarshal(eventBytes, &evt); err != nil {
+				return fmt.Errorf("unmarshal track event failed: %w", err)
+			}
+			events = append(events, evt)
+			return nil
+		}, q.query, q.args...)
+		if err != nil {
+			return nil, fmt.Errorf("query track events failed: %w", err)
+		}
+
+		for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+			events[i], events[j] = events[j], events[i]
+		}
+		if results[q.sessionIdx] == nil {
+			results[q.sessionIdx] = make(map[session.Track][]session.TrackEvent)
+		}
+		results[q.sessionIdx][q.track] = events
+	}
+	for i := range results {
+		if results[i] == nil {
+			results[i] = make(map[session.Track][]session.TrackEvent)
+		}
+	}
+	return results, nil
 }
 
 // getSummariesList loads summaries for multiple sessions in batch.

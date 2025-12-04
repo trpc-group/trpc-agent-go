@@ -596,6 +596,9 @@ func TestDeleteSessionState(t *testing.T) {
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 					WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
 					WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+					WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+					WillReturnResult(sqlmock.NewResult(0, 0))
 			} else {
 				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
 					WithArgs(key.AppName, key.UserID, key.SessionID).
@@ -604,6 +607,9 @@ func TestDeleteSessionState(t *testing.T) {
 					WithArgs(key.AppName, key.UserID, key.SessionID).
 					WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events")).
+					WithArgs(key.AppName, key.UserID, key.SessionID).
+					WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events")).
 					WithArgs(key.AppName, key.UserID, key.SessionID).
 					WillReturnResult(sqlmock.NewResult(0, 0))
 			}

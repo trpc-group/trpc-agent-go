@@ -53,6 +53,32 @@ CREATE INDEX idx_session_events_expires
 ON session_events(expires_at);
 
 -- ============================================================================
+-- Table: session_track_events
+-- Description: Stores session track events
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS session_track_events (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    track VARCHAR(255) NOT NULL,
+    event JSON NOT NULL COMMENT 'Track event data in JSON format',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Session track events table';
+
+-- Lookup index for querying track events by session and track
+CREATE INDEX idx_session_track_events_lookup
+ON session_track_events(app_name, user_id, session_id, track, created_at);
+
+-- TTL cleanup index
+CREATE INDEX idx_session_track_events_expires
+ON session_track_events(expires_at);
+
+-- ============================================================================
 -- Table: session_summaries
 -- Description: Stores AI-generated session summaries
 -- ============================================================================
