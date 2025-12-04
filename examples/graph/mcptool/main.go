@@ -80,7 +80,8 @@ type mcpGraphChat struct {
 
 // run sets up the graph and starts the interactive loop.
 func (c *mcpGraphChat) run() error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 
 	if err := c.setup(ctx); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
