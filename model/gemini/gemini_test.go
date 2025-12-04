@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"net/http"
 	"reflect"
 	"testing"
 	"time"
@@ -450,12 +451,12 @@ func TestNew(t *testing.T) {
 		opts []Option
 	}
 	tests := []struct {
-		name string
-		args args
-		want *Model
+		name    string
+		args    args
+		wantErr bool
 	}{
 		{
-			name: "success",
+			name: "failed",
 			args: args{
 				ctx:  context.Background(),
 				name: "gemini-pro",
@@ -464,13 +465,36 @@ func TestNew(t *testing.T) {
 					WithMaxInputTokens(10),
 				},
 			},
-			want: &Model{},
+			wantErr: true,
+		},
+		{
+			name: "success",
+			args: args{
+				ctx:  context.Background(),
+				name: "gemini-pro",
+				opts: []Option{
+					WithTokenTailoringConfig(config),
+					WithMaxInputTokens(10),
+					WithGeminiClientConfig(
+						&genai.ClientConfig{
+							APIKey:     "APIKey",
+							Backend:    2,
+							HTTPClient: http.DefaultClient,
+						},
+					),
+				},
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := New(tt.args.ctx, tt.args.name, tt.args.opts...)
-			assert.NotNil(t, err)
+			if tt.wantErr {
+				assert.NotNil(t, err)
+				return
+			} else {
+				assert.Nil(t, err)
+			}
 		})
 	}
 }
