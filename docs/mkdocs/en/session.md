@@ -1269,6 +1269,7 @@ Configure the summarizer behavior with the following options:
 
 - **`WithMaxSummaryWords(maxWords int)`**: Limit the summary to a maximum word count. The limit is included in the prompt to guide the model's generation. Example: `WithMaxSummaryWords(150)` requests summaries within 150 words.
 - **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. Optionally include `{max_summary_words}` for word limit instructions.
+- **`WithSkipRecentEvents(count int)`**: Skip the most recent events during summarization. These events will be excluded from the summary input but remain in the session. Useful for avoiding summarization of very recent, potentially incomplete conversations. A value <= 0 means no events are skipped. Example: `WithSkipRecentEvents(2)` skips the last 2 events.
 
 **Example with custom prompt:**
 
@@ -1287,6 +1288,7 @@ summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithPrompt(customPrompt),
     summary.WithMaxSummaryWords(100),
+    summary.WithSkipRecentEvents(2),  // Skip the last 2 events
     summary.WithEventThreshold(15),
 )
 ```
