@@ -88,10 +88,17 @@ func WithNodeType(nodeType NodeType) Option {
 	}
 }
 
-// WithToolSets sets the tool sets for the node.
+// WithToolSets sets the ToolSets for the node. This is a declarative
+// per-node configuration used by AddLLMNode to build the LLM runner.
 func WithToolSets(toolSets []tool.ToolSet) Option {
 	return func(node *Node) {
-		node.toolSets = toolSets
+		if len(toolSets) == 0 {
+			node.toolSets = nil
+			return
+		}
+		copied := make([]tool.ToolSet, len(toolSets))
+		copy(copied, toolSets)
+		node.toolSets = copied
 	}
 }
 

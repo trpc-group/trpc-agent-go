@@ -47,17 +47,18 @@ func defaultCodeExecutor() codeexecutor.CodeExecutor {
 
 // LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
-	name                 string
-	mu                   sync.RWMutex
-	model                model.Model
-	models               map[string]model.Model // Registered models for switching
-	description          string
-	instruction          string
-	systemPrompt         string
-	genConfig            model.GenerationConfig
-	flow                 flow.Flow
-	tools                []tool.Tool     // All tools (user tools + framework tools)
-	userToolNames        map[string]bool // Names of tools explicitly registered by user via WithTools and WithToolSets
+	name          string
+	mu            sync.RWMutex
+	model         model.Model
+	models        map[string]model.Model // Registered models for switching
+	description   string
+	instruction   string
+	systemPrompt  string
+	genConfig     model.GenerationConfig
+	flow          flow.Flow
+	tools         []tool.Tool     // All tools (user tools + framework tools)
+	userToolNames map[string]bool // Names of tools explicitly registered
+	// via WithTools and WithToolSets.
 	codeExecutor         codeexecutor.CodeExecutor
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
@@ -587,21 +588,34 @@ func (a *LLMAgent) Info() agent.Info {
 	}
 }
 
-// Tools implements the agent.Agent interface.
-// It returns the list of tools available to the agent, including transfer tools.
-func (a *LLMAgent) Tools() []tool.Tool {
+// getAllToolsLocked builds the full tool list (user tools plus framework
+// tools like transfer_to_agent) under the caller's read lock. It always
+// returns a fresh slice so callers can safely use it after releasing the
+// lock without data races.
+func (a *LLMAgent) getAllToolsLocked() []tool.Tool {
+	tools := make([]tool.Tool, len(a.tools))
+	copy(tools, a.tools)
+
 	if len(a.subAgents) == 0 {
-		return a.tools
+		return tools
 	}
 
-	// Create agent info for sub-agents.
 	agentInfos := make([]agent.Info, len(a.subAgents))
 	for i, subAgent := range a.subAgents {
 		agentInfos[i] = subAgent.Info()
 	}
 
 	transferTool := transfer.New(agentInfos)
-	return append(a.tools, transferTool)
+	return append(tools, transferTool)
+}
+
+// Tools implements the agent.Agent interface. It returns the list of
+// tools available to the agent, including transfer tools.
+func (a *LLMAgent) Tools() []tool.Tool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	return a.getAllToolsLocked()
 }
 
 // SubAgents returns the list of sub-agents for this agent.
@@ -620,20 +634,24 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
-// UserTools returns the list of tools that were explicitly registered by the user
-// via WithTools and WithToolSets options.
+// UserTools returns the list of tools that were explicitly registered
+// by the user via WithTools and WithToolSets options.
 //
 // User tools (can be filtered):
 //   - Tools registered via WithTools
 //   - Tools registered via WithToolSets
 //
 // Framework tools (never filtered, not included in this list):
-//   - knowledge_search / agentic_knowledge_search (auto-added when WithKnowledge is set)
+//   - knowledge_search / agentic_knowledge_search (auto-added when
+//     WithKnowledge is set)
 //   - transfer_to_agent (auto-added when WithSubAgents is set)
 //
-// This method is used by the tool filtering logic to distinguish user tools from framework tools.
+// This method is used by the tool filtering logic to distinguish user
+// tools from framework tools.
 func (a *LLMAgent) UserTools() []tool.Tool {
-	// Filter user tools from all tools
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	userTools := make([]tool.Tool, 0, len(a.userToolNames))
 	for _, t := range a.tools {
 		if a.userToolNames[t.Declaration().Name] {
@@ -645,20 +663,29 @@ func (a *LLMAgent) UserTools() []tool.Tool {
 
 // FilterTools filters the list of tools based on the provided filter function.
 func (a *LLMAgent) FilterTools(ctx context.Context) []tool.Tool {
-	filteredTools := make([]tool.Tool, 0, len(a.tools))
+	a.mu.RLock()
+	tools := a.getAllToolsLocked()
+	userToolNames := make(map[string]bool, len(a.userToolNames))
+	for name, isUser := range a.userToolNames {
+		userToolNames[name] = isUser
+	}
+	filter := a.option.toolFilter
+	a.mu.RUnlock()
 
-	for _, t := range a.Tools() {
-		if !a.userToolNames[t.Declaration().Name] {
-			filteredTools = append(filteredTools, t)
+	filtered := make([]tool.Tool, 0, len(tools))
+	for _, t := range tools {
+		name := t.Declaration().Name
+		if !userToolNames[name] {
+			filtered = append(filtered, t)
 			continue
 		}
-		// Apply user tool filter
-		if a.option.toolFilter == nil || a.option.toolFilter(ctx, t) {
-			filteredTools = append(filteredTools, t)
+
+		if filter == nil || filter(ctx, t) {
+			filtered = append(filtered, t)
 		}
 	}
 
-	return filteredTools
+	return filtered
 }
 
 // CodeExecutor returns the code executor used by this agent.
@@ -666,6 +693,92 @@ func (a *LLMAgent) FilterTools(ctx context.Context) []tool.Tool {
 // This allows the agent to execute code blocks in different environments.
 func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
 	return a.codeExecutor
+}
+
+// refreshToolsLocked recomputes the aggregated tool list and user tool
+// tracking map from the current options. Caller must hold a.mu.Lock.
+func (a *LLMAgent) refreshToolsLocked() {
+	tools, userToolNames := registerTools(&a.option)
+	a.tools = tools
+	a.userToolNames = userToolNames
+}
+
+// AddToolSet adds or replaces a tool set at runtime in a
+// concurrency-safe way. If another ToolSet with the same Name()
+// already exists, it will be replaced. Subsequent invocations of the
+// agent will see the updated tool list without recreating the agent.
+func (a *LLMAgent) AddToolSet(toolSet tool.ToolSet) {
+	if toolSet == nil {
+		return
+	}
+
+	name := toolSet.Name()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	replaced := false
+	for i, ts := range a.option.ToolSets {
+		if name != "" && ts.Name() == name {
+			a.option.ToolSets[i] = toolSet
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		a.option.ToolSets = append(a.option.ToolSets, toolSet)
+	}
+
+	a.refreshToolsLocked()
+}
+
+// RemoveToolSet removes all tool sets whose Name() matches the given
+// name. It returns true if at least one ToolSet was removed. Tools
+// from the removed tool sets will no longer be exposed on future
+// invocations.
+func (a *LLMAgent) RemoveToolSet(name string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if len(a.option.ToolSets) == 0 {
+		return false
+	}
+
+	dst := a.option.ToolSets[:0]
+	removed := false
+	for _, ts := range a.option.ToolSets {
+		if ts.Name() == name {
+			removed = true
+			continue
+		}
+		dst = append(dst, ts)
+	}
+	if !removed {
+		return false
+	}
+	a.option.ToolSets = dst
+
+	a.refreshToolsLocked()
+
+	return true
+}
+
+// SetToolSets replaces the agent ToolSets with the provided slice in a
+// concurrency-safe way. Subsequent invocations will see tools from
+// exactly these ToolSets plus framework tools (knowledge, skills).
+func (a *LLMAgent) SetToolSets(toolSets []tool.ToolSet) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if len(toolSets) == 0 {
+		a.option.ToolSets = nil
+	} else {
+		copied := make([]tool.ToolSet, len(toolSets))
+		copy(copied, toolSets)
+		a.option.ToolSets = copied
+	}
+
+	a.refreshToolsLocked()
 }
 
 // SetModel sets the model for this agent in a concurrency-safe way.
