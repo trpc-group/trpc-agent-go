@@ -1,8 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/tailor
 
-go 1.24.10
-
-toolchain go1.24.11
+go 1.24.0
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..
