@@ -28,7 +28,7 @@ func init() {
 // It allows front-end users to configure an LLMAgent directly in DSL without pre-registration.
 //
 // This component wraps the llmagent.New() constructor and supports common LLMAgent options:
-//   - model_name: Model to use (from ModelRegistry)
+//   - model_id: Logical model ID resolved by ModelProvider/ModelRegistry
 //   - instruction: System prompt/instruction
 //   - tools: List of tool names (from ToolRegistry)
 //   - structured_output: JSON schema for structured output
@@ -43,7 +43,7 @@ func init() {
 //	    "ref": "builtin.llmagent"
 //	  },
 //	  "config": {
-//	    "model_name": "gpt-4-turbo",
+//	    "model_id": "gpt-4-turbo",
 //	    "instruction": "You are a classification agent. Classify user intent into categories.",
 //	    "tools": ["search", "calculator"],
 //	    "temperature": 0.7,
@@ -85,9 +85,9 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 		},
 		ConfigSchema: []registry.ParameterSchema{
 			{
-				Name:        "model_name",
-				DisplayName: "Model Name",
-				Description: "Name of the model to use (must be registered in ModelRegistry)",
+				Name:        "model_id",
+				DisplayName: "Model ID",
+				Description: "Logical model identifier resolved by the platform's ModelProvider/ModelRegistry",
 				Type:        "string",
 				TypeID:      "string",
 				Kind:        "string",
@@ -270,13 +270,13 @@ func (c *LLMAgentComponent) Execute(ctx context.Context, config registry.Compone
 
 // Validate validates the component configuration.
 func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
-	// Validate model_name
-	modelName, ok := config["model_name"].(string)
+	// Validate model_id
+	modelID, ok := config["model_id"].(string)
 	if !ok {
-		return fmt.Errorf("model_name must be a string")
+		return fmt.Errorf("model_id must be a string")
 	}
-	if modelName == "" {
-		return fmt.Errorf("model_name cannot be empty")
+	if modelID == "" {
+		return fmt.Errorf("model_id cannot be empty")
 	}
 
 	// Validate instruction if present

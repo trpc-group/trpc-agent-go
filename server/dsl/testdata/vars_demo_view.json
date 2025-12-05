@@ -22,7 +22,7 @@
           "label": "Classifier",
           "node_type": "builtin.llmagent",
           "config": {
-            "model_name": "deepseek-chat",
+            "model_id": "deepseek-chat",
             "instruction": "Classify how complex the user's question is (short / detailed) and provide a short summary.",
             "structured_output": {
               "type": "object",
@@ -52,7 +52,7 @@
           "label": "Plain agent",
           "node_type": "builtin.llmagent",
           "config": {
-            "model_name": "deepseek-chat",
+            "model_id": "deepseek-chat",
             "instruction": "Answer the user's question briefly in one or two sentences."
           }
         }

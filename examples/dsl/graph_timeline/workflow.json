@@ -14,7 +14,7 @@
       "label": "Classifier",
       "node_type": "builtin.llmagent",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_id": "deepseek-chat",
         "instruction": "You are a helpful assistant.\n\nRead the user input and do two things:\n1. Classify how complex the user's request is using one of these labels:\n   - \"short\" for very simple questions that need only a brief answer.\n   - \"detailed\" for questions that would benefit from a longer, more detailed answer.\n2. Provide a short natural-language summary of what the user is asking for.\n\nYou MUST respond strictly as JSON that matches the provided schema.",
         "description": "LLM agent that classifies the request as short or detailed and summarizes it.",
         "structured_output": {
@@ -42,7 +42,7 @@
       "label": "Short answer agent",
       "node_type": "builtin.llmagent",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_id": "deepseek-chat",
         "instruction": "You are a helpful assistant. Answer the user's request briefly in 1-2 sentences.",
         "description": "Produces a short answer when the classifier decides complexity is \"short\".",
         "temperature": 0.7,
@@ -54,7 +54,7 @@
       "label": "Detailed answer agent",
       "node_type": "builtin.llmagent",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_id": "deepseek-chat",
         "instruction": "You are a helpful assistant. Provide a more detailed answer (3-5 sentences) with helpful context.",
         "description": "Produces a detailed answer when the classifier decides complexity is \"detailed\".",
         "temperature": 0.7,

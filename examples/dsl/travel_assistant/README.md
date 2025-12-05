@@ -503,9 +503,9 @@ suggestActivitiesTool := createSuggestActivitiesTool()
 toolRegistry.MustRegister("suggest_activities", suggestActivitiesTool)
 
 // 3. Compile DSL to Graph with tool registry
-compiler := dsl.NewCompiler(registry.DefaultRegistry).
-    WithModelRegistry(modelRegistry).
-    WithToolRegistry(toolRegistry)
+    compiler := dsl.NewCompiler(registry.DefaultRegistry).
+        WithModelProvider(modelRegistry).
+        WithToolProvider(toolRegistry)
 compiledGraph, _ := compiler.Compile(&workflow)
 
 // 4. Wrap Graph in GraphAgent

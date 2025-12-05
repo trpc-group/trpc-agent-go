@@ -22,9 +22,9 @@ import (
 // into imperative Go code that can be executed by trpc-agent-go.
 type Compiler struct {
 	registry        *registry.Registry
-	modelRegistry   *registry.ModelRegistry
-	toolRegistry    *registry.ToolRegistry
-	toolSetRegistry *registry.ToolSetRegistry
+	modelProvider   ModelProvider
+	toolProvider    ToolProvider
+	toolSetProvider ToolSetProvider
 	reducerRegistry *registry.ReducerRegistry
 	agentRegistry   *registry.AgentRegistry
 	schemaInference *SchemaInference
@@ -67,7 +67,9 @@ type whileExpansion struct {
 func NewCompiler(reg *registry.Registry) *Compiler {
 	c := &Compiler{
 		registry:        reg,
-		modelRegistry:   registry.NewModelRegistry(),
+		modelProvider:   registry.NewModelRegistry(),
+		toolProvider:    registry.DefaultToolRegistry,
+		toolSetProvider: registry.DefaultToolSetRegistry,
 		reducerRegistry: registry.NewReducerRegistry(),
 		agentRegistry:   registry.NewAgentRegistry(),
 		schemaInference: NewSchemaInference(reg),
@@ -77,24 +79,34 @@ func NewCompiler(reg *registry.Registry) *Compiler {
 	return c
 }
 
-// WithModelRegistry sets the model registry for the compiler.
-// This allows the compiler to resolve model references in LLM nodes.
-func (c *Compiler) WithModelRegistry(modelRegistry *registry.ModelRegistry) *Compiler {
-	c.modelRegistry = modelRegistry
+// WithModelProvider sets a custom model provider for the compiler. This
+// allows integration with platform-level model services or other dynamic
+// resolution strategies.
+func (c *Compiler) WithModelProvider(provider ModelProvider) *Compiler {
+	c.modelProvider = provider
 	return c
 }
 
-// WithToolRegistry sets the tool registry for the compiler.
-// This allows the compiler to resolve tool references in LLM nodes.
-func (c *Compiler) WithToolRegistry(toolRegistry *registry.ToolRegistry) *Compiler {
-	c.toolRegistry = toolRegistry
+// WithToolProvider sets the tool provider for the compiler. This allows
+// callers to supply a user/tenant specific provider that may combine
+// framework built‑in tools with application or user defined tools.
+func (c *Compiler) WithToolProvider(provider ToolProvider) *Compiler {
+	c.toolProvider = provider
 	return c
 }
 
-// WithToolSetRegistry sets the toolset registry for the compiler.
-// This allows the compiler to resolve toolset references in LLM nodes.
+// WithToolSetProvider sets the ToolSet provider for the compiler. This allows
+// callers to supply a user/tenant specific provider that may combine
+// framework built‑in ToolSets with application or user defined ToolSets.
+func (c *Compiler) WithToolSetProvider(provider ToolSetProvider) *Compiler {
+	c.toolSetProvider = provider
+	return c
+}
+
+// WithToolSetRegistry is a convenience helper for callers that build a
+// concrete ToolSetRegistry. It simply forwards to WithToolSetProvider.
 func (c *Compiler) WithToolSetRegistry(toolSetRegistry *registry.ToolSetRegistry) *Compiler {
-	c.toolSetRegistry = toolSetRegistry
+	c.toolSetProvider = toolSetRegistry
 	return c
 }
 
@@ -105,16 +117,6 @@ func (c *Compiler) WithReducerRegistry(reducerRegistry *registry.ReducerRegistry
 	// Update schema inference to use the new reducer registry
 	c.schemaInference.reducerRegistry = reducerRegistry
 	return c
-}
-
-// ModelRegistry returns the model registry used by the compiler.
-func (c *Compiler) ModelRegistry() *registry.ModelRegistry {
-	return c.modelRegistry
-}
-
-// ToolRegistry returns the tool registry used by the compiler.
-func (c *Compiler) ToolRegistry() *registry.ToolRegistry {
-	return c.toolRegistry
 }
 
 // WithAgentRegistry sets the agent registry for the compiler.
@@ -473,20 +475,20 @@ func (c *Compiler) createNodeFunc(node Node) (graph.NodeFunc, error) {
 func (c *Compiler) createLLMNodeFunc(node Node) (graph.NodeFunc, error) {
 	engine := node.EngineNode
 
-	// Get model_name from config
-	modelName, ok := engine.Config["model_name"].(string)
-	if !ok || modelName == "" {
-		return nil, fmt.Errorf("model_name is required in LLM node config")
+	// Get model_id from config
+	modelID, ok := engine.Config["model_id"].(string)
+	if !ok || modelID == "" {
+		return nil, fmt.Errorf("model_id is required in LLM node config")
 	}
 
 	// Get model from registry
-	if c.modelRegistry == nil {
-		return nil, fmt.Errorf("model registry is not set, use WithModelRegistry() to set it")
+	if c.modelProvider == nil {
+		return nil, fmt.Errorf("model provider is not set, use WithModelProvider() to set it")
 	}
 
-	llmModel, err := c.modelRegistry.Get(modelName)
+	llmModel, err := c.modelProvider.Get(modelID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get model %q from registry: %w", modelName, err)
+		return nil, fmt.Errorf("failed to resolve model %q: %w", modelID, err)
 	}
 
 	// Get instruction from config (optional)
@@ -497,20 +499,20 @@ func (c *Compiler) createLLMNodeFunc(node Node) (graph.NodeFunc, error) {
 
 	// Get tools from config (optional)
 	// Tools can be specified as:
-	// 1. A list of tool names (strings) - resolved from ToolRegistry
-	// 2. "*" - use all tools from ToolRegistry
+	// 1. A list of tool names (strings) - resolved from ToolProvider
+	// 2. "*" - use all tools from ToolProvider
 	tools := make(map[string]tool.Tool)
 
-	if c.toolRegistry != nil {
+	if c.toolProvider != nil {
 		if toolsConfig, ok := engine.Config["tools"]; ok {
 			switch v := toolsConfig.(type) {
 			case string:
 				// "*" means all tools
 				if v == "*" {
-					tools = c.toolRegistry.GetAll()
+					tools = c.toolProvider.GetAll()
 				} else {
 					// Single tool name
-					if t, err := c.toolRegistry.Get(v); err == nil {
+					if t, err := c.toolProvider.Get(v); err == nil {
 						tools[v] = t
 					}
 				}
@@ -523,13 +525,13 @@ func (c *Compiler) createLLMNodeFunc(node Node) (graph.NodeFunc, error) {
 					}
 				}
 				if len(toolNames) > 0 {
-					if resolvedTools, err := c.toolRegistry.GetMultiple(toolNames); err == nil {
+					if resolvedTools, err := c.toolProvider.GetMultiple(toolNames); err == nil {
 						tools = resolvedTools
 					}
 				}
 			case []string:
 				// List of tool names (already strings)
-				if resolvedTools, err := c.toolRegistry.GetMultiple(v); err == nil {
+				if resolvedTools, err := c.toolProvider.GetMultiple(v); err == nil {
 					tools = resolvedTools
 				}
 			}
@@ -577,16 +579,16 @@ func (c *Compiler) createToolsNodeFunc(node Node) (graph.NodeFunc, error) {
 	// 2. "*" - use all tools from ToolRegistry
 	tools := make(map[string]tool.Tool)
 
-	if c.toolRegistry != nil {
+	if c.toolProvider != nil {
 		if toolsConfig, ok := engine.Config["tools"]; ok {
 			switch v := toolsConfig.(type) {
 			case string:
 				// "*" means all tools
 				if v == "*" {
-					tools = c.toolRegistry.GetAll()
+					tools = c.toolProvider.GetAll()
 				} else {
 					// Single tool name
-					if t, err := c.toolRegistry.Get(v); err == nil {
+					if t, err := c.toolProvider.Get(v); err == nil {
 						tools[v] = t
 					}
 				}
@@ -599,19 +601,19 @@ func (c *Compiler) createToolsNodeFunc(node Node) (graph.NodeFunc, error) {
 					}
 				}
 				if len(toolNames) > 0 {
-					if resolvedTools, err := c.toolRegistry.GetMultiple(toolNames); err == nil {
+					if resolvedTools, err := c.toolProvider.GetMultiple(toolNames); err == nil {
 						tools = resolvedTools
 					}
 				}
 			case []string:
 				// List of tool names (already strings)
-				if resolvedTools, err := c.toolRegistry.GetMultiple(v); err == nil {
+				if resolvedTools, err := c.toolProvider.GetMultiple(v); err == nil {
 					tools = resolvedTools
 				}
 			}
 		} else {
 			// If no tools config specified, use all tools from registry
-			tools = c.toolRegistry.GetAll()
+			tools = c.toolProvider.GetAll()
 		}
 	}
 
@@ -917,7 +919,7 @@ func (c *llmPseudoComponent) Execute(ctx context.Context, config registry.Compon
 // createLLMAgentNodeFunc creates a NodeFunc for an LLMAgent component.
 // This dynamically creates an LLMAgent based on DSL configuration and executes it.
 func (c *Compiler) createLLMAgentNodeFunc(node Node) (graph.NodeFunc, error) {
-	return NewLLMAgentNodeFuncFromConfig(node.ID, node.EngineNode.Config, c.modelRegistry, c.toolRegistry)
+	return NewLLMAgentNodeFuncFromConfig(node.ID, node.EngineNode.Config, c.modelProvider, c.toolProvider)
 }
 
 // createUserApprovalNodeFunc creates a NodeFunc for a user approval step.

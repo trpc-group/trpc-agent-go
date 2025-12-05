@@ -60,9 +60,9 @@ func (c *LLMComponent) Metadata() registry.ComponentMetadata {
 
 		ConfigSchema: []registry.ParameterSchema{
 			{
-				Name:        "model_name",
-				DisplayName: "Model Name",
-				Description: "Name of the model registered in ModelRegistry",
+				Name:        "model_id",
+				DisplayName: "Model ID",
+				Description: "Logical model identifier resolved by the platform's ModelProvider/ModelRegistry",
 				Type:        "string",
 				GoType:      reflect.TypeOf(""),
 				Required:    true,

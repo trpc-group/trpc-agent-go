@@ -77,8 +77,8 @@ func run() error {
 
 	// Step 3: Compile graph
 	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry).
-		WithToolRegistry(registry.DefaultToolRegistry)
+		WithModelProvider(modelRegistry).
+		WithToolProvider(registry.DefaultToolRegistry)
 
 	compiledGraph, err := compiler.Compile(&graphDef)
 	if err != nil {

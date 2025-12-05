@@ -101,8 +101,8 @@ func NewServer() *Server {
 
 	// Create compiler
 	compiler := dsl.NewCompiler(componentRegistry).
-		WithModelRegistry(modelRegistry).
-		WithToolRegistry(toolRegistry).
+		WithModelProvider(modelRegistry).
+		WithToolProvider(toolRegistry).
 		WithToolSetRegistry(toolSetRegistry)
 
 	return &Server{

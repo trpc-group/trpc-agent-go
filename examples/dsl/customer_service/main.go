@@ -65,7 +65,7 @@ func runInteractive() error {
 
 	// Compile
 	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry)
+		WithModelProvider(modelRegistry)
 
 	graphCompiled, err := compiler.Compile(&graphDef)
 	if err != nil {

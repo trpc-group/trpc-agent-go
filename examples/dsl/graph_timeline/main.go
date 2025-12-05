@@ -70,9 +70,9 @@ func run() error {
 	fmt.Printf("   Nodes: %d\n", len(graphDef.Nodes))
 	fmt.Println()
 
-	// Compile graph with ModelRegistry so builtin.llmagent can resolve model_name.
+	// Compile graph with ModelRegistry so builtin.llmagent can resolve model_id.
 	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry)
+		WithModelProvider(modelRegistry)
 
 	compiledGraph, err := compiler.Compile(&graphDef)
 	if err != nil {

@@ -195,11 +195,11 @@
     },
     "AgentConfig": {
       "type": "object",
-      "required": ["model_name"],
+      "required": ["model_id"],
       "properties": {
-        "model_name": {
+        "model_id": {
           "type": "string",
-          "description": "Name of the model to use (must exist in the ModelRegistry at runtime)."
+          "description": "Logical model identifier resolved by the platform's ModelProvider/ModelRegistry at runtime."
         },
         "instruction": {
           "type": "string",

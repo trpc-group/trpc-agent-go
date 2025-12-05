@@ -86,8 +86,8 @@ func main() {
 
 	// Compile DSL to Graph with Model Registry and Tool Registry
 	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry).
-		WithToolRegistry(toolRegistry)
+		WithModelProvider(modelRegistry).
+		WithToolProvider(toolRegistry)
 
 	compiledGraph, err := compiler.Compile(workflow)
 	if err != nil {

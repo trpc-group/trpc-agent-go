@@ -38,7 +38,7 @@ The MCP server is launched as a subprocess via stdio, demonstrating how to integ
     "ref": "builtin.llmagent"
   },
   "config": {
-    "model_name": "deepseek-chat",
+    "model_id": "deepseek-chat",
     "instruction": "You are a helpful assistant with access to echo and add tools via MCP...",
     "tools": ["calculator"],
     "mcp_tools": [
@@ -276,9 +276,9 @@ workflow.json → Parser → Compiler → Graph → GraphAgent → Runner → Ev
 parser := dsl.NewParser()
 workflow, _ := parser.ParseFile("workflow.json")
 
-compiler := dsl.NewCompiler(registry.DefaultRegistry).
-    WithModelRegistry(modelRegistry).
-    WithToolRegistry(toolRegistry)
+    compiler := dsl.NewCompiler(registry.DefaultRegistry).
+        WithModelProvider(modelRegistry).
+        WithToolProvider(toolRegistry)
 
 compiledGraph, _ := compiler.Compile(workflow)
 

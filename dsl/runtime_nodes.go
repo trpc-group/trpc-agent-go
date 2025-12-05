@@ -20,7 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -31,31 +30,32 @@ import (
 )
 
 // NewLLMAgentNodeFuncFromConfig creates a NodeFunc for a builtin.llmagent node
-// given its ID, configuration and model/tool registries. It is a refactoring
-// of the compiler's createLLMAgentNodeFunc method so that codegen can reuse
-// the same behavior.
+// given its ID, configuration and model/tool providers. It is a refactoring
+// of the compiler's createLLMAgentNodeFunc method so that codegen and other
+// callers can reuse the same behavior while remaining agnostic to how
+// models are sourced (env vars, platform model service, etc.).
 func NewLLMAgentNodeFuncFromConfig(
 	nodeID string,
 	cfg map[string]any,
-	modelRegistry *registry.ModelRegistry,
-	toolRegistry *registry.ToolRegistry,
+	models ModelProvider,
+	toolsProvider ToolProvider,
 ) (graph.NodeFunc, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("nodeID is required for NewLLMAgentNodeFuncFromConfig")
 	}
 
-	modelName, ok := cfg["model_name"].(string)
-	if !ok || modelName == "" {
-		return nil, fmt.Errorf("model_name is required for builtin.llmagent")
+	modelID, ok := cfg["model_id"].(string)
+	if !ok || modelID == "" {
+		return nil, fmt.Errorf("model_id is required for builtin.llmagent")
 	}
 
-	if modelRegistry == nil {
-		return nil, fmt.Errorf("model registry is not set")
+	if models == nil {
+		return nil, fmt.Errorf("model provider is not set")
 	}
 
-	llmModel, err := modelRegistry.Get(modelName)
+	llmModel, err := models.Get(modelID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get model %q from registry: %w", modelName, err)
+		return nil, fmt.Errorf("failed to resolve model %q: %w", modelID, err)
 	}
 
 	instruction := ""
@@ -68,22 +68,22 @@ func NewLLMAgentNodeFuncFromConfig(
 		description = desc
 	}
 
-	// Resolve tools from registry (if provided).
+	// Resolve tools from provider (if provided).
 	var tools []tool.Tool
-	if toolRegistry != nil {
+	if toolsProvider != nil {
 		if toolsConfig, ok := cfg["tools"]; ok {
 			switch v := toolsConfig.(type) {
 			case []interface{}:
 				for _, toolNameInterface := range v {
 					if toolName, ok := toolNameInterface.(string); ok {
-						if t, err := toolRegistry.Get(toolName); err == nil {
+						if t, err := toolsProvider.Get(toolName); err == nil {
 							tools = append(tools, t)
 						}
 					}
 				}
 			case []string:
 				for _, toolName := range v {
-					if t, err := toolRegistry.Get(toolName); err == nil {
+					if t, err := toolsProvider.Get(toolName); err == nil {
 						tools = append(tools, t)
 					}
 				}
@@ -264,7 +264,7 @@ func NewLLMAgentNodeFuncFromConfig(
 			opts = append(opts, llmagent.WithGenerationConfig(genConfig))
 		}
 
-		agentName := fmt.Sprintf("llmagent_%s_%s", nodeID, modelName)
+		agentName := fmt.Sprintf("llmagent_%s_%s", nodeID, modelID)
 		llmAgent := llmagent.New(agentName, opts...)
 
 		parentInvocation, ok := agent.InvocationFromContext(ctx)

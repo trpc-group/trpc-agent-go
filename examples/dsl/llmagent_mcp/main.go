@@ -64,8 +64,8 @@ func run() error {
 
 	// Step 5: Compile workflow
 	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry).
-		WithToolRegistry(registry.DefaultToolRegistry)
+		WithModelProvider(modelRegistry).
+		WithToolProvider(registry.DefaultToolRegistry)
 
 	compiledGraph, err := compiler.Compile(workflow)
 	if err != nil {

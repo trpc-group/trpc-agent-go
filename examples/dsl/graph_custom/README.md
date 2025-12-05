@@ -34,7 +34,7 @@ modelRegistry.MustRegister("deepseek-chat", modelInstance)
 // In DSL
 {
   "config": {
-    "model_name": "deepseek-chat"
+    "model_id": "deepseek-chat"
   }
 }
 ```
@@ -175,9 +175,9 @@ toolRegistry.MustRegister("analyze_complexity", complexityTool)
 ### 2. Compile the DSL
 
 ```go
-compiler := dsl.NewCompiler(registry.DefaultRegistry).
-    WithModelRegistry(modelRegistry).
-    WithToolRegistry(toolRegistry)
+    compiler := dsl.NewCompiler(registry.DefaultRegistry).
+        WithModelProvider(modelRegistry).
+        WithToolProvider(toolRegistry)
 
 compiledGraph, err := compiler.Compile(workflow)
 ```
@@ -203,7 +203,7 @@ graphAgent, err := graphagent.New("document-processor", compiledGraph,
     "ref": "builtin.llm"
   },
   "config": {
-    "model_name": "deepseek-chat",
+    "model_id": "deepseek-chat",
     "tools": ["analyze_complexity"],
     "instruction": "Analyze the document using the analyze_complexity tool"
   }
