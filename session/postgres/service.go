@@ -247,9 +247,21 @@ func (s *Service) CreateSession(
 		if existingExpiresAt.Time.After(now) {
 			return nil, fmt.Errorf("session already exists and has not expired")
 		}
-		log.Infof("found expired session (app=%s,. user=%s, session=%s), triggering cleanup",
-			key.AppName, key.UserID, key.SessionID)
-		s.cleanupExpiredForUser(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+		log.InfofContext(
+			ctx,
+			"found expired session (app=%s,. user=%s, session=%s), "+
+				"triggering cleanup",
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
+		s.cleanupExpiredForUser(
+			ctx,
+			session.UserKey{
+				AppName: key.AppName,
+				UserID:  key.UserID,
+			},
+		)
 	}
 
 	// Insert session state
@@ -300,8 +312,12 @@ func (s *Service) GetSession(
 	// Refresh session TTL if configured and session exists
 	if sess != nil && s.sessionTTL > 0 {
 		if err := s.refreshSessionTTL(ctx, key); err != nil {
-			log.Warnf("failed to refresh session TTL: %v", err)
-			// Don't fail the GetSession call, just log the warning
+			log.WarnfContext(
+				ctx,
+				"failed to refresh session TTL: %v",
+				err,
+			)
+			// Don't fail the GetSession call, just log the warning.
 		}
 	}
 
@@ -623,8 +639,14 @@ func (s *Service) AppendEvent(
 	if s.opts.enableAsyncPersist {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
-					log.Errorf("postgres session service append event failed: %v", r)
+				if err, ok := r.(error); ok &&
+					err.Error() == "send on closed channel" {
+					log.ErrorfContext(
+						ctx,
+						"postgres session service append event "+
+							"failed: %v",
+						r,
+					)
 					return
 				}
 				panic(r)
@@ -671,8 +693,14 @@ func (s *Service) AppendTrackEvent(
 	if s.opts.enableAsyncPersist {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
-					log.Errorf("postgres session service append track event failed: %v", err)
+				if err, ok := r.(error); ok &&
+					err.Error() == "send on closed channel" {
+					log.ErrorfContext(
+						ctx,
+						"postgres session service append track "+
+							"event failed: %v",
+						err,
+					)
 					return
 				}
 				panic(r)
@@ -968,8 +996,14 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 	// Check if session is expired, log info if so.
 	if currentExpiresAt != nil && currentExpiresAt.Before(now) {
-		log.Infof("appending event to expired session (app=%s, user=%s, session=%s), will extend expires_at",
-			key.AppName, key.UserID, key.SessionID)
+		log.InfofContext(
+			ctx,
+			"appending event to expired session (app=%s, user=%s, "+
+				"session=%s), will extend expires_at",
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
 	}
 
 	sessState.UpdatedAt = now
@@ -1056,8 +1090,14 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 
 	// Check if session is expired, log info if so.
 	if currentExpiresAt != nil && currentExpiresAt.Before(now) {
-		log.Infof("appending track event to expired session (app=%s, user=%s, session=%s), will extend expires_at",
-			key.AppName, key.UserID, key.SessionID)
+		log.InfofContext(
+			ctx,
+			"appending track event to expired session (app=%s, "+
+				"user=%s, session=%s), will extend expires_at",
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
 	}
 
 	sess := &session.Session{
@@ -1241,11 +1281,29 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			for pair := range eventPairChan {
-				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:(app: %s, user: %s, session: %s)",
-					cap(eventPairChan), len(eventPairChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(
+					ctx,
+					defaultAsyncPersistTimeout,
+				)
+				log.DebugfContext(
+					ctx,
+					"Session persistence queue monitoring: channel "+
+						"capacity: %d, current length: %d, "+
+						"session key:(app: %s, user: %s, session: %s)",
+					cap(eventPairChan),
+					len(eventPairChan),
+					pair.key.AppName,
+					pair.key.UserID,
+					pair.key.SessionID,
+				)
 				if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
-					log.Errorf("postgres session service async persist event failed: %v", err)
+					log.ErrorfContext(
+						ctx,
+						"postgres session service async persist "+
+							"event failed: %v",
+						err,
+					)
 				}
 				cancel()
 			}
@@ -1256,11 +1314,30 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(trackPairChan chan *trackEventPair) {
 			defer s.persistWg.Done()
 			for pair := range trackPairChan {
-				log.Debugf("Session track persistence queue monitoring: channel capacity: %d, current length: %d, session key:(app: %s, user: %s, session: %s)",
-					cap(trackPairChan), len(trackPairChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(
+					ctx,
+					defaultAsyncPersistTimeout,
+				)
+				log.DebugfContext(
+					ctx,
+					"Session track persistence queue monitoring: "+
+						"channel capacity: %d, current length: "+
+						"%d, session key:(app: %s, user: %s, "+
+						"session: %s)",
+					cap(trackPairChan),
+					len(trackPairChan),
+					pair.key.AppName,
+					pair.key.UserID,
+					pair.key.SessionID,
+				)
 				if err := s.addTrackEvent(ctx, pair.key, pair.event); err != nil {
-					log.Errorf("postgres session service async persist track event failed: %v", err)
+					log.ErrorfContext(
+						ctx,
+						"postgres session service async persist track "+
+							"event failed: %v",
+						err,
+					)
 				}
 				cancel()
 			}
@@ -1580,7 +1657,11 @@ func (s *Service) cleanupExpiredData(ctx context.Context, userKey *session.UserK
 			return nil
 		})
 		if err != nil {
-			log.Errorf("cleanup expired tables failed: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"cleanup expired tables failed: %v",
+				err,
+			)
 		}
 	}
 }

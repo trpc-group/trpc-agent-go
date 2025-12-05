@@ -206,7 +206,11 @@ func (t *tracker) flushPeriodically(ctx context.Context, key session.Key, state 
 		select {
 		case <-ticker.C:
 			if err := t.flush(ctx, key, state); err != nil {
-				log.Warnf("flush: %v", err)
+				log.WarnfContext(
+					ctx,
+					"flush: %v",
+					err,
+				)
 			}
 		case <-state.done:
 			return

@@ -178,7 +178,11 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 
 	// Additional safety check for choices array bounds
 	if len(event.Response.Choices) == 0 {
-		log.Debugf("no choices in response, event: %v", event.ID)
+		log.DebugfContext(
+			ctx,
+			"no choices in response, event: %v",
+			event.ID,
+		)
 		return nil, nil
 	}
 
@@ -187,12 +191,13 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 		return c.convertToolCallToA2AMessage(event)
 	}
 
-	return c.convertContentToA2AMessage(event)
+	return c.convertContentToA2AMessage(ctx, event)
 }
 
 // convertContentToA2AMessage converts message content to A2A message.
 // It creates a message with text parts containing the content.
 func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
+	ctx context.Context,
 	event *event.Event,
 ) (protocol.UnaryMessageResult, error) {
 	choice := event.Response.Choices[0]
@@ -203,7 +208,11 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 		return &msg, nil
 	}
 
-	log.Debugf("content is empty, event: %v", event)
+	log.DebugfContext(
+		ctx,
+		"content is empty, event: %v",
+		event,
+	)
 	return nil, nil
 }
 
@@ -225,7 +234,11 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 
 	// Additional safety check for choices array bounds
 	if len(event.Response.Choices) == 0 {
-		log.Debugf("no choices in response, event: %v", event.ID)
+		log.DebugfContext(
+			ctx,
+			"no choices in response, event: %v",
+			event.ID,
+		)
 		return nil, nil
 	}
 
@@ -234,12 +247,13 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 		return c.convertToolCallToA2AStreamingMessage(event, options)
 	}
 
-	return c.convertDeltaContentToA2AStreamingMessage(event, options)
+	return c.convertDeltaContentToA2AStreamingMessage(ctx, event, options)
 }
 
 // convertDeltaContentToA2AStreamingMessage converts delta content to A2A streaming message.
 // It creates a task artifact update event for incremental content updates.
 func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
+	ctx context.Context,
 	event *event.Event,
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
@@ -261,7 +275,11 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 		return &taskArtifact, nil
 	}
 
-	log.Debugf("delta content is empty, event: %v", event)
+	log.DebugfContext(
+		ctx,
+		"delta content is empty, event: %v",
+		event,
+	)
 	return nil, nil
 }
 

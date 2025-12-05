@@ -2877,7 +2877,7 @@ func TestProcessEventCmd_SkipMalformed(t *testing.T) {
 	cmd.SetVal([]string{malformed, string(validBytes)})
 
 	// Call the helper under test.
-	events, err := processEventCmd(cmd)
+	events, err := processEventCmd(context.Background(), cmd)
 	require.NoError(t, err)
 
 	// Only the valid one should be returned.

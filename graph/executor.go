@@ -218,7 +218,12 @@ func (e *Executor) Execute(
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
-				log.Errorf("panic in executor goroutine: %v\n%s", r, string(stack))
+				log.ErrorfContext(
+					ctx,
+					"panic in executor goroutine: %v\n%s",
+					r,
+					string(stack),
+				)
 				agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 					WithPregelEventInvocationID(invocation.InvocationID),
 					WithPregelEventStepNumber(-1),
@@ -266,7 +271,11 @@ func (e *Executor) executeGraph(
 	}
 
 	if resumed && len(execCtx.pendingWrites) > 0 {
-		log.Debugf("🔧 Executor: applying %d pending writes", len(execCtx.pendingWrites))
+		log.DebugfContext(
+			ctx,
+			"🔧 Executor: applying %d pending writes",
+			len(execCtx.pendingWrites),
+		)
 		e.applyPendingWrites(ctx, invocation, execCtx, execCtx.pendingWrites)
 	}
 
@@ -274,7 +283,11 @@ func (e *Executor) executeGraph(
 		if err := e.createCheckpointAndSave(
 			ctx, &checkpointConfig, CheckpointSourceInput, -1, execCtx,
 		); err != nil {
-			log.Debugf("Failed to create initial checkpoint: %v", err)
+			log.DebugfContext(
+				ctx,
+				"Failed to create initial checkpoint: %v",
+				err,
+			)
 		}
 	}
 
@@ -319,7 +332,11 @@ func (e *Executor) resumeOrInitWithSaver(
 		lineageID = invocation.InvocationID
 	} else {
 		lineageID = fmt.Sprintf("lineage_%d", time.Now().UnixNano())
-		log.Debugf("Generated new lineage_id: %s", lineageID)
+		log.DebugfContext(
+			ctx,
+			"Generated new lineage_id: %s",
+			lineageID,
+		)
 	}
 	var namespace, checkpointID string
 	if ns, ok := initialState[CfgKeyCheckpointNS].(string); ok {
@@ -327,30 +344,45 @@ func (e *Executor) resumeOrInitWithSaver(
 	}
 	if id, ok := initialState[CfgKeyCheckpointID].(string); ok {
 		checkpointID = id
-		log.Debugf("Resuming from checkpoint_id: %s", checkpointID)
+		log.DebugfContext(
+			ctx,
+			"Resuming from checkpoint_id: %s",
+			checkpointID,
+		)
 	}
 	checkpointConfig := CreateCheckpointConfig(lineageID, checkpointID, namespace)
-	log.Debugf(
+	log.DebugfContext(
+		ctx,
 		"Checkpoint config: lineage=%s, checkpoint_id=%s, namespace=%s",
-		lineageID, checkpointID, namespace,
+		lineageID,
+		checkpointID,
+		namespace,
 	)
 
 	tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig)
 	if err != nil || tuple == nil || tuple.Checkpoint == nil {
-		log.Debug("No checkpoint found, starting fresh")
+		log.DebugContext(ctx, "No checkpoint found, starting fresh")
 		execState := e.initializeState(initialState)
 		e.initializeChannels(execState, true)
 		return execState, checkpointConfig, false, 0, nil, nil
 	}
 
-	log.Debugf("Resuming from checkpoint ID=%s", tuple.Checkpoint.ID)
+	log.DebugfContext(
+		ctx,
+		"Resuming from checkpoint ID=%s",
+		tuple.Checkpoint.ID,
+	)
 	restored := e.restoreStateFromCheckpoint(tuple)
 	restored = e.mergeInitialStateNonInternal(restored, initialState)
 
 	resumedStep := 0
 	if tuple.Metadata != nil {
 		resumedStep = tuple.Metadata.Step
-		log.Debugf("Resuming from step %d", resumedStep)
+		log.DebugfContext(
+			ctx,
+			"Resuming from step %d",
+			resumedStep,
+		)
 	}
 	lastCheckpoint := tuple.Checkpoint
 	e.initializeChannels(restored, true)
@@ -358,9 +390,13 @@ func (e *Executor) resumeOrInitWithSaver(
 		checkpointConfig = tuple.Config
 	}
 	pending := tuple.PendingWrites
-	log.Debugf(
-		"Loaded checkpoint - PendingWrites=%d, NextNodes=%v, NextChannels=%v",
-		len(pending), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels,
+	log.DebugfContext(
+		ctx,
+		"Loaded checkpoint - PendingWrites=%d, NextNodes=%v, "+
+			"NextChannels=%v",
+		len(pending),
+		tuple.Checkpoint.NextNodes,
+		tuple.Checkpoint.NextChannels,
 	)
 	e.applyExecutableNextNodes(restored, tuple)
 	return restored, checkpointConfig, true, resumedStep, lastCheckpoint, pending
@@ -518,11 +554,20 @@ func (e *Executor) runBspLoop(
 			return stepsExecuted, fmt.Errorf("update failed at step %d: %w", step, err)
 		}
 		if e.checkpointSaver != nil && *checkpointConfig != nil {
-			log.Debugf("Creating checkpoint at step %d", step)
+			log.DebugfContext(
+				ctx,
+				"Creating checkpoint at step %d",
+				step,
+			)
 			if err := e.createCheckpointAndSave(
 				ctx, checkpointConfig, CheckpointSourceLoop, step, execCtx,
 			); err != nil {
-				log.Debugf("Failed to create checkpoint at step %d: %v", step, err)
+				log.DebugfContext(
+					ctx,
+					"Failed to create checkpoint at step %d: %v",
+					step,
+					err,
+				)
 			}
 		}
 		stepCancel()
@@ -578,7 +623,7 @@ func (e *Executor) createCheckpointAndSave(
 	// Create checkpoint object.
 	checkpoint := e.createCheckpointFromState(execCtx.State, step, execCtx)
 	if checkpoint == nil {
-		log.Debug("Failed to create checkpoint object")
+		log.DebugContext(ctx, "Failed to create checkpoint object")
 		return fmt.Errorf("failed to create checkpoint")
 	}
 
@@ -621,7 +666,11 @@ func (e *Executor) createCheckpointAndSave(
 		// the workflow will start from the beginning.
 		if entryPoint := e.graph.EntryPoint(); entryPoint != "" {
 			checkpoint.NextNodes = []string{entryPoint}
-			log.Debugf("Initial checkpoint - setting NextNodes to entry point: %v", checkpoint.NextNodes)
+			log.DebugfContext(
+				ctx,
+				"Initial checkpoint - setting NextNodes to entry point: %v",
+				checkpoint.NextNodes,
+			)
 		}
 		checkpoint.NextChannels = e.getNextChannels()
 	} else {
@@ -630,8 +679,16 @@ func (e *Executor) createCheckpointAndSave(
 	}
 
 	// Use PutFull for atomic storage.
-	log.Debugf("Saving checkpoint ID=%s, Source=%s, Step=%d, NextNodes=%v, PendingWrites=%d",
-		checkpoint.ID, source, step, checkpoint.NextNodes, len(pendingWrites))
+	log.DebugfContext(
+		ctx,
+		"Saving checkpoint ID=%s, Source=%s, Step=%d, NextNodes=%v, "+
+			"PendingWrites=%d",
+		checkpoint.ID,
+		source,
+		step,
+		checkpoint.NextNodes,
+		len(pendingWrites),
+	)
 	updatedConfig, err := e.checkpointSaver.PutFull(ctx, PutFullRequest{
 		Config:        *config,
 		Checkpoint:    checkpoint,
@@ -640,7 +697,12 @@ func (e *Executor) createCheckpointAndSave(
 		PendingWrites: pendingWrites,
 	})
 	if err != nil {
-		log.Errorf("Failed to save checkpoint %s: %v", checkpoint.ID, err)
+		log.ErrorfContext(
+			ctx,
+			"Failed to save checkpoint %s: %v",
+			checkpoint.ID,
+			err,
+		)
 		return fmt.Errorf("failed to save checkpoint atomically: %w", err)
 	}
 	// Successfully saved checkpoint.
@@ -696,7 +758,11 @@ func (e *Executor) resumeFromCheckpoint(
 	invocation *agent.Invocation,
 	config map[string]any,
 ) (State, *Checkpoint, []PendingWrite, error) {
-	log.Debugf("resumeFromCheckpoint: called with config keys: %v", getConfigKeys(config))
+	log.DebugfContext(
+		ctx,
+		"resumeFromCheckpoint: called with config keys: %v",
+		getConfigKeys(config),
+	)
 
 	if e.checkpointSaver == nil {
 		// No checkpoint saver
@@ -724,8 +790,14 @@ func (e *Executor) resumeFromCheckpoint(
 	e.initializeChannels(state, false)
 
 	// Apply pending writes if available, otherwise use NextChannels as fallback
-	log.Debugf("resumeFromCheckpoint: PendingWrites=%d, NextNodes=%v, NextChannels=%v",
-		len(tuple.PendingWrites), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels)
+	log.DebugfContext(
+		ctx,
+		"resumeFromCheckpoint: PendingWrites=%d, NextNodes=%v, "+
+			"NextChannels=%v",
+		len(tuple.PendingWrites),
+		tuple.Checkpoint.NextNodes,
+		tuple.Checkpoint.NextChannels,
+	)
 
 	if len(tuple.PendingWrites) > 0 {
 		// Create a temporary execution context for replay
@@ -735,11 +807,19 @@ func (e *Executor) resumeFromCheckpoint(
 			InvocationID: "resume-replay",
 		}
 		e.applyPendingWrites(ctx, invocation, tempExecCtx, tuple.PendingWrites)
-		log.Debugf("Applied %d pending writes", len(tuple.PendingWrites))
+		log.DebugfContext(
+			ctx,
+			"Applied %d pending writes",
+			len(tuple.PendingWrites),
+		)
 	} else if len(tuple.Checkpoint.NextNodes) > 0 {
 		// Fallback: use NextNodes to trigger execution when no pending writes or channels
 		// This is particularly important for initial checkpoints that have the entry point set
-		log.Debugf("Using NextNodes to trigger execution: %v", tuple.Checkpoint.NextNodes)
+		log.DebugfContext(
+			ctx,
+			"Using NextNodes to trigger execution: %v",
+			tuple.Checkpoint.NextNodes,
+		)
 		// Store the nodes in the state so they can be picked up during planning
 		state[StateKeyNextNodes] = tuple.Checkpoint.NextNodes
 		// Added NextNodes to state
@@ -810,10 +890,20 @@ func (e *Executor) planStep(ctx context.Context, invocation *agent.Invocation,
 	nextNodesValue, hasNextNodes := execCtx.State[StateKeyNextNodes]
 
 	if hasNextNodes {
-		log.Debugf("planStep: step=%d, found %s in state", step, StateKeyNextNodes)
+		log.DebugfContext(
+			ctx,
+			"planStep: step=%d, found %s in state",
+			step,
+			StateKeyNextNodes,
+		)
 
 		if nextNodes, ok := nextNodesValue.([]string); ok && len(nextNodes) > 0 {
-			log.Debugf("Using %s from state: %v", StateKeyNextNodes, nextNodes)
+			log.DebugfContext(
+				ctx,
+				"Using %s from state: %v",
+				StateKeyNextNodes,
+				nextNodes,
+			)
 			// Create tasks for the nodes stored in the state
 			for _, nodeID := range nextNodes {
 				task := e.createTask(nodeID, execCtx.State, step)
@@ -847,7 +937,12 @@ func (e *Executor) planStep(ctx context.Context, invocation *agent.Invocation,
 		if task != nil {
 			tasks = append(tasks, task)
 		} else if entryPoint != End {
-			log.Warnf("❌ Step %d: Failed to create task for entry point %s", step, entryPoint)
+			log.WarnfContext(
+				ctx,
+				"❌ Step %d: Failed to create task for entry point %s",
+				step,
+				entryPoint,
+			)
 		}
 	} else {
 		// Plan based on channel triggers.
@@ -913,7 +1008,12 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 				if task != nil {
 					tasks = append(tasks, task)
 					scheduledNodes[nodeID] = true
-					log.Debugf("Scheduled node %s for execution (triggered by channel %s)", nodeID, channelName)
+					log.Debugf(
+						"Scheduled node %s for execution (triggered by "+
+							"channel %s)",
+						nodeID,
+						channelName,
+					)
 				}
 			}
 		}
@@ -976,23 +1076,39 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 		return nil
 	}
 
-	log.Debugf("🔧 createTask: creating task for nodeID='%s', step=%d", nodeID, step)
+	log.Debugf(
+		"🔧 createTask: creating task for nodeID='%s', step=%d",
+		nodeID,
+		step,
+	)
 	stateKeys := make([]string, 0, len(state))
 	for k := range state {
 		stateKeys = append(stateKeys, k)
 	}
-	log.Debugf("🔧 createTask: state has %d keys: %v", len(state), stateKeys)
+	log.Debugf(
+		"🔧 createTask: state has %d keys: %v",
+		len(state),
+		stateKeys,
+	)
 
 	// Log key state values that we're interested in tracking
 	// State prepared for task
 
 	if stepCountVal, exists := state[StateFieldStepCount]; exists {
-		log.Debugf("🔧 createTask: state contains step_count=%v (type: %T)", stepCountVal, stepCountVal)
+		log.Debugf(
+			"🔧 createTask: state contains step_count=%v (type: %T)",
+			stepCountVal,
+			stepCountVal,
+		)
 	}
 
 	// Special logging for final node to track the counter issue
 	if nodeID == "final" {
-		log.Debugf("🔧 createTask: FINAL NODE - counter=%v, step_count=%v", state[StateFieldCounter], state[StateFieldStepCount])
+		log.Debugf(
+			"🔧 createTask: FINAL NODE - counter=%v, step_count=%v",
+			state[StateFieldCounter],
+			state[StateFieldStepCount],
+		)
 	}
 
 	return &Task{
@@ -1025,7 +1141,13 @@ func (e *Executor) executeStep(
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					log.Errorf("panic executing task %s: %v\n%s", t.NodeID, r, string(debug.Stack()))
+					log.ErrorfContext(
+						ctx,
+						"panic executing task %s: %v\n%s",
+						t.NodeID,
+						r,
+						string(debug.Stack()),
+					)
 					results <- fmt.Errorf("task panic: %v", r)
 				}
 			}()
@@ -1752,7 +1874,13 @@ func (e *Executor) executeNodeFunction(
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
-			log.Errorf("panic in node %s: %v\n%s", t.NodeID, r, string(stack))
+			log.ErrorfContext(
+				ctx,
+				"panic in node %s: %v\n%s",
+				t.NodeID,
+				r,
+				string(stack),
+			)
 			err = fmt.Errorf("node %s panic: %v", t.NodeID, r)
 			res = nil
 		}
@@ -2338,7 +2466,12 @@ func (e *Executor) processConditionalResult(
 		e.emitChannelUpdateEvent(ctx, invocation, execCtx, channelName,
 			channel.BehaviorLastValue, []string{target})
 	} else {
-		log.Warnf("❌ Step %d: Failed to get channel %s", step, channelName)
+		log.WarnfContext(
+			ctx,
+			"❌ Step %d: Failed to get channel %s",
+			step,
+			channelName,
+		)
 	}
 	return nil
 }
@@ -2414,7 +2547,11 @@ func (e *Executor) handleInterrupt(
 		}
 		updatedConfig, err := e.checkpointSaver.PutFull(saveCtx, req)
 		if err != nil {
-			log.Debugf("Failed to store interrupt checkpoint: %v", err)
+			log.DebugfContext(
+				ctx,
+				"Failed to store interrupt checkpoint: %v",
+				err,
+			)
 		} else {
 			// Update the config with new checkpoint ID for proper parent tracking
 			if configurable, ok := checkpointConfig[CfgKeyConfigurable].(map[string]any); ok {
@@ -2564,7 +2701,12 @@ func (e *Executor) updateVersionsSeen(execCtx *ExecutionContext, nodeID string, 
 	for _, trigger := range triggers {
 		if channel, exists := channels[trigger]; exists {
 			execCtx.versionsSeen[nodeID][trigger] = channel.Version
-			log.Debugf("Node %s saw channel %s version %d", nodeID, trigger, channel.Version)
+			log.Debugf(
+				"Node %s saw channel %s version %d",
+				nodeID,
+				trigger,
+				channel.Version,
+			)
 		}
 	}
 }
@@ -2585,7 +2727,10 @@ func (e *Executor) shouldTriggerNode(
 	nodeVersions, nodeExists := lastCheckpoint.VersionsSeen[nodeID]
 	if !nodeExists {
 		// Node has never run - should trigger.
-		log.Debugf("Node %s has never run, triggering", nodeID)
+		log.Debugf(
+			"Node %s has never run, triggering",
+			nodeID,
+		)
 		return true
 	}
 
@@ -2593,17 +2738,31 @@ func (e *Executor) shouldTriggerNode(
 	seenVersion, channelSeen := nodeVersions[channelName]
 	if !channelSeen {
 		// Node hasn't seen this channel before - should trigger.
-		log.Debugf("Node %s hasn't seen channel %s before, triggering", nodeID, channelName)
+		log.Debugf(
+			"Node %s hasn't seen channel %s before, triggering",
+			nodeID,
+			channelName,
+		)
 		return true
 	}
 
 	// Only trigger if channel has newer version than what node has seen.
 	shouldTrigger := currentVersion > seenVersion
 	if shouldTrigger {
-		log.Debugf("Node %s should trigger: channel %s version %d > seen %d",
-			nodeID, channelName, currentVersion, seenVersion)
+		log.Debugf(
+			"Node %s should trigger: channel %s version %d > seen %d",
+			nodeID,
+			channelName,
+			currentVersion,
+			seenVersion,
+		)
 	} else {
-		log.Debugf("Node %s already saw channel %s version %d", nodeID, channelName, currentVersion)
+		log.Debugf(
+			"Node %s already saw channel %s version %d",
+			nodeID,
+			channelName,
+			currentVersion,
+		)
 	}
 	return shouldTrigger
 }
@@ -2616,7 +2775,11 @@ func (e *Executor) Fork(ctx context.Context, config map[string]any) (map[string]
 	}
 
 	// Get the source checkpoint.
-	log.Debugf("Fork: Attempting to get checkpoint with config: %v", config)
+	log.DebugfContext(
+		ctx,
+		"Fork: Attempting to get checkpoint with config: %v",
+		config,
+	)
 	sourceTuple, err := e.checkpointSaver.GetTuple(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source checkpoint: %w", err)
@@ -2626,13 +2789,24 @@ func (e *Executor) Fork(ctx context.Context, config map[string]any) (map[string]
 	}
 
 	// Fork the checkpoint (creates new ID and sets parent).
-	log.Debugf("Fork: Retrieved source checkpoint - ID=%s, Step=%d, NextNodes=%v, PendingWrites=%d",
-		sourceTuple.Checkpoint.ID, sourceTuple.Metadata.Step, sourceTuple.Checkpoint.NextNodes, len(sourceTuple.PendingWrites))
+	log.DebugfContext(
+		ctx,
+		"Fork: Retrieved source checkpoint - ID=%s, Step=%d, NextNodes=%v, "+
+			"PendingWrites=%d",
+		sourceTuple.Checkpoint.ID,
+		sourceTuple.Metadata.Step,
+		sourceTuple.Checkpoint.NextNodes,
+		len(sourceTuple.PendingWrites),
+	)
 
 	forkedCheckpoint := sourceTuple.Checkpoint.Fork()
 
-	log.Debugf("Fork: Forked checkpoint - ID=%s, NextNodes=%v",
-		forkedCheckpoint.ID, forkedCheckpoint.NextNodes)
+	log.DebugfContext(
+		ctx,
+		"Fork: Forked checkpoint - ID=%s, NextNodes=%v",
+		forkedCheckpoint.ID,
+		forkedCheckpoint.NextNodes,
+	)
 
 	// Create metadata for the fork.
 	metadata := NewCheckpointMetadata(CheckpointSourceFork, sourceTuple.Metadata.Step)

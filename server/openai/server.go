@@ -174,10 +174,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	ctx := r.Context()
 	var req openAIRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Warnf("openai: failed to decode request: %v", err)
-		s.writeError(w, fmt.Errorf("invalid request: %w", err), errorTypeInvalidRequest, http.StatusBadRequest)
+		log.WarnfContext(
+			ctx,
+			"openai: failed to decode request: %v",
+			err,
+		)
+		s.writeError(
+			w,
+			fmt.Errorf("invalid request: %w", err),
+			errorTypeInvalidRequest,
+			http.StatusBadRequest,
+		)
 		return
 	}
 	defer r.Body.Close()
@@ -201,8 +211,17 @@ func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, req 
 	ctx := r.Context()
 	messages, err := s.converter.convertRequest(ctx, req)
 	if err != nil {
-		log.Warnf("openai: failed to convert request: %v", err)
-		s.writeError(w, err, errorTypeInvalidRequest, http.StatusBadRequest)
+		log.WarnfContext(
+			ctx,
+			"openai: failed to convert request: %v",
+			err,
+		)
+		s.writeError(
+			w,
+			err,
+			errorTypeInvalidRequest,
+			http.StatusBadRequest,
+		)
 		return
 	}
 	if len(messages) == 0 {
@@ -233,8 +252,17 @@ func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, req 
 	// Run the agent.
 	eventCh, err := s.runner.Run(ctx, userID, sessionID, userMessage, runOpts...)
 	if err != nil {
-		log.Errorf("openai: failed to run agent: %v", err)
-		s.writeError(w, err, errorTypeInternal, http.StatusInternalServerError)
+		log.ErrorfContext(
+			ctx,
+			"openai: failed to run agent: %v",
+			err,
+		)
+		s.writeError(
+			w,
+			err,
+			errorTypeInternal,
+			http.StatusInternalServerError,
+		)
 		return
 	}
 	// Collect all events.
@@ -254,8 +282,17 @@ func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, req 
 	var response *openAIResponse
 	response, err = s.converter.aggregateStreamingEvents(events)
 	if err != nil {
-		log.Errorf("openai: failed to aggregate events: %v", err)
-		s.writeError(w, err, errorTypeInternal, http.StatusInternalServerError)
+		log.ErrorfContext(
+			ctx,
+			"openai: failed to aggregate events: %v",
+			err,
+		)
+		s.writeError(
+			w,
+			err,
+			errorTypeInternal,
+			http.StatusInternalServerError,
+		)
 		return
 	}
 	if response == nil {
@@ -277,8 +314,17 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 	ctx := r.Context()
 	messages, err := s.converter.convertRequest(ctx, req)
 	if err != nil {
-		log.Warnf("openai: failed to convert request: %v", err)
-		s.writeError(w, err, errorTypeInvalidRequest, http.StatusBadRequest)
+		log.WarnfContext(
+			ctx,
+			"openai: failed to convert request: %v",
+			err,
+		)
+		s.writeError(
+			w,
+			err,
+			errorTypeInvalidRequest,
+			http.StatusBadRequest,
+		)
 		return
 	}
 	if len(messages) == 0 {
@@ -309,8 +355,17 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 	// Run the agent.
 	eventCh, err := s.runner.Run(ctx, userID, sessionID, userMessage, runOpts...)
 	if err != nil {
-		log.Errorf("openai: failed to run agent: %v", err)
-		s.writeError(w, err, errorTypeInternal, http.StatusInternalServerError)
+		log.ErrorfContext(
+			ctx,
+			"openai: failed to run agent: %v",
+			err,
+		)
+		s.writeError(
+			w,
+			err,
+			errorTypeInternal,
+			http.StatusInternalServerError,
+		)
 		return
 	}
 	// Set up SSE headers.
@@ -361,7 +416,7 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 
 // processStreamingChunk processes a single streaming chunk and returns true if it's the final event.
 func (s *Server) processStreamingChunk(
-	_ context.Context,
+	ctx context.Context,
 	w http.ResponseWriter,
 	flusher http.Flusher,
 	evt *event.Event,
@@ -370,7 +425,11 @@ func (s *Server) processStreamingChunk(
 ) bool {
 	chunkData, err := s.converter.convertToChunk(evt)
 	if err != nil {
-		log.Errorf("openai: failed to convert event: %v", err)
+		log.ErrorfContext(
+			ctx,
+			"openai: failed to convert event: %v",
+			err,
+		)
 		return false
 	}
 	if chunkData == nil {

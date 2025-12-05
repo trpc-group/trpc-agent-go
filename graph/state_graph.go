@@ -669,10 +669,12 @@ func mergeToolsWithToolSets(
 		for _, t := range setTools {
 			name := t.Declaration().Name
 			if _, ok := out[name]; ok {
-				log.Warnf(
-					"tool %s already exists at %s toolset, "+
-						"will be overridden",
-					name, toolSet.Name(),
+				log.WarnfContext(
+					ctx,
+					"tool %s already exists at %s toolset, will be "+
+						"overridden",
+					name,
+					toolSet.Name(),
 				)
 			}
 			out[name] = t
@@ -1372,7 +1374,12 @@ func processAgentEventStream(
 					// Debug-only: record keys that failed to unmarshal to
 					// help diagnose type drift. RawStateDelta still
 					// carries the original JSON.
-					log.Debugf("subgraph: failed to unmarshal final state key=%s: %v", k, err)
+					log.DebugfContext(
+						ctx,
+						"subgraph: failed to unmarshal final state key=%s: %v",
+						k,
+						err,
+					)
 				}
 			}
 			finalState = tmp

@@ -186,7 +186,10 @@ var indexDefs = []indexDefinition{
 
 // initDB initializes the database schema.
 func (s *Service) initDB(ctx context.Context) error {
-	log.Info("initializing mysql session database schema...")
+	log.InfoContext(
+		ctx,
+		"initializing mysql session database schema...",
+	)
 
 	// Create tables
 	for _, tableDef := range tableDefs {
@@ -196,7 +199,11 @@ func (s *Service) initDB(ctx context.Context) error {
 		if _, err := s.mysqlClient.Exec(ctx, sql); err != nil {
 			return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 		}
-		log.Infof("created table: %s", fullTableName)
+		log.InfofContext(
+			ctx,
+			"created table: %s",
+			fullTableName,
+		)
 	}
 
 	// Create indexes
@@ -213,16 +220,34 @@ func (s *Service) initDB(ctx context.Context) error {
 			// Check if it's a duplicate key error (error code 1061)
 			// This is more robust than checking error message strings
 			if !isDuplicateKeyError(err) {
-				return fmt.Errorf("create index %s on table %s failed: %w", indexName, fullTableName, err)
+				return fmt.Errorf(
+					"create index %s on table %s failed: %w",
+					indexName,
+					fullTableName,
+					err,
+				)
 			}
-			// Index already exists, log and continue
-			log.Infof("index %s already exists on table %s, skipping", indexName, fullTableName)
+			// Index already exists, log and continue.
+			log.InfofContext(
+				ctx,
+				"index %s already exists on table %s, skipping",
+				indexName,
+				fullTableName,
+			)
 		} else {
-			log.Infof("created index: %s on table %s", indexName, fullTableName)
+			log.InfofContext(
+				ctx,
+				"created index: %s on table %s",
+				indexName,
+				fullTableName,
+			)
 		}
 	}
 
-	log.Info("mysql session database schema initialized successfully")
+	log.InfoContext(
+		ctx,
+		"mysql session database schema initialized successfully",
+	)
 	return nil
 }
 
