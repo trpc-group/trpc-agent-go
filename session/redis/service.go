@@ -463,8 +463,13 @@ func (s *Service) AppendEvent(
 	if s.opts.enableAsyncPersist {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
-					log.Errorf("redis session service append event failed: %v", r)
+				if err, ok := r.(error); ok &&
+					err.Error() == "send on closed channel" {
+					log.ErrorfContext(
+						ctx,
+						"redis session service append event failed: %v",
+						r,
+					)
 					return
 				}
 				panic(r)
@@ -510,8 +515,14 @@ func (s *Service) AppendTrackEvent(
 	if s.opts.enableAsyncPersist {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
-					log.Errorf("redis session service append track event failed: %v", r)
+				if err, ok := r.(error); ok &&
+					err.Error() == "send on closed channel" {
+					log.ErrorfContext(
+						ctx,
+						"redis session service append track event "+
+							"failed: %v",
+						r,
+					)
 					return
 				}
 				panic(r)
@@ -786,7 +797,7 @@ func (s *Service) getEventsList(
 		if !ok {
 			return nil, fmt.Errorf("get events failed: %w", err)
 		}
-		events, err := processEventCmd(eventCmd)
+		events, err := processEventCmd(ctx, eventCmd)
 		if err != nil {
 			return nil, fmt.Errorf("process event cmd failed: %w", err)
 		}
@@ -956,7 +967,10 @@ func processSessStateCmdList(cmd *redis.MapStringStringCmd) ([]*SessionState, er
 	return sessStates, nil
 }
 
-func processEventCmd(cmd *redis.StringSliceCmd) ([]event.Event, error) {
+func processEventCmd(
+	ctx context.Context,
+	cmd *redis.StringSliceCmd,
+) ([]event.Event, error) {
 	eventsBytes, err := cmd.Result()
 	if err == redis.Nil || len(eventsBytes) == 0 {
 		return []event.Event{}, nil
@@ -968,11 +982,16 @@ func processEventCmd(cmd *redis.StringSliceCmd) ([]event.Event, error) {
 	for _, eventBytes := range eventsBytes {
 		event := &event.Event{}
 		if err := json.Unmarshal([]byte(eventBytes), &event); err != nil {
-			// Skip malformed or legacy-format events to avoid breaking the whole session fetch.
-			// Log and continue so that readable events can still be returned.
-			// Common root causes include: historical []byte fields encoded as plain string
-			// which triggers base64 decoding errors during JSON unmarshal.
-			log.Warnf("skip malformed event in redis history: %v", err)
+			// Skip malformed or legacy-format events to avoid breaking the
+			// whole session fetch. Log and continue so that readable events
+			// can still be returned. Common root causes include: historical
+			// []byte fields encoded as plain string which triggers base64
+			// decoding errors during JSON unmarshal.
+			log.WarnfContext(
+				ctx,
+				"skip malformed event in redis history: %v",
+				err,
+			)
 			continue
 		}
 		events = append(events, *event)
@@ -1141,11 +1160,27 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			for eventPair := range eventPairChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:%s",
-					cap(eventPairChan), len(eventPairChan), getSessionStateKey(eventPair.key))
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(
+					ctx,
+					defaultAsyncPersistTimeout,
+				)
+				log.DebugfContext(
+					ctx,
+					"Session persistence queue monitoring: channel "+
+						"capacity: %d, current length: %d, "+
+						"session key:%s",
+					cap(eventPairChan),
+					len(eventPairChan),
+					getSessionStateKey(eventPair.key),
+				)
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
-					log.Errorf("redis session service persistence event failed: %w", err)
+					log.ErrorfContext(
+						ctx,
+						"redis session service persistence event "+
+							"failed: %w",
+						err,
+					)
 				}
 				cancel()
 			}
@@ -1155,12 +1190,31 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(trackEventChan chan *trackEventPair) {
 			defer s.persistWg.Done()
 			for trackEvent := range trackEventChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				log.Debugf("Session track persistence queue monitoring: channel capacity: %d, current length: %d, "+
-					"session key:%s, track key:%s", cap(trackEventChan), len(trackEventChan),
-					getSessionStateKey(trackEvent.key), getTrackKey(trackEvent.key, trackEvent.event.Track))
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(
+					ctx,
+					defaultAsyncPersistTimeout,
+				)
+				log.DebugfContext(
+					ctx,
+					"Session track persistence queue monitoring: "+
+						"channel capacity: %d, current length: %d, "+
+						"session key:%s, track key:%s",
+					cap(trackEventChan),
+					len(trackEventChan),
+					getSessionStateKey(trackEvent.key),
+					getTrackKey(
+						trackEvent.key,
+						trackEvent.event.Track,
+					),
+				)
 				if err := s.addTrackEvent(ctx, trackEvent.key, trackEvent.event); err != nil {
-					log.Errorf("redis session service persistence track event failed: %w", err)
+					log.ErrorfContext(
+						ctx,
+						"redis session service persistence track event "+
+							"failed: %w",
+						err,
+					)
 				}
 				cancel()
 			}
