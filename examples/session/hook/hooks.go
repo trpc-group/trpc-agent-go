@@ -37,7 +37,7 @@ func MarkViolationHook() session.AppendEventHook {
 
 		content := getEventContent(ctx.Event)
 		if word := containsProhibitedWord(content); word != "" {
-			ctx.Event.SetCustomData(MetadataKeyViolation, word)
+			ctx.Event.SetMetadata(MetadataKeyViolation, word)
 			role := "assistant"
 			if ctx.Event.IsUserMessage() {
 				role = "user"
@@ -91,7 +91,7 @@ func filterViolationEvents(sess *session.Session) int {
 	// First pass: mark indices to skip
 	skipIndices := make(map[int]bool)
 	for i, evt := range sess.Events {
-		if _, ok := evt.CustomData[MetadataKeyViolation]; ok {
+		if _, ok := evt.GetMetadata(MetadataKeyViolation); ok {
 			skipIndices[i] = true
 			fmt.Printf("  [Filtered violation: %s]\n", truncate(getEventContent(&evt), 30))
 

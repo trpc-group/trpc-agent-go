@@ -111,6 +111,39 @@ func TestRunAppendEventHooks(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "modified", ctx.Event.Author)
 	})
+
+	t.Run("nil final function with empty hooks", func(t *testing.T) {
+		ctx := &AppendEventContext{Context: context.Background()}
+		err := RunAppendEventHooks(nil, ctx, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("nil final function with hooks", func(t *testing.T) {
+		hooks := []AppendEventHook{
+			func(ctx *AppendEventContext, next func() error) error {
+				return next()
+			},
+		}
+
+		ctx := &AppendEventContext{Context: context.Background()}
+		err := RunAppendEventHooks(hooks, ctx, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("error propagates from final", func(t *testing.T) {
+		testErr := errors.New("final error")
+		hooks := []AppendEventHook{
+			func(ctx *AppendEventContext, next func() error) error {
+				return next()
+			},
+		}
+
+		ctx := &AppendEventContext{Context: context.Background()}
+		err := RunAppendEventHooks(hooks, ctx, func() error {
+			return testErr
+		})
+		assert.Equal(t, testErr, err)
+	})
 }
 
 func TestRunGetSessionHooks(t *testing.T) {
@@ -174,5 +207,63 @@ func TestRunGetSessionHooks(t *testing.T) {
 
 		assert.NoError(t, err)
 		assert.Equal(t, []byte("true"), sess.State["modified"])
+	})
+
+	t.Run("hook can return error", func(t *testing.T) {
+		testErr := errors.New("get session error")
+		hooks := []GetSessionHook{
+			func(ctx *GetSessionContext, next func() (*Session, error)) (*Session, error) {
+				return nil, testErr
+			},
+		}
+
+		ctx := &GetSessionContext{Context: context.Background()}
+		sess, err := RunGetSessionHooks(hooks, ctx, func() (*Session, error) {
+			return NewSession("app", "user", "sess"), nil
+		})
+
+		assert.Nil(t, sess)
+		assert.Equal(t, testErr, err)
+	})
+
+	t.Run("hook can skip next and return nil session", func(t *testing.T) {
+		finalCalled := false
+		hooks := []GetSessionHook{
+			func(ctx *GetSessionContext, next func() (*Session, error)) (*Session, error) {
+				return nil, nil // skip next()
+			},
+		}
+
+		ctx := &GetSessionContext{Context: context.Background()}
+		sess, err := RunGetSessionHooks(hooks, ctx, func() (*Session, error) {
+			finalCalled = true
+			return NewSession("app", "user", "sess"), nil
+		})
+
+		assert.NoError(t, err)
+		assert.Nil(t, sess)
+		assert.False(t, finalCalled)
+	})
+
+	t.Run("nil final function with empty hooks", func(t *testing.T) {
+		ctx := &GetSessionContext{Context: context.Background()}
+		sess, err := RunGetSessionHooks(nil, ctx, nil)
+
+		assert.NoError(t, err)
+		assert.Nil(t, sess)
+	})
+
+	t.Run("nil final function with hooks", func(t *testing.T) {
+		hooks := []GetSessionHook{
+			func(ctx *GetSessionContext, next func() (*Session, error)) (*Session, error) {
+				return next()
+			},
+		}
+
+		ctx := &GetSessionContext{Context: context.Background()}
+		sess, err := RunGetSessionHooks(hooks, ctx, nil)
+
+		assert.NoError(t, err)
+		assert.Nil(t, sess)
 	})
 }
