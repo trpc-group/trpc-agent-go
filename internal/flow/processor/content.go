@@ -312,15 +312,12 @@ func (p *ContentRequestProcessor) insertInvocationMessage(
 	if inv.Message.Content == "" {
 		return events
 	}
-	userMsgEvent := event.NewResponseEvent(inv.RunOptions.RequestID, "user", &model.Response{
-		Done: true,
+	userMsgEvent := event.NewResponseEvent(inv.InvocationID, "user", &model.Response{
 		Choices: []model.Choice{
-			{
-				Index:   0,
-				Message: inv.Message,
-			},
+			{Message: inv.Message},
 		},
 	})
+	userMsgEvent.RequestID = inv.RunOptions.RequestID
 	if len(events) == 0 {
 		return []event.Event{*userMsgEvent}
 	}
