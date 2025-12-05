@@ -83,7 +83,7 @@ service := inmemory.NewService()
 
 ### 腾讯云对象存储 (COS)
 
-用于生产部署：
+用于腾讯云生产部署：
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/artifact/cos"
@@ -94,6 +94,52 @@ import "trpc.group/trpc-go/trpc-agent-go/artifact/cos"
 
 service := cos.NewService("https://bucket.cos.region.myqcloud.com")
 ```
+
+### S3 兼容存储
+
+S3 后端支持 AWS S3 和 S3 兼容服务（MinIO、DigitalOcean Spaces、Cloudflare R2 等）。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/artifact/s3"
+```
+
+#### 使用方法
+
+```go
+// 创建服务
+service, err := s3.NewService(os.Getenv("S3_BUCKET"))
+if err != nil {
+    log.Fatal(err)
+}
+
+// 使用自定义端点（用于 S3 兼容服务）
+service, err := s3.NewService(os.Getenv("S3_BUCKET"),
+    s3.WithEndpoint(os.Getenv("S3_ENDPOINT")),
+    s3.WithCredentials(os.Getenv("S3_ACCESS_KEY"), os.Getenv("S3_SECRET_KEY")),
+    s3.WithPathStyle(),  // MinIO 和某些 S3 兼容服务需要
+)
+```
+
+> **注意**：在使用服务之前，存储桶必须已存在。
+
+#### 配置选项
+
+| 选项 | 描述 | 默认值 |
+|------|------|--------|
+| `WithEndpoint(url)` | S3 兼容服务的自定义端点（使用 `http://` 禁用 SSL） | AWS S3 |
+| `WithRegion(region)` | AWS 区域 | `AWS_REGION` 环境变量或 `us-east-1` |
+| `WithCredentials(key, secret)` | 静态凭证 | AWS 凭证链 |
+| `WithSessionToken(token)` | 临时凭证的 STS 会话令牌 | - |
+| `WithPathStyle()` | 使用路径样式 URL（MinIO、R2 需要） | 虚拟主机样式 |
+| `WithRetries(n)` | 最大重试次数 | 3 |
+
+#### 凭证解析顺序
+
+当未通过 `WithCredentials()` 提供显式凭证时，AWS SDK 按以下优先级顺序解析凭证：
+
+1. **环境变量**：`AWS_ACCESS_KEY_ID` 和 `AWS_SECRET_ACCESS_KEY`
+2. **共享凭证文件**：`~/.aws/credentials`（可选配合 `AWS_PROFILE`）
+3. **IAM 角色**：EC2 实例配置文件、ECS 任务角色、Lambda 执行角色等
 
 ## 在 Agent 中的使用
 
@@ -282,6 +328,20 @@ func processTextTool(ctx context.Context, input ProcessTextInput) (ProcessTextOu
 6. **资源管理**：使用云存储后端时要注意存储成本和数据生命周期。
 
 ## 配置
+
+### S3 的环境变量
+
+使用 AWS S3 或 S3 兼容服务时：
+
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION="your-region"
+export S3_BUCKET="your-bucket-name"
+
+# 可选：用于 S3 兼容服务（MinIO、R2、Spaces 等）
+export S3_ENDPOINT="https://your-endpoint.com"
+```
 
 ### COS 的环境变量
 
