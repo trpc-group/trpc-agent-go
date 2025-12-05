@@ -418,6 +418,39 @@ func TestGetSessionSummaryText_WithNilSession(t *testing.T) {
 	assert.Empty(t, text)
 }
 
+func TestGetSessionSummaryText_WithFilterKey(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:      "session-123",
+		AppName: "test-app",
+		UserID:  "user-456",
+	}
+
+	filterKey := "user-messages"
+	summary := session.Summary{
+		Summary: "Filtered summary text",
+		Topics:  []string{},
+	}
+	summaryBytes, _ := json.Marshal(summary)
+
+	// Mock: Query summary with specific filter key
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, filterKey, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary"}).
+			AddRow(summaryBytes))
+
+	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey(filterKey))
+	assert.True(t, found)
+	assert.Equal(t, "Filtered summary text", text)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // func TestPickSummaryText
 
 func TestEnqueueSummaryJob_Success(t *testing.T) {

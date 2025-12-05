@@ -91,6 +91,35 @@ func TestWithEventTime(t *testing.T) {
 	}
 }
 
+func TestWithSummaryFilterKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		filterKey string
+	}{
+		{
+			name:      "empty filter key",
+			filterKey: "",
+		},
+		{
+			name:      "specific filter key",
+			filterKey: "user-messages",
+		},
+		{
+			name:      "another filter key",
+			filterKey: "tool-calls",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			option := WithSummaryFilterKey(tt.filterKey)
+			opts := &SummaryOptions{}
+			option(opts)
+			assert.Equal(t, tt.filterKey, opts.FilterKey)
+		})
+	}
+}
+
 func TestKey_CheckSessionKey(t *testing.T) {
 	tests := []struct {
 		name    string
