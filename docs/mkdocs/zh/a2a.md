@@ -183,6 +183,11 @@ func main() {
 }
 ```
 
+在多 Agent 系统中，`A2AAgent` 通常作为本地协调者 Agent
+（例如 `LLMAgent`）的 SubAgent 使用。你可以将 `A2AAgent`
+与 `LLMAgent.SetSubAgents` 结合，从注册中心动态加载并更新
+远程 SubAgent，而无需重建协调者实例。
+
 #### 高级配置
 
 ```go
@@ -490,4 +495,3 @@ a2aAgent, _ := a2aagent.New(
 ```
 
 通过 A2A Server 和 A2AAgent 的配合使用，可以比较方便的构建的远程的 Agent 系统。
-
