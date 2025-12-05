@@ -213,98 +213,140 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 	eventChan := make(chan *event.Event, r.streamingBufSize)
 	go func() {
 		defer close(eventChan)
-
-		a2aMessage, err := r.buildA2AMessage(invocation, true)
-		if err != nil {
-			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
-			return
-		}
-		params := protocol.SendMessageParams{
-			Message: *a2aMessage,
-		}
-		// Extract A2A request options from invocation
-		var requestOpts []client.RequestOption
-		if invocation.RunOptions.A2ARequestOptions != nil {
-			for _, opt := range invocation.RunOptions.A2ARequestOptions {
-				requestOpts = append(requestOpts, opt.(client.RequestOption))
-			}
-		}
-		// Add UserID header if session has UserID
-		if invocation.Session != nil && invocation.Session.UserID != "" {
-			userIDHeader := r.userIDHeader
-			if userIDHeader == "" {
-				userIDHeader = defaultUserIDHeader
-			}
-			requestOpts = append(requestOpts, client.WithRequestHeader(userIDHeader, invocation.Session.UserID))
-		}
-		streamChan, err := r.a2aClient.StreamMessage(ctx, params, requestOpts...)
-		if err != nil {
-			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("A2A streaming request failed to %s: %v", r.agentCard.URL, err))
-			return
-		}
-
-		var (
-			responseID               string
-			aggregatedContentBuilder strings.Builder
-		)
-		for streamEvent := range streamChan {
-			if err := agent.CheckContextCancelled(ctx); err != nil {
-				return
-			}
-
-			events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
-			if err != nil {
-				r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
-				return
-			}
-
-			for _, evt := range events {
-				if evt == nil {
-					continue
-				}
-				// Aggregate content from delta
-				if evt.Response != nil && len(evt.Response.Choices) > 0 {
-					if evt.Response.ID != "" {
-						responseID = evt.Response.ID
-					}
-					if r.streamingRespHandler != nil {
-						content, err := r.streamingRespHandler(evt.Response)
-						if err != nil {
-							r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
-							return
-						}
-						if content != "" {
-							aggregatedContentBuilder.WriteString(content)
-						}
-					} else if evt.Response.Choices[0].Delta.Content != "" {
-						aggregatedContentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
-					}
-				}
-
-				agent.EmitEvent(ctx, invocation, eventChan, evt)
-			}
-		}
-
-		agent.EmitEvent(ctx, invocation, eventChan, event.New(
-			invocation.InvocationID,
-			r.name,
-			event.WithResponse(&model.Response{
-				ID:        responseID,
-				Object:    model.ObjectTypeChatCompletion,
-				Done:      true,
-				IsPartial: false,
-				Timestamp: time.Now(),
-				Created:   time.Now().Unix(),
-				Choices: []model.Choice{{
-					Message: model.Message{
-						Role:    model.RoleAssistant,
-						Content: aggregatedContentBuilder.String(),
-					},
-				}},
-			}),
-		))
+		r.executeStreaming(ctx, invocation, eventChan)
 	}()
 	return eventChan, nil
+}
+
+// executeStreaming executes the streaming A2A communication workflow.
+func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invocation, eventChan chan<- *event.Event) {
+	a2aMessage, err := r.buildA2AMessage(invocation, true)
+	if err != nil {
+		r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
+		return
+	}
+
+	requestOpts := r.buildRequestOptions(invocation)
+	streamChan, err := r.a2aClient.StreamMessage(ctx, protocol.SendMessageParams{Message: *a2aMessage}, requestOpts...)
+	if err != nil {
+		r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("A2A streaming request failed to %s: %v", r.agentCard.URL, err))
+		return
+	}
+
+	responseID, aggregatedContent := r.processStreamingEvents(ctx, invocation, eventChan, streamChan)
+	r.emitFinalEvent(ctx, invocation, eventChan, responseID, aggregatedContent)
+}
+
+// buildRequestOptions constructs A2A request options from invocation.
+func (r *A2AAgent) buildRequestOptions(invocation *agent.Invocation) []client.RequestOption {
+	var requestOpts []client.RequestOption
+	if invocation.RunOptions.A2ARequestOptions != nil {
+		for _, opt := range invocation.RunOptions.A2ARequestOptions {
+			requestOpts = append(requestOpts, opt.(client.RequestOption))
+		}
+	}
+	// Add UserID header if session has UserID
+	if invocation.Session != nil && invocation.Session.UserID != "" {
+		userIDHeader := r.userIDHeader
+		if userIDHeader == "" {
+			userIDHeader = defaultUserIDHeader
+		}
+		requestOpts = append(requestOpts, client.WithRequestHeader(userIDHeader, invocation.Session.UserID))
+	}
+	return requestOpts
+}
+
+// processStreamingEvents processes streaming events and aggregates content.
+// Returns the response ID and aggregated content.
+func (r *A2AAgent) processStreamingEvents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	streamChan <-chan protocol.StreamingMessageEvent,
+) (responseID string, aggregatedContent string) {
+	var contentBuilder strings.Builder
+
+	for streamEvent := range streamChan {
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			return responseID, contentBuilder.String()
+		}
+
+		events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
+		if err != nil {
+			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
+			return responseID, contentBuilder.String()
+		}
+
+		for _, evt := range events {
+			if evt == nil {
+				continue
+			}
+			responseID, _ = r.aggregateEventContent(ctx, invocation, eventChan, evt, responseID, &contentBuilder)
+			agent.EmitEvent(ctx, invocation, eventChan, evt)
+		}
+	}
+	return responseID, contentBuilder.String()
+}
+
+// aggregateEventContent aggregates content from event delta.
+// Returns updated responseID and whether an error occurred.
+func (r *A2AAgent) aggregateEventContent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	evt *event.Event,
+	responseID string,
+	contentBuilder *strings.Builder,
+) (string, bool) {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return responseID, false
+	}
+
+	if evt.Response.ID != "" {
+		responseID = evt.Response.ID
+	}
+
+	if r.streamingRespHandler != nil {
+		content, err := r.streamingRespHandler(evt.Response)
+		if err != nil {
+			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
+			return responseID, true
+		}
+		if content != "" {
+			contentBuilder.WriteString(content)
+		}
+	} else if evt.Response.Choices[0].Delta.Content != "" {
+		contentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
+	}
+	return responseID, false
+}
+
+// emitFinalEvent emits the final completion event.
+func (r *A2AAgent) emitFinalEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	responseID string,
+	aggregatedContent string,
+) {
+	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+		invocation.InvocationID,
+		r.name,
+		event.WithResponse(&model.Response{
+			ID:        responseID,
+			Object:    model.ObjectTypeChatCompletion,
+			Done:      true,
+			IsPartial: false,
+			Timestamp: time.Now(),
+			Created:   time.Now().Unix(),
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: aggregatedContent,
+				},
+			}},
+		}),
+	))
 }
 
 // runNonStreaming handles non-streaming A2A communication

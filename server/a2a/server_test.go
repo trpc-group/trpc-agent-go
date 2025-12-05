@@ -1123,12 +1123,11 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 	t.Run("final_event_stops", func(t *testing.T) {
 		proc := createTestMessageProcessor()
 		sub := &mockTaskSubscriber{}
+		// Only runner.completion is treated as final event
 		final := &event.Event{
 			Response: &model.Response{
-				Done: true,
-				Choices: []model.Choice{
-					{Message: model.Message{Role: model.RoleAssistant}},
-				},
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
 			},
 		}
 		cont, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{final}, sub)
