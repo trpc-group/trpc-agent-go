@@ -11,6 +11,8 @@
 package gemini
 
 import (
+	"context"
+
 	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -20,13 +22,35 @@ const (
 	defaultChannelBufferSize = 256
 )
 
-var (
-	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
-	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
-	inputTokensFloor       = imodel.DefaultInputTokensFloor
-	outputTokensFloor      = imodel.DefaultOutputTokensFloor
-	safetyMarginRatio      = imodel.DefaultSafetyMarginRatio
-	maxInputTokensRatio    = imodel.DefaultMaxInputTokensRatio
+// ChatRequestCallbackFunc is the function type for the chat request callback.
+type ChatRequestCallbackFunc func(
+	ctx context.Context,
+	chatRequest []*genai.Content,
+)
+
+// ChatResponseCallbackFunc is the function type for the chat response callback.
+type ChatResponseCallbackFunc func(
+	ctx context.Context,
+	chatRequest []*genai.Content,
+	generateConfig *genai.GenerateContentConfig,
+	chatResponse *genai.GenerateContentResponse,
+)
+
+// ChatChunkCallbackFunc is the function type for the chat chunk callback.
+type ChatChunkCallbackFunc func(
+	ctx context.Context,
+	chatRequest []*genai.Content,
+	generateConfig *genai.GenerateContentConfig,
+	chatResponse *genai.GenerateContentResponse,
+)
+
+// ChatStreamCompleteCallbackFunc is the function type for the chat stream completion callback.
+// This callback is invoked when streaming is completely finished (success or error).
+type ChatStreamCompleteCallbackFunc func(
+	ctx context.Context,
+	chatRequest []*genai.Content,
+	generateConfig *genai.GenerateContentConfig,
+	chatResponse *model.Response,
 )
 
 // options contains configuration options for creating an Anthropic model.
@@ -54,6 +78,20 @@ type options struct {
 	// geminiClientConfig for building gemini client.
 	geminiClientConfig *genai.ClientConfig
 }
+
+var (
+	defaultOptions = options{
+		channelBufferSize: defaultChannelBufferSize,
+		tokenTailoringConfig: &model.TokenTailoringConfig{
+			ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
+			ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
+			SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
+			InputTokensFloor:       imodel.DefaultInputTokensFloor,
+			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
+			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
+		},
+	}
+)
 
 // Option is a function that configures an Anthropic model.
 type Option func(*options)
@@ -148,6 +186,27 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 // requirements.
 func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	return func(opts *options) {
+		if config == nil {
+			return
+		}
+		if config.ProtocolOverheadTokens <= 0 {
+			config.ProtocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
+		}
+		if config.ReserveOutputTokens <= 0 {
+			config.ReserveOutputTokens = imodel.DefaultReserveOutputTokens
+		}
+		if config.SafetyMarginRatio <= 0 {
+			config.SafetyMarginRatio = imodel.DefaultSafetyMarginRatio
+		}
+		if config.InputTokensFloor <= 0 {
+			config.InputTokensFloor = imodel.DefaultInputTokensFloor
+		}
+		if config.OutputTokensFloor <= 0 {
+			config.OutputTokensFloor = imodel.DefaultOutputTokensFloor
+		}
+		if config.MaxInputTokensRatio <= 0 {
+			config.MaxInputTokensRatio = imodel.DefaultMaxInputTokensRatio
+		}
 		opts.tokenTailoringConfig = config
 	}
 }

@@ -32,6 +32,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	testSimpleSubAgentName   = "sub"
+	testSubAgentsMainName    = "main"
+	testSubAgentDescription  = "subdesc"
+	testSubAgentNameOne      = "sub1"
+	testSubAgentNameTwo      = "sub2"
+	testSubAgentNotFoundName = "notfound"
+)
+
 func newDummyModel() model.Model {
 	return openai.New("dummy-model")
 }
@@ -58,17 +67,80 @@ func (m *mockModelWithResponse) Info() model.Info {
 }
 
 func TestLLMAgent_SubAgents(t *testing.T) {
-	sub := New("sub", WithDescription("subdesc"))
-	agt := New("main", WithSubAgents([]agent.Agent{sub}))
+	sub := New(
+		testSimpleSubAgentName,
+		WithDescription(testSubAgentDescription),
+	)
+	agt := New(
+		testSubAgentsMainName,
+		WithSubAgents([]agent.Agent{sub}),
+	)
 	if len(agt.SubAgents()) != 1 {
 		t.Errorf("expected 1 subagent")
 	}
-	if agt.FindSubAgent("sub") == nil {
+	if agt.FindSubAgent(testSimpleSubAgentName) == nil {
 		t.Errorf("FindSubAgent failed")
 	}
-	if agt.FindSubAgent("notfound") != nil {
+	if agt.FindSubAgent(testSubAgentNotFoundName) != nil {
 		t.Errorf("FindSubAgent should return nil for missing")
 	}
+}
+
+// TestLLMAgent_SubAgentsEmpty verifies that SubAgents returns nil when
+// no sub-agents are configured.
+func TestLLMAgent_SubAgentsEmpty(t *testing.T) {
+	agt := New(testSubAgentsMainName)
+
+	subAgents := agt.SubAgents()
+	require.Nil(t, subAgents)
+}
+
+// TestLLMAgent_SetSubAgents verifies that SetSubAgents replaces the
+// sub-agent list and updates FindSubAgent results.
+func TestLLMAgent_SetSubAgents(t *testing.T) {
+	sub1 := &mockAgent{name: testSubAgentNameOne}
+	sub2 := &mockAgent{name: testSubAgentNameTwo}
+
+	agt := New(
+		testSubAgentsMainName,
+		WithSubAgents([]agent.Agent{sub1}),
+	)
+
+	require.Equal(t, 1, len(agt.SubAgents()))
+	require.NotNil(t, agt.FindSubAgent(testSubAgentNameOne))
+	require.Nil(t, agt.FindSubAgent(testSubAgentNameTwo))
+
+	agt.SetSubAgents([]agent.Agent{sub2})
+
+	subAgents := agt.SubAgents()
+	require.Equal(t, 1, len(subAgents))
+	require.Equal(t, testSubAgentNameTwo, subAgents[0].Info().Name)
+	require.Nil(t, agt.FindSubAgent(testSubAgentNameOne))
+	found := agt.FindSubAgent(testSubAgentNameTwo)
+	require.NotNil(t, found)
+	require.Equal(t, testSubAgentNameTwo, found.Info().Name)
+}
+
+// TestLLMAgent_SubAgentsReturnsCopy ensures that callers cannot mutate
+// the internal sub-agent slice through the returned value.
+func TestLLMAgent_SubAgentsReturnsCopy(t *testing.T) {
+	sub := &mockAgent{name: testSimpleSubAgentName}
+	agt := New(
+		testSubAgentsMainName,
+		WithSubAgents([]agent.Agent{sub}),
+	)
+
+	subAgents := agt.SubAgents()
+	require.Equal(t, 1, len(subAgents))
+	require.NotNil(t, subAgents[0])
+
+	// Mutate the returned slice.
+	subAgents[0] = nil
+
+	// Fetch again and ensure internal state is intact.
+	subAgents2 := agt.SubAgents()
+	require.Equal(t, 1, len(subAgents2))
+	require.NotNil(t, subAgents2[0])
 }
 
 // Test that buildRequestProcessors wires AddSessionSummary into

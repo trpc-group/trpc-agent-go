@@ -111,7 +111,8 @@ type Node struct {
 	Function    NodeFunc
 	Type        NodeType // Type of the node (function, llm, tool, etc.)
 
-	toolSets []tool.ToolSet
+	toolSets             []tool.ToolSet
+	refreshToolSetsOnRun bool
 	// Per-node callbacks for fine-grained control
 	callbacks *NodeCallbacks
 	// Optional per-node cache policy. If nil, graph-level policy applies.
