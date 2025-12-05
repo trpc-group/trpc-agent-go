@@ -27,8 +27,6 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return nil
 	}
 
-	const errSummaryMissing = "summary missing for filter key"
-
 	if sess == nil {
 		return errors.New("nil session")
 	}
@@ -47,14 +45,11 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return nil
 	}
 
+	// Persist to in-memory store under lock.
 	sess.SummariesMu.RLock()
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
-	if sum == nil {
-		return fmt.Errorf("%s %q", errSummaryMissing, filterKey)
-	}
 
-	// Persist to in-memory store under lock.
 	app := s.getOrCreateAppSessions(key.AppName)
 	if err := s.writeSummaryUnderLock(
 		app, key, filterKey, sum.Summary,
