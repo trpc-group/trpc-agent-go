@@ -132,13 +132,18 @@ func (r *runner) Close() error {
 	r.closeOnce.Do(func() {
 		// Only close resources that we own (created by this runner).
 		if r.ownedSessionService && r.sessionService != nil {
-			if err := r.sessionService.Close(); err != nil {
-				closeErr = err
-				log.Errorf("close session service failed: %v", err)
-			}
+			closeErr = r.closeSessionService()
 		}
 	})
 	return closeErr
+}
+
+func (r *runner) closeSessionService() error {
+	err := r.sessionService.Close()
+	if err != nil {
+		log.Errorf("close session service failed: %v", err)
+	}
+	return err
 }
 
 // Run runs the agent.
@@ -259,7 +264,12 @@ func (r *runner) processAgentEvents(
 	go func() {
 		defer func() {
 			if rr := recover(); rr != nil {
-				log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
+				log.ErrorfContext(
+					ctx,
+					"panic in runner event loop: %v\n%s",
+					rr,
+					string(debug.Stack()),
+				)
 			}
 			close(processedEventCh)
 			invocation.CleanupNotice(ctx)
@@ -268,7 +278,7 @@ func (r *runner) processAgentEvents(
 		// Process all agent events.
 		for agentEvent := range agentEventCh {
 			if agentEvent == nil {
-				log.Debug("agentEvent is nil.")
+				log.DebugContext(ctx, "agentEvent is nil.")
 				continue
 			}
 
@@ -312,7 +322,7 @@ func (r *runner) handleEventPersistence(
 	}
 
 	if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
-		log.Errorf("Failed to append event to session: %v", err)
+		log.ErrorfContext(ctx, "Failed to append event to session: %v", err)
 		return
 	}
 
@@ -322,7 +332,7 @@ func (r *runner) handleEventPersistence(
 	if err := r.sessionService.EnqueueSummaryJob(
 		context.Background(), sess, agentEvent.FilterKey, false,
 	); err != nil {
-		log.Debugf("Auto summarize after append skipped or failed: %v.", err)
+		log.DebugfContext(ctx, "Auto summarize after append skipped or failed: %v.", err)
 	}
 	// Do not enqueue full-session summary here. The worker will cascade
 	// a full-session summarization after a branch update when appropriate.

@@ -108,12 +108,19 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 		return
 	}
 	if req == nil {
-		log.Errorf("Instruction request processor: request is nil")
+		log.ErrorfContext(
+			ctx,
+			"Instruction request processor: request is nil",
+		)
 		return
 	}
 
 	agentName := invocation.AgentName
-	log.Debugf("Instruction request processor: processing request for agent %s", agentName)
+	log.DebugfContext(
+		ctx,
+		"Instruction request processor: processing request for agent %s",
+		agentName,
+	)
 
 	// Process instruction and system prompt with state injection.
 	processedInstruction, processedSystemPrompt := p.processInstructionsWithState(invocation)

@@ -662,8 +662,13 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	select {
 	case <-ch:
 	case <-time.After(timeout):
-		log.Infof("[AddNoticeChannelAndWait]: Wait for notification message timeout. key: %s, timeout: %d(s)",
-			key, int64(timeout/time.Second))
+		log.InfofContext(
+			ctx,
+			"[AddNoticeChannelAndWait]: Wait for notification message "+
+				"timeout. key: %s, timeout: %d(s)",
+			key,
+			int64(timeout/time.Second),
+		)
 		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
 	case <-ctx.Done():
 		return ctx.Err()
@@ -674,7 +679,11 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
 		return nil
 	}
 	inv.noticeMu.Lock()
@@ -696,15 +705,23 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
-		return fmt.Errorf("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation key:%s", key)
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
+		return fmt.Errorf(
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation key:%s",
+			key,
+		)
 	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
 	ch, ok := inv.noticeChanMap[key]
 	if !ok {
-		log.Warnf("notice channel not found for %s", key)
+		log.WarnfContext(ctx, "notice channel not found for %s", key)
 		return fmt.Errorf("notice channel not found for %s", key)
 	}
 
@@ -719,7 +736,11 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		log.ErrorContext(
+			ctx,
+			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+				"Clone method to create Invocation",
+		)
 		return
 	}
 	inv.noticeMu.Lock()
