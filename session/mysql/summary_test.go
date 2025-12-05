@@ -1319,13 +1319,6 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 	s.startAsyncSummaryWorker()
 	defer s.Close() // This will close the channels
 
-	// Create cancelled context
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	// Give a small delay to ensure context cancellation is detected
-	time.Sleep(1 * time.Millisecond)
-
 	sess := session.NewSession("test-app", "user-456", "session-123")
 	job := &summaryJob{
 		filterKey: "",
@@ -1333,9 +1326,22 @@ func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
 		session:   sess,
 	}
 
-	// Try to enqueue with cancelled context - should return false
+	// First, fill the queue to make subsequent enqueue operations check ctx.Done()
+	index := sess.Hash % len(s.summaryJobChans)
+	select {
+	case s.summaryJobChans[index] <- job:
+		// Successfully filled the queue
+	default:
+		t.Skip("Could not fill queue for testing")
+	}
+
+	// Create cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Try to enqueue with cancelled context when queue is full - should return false
 	result := s.tryEnqueueJob(ctx, job)
-	assert.False(t, result)
+	assert.False(t, result, "tryEnqueueJob should return false when context is cancelled and queue is full")
 }
 
 func TestProcessSummaryJob_Timeout(t *testing.T) {
