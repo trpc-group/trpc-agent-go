@@ -345,14 +345,24 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		searchQuery, err = vs.buildVectorSearchQuery(query)
 	case vectorstore.SearchModeKeyword:
 		if !vs.option.enableTSVector {
-			log.Infof("elasticsearch: keyword search is not supported when enableTSVector is disabled, use vector search instead")
+			log.InfofContext(
+				ctx,
+				"elasticsearch: keyword search is not supported "+
+					"when enableTSVector is disabled, use vector "+
+					"search instead",
+			)
 			searchQuery, err = vs.buildVectorSearchQuery(query)
 		} else {
 			searchQuery, err = vs.buildKeywordSearchQuery(query)
 		}
 	case vectorstore.SearchModeHybrid:
 		if !vs.option.enableTSVector {
-			log.Infof("elasticsearch: hybrid search is not supported when enableTSVector is disabled, use vector search instead")
+			log.InfofContext(
+				ctx,
+				"elasticsearch: hybrid search is not supported "+
+					"when enableTSVector is disabled, use vector "+
+					"search instead",
+			)
 			searchQuery, err = vs.buildVectorSearchQuery(query)
 		} else {
 			searchQuery, err = vs.buildHybridSearchQuery(query)
@@ -423,7 +433,11 @@ func (vs *VectorStore) parseSearchResults(data []byte) (*vectorstore.SearchResul
 		}
 		doc, _, err := vs.docBuilder(hit.Source_)
 		if err != nil {
-			log.Errorf("elasticsearch parse search result: %v", err)
+			log.ErrorfContext(
+				ctx,
+				"elasticsearch parse search result: %v",
+				err,
+			)
 			continue
 		}
 		if doc == nil {
@@ -547,7 +561,11 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 		return fmt.Errorf("elasticsearch delete all documents: %w", err)
 	}
 
-	log.Infof("elasticsearch deleted all documents from index %s", vs.option.indexName)
+	log.InfofContext(
+		ctx,
+		"elasticsearch deleted all documents from index %s",
+		vs.option.indexName,
+	)
 	return nil
 }
 
@@ -589,7 +607,10 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.D
 		return fmt.Errorf("elasticsearch delete by filter: %w", err)
 	}
 
-	log.Infof("elasticsearch executed delete by filter query")
+	log.InfofContext(
+		ctx,
+		"elasticsearch executed delete by filter query",
+	)
 	return nil
 }
 
@@ -657,7 +678,11 @@ func (vs *VectorStore) queryMetadataBatch(
 
 		doc, _, err := vs.docBuilder(hit.Source_)
 		if err != nil {
-			log.Warnf("elasticsearch doc builder failed: %v", err)
+			log.WarnfContext(
+				ctx,
+				"elasticsearch doc builder failed: %v",
+				err,
+			)
 			continue // Skip invalid documents
 		}
 		if doc == nil || len(doc.Metadata) == 0 {

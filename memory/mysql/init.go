@@ -36,7 +36,10 @@ const (
 
 // initDB initializes the database schema.
 func (s *Service) initDB(ctx context.Context) error {
-	log.Info("initializing mysql memory database schema...")
+	log.InfoContext(
+		ctx,
+		"initializing mysql memory database schema...",
+	)
 
 	// Create table
 	fullTableName := s.tableName
@@ -45,8 +48,15 @@ func (s *Service) initDB(ctx context.Context) error {
 	if _, err := s.db.Exec(ctx, sql); err != nil {
 		return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 	}
-	log.Infof("created table: %s", fullTableName)
+	log.InfofContext(
+		ctx,
+		"created table: %s",
+		fullTableName,
+	)
 
-	log.Info("mysql memory database schema initialized successfully")
+	log.InfoContext(
+		ctx,
+		"mysql memory database schema initialized successfully",
+	)
 	return nil
 }
