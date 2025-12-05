@@ -42,11 +42,11 @@ const (
 )
 
 const (
-	// TagCodeExecution is the tag value for code execution code event.
-	TagCodeExecution = "code_execution_code"
+	// CodeExecutionTag is the tag value for code execution code event.
+	CodeExecutionTag = "code_execution_code"
 
-	// TagCodeExecutionResult is the tag value for code execution result event.
-	TagCodeExecutionResult = "code_execution_result"
+	// CodeExecutionResultTag is the tag value for code execution result event.
+	CodeExecutionResultTag = "code_execution_result"
 
 	// TransferTag is the tag for transfer event.
 	TransferTag = "transfer"
@@ -108,8 +108,8 @@ type Event struct {
 	Version int `json:"version,omitempty"`
 }
 
-// ContainTag checks if the event contains the specified tag.
-func (e *Event) ContainTag(tag string) bool {
+// ContainsTag checks if the event contains the specified tag.
+func (e *Event) ContainsTag(tag string) bool {
 	if e.Tag == "" {
 		return false
 	}

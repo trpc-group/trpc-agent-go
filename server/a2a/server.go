@@ -209,22 +209,9 @@ func isFinalStreamingEvent(evt *event.Event) bool {
 		return false
 	}
 
-	rsp := evt.Response
-	if !rsp.Done {
-		return false
-	}
-
-	if rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
-		return false
-	}
-
-	for _, choice := range rsp.Choices {
-		if choice.Message.Role == model.RoleTool || len(choice.Message.ToolCalls) > 0 || choice.Message.ToolID != "" {
-			return false
-		}
-	}
-
-	return true
+	// The only truly final event is runner.completion
+	// This ensures we don't miss postprocessing events (code execution, etc.)
+	return evt.IsRunnerCompletion()
 }
 
 // handleDefaultError provides a fallback error handling mechanism

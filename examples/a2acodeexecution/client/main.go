@@ -1,10 +1,14 @@
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
 
-// Package main demonstrates handling code execution events from ADK A2A server
+// Package main demonstrates an A2A client that connects to a code execution server.
+// It shows how to handle code execution events (code and result) via the A2A protocol.
 package main
 
 import (
@@ -15,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -24,22 +27,22 @@ import (
 )
 
 var (
-	agentURL = flag.String("url", "http://localhost:8082", "ADK A2A agent server URL with code execution")
+	serverURL = flag.String("url", "http://localhost:8888", "A2A server URL")
 )
 
 func main() {
 	flag.Parse()
 
 	fmt.Println("========================================")
-	fmt.Println("trpc-agent-go A2A Code Execution Demo")
+	fmt.Println("A2A Code Execution Client")
 	fmt.Println("========================================")
-	fmt.Printf("Connecting to ADK A2A server: %s\n", *agentURL)
+	fmt.Printf("Server URL: %s\n", *serverURL)
 	fmt.Println("========================================")
 	fmt.Println()
 
 	// Create A2A agent client
 	a2aAgent, err := a2aagent.New(
-		a2aagent.WithAgentCardURL(*agentURL),
+		a2aagent.WithAgentCardURL(*serverURL),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create A2A agent: %v", err)
@@ -47,7 +50,7 @@ func main() {
 
 	// Display agent card info
 	card := a2aAgent.GetAgentCard()
-	fmt.Printf("Connected to agent:\n")
+	fmt.Printf("Connected to A2A Server:\n")
 	fmt.Printf("  Name: %s\n", card.Name)
 	fmt.Printf("  Description: %s\n", card.Description)
 	fmt.Printf("  URL: %s\n", card.URL)
@@ -60,7 +63,6 @@ func main() {
 
 	ctx := context.Background()
 	userID := "test_user"
-	// Use unique session ID to avoid polluted session history on ADK server
 	sessionID := fmt.Sprintf("session_%d", time.Now().UnixNano())
 
 	fmt.Printf("Client Session Info:\n")
@@ -82,7 +84,7 @@ func main() {
 		"Analyze this data: [5, 12, 8, 15, 7, 9, 11]. Calculate mean, median, and standard deviation using Python.")
 	fmt.Println()
 
-	// Test 3: Plot generation (if matplotlib is available)
+	// Test 3: Multiple steps
 	fmt.Println("Test 3: Code with Multiple Steps")
 	fmt.Println("=================================")
 	testQuery(ctx, agentRunner, userID, sessionID,
@@ -98,7 +100,6 @@ func testQuery(ctx context.Context, agentRunner runner.Runner, userID, sessionID
 		userID,
 		sessionID,
 		model.NewUserMessage(query),
-		agent.WithRuntimeState(map[string]any{"test": "value"}),
 	)
 	if err != nil {
 		log.Printf("Error: %v", err)
@@ -110,7 +111,7 @@ func testQuery(ctx context.Context, agentRunner runner.Runner, userID, sessionID
 	}
 }
 
-// processCodeExecutionResponse processes events and displays code execution information
+// processCodeExecutionResponse processes events and displays code execution information.
 func processCodeExecutionResponse(events <-chan *event.Event) error {
 	var lastValidContent string
 
@@ -119,12 +120,12 @@ func processCodeExecutionResponse(events <-chan *event.Event) error {
 			return fmt.Errorf("event error: %s", evt.Error.Message)
 		}
 
-		// Handle code execution events
+		// Handle code execution events (ObjectType == codeexecution && Tag == code)
 		if handleCodeExecution(evt) {
 			continue
 		}
 
-		// Handle code execution result events
+		// Handle code execution result events (ObjectType == codeexecution && Tag == code_execution_result)
 		if handleCodeExecutionResult(evt) {
 			continue
 		}
@@ -139,7 +140,7 @@ func processCodeExecutionResponse(events <-chan *event.Event) error {
 		// Print content when we receive the final response event
 		if evt.IsFinalResponse() {
 			if lastValidContent != "" {
-				fmt.Println("🤖 Assistant:")
+				fmt.Println("Assistant:")
 				fmt.Println(lastValidContent)
 			}
 			break
@@ -149,25 +150,31 @@ func processCodeExecutionResponse(events <-chan *event.Event) error {
 	return nil
 }
 
-// handleCodeExecution processes code execution events
+// handleCodeExecution processes code execution events.
+// Checks: ObjectType == postprocessing.code_execution && Tag contains "code"
 func handleCodeExecution(evt *event.Event) bool {
 	if evt.Response == nil {
 		return false
 	}
 
-	if evt.Response.Object == model.ObjectTypePostprocessingCodeExecution {
+	// Check ObjectType first, then Tag for code
+	if evt.Response.Object == model.ObjectTypePostprocessingCodeExecution &&
+		evt.ContainsTag(event.CodeExecutionTag) {
 		if len(evt.Response.Choices) > 0 {
 			choice := evt.Response.Choices[0]
-			// Use Delta for streaming response
+			// Use Delta for streaming response, Message for non-streaming
 			content := strings.TrimSpace(choice.Delta.Content)
+			if content == "" {
+				content = strings.TrimSpace(choice.Message.Content)
+			}
 			if content == "" {
 				return true
 			}
 
-			fmt.Println("\n💻 Code Execution:")
-			fmt.Println("─────────────────────────────────────────")
+			fmt.Println("\n[Code Execution]")
+			fmt.Println("---------------------------------------------")
 			fmt.Println(content)
-			fmt.Println("─────────────────────────────────────────")
+			fmt.Println("---------------------------------------------")
 			fmt.Println()
 		}
 		return true
@@ -176,7 +183,7 @@ func handleCodeExecution(evt *event.Event) bool {
 }
 
 // handleCodeExecutionResult processes code execution result events.
-// Requires: ObjectType == codeexecution && Tag == code_execution_result
+// Checks: ObjectType == postprocessing.code_execution && Tag contains "code_execution_result"
 func handleCodeExecutionResult(evt *event.Event) bool {
 	if evt.Response == nil {
 		return false
@@ -187,21 +194,25 @@ func handleCodeExecutionResult(evt *event.Event) bool {
 		evt.ContainsTag(event.CodeExecutionResultTag) {
 		if len(evt.Response.Choices) > 0 {
 			choice := evt.Response.Choices[0]
-			// Use Delta for streaming response
+			// Use Delta for streaming response, Message for non-streaming
 			content := strings.TrimSpace(choice.Delta.Content)
+			if content == "" {
+				content = strings.TrimSpace(choice.Message.Content)
+			}
 			if content == "" {
 				return false
 			}
 
+			fmt.Println("[Code Execution Result]")
 			fmt.Println(content)
-			fmt.Printf("─────────────────────────────────────────\n\n\n")
+			fmt.Println("---------------------------------------------\n")
 		}
 		return true
 	}
 	return false
 }
 
-// captureFinalContent extracts assistant text from message or delta
+// captureFinalContent extracts assistant text from message or delta.
 func captureFinalContent(evt *event.Event) string {
 	if evt.Response == nil || len(evt.Response.Choices) == 0 {
 		return ""
