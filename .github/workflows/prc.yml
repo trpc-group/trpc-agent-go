@@ -134,23 +134,28 @@ jobs:
           version: latest
           only-new-issues: true
           args: --timeout=10m
-      - name: Check for interface{} usage
+      - name: gofmt
         run: |
-          echo "::group::Checking for interface{} usage (should use 'any' instead)"
+          echo "::group::Checking for interface{} usage and gofmt formatting"
           files=$(gofmt -r 'interface{} -> any' -l .)
           if [ -n "$files" ]; then
-            echo "::error::Found interface{} usage. Please use 'any' instead of 'interface{}'."
-            echo "Files that need to be updated:"
+            echo "::error::Found files that need formatting or contain interface{} type usage."
+            echo "This check detects both:"
+            echo "  - Files using 'interface{}' (should use 'any' in Go 1.18+)"
+            echo "  - Files not properly formatted with gofmt"
+            echo ""
+            echo "Files that need attention:"
             echo "$files"
             echo ""
-            echo "You can fix this by running:"
+            echo "You can fix this automatically by running:"
             echo "  gofmt -w -r 'interface{} -> any' ."
+            echo "  # This will format files and replace interface{} with any"
             exit 1
           else
-            echo "✓ No interface{} usage found - all files use 'any'"
+            echo "✓ All files are properly formatted and use modern 'any' type"
           fi
           echo "::endgroup::"
-      - name: Check license headers
+      - name: license
         run: |
           echo "::group::Checking license headers in Go files"
           missing_files=""
