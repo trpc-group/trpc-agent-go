@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	iprocessor "trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -55,10 +56,14 @@ func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
 		evts = append(evts, <-ch)
 	}
 	if assert.Len(t, evts, 2) {
+		// Both events have the same Object type (code execution)
 		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution,
 			evts[0].Response.Object)
 		assert.Equal(t, model.ObjectTypePostprocessingCodeExecution,
 			evts[1].Response.Object)
+		// The distinction is made via the Tag field
+		assert.Contains(t, evts[0].Tag, ia2a.TagCodeExecution)       // code execution event has "code" tag
+		assert.Contains(t, evts[1].Tag, ia2a.TagCodeExecutionResult) // result event has "code_execution_result" tag
 		codeMsg := evts[0].Response.Choices[0].Message.Content
 		assert.Contains(t, codeMsg, "```bash")
 		resultMsg := evts[1].Response.Choices[0].Message.Content
