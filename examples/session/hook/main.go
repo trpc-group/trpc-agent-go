@@ -152,7 +152,7 @@ func getEventPreview(evt *event.Event) string {
 		}
 	}
 	violation := ""
-	if word, ok := evt.CustomData[MetadataKeyViolation].(string); ok {
+	if word, ok := evt.GetMetadata(MetadataKeyViolation); ok {
 		violation = fmt.Sprintf(" [VIOLATION: %s]", word)
 	}
 	return fmt.Sprintf("%s: %s%s", role, content, violation)
