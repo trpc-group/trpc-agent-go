@@ -215,7 +215,7 @@ Semantics (example):
     - `output_parsed: object` whose inner schema is taken from
       `AgentConfig.output_format.schema` when `type = "json"`.
 - For `builtin.mcp`:
-  - `target_input_schema` is derived from the selected MCP tool's input schema.
+  - `target_input_schema` is derived from the selected MCP tool's input schema (populated into `MCPConfig.input_schema` by the backend when the tool is selected).
 
 Editor usage:
 

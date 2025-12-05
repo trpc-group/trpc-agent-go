@@ -9,10 +9,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Auto-register builtin components
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -32,16 +32,7 @@ func run() error {
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println()
 
-	// Step 1: Create model registry
-	modelRegistry := registry.NewModelRegistry()
-
-	// Step 2: Register model
-	modelName := getEnv("MODEL_NAME", "deepseek-chat")
-	llmModel := openai.New(modelName)
-	modelRegistry.MustRegister("deepseek-chat", llmModel)
-	fmt.Printf("✅ Registered model: %s\n", modelName)
-
-	// Step 3: Register calculator tool to DefaultToolRegistry
+	// Step 1: Register calculator tool to DefaultToolRegistry
 	// Note: Built-in tools (duckduckgo_search) are already auto-registered
 	calculatorTool := function.NewFunctionTool(
 		calculate,
@@ -53,7 +44,7 @@ func run() error {
 	fmt.Println("✅ Built-in tools available: duckduckgo_search (auto-registered)")
 	fmt.Println()
 
-	// Step 4: Load workflow
+	// Step 2: Load workflow
 	parser := dsl.NewParser()
 	workflow, err := parser.ParseFile("workflow.json")
 	if err != nil {
@@ -62,12 +53,13 @@ func run() error {
 	fmt.Printf("✅ Loaded workflow: %s\n", workflow.Name)
 	fmt.Println()
 
-	// Step 5: Compile workflow
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry).
-		WithToolRegistry(registry.DefaultToolRegistry)
+	// Step 3: Compile workflow
+	comp := compiler.New(
+		compiler.WithAllowEnvSecrets(true),
+		compiler.WithToolProvider(registry.DefaultToolRegistry),
+	)
 
-	compiledGraph, err := compiler.Compile(workflow)
+	compiledGraph, err := comp.Compile(workflow)
 	if err != nil {
 		return fmt.Errorf("failed to compile workflow: %w", err)
 	}

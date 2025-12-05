@@ -212,7 +212,7 @@
     - `output_text: string`
     - `output_parsed: object`，内部结构来自 `AgentConfig.output_format.schema`（当 `type = "json"` 时）。
 - 对于 `builtin.mcp`：
-  - `target_input_schema` 来自所选 MCP tool 的输入 schema。
+  - `target_input_schema` 来自所选 MCP tool 的输入 schema（后端在工具选择时写入 `MCPConfig.input_schema`）。
 
 前端用途：
 

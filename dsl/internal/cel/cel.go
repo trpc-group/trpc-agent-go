@@ -75,26 +75,96 @@ func init() {
 	defaultEnv = env
 }
 
+// BoolProgram is a compiled CEL program that is expected to evaluate to a
+// boolean value. It can be safely reused across multiple evaluations and
+// goroutines.
+type BoolProgram struct {
+	program celgo.Program
+}
+
+// CompileBool compiles a CEL expression into a BoolProgram that can be
+// evaluated multiple times without re-parsing or re-type-checking the
+// expression. It is intended for hot paths such as builtin conditions and
+// builtin.while loops where the same expression is evaluated repeatedly.
+func CompileBool(expr string) (*BoolProgram, error) {
+	if expr == "" {
+		return nil, fmt.Errorf("cel: expression is empty")
+	}
+
+	// Apply the same convenience rewrite as Eval/EvalBool so that callers
+	// see consistent behavior regardless of whether they use the compiled
+	// or non-compiled API.
+	if expr == "has_tool_calls()" {
+		expr = "has_tool_calls(state)"
+	}
+
+	ast, issues := defaultEnv.Parse(expr)
+	if issues != nil && issues.Err() != nil {
+		return nil, fmt.Errorf("cel parse error: %w", issues.Err())
+	}
+
+	ast, issues = defaultEnv.Check(ast)
+	if issues != nil && issues.Err() != nil {
+		return nil, fmt.Errorf("cel type-check error: %w", issues.Err())
+	}
+
+	prg, err := defaultEnv.Program(ast)
+	if err != nil {
+		return nil, fmt.Errorf("cel program build error: %w", err)
+	}
+
+	return &BoolProgram{program: prg}, nil
+}
+
+// Eval evaluates the compiled BoolProgram with the given state and input and
+// returns a boolean result. It mirrors the behavior of EvalBool but avoids
+// re-parsing and re-compiling the expression on each call.
+func (p *BoolProgram) Eval(state any, input any) (bool, error) {
+	if p == nil || p.program == nil {
+		return false, fmt.Errorf("cel: program is nil")
+	}
+
+	// Best-effort extraction of nodes view from state for convenience.
+	nodes := any(nil)
+	switch s := state.(type) {
+	case map[string]any:
+		if ns, ok := s["node_structured"]; ok {
+			nodes = ns
+		}
+	case graph.State:
+		if ns, ok := s["node_structured"]; ok {
+			nodes = ns
+		}
+	}
+
+	out, _, err := p.program.Eval(map[string]any{
+		"state": state,
+		"input": input,
+		"nodes": nodes,
+	})
+	if err != nil {
+		return false, fmt.Errorf("cel eval error: %w", err)
+	}
+
+	// Normalize the CEL value into a Go value and ensure it is boolean.
+	val := normalizeCELValue(out)
+	if b, ok := val.(bool); ok {
+		return b, nil
+	}
+
+	return false, fmt.Errorf("cel: expression did not evaluate to bool (got %T)", val)
+}
+
 // EvalBool evaluates a CEL expression that is expected to produce a boolean
 // result. The "state" and "input" variables are available inside the
 // expression and are typically bound to graph.State and a JSON-like object,
 // respectively.
 func EvalBool(expr string, state any, input any) (bool, error) {
-	val, err := Eval(expr, state, input)
+	prog, err := CompileBool(expr)
 	if err != nil {
 		return false, err
 	}
-	b, ok := val.(bool)
-	if ok {
-		return b, nil
-	}
-	// Handle CEL bool wrapper.
-	if rv, ok := val.(ref.Val); ok {
-		if bVal, ok := rv.(types.Bool); ok {
-			return bool(bVal), nil
-		}
-	}
-	return false, fmt.Errorf("cel: expression %q did not evaluate to bool (got %T)", expr, val)
+	return prog.Eval(state, input)
 }
 
 // Eval evaluates a CEL expression and returns the resulting Go value. It
@@ -129,8 +199,13 @@ func Eval(expr string, state any, input any) (any, error) {
 
 	// Best-effort extraction of nodes view from state for convenience.
 	nodes := any(nil)
-	if m, ok := state.(map[string]any); ok {
-		if ns, ok := m["node_structured"]; ok {
+	switch s := state.(type) {
+	case map[string]any:
+		if ns, ok := s["node_structured"]; ok {
+			nodes = ns
+		}
+	case graph.State:
+		if ns, ok := s["node_structured"]; ok {
 			nodes = ns
 		}
 	}

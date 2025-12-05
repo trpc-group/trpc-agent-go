@@ -1,17 +1,16 @@
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-package dsl
+package validator
 
 import (
 	"fmt"
 	"strings"
 
+	dsl "trpc.group/trpc-go/trpc-agent-go/dsl"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
+
+// Option configures a Validator instance.
+type Option func(*Validator)
 
 // Validator validates DSL graphs.
 // It performs multi-level validation:
@@ -23,16 +22,37 @@ type Validator struct {
 	registry *registry.Registry
 }
 
-// NewValidator creates a new validator with the given component registry.
-func NewValidator(reg *registry.Registry) *Validator {
-	return &Validator{
-		registry: reg,
+// New creates a new Validator with sensible defaults and applies the provided
+// options. By default it uses registry.DefaultRegistry for component metadata.
+func New(opts ...Option) *Validator {
+	v := &Validator{
+		registry: registry.DefaultRegistry,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(v)
+		}
+	}
+	if v.registry == nil {
+		v.registry = registry.DefaultRegistry
+	}
+	return v
+}
+
+// WithComponentRegistry sets the component registry used by the validator.
+// Callers only need this when they maintain a custom registry; otherwise the
+// default shared registry is used.
+func WithComponentRegistry(reg *registry.Registry) Option {
+	return func(v *Validator) {
+		if reg != nil {
+			v.registry = reg
+		}
 	}
 }
 
 // Validate validates an engine-level graph. It operates purely on the
 // execution DSL and does not depend on any UI-specific concepts.
-func (v *Validator) Validate(graphDef *Graph) error {
+func (v *Validator) Validate(graphDef *dsl.Graph) error {
 	if graphDef == nil {
 		return fmt.Errorf("graph is nil")
 	}
@@ -56,12 +76,7 @@ func (v *Validator) Validate(graphDef *Graph) error {
 }
 
 // validateStructure validates the basic structure of the graph.
-func (v *Validator) validateStructure(graphDef *Graph) error {
-	// Check version
-	if graphDef.Version == "" {
-		return fmt.Errorf("graph version is required")
-	}
-
+func (v *Validator) validateStructure(graphDef *dsl.Graph) error {
 	// Check name
 	if graphDef.Name == "" {
 		return fmt.Errorf("graph name is required")
@@ -74,7 +89,7 @@ func (v *Validator) validateStructure(graphDef *Graph) error {
 
 	// Check for duplicate node IDs and component references. Track builtin.start
 	// node (if present) so we can enforce related invariants.
-	nodeIDs := make(map[string]bool)
+	nodeIDs := make(map[string]bool, len(graphDef.Nodes))
 	startNodeID := ""
 	for _, node := range graphDef.Nodes {
 		if node.ID == "" {
@@ -181,8 +196,8 @@ func (v *Validator) validateStructure(graphDef *Graph) error {
 // validateStateVariables validates graph-level state variable declarations
 // and ensures builtin.set_state assignments only target declared variables
 // when declarations are present.
-func (v *Validator) validateStateVariables(graphDef *Graph) error {
-	declared := make(map[string]StateVariable)
+func (v *Validator) validateStateVariables(graphDef *dsl.Graph) error {
+	declared := make(map[string]dsl.StateVariable)
 	for idx, sv := range graphDef.StateVariables {
 		name := strings.TrimSpace(sv.Name)
 		if name == "" {
@@ -243,7 +258,7 @@ func (v *Validator) validateStateVariables(graphDef *Graph) error {
 }
 
 // validateComponents validates that all referenced components exist in the registry.
-func (v *Validator) validateComponents(graphDef *Graph) error {
+func (v *Validator) validateComponents(graphDef *dsl.Graph) error {
 	for _, node := range graphDef.Nodes {
 		engine := node.EngineNode
 
@@ -261,6 +276,17 @@ func (v *Validator) validateComponents(graphDef *Graph) error {
 		// Validate config against component schema
 		if err := v.validateConfig(node.ID, engine.Config, metadata.ConfigSchema); err != nil {
 			return err
+		}
+
+		// Run component-specific validation if provided.
+		if component, ok := v.registry.Get(engine.NodeType); ok {
+			if validator, ok := component.(interface {
+				Validate(config registry.ComponentConfig) error
+			}); ok {
+				if err := validator.Validate(registry.ComponentConfig(engine.Config)); err != nil {
+					return fmt.Errorf("node %s: %w", node.ID, err)
+				}
+			}
 		}
 	}
 
@@ -285,7 +311,7 @@ func (v *Validator) validateConfig(nodeID string, config map[string]interface{},
 }
 
 // validateTopology validates the graph topology (no unreachable nodes, etc.).
-func (v *Validator) validateTopology(graphDef *Graph) error {
+func (v *Validator) validateTopology(graphDef *dsl.Graph) error {
 	// Build adjacency list
 	adjacency := make(map[string][]string)
 	for _, edge := range graphDef.Edges {

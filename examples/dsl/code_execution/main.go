@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Import to register builtin components
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -47,8 +48,9 @@ func run() error {
 		return fmt.Errorf("failed to read workflow.json: %w", err)
 	}
 
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(graphData, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(graphData)
+	if err != nil {
 		return fmt.Errorf("failed to parse workflow.json: %w", err)
 	}
 
@@ -58,9 +60,9 @@ func run() error {
 	fmt.Println()
 
 	// Step 3: Compile graph
-	compiler := dsl.NewCompiler(componentRegistry)
+	comp := compiler.New(compiler.WithComponentRegistry(componentRegistry))
 
-	compiledGraph, err := compiler.Compile(&graphDef)
+	compiledGraph, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}

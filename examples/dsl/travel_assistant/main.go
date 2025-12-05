@@ -10,11 +10,12 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Import to register builtin components
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -31,29 +32,7 @@ func main() {
 func run() error {
 	ctx := context.Background()
 
-	// Step 1: Register model
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("OPENAI_API_KEY environment variable not set")
-	}
-
-	// Create model registry
-	modelRegistry := registry.NewModelRegistry()
-
-	// Get model name from environment or use default
-	modelName := os.Getenv("MODEL_NAME")
-	if modelName == "" {
-		modelName = "deepseek-chat"
-	}
-
-	modelClient := openai.New(
-		modelName,
-		openai.WithAPIKey(apiKey),
-	)
-	modelRegistry.MustRegister(modelName, modelClient)
-	fmt.Printf("✅ Model registered: %s\n", modelName)
-
-	// Step 1.5: Register custom tools to DefaultToolRegistry
+	// Step 1: Register custom tools to DefaultToolRegistry
 	// Note: Built-in tools (duckduckgo_search) are already auto-registered via import
 	registry.DefaultToolRegistry.MustRegister("search_flights", createSearchFlightsTool())
 	registry.DefaultToolRegistry.MustRegister("check_flight_status", createCheckFlightStatusTool())
@@ -69,18 +48,26 @@ func run() error {
 		return fmt.Errorf("failed to read graph file: %w", err)
 	}
 
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(graphData, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(graphData)
+	if err != nil {
 		return fmt.Errorf("failed to parse graph: %w", err)
 	}
 	fmt.Printf("✅ Graph loaded: %s\n", graphDef.Name)
 
-	// Step 3: Compile graph
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry).
-		WithToolRegistry(registry.DefaultToolRegistry)
+	validator := dslvalidator.New()
+	if err := validator.Validate(graphDef); err != nil {
+		return fmt.Errorf("graph validation failed: %w", err)
+	}
+	fmt.Println("✅ Graph validated successfully")
 
-	compiledGraph, err := compiler.Compile(&graphDef)
+	// Step 3: Compile graph
+	comp := compiler.New(
+		compiler.WithAllowEnvSecrets(true),
+		compiler.WithToolProvider(registry.DefaultToolRegistry),
+	)
+
+	compiledGraph, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}
@@ -294,7 +281,7 @@ func searchFlights(_ context.Context, req searchFlightsRequest) (searchFlightsRe
 	}
 
 	fmt.Printf("[TA][tool] search_flights(from=%q,to=%q,date=%q) -> %d flights\n",
-			req.From, req.To, req.Date, resp.Count)
+		req.From, req.To, req.Date, resp.Count)
 
 	return resp, nil
 }
@@ -378,7 +365,7 @@ func checkFlightStatus(_ context.Context, req checkFlightStatusRequest) (flightS
 	}
 
 	fmt.Printf("[TA][tool] check_flight_status(%q) -> status=%q airline=%q\n",
-			req.FlightNumber, status.Status, status.Airline)
+		req.FlightNumber, status.Status, status.Airline)
 
 	return status, nil
 }
@@ -492,7 +479,7 @@ func getDestinationInfo(_ context.Context, req getDestinationInfoRequest) (desti
 	}
 
 	fmt.Printf("[TA][tool] get_destination_info(%q) -> name=%q highlights=%d\n",
-			req.Destination, info.Name, len(info.Highlights))
+		req.Destination, info.Name, len(info.Highlights))
 
 	return info, nil
 }
@@ -580,7 +567,7 @@ func suggestActivities(_ context.Context, req suggestActivitiesRequest) (suggest
 	}
 
 	fmt.Printf("[TA][tool] suggest_activities(dest=%q,days=%d,interests=%q) -> %d activities\n",
-			req.Destination, req.Days, req.Interests, len(resp.Activities))
+		req.Destination, req.Days, req.Interests, len(resp.Activities))
 
 	return resp, nil
 }

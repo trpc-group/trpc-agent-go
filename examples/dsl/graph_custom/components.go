@@ -11,7 +11,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -45,7 +44,7 @@ func (c *PreprocessDocumentComponent) Metadata() registry.ComponentMetadata {
 			"icon":  "📄",
 			"color": "#3B82F6",
 		},
-		Version:     "1.0.0",
+		Version: "1.0.0",
 		Inputs: []registry.ParameterSchema{
 			{
 				Name:        graph.StateKeyUserInput,
@@ -128,7 +127,7 @@ func (c *RouteComplexityComponent) Metadata() registry.ComponentMetadata {
 			"icon":  "🔀",
 			"color": "#8B5CF6",
 		},
-		Version:     "1.0.0",
+		Version: "1.0.0",
 		Inputs: []registry.ParameterSchema{
 			{
 				Name:        stateKeyOriginalText,
@@ -266,7 +265,7 @@ func (c *ComplexityConditionComponent) Metadata() registry.ComponentMetadata {
 			"icon":  "🎯",
 			"color": "#F59E0B",
 		},
-		Version:     "1.0.0",
+		Version: "1.0.0",
 		Inputs: []registry.ParameterSchema{
 			{
 				Name:        graph.StateKeyMessages,
@@ -337,7 +336,7 @@ func (c *FormatOutputComponent) Metadata() registry.ComponentMetadata {
 			"icon":  "📋",
 			"color": "#10B981",
 		},
-		Version:     "1.0.0",
+		Version: "1.0.0",
 		Inputs: []registry.ParameterSchema{
 			{
 				Name:        graph.StateKeyLastResponse,
@@ -419,7 +418,7 @@ func (c *AnalyzeComplexityToolComponent) Metadata() registry.ComponentMetadata {
 			"icon":  "🔍",
 			"color": "#EF4444",
 		},
-		Version:     "1.0.0",
+		Version: "1.0.0",
 		Inputs: []registry.ParameterSchema{
 			{
 				Name:        "text",
@@ -488,14 +487,5 @@ func CreateAnalyzeComplexityTool() tool.Tool {
 		AnalyzeComplexity,
 		function.WithName("analyze_complexity"),
 		function.WithDescription("Analyzes document complexity level"),
-	)
-}
-
-// CreateModel creates and configures the LLM model instance.
-// This function should be called during application initialization to create the model.
-func CreateModel(modelName, baseURL, apiKey string) model.Model {
-	return openai.New(modelName,
-		openai.WithBaseURL(baseURL),
-		openai.WithAPIKey(apiKey),
 	)
 }

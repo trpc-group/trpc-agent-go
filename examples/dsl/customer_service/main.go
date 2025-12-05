@@ -12,12 +12,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Import to register builtin components
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	checkpointinmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -34,40 +34,31 @@ func main() {
 func runInteractive() error {
 	ctx := context.Background()
 
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("OPENAI_API_KEY environment variable not set")
-	}
-
-	modelRegistry := registry.NewModelRegistry()
-	modelName := os.Getenv("MODEL_NAME")
-	if modelName == "" {
-		modelName = "deepseek-chat"
-	}
-
-	modelClient := openai.New(
-		modelName,
-		openai.WithAPIKey(apiKey),
-	)
-	modelRegistry.MustRegister(modelName, modelClient)
-	fmt.Printf("✅ Model registered: %s\n", modelName)
-
 	// Load graph definition
 	data, err := os.ReadFile("workflow.json")
 	if err != nil {
 		return fmt.Errorf("failed to read workflow.json: %w", err)
 	}
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(data, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(data)
+	if err != nil {
 		return fmt.Errorf("failed to parse workflow.json: %w", err)
 	}
 	fmt.Printf("✅ Graph loaded: %s\n", graphDef.Name)
 
-	// Compile
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry)
+	// Validate graph definition
+	validator := dslvalidator.New()
+	if err := validator.Validate(graphDef); err != nil {
+		return fmt.Errorf("graph validation failed: %w", err)
+	}
+	fmt.Println("✅ Graph validated successfully")
 
-	graphCompiled, err := compiler.Compile(&graphDef)
+	// Compile
+	comp := compiler.New(
+		compiler.WithAllowEnvSecrets(true),
+	)
+
+	graphCompiled, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}
@@ -277,7 +268,7 @@ func runOnce(
 	} else if strings.TrimSpace(lastResponse) != "" {
 		fmt.Printf("\n🤖 Response:\n%s\n\n", lastResponse)
 	} else {
-		fmt.Println("\n🤖 No final response captured.\n")
+		fmt.Printf("\n🤖 No final response captured.\n\n")
 	}
 
 	return nil

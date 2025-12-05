@@ -9,12 +9,12 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Register builtin components
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -36,33 +36,21 @@ func run() error {
 	fmt.Println("==================================================")
 	fmt.Println()
 
-	// Configure model registry for builtin.llmagent nodes.
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("OPENAI_API_KEY environment variable not set")
-	}
-	modelRegistry := registry.NewModelRegistry()
-	modelName := os.Getenv("MODEL_NAME")
-	if modelName == "" {
-		modelName = "deepseek-chat"
-	}
-	modelClient := openai.New(
-		modelName,
-		openai.WithAPIKey(apiKey),
-	)
-	modelRegistry.MustRegister(modelName, modelClient)
-	fmt.Printf("✅ Model registered: %s\n", modelName)
-	fmt.Println()
-
 	// Load graph definition from JSON.
 	data, err := os.ReadFile("workflow.json")
 	if err != nil {
 		return fmt.Errorf("failed to read workflow.json: %w", err)
 	}
 
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(data, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(data)
+	if err != nil {
 		return fmt.Errorf("failed to parse workflow.json: %w", err)
+	}
+
+	validator := dslvalidator.New()
+	if err := validator.Validate(graphDef); err != nil {
+		return fmt.Errorf("graph validation failed: %w", err)
 	}
 
 	fmt.Printf("✅ Loaded graph: %s\n", graphDef.Name)
@@ -70,11 +58,12 @@ func run() error {
 	fmt.Printf("   Nodes: %d\n", len(graphDef.Nodes))
 	fmt.Println()
 
-	// Compile graph with ModelRegistry so builtin.llmagent can resolve model_name.
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry)
+	// Compile graph (workflow.json provides full model_spec).
+	comp := compiler.New(
+		compiler.WithAllowEnvSecrets(true),
+	)
 
-	compiledGraph, err := compiler.Compile(&graphDef)
+	compiledGraph, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}

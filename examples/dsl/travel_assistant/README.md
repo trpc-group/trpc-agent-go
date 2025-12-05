@@ -23,7 +23,7 @@ This workflow showcases:
      │
      ▼
 ┌──────────────┐
-│  Classifier  │ (builtin.llmagent with structured_output)
+│  Classifier  │ (builtin.llmagent with output_format)
 │    Agent     │
 └──────┬───────┘
        │
@@ -173,7 +173,7 @@ The classifier uses JSON schema to ensure consistent output, and the framework *
 
 **Automatic State Storage**:
 
-When `structured_output` is configured, the framework automatically:
+When `output_format.type == "json"` is configured, the framework automatically:
 1. Parses the JSON response from the classifier
 2. Stores the parsed object under the classifier node in `node_structured`
 
@@ -461,8 +461,6 @@ Tools are assigned to agents in `workflow.json`:
 1. Set OpenAI API key (or DeepSeek API key):
 ```bash
 export OPENAI_API_KEY="your-api-key-here"
-export OPENAI_BASE_URL="https://api.deepseek.com/v1"  # For DeepSeek
-export MODEL_NAME="deepseek-chat"
 ```
 
 ### Run
@@ -503,10 +501,11 @@ suggestActivitiesTool := createSuggestActivitiesTool()
 toolRegistry.MustRegister("suggest_activities", suggestActivitiesTool)
 
 // 3. Compile DSL to Graph with tool registry
-compiler := dsl.NewCompiler(registry.DefaultRegistry).
-    WithModelRegistry(modelRegistry).
-    WithToolRegistry(toolRegistry)
-compiledGraph, _ := compiler.Compile(&workflow)
+comp := compiler.New(
+    compiler.WithAllowEnvSecrets(true),
+    compiler.WithToolProvider(toolRegistry),
+)
+compiledGraph, _ := comp.Compile(&workflow)
 
 // 4. Wrap Graph in GraphAgent
 graphAgent, _ := graphagent.New("travel-assistant", compiledGraph,
@@ -557,7 +556,6 @@ The example includes 4 test queries:
 ## 🎯 Expected Output
 
 ```
-✅ Model registered: deepseek-chat
 ✅ Workflow loaded: travel_assistant
 ✅ Workflow compiled successfully
 

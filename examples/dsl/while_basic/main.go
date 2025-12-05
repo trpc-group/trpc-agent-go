@@ -8,11 +8,11 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Register builtin components
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -38,35 +38,21 @@ func run() error {
 	fmt.Println("==================================================")
 	fmt.Println()
 
-	// Step 1: Register model
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("OPENAI_API_KEY environment variable not set")
-	}
-
-	modelName := os.Getenv("MODEL_NAME")
-	if modelName == "" {
-		modelName = "deepseek-chat"
-	}
-
-	modelRegistry := registry.NewModelRegistry()
-	modelClient := openai.New(
-		modelName,
-		openai.WithAPIKey(apiKey),
-	)
-	modelRegistry.MustRegister(modelName, modelClient)
-	fmt.Printf("✅ Model registered: %s\n", modelName)
-	fmt.Println()
-
-	// Step 2: Load graph definition
+	// Step 1: Load graph definition
 	data, err := os.ReadFile("workflow.json")
 	if err != nil {
 		return fmt.Errorf("failed to read workflow.json: %w", err)
 	}
 
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(data, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(data)
+	if err != nil {
 		return fmt.Errorf("failed to parse workflow.json: %w", err)
+	}
+
+	validator := dslvalidator.New()
+	if err := validator.Validate(graphDef); err != nil {
+		return fmt.Errorf("graph validation failed: %w", err)
 	}
 
 	fmt.Printf("✅ Loaded graph: %s\n", graphDef.Name)
@@ -74,18 +60,19 @@ func run() error {
 	fmt.Printf("   Nodes: %d\n", len(graphDef.Nodes))
 	fmt.Println()
 
-	// Step 3: Compile graph
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry)
+	// Step 2: Compile graph
+	comp := compiler.New(
+		compiler.WithAllowEnvSecrets(true),
+	)
 
-	compiledGraph, err := compiler.Compile(&graphDef)
+	compiledGraph, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}
 	fmt.Println("✅ Graph compiled successfully")
 	fmt.Println()
 
-	// Step 4: Create GraphAgent and Runner
+	// Step 3: Create GraphAgent and Runner
 	graphAgent, err := graphagent.New("while-basic", compiledGraph,
 		graphagent.WithDescription("While-loop DSL example using LLMAgent structured_output as loop guard"),
 	)
@@ -101,7 +88,7 @@ func run() error {
 	)
 	defer appRunner.Close()
 
-	// Step 5: Run a single example input
+	// Step 4: Run a single example input
 	userID := "demo-user"
 	sessionID := "demo-session"
 	input := "Give me a few short ideas for improving developer productivity. You are allowed to iterate a few times and then stop."

@@ -14,27 +14,35 @@
       "label": "classifier",
       "node_type": "builtin.llmagent",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
         "instruction": "You are a routing assistant. Analyze the user's request and decide if it should be answered via an HTTP echo service or directly by chat.\n\nRouting rules:\n- If the user explicitly asks to call an HTTP endpoint, echo some text via HTTP, or inspect an HTTP response, classify as 'http'.\n- Otherwise classify as 'chat'.\n\nStructured output requirements:\n- Always set classification strictly to one of: 'http' or 'chat'.\n- When classification = 'http':\n  - Extract the SHORT exact text that should be echoed (for example, if the user says \\\"echo the text 'hello-http'\\\", then text_to_echo MUST be exactly \\\"hello-http\\\" without quotes or extra words).\n  - Put this short value into text_to_echo.\n- When classification = 'chat':\n  - Set text_to_echo to an empty string.\n\nOnly use the provided JSON schema fields; do not add extra keys.",
         "description": "Route between HTTP call and chat agent",
-        "structured_output": {
-          "type": "object",
-          "properties": {
-            "classification": {
-              "type": "string",
-              "enum": ["http", "chat"],
-              "description": "Routing decision: http or chat"
+        "output_format": {
+          "type": "json",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "classification": {
+                "type": "string",
+                "enum": ["http", "chat"],
+                "description": "Routing decision: http or chat"
+              },
+              "text_to_echo": {
+                "type": "string",
+                "description": "Short text that should be echoed via HTTP when classification is http (e.g., hello-http)"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Brief reasoning for the decision"
+              }
             },
-            "text_to_echo": {
-              "type": "string",
-              "description": "Short text that should be echoed via HTTP when classification is http (e.g., hello-http)"
-            },
-            "reasoning": {
-              "type": "string",
-              "description": "Brief reasoning for the decision"
-            }
-          },
-          "required": ["classification", "text_to_echo", "reasoning"]
+            "required": ["classification", "text_to_echo", "reasoning"]
+          }
         },
         "temperature": 0.1
       }
@@ -53,7 +61,12 @@
       "label": "chat_agent",
       "node_type": "builtin.llmagent",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
         "instruction": "You are a helpful chat assistant. Answer the user's question directly without calling external HTTP APIs.",
         "description": "Direct chat agent",
         "stream": true,

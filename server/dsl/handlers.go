@@ -2,9 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
@@ -344,192 +342,11 @@ func (s *Server) handleGraphSchema(w http.ResponseWriter, r *http.Request) {
 // Graph Variable View (per-node variables for editors)
 // ============================================================================
 
-// graphVar describes a single variable available in a graph context.
-// It matches the GraphVar schema in engine_api.openapi.json.
-type graphVar struct {
-	Variable   string                 `json:"variable"`
-	Origin     string                 `json:"origin,omitempty"`
-	Kind       string                 `json:"kind,omitempty"`
-	JSONSchema map[string]interface{} `json:"json_schema,omitempty"`
-}
-
-// variableGroup groups variables by source, such as a previous node, State,
-// or Graph input. It matches the VariableGroup schema in engine_api.openapi.json.
-type variableGroup struct {
-	Type  string     `json:"type"`           // "node_output", "state", "graph_input"
-	ID    string     `json:"id"`             // node ID or fixed identifier ("state", "graph_input")
-	Title string     `json:"title,omitempty"`// Human-readable title for editors
-	Vars  []graphVar `json:"vars"`           // Variables in this group
-}
-
 // graphNodeVarsRequest is used by /api/v1/graphs/vars and /api/v1/graphs/vars/node
 // to request variables for a single node while still sending the full graph draft.
 type graphNodeVarsRequest struct {
 	Graph  ViewGraph `json:"graph"`
 	NodeID string    `json:"node_id"`
-}
-
-// computeVariableGroups builds the grouped variable view for a single node
-// in a compiled engine graph. It returns three kinds of groups:
-//   - node_output: outputs from direct upstream nodes (e.g., input.output_text)
-//   - state: graph state variables (typically declared via Start/SetState)
-//   - graph_input: workflow input variables (e.g., state.user_input)
-func (s *Server) computeVariableGroups(engineGraph *dsl.Graph, nodeID string) ([]variableGroup, error) {
-	if engineGraph == nil || nodeID == "" {
-		return nil, nil
-	}
-
-	// Index nodes by ID for quick lookup.
-	nodeByID := make(map[string]dsl.Node, len(engineGraph.Nodes))
-	for _, n := range engineGraph.Nodes {
-		nodeByID[n.ID] = n
-	}
-
-	if _, ok := nodeByID[nodeID]; !ok {
-		return nil, fmt.Errorf("node %q not found in graph", nodeID)
-	}
-
-	// Collect direct upstream node IDs (static edges only for now).
-	upstreamIDs := make(map[string]struct{})
-	for _, e := range engineGraph.Edges {
-		if e.Target == nodeID {
-			upstreamIDs[e.Source] = struct{}{}
-		}
-	}
-
-	// Infer schema + usage once so that variable kinds and JSON schemas are
-	// consistent with /graphs/schema.
-	si := dsl.NewSchemaInference(s.componentRegistry)
-	_, usage, err := si.InferSchemaAndUsage(engineGraph)
-	if err != nil {
-		return nil, err
-	}
-
-	// Split usage into state fields and workflow input (user_input). Hide
-	// framework-internal fields that are not meant for direct authoring.
-	var (
-		stateFields []dsl.FieldUsage
-		userInput   *dsl.FieldUsage
-	)
-	for _, u := range usage {
-		switch u.Name {
-		case "node_structured", "output_parsed",
-			"messages", "last_response", "node_responses",
-			"end_structured_output":
-			// Internal / graph-output fields; not exposed directly in state group for editors.
-			continue
-		case "user_input":
-			// Treat user_input as workflow input group.
-			tmp := u
-			userInput = &tmp
-			continue
-		default:
-			// All other fields are considered state variables.
-			stateFields = append(stateFields, u)
-		}
-	}
-
-	sort.Slice(stateFields, func(i, j int) bool {
-		return stateFields[i].Name < stateFields[j].Name
-	})
-
-	var groups []variableGroup
-
-	// 1) Node output groups (direct upstream nodes).
-	for upstreamID := range upstreamIDs {
-		upNode, ok := nodeByID[upstreamID]
-		if !ok {
-			continue
-		}
-		engine := upNode.EngineNode
-
-		var vars []graphVar
-
-		// For now we special-case builtin.llmagent so editors can use
-		// input.output_text / input.output_parsed with a schema that
-		// mirrors the structured_output config.
-		if engine.NodeType == "builtin.llmagent" {
-			// Text view.
-			vars = append(vars, graphVar{
-				Variable: "input.output_text",
-				Origin:   "node_output",
-				Kind:     "string",
-			})
-
-			// Structured output view (if available).
-			gv := graphVar{
-				Variable: "input.output_parsed",
-				Origin:   "node_output",
-				Kind:     "object",
-			}
-			if rawSchema, ok := engine.Config["structured_output"].(map[string]any); ok {
-				gv.JSONSchema = rawSchema
-			}
-			vars = append(vars, gv)
-		}
-
-		if len(vars) == 0 {
-			continue
-		}
-
-		title := engine.Label
-		if title == "" {
-			title = upNode.ID
-		}
-
-		groups = append(groups, variableGroup{
-			Type:  "node_output",
-			ID:    upNode.ID,
-			Title: title,
-			Vars:  vars,
-		})
-	}
-
-	// 2) State variables group.
-	if len(stateFields) > 0 {
-		stateVars := make([]graphVar, 0, len(stateFields))
-		for _, f := range stateFields {
-			// Extra safety: ensure end_structured_output never leaks into the
-			// state group even if usage is enriched elsewhere.
-			if f.Name == "end_structured_output" {
-				continue
-			}
-			stateVars = append(stateVars, graphVar{
-				Variable:   "state." + f.Name,
-				Origin:     "state",
-				Kind:       f.Kind,
-				JSONSchema: f.JSONSchema,
-			})
-		}
-		groups = append(groups, variableGroup{
-			Type:  "state",
-			ID:    "state",
-			Title: "State",
-			Vars:  stateVars,
-		})
-	}
-
-	// 3) Workflow input group (user_input). Always expose it, even if it did
-	// not appear in usage, so editors can reference the original text input.
-	graphInputVar := graphVar{
-		Variable: "state.user_input",
-		Origin:   "graph_input",
-		Kind:     "string",
-	}
-	if userInput != nil && userInput.Kind != "" {
-		graphInputVar.Kind = userInput.Kind
-	}
-	if userInput != nil && userInput.JSONSchema != nil {
-		graphInputVar.JSONSchema = userInput.JSONSchema
-	}
-	groups = append(groups, variableGroup{
-		Type:  "graph_input",
-		ID:    "graph_input",
-		Title: "Workflow input",
-		Vars:  []graphVar{graphInputVar},
-	})
-
-	return groups, nil
 }
 
 // handleGraphVars returns grouped variables for the given node in the graph.
@@ -550,7 +367,8 @@ func (s *Server) handleGraphVars(w http.ResponseWriter, r *http.Request) {
 	}
 
 	engineGraph := req.Graph.ToEngineGraph()
-	groups, err := s.computeVariableGroups(engineGraph, req.NodeID)
+	si := dsl.NewSchemaInference(s.componentRegistry)
+	groups, err := si.ComputeVariableGroups(engineGraph, req.NodeID)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "Failed to infer variables: "+err.Error())
 		return
@@ -568,6 +386,35 @@ func (s *Server) handleGraphVars(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGraphNodeVars(w http.ResponseWriter, r *http.Request) {
 	// Alias for handleGraphVars so both endpoints share the same semantics.
 	s.handleGraphVars(w, r)
+}
+
+// handleInspectEdge inspects a connection between two nodes and returns
+// source/target schemas plus diagnostics. It matches the EdgeInspectionRequest
+// / EdgeInspectionResult shapes described in dsl/schema/engine_api.openapi.json.
+func (s *Server) handleInspectEdge(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Graph dsl.Graph `json:"graph"`
+		Edge  struct {
+			SourceNodeID string `json:"source_node_id"`
+			TargetNodeID string `json:"target_node_id"`
+		} `json:"edge"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request JSON: "+err.Error())
+		return
+	}
+	if req.Edge.SourceNodeID == "" || req.Edge.TargetNodeID == "" {
+		respondError(w, http.StatusBadRequest, "source_node_id and target_node_id are required")
+		return
+	}
+
+	result, err := dsl.InspectEdge(&req.Graph, req.Edge.SourceNodeID, req.Edge.TargetNodeID)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Failed to inspect edge: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, result)
 }
 
 // handleCompileGraph compiles a graph definition to an executable runtime graph.

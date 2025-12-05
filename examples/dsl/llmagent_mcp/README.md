@@ -38,7 +38,12 @@ The MCP server is launched as a subprocess via stdio, demonstrating how to integ
     "ref": "builtin.llmagent"
   },
   "config": {
-    "model_name": "deepseek-chat",
+    "model_spec": {
+      "provider": "openai",
+      "model_name": "deepseek-chat",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "env:OPENAI_API_KEY"
+    },
     "instruction": "You are a helpful assistant with access to echo and add tools via MCP...",
     "tools": ["calculator"],
     "mcp_tools": [
@@ -125,13 +130,7 @@ The MCP server is launched as a subprocess via stdio, demonstrating how to integ
 
 1. Set up environment variables:
 ```bash
-# Copy the example env file
-cp .env.example .env
-
-# Edit .env and add your API key
-export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_API_KEY="your-api-key"
-export MODEL_NAME="deepseek-chat"
 ```
 
 2. **No need to start MCP server separately!**
@@ -276,11 +275,12 @@ workflow.json → Parser → Compiler → Graph → GraphAgent → Runner → Ev
 parser := dsl.NewParser()
 workflow, _ := parser.ParseFile("workflow.json")
 
-compiler := dsl.NewCompiler(registry.DefaultRegistry).
-    WithModelRegistry(modelRegistry).
-    WithToolRegistry(toolRegistry)
+comp := compiler.New(
+    compiler.WithAllowEnvSecrets(true),
+    compiler.WithToolProvider(toolRegistry),
+)
 
-compiledGraph, _ := compiler.Compile(workflow)
+compiledGraph, _ := comp.Compile(workflow)
 
 // Step 2: Create GraphAgent
 graphAgent, _ := graphagent.New("llmagent-mcp-workflow", compiledGraph,

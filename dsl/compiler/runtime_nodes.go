@@ -1,61 +1,193 @@
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-// Package dsl provides shared helpers for constructing NodeFunc implementations
-// for builtin components. These helpers are used both by the DSL compiler
-// (DSL‑run) and by code generation (codegen‑run) to ensure that builtin node
-// behavior is defined in a single place.
-package dsl
+package compiler
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/dsl"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
 
-// NewLLMAgentNodeFuncFromConfig creates a NodeFunc for a builtin.llmagent node
-// given its ID, configuration and model/tool registries. It is a refactoring
-// of the compiler's createLLMAgentNodeFunc method so that codegen can reuse
-// the same behavior.
-func NewLLMAgentNodeFuncFromConfig(
+// resolveModelFromConfig constructs a concrete model instance from config.
+// Preferred path: model_spec (provider/model_name/base_url/api_key/headers/extra_fields).
+// Compatibility path: model_id resolved via ModelProvider.
+func resolveModelFromConfig(cfg map[string]any, models dsl.ModelProvider, allowEnvSecrets bool) (model.Model, string, error) {
+	if cfg == nil {
+		return nil, "", fmt.Errorf("model config is nil")
+	}
+
+	resolveEnvString := func(value string, fieldPath string) (string, error) {
+		value = strings.TrimSpace(value)
+		if !strings.HasPrefix(value, "env:") {
+			return value, nil
+		}
+		if !allowEnvSecrets {
+			return "", fmt.Errorf("%s uses an env placeholder but env secrets are disabled (enable compiler.WithAllowEnvSecrets(true) for local debugging)", fieldPath)
+		}
+		varName := strings.TrimSpace(strings.TrimPrefix(value, "env:"))
+		if varName == "" {
+			return "", fmt.Errorf("%s env placeholder is invalid (expected env:VAR)", fieldPath)
+		}
+		envVal, ok := os.LookupEnv(varName)
+		if !ok || strings.TrimSpace(envVal) == "" {
+			return "", fmt.Errorf("environment variable %q is not set (required by %s)", varName, fieldPath)
+		}
+		return envVal, nil
+	}
+
+	if specRaw, ok := cfg["model_spec"]; ok && specRaw != nil {
+		spec, ok := specRaw.(map[string]any)
+		if !ok {
+			return nil, "", fmt.Errorf("model_spec must be an object")
+		}
+
+		providerName, _ := spec["provider"].(string)
+		modelName, _ := spec["model_name"].(string)
+		providerName = strings.TrimSpace(providerName)
+		modelName = strings.TrimSpace(modelName)
+		if providerName == "" {
+			return nil, "", fmt.Errorf("model_spec.provider is required")
+		}
+		if modelName == "" {
+			return nil, "", fmt.Errorf("model_spec.model_name is required")
+		}
+
+		// Common options extracted from spec.
+		apiKeyRaw, ok := spec["api_key"]
+		if !ok || apiKeyRaw == nil {
+			return nil, "", fmt.Errorf("model_spec.api_key is required")
+		}
+		apiKey, ok := apiKeyRaw.(string)
+		if !ok {
+			return nil, "", fmt.Errorf("model_spec.api_key must be a string")
+		}
+		apiKey, err := resolveEnvString(apiKey, "model_spec.api_key")
+		if err != nil {
+			return nil, "", err
+		}
+		apiKey = strings.TrimSpace(apiKey)
+		if apiKey == "" {
+			return nil, "", fmt.Errorf("model_spec.api_key is required")
+		}
+
+		var baseURL string
+		if baseURLRaw, ok := spec["base_url"]; ok && baseURLRaw != nil {
+			baseURLStr, ok := baseURLRaw.(string)
+			if !ok {
+				return nil, "", fmt.Errorf("model_spec.base_url must be a string")
+			}
+			baseURL, err = resolveEnvString(baseURLStr, "model_spec.base_url")
+			if err != nil {
+				return nil, "", err
+			}
+			baseURL = strings.TrimSpace(baseURL)
+		}
+
+		var headers map[string]string
+		if headersRaw, ok := spec["headers"]; ok && headersRaw != nil {
+			switch h := headersRaw.(type) {
+			case map[string]any:
+				headers = make(map[string]string)
+				for k, v := range h {
+					vStr, ok := v.(string)
+					if !ok {
+						return nil, "", fmt.Errorf("model_spec.headers[%q] must be a string", k)
+					}
+					vStr, err := resolveEnvString(vStr, fmt.Sprintf("model_spec.headers[%q]", k))
+					if err != nil {
+						return nil, "", err
+					}
+					if strings.TrimSpace(vStr) != "" {
+						headers[k] = vStr
+					}
+				}
+			case map[string]string:
+				if len(h) > 0 {
+					headers = make(map[string]string, len(h))
+					for k, v := range h {
+						vResolved, err := resolveEnvString(v, fmt.Sprintf("model_spec.headers[%q]", k))
+						if err != nil {
+							return nil, "", err
+						}
+						if strings.TrimSpace(vResolved) != "" {
+							headers[k] = vResolved
+						}
+					}
+				}
+			default:
+				return nil, "", fmt.Errorf("model_spec.headers must be an object")
+			}
+		}
+
+		extraFields, _ := spec["extra_fields"].(map[string]any)
+
+		switch strings.ToLower(providerName) {
+		case "openai":
+			var opts []openai.Option
+			opts = append(opts, openai.WithAPIKey(apiKey))
+			if baseURL != "" {
+				opts = append(opts, openai.WithBaseURL(baseURL))
+			}
+			if len(headers) > 0 {
+				opts = append(opts, openai.WithHeaders(headers))
+			}
+			if len(extraFields) > 0 {
+				opts = append(opts, openai.WithExtraFields(extraFields))
+			}
+			return openai.New(modelName, opts...), modelName, nil
+		default:
+			return nil, "", fmt.Errorf("unsupported model_spec.provider %q (only \"openai\" is supported in this version)", providerName)
+		}
+	}
+
+	modelID, ok := cfg["model_id"].(string)
+	modelID = strings.TrimSpace(modelID)
+	if !ok || modelID == "" {
+		return nil, "", fmt.Errorf("either model_spec or model_id is required")
+	}
+	if models == nil {
+		return nil, "", fmt.Errorf("model provider is not set")
+	}
+	llmModel, err := models.Get(modelID)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to resolve model %q: %w", modelID, err)
+	}
+	return llmModel, modelID, nil
+}
+
+// newLLMAgentNodeFuncFromConfig creates a NodeFunc for a builtin.llmagent node
+// given its ID, configuration and model/tool providers. It is a refactoring
+// of the compiler's createLLMAgentNodeFunc method so that codegen and other
+// callers can reuse the same behavior while remaining agnostic to how
+// models are sourced (env vars, platform model service, etc.).
+func newLLMAgentNodeFuncFromConfig(
 	nodeID string,
 	cfg map[string]any,
-	modelRegistry *registry.ModelRegistry,
-	toolRegistry *registry.ToolRegistry,
+	models dsl.ModelProvider,
+	toolsProvider dsl.ToolProvider,
+	allowEnvSecrets bool,
 ) (graph.NodeFunc, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("nodeID is required for NewLLMAgentNodeFuncFromConfig")
 	}
 
-	modelName, ok := cfg["model_name"].(string)
-	if !ok || modelName == "" {
-		return nil, fmt.Errorf("model_name is required for builtin.llmagent")
-	}
-
-	if modelRegistry == nil {
-		return nil, fmt.Errorf("model registry is not set")
-	}
-
-	llmModel, err := modelRegistry.Get(modelName)
+	llmModel, modelID, err := resolveModelFromConfig(cfg, models, allowEnvSecrets)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get model %q from registry: %w", modelName, err)
+		return nil, err
 	}
 
 	instruction := ""
@@ -68,22 +200,22 @@ func NewLLMAgentNodeFuncFromConfig(
 		description = desc
 	}
 
-	// Resolve tools from registry (if provided).
+	// Resolve tools from provider (if provided).
 	var tools []tool.Tool
-	if toolRegistry != nil {
+	if toolsProvider != nil {
 		if toolsConfig, ok := cfg["tools"]; ok {
 			switch v := toolsConfig.(type) {
 			case []interface{}:
 				for _, toolNameInterface := range v {
 					if toolName, ok := toolNameInterface.(string); ok {
-						if t, err := toolRegistry.Get(toolName); err == nil {
+						if t, err := toolsProvider.Get(toolName); err == nil {
 							tools = append(tools, t)
 						}
 					}
 				}
 			case []string:
 				for _, toolName := range v {
-					if t, err := toolRegistry.Get(toolName); err == nil {
+					if t, err := toolsProvider.Get(toolName); err == nil {
 						tools = append(tools, t)
 					}
 				}
@@ -95,17 +227,16 @@ func NewLLMAgentNodeFuncFromConfig(
 	var mcpToolSets []tool.ToolSet
 	if mcpToolsConfig, ok := cfg["mcp_tools"]; ok {
 		if mcpToolsList, ok := mcpToolsConfig.([]interface{}); ok {
-			for _, mcpToolInterface := range mcpToolsList {
+			for idx, mcpToolInterface := range mcpToolsList {
 				mcpToolConfig, ok := mcpToolInterface.(map[string]interface{})
 				if !ok {
-					continue
+					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d] must be an object", nodeID, idx)
 				}
 
 				rawServerURL, ok := mcpToolConfig["server_url"].(string)
 				serverURL := strings.TrimSpace(rawServerURL)
 				if !ok || serverURL == "" {
-					log.Warnf("builtin.llmagent: skipping MCP tool config without server_url")
-					continue
+					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d].server_url is required", nodeID, idx)
 				}
 
 				transport := "streamable_http"
@@ -113,8 +244,7 @@ func NewLLMAgentNodeFuncFromConfig(
 					transport = strings.TrimSpace(t)
 				}
 				if transport != "streamable_http" && transport != "sse" {
-					log.Warnf("builtin.llmagent: skipping MCP tool config with unsupported transport %q", transport)
-					continue
+					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d].transport %q is not supported (must be \"streamable_http\" or \"sse\")", nodeID, idx, transport)
 				}
 
 				var headers map[string]any
@@ -151,18 +281,33 @@ func NewLLMAgentNodeFuncFromConfig(
 					cfgMap["tool_filter"] = toolFilter
 				}
 
-				if toolSet, err := CreateMCPToolSet(cfgMap); err == nil {
-					mcpToolSets = append(mcpToolSets, toolSet)
-				} else {
-					log.Warnf("builtin.llmagent: failed to create MCP toolset for server %q: %v", serverURL, err)
+				toolSet, err := createMCPToolSet(cfgMap)
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: failed to create MCP toolset for server %q: %w", nodeID, serverURL, err)
 				}
+				mcpToolSets = append(mcpToolSets, toolSet)
 			}
 		}
 	}
 
+	// Structured output configuration via output_format. When
+	// output_format.type == "json", we treat output_format.schema as the
+	// JSON Schema for structured output and expose it via
+	// node_structured[<id>].output_parsed.
 	var structuredOutput map[string]any
-	if so, ok := cfg["structured_output"].(map[string]any); ok {
-		structuredOutput = so
+	if ofmtRaw, ok := cfg["output_format"]; ok {
+		if ofmt, ok := ofmtRaw.(map[string]any); ok {
+			formatType, _ := ofmt["type"].(string)
+			formatType = strings.TrimSpace(formatType)
+			if formatType == "" {
+				formatType = "text"
+			}
+			if formatType == "json" {
+				if schema, ok := ofmt["schema"].(map[string]any); ok {
+					structuredOutput = schema
+				}
+			}
+		}
 	}
 
 	var genConfig model.GenerationConfig
@@ -264,7 +409,7 @@ func NewLLMAgentNodeFuncFromConfig(
 			opts = append(opts, llmagent.WithGenerationConfig(genConfig))
 		}
 
-		agentName := fmt.Sprintf("llmagent_%s_%s", nodeID, modelName)
+		agentName := fmt.Sprintf("llmagent_%s_%s", nodeID, modelID)
 		llmAgent := llmagent.New(agentName, opts...)
 
 		parentInvocation, ok := agent.InvocationFromContext(ctx)
@@ -332,9 +477,15 @@ func NewLLMAgentNodeFuncFromConfig(
 			}
 
 			if ev.RequiresCompletion {
-				completionID := agent.GetAppendEventNoticeKey(ev.ID)
-				if err := invocation.NotifyCompletion(subCtx, completionID); err != nil {
-					log.Warnf("builtin.llmagent: failed to notify completion for %s: %v", completionID, err)
+				// In graph execution, events are forwarded to the parent event channel
+				// and the runner will handle persistence and completion notification.
+				// Only self‑notify when there's no parent channel (standalone agent run),
+				// otherwise we risk double notifications and spurious WARN logs.
+				if parentEventChan == nil {
+					completionID := agent.GetAppendEventNoticeKey(ev.ID)
+					if err := invocation.NotifyCompletion(subCtx, completionID); err != nil {
+						log.Warnf("builtin.llmagent: failed to notify completion for %s: %v", completionID, err)
+					}
 				}
 			}
 
@@ -404,10 +555,10 @@ func NewLLMAgentNodeFuncFromConfig(
 	}, nil
 }
 
-// NewUserApprovalNodeFuncFromConfig creates a NodeFunc for a builtin.user_approval
+// newUserApprovalNodeFuncFromConfig creates a NodeFunc for a builtin.user_approval
 // node given its ID and configuration. It mirrors the compiler's
 // createUserApprovalNodeFunc behavior.
-func NewUserApprovalNodeFuncFromConfig(nodeID string, cfg map[string]any) (graph.NodeFunc, error) {
+func newUserApprovalNodeFuncFromConfig(nodeID string, cfg map[string]any) (graph.NodeFunc, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("nodeID is required for NewUserApprovalNodeFuncFromConfig")
 	}
@@ -455,38 +606,50 @@ func NewUserApprovalNodeFuncFromConfig(nodeID string, cfg map[string]any) (graph
 	}, nil
 }
 
-// NewBuiltinConditionFunc creates a ConditionalFunc for a builtin CEL-based
+// newBuiltinConditionFunc creates a ConditionalFunc for a builtin CEL-based
 // condition. It mirrors the compiler's createBuiltinCondition behavior and is
-// shared between the compiler and codegen so that conditional routing logic is
-// defined in a single place.
-func NewBuiltinConditionFunc(fromNodeID string, cond Condition) (graph.ConditionalFunc, error) {
+// used internally so that conditional routing logic is defined in a single place.
+func newBuiltinConditionFunc(fromNodeID string, cond dsl.Condition) (graph.ConditionalFunc, error) {
 	if len(cond.Cases) == 0 {
 		return nil, fmt.Errorf("builtin condition requires at least one case")
 	}
 
-	// Create a local copy of cases to avoid capturing a mutable slice from the caller.
-	cases := make([]Case, len(cond.Cases))
-	copy(cases, cond.Cases)
+	// Create a local copy of cases and compile their predicates once so that
+	// runtime evaluation only needs to execute the compiled CEL programs.
+	type compiledCase struct {
+		caseDef dsl.Case
+		prog    *dslcel.BoolProgram
+	}
+	compiled := make([]compiledCase, 0, len(cond.Cases))
+	for idx, kase := range cond.Cases {
+		expr := strings.TrimSpace(kase.Predicate.Expression)
+		if expr == "" {
+			return nil, fmt.Errorf("builtin case %d predicate.expression is required", idx)
+		}
+		prog, err := dslcel.CompileBool(expr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compile builtin case %d expression: %w", idx, err)
+		}
+		compiled = append(compiled, compiledCase{
+			caseDef: kase,
+			prog:    prog,
+		})
+	}
 
 	return func(ctx context.Context, state graph.State) (string, error) {
 		input := buildNodeInputView(state, fromNodeID)
 
-		for idx, kase := range cases {
-			expr := strings.TrimSpace(kase.Predicate.Expression)
-			if expr == "" {
-				continue
-			}
-
-			ok, err := dslcel.EvalBool(expr, state, input)
+		for idx, c := range compiled {
+			ok, err := c.prog.Eval(state, input)
 			if err != nil {
 				return "", fmt.Errorf("failed to evaluate builtin case %d: %w", idx, err)
 			}
 			if ok {
-				log.Debugf("[COND] builtin case matched index=%d name=%q target=%q", idx, kase.Name, kase.Target)
-				if kase.Target == "" {
+				log.Debugf("[COND] builtin case matched index=%d name=%q target=%q", idx, c.caseDef.Name, c.caseDef.Target)
+				if c.caseDef.Target == "" {
 					return "", fmt.Errorf("builtin case %d has empty target", idx)
 				}
-				return kase.Target, nil
+				return c.caseDef.Target, nil
 			}
 		}
 
@@ -498,9 +661,9 @@ func NewBuiltinConditionFunc(fromNodeID string, cond Condition) (graph.Condition
 	}, nil
 }
 
-// CreateMCPToolSet is a helper that constructs an MCP ToolSet from DSL
-// configuration. It is shared by the compiler and by NewLLMAgentNodeFuncFromConfig.
-func CreateMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
+// createMCPToolSet is a helper that constructs an MCP ToolSet from DSL
+// configuration.
+func createMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
 	transport, ok := config["transport"].(string)
 	if !ok || transport == "" {
 		return nil, fmt.Errorf("transport is required in MCP tool config")

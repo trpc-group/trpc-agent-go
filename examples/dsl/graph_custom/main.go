@@ -11,8 +11,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Import built-in components
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -56,27 +58,19 @@ func main() {
 		log.Fatalf("Failed to parse DSL: %v", err)
 	}
 
+	// Get configuration from environment
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.deepseek.com/v1"
+	}
+
+	applyModelOverrides(workflow, *modelName, baseURL)
+
 	// Validate DSL
-	validator := dsl.NewValidator(registry.DefaultRegistry)
+	validator := dslvalidator.New()
 	if err := validator.Validate(workflow); err != nil {
 		log.Fatalf("DSL validation failed: %v", err)
 	}
-
-	// Get configuration from environment
-	baseURL := os.Getenv("OPENAI_BASE_URL")
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
-	}
-	if apiKey == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required")
-	}
-
-	// Create Model Registry and register models
-	modelRegistry := registry.NewModelRegistry()
-	modelInstance := CreateModel(*modelName, baseURL, apiKey)
-	modelRegistry.MustRegister(*modelName, modelInstance)
-	fmt.Printf("✅ Model registered in ModelRegistry: %s (BaseURL: %s)\n", *modelName, baseURL)
 
 	// Create Tool Registry and register tools
 	toolRegistry := registry.NewToolRegistry()
@@ -84,12 +78,13 @@ func main() {
 	toolRegistry.MustRegister("analyze_complexity", complexityTool)
 	fmt.Printf("✅ Tool registered in ToolRegistry: analyze_complexity\n")
 
-	// Compile DSL to Graph with Model Registry and Tool Registry
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry).
-		WithToolRegistry(toolRegistry)
+	// Compile DSL to Graph with Tool Registry
+	comp := compiler.New(
+		compiler.WithAllowEnvSecrets(true),
+		compiler.WithToolProvider(toolRegistry),
+	)
 
-	compiledGraph, err := compiler.Compile(workflow)
+	compiledGraph, err := comp.Compile(workflow)
 	if err != nil {
 		log.Fatalf("Failed to compile DSL: %v", err)
 	}
@@ -168,6 +163,40 @@ func main() {
 		fmt.Printf("\n%s\n", finalOutput)
 	} else {
 		fmt.Printf("\n✅ Workflow completed successfully!\n")
+	}
+}
+
+func applyModelOverrides(graphDef *dsl.Graph, modelName string, baseURL string) {
+	if graphDef == nil {
+		return
+	}
+
+	modelName = strings.TrimSpace(modelName)
+	baseURL = strings.TrimSpace(baseURL)
+	if modelName == "" && baseURL == "" {
+		return
+	}
+
+	for i := range graphDef.Nodes {
+		cfg := graphDef.Nodes[i].EngineNode.Config
+		if cfg == nil {
+			continue
+		}
+		specRaw, ok := cfg["model_spec"]
+		if !ok || specRaw == nil {
+			continue
+		}
+		spec, ok := specRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if modelName != "" {
+			spec["model_name"] = modelName
+		}
+		if baseURL != "" {
+			spec["base_url"] = baseURL
+		}
+		cfg["model_spec"] = spec
 	}
 }
 

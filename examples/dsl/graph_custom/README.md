@@ -22,22 +22,27 @@ The workflow processes a document through several stages:
 
 ## Key Concepts
 
-### 1. Model Registry
+### 1. Model Spec
 
-Models are registered at startup and referenced by name in the DSL:
+This example uses `model_spec` in the DSL and lets the framework construct the
+model instance at compile time:
 
-```go
-// Register model
-modelRegistry := registry.NewModelRegistry()
-modelRegistry.MustRegister("deepseek-chat", modelInstance)
-
-// In DSL
+```json
 {
   "config": {
-    "model_name": "deepseek-chat"
+    "model_spec": {
+      "provider": "openai",
+      "model_name": "deepseek-chat",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "env:OPENAI_API_KEY"
+    }
   }
 }
 ```
+
+Notes:
+- `env:OPENAI_API_KEY` is intended for local debugging. The compiler must be
+  created with `compiler.WithAllowEnvSecrets(true)` to enable resolving `env:...`.
 
 ### 2. Tool Registry
 
@@ -70,7 +75,7 @@ This example defines several custom components:
 
 ```text
 graph_custom/
-├── main.go           # Main program: registers components, models, tools
+├── main.go           # Main program: registers components, tools
 ├── components.go     # Custom component implementations
 ├── workflow.json     # DSL workflow definition
 └── README.md         # This document
@@ -102,9 +107,7 @@ END
 
 ```bash
 # Set environment variables
-export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_API_KEY="your-api-key"
-export MODEL_NAME="deepseek-chat"
 
 # Build
 go build -o graph_custom main.go components.go
@@ -127,7 +130,6 @@ DSL File: workflow.json
    - custom.format_output
    - custom.analyze_complexity_tool
 
-✅ Model registered in ModelRegistry: deepseek-chat (BaseURL: https://api.deepseek.com/v1)
 ✅ Tool registered in ToolRegistry: analyze_complexity
 
 🔄 Processing workflow...
@@ -151,17 +153,9 @@ DSL File: workflow.json
 
 ## Key code snippets
 
-### 1. Register models and tools
+### 1. Register tools
 
 ```go
-// Create Model Registry
-modelRegistry := registry.NewModelRegistry()
-modelInstance := openai.New(*modelName,
-    openai.WithBaseURL(baseURL),
-    openai.WithAPIKey(apiKey),
-)
-modelRegistry.MustRegister(*modelName, modelInstance)
-
 // Create Tool Registry
 toolRegistry := registry.NewToolRegistry()
 complexityTool := function.NewFunctionTool(
@@ -175,11 +169,12 @@ toolRegistry.MustRegister("analyze_complexity", complexityTool)
 ### 2. Compile the DSL
 
 ```go
-compiler := dsl.NewCompiler(registry.DefaultRegistry).
-    WithModelRegistry(modelRegistry).
-    WithToolRegistry(toolRegistry)
+comp := compiler.New(
+    compiler.WithAllowEnvSecrets(true),
+    compiler.WithToolProvider(toolRegistry),
+)
 
-compiledGraph, err := compiler.Compile(workflow)
+compiledGraph, err := comp.Compile(workflow)
 ```
 
 ### 3. Create the GraphAgent
@@ -203,7 +198,12 @@ graphAgent, err := graphagent.New("document-processor", compiledGraph,
     "ref": "builtin.llm"
   },
   "config": {
-    "model_name": "deepseek-chat",
+    "model_spec": {
+      "provider": "openai",
+      "model_name": "deepseek-chat",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "env:OPENAI_API_KEY"
+    },
     "tools": ["analyze_complexity"],
     "instruction": "Analyze the document using the analyze_complexity tool"
   }

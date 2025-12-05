@@ -60,13 +60,21 @@ func (c *LLMComponent) Metadata() registry.ComponentMetadata {
 
 		ConfigSchema: []registry.ParameterSchema{
 			{
-				Name:        "model_name",
-				DisplayName: "Model Name",
-				Description: "Name of the model registered in ModelRegistry",
+				Name:        "model_id",
+				DisplayName: "Model ID",
+				Description: "Optional logical model identifier (kept for compatibility and observability).",
 				Type:        "string",
 				GoType:      reflect.TypeOf(""),
-				Required:    true,
+				Required:    false,
 				Placeholder: "deepseek-chat",
+			},
+			{
+				Name:        "model_spec",
+				DisplayName: "Model Spec",
+				Description: "Resolved model specification used by the framework to construct a concrete model instance.",
+				Type:        "map[string]any",
+				GoType:      reflect.TypeOf(map[string]any{}),
+				Required:    false,
 			},
 			{
 				Name:        "instruction",

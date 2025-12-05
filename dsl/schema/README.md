@@ -77,7 +77,7 @@ The I/O schema for each component is not encoded inside the graph; it is describ
 - **`ParameterSchema`**
   - Shared shape for inputs, outputs, and config parameters.
   - Important fields:
-    - `name` – parameter name (e.g., `"messages"`, `"result"`, `"model_name"`).
+    - `name` – parameter name (e.g., `"messages"`, `"result"`, `"model_id"`).
     - `display_name` – label used in UIs.
     - `description` – description for users.
     - `type_id` – DSL‑level type identifier for editors (e.g., `"string"`, `"number"`, `"graph.messages"`, `"llmagent.output_parsed"`).
@@ -123,7 +123,7 @@ Built‑in components are implemented under `dsl/registry/builtin`. Each compone
 
 - **`builtin.llm`**
   - `inputs`:
-    - Primarily `messages` (`type_id: graph.messages, kind: array`) plus model configuration parameters (`model_name`, `instruction`, `temperature`, `max_tokens`, ...).
+    - Primarily `messages` (`type_id: graph.messages, kind: array`) plus model configuration parameters (`model_id`, `instruction`, `temperature`, `max_tokens`, ...).
   - `outputs`:
     - `messages` (appended to the conversation history).
     - `last_response` (the most recent model output).
@@ -136,7 +136,7 @@ Built‑in components are implemented under `dsl/registry/builtin`. Each compone
   - `outputs`:
     - `last_response` / `messages` as above.
   - `config_schema`:
-    - `model_name`, `instruction`, `tools`, `tool_sets`, `mcp_tools`, `structured_output` (JSON Schema), sampling parameters, etc.
+    - `model_id`, `instruction`, `tools`, `tool_sets`, `mcp_tools`, `output_format` (object with `type: "text" | "json"` and `schema` containing the JSON Schema for structured output when `type == "json"`), sampling parameters, etc.
 
 - **`builtin.agent`**
   - `inputs`:

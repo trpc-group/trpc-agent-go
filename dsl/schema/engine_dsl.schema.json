@@ -195,11 +195,18 @@
     },
     "AgentConfig": {
       "type": "object",
-      "required": ["model_name"],
+      "anyOf": [
+        { "required": ["model_spec"] },
+        { "required": ["model_id"] }
+      ],
       "properties": {
-        "model_name": {
+        "model_id": {
           "type": "string",
-          "description": "Name of the model to use (must exist in the ModelRegistry at runtime)."
+          "description": "Optional logical model identifier (kept for compatibility and observability)."
+        },
+        "model_spec": {
+          "$ref": "#/$defs/ModelSpec",
+          "description": "Resolved model specification used by the framework to construct a concrete model instance."
         },
         "instruction": {
           "type": "string",
@@ -282,6 +289,39 @@
           "type": "number",
           "minimum": 0.0,
           "maximum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModelSpec": {
+      "type": "object",
+      "required": ["provider", "model_name", "api_key"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Model provider name (e.g., \"openai\", \"anthropic\")."
+        },
+        "model_name": {
+          "type": "string",
+          "description": "Concrete model name understood by the provider (e.g., \"deepseek-chat\", \"gpt-4o\")."
+        },
+        "base_url": {
+          "type": "string",
+          "description": "Optional base URL override for provider requests."
+        },
+        "api_key": {
+          "type": "string",
+          "description": "Provider API key. For local debugging you may use an explicit env placeholder (e.g., \"env:OPENAI_API_KEY\") when compiler env secret resolution is enabled. Must be redacted in logs/export."
+        },
+        "headers": {
+          "type": "object",
+          "description": "Optional static HTTP headers for provider requests.",
+          "additionalProperties": { "type": "string" }
+        },
+        "extra_fields": {
+          "type": "object",
+          "description": "Provider-specific extra fields serialized into request payloads.",
+          "additionalProperties": true
         }
       },
       "additionalProperties": false
@@ -420,6 +460,16 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema snapshot of the MCP tool input, used for edge validation and editor hints. Typically populated by the backend when the tool is selected.",
+          "additionalProperties": true
+        },
+        "output_schema": {
+          "type": "object",
+          "description": "JSON Schema for the normalized MCP tool result exposed via node_structured[<id>].output_parsed. Typically derived from the MCP tool's output schema (when available).",
+          "additionalProperties": true
         },
         "params": {
           "type": "object",

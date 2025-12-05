@@ -1,7 +1,9 @@
-package dsl
+package compiler
 
 import (
 	"fmt"
+
+	dsl "trpc.group/trpc-go/trpc-agent-go/dsl"
 )
 
 // expandWhile flattens builtin.while nodes in the given graph definition into
@@ -9,7 +11,7 @@ import (
 // conditional back-edges in the StateGraph. The returned graph does not
 // contain any builtin.while nodes; instead, their body nodes are merged into
 // the top level.
-func (c *Compiler) expandWhile(graphDef *Graph) (*Graph, map[string]*whileExpansion, error) {
+func (c *Compiler) expandWhile(graphDef *dsl.Graph) (*dsl.Graph, map[string]*whileExpansion, error) {
 	if graphDef == nil {
 		return nil, nil, fmt.Errorf("graph is nil")
 	}
@@ -55,7 +57,7 @@ func (c *Compiler) expandWhile(graphDef *Graph) (*Graph, map[string]*whileExpans
 	// Make a shallow copy of conditional edges slice so we can append body
 	// edges without mutating the original graph definition.
 	if len(graphDef.ConditionalEdges) > 0 {
-		expanded.ConditionalEdges = append([]ConditionalEdge(nil), graphDef.ConditionalEdges...)
+		expanded.ConditionalEdges = append([]dsl.ConditionalEdge(nil), graphDef.ConditionalEdges...)
 	}
 
 	// First, copy all non-while nodes.

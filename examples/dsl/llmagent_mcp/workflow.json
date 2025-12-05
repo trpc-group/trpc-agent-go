@@ -15,7 +15,12 @@
       "label": "mcp_agent",
       "node_type": "builtin.llmagent",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
         "instruction": "You are a helpful assistant with access to echo and add tools via MCP. Use the available tools to help users with their queries. The echo tool can repeat messages with a prefix, and the add tool can add two numbers.",
         "temperature": 0.7,
         "max_tokens": 2000,

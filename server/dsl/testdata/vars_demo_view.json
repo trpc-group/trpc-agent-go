@@ -22,23 +22,26 @@
           "label": "Classifier",
           "node_type": "builtin.llmagent",
           "config": {
-            "model_name": "deepseek-chat",
+            "model_id": "deepseek-chat",
             "instruction": "Classify how complex the user's question is (short / detailed) and provide a short summary.",
-            "structured_output": {
-              "type": "object",
-              "properties": {
-                "classification": {
-                  "type": "string",
-                  "enum": ["short", "detailed"],
-                  "description": "How complex the answer should be."
+            "output_format": {
+              "type": "json",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "classification": {
+                    "type": "string",
+                    "enum": ["short", "detailed"],
+                    "description": "How complex the answer should be."
+                  },
+                  "summary": {
+                    "type": "string",
+                    "description": "Short natural-language summary of the user request."
+                  }
                 },
-                "summary": {
-                  "type": "string",
-                  "description": "Short natural-language summary of the user request."
-                }
-              },
-              "required": ["classification", "summary"],
-              "additionalProperties": false
+                "required": ["classification", "summary"],
+                "additionalProperties": false
+              }
             }
           }
         }
@@ -52,7 +55,7 @@
           "label": "Plain agent",
           "node_type": "builtin.llmagent",
           "config": {
-            "model_name": "deepseek-chat",
+            "model_id": "deepseek-chat",
             "instruction": "Answer the user's question briefly in one or two sentences."
           }
         }
@@ -98,7 +101,7 @@
           "node_type": "builtin.end",
           "config": {
             "expr": {
-              "expression": "{ \"message\": \"vars_demo finished\", \"echo\": state.result }",
+              "expression": "{ \"message\": \"vars_demo finished\", \"echo\": nodes.transform.output_parsed }",
               "format": "cel"
             },
             "output_schema": {

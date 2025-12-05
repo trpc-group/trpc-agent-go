@@ -11,8 +11,10 @@ package builtin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -28,10 +30,10 @@ func init() {
 // It allows front-end users to configure an LLMAgent directly in DSL without pre-registration.
 //
 // This component wraps the llmagent.New() constructor and supports common LLMAgent options:
-//   - model_name: Model to use (from ModelRegistry)
+//   - model_id: Logical model ID resolved by ModelProvider/ModelRegistry
 //   - instruction: System prompt/instruction
 //   - tools: List of tool names (from ToolRegistry)
-//   - structured_output: JSON schema for structured output
+//   - output_format: Output configuration { type: text|json, schema } for structured output
 //   - temperature, max_tokens, top_p: Generation parameters
 //
 // Example DSL:
@@ -43,7 +45,7 @@ func init() {
 //	    "ref": "builtin.llmagent"
 //	  },
 //	  "config": {
-//	    "model_name": "gpt-4-turbo",
+//	    "model_id": "gpt-4-turbo",
 //	    "instruction": "You are a classification agent. Classify user intent into categories.",
 //	    "tools": ["search", "calculator"],
 //	    "temperature": 0.7,
@@ -63,7 +65,7 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 		// LLMAgent does not consume additional named state inputs beyond the
 		// built-in graph fields (messages/user_input/session). Those are added
 		// by SchemaInference.addBuiltinFields, so Inputs can remain empty here.
-		Inputs:  []registry.ParameterSchema{},
+		Inputs: []registry.ParameterSchema{},
 		Outputs: []registry.ParameterSchema{
 			{
 				Name:        graph.StateKeyLastResponse,
@@ -85,15 +87,25 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 		},
 		ConfigSchema: []registry.ParameterSchema{
 			{
-				Name:        "model_name",
-				DisplayName: "Model Name",
-				Description: "Name of the model to use (must be registered in ModelRegistry)",
+				Name:        "model_id",
+				DisplayName: "Model ID",
+				Description: "Optional logical model identifier (kept for compatibility and observability).",
 				Type:        "string",
 				TypeID:      "string",
 				Kind:        "string",
 				GoType:      reflect.TypeOf(""),
-				Required:    true,
+				Required:    false,
 				Placeholder: "deepseek-chat",
+			},
+			{
+				Name:        "model_spec",
+				DisplayName: "Model Spec",
+				Description: "Resolved model specification used by the framework to construct a concrete model instance.",
+				Type:        "map[string]any",
+				TypeID:      "object",
+				Kind:        "object",
+				GoType:      reflect.TypeOf(map[string]any{}),
+				Required:    false,
 			},
 			{
 				Name:        "instruction",
@@ -128,9 +140,9 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 				Required:    false,
 			},
 			{
-				Name:        "structured_output",
-				DisplayName: "Structured Output Schema",
-				Description: "JSON schema for structured output (when set, agent cannot use tools)",
+				Name:        "output_format",
+				DisplayName: "Output Format",
+				Description: "Controls how the agent returns its response. When type == \"json\", schema contains the JSON Schema for structured output and the agent writes parsed JSON to node_structured[<id>].output_parsed.",
 				Type:        "map[string]any",
 				TypeID:      "object",
 				Kind:        "object",
@@ -270,13 +282,34 @@ func (c *LLMAgentComponent) Execute(ctx context.Context, config registry.Compone
 
 // Validate validates the component configuration.
 func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
-	// Validate model_name
-	modelName, ok := config["model_name"].(string)
-	if !ok {
-		return fmt.Errorf("model_name must be a string")
-	}
-	if modelName == "" {
-		return fmt.Errorf("model_name cannot be empty")
+	// Validate model_spec (preferred) or model_id (compatibility).
+	if specRaw, hasSpec := config["model_spec"]; hasSpec && specRaw != nil {
+		spec, ok := specRaw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("model_spec must be an object")
+		}
+		providerName, _ := spec["provider"].(string)
+		modelName, _ := spec["model_name"].(string)
+		apiKey, _ := spec["api_key"].(string)
+		if strings.TrimSpace(providerName) == "" {
+			return fmt.Errorf("model_spec.provider cannot be empty")
+		}
+		if strings.TrimSpace(modelName) == "" {
+			return fmt.Errorf("model_spec.model_name cannot be empty")
+		}
+		if strings.TrimSpace(apiKey) == "" {
+			return fmt.Errorf("model_spec.api_key cannot be empty")
+		}
+	} else if modelIDRaw, hasID := config["model_id"]; hasID {
+		modelID, ok := modelIDRaw.(string)
+		if !ok {
+			return fmt.Errorf("model_id must be a string")
+		}
+		if strings.TrimSpace(modelID) == "" {
+			return fmt.Errorf("model_id cannot be empty")
+		}
+	} else {
+		return fmt.Errorf("either model_spec or model_id is required")
 	}
 
 	// Validate instruction if present
@@ -288,28 +321,54 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate tools if present
 	if tools, ok := config["tools"]; ok {
-		toolsSlice, ok := tools.([]interface{})
-		if !ok {
-			return fmt.Errorf("tools must be an array")
-		}
-		for i, tool := range toolsSlice {
-			if _, ok := tool.(string); !ok {
-				return fmt.Errorf("tools[%d] must be a string", i)
+		switch toolsSlice := tools.(type) {
+		case []interface{}:
+			for i, tool := range toolsSlice {
+				if _, ok := tool.(string); !ok {
+					return fmt.Errorf("tools[%d] must be a string", i)
+				}
 			}
+		case []string:
+			// ok
+		default:
+			return fmt.Errorf("tools must be an array")
 		}
 	}
 
-	// Validate structured_output if present
-	if structuredOutput, ok := config["structured_output"]; ok {
-		if _, ok := structuredOutput.(map[string]any); !ok {
-			return fmt.Errorf("structured_output must be an object")
+	// Validate output_format if present
+	if outputFormat, ok := config["output_format"]; ok {
+		ofMap, ok := outputFormat.(map[string]any)
+		if !ok {
+			return fmt.Errorf("output_format must be an object")
+		}
+
+		if t, ok := ofMap["type"]; ok {
+			typeStr, ok := t.(string)
+			if !ok {
+				return fmt.Errorf("output_format.type must be a string when present")
+			}
+			typeStr = strings.TrimSpace(typeStr)
+			if typeStr != "" && typeStr != "text" && typeStr != "json" {
+				return fmt.Errorf("output_format.type must be one of: text, json")
+			}
+		}
+
+		if schema, ok := ofMap["schema"]; ok {
+			if _, ok := schema.(map[string]any); !ok {
+				return fmt.Errorf("output_format.schema must be an object when present")
+			}
 		}
 	}
 
 	// Validate temperature if present
 	if temperature, ok := config["temperature"]; ok {
-		temp, ok := temperature.(float64)
-		if !ok {
+		var temp float64
+		switch v := temperature.(type) {
+		case float64:
+			temp = v
+		case int:
+			temp = float64(v)
+		default:
 			return fmt.Errorf("temperature must be a number")
 		}
 		if temp < 0 || temp > 2 {
@@ -319,8 +378,30 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate max_tokens if present
 	if maxTokens, ok := config["max_tokens"]; ok {
-		tokens, ok := maxTokens.(int)
-		if !ok {
+		var tokens int
+		switch v := maxTokens.(type) {
+		case int:
+			tokens = v
+		case float64:
+			maxInt := int(^uint(0) >> 1)
+			if v > float64(maxInt) {
+				return fmt.Errorf("max_tokens is too large")
+			}
+			if v != float64(int(v)) {
+				return fmt.Errorf("max_tokens must be an integer")
+			}
+			tokens = int(v)
+		case json.Number:
+			n, err := v.Int64()
+			if err != nil {
+				return fmt.Errorf("max_tokens must be an integer")
+			}
+			maxInt := int64(^uint(0) >> 1)
+			if n > maxInt {
+				return fmt.Errorf("max_tokens is too large")
+			}
+			tokens = int(n)
+		default:
 			return fmt.Errorf("max_tokens must be an integer")
 		}
 		if tokens <= 0 {
@@ -330,8 +411,13 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 
 	// Validate top_p if present
 	if topP, ok := config["top_p"]; ok {
-		tp, ok := topP.(float64)
-		if !ok {
+		var tp float64
+		switch v := topP.(type) {
+		case float64:
+			tp = v
+		case int:
+			tp = float64(v)
+		default:
 			return fmt.Errorf("top_p must be a number")
 		}
 		if tp < 0 || tp > 1 {

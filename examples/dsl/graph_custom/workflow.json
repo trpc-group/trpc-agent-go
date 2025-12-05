@@ -22,7 +22,12 @@
       "label": "Analyze Document",
       "node_type": "builtin.llm",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
         "tools": [
           "analyze_complexity"
         ],
@@ -48,7 +53,12 @@
       "label": "Summarize Complex Document",
       "node_type": "builtin.llm",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
         "instruction": "You are a document summarization expert. Create a comprehensive yet concise summary of the provided document.\nFocus on:\n1. Key points and main arguments\n2. Important details and insights\n3. Logical structure and flow\n4. Conclusions and implications\nProvide a well-structured summary that preserves the essential information.\nRemember: only output the final result itself, no other text."
       }
     },
@@ -57,7 +67,12 @@
       "label": "Enhance Simple Document",
       "node_type": "builtin.llm",
       "config": {
-        "model_name": "deepseek-chat",
+        "model_spec": {
+          "provider": "openai",
+          "model_name": "deepseek-chat",
+          "base_url": "https://api.deepseek.com/v1",
+          "api_key": "env:OPENAI_API_KEY"
+        },
         "instruction": "You are a content enhancement expert. Improve the provided content by:\n1. Enhancing clarity and readability\n2. Improving structure and organization\n3. Adding relevant details where appropriate\n4. Ensuring consistency and coherence\nFocus on making the content more engaging and professional while preserving the original meaning.\nRemember: only output the final result itself, no other text."
       }
     },

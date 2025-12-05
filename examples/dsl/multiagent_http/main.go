@@ -9,11 +9,11 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
-	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Register builtin components
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -28,33 +28,21 @@ func main() {
 func run() error {
 	ctx := context.Background()
 
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("OPENAI_API_KEY environment variable not set")
-	}
-
-	modelRegistry := registry.NewModelRegistry()
-	modelName := os.Getenv("MODEL_NAME")
-	if modelName == "" {
-		modelName = "deepseek-chat"
-	}
-
-	modelClient := openai.New(
-		modelName,
-		openai.WithAPIKey(apiKey),
-	)
-	modelRegistry.MustRegister(modelName, modelClient)
-	fmt.Printf("✅ Model registered: %s\n", modelName)
-
 	// Load graph definition
 	data, err := os.ReadFile("workflow.json")
 	if err != nil {
 		return fmt.Errorf("failed to read workflow.json: %w", err)
 	}
 
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(data, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(data)
+	if err != nil {
 		return fmt.Errorf("failed to parse workflow.json: %w", err)
+	}
+
+	validator := dslvalidator.New()
+	if err := validator.Validate(graphDef); err != nil {
+		return fmt.Errorf("DSL validation failed: %w", err)
 	}
 
 	fmt.Println("🚀 Multi-Agent HTTP DSL Graph Example")
@@ -65,10 +53,11 @@ func run() error {
 	fmt.Println()
 
 	// Compile graph
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelRegistry(modelRegistry)
+	comp := compiler.New(
+		compiler.WithAllowEnvSecrets(true),
+	)
 
-	compiledGraph, err := compiler.Compile(&graphDef)
+	compiledGraph, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}

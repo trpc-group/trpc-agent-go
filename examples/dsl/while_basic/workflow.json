@@ -20,27 +20,35 @@
               "label": "Loop Agent",
               "node_type": "builtin.llmagent",
               "config": {
-                "model_name": "deepseek-chat",
+                "model_spec": {
+                  "provider": "openai",
+                  "model_name": "deepseek-chat",
+                  "base_url": "https://api.deepseek.com/v1",
+                  "api_key": "env:OPENAI_API_KEY"
+                },
                 "instruction": "You are part of a loop in a workflow engine. The same user input will be provided each time, and your job is to decide whether the loop should continue.\\n\\nEach time you are called:\\n1. Look at the full conversation so far (previous messages from yourself are available).\\n2. Produce exactly one short message field summarizing your current thinking.\\n3. Decide whether another iteration is needed.\\n\\nStructured output requirements:\\n- step_index (integer): 1-based index of this iteration. You can infer this from how many times you have already responded in this conversation.\\n- continue_loop (boolean):\\n  - true if you believe another iteration would still add value (for example, you have not yet produced three distinct suggestions).\\n  - false once you think the loop should stop (for example, after about three iterations or when you have nothing new to add).\\n- message (string): short natural-language content for this iteration.\\n\\nReturn ONLY JSON that matches the schema; do not include explanation outside the JSON.",
                 "description": "Agent that decides whether to continue the loop via structured_output.continue_loop",
-                "structured_output": {
-                  "type": "object",
-                  "properties": {
-                    "step_index": {
-                      "type": "integer",
-                      "description": "1-based index of the current loop iteration"
+                "output_format": {
+                  "type": "json",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "step_index": {
+                        "type": "integer",
+                        "description": "1-based index of the current loop iteration"
+                      },
+                      "continue_loop": {
+                        "type": "boolean",
+                        "description": "Whether the loop should continue after this iteration"
+                      },
+                      "message": {
+                        "type": "string",
+                        "description": "Natural-language content for this iteration"
+                      }
                     },
-                    "continue_loop": {
-                      "type": "boolean",
-                      "description": "Whether the loop should continue after this iteration"
-                    },
-                    "message": {
-                      "type": "string",
-                      "description": "Natural-language content for this iteration"
-                    }
-                  },
-                  "required": ["step_index", "continue_loop", "message"],
-                  "additionalProperties": false
+                    "required": ["step_index", "continue_loop", "message"],
+                    "additionalProperties": false
+                  }
                 },
                 "temperature": 0.2
               }

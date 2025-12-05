@@ -263,8 +263,19 @@ func (c *CodeComponent) Validate(config registry.ComponentConfig) error {
 	}
 
 	// Validate timeout if provided
-	if timeout, ok := config["timeout"].(int); ok && timeout <= 0 {
-		return fmt.Errorf("timeout must be positive, got: %d", timeout)
+	if timeoutRaw, ok := config["timeout"]; ok {
+		switch timeout := timeoutRaw.(type) {
+		case int:
+			if timeout <= 0 {
+				return fmt.Errorf("timeout must be positive, got: %d", timeout)
+			}
+		case float64:
+			if timeout <= 0 {
+				return fmt.Errorf("timeout must be positive, got: %v", timeout)
+			}
+		default:
+			return fmt.Errorf("timeout must be a number")
+		}
 	}
 
 	return nil

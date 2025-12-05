@@ -10,6 +10,7 @@ package dsl
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
@@ -36,6 +37,16 @@ func NewSchemaInference(reg *registry.Registry) *SchemaInference {
 		registry:        reg,
 		reducerRegistry: registry.NewReducerRegistry(), // Default reducer registry
 	}
+}
+
+// SetReducerRegistry overrides the reducer registry used by schema inference.
+// This allows external callers (such as the DSL compiler) to share a
+// reducer registry instance between SchemaInference and other components.
+func (si *SchemaInference) SetReducerRegistry(reducerRegistry *registry.ReducerRegistry) {
+	if si == nil {
+		return
+	}
+	si.reducerRegistry = reducerRegistry
 }
 
 // addBuiltinFields adds framework built-in fields to the schema.
@@ -147,11 +158,11 @@ func (si *SchemaInference) addDeclaredStateVariables(
 // This method only cares about executable semantics and is intentionally
 // decoupled from any UI-specific concepts.
 func (si *SchemaInference) InferSchema(graphDef *Graph) (*graph.StateSchema, error) {
-	paramMap, err := si.buildParameterMap(graphDef)
+	params, err := si.buildParameterMap(graphDef)
 	if err != nil {
 		return nil, err
 	}
-	schema := si.buildSchemaFromParams(paramMap)
+	schema := si.buildSchemaFromParams(params)
 	// Enrich with graph-declared state variables (e.g., for builtin.set_state).
 	si.addDeclaredStateVariables(schema, graphDef, nil)
 	return schema, nil
@@ -176,16 +187,16 @@ type FieldUsage struct {
 // information (which nodes read/write which fields). This is intended for
 // platform / UI layers that need to present variable suggestions.
 func (si *SchemaInference) InferSchemaAndUsage(graphDef *Graph) (*graph.StateSchema, map[string]FieldUsage, error) {
-	paramMap, err := si.buildParameterMap(graphDef)
+	params, err := si.buildParameterMap(graphDef)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Enrich parameter info with component-level context where useful (e.g., structured_output).
-	si.attachComponentContext(graphDef, paramMap)
+	si.attachComponentContext(graphDef, params)
 
-	schema := si.buildSchemaFromParams(paramMap)
-	usage := si.buildUsageFromParams(paramMap)
+	schema := si.buildSchemaFromParams(params)
+	usage := si.buildUsageFromParams(params)
 
 	// Enrich schema and usage with graph-declared state variables so that
 	// editor-facing variables include explicitly declared fields (e.g., via Start).
@@ -194,16 +205,227 @@ func (si *SchemaInference) InferSchemaAndUsage(graphDef *Graph) (*graph.StateSch
 	return schema, usage, nil
 }
 
+// GraphVar describes a single variable available in a graph context. It
+// matches the GraphVar schema defined in dsl/schema/engine_api.openapi.json
+// and is intended for editor-facing variable pickers.
+type GraphVar struct {
+	Variable   string         `json:"variable"`
+	Origin     string         `json:"origin,omitempty"`
+	Kind       string         `json:"kind,omitempty"`
+	JSONSchema map[string]any `json:"json_schema,omitempty"`
+}
+
+// VariableGroup groups variables by logical source (previous node outputs,
+// state fields, workflow input). It matches the VariableGroup schema in
+// dsl/schema/engine_api.openapi.json.
+type VariableGroup struct {
+	Type  string     `json:"type"`            // "node_output", "state", "graph_input"
+	ID    string     `json:"id"`              // node ID or fixed identifier ("state", "graph_input")
+	Title string     `json:"title,omitempty"` // Human-readable title for editors
+	Vars  []GraphVar `json:"vars"`            // Variables in this group
+}
+
+// ComputeVariableGroups builds the grouped variable view for a single node in
+// a compiled engine graph. It returns three kinds of groups:
+//   - node_output: outputs from direct upstream nodes (e.g., input.output_text)
+//   - state: graph state variables (typically declared via Start/SetState)
+//   - graph_input: workflow input variables (e.g., state.user_input)
+//
+// This function is intentionally implemented in the DSL package so that
+// different frontends (HTTP server, CLI tools, editors) can share the same
+// semantics for variable discovery.
+func (si *SchemaInference) ComputeVariableGroups(graphDef *Graph, nodeID string) ([]VariableGroup, error) {
+	if graphDef == nil || nodeID == "" {
+		return nil, nil
+	}
+
+	// Index nodes by ID for quick lookup.
+	nodeByID := make(map[string]Node, len(graphDef.Nodes))
+	for _, n := range graphDef.Nodes {
+		nodeByID[n.ID] = n
+	}
+
+	if _, ok := nodeByID[nodeID]; !ok {
+		return nil, fmt.Errorf("node %q not found in graph", nodeID)
+	}
+
+	// Collect direct upstream node IDs (static edges only for now).
+	upstreamIDs := make(map[string]struct{})
+	for _, e := range graphDef.Edges {
+		if e.Target == nodeID {
+			upstreamIDs[e.Source] = struct{}{}
+		}
+	}
+
+	// Infer schema + usage once so that variable kinds and JSON schemas are
+	// consistent with /graphs/schema and other schema-based APIs.
+	_, usage, err := si.InferSchemaAndUsage(graphDef)
+	if err != nil {
+		return nil, err
+	}
+
+	// Split usage into state fields and workflow input (user_input). Hide
+	// framework-internal fields that are not meant for direct authoring.
+	var (
+		stateFields []FieldUsage
+		userInput   *FieldUsage
+	)
+	for _, u := range usage {
+		switch u.Name {
+		case "node_structured", "output_parsed",
+			"messages", "last_response", "node_responses",
+			"end_structured_output":
+			// Internal / graph-output fields; not exposed directly in state group for editors.
+			continue
+		case "user_input":
+			// Treat user_input as workflow input group.
+			tmp := u
+			userInput = &tmp
+			continue
+		default:
+			// All other fields are considered state variables.
+			stateFields = append(stateFields, u)
+		}
+	}
+
+	sort.Slice(stateFields, func(i, j int) bool {
+		return stateFields[i].Name < stateFields[j].Name
+	})
+
+	var groups []VariableGroup
+
+	// 1) Node output groups (direct upstream nodes).
+	for upstreamID := range upstreamIDs {
+		upNode, ok := nodeByID[upstreamID]
+		if !ok {
+			continue
+		}
+		engine := upNode.EngineNode
+
+		var vars []GraphVar
+
+		// For now we special-case builtin.llmagent and builtin.mcp so editors
+		// can use input.output_text / input.output_parsed with schemas that
+		// mirror node config (output_format.schema / MCPConfig.output_schema).
+		if engine.NodeType == "builtin.llmagent" {
+			// Text view.
+			vars = append(vars, GraphVar{
+				Variable: "input.output_text",
+				Origin:   "node_output",
+				Kind:     "string",
+			})
+
+			// Structured output view (if available).
+			gv := GraphVar{
+				Variable: "input.output_parsed",
+				Origin:   "node_output",
+				Kind:     "object",
+			}
+			if ofmt, ok := engine.Config["output_format"].(map[string]any); ok {
+				formatType, _ := ofmt["type"].(string)
+				formatType = strings.TrimSpace(formatType)
+				if formatType == "" {
+					formatType = "text"
+				}
+				if formatType == "json" {
+					if schema, ok := ofmt["schema"].(map[string]any); ok {
+						gv.JSONSchema = schema
+					}
+				}
+			}
+			vars = append(vars, gv)
+		} else if engine.NodeType == "builtin.mcp" {
+			// MCP node structured result view. MCP nodes do not produce a
+			// streaming text output in the same way as LLMAgent, so we only
+			// expose output_parsed here. The schema is taken from
+			// MCPConfig.output_schema when available.
+			gv := GraphVar{
+				Variable: "input.output_parsed",
+				Origin:   "node_output",
+				Kind:     "object",
+			}
+			if schema, ok := engine.Config["output_schema"].(map[string]any); ok {
+				gv.JSONSchema = schema
+			}
+			vars = append(vars, gv)
+		}
+
+		if len(vars) == 0 {
+			continue
+		}
+
+		title := engine.Label
+		if title == "" {
+			title = upNode.ID
+		}
+
+		groups = append(groups, VariableGroup{
+			Type:  "node_output",
+			ID:    upNode.ID,
+			Title: title,
+			Vars:  vars,
+		})
+	}
+
+	// 2) State variables group.
+	if len(stateFields) > 0 {
+		stateVars := make([]GraphVar, 0, len(stateFields))
+		for _, f := range stateFields {
+			// Extra safety: ensure end_structured_output never leaks into the
+			// state group even if usage is enriched elsewhere.
+			if f.Name == "end_structured_output" {
+				continue
+			}
+			stateVars = append(stateVars, GraphVar{
+				Variable:   "state." + f.Name,
+				Origin:     "state",
+				Kind:       f.Kind,
+				JSONSchema: f.JSONSchema,
+			})
+		}
+		if len(stateVars) > 0 {
+			groups = append(groups, VariableGroup{
+				Type:  "state",
+				ID:    "state",
+				Title: "State",
+				Vars:  stateVars,
+			})
+		}
+	}
+
+	// 3) Workflow input group (user_input). Always expose it, even if it did
+	// not appear in usage, so editors can reference the original text input.
+	graphInputVar := GraphVar{
+		Variable: "state.user_input",
+		Origin:   "graph_input",
+		Kind:     "string",
+	}
+	if userInput != nil && userInput.Kind != "" {
+		graphInputVar.Kind = userInput.Kind
+	}
+	if userInput != nil && userInput.JSONSchema != nil {
+		graphInputVar.JSONSchema = userInput.JSONSchema
+	}
+	groups = append(groups, VariableGroup{
+		Type:  "graph_input",
+		ID:    "graph_input",
+		Title: "Workflow input",
+		Vars:  []GraphVar{graphInputVar},
+	})
+
+	return groups, nil
+}
+
 // buildSchemaFromParams constructs a StateSchema from a collected parameter map.
 // It is intentionally focused on execution semantics and does not attach any
 // editor-facing usage information.
-func (si *SchemaInference) buildSchemaFromParams(paramMap map[string]*parameterInfo) *graph.StateSchema {
+func (si *SchemaInference) buildSchemaFromParams(params map[string]*parameterInfo) *graph.StateSchema {
 	schema := graph.NewStateSchema()
 	// Add framework built-in fields first.
 	si.addBuiltinFields(schema)
 
 	// Convert parameter map to StateSchema.
-	for name, param := range paramMap {
+	for name, param := range params {
 		reducer := si.getReducer(param.Reducer)
 
 		schema.AddField(name, graph.StateField{
@@ -219,10 +441,10 @@ func (si *SchemaInference) buildSchemaFromParams(paramMap map[string]*parameterI
 // buildUsageFromParams constructs FieldUsage information from a collected
 // parameter map. It is used by higher layers (e.g., editors) to drive
 // variable pickers and type hints.
-func (si *SchemaInference) buildUsageFromParams(paramMap map[string]*parameterInfo) map[string]FieldUsage {
-	usage := make(map[string]FieldUsage, len(paramMap))
+func (si *SchemaInference) buildUsageFromParams(params map[string]*parameterInfo) map[string]FieldUsage {
+	usage := make(map[string]FieldUsage, len(params))
 
-	for name, param := range paramMap {
+	for name, param := range params {
 		fieldUsage := FieldUsage{
 			Name:       name,
 			Type:       param.GoType.String(),
@@ -261,7 +483,9 @@ func (si *SchemaInference) buildUsageFromParams(paramMap map[string]*parameterIn
 // buildParameterMap collects all input/output parameters from components and DSL NodeIO
 // into a map keyed by state field name.
 func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*parameterInfo, error) {
-	parameterMap := make(map[string]*parameterInfo)
+	// Rough capacity hint: each node typically contributes a small number of
+	// inputs and outputs, so we start with 2x node count to reduce map growth.
+	params := make(map[string]*parameterInfo, len(graphDef.Nodes)*2)
 
 	for _, node := range graphDef.Nodes {
 		engine := node.EngineNode
@@ -270,9 +494,13 @@ func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*param
 		component, exists := si.registry.Get(engine.NodeType)
 		if !exists {
 			// For builtin components not present in the registry, fall back to
-			// processing DSL-level outputs only.
-			if engine.NodeType == "builtin.llm" || engine.NodeType == "builtin.tools" {
-				if err := si.addDSLOutputs(node, parameterMap); err != nil {
+			// processing DSL-level outputs only. builtin.mcp currently does not
+			// contribute additional state fields, but we still treat it as a
+			// known builtin so schema inference does not fail.
+			if engine.NodeType == "builtin.llm" ||
+				engine.NodeType == "builtin.tools" ||
+				engine.NodeType == "builtin.mcp" {
+				if err := si.addDSLOutputs(node, params); err != nil {
 					return nil, fmt.Errorf("node %s: %w", node.ID, err)
 				}
 				continue
@@ -284,26 +512,26 @@ func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*param
 
 		// Add input parameters (mark as readers tied to this node)
 		for _, input := range metadata.Inputs {
-			if err := si.addParameter(parameterMap, input, fmt.Sprintf("input:%s", node.ID)); err != nil {
+			if err := si.addParameter(params, input, fmt.Sprintf("input:%s", node.ID)); err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
 		}
 
 		// Add output parameters from component metadata (writers tied to this node)
 		for _, output := range metadata.Outputs {
-			if err := si.addParameter(parameterMap, output, fmt.Sprintf("output:%s", node.ID)); err != nil {
+			if err := si.addParameter(params, output, fmt.Sprintf("output:%s", node.ID)); err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
 		}
 
 		// Add DSL-level output overrides (if specified)
 		// These take precedence over component metadata outputs
-		if err := si.addDSLOutputs(node, parameterMap); err != nil {
+		if err := si.addDSLOutputs(node, params); err != nil {
 			return nil, fmt.Errorf("node %s: %w", node.ID, err)
 		}
 	}
 
-	return parameterMap, nil
+	return params, nil
 }
 
 // parameterInfo holds information about a parameter during inference.
@@ -321,8 +549,8 @@ type parameterInfo struct {
 }
 
 // addParameter adds a parameter to the parameter map.
-func (si *SchemaInference) addParameter(paramMap map[string]*parameterInfo, param registry.ParameterSchema, source string) error {
-	existing, exists := paramMap[param.Name]
+func (si *SchemaInference) addParameter(params map[string]*parameterInfo, param registry.ParameterSchema, source string) error {
+	existing, exists := params[param.Name]
 
 	if !exists {
 		// First time seeing this parameter
@@ -334,7 +562,7 @@ func (si *SchemaInference) addParameter(paramMap map[string]*parameterInfo, para
 
 		kind, schemaRef := classifyGoType(param.GoType, param.Name)
 
-		paramMap[param.Name] = &parameterInfo{
+		params[param.Name] = &parameterInfo{
 			Name:        param.Name,
 			GoType:      param.GoType,
 			Reducer:     param.Reducer,
@@ -369,7 +597,7 @@ func (si *SchemaInference) addParameter(paramMap map[string]*parameterInfo, para
 
 // addDSLOutputs adds output parameters from DSL node outputs configuration.
 // This handles output remapping specified in the graph DSL.
-func (si *SchemaInference) addDSLOutputs(node Node, paramMap map[string]*parameterInfo) error {
+func (si *SchemaInference) addDSLOutputs(node Node, params map[string]*parameterInfo) error {
 	engine := node.EngineNode
 
 	if len(engine.Outputs) == 0 {
@@ -402,7 +630,7 @@ func (si *SchemaInference) addDSLOutputs(node Node, paramMap map[string]*paramet
 		}
 
 		// Add to parameter map
-		if err := si.addParameter(paramMap, param, fmt.Sprintf("dsl:%s", node.ID)); err != nil {
+		if err := si.addParameter(params, param, fmt.Sprintf("dsl:%s", node.ID)); err != nil {
 			return err
 		}
 	}

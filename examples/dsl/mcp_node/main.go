@@ -15,8 +15,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
-// A minimal example showing how builtin.transform can reshape user_input into
-// a structured object and make it available to downstream nodes.
+// This example demonstrates a standalone MCP node wired with Transform
+// before and after:
+//   Start -> Transform (build MCP args) -> MCP node -> Transform (format summary) -> End.
+//
+// To run end-to-end, start the example MCP HTTP server first:
+//   cd examples/mcptool/streamalbeserver && go run .
+//
+// Then run this example from examples/dsl:
+//   cd examples/dsl && go run ./mcp_node
 
 func main() {
 	if err := run(); err != nil {
@@ -28,12 +35,12 @@ func main() {
 func run() error {
 	ctx := context.Background()
 
-	fmt.Println("🚀 Transform DSL Example")
+	fmt.Println("🚀 MCP Node DSL Example")
+	fmt.Println("Chain: Start → Agent → Transform → MCP → Transform → End")
 	fmt.Println("==================================================")
 	fmt.Println()
 
-	// Load graph definition from JSON
-	data, err := os.ReadFile("workflow.json")
+	data, err := os.ReadFile("mcp_node/workflow.json")
 	if err != nil {
 		return fmt.Errorf("failed to read workflow.json: %w", err)
 	}
@@ -49,9 +56,10 @@ func run() error {
 	fmt.Printf("   Nodes: %d\n", len(graphDef.Nodes))
 	fmt.Println()
 
-	// Compile graph
-	comp := compiler.New()
-
+	// Compile graph.
+	comp := compiler.New(
+		compiler.WithAllowEnvSecrets(true),
+	)
 	compiledGraph, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
@@ -59,22 +67,22 @@ func run() error {
 	fmt.Println("✅ Graph compiled successfully")
 	fmt.Println()
 
-	// Create GraphAgent
-	graphAgent, err := graphagent.New("transform-basic", compiledGraph,
-		graphagent.WithDescription("Demonstrates builtin.transform reshaping user_input"),
+	// Create GraphAgent.
+	graphAgent, err := graphagent.New("mcp-node-example", compiledGraph,
+		graphagent.WithDescription("Standalone MCP node with pre/post transforms"),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create graph agent: %w", err)
 	}
 
-	// Create Runner
-	appRunner := runner.NewRunner("transform-basic-graph", graphAgent)
+	// Create Runner.
+	appRunner := runner.NewRunner("mcp-node-example", graphAgent)
 	defer appRunner.Close()
 
-	// Run a single example input
+	// Run a single example input.
 	userID := "demo-user"
 	sessionID := "demo-session"
-	input := "Hello from transform_basic graph"
+	input := "Beijing"
 
 	fmt.Printf("🔄 Running graph with input: %q\n\n", input)
 	if err := executeGraph(ctx, appRunner, userID, sessionID, input); err != nil {
@@ -82,6 +90,13 @@ func run() error {
 	}
 
 	return nil
+}
+
+func getEnv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func executeGraph(ctx context.Context, appRunner runner.Runner, userID, sessionID, userInput string) error {
@@ -92,53 +107,87 @@ func executeGraph(ctx context.Context, appRunner runner.Runner, userID, sessionI
 	}
 
 	var (
-		transformResult any
-		endOutput       map[string]any
-		lastResponse    string
+		mcpResult   any
+		transformIn any
+		endOutput   map[string]any
+		lastText    string
 	)
 
+	eventIndex := 0
 	for ev := range events {
+		eventIndex++
+
 		if ev.Error != nil {
 			return fmt.Errorf("workflow error: %s", ev.Error.Message)
 		}
 
 		if ev.StateDelta != nil {
-			// Read transform result from node_structured.transform.output_parsed.
+			// Debug: print state delta keys for each event.
+			keys := make([]string, 0, len(ev.StateDelta))
+			for k := range ev.StateDelta {
+				keys = append(keys, k)
+			}
+			fmt.Printf("[DEBUG] Event %d: StateDelta keys = %v\n", eventIndex, keys)
+
+			// Inspect transform result from node_structured.prepare_request.output_parsed.
 			if raw, ok := ev.StateDelta["node_structured"]; ok {
+				fmt.Printf("[DEBUG] Event %d: raw node_structured delta = %s\n", eventIndex, string(raw))
+
 				var ns map[string]any
 				if err := json.Unmarshal(raw, &ns); err == nil {
-					if nodeRaw, ok := ns["transform"]; ok {
+					fmt.Printf("[DEBUG] Event %d: decoded node_structured = %#v\n", eventIndex, ns)
+
+					if nodeRaw, ok := ns["prepare_request"]; ok {
 						if nodeMap, ok := nodeRaw.(map[string]any); ok {
 							if parsed, ok := nodeMap["output_parsed"]; ok {
-								transformResult = parsed
+								transformIn = parsed
+							}
+						}
+					}
+
+					if nodeRaw, ok := ns["mcp_weather"]; ok {
+						if nodeMap, ok := nodeRaw.(map[string]any); ok {
+							if parsed, ok := nodeMap["output_parsed"]; ok {
+								mcpResult = parsed
 							}
 						}
 					}
 				}
 			}
 
-			// Read structured end output if present
+			// Inspect final structured output from End node.
 			if raw, ok := ev.StateDelta["end_structured_output"]; ok {
 				var v map[string]any
 				if err := json.Unmarshal(raw, &v); err == nil {
 					endOutput = v
+					fmt.Printf("[DEBUG] Event %d: end_structured_output delta = %s\n", eventIndex, string(raw))
 				}
 			}
 
-			// Fallback text view via last_response
+			// Fallback textual view via last_response.
 			if raw, ok := ev.StateDelta[graph.StateKeyLastResponse]; ok {
 				var s string
 				if err := json.Unmarshal(raw, &s); err == nil {
-					lastResponse = s
+					lastText = s
 				}
 			}
 		}
 	}
 
-	fmt.Println("📊 Transform Result (nodes.transform.output_parsed)")
+	fmt.Println("📥 Transform Output (nodes.prepare_request.output_parsed)")
 	fmt.Println("==================================================")
-	if transformResult != nil {
-		b, _ := json.MarshalIndent(transformResult, "", "  ")
+	if transformIn != nil {
+		b, _ := json.MarshalIndent(transformIn, "", "  ")
+		fmt.Println(string(b))
+	} else {
+		fmt.Println("<nil>")
+	}
+	fmt.Println()
+
+	fmt.Println("🔧 MCP Result (nodes.mcp_weather.output_parsed)")
+	fmt.Println("==================================================")
+	if mcpResult != nil {
+		b, _ := json.MarshalIndent(mcpResult, "", "  ")
 		fmt.Println(string(b))
 	} else {
 		fmt.Println("<nil>")
@@ -150,8 +199,8 @@ func executeGraph(ctx context.Context, appRunner runner.Runner, userID, sessionI
 	if endOutput != nil {
 		b, _ := json.MarshalIndent(endOutput, "", "  ")
 		fmt.Println(string(b))
-	} else if lastResponse != "" {
-		fmt.Println(lastResponse)
+	} else if lastText != "" {
+		fmt.Println(lastText)
 	} else {
 		fmt.Println("<none>")
 	}
