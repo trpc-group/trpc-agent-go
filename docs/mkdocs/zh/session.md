@@ -1411,8 +1411,8 @@ customPrompt := `分析以下对话并提供简洁的摘要，重点关注关键
 
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithPrompt(customPrompt),
-    summary.WithMaxSummaryWords(100),
+    summary.WithPrompt(customPrompt), // 自定义 Prompt
+    summary.WithMaxSummaryWords(100), // 注入 Prompt 里面的 {max_summary_words}
     summary.WithSkipRecentEvents(2),  // 跳过最后 2 个事件
     summary.WithEventThreshold(15),
 )

@@ -1286,8 +1286,8 @@ Summary:`
 
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithPrompt(customPrompt),
-    summary.WithMaxSummaryWords(100),
+    summary.WithPrompt(customPrompt), // Custom Prompt
+    summary.WithMaxSummaryWords(100), // Inject into {max_summary_words}
     summary.WithSkipRecentEvents(2),  // Skip the last 2 events
     summary.WithEventThreshold(15),
 )
