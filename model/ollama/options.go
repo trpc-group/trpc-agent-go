@@ -7,54 +7,66 @@
 //
 //
 
-// Package gemini provides Gemini-compatible model implementations.
-package gemini
+// Package ollama provides Ollama-compatible model implementations.
+package ollama
 
 import (
 	"context"
+	"net/http"
+	"time"
 
-	"google.golang.org/genai"
+	"github.com/ollama/ollama/api"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 )
 
 const (
 	defaultChannelBufferSize = 256
+	functionToolType         = "function"
+	// OllamaHost is the environment variable for the Ollama host.
+	OllamaHost = "OLLAMA_HOST"
+)
+
+var (
+	// DefaultHost is the default Ollama host port.
+	defaultPort = "11434"
+	// DefaultHost is the default Ollama host.
+	defaultHost = "http://localhost:11434"
 )
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
 type ChatRequestCallbackFunc func(
 	ctx context.Context,
-	chatRequest []*genai.Content,
+	chatRequest *api.ChatRequest,
 )
 
 // ChatResponseCallbackFunc is the function type for the chat response callback.
 type ChatResponseCallbackFunc func(
 	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *genai.GenerateContentResponse,
+	chatRequest *api.ChatRequest,
+	chatResponse *api.ChatResponse,
 )
 
 // ChatChunkCallbackFunc is the function type for the chat chunk callback.
 type ChatChunkCallbackFunc func(
 	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *genai.GenerateContentResponse,
+	chatRequest *api.ChatRequest,
+	chatChunk *api.ChatResponse,
 )
 
 // ChatStreamCompleteCallbackFunc is the function type for the chat stream completion callback.
-// This callback is invoked when streaming is completely finished (success or error).
 type ChatStreamCompleteCallbackFunc func(
 	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *model.Response,
+	chatRequest *api.ChatRequest,
+	streamErr error,
 )
 
-// options contains configuration options for creating an Anthropic model.
+// options contains configuration options for creating an Ollama model.
 type options struct {
+	// Host URL for the Ollama server.
+	host string
+	// HTTP client for the Ollama client.
+	httpClient *http.Client
 	// Buffer size for response channels (default: 256)
 	channelBufferSize int
 	// Callback for the chat request.
@@ -75,13 +87,15 @@ type options struct {
 	maxInputTokens int
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
-	// geminiClientConfig for building gemini client.
-	geminiClientConfig *genai.ClientConfig
+	// Additional options for Ollama API.
+	options   map[string]any
+	keepAlive *api.Duration
 }
 
 var (
 	defaultOptions = options{
 		channelBufferSize: defaultChannelBufferSize,
+		httpClient:        http.DefaultClient,
 		tokenTailoringConfig: &model.TokenTailoringConfig{
 			ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
 			ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
@@ -90,13 +104,29 @@ var (
 			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 		},
+		host: defaultHost,
 	}
 )
 
-// Option is a function that configures an Anthropic model.
+// Option is a function that configures an Ollama model.
 type Option func(*options)
 
-// WithChannelBufferSize sets the channel buffer size for the Anthropic client, 256 by default.
+// WithHost sets the host URL for the Ollama server.
+func WithHost(host string) Option {
+	return func(o *options) {
+		o.host = host
+	}
+}
+
+// withHttpClient sets the HTTP client to use.
+// The site is temporarily not open to the public, as we may implement injection of an internal http client.
+func withHttpClient(client *http.Client) Option {
+	return func(o *options) {
+		o.httpClient = client
+	}
+}
+
+// WithChannelBufferSize sets the channel buffer size for the Ollama client, 256 by default.
 func WithChannelBufferSize(size int) Option {
 	return func(o *options) {
 		if size <= 0 {
@@ -114,7 +144,6 @@ func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
 }
 
 // WithChatResponseCallback sets the function to be called after receiving a chat response.
-// Used for non-streaming responses.
 func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
 	return func(opts *options) {
 		opts.chatResponseCallback = fn
@@ -122,7 +151,6 @@ func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
 }
 
 // WithChatChunkCallback sets the function to be called after receiving a chat chunk.
-// Used for streaming responses.
 func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 	return func(opts *options) {
 		opts.chatChunkCallback = fn
@@ -130,7 +158,6 @@ func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 }
 
 // WithChatStreamCompleteCallback sets the function to be called when streaming is completed.
-// Called for both successful and failed streaming completions.
 func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	return func(opts *options) {
 		opts.chatStreamCompleteCallback = fn
@@ -138,8 +165,6 @@ func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 }
 
 // WithEnableTokenTailoring enables automatic token tailoring based on model context window.
-// When enabled, the system will automatically calculate max input tokens using the model's
-// context window minus reserved tokens and protocol overhead.
 func WithEnableTokenTailoring(enabled bool) Option {
 	return func(opts *options) {
 		opts.enableTokenTailoring = enabled
@@ -147,8 +172,6 @@ func WithEnableTokenTailoring(enabled bool) Option {
 }
 
 // WithMaxInputTokens sets only the input token limit for token tailoring.
-// The counter/strategy will be lazily initialized if not provided.
-// Defaults to SimpleTokenCounter and MiddleOutStrategy.
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.maxInputTokens = limit
@@ -156,7 +179,6 @@ func WithMaxInputTokens(limit int) Option {
 }
 
 // WithTokenCounter sets the TokenCounter used for token tailoring.
-// If not provided and token limit is enabled, a SimpleTokenCounter will be used.
 func WithTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *options) {
 		opts.tokenCounter = counter
@@ -164,7 +186,6 @@ func WithTokenCounter(counter model.TokenCounter) Option {
 }
 
 // WithTailoringStrategy sets the TailoringStrategy used for token tailoring.
-// If not provided and token limit is enabled, a MiddleOutStrategy will be used.
 func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 	return func(opts *options) {
 		opts.tailoringStrategy = strategy
@@ -172,18 +193,6 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 }
 
 // WithTokenTailoringConfig sets custom token tailoring budget parameters.
-// This allows advanced users to fine-tune the token allocation strategy.
-//
-// Example:
-//
-//	anthropic.WithTokenTailoringConfig(&model.TokenTailoringConfig{
-//	    ProtocolOverheadTokens: 1024,
-//	    ReserveOutputTokens:    4096,
-//	    SafetyMarginRatio:      0.15,
-//	})
-//
-// Note: It is recommended to use the default values unless you have specific
-// requirements.
 func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	return func(opts *options) {
 		if config == nil {
@@ -211,9 +220,17 @@ func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	}
 }
 
-// WithGeminiClientConfig sets the ClientConfig used for gemini Client initialization.
-func WithGeminiClientConfig(c *genai.ClientConfig) Option {
+// WithOptions sets additional options for Ollama API.
+func WithOptions(opt map[string]any) Option {
 	return func(opts *options) {
-		opts.geminiClientConfig = c
+		opts.options = opt
+	}
+}
+
+// WithKeepAlive sets the keep alive duration for the Ollama API.
+func WithKeepAlive(duration time.Duration) Option {
+	return func(opts *options) {
+		d := api.Duration{Duration: duration}
+		opts.keepAlive = &d
 	}
 }
