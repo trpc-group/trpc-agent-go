@@ -433,11 +433,7 @@ func (vs *VectorStore) parseSearchResults(data []byte) (*vectorstore.SearchResul
 		}
 		doc, _, err := vs.docBuilder(hit.Source_)
 		if err != nil {
-			log.ErrorfContext(
-				ctx,
-				"elasticsearch parse search result: %v",
-				err,
-			)
+			log.Errorf("elasticsearch parse search result: %v", err)
 			continue
 		}
 		if doc == nil {
