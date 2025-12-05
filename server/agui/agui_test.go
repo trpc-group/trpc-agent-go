@@ -282,7 +282,7 @@ func (fakeSessionService) EnqueueSummaryJob(context.Context, *session.Session, s
 	return nil
 }
 
-func (fakeSessionService) GetSessionSummaryText(context.Context, *session.Session) (string, bool) {
+func (fakeSessionService) GetSessionSummaryText(context.Context, *session.Session, ...session.SummaryOption) (string, bool) {
 	return "", false
 }
 

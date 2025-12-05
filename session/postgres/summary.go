@@ -193,9 +193,12 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 }
 
 // GetSessionSummaryText gets the summary text for a session.
+// When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
+// Use session.WithSummaryFilterKey to specify a different filter key.
 func (s *Service) GetSessionSummaryText(
 	ctx context.Context,
 	sess *session.Session,
+	opts ...session.SummaryOption,
 ) (string, bool) {
 	if sess == nil {
 		return "", false
@@ -204,14 +207,23 @@ func (s *Service) GetSessionSummaryText(
 	if err := key.CheckSessionKey(); err != nil {
 		return "", false
 	}
+
+	// Parse options.
+	options := &session.SummaryOptions{
+		FilterKey: session.SummaryFilterKeyAllContents, // Default to full session.
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	// Prefer local in-memory session summaries when available.
 	if len(sess.Summaries) > 0 {
-		if text, ok := pickSummaryText(sess.Summaries); ok {
+		if text, ok := pickSummaryText(sess.Summaries, options.FilterKey); ok {
 			return text, true
 		}
 	}
 
-	// Use empty filterKey to get the default summary
+	// Query database with specified filterKey.
 	var summaryText string
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		if rows.Next() {
@@ -230,10 +242,35 @@ func (s *Service) GetSessionSummaryText(
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
 		AND (expires_at IS NULL OR expires_at > $5)
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now())
+		key.AppName, key.UserID, key.SessionID, options.FilterKey, time.Now())
 
 	if err != nil {
 		return "", false
+	}
+
+	// If requested filterKey not found, try fallback to full-session summary.
+	if summaryText == "" && options.FilterKey != session.SummaryFilterKeyAllContents {
+		err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+			if rows.Next() {
+				var summaryBytes []byte
+				if err := rows.Scan(&summaryBytes); err != nil {
+					return err
+				}
+				var sum session.Summary
+				if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+					return fmt.Errorf("unmarshal summary failed: %w", err)
+				}
+				summaryText = sum.Summary
+			}
+			return nil
+		}, fmt.Sprintf(`SELECT summary FROM %s
+			WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
+			AND (expires_at IS NULL OR expires_at > $5)
+			AND deleted_at IS NULL`, s.tableSessionSummaries),
+			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now())
+		if err != nil {
+			return "", false
+		}
 	}
 
 	if summaryText == "" {
@@ -244,15 +281,23 @@ func (s *Service) GetSessionSummaryText(
 }
 
 // pickSummaryText picks a non-empty summary string with preference for the
-// all-contents key "" (empty filterKey). No special handling for "root".
-func pickSummaryText(summaries map[string]*session.Summary) (string, bool) {
+// specified filterKey. Falls back to all-contents key and then any available summary.
+// When filterKey is empty (SummaryFilterKeyAllContents), prefers the full-session summary.
+func pickSummaryText(summaries map[string]*session.Summary, filterKey string) (string, bool) {
 	if summaries == nil {
 		return "", false
 	}
-	// Prefer full-summary stored under empty filterKey.
-	if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
+	// First, try to get the requested filter key summary.
+	if sum, ok := summaries[filterKey]; ok && sum != nil && sum.Summary != "" {
 		return sum.Summary, true
 	}
+	// Fallback: if requesting a specific filter key but not found, try full-session summary.
+	if filterKey != session.SummaryFilterKeyAllContents {
+		if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
+			return sum.Summary, true
+		}
+	}
+	// Last resort: return any available summary.
 	for _, s := range summaries {
 		if s != nil && s.Summary != "" {
 			return s.Summary, true

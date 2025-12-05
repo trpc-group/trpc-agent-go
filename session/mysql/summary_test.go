@@ -1210,7 +1210,7 @@ func TestPickSummaryText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotText, gotOk := pickSummaryText(tt.summaries)
+			gotText, gotOk := pickSummaryText(tt.summaries, "")
 			if gotText != tt.wantText {
 				t.Errorf("pickSummaryText() text = %v, want %v", gotText, tt.wantText)
 			}

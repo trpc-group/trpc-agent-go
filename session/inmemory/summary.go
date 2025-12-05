@@ -80,16 +80,36 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 }
 
 // GetSessionSummaryText returns previously stored summary from session summaries if present.
-func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+// When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
+// Use session.WithSummaryFilterKey to specify a different filter key.
+func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
 	if sess == nil {
 		return "", false
 	}
+
+	// Parse options.
+	options := &session.SummaryOptions{
+		FilterKey: session.SummaryFilterKeyAllContents, // Default to full session.
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	// Prefer structured summaries on session.
 	if sess.Summaries != nil {
-		// Prefer full-summary under the all-contents filter key.
-		if sum, ok := sess.Summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
+		// First, try to get the requested filter key summary.
+		if sum, ok := sess.Summaries[options.FilterKey]; ok && sum != nil && sum.Summary != "" {
 			return sum.Summary, true
 		}
+
+		// Fallback: if requesting a specific filter key but not found, try full-session summary.
+		if options.FilterKey != session.SummaryFilterKeyAllContents {
+			if sum, ok := sess.Summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
+				return sum.Summary, true
+			}
+		}
+
+		// Last resort: return any available summary.
 		for _, s := range sess.Summaries {
 			if s != nil && s.Summary != "" {
 				return s.Summary, true

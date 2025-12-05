@@ -1375,11 +1375,28 @@ err := sessionService.CreateSessionSummary(
 Get the latest summary text from a session:
 
 ```go
+// Get the full-session summary (default behavior)
 summaryText, found := sessionService.GetSessionSummaryText(ctx, sess)
 if found {
     fmt.Printf("Summary: %s\n", summaryText)
 }
+
+// Get summary for a specific filter key
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("user-messages"),
+)
+if found {
+    fmt.Printf("User messages summary: %s\n", userSummary)
+}
 ```
+
+**Filter Key Support:**
+
+The `GetSessionSummaryText` method supports an optional `WithSummaryFilterKey` option to retrieve summaries for specific event filters:
+
+- When no option is provided, returns the full-session summary (`SummaryFilterKeyAllContents`)
+- When a specific filter key is provided but not found, falls back to the full-session summary
+- If neither exists, returns any available summary as a last resort
 
 ### How It Works
 

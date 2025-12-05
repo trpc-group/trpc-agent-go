@@ -393,7 +393,7 @@ func (serviceWithoutTrack) EnqueueSummaryJob(ctx context.Context, sess *session.
 	return nil
 }
 
-func (serviceWithoutTrack) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+func (serviceWithoutTrack) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
 	return "", false
 }
 
