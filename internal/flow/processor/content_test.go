@@ -2482,7 +2482,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, evt, inv, filter, isZeroTime, since := tt.setup()
-			result := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
+			result, _ := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
 			if result != tt.expected {
 				t.Errorf("shouldIncludeEvent() = %v, want %v", result, tt.expected)
 			}
