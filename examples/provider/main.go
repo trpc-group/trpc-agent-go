@@ -233,13 +233,20 @@ func (c *providerChat) processStreamingResponse(eventChan <-chan *event.Event) e
 		}
 
 		// Detect and display tool calls.
-		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && (len(event.Response.Choices[0].Message.ToolCalls) > 0 || len(event.Response.Choices[0].Delta.ToolCalls) > 0) {
 			toolCallsDetected = true
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
 			fmt.Printf("🔧 Executing tools:\n")
 			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
+				fmt.Printf("   • %s", toolCall.Function.Name)
+				if len(toolCall.Function.Arguments) > 0 {
+					fmt.Printf(" (%s)", string(toolCall.Function.Arguments))
+				}
+				fmt.Printf("\n")
+			}
+			for _, toolCall := range event.Response.Choices[0].Delta.ToolCalls {
 				fmt.Printf("   • %s", toolCall.Function.Name)
 				if len(toolCall.Function.Arguments) > 0 {
 					fmt.Printf(" (%s)", string(toolCall.Function.Arguments))
