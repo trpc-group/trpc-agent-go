@@ -332,17 +332,21 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 	allTools := make([]tool.Tool, 0, len(options.Tools))
 	allTools = append(allTools, options.Tools...)
 
-	// Add tools from each toolset with automatic namespacing.
-	// Tools from WithToolSets are also user tools (user explicitly added them).
-	ctx := context.Background()
-	for _, toolSet := range options.ToolSets {
-		// Create named toolset wrapper to avoid name conflicts.
-		namedToolSet := itool.NewNamedToolSet(toolSet)
-		setTools := namedToolSet.Tools(ctx)
-		for _, t := range setTools {
-			allTools = append(allTools, t)
-			// Mark toolset tools as user tools.
-			userToolNames[t.Declaration().Name] = true
+	// Add tools from each toolset with automatic namespacing when using
+	// static ToolSets. Tools from WithToolSets are also user tools
+	// (user explicitly added them). When RefreshToolSetsOnRun is true,
+	// ToolSets are resolved on each Tools() call instead of here.
+	if !options.RefreshToolSetsOnRun {
+		ctx := context.Background()
+		for _, toolSet := range options.ToolSets {
+			// Create named toolset wrapper to avoid name conflicts.
+			namedToolSet := itool.NewNamedToolSet(toolSet)
+			setTools := namedToolSet.Tools(ctx)
+			for _, t := range setTools {
+				allTools = append(allTools, t)
+				// Mark toolset tools as user tools.
+				userToolNames[t.Declaration().Name] = true
+			}
 		}
 	}
 
@@ -594,11 +598,32 @@ func (a *LLMAgent) Info() agent.Info {
 // callers can safely use it after releasing the lock without data
 // races.
 func (a *LLMAgent) getAllToolsLocked() []tool.Tool {
-	tools := make([]tool.Tool, len(a.tools))
-	copy(tools, a.tools)
+	base := make([]tool.Tool, len(a.tools))
+	copy(base, a.tools)
+
+	// When RefreshToolSetsOnRun is enabled, rebuild tools from ToolSets
+	// on each call to keep ToolSet-provided tools in sync with their
+	// underlying dynamic source (for example, MCP ListTools).
+	if a.option.RefreshToolSetsOnRun && len(a.option.ToolSets) > 0 {
+		ctx := context.Background()
+
+		dynamic := make([]tool.Tool, 0)
+		for _, toolSet := range a.option.ToolSets {
+			namedToolSet := itool.NewNamedToolSet(toolSet)
+			setTools := namedToolSet.Tools(ctx)
+			dynamic = append(dynamic, setTools...)
+		}
+
+		if len(dynamic) > 0 {
+			combined := make([]tool.Tool, 0, len(base)+len(dynamic))
+			combined = append(combined, base...)
+			combined = append(combined, dynamic...)
+			base = combined
+		}
+	}
 
 	if len(a.subAgents) == 0 {
-		return tools
+		return base
 	}
 
 	agentInfos := make([]agent.Info, len(a.subAgents))
@@ -607,7 +632,7 @@ func (a *LLMAgent) getAllToolsLocked() []tool.Tool {
 	}
 
 	transferTool := transfer.New(agentInfos)
-	return append(tools, transferTool)
+	return append(base, transferTool)
 }
 
 // Tools implements the agent.Agent interface.
@@ -666,12 +691,39 @@ func (a *LLMAgent) UserTools() []tool.Tool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	userTools := make([]tool.Tool, 0, len(a.userToolNames))
-	for _, t := range a.tools {
-		if a.userToolNames[t.Declaration().Name] {
+	// When ToolSets are static, user tool tracking is based on the
+	// snapshot captured at construction time.
+	if !a.option.RefreshToolSetsOnRun {
+		userTools := make([]tool.Tool, 0, len(a.userToolNames))
+		for _, t := range a.tools {
+			if a.userToolNames[t.Declaration().Name] {
+				userTools = append(userTools, t)
+			}
+		}
+		return userTools
+	}
+
+	// When ToolSets are refreshed on each run, user tools include:
+	//   - Tools from WithTools (tracked in userToolNames)
+	//   - Tools coming from ToolSets (wrapped as NamedTool).
+	// Framework tools (knowledge_search, transfer_to_agent, etc.)
+	// remain excluded.
+	allTools := a.getAllToolsLocked()
+	userTools := make([]tool.Tool, 0, len(allTools))
+
+	for _, t := range allTools {
+		name := t.Declaration().Name
+
+		if a.userToolNames[name] {
+			userTools = append(userTools, t)
+			continue
+		}
+
+		if _, ok := t.(*itool.NamedTool); ok {
 			userTools = append(userTools, t)
 		}
 	}
+
 	return userTools
 }
 
@@ -684,13 +736,22 @@ func (a *LLMAgent) FilterTools(ctx context.Context) []tool.Tool {
 	for name, isUser := range a.userToolNames {
 		userToolNames[name] = isUser
 	}
+	refreshToolSets := a.option.RefreshToolSetsOnRun
 	filter := a.option.toolFilter
 	a.mu.RUnlock()
 
 	filtered := make([]tool.Tool, 0, len(tools))
 	for _, t := range tools {
 		name := t.Declaration().Name
-		if !userToolNames[name] {
+		isUser := userToolNames[name]
+
+		if refreshToolSets {
+			if _, ok := t.(*itool.NamedTool); ok {
+				isUser = true
+			}
+		}
+
+		if !isUser {
 			filtered = append(filtered, t)
 			continue
 		}

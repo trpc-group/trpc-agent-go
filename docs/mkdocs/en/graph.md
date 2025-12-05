@@ -2201,13 +2201,14 @@ Graph state is a `map[string]any` with runtime validation provided by `StateSche
 
 Constants live in `graph/state.go` and `graph/keys.go`. Prefer referencing constants over hard‑coding strings.
 
-#### Node‑level Callbacks & Generation Parameters
+#### Node‑level Callbacks, Tools & Generation Parameters
 
 Per‑node options (see `graph/state_graph.go`):
 
 - `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
 - LLM nodes: `graph.WithGenerationConfig`, `graph.WithModelCallbacks`
-- Tooling: `graph.WithToolCallbacks`, `graph.WithToolSets` (supply ToolSets in addition to `tools []tool.Tool`)
+- Tooling: `graph.WithToolCallbacks`, `graph.WithToolSets` (supply ToolSets in addition to `tools []tool.Tool`),
+  `graph.WithRefreshToolSetsOnRun` (rebuild tools from ToolSets on each run for dynamic sources such as MCP)
 - Agent nodes: `graph.WithAgentNodeEventCallback`
 
 #### ToolSets in Graphs vs Agents
