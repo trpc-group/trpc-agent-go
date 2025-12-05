@@ -1556,8 +1556,9 @@ func TestBuildRespEvent_CodeExecution(t *testing.T) {
 				if choice.Message.Content != "test output" {
 					t.Errorf("expected content 'test output', got %s", choice.Message.Content)
 				}
-				if evt.Response.Object != model.ObjectTypePostprocessingCodeExecutionResult {
-					t.Errorf("expected object type %s, got %s", model.ObjectTypePostprocessingCodeExecutionResult, evt.Response.Object)
+				// Both code execution and result use the same ObjectType
+				if evt.Response.Object != model.ObjectTypePostprocessingCodeExecution {
+					t.Errorf("expected object type %s, got %s", model.ObjectTypePostprocessingCodeExecution, evt.Response.Object)
 				}
 			},
 		},
@@ -1665,7 +1666,8 @@ func TestExtractObjectType(t *testing.T) {
 			result: &parseResult{
 				codeExecutionResult: "some output",
 			},
-			expected: model.ObjectTypePostprocessingCodeExecutionResult,
+			// Both code execution and result use the same ObjectType now
+			expected: model.ObjectTypePostprocessingCodeExecution,
 		},
 		{
 			name: "objectType takes precedence over inferred type",

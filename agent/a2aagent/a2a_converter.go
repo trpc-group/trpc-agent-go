@@ -250,6 +250,9 @@ type parseResult struct {
 
 	// objectType holds the type of the object
 	objectType string
+
+	// tag holds the event tag from A2A message metadata
+	tag string
 }
 
 // toolResponseData holds tool response information
@@ -277,6 +280,9 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 	if msg.Metadata != nil {
 		if objectType, ok := msg.Metadata[ia2a.MessageMetadataObjectTypeKey].(string); ok {
 			result.objectType = objectType
+		}
+		if tag, ok := msg.Metadata[ia2a.MessageMetadataTagKey].(string); ok {
+			result.tag = tag
 		}
 	}
 
@@ -429,7 +435,13 @@ func buildEventResponse(
 	invocation *agent.Invocation,
 	agentName string,
 ) *event.Event {
-	evt := event.New(invocation.InvocationID, agentName)
+	var opts []event.Option
+	// Restore tag from A2A message metadata if present
+	if result.tag != "" {
+		opts = append(opts, event.WithTag(result.tag))
+	}
+
+	evt := event.New(invocation.InvocationID, agentName, opts...)
 
 	if isStreaming {
 		evt.Response = buildStreamingResponse(messageID, result)
@@ -533,13 +545,12 @@ func extractObjectType(result *parseResult) string {
 		return model.ObjectTypeChatCompletion
 	}
 
-	if len(result.codeExecution) > 0 {
+	// Both code execution and code execution result use the same ObjectType.
+	// The distinction is made via the Tag field.
+	if len(result.codeExecution) > 0 || len(result.codeExecutionResult) > 0 {
 		return model.ObjectTypePostprocessingCodeExecution
 	}
 
-	if len(result.codeExecutionResult) > 0 {
-		return model.ObjectTypePostprocessingCodeExecutionResult
-	}
 	return ""
 }
 

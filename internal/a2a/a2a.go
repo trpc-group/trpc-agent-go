@@ -73,6 +73,11 @@ const (
 	// from agent events to A2A messages, allowing A2A clients to distinguish different event types.
 	MessageMetadataObjectTypeKey = "object_type"
 
+	// MessageMetadataTagKey is the metadata key for event tag in A2A message.
+	// This is used to preserve event tag when converting from agent events to A2A messages,
+	// allowing A2A clients to restore the tag information for business-specific labeling.
+	MessageMetadataTagKey = "tag"
+
 	// ADKMetadataKeyPrefix is the prefix for ADK-compatible metadata keys.
 	// ADK uses "adk_" prefix for metadata keys like "adk_type", "adk_app_name", "adk_user_id", etc.
 	// This ensures compatibility with ADK's part converter which expects "adk_type" instead of "type".

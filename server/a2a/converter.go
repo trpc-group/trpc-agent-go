@@ -205,63 +205,62 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 // convertCodeExecutionToA2AMessage converts code execution events to A2A DataPart messages.
 // This handles both code execution and code execution result events.
 func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
-	event *event.Event,
+	evt *event.Event,
 ) (protocol.UnaryMessageResult, error) {
-	if len(event.Response.Choices) == 0 {
+	if len(evt.Response.Choices) == 0 {
 		return nil, nil
 	}
 
-	choice := event.Response.Choices[0]
+	choice := evt.Response.Choices[0]
 	if choice.Message.Content == "" {
 		return nil, nil
 	}
 
 	var parts []protocol.Part
 	var dataPart protocol.DataPart
-
 	metadataTypeKey := c.getMetadataTypeKey()
 
-	switch event.Response.Object {
-	case model.ObjectTypePostprocessingCodeExecution:
+	if evt.ContainTag(event.TagCodeExecutionResult) {
+		// Code execution result event
+		if c.adkCompatibility {
+			dataPart = protocol.NewDataPart(map[string]any{
+				ia2a.CodeExecutionFieldOutcome: "",
+				ia2a.CodeExecutionFieldOutput:  choice.Message.Content,
+			})
+		} else {
+			dataPart = protocol.NewDataPart(map[string]any{
+				ia2a.CodeExecutionFieldContent: choice.Message.Content,
+			})
+		}
+		// set metadata type key
+		dataPart.Metadata = map[string]any{
+			metadataTypeKey: ia2a.DataPartMetadataTypeCodeExecutionResult,
+		}
+	} else if evt.ContainTag(event.TagCodeExecution) {
 		// Code execution event
 		if c.adkCompatibility {
 			dataPart = protocol.NewDataPart(map[string]any{
 				ia2a.CodeExecutionFieldCode:     choice.Message.Content,
 				ia2a.CodeExecutionFieldLanguage: "unknown",
 			})
-
 		} else {
-			// Non-ADK mode: send raw content as data
 			dataPart = protocol.NewDataPart(map[string]any{
 				ia2a.CodeExecutionFieldContent: choice.Message.Content,
 			})
-
 		}
+		// set metadata type key
 		dataPart.Metadata = map[string]any{
 			metadataTypeKey: ia2a.DataPartMetadataTypeExecutableCode,
-		}
-
-	case model.ObjectTypePostprocessingCodeExecutionResult:
-		if c.adkCompatibility {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldOutcome: "",
-				ia2a.CodeExecutionFieldOutput:  choice.Message.Content,
-			})
-
-		} else {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldContent: choice.Message.Content,
-			})
-		}
-		dataPart.Metadata = map[string]any{
-			metadataTypeKey: ia2a.DataPartMetadataTypeCodeExecutionResult,
 		}
 	}
 
 	parts = append(parts, &dataPart)
 	msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
+
+	// Pass Tag field to A2A metadata for client to restore event tag
 	msg.Metadata = map[string]any{
-		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
+		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
+		ia2a.MessageMetadataTagKey:        evt.Tag,
 	}
 	return &msg, nil
 }
@@ -278,6 +277,7 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 		msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 		msg.Metadata = map[string]any{
 			ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
+			ia2a.MessageMetadataTagKey:        event.Tag,
 		}
 		return &msg, nil
 	}
@@ -337,6 +337,10 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 			},
 			false,
 		)
+		taskArtifact.Metadata = map[string]any{
+			ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
+			ia2a.MessageMetadataTagKey:        event.Tag,
+		}
 		return &taskArtifact, nil
 	}
 
@@ -376,14 +380,33 @@ func isCodeExecutionEvent(event *event.Event) bool {
 	}
 
 	// Check if the event object type is code execution related
-	return event.Response.Object == model.ObjectTypePostprocessingCodeExecution ||
-		event.Response.Object == model.ObjectTypePostprocessingCodeExecutionResult
+	return event.Response.Object == model.ObjectTypePostprocessingCodeExecution
+}
+
+// isCodeExecutionResultEvent checks if an event is a code execution result event.
+// Requires: ObjectType == codeexecution && Tag == code_execution_result
+func isCodeExecutionResultEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return false
+	}
+	// Check ObjectType first, then Tag
+	return evt.Response.Object == model.ObjectTypePostprocessingCodeExecution &&
+		evt.ContainTag(event.TagCodeExecutionResult)
+}
+
+func isCodeExecutionCodeEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return false
+	}
+	return evt.Response.Object == model.ObjectTypePostprocessingCodeExecution &&
+		evt.ContainTag(event.TagCodeExecution)
 }
 
 // convertToolCallToA2AMessage converts tool call events to A2A DataPart messages.
 // This handles both tool call requests and tool call responses.
 func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
-	event *event.Event) (protocol.UnaryMessageResult, error) {
+	event *event.Event,
+) (protocol.UnaryMessageResult, error) {
 	if len(event.Response.Choices) == 0 {
 		return nil, nil
 	}
@@ -446,6 +469,7 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 	msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 	msg.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
+		ia2a.MessageMetadataTagKey:        event.Tag,
 	}
 	return &msg, nil
 }
@@ -480,6 +504,7 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AStreamingMessage(
 	)
 	taskArtifact.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
+		ia2a.MessageMetadataTagKey:        event.Tag,
 	}
 	return &taskArtifact, nil
 }

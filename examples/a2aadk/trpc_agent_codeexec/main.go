@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -175,13 +176,16 @@ func handleCodeExecution(evt *event.Event) bool {
 	return false
 }
 
-// handleCodeExecutionResult processes code execution result events
+// handleCodeExecutionResult processes code execution result events.
+// Requires: ObjectType == codeexecution && Tag == code_execution_result
 func handleCodeExecutionResult(evt *event.Event) bool {
 	if evt.Response == nil {
 		return false
 	}
 
-	if evt.Response.Object == model.ObjectTypePostprocessingCodeExecutionResult {
+	// Check ObjectType first, then Tag for result
+	if evt.Response.Object == model.ObjectTypePostprocessingCodeExecution &&
+		strings.Contains(evt.Tag, ia2a.TagCodeExecutionResult) {
 		if len(evt.Response.Choices) > 0 {
 			choice := evt.Response.Choices[0]
 			// Use Delta for streaming response
@@ -211,9 +215,8 @@ func captureFinalContent(evt *event.Event) string {
 		return ""
 	}
 
-	// Skip code execution events
-	if evt.Response.Object == model.ObjectTypePostprocessingCodeExecution ||
-		evt.Response.Object == model.ObjectTypePostprocessingCodeExecutionResult {
+	// Skip code execution events (both code and result have the same ObjectType)
+	if evt.Response.Object == model.ObjectTypePostprocessingCodeExecution {
 		return ""
 	}
 
