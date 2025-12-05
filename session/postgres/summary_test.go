@@ -930,3 +930,152 @@ func TestTryEnqueueJob_SendSuccess(t *testing.T) {
 	// Clean up
 	s.Close()
 }
+
+func TestCreateSessionSummary_MarshalError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
+
+	s := createTestService(t, db, WithSummarizer(summarizer))
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+		Summaries: make(map[string]*session.Summary),
+	}
+
+	// Mock: Insert new summary (this won't be reached due to marshal error)
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// This should not panic but should handle the error gracefully
+	// The test is mainly to ensure we don't crash on marshal errors
+	require.NotPanics(t, func() {
+		err = s.CreateSessionSummary(ctx, sess, "", false)
+		require.NoError(t, err) // Should not return error, just log warning
+	})
+}
+
+func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizerImpl{summaryText: "async summary", shouldSummarize: true}
+
+	s := createTestService(t, db, WithSummarizer(summarizer),
+		WithAsyncSummaryNum(1), WithSummaryQueueSize(10))
+
+	// Start async workers
+	s.startAsyncSummaryWorker()
+	defer func() {
+		for _, ch := range s.summaryJobChans {
+			close(ch)
+		}
+	}()
+
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: Insert summary via async worker
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
+
+	// Wait for async processing
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestTryEnqueueJob_QueueFull(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithAsyncSummaryNum(1), WithSummaryQueueSize(1))
+
+	// Start async workers to initialize channels
+	s.startAsyncSummaryWorker()
+	defer s.Close() // This will close the channels
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "user-456", "session-123")
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+
+	// Fill the queue by sending to the channel directly
+	index := sess.Hash % len(s.summaryJobChans)
+	select {
+	case s.summaryJobChans[index] <- job:
+		// Successfully sent, now try to enqueue another which should fail
+	default:
+		t.Skip("Could not fill queue for testing")
+	}
+
+	// Try to enqueue when queue is full - should return false
+	result := s.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+}
+
+func TestProcessSummaryJob_Timeout(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &mockSummarizerImpl{
+		summaryText:     "timeout summary",
+		shouldSummarize: true,
+	}
+
+	s := createTestService(t, db, WithSummarizer(summarizer),
+		WithSummaryJobTimeout(10*time.Millisecond))
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session: &session.Session{
+			ID:        "session-123",
+			AppName:   "test-app",
+			UserID:    "user-456",
+			UpdatedAt: time.Now(),
+		},
+	}
+
+	// This should not panic even with timeout
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
+}

@@ -1221,3 +1221,146 @@ func TestPickSummaryText(t *testing.T) {
 		})
 	}
 }
+
+func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "async summary"}
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSummarizer(summarizer),
+		WithAsyncSummaryNum(1), WithSummaryQueueSize(10))
+
+	// Start async workers
+	s.startAsyncSummaryWorker()
+	defer func() {
+		for _, ch := range s.summaryJobChans {
+			close(ch)
+		}
+	}()
+
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: Insert summary via async worker
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
+
+	// Wait for async processing
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestTryEnqueueJob_QueueFull(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db,
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+
+	// Start async workers to initialize channels
+	s.startAsyncSummaryWorker()
+	defer s.Close() // This will close the channels
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "user-456", "session-123")
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+
+	// Fill the queue by sending to the channel directly
+	index := sess.Hash % len(s.summaryJobChans)
+	select {
+	case s.summaryJobChans[index] <- job:
+		// Successfully sent, now try to enqueue another which should fail
+	default:
+		t.Skip("Could not fill queue for testing")
+	}
+
+	// Try to enqueue when queue is full - should return false
+	result := s.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+}
+
+func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db,
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+
+	// Start async workers to initialize channels
+	s.startAsyncSummaryWorker()
+	defer s.Close() // This will close the channels
+
+	// Create cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Give a small delay to ensure context cancellation is detected
+	time.Sleep(1 * time.Millisecond)
+
+	sess := session.NewSession("test-app", "user-456", "session-123")
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+
+	// Try to enqueue with cancelled context - should return false
+	result := s.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+}
+
+func TestProcessSummaryJob_Timeout(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "timeout summary"}
+
+	s := createTestService(t, db, WithSummarizer(summarizer),
+		WithSummaryJobTimeout(10*time.Millisecond))
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session: &session.Session{
+			ID:        "session-123",
+			AppName:   "test-app",
+			UserID:    "user-456",
+			UpdatedAt: time.Now(),
+		},
+	}
+
+	// This should not panic even with timeout
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
+}
