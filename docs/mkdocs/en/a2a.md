@@ -183,6 +183,11 @@ func main() {
 }
 ```
 
+In multi-agent systems, `A2AAgent` is often used as a SubAgent of a
+local coordinator Agent (for example an `LLMAgent`). You can combine
+`A2AAgent` with `LLMAgent.SetSubAgents` to dynamically load and refresh
+remote SubAgents from a registry without recreating the coordinator.
+
 #### Advanced Configuration
 
 ```go
