@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -713,20 +714,20 @@ func TestRedisService_PickSummaryText_BranchFallback(t *testing.T) {
 	summaries := map[string]*session.Summary{
 		"branch1": {Summary: "branch-summary", UpdatedAt: time.Now()},
 	}
-	text, ok := pickSummaryText(summaries, "")
+	text, ok := isummary.PickSummaryText(summaries, "")
 	require.True(t, ok)
 	require.Equal(t, "branch-summary", text)
 }
 
 func TestRedisService_PickSummaryText_EmptySummaries(t *testing.T) {
 	summaries := map[string]*session.Summary{}
-	text, ok := pickSummaryText(summaries, "")
+	text, ok := isummary.PickSummaryText(summaries, "")
 	require.False(t, ok)
 	require.Empty(t, text)
 }
 
 func TestRedisService_PickSummaryText_NilSummaries(t *testing.T) {
-	text, ok := pickSummaryText(nil, "")
+	text, ok := isummary.PickSummaryText(nil, "")
 	require.False(t, ok)
 	require.Empty(t, text)
 }
@@ -735,7 +736,7 @@ func TestRedisService_PickSummaryText_EmptyText(t *testing.T) {
 	summaries := map[string]*session.Summary{
 		"branch1": {Summary: "", UpdatedAt: time.Now()},
 	}
-	text, ok := pickSummaryText(summaries, "")
+	text, ok := isummary.PickSummaryText(summaries, "")
 	require.False(t, ok)
 	require.Empty(t, text)
 }
@@ -744,7 +745,7 @@ func TestRedisService_PickSummaryText_NilEntry(t *testing.T) {
 	summaries := map[string]*session.Summary{
 		"branch1": nil,
 	}
-	text, ok := pickSummaryText(summaries, "")
+	text, ok := isummary.PickSummaryText(summaries, "")
 	require.False(t, ok)
 	require.Empty(t, text)
 }

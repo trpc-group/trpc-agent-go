@@ -16,7 +16,7 @@ import (
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
-	"trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
+	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -66,7 +66,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	updated, err := summary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
@@ -107,51 +107,16 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 		return "", false
 	}
 
-	// Parse options.
-	options := &session.SummaryOptions{
-		FilterKey: session.SummaryFilterKeyAllContents, // Default to full session.
-	}
-	for _, opt := range opts {
-		opt(options)
+	// Try in-memory session summaries first.
+	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
+		return text, true
 	}
 
-	// Prefer local in-memory session summaries when available.
-	if len(sess.Summaries) > 0 {
-		if text, ok := pickSummaryText(sess.Summaries, options.FilterKey); ok {
-			return text, true
-		}
-	}
-	// Prefer separate summaries hash.
+	// Fall back to Redis-stored summaries.
 	if bytes, err := s.redisClient.HGet(ctx, getSessionSummaryKey(key), key.SessionID).Bytes(); err == nil && len(bytes) > 0 {
 		var summaries map[string]*session.Summary
 		if err := json.Unmarshal(bytes, &summaries); err == nil && len(summaries) > 0 {
-			return pickSummaryText(summaries, options.FilterKey)
-		}
-	}
-	return "", false
-}
-
-// pickSummaryText picks a non-empty summary string with preference for the
-// specified filterKey. Falls back to all-contents key and then any available summary.
-// When filterKey is empty (SummaryFilterKeyAllContents), prefers the full-session summary.
-func pickSummaryText(summaries map[string]*session.Summary, filterKey string) (string, bool) {
-	if summaries == nil {
-		return "", false
-	}
-	// First, try to get the requested filter key summary.
-	if sum, ok := summaries[filterKey]; ok && sum != nil && sum.Summary != "" {
-		return sum.Summary, true
-	}
-	// Fallback: if requesting a specific filter key but not found, try full-session summary.
-	if filterKey != session.SummaryFilterKeyAllContents {
-		if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
-			return sum.Summary, true
-		}
-	}
-	// Last resort: return any available summary.
-	for _, s := range summaries {
-		if s != nil && s.Summary != "" {
-			return s.Summary, true
+			return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...))
 		}
 	}
 	return "", false

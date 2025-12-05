@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
+	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -41,7 +41,7 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	updated, err := summary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
@@ -155,19 +155,9 @@ func (s *Service) GetSessionSummaryText(
 		return "", false
 	}
 
-	// Parse options.
-	options := &session.SummaryOptions{
-		FilterKey: session.SummaryFilterKeyAllContents, // Default to full session.
-	}
-	for _, opt := range opts {
-		opt(options)
-	}
-
-	// Prefer local in-memory session summaries when available.
-	if len(sess.Summaries) > 0 {
-		if text, ok := pickSummaryText(sess.Summaries, options.FilterKey); ok {
-			return text, true
-		}
+	// Try in-memory session summaries first.
+	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
+		return text, true
 	}
 
 	// Query database with specified filterKey.
@@ -188,14 +178,15 @@ func (s *Service) GetSessionSummaryText(
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, options.FilterKey, time.Now())
+		key.AppName, key.UserID, key.SessionID, isummary.GetFilterKeyFromOptions(opts...), time.Now())
 
 	if err != nil {
 		return "", false
 	}
 
 	// If requested filterKey not found, try fallback to full-session summary.
-	if summaryText == "" && options.FilterKey != session.SummaryFilterKeyAllContents {
+	filterKey := isummary.GetFilterKeyFromOptions(opts...)
+	if summaryText == "" && filterKey != session.SummaryFilterKeyAllContents {
 		err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 			var summaryBytes []byte
 			if err := rows.Scan(&summaryBytes); err != nil {
@@ -222,32 +213,6 @@ func (s *Service) GetSessionSummaryText(
 	}
 
 	return summaryText, true
-}
-
-// pickSummaryText picks a non-empty summary string with preference for the
-// specified filterKey. Falls back to all-contents key and then any available summary.
-// When filterKey is empty (SummaryFilterKeyAllContents), prefers the full-session summary.
-func pickSummaryText(summaries map[string]*session.Summary, filterKey string) (string, bool) {
-	if summaries == nil {
-		return "", false
-	}
-	// First, try to get the requested filter key summary.
-	if sum, ok := summaries[filterKey]; ok && sum != nil && sum.Summary != "" {
-		return sum.Summary, true
-	}
-	// Fallback: if requesting a specific filter key but not found, try full-session summary.
-	if filterKey != session.SummaryFilterKeyAllContents {
-		if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
-			return sum.Summary, true
-		}
-	}
-	// Last resort: return any available summary.
-	for _, s := range summaries {
-		if s != nil && s.Summary != "" {
-			return s.Summary, true
-		}
-	}
-	return "", false
 }
 
 // startAsyncSummaryWorker starts worker goroutines for async summary generation.

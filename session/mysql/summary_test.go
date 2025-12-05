@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -1210,7 +1211,7 @@ func TestPickSummaryText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotText, gotOk := pickSummaryText(tt.summaries, "")
+			gotText, gotOk := isummary.PickSummaryText(tt.summaries, "")
 			if gotText != tt.wantText {
 				t.Errorf("pickSummaryText() text = %v, want %v", gotText, tt.wantText)
 			}
