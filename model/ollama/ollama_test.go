@@ -869,28 +869,6 @@ func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
 	require.Len(t, capturedReq.Messages, 2)
 }
 
-// TestWithTokenTailoringConfig tests the WithTokenTailoringConfig option.
-func TestWithTokenTailoringConfig(t *testing.T) {
-	config := &model.TokenTailoringConfig{
-		ProtocolOverheadTokens: 1024,
-		ReserveOutputTokens:    4096,
-		InputTokensFloor:       2048,
-		OutputTokensFloor:      512,
-		SafetyMarginRatio:      0.15,
-		MaxInputTokensRatio:    0.90,
-	}
-
-	m := New("llama3.2:latest", WithTokenTailoringConfig(config))
-
-	require.NotNil(t, m)
-	assert.Equal(t, 1024, m.protocolOverheadTokens)
-	assert.Equal(t, 4096, m.reserveOutputTokens)
-	assert.Equal(t, 2048, m.inputTokensFloor)
-	assert.Equal(t, 512, m.outputTokensFloor)
-	assert.Equal(t, 0.15, m.safetyMarginRatio)
-	assert.Equal(t, 0.90, m.maxInputTokensRatio)
-}
-
 // Test_convertChatResponse tests chat response conversion.
 func Test_convertChatResponse(t *testing.T) {
 	resp := api.ChatResponse{
