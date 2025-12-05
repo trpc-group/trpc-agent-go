@@ -205,15 +205,6 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			}
 		}
 		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
-		// When summary is present, ensure messages start with user role to comply with API requirements.
-		if !summaryUpdatedAt.IsZero() {
-			messages = p.trimLeadingNonUserMessages(messages)
-			// For Defense, summary exists
-			// If trimLeadingNonUserMessages results in empty messages(user message summarized to system prompt), add invocation.Message
-			if len(messages) == 0 && invocation.Message.Content != "" {
-				messages = append(messages, invocation.Message)
-			}
-		}
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = summaryUpdatedAt.IsZero() && len(messages) == 0
 	}
@@ -397,33 +388,13 @@ func (p *ContentRequestProcessor) mergeSystemMessages(messages []model.Message) 
 	return result
 }
 
-// trimLeadingNonUserMessages removes leading non-user messages from the slice.
-// This ensures that when summary is present, the incremental messages start with
-// a user message to comply with API requirements (system messages must be followed by user).
-//
-// Note: Under normal operation, summary is only triggered after final assistant responses
-// (not user messages, tool calls, or tool results), so the incremental messages should
-// already start with a user message. This function serves as a defensive measure for
-// edge cases or potential future changes.
-func (p *ContentRequestProcessor) trimLeadingNonUserMessages(messages []model.Message) []model.Message {
-	for i, msg := range messages {
-		if msg.Role == model.RoleUser {
-			return messages[i:]
-		}
-	}
-	// No user message found, return empty slice.
-	return nil
-}
-
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
 	isZeroTime bool, since time.Time) bool {
 	if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
 		return false
 	}
 
-	// Use !After instead of Before to exclude events at exactly the summary boundary.
-	// This prevents the last summarized event from appearing in both the summary and incremental messages.
-	if !isZeroTime && !evt.Timestamp.After(since) {
+	if !isZeroTime && evt.Timestamp.Before(since) {
 		return false
 	}
 
