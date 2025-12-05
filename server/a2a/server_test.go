@@ -792,10 +792,15 @@ func TestMessageProcessor_HandleError_DebugLogging(t *testing.T) {
 }
 
 func TestIsFinalStreamingEventVariants(t *testing.T) {
+	// nil and empty events are not final
 	assert.False(t, isFinalStreamingEvent(nil))
 	assert.False(t, isFinalStreamingEvent(&event.Event{}))
+
+	// Regular done event is NOT final (we wait for runner.completion)
 	base := &event.Event{Response: &model.Response{Done: false}}
 	assert.False(t, isFinalStreamingEvent(base))
+
+	// Tool calls are not final
 	toolCall := &event.Event{Response: &model.Response{
 		Done: true,
 		Choices: []model.Choice{
@@ -803,6 +808,8 @@ func TestIsFinalStreamingEventVariants(t *testing.T) {
 		},
 	}}
 	assert.False(t, isFinalStreamingEvent(toolCall))
+
+	// Tool role is not final
 	toolRole := &event.Event{Response: &model.Response{
 		Done: true,
 		Choices: []model.Choice{
@@ -810,13 +817,22 @@ func TestIsFinalStreamingEventVariants(t *testing.T) {
 		},
 	}}
 	assert.False(t, isFinalStreamingEvent(toolRole))
-	final := &event.Event{Response: &model.Response{
+
+	// Regular assistant response is NOT final (we wait for runner.completion)
+	assistantResp := &event.Event{Response: &model.Response{
 		Done: true,
 		Choices: []model.Choice{
 			{Message: model.Message{Role: model.RoleAssistant}},
 		},
 	}}
-	assert.True(t, isFinalStreamingEvent(final))
+	assert.False(t, isFinalStreamingEvent(assistantResp))
+
+	// Only runner.completion is truly final
+	runnerCompletion := &event.Event{Response: &model.Response{
+		Done:   true,
+		Object: model.ObjectTypeRunnerCompletion,
+	}}
+	assert.True(t, isFinalStreamingEvent(runnerCompletion))
 }
 
 func TestMessageProcessor_ProcessMessage_EdgeCases(t *testing.T) {

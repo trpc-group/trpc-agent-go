@@ -220,7 +220,7 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 	var dataPart protocol.DataPart
 	metadataTypeKey := c.getMetadataTypeKey()
 
-	if evt.ContainTag(event.TagCodeExecutionResult) {
+	if evt.ContainsTag(event.CodeExecutionResultTag) {
 		// Code execution result event
 		if c.adkCompatibility {
 			dataPart = protocol.NewDataPart(map[string]any{
@@ -236,7 +236,7 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 		dataPart.Metadata = map[string]any{
 			metadataTypeKey: ia2a.DataPartMetadataTypeCodeExecutionResult,
 		}
-	} else if evt.ContainTag(event.TagCodeExecution) {
+	} else if evt.ContainsTag(event.CodeExecutionTag) {
 		// Code execution event
 		if c.adkCompatibility {
 			dataPart = protocol.NewDataPart(map[string]any{
@@ -290,30 +290,34 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 // For streaming responses, it returns delta content as task artifact updates and converts tool calls.
 func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	ctx context.Context,
-	event *event.Event,
+	evt *event.Event,
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
-	if event.Response == nil {
+	if evt.Response == nil {
 		return nil, nil
 	}
 
-	if event.Response.Error != nil {
+	if evt.Response.Error != nil {
 		return nil, fmt.Errorf("A2A server received error event from agent, event ID: %s, error: %v",
-			event.ID, event.Response.Error)
+			evt.ID, evt.Response.Error)
 	}
 
 	// Additional safety check for choices array bounds
-	if len(event.Response.Choices) == 0 {
-		log.Debugf("no choices in response, event: %v", event.ID)
+	if len(evt.Response.Choices) == 0 {
+		log.Debugf("no choices in response, event: %v", evt.ID)
 		return nil, nil
 	}
 
 	// Check if this is a tool call event
-	if isToolCallEvent(event) {
-		return c.convertToolCallToA2AStreamingMessage(event, options)
+	if isToolCallEvent(evt) {
+		return c.convertToolCallToA2AStreamingMessage(evt, options)
 	}
 
-	return c.convertDeltaContentToA2AStreamingMessage(event, options)
+	if isCodeExecutionEvent(evt) {
+		return c.convertCodeExecutionToA2AStreamingMessage(evt, options)
+	}
+
+	return c.convertDeltaContentToA2AStreamingMessage(evt, options)
 }
 
 // convertDeltaContentToA2AStreamingMessage converts delta content to A2A streaming message.
@@ -374,32 +378,13 @@ func isToolCallEvent(event *event.Event) bool {
 	return false
 }
 
-func isCodeExecutionEvent(event *event.Event) bool {
-	if event == nil || event.Response == nil {
+func isCodeExecutionEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
 		return false
 	}
 
 	// Check if the event object type is code execution related
-	return event.Response.Object == model.ObjectTypePostprocessingCodeExecution
-}
-
-// isCodeExecutionResultEvent checks if an event is a code execution result event.
-// Requires: ObjectType == codeexecution && Tag == code_execution_result
-func isCodeExecutionResultEvent(evt *event.Event) bool {
-	if evt == nil || evt.Response == nil {
-		return false
-	}
-	// Check ObjectType first, then Tag
-	return evt.Response.Object == model.ObjectTypePostprocessingCodeExecution &&
-		evt.ContainTag(event.TagCodeExecutionResult)
-}
-
-func isCodeExecutionCodeEvent(evt *event.Event) bool {
-	if evt == nil || evt.Response == nil {
-		return false
-	}
-	return evt.Response.Object == model.ObjectTypePostprocessingCodeExecution &&
-		evt.ContainTag(event.TagCodeExecution)
+	return evt.Response.Object == model.ObjectTypePostprocessingCodeExecution
 }
 
 // convertToolCallToA2AMessage converts tool call events to A2A DataPart messages.
@@ -505,6 +490,41 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AStreamingMessage(
 	taskArtifact.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
 		ia2a.MessageMetadataTagKey:        event.Tag,
+	}
+	return &taskArtifact, nil
+}
+
+// convertCodeExecutionToA2AStreamingMessage converts code execution events to A2A streaming messages.
+// For streaming mode, code execution events are sent as TaskArtifactUpdateEvent.
+func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AStreamingMessage(
+	evt *event.Event,
+	options EventToA2AStreamingOptions,
+) (protocol.StreamingMessageResult, error) {
+	// For streaming, we convert code execution to task artifact updates
+	// First get the message parts using the unary converter
+	unaryResult, err := c.convertCodeExecutionToA2AMessage(evt)
+	if err != nil || unaryResult == nil {
+		return nil, err
+	}
+
+	msg, ok := unaryResult.(*protocol.Message)
+	if !ok || len(msg.Parts) == 0 {
+		return nil, nil
+	}
+
+	// Create a task artifact update with the code execution parts
+	taskArtifact := protocol.NewTaskArtifactUpdateEvent(
+		options.TaskID,
+		options.CtxID,
+		protocol.Artifact{
+			ArtifactID: evt.Response.ID,
+			Parts:      msg.Parts,
+		},
+		false, // append=false for code execution (complete events, not incremental)
+	)
+	taskArtifact.Metadata = map[string]any{
+		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
+		ia2a.MessageMetadataTagKey:        evt.Tag,
 	}
 	return &taskArtifact, nil
 }

@@ -16,7 +16,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -1137,7 +1136,7 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 			name:             "code execution event - ADK mode",
 			adkCompatibility: true,
 			event: &event.Event{
-				Tag: ia2a.TagCodeExecution,
+				Tag: event.CodeExecutionTag,
 				Response: &model.Response{
 					ID:     "resp-ce-1",
 					Object: model.ObjectTypePostprocessingCodeExecution,
@@ -1195,7 +1194,7 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 			name:             "code execution event - non-ADK mode",
 			adkCompatibility: false,
 			event: &event.Event{
-				Tag: ia2a.TagCodeExecution,
+				Tag: event.CodeExecutionTag,
 				Response: &model.Response{
 					ID:     "resp-ce-2",
 					Object: model.ObjectTypePostprocessingCodeExecution,
@@ -1245,7 +1244,7 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 			name:             "code execution result event - ADK mode",
 			adkCompatibility: true,
 			event: &event.Event{
-				Tag: ia2a.TagCodeExecutionResult,
+				Tag: event.CodeExecutionResultTag,
 				Response: &model.Response{
 					ID:     "resp-cer-1",
 					Object: model.ObjectTypePostprocessingCodeExecution,
@@ -1295,7 +1294,7 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 			name:             "code execution result event - non-ADK mode",
 			adkCompatibility: false,
 			event: &event.Event{
-				Tag: ia2a.TagCodeExecutionResult,
+				Tag: event.CodeExecutionResultTag,
 				Response: &model.Response{
 					ID:     "resp-cer-2",
 					Object: model.ObjectTypePostprocessingCodeExecution,
@@ -1400,7 +1399,7 @@ func TestIsCodeExecutionEvent(t *testing.T) {
 		{
 			name: "code execution result event (same object type, different tag)",
 			event: &event.Event{
-				Tag: ia2a.TagCodeExecutionResult,
+				Tag: event.CodeExecutionResultTag,
 				Response: &model.Response{
 					Object: model.ObjectTypePostprocessingCodeExecution,
 				},

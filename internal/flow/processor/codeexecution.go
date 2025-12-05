@@ -15,7 +15,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -67,7 +66,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 			},
 		}),
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
-		event.WithTag(ia2a.TagCodeExecution),
+		event.WithTag(event.CodeExecutionTag),
 	))
 
 	codeExecutionResult, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
@@ -86,6 +85,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 				},
 			}),
 			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+			event.WithTag(event.CodeExecutionResultTag), // Add tag for error result
 		))
 		return
 	}
@@ -100,7 +100,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 			},
 		}),
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
-		event.WithTag(ia2a.TagCodeExecutionResult),
+		event.WithTag(event.CodeExecutionResultTag),
 	))
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
 	rsp.Choices[0].Message.Content = ""
