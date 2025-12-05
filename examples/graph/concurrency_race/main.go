@@ -11,7 +11,8 @@
 // concurrent invocations.
 //
 // The graph is intentionally simple:
-//   start -> worker
+//
+//	start -> worker
 //
 // Node "worker" increments a per-run counter field. When the executor is
 // reused concurrently and channels are shared at the Graph level, some
@@ -221,4 +222,3 @@ func runSingle(
 
 	return finalCounter, nil
 }
-
