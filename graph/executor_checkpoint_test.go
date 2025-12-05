@@ -447,6 +447,64 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 	require.Equal(t, 1, len(merged.AfterNode))
 }
 
+// Ensure buildExecutionContext seeds per-run channel versions from the last checkpoint.
+func TestExecutor_BuildExecutionContext_SeedsChannelVersions(t *testing.T) {
+	g := New(NewStateSchema())
+	g.addChannel("branch:to:X", ichannel.BehaviorLastValue)
+	exec := &Executor{graph: g}
+
+	last := &Checkpoint{
+		ChannelVersions: map[string]int64{
+			"branch:to:X": 7,
+		},
+	}
+	ec := exec.buildExecutionContext(nil, "inv", State{}, true, last)
+
+	ch, ok := ec.channels.GetChannel("branch:to:X")
+	require.True(t, ok)
+	require.NotNil(t, ch)
+	require.Equal(t, int64(7), ch.Version)
+}
+
+// Ensure applyPendingWrites replays writes into per-execution channels (not Graph channels)
+// and respects the PendingWrite.Sequence ordering.
+func TestExecutor_ApplyPendingWrites_UsesExecCtxChannels(t *testing.T) {
+	g := New(NewStateSchema())
+	g.addChannel("x", ichannel.BehaviorLastValue)
+	exec := &Executor{graph: g}
+
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+	writes := []PendingWrite{
+		{Channel: "x", Value: 1, Sequence: 2},
+		{Channel: "x", Value: 2, Sequence: 1},
+	}
+
+	exec.applyPendingWrites(context.Background(), nil, ec, writes)
+
+	// Graph-level channel definition should remain untouched.
+	graphCh, _ := g.getChannel("x")
+	require.NotNil(t, graphCh)
+	require.Equal(t, int64(0), graphCh.Version)
+
+	// Per-run channel should have applied both writes in sequence order
+	// (Sequence=1 then Sequence=2), ending with value 1 and version 2.
+	runCh, ok := ec.channels.GetChannel("x")
+	require.True(t, ok)
+	require.NotNil(t, runCh)
+	require.Equal(t, int64(2), runCh.Version)
+	require.Equal(t, 1, runCh.Get())
+}
+
+// Guard: ensure applyPendingWrites safely handles nil execCtx.
+func TestExecutor_ApplyPendingWrites_NilExecCtx_NoPanic(t *testing.T) {
+	exec := &Executor{graph: New(NewStateSchema())}
+	require.NotPanics(t, func() {
+		exec.applyPendingWrites(context.Background(), nil, nil, []PendingWrite{
+			{Channel: "x", Value: 1, Sequence: 1},
+		})
+	})
+}
+
 func TestRunModel_BeforeModelError(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
 		return nil, fmt.Errorf("boom")
