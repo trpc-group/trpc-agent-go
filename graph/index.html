@@ -2978,7 +2978,7 @@
 </ul>
 <h2 id="quick-start">Quick Start</h2>
 <h3 id="minimal-workflow">Minimal Workflow</h3>
-<p>Below is a classic “prepare → ask LLM → optionally call tools” loop using <code>graph.MessagesStateSchema()</code> (predefines <code>graph.StateKeyMessages</code>, <code>graph.StateKeyUserInput</code>, <code>graph.StateKeyLastResponse</code>, etc.).</p>
+<p>Below is a classic "prepare → ask LLM → optionally call tools" loop using <code>graph.MessagesStateSchema()</code> (predefines <code>graph.StateKeyMessages</code>, <code>graph.StateKeyUserInput</code>, <code>graph.StateKeyLastResponse</code>, etc.).</p>
 <pre class="mermaid"><code>flowchart LR
     START([start]):::startNode --&gt; P[prepare]:::processNode
     P --&gt; A[ask LLM]:::llmNode
@@ -3177,7 +3177,7 @@
 </span></code></pre></div></td></tr></table></div>
 <h2 id="usage-guide">Usage Guide</h2>
 <h3 id="node-io-conventions">Node I/O Conventions</h3>
-<p>Nodes communicate exclusively through the shared state. Each node returns a state delta which is merged into the graph state using the schema’s reducers. Downstream nodes read whatever upstream nodes wrote.</p>
+<p>Nodes communicate exclusively through the shared state. Each node returns a state delta which is merged into the graph state using the schema's reducers. Downstream nodes read whatever upstream nodes wrote.</p>
 <ul>
 <li>
 <p>Common built‑in keys (user‑facing)</p>
@@ -3224,7 +3224,7 @@
 </ul>
 <ul>
 <li>Agent node (sub‑agent)<ul>
-<li>Input: state is injected into the sub‑agent’s <code>Invocation.RunOptions.RuntimeState</code>.<ul>
+<li>Input: state is injected into the sub‑agent's <code>Invocation.RunOptions.RuntimeState</code>.<ul>
 <li>Model/Tool callbacks can access it via <code>agent.InvocationFromContext(ctx)</code>.</li>
 </ul>
 </li>
@@ -3241,7 +3241,7 @@
 <ul>
 <li>Add your own keys in the schema (e.g., <code>parsed_time</code>, <code>final_payload</code>) and write/read them in function nodes.</li>
 <li>To feed structured hints into an LLM node, write <code>one_shot_messages</code> in the previous node (e.g., prepend a system message with parsed context).</li>
-<li>To consume an upstream node’s text, read <code>last_response</code> immediately downstream or fetch from <code>node_responses[that_node_id]</code> later.</li>
+<li>To consume an upstream node's text, read <code>last_response</code> immediately downstream or fetch from <code>node_responses[that_node_id]</code> later.</li>
 </ul>
 <p>See examples:</p>
 <ul>
@@ -3843,11 +3843,11 @@ aligned with <code>subAgent.Info().Name == "assistant"</code>.</p>
 </span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Conditional edges can reuse Ends: when <code>AddConditionalEdges(from, condition, pathMap)</code> receives a <code>nil</code> <code>pathMap</code> or no match is found, the executor tries the node’s Ends; if still no match, the return string is treated as a concrete node ID.</p>
+<p>Conditional edges can reuse Ends: when <code>AddConditionalEdges(from, condition, pathMap)</code> receives a <code>nil</code> <code>pathMap</code> or no match is found, the executor tries the node's Ends; if still no match, the return string is treated as a concrete node ID.</p>
 <p>Resolution precedence:</p>
 <ol>
-<li>Explicit mapping in the conditional edge’s <code>pathMap</code>.</li>
-<li>The node’s Ends mapping (label → concrete target).</li>
+<li>Explicit mapping in the conditional edge's <code>pathMap</code>.</li>
+<li>The node's Ends mapping (label → concrete target).</li>
 <li>Treat the return string as a node ID.</li>
 </ol>
 <p>Compile‑time checks:</p>
@@ -3858,7 +3858,7 @@ aligned with <code>subAgent.Info().Name == "assistant"</code>.</p>
 <p>Notes:</p>
 <ul>
 <li>Use the constant <code>graph.End</code> to terminate; do not use the string "END".</li>
-<li>With <code>Command.GoTo</code>, you don’t need to add a static <code>AddEdge(from, to)</code> for the target; ensure the target exists and set <code>SetFinishPoint(target)</code> if it should end the graph.</li>
+<li>With <code>Command.GoTo</code>, you don't need to add a static <code>AddEdge(from, to)</code> for the target; ensure the target exists and set <code>SetFinishPoint(target)</code> if it should end the graph.</li>
 </ul>
 <p>Runnable example: <code>examples/graph/multiends</code>.</p>
 <h3 id="42-multiconditional-fanout">4.2 Multi‑conditional Fan‑out</h3>
@@ -3894,10 +3894,10 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 <li>Results are de‑duplicated before triggering; repeated keys do not trigger a
   target more than once in the same step.</li>
 <li>Resolution precedence for each branch key mirrors single‑conditional routing:<ol>
-<li>explicit <code>pathMap</code>; 2) node’s Ends; 3) treat as node ID.</li>
+<li>explicit <code>pathMap</code>; 2) node's Ends; 3) treat as node ID.</li>
 </ol>
 </li>
-<li>Visualization: when <code>pathMap</code> is omitted, DOT falls back to the node’s Ends
+<li>Visualization: when <code>pathMap</code> is omitted, DOT falls back to the node's Ends
   mapping to render dashed conditional edges.</li>
 </ul>
 <h3 id="5-tool-node-integration">5. Tool Node Integration</h3>
@@ -3923,7 +3923,7 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a><span class="c1">// Add conditional routing from LLM to tools.</span>
 </span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a><span class="nx">stateGraph</span><span class="p">.</span><span class="nx">AddToolsConditionalEdges</span><span class="p">(</span><span class="s">&quot;llm_node&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fallback_node&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Enable parallel tool execution for the Tools node (aligns with LLMAgent’s option):</p>
+<p>Enable parallel tool execution for the Tools node (aligns with LLMAgent's option):</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span>
 <span class="normal"><a href="#__codelineno-16-2">2</a></span>
 <span class="normal"><a href="#__codelineno-16-3">3</a></span>
@@ -3939,7 +3939,7 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 <p>Tool-call pairing and second entry into LLM:</p>
 <ul>
 <li>Scan <code>messages</code> backward from the tail to find the most recent <code>assistant(tool_calls)</code>; stop at <code>user</code> to ensure correct pairing.</li>
-<li>When returning from tools to the LLM node, since <code>user_input</code> is cleared, the LLM follows the “Messages only” branch and continues based on the tool response in history.</li>
+<li>When returning from tools to the LLM node, since <code>user_input</code> is cleared, the LLM follows the "Messages only" branch and continues based on the tool response in history.</li>
 </ul>
 <h4 id="placeholder-variables-in-llm-instructions">Placeholder Variables in LLM Instructions</h4>
 <p>LLM nodes support placeholder injection in their <code>instruction</code> string (same rules as LLMAgent). Both native <code>{key}</code> and Mustache <code>{{key}}</code> syntaxes are accepted (Mustache is normalized to the native form automatically):</p>
@@ -4510,7 +4510,7 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span><span id="__span-27-110"><a id="__codelineno-27-110" name="__codelineno-27-110"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-27-111"><a id="__codelineno-27-111" name="__codelineno-27-111"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>The example shows how to declare nodes, connect edges, and run. Next, we’ll cover execution with GraphAgent + Runner, then core concepts and common practices.</p>
+<p>The example shows how to declare nodes, connect edges, and run. Next, we'll cover execution with GraphAgent + Runner, then core concepts and common practices.</p>
 <h3 id="execution">Execution</h3>
 <ul>
 <li>Wrap the compiled graph with <code>graphagent.New</code> (as a generic <code>agent.Agent</code>) and hand it to <code>runner.Runner</code> to manage sessions and streaming events.</li>
@@ -5490,7 +5490,7 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 <ul>
 <li><code>SetEntryPoint("first")</code> is equivalent to Start → first.</li>
 <li><code>SetFinishPoint("last")</code> is equivalent to last → End.
-  There’s no need to add these two edges explicitly.</li>
+  There's no need to add these two edges explicitly.</li>
 </ul>
 <p>Constants: <code>graph.Start == "__start__"</code>, <code>graph.End == "__end__"</code>.</p>
 <h3 id="command-mode-dynamic-routing-fanout">Command Mode (Dynamic Routing / Fan‑out)</h3>
@@ -5551,10 +5551,10 @@ for independent processing (e.g., route to both summarization and tagging).</p>
 </span><span id="__span-47-27"><a id="__codelineno-47-27" name="__codelineno-47-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">cmds</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
 </span><span id="__span-47-28"><a id="__codelineno-47-28" name="__codelineno-47-28"></a><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
-<p>When using command‑based routing, you don’t need static edges to <code>GoTo</code> targets; just ensure the target nodes exist and call <code>SetFinishPoint</code> where appropriate.</p>
+<p>When using command‑based routing, you don't need static edges to <code>GoTo</code> targets; just ensure the target nodes exist and call <code>SetFinishPoint</code> where appropriate.</p>
 <h2 id="architecture">Architecture</h2>
 <h3 id="overall-architecture">Overall Architecture</h3>
-<p>GraphAgent’s architecture manages complexity via clear layering. Each layer has a well‑defined responsibility and communicates through standard interfaces.</p>
+<p>GraphAgent's architecture manages complexity via clear layering. Each layer has a well‑defined responsibility and communicates through standard interfaces.</p>
 <pre class="mermaid"><code>flowchart TB
     subgraph "Runner Layer"
         R[Runner]:::runnerClass
@@ -5607,13 +5607,13 @@ Provides a fluent, declarative Go API to build graphs via method chaining (AddNo
 <p><code>graph/graph.go</code> — Compiled runtime<br />
 Implements channel‑based, event‑triggered execution. Node results merge into State; channels are used to drive routing and carry sentinel values (not business data).</p>
 <p><code>graph/executor.go</code> — BSP executor<br />
-Heart of the system, inspired by Google’s Pregel. Implements BSP (Bulk Synchronous Parallel) supersteps: Planning → Execution → Update.</p>
+Heart of the system, inspired by Google's Pregel. Implements BSP (Bulk Synchronous Parallel) supersteps: Planning → Execution → Update.</p>
 <p><code>graph/checkpoint/*</code> — Checkpoints and recovery<br />
 Optional checkpoint persistence (e.g., sqlite). Atomically saves state and pending writes; supports lineage/checkpoint‑based recovery.</p>
 <p><code>agent/graphagent/graph_agent.go</code> — Bridge between Graph and Agent<br />
 Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and streaming.</p>
 <h3 id="execution-model">Execution Model</h3>
-<p>GraphAgent adapts Pregel’s BSP (Bulk Synchronous Parallel) to a single‑process runtime and adds checkpoints, HITL interrupts/resumes, and time travel:</p>
+<p>GraphAgent adapts Pregel's BSP (Bulk Synchronous Parallel) to a single‑process runtime and adds checkpoints, HITL interrupts/resumes, and time travel:</p>
 <pre class="mermaid"><code>sequenceDiagram
     autonumber
     participant R as Runner
@@ -5713,7 +5713,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <h4 id="runtime-isolation-and-event-snapshots">Runtime Isolation and Event Snapshots</h4>
 <ul>
 <li>The Executor is reusable and concurrency‑safe. Per‑run state lives in <code>ExecutionContext</code> (channel versions, pending writes, last checkpoint, etc.).</li>
-<li>Each event’s <code>StateDelta</code> is a deep‑copy snapshot containing only serializable and allowed keys; internal keys (execution context, callbacks, etc.) are filtered out for external telemetry and persistence.</li>
+<li>Each event's <code>StateDelta</code> is a deep‑copy snapshot containing only serializable and allowed keys; internal keys (execution context, callbacks, etc.) are filtered out for external telemetry and persistence.</li>
 </ul>
 <h3 id="executor-configuration">Executor Configuration</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1">1</a></span>
@@ -5929,7 +5929,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span></code></pre></div></td></tr></table></div>
 <h4 id="passing-only-results-map-last_response-to-downstream-user_input">Passing only results: map last_response to downstream user_input</h4>
 <blockquote>
-<p>Scenario: A → B → C as black boxes. Downstream should only consume upstream’s result text as this turn’s input, without pulling full session history.</p>
+<p>Scenario: A → B → C as black boxes. Downstream should only consume upstream's result text as this turn's input, without pulling full session history.</p>
 </blockquote>
 <ul>
 <li>Approach 1 (dependency‑free, universally available): add a pre‑node callback to the target Agent node that assigns parent <code>last_response</code> to <code>user_input</code>. Optionally isolate messages.</li>
@@ -5969,7 +5969,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithSubgraphIsolatedMessages</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// optional: isolate for true &quot;pass only results&quot;</span>
 </span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Notes: Both approaches ensure B only sees A’s result, and C only sees B’s. The option is more concise when available; the callback is zero‑dependency and works everywhere.</p>
+<p>Notes: Both approaches ensure B only sees A's result, and C only sees B's. The option is more concise when available; the callback is zero‑dependency and works everywhere.</p>
 <h3 id="hybrid-pattern-example">Hybrid Pattern Example</h3>
 <p>Embed dynamic decision‑making within a structured flow:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-53-1"> 1</a></span>
@@ -6117,7 +6117,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <p>Built‑in selection logic (no extra config):</p>
 <ol>
 <li>Prefer <code>graph.StateKeyOneShotMessages</code>: fully override inputs (system/user) for this turn; cleared after execution.</li>
-<li>Else use <code>graph.StateKeyUserInput</code>: append this turn’s user to <code>graph.StateKeyMessages</code>, then atomically write back user+assistant; finally clear <code>graph.StateKeyUserInput</code>.</li>
+<li>Else use <code>graph.StateKeyUserInput</code>: append this turn's user to <code>graph.StateKeyMessages</code>, then atomically write back user+assistant; finally clear <code>graph.StateKeyUserInput</code>.</li>
 <li>Else use <code>graph.StateKeyMessages</code> only: common on tool loops re‑entering LLM (since <code>graph.StateKeyUserInput</code> has been cleared).</li>
 </ol>
 <p>The benefit: preprocess nodes can rewrite <code>graph.StateKeyUserInput</code> and take effect in the same turn, while seamlessly integrating with the tool loop (tool_calls → tools → LLM).</p>
@@ -6140,7 +6140,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <span class="normal"><a href="#__codelineno-55-16">16</a></span>
 <span class="normal"><a href="#__codelineno-55-17">17</a></span>
 <span class="normal"><a href="#__codelineno-55-18">18</a></span>
-<span class="normal"><a href="#__codelineno-55-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1"></a><span class="c1">// OneShot (graph.StateKeyOneShotMessages): completely override this turn’s inputs (system/user)</span>
+<span class="normal"><a href="#__codelineno-55-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1"></a><span class="c1">// OneShot (graph.StateKeyOneShotMessages): completely override this turn&#39;s inputs (system/user)</span>
 </span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
 </span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
@@ -6177,7 +6177,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 <span class="normal"><a href="#__codelineno-56-15">15</a></span>
 <span class="normal"><a href="#__codelineno-56-16">16</a></span>
 <span class="normal"><a href="#__codelineno-56-17">17</a></span>
-<span class="normal"><a href="#__codelineno-56-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1"></a><span class="c1">// UserInput (graph.StateKeyUserInput): append this turn’s user input on top of history graph.StateKeyMessages</span>
+<span class="normal"><a href="#__codelineno-56-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1"></a><span class="c1">// UserInput (graph.StateKeyUserInput): append this turn&#39;s user input on top of history graph.StateKeyMessages</span>
 </span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3"></a><span class="w">    </span><span class="s">&quot;strings&quot;</span>
 </span><span id="__span-56-4"><a id="__codelineno-56-4" name="__codelineno-56-4"></a>
@@ -6225,7 +6225,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-57-14"><a id="__codelineno-57-14" name="__codelineno-57-14"></a><span class="c1">// On returning to nodeAsk (or a downstream LLM) graph.StateKeyUserInput is empty, so it follows the messages‑only path</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="instruction-placeholder-injection">Instruction Placeholder Injection</h4>
-<p><code>AddLLMNode</code>’s <code>instruction</code> supports placeholders, same syntax as <code>llmagent</code>:</p>
+<p><code>AddLLMNode</code>'s <code>instruction</code> supports placeholders, same syntax as <code>llmagent</code>:</p>
 <ul>
 <li><code>{key}</code> / <code>{key?}</code>: read from <code>session.State</code>; optional <code>?</code> yields empty when missing.</li>
 <li><code>{user:subkey}</code>, <code>{app:subkey}</code>, <code>{temp:subkey}</code>: read by namespace.</li>
@@ -6258,7 +6258,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span></code></pre></div></td></tr></table></div>
 <p>Internally, the executor constructs shallow copies (maps.Copy) per task and merges under a lock, with reducers ensuring safe concurrent updates.</p>
 <h3 id="node-io-conventions_1">Node I/O Conventions</h3>
-<p>Nodes communicate only via the shared <code>State</code>. Each node returns a state delta that merges via the Schema’s reducers.</p>
+<p>Nodes communicate only via the shared <code>State</code>. Each node returns a state delta that merges via the Schema's reducers.</p>
 <ul>
 <li>
 <p>Function nodes</p>
@@ -6533,7 +6533,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </ul>
 </li>
 </ul>
-<p>See “Event Monitoring” for a full streaming example and metadata parsing.</p>
+<p>See "Event Monitoring" for a full streaming example and metadata parsing.</p>
 <h3 id="humanintheloop">Human‑in‑the‑Loop</h3>
 <p>Introduce human confirmation on critical paths. The example shows a basic interrupt → resume flow:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
@@ -6680,15 +6680,15 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-65-10"><a id="__codelineno-65-10" name="__codelineno-65-10"></a><span class="w">    </span><span class="c1">// ... your handling here</span>
 </span><span id="__span-65-11"><a id="__codelineno-65-11" name="__codelineno-65-11"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>You can also filter by the event’s <code>Author</code> field:</p>
+<p>You can also filter by the event's <code>Author</code> field:</p>
 <ul>
 <li>Node‑level events (model, tools, node start/stop): <code>Author = &lt;nodeID&gt;</code> (or <code>graph-node</code> if unavailable)</li>
 <li>Pregel (planning/execution/update/errors): <code>Author = graph.AuthorGraphPregel</code></li>
 <li>Executor‑level (state updates/checkpoints): <code>Author = graph.AuthorGraphExecutor</code></li>
 <li>User input (Runner writes): <code>Author = user</code></li>
 </ul>
-<p>This convention lets you subscribe to a specific node’s stream without passing streaming context through nodes (streaming travels via the event channel; state stays structured in a LangGraph‑like style).</p>
-<p>Example: consume only node <code>ask</code>’s streaming output and print the final message when done.</p>
+<p>This convention lets you subscribe to a specific node's stream without passing streaming context through nodes (streaming travels via the event channel; state stays structured in a LangGraph‑like style).</p>
+<p>Example: consume only node <code>ask</code>'s streaming output and print the final message when done.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-66-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-66-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-66-3"> 3</a></span>
@@ -6786,13 +6786,13 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-67-18"><a id="__codelineno-67-18" name="__codelineno-67-18"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="emit-selected-values-from-node-callbacks">Emit selected values from node callbacks</h4>
-<p>By default, mid‑run events like <code>graph.state.update</code> report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final <code>graph.execution</code> event’s <code>StateDelta</code> carries the serialized final snapshot of allowed keys (see implementations in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go#L2001">graph/executor.go:2001</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1276">graph/events.go:1276</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1330">graph/events.go:1330</a>).</p>
+<p>By default, mid‑run events like <code>graph.state.update</code> report which keys were updated (metadata‑only). Concrete values are not included to keep the stream lightweight and avoid exposing intermediate, potentially conflicting updates. The final <code>graph.execution</code> event's <code>StateDelta</code> carries the serialized final snapshot of allowed keys (see implementations in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/executor.go#L2001">graph/executor.go:2001</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1276">graph/events.go:1276</a>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/graph/events.go#L1330">graph/events.go:1330</a>).</p>
 <p>If you only need to surface a few values from the result of a specific node right after it completes, register an After‑node callback and emit a small custom event containing just those values:</p>
 <p>Steps:</p>
 <ul>
 <li>Register <code>WithPostNodeCallback</code> on the target node.</li>
-<li>In the callback, read <code>result any</code>; when the node returns <code>graph.State</code>, this is the node’s state delta.</li>
-<li>Pick the needed keys, serialize to JSON, attach to a new event’s <code>StateDelta</code>.</li>
+<li>In the callback, read <code>result any</code>; when the node returns <code>graph.State</code>, this is the node's state delta.</li>
+<li>Pick the needed keys, serialize to JSON, attach to a new event's <code>StateDelta</code>.</li>
 <li>Send via <code>agent.EmitEvent</code>.</li>
 </ul>
 <p>Example:</p>
@@ -6948,219 +6948,240 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 </span><span id="__span-69-20"><a id="__codelineno-69-20" name="__codelineno-69-20"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="troubleshooting">Troubleshooting</h2>
-<ul>
-<li>
-<p>Graph has no entry point</p>
+<p><strong>Q1: Graph has no entry point</strong></p>
 <ul>
 <li>Error: "graph must have an entry point". Call <code>SetEntryPoint()</code> and ensure the node exists.</li>
 </ul>
-</li>
-</ul>
-<ul>
-<li>
-<p>Edge target/source does not exist</p>
+<p><strong>Q2: Edge target/source does not exist</strong></p>
 <ul>
 <li>Error mentions missing node. Define nodes before wiring edges/condition maps.</li>
 </ul>
-</li>
-</ul>
-<ul>
-<li>
-<p>Tools don’t run after LLM</p>
+<p><strong>Q3: Tools don't run after LLM</strong></p>
 <ul>
 <li>Ensure the LLM actually returned <code>tool_calls</code> and you used <code>AddToolsConditionalEdges(ask, tools, fallback)</code>.</li>
-<li>Check that tool names in your map match the model’s declared tool names.</li>
+<li>Check that tool names in your map match the model's declared tool names.</li>
 <li>Pairing walks from the latest assistant(tool_calls) until a new user; verify messages ordering.</li>
 </ul>
-</li>
-</ul>
+<p><strong>Q4: LLM returns tool_calls but tools never execute (always routes to fallback)</strong></p>
 <ul>
-<li>
-<p>No streaming events observed</p>
+<li><strong>Root cause</strong>: Using <code>NewStateSchema()</code> instead of <code>MessagesStateSchema()</code>.</li>
+<li><code>AddToolsConditionalEdges</code> internally checks <code>state[StateKeyMessages].([]model.Message)</code> to determine if there are tool calls.</li>
+<li>If the Schema lacks the <code>StateKeyMessages</code> field, <code>MessageReducer</code> won't be applied. The LLM node returns <code>[]graph.MessageOp</code> instead of <code>[]model.Message</code>, causing type assertion to fail and always routing to <code>fallbackNode</code>.</li>
+<li><strong>Solution</strong>: Replace <code>graph.NewStateSchema()</code> with <code>graph.MessagesStateSchema()</code>, then add custom fields on top:
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-70-1">1</a></span>
+<span class="normal"><a href="#__codelineno-70-2">2</a></span>
+<span class="normal"><a href="#__codelineno-70-3">3</a></span>
+<span class="normal"><a href="#__codelineno-70-4">4</a></span>
+<span class="normal"><a href="#__codelineno-70-5">5</a></span>
+<span class="normal"><a href="#__codelineno-70-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1"></a><span class="c1">// Wrong</span>
+</span><span id="__span-70-2"><a id="__codelineno-70-2" name="__codelineno-70-2"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateSchema</span><span class="p">()</span>
+</span><span id="__span-70-3"><a id="__codelineno-70-3" name="__codelineno-70-3"></a>
+</span><span id="__span-70-4"><a id="__codelineno-70-4" name="__codelineno-70-4"></a><span class="c1">// Correct</span>
+</span><span id="__span-70-5"><a id="__codelineno-70-5" name="__codelineno-70-5"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">()</span>
+</span><span id="__span-70-6"><a id="__codelineno-70-6" name="__codelineno-70-6"></a><span class="nx">schema</span><span class="p">.</span><span class="nx">AddField</span><span class="p">(</span><span class="s">&quot;my_field&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateField</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
+</span></code></pre></div></td></tr></table></div></li>
+</ul>
+<p><strong>Q5: No streaming events observed</strong></p>
 <ul>
 <li>Increase <code>WithChannelBufferSize</code> and filter by <code>Author</code>/object types.</li>
-<li>Verify you’re consuming events from <code>Runner.Run(...)</code> and not from direct <code>Executor</code> calls.</li>
+<li>Verify you're consuming events from <code>Runner.Run(...)</code> and not from direct <code>Executor</code> calls.</li>
 </ul>
-</li>
-</ul>
-<ul>
-<li>
-<p>Resume did not continue where expected</p>
+<p><strong>Q6: Resume did not continue where expected</strong></p>
 <ul>
 <li>Pass <code>agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })</code>.</li>
 <li>Provide <code>ResumeMap</code> for HITL continuation when needed. A plain "resume" message is not added to <code>graph.StateKeyUserInput</code>.</li>
 </ul>
-</li>
-</ul>
+<p><strong>Q7: State conflicts in parallel</strong></p>
 <ul>
-<li>State conflicts in parallel<ul>
 <li>Define reducers for lists/maps (e.g., <code>StringSliceReducer</code>, <code>MergeReducer</code>), avoid overwriting the same key from multiple branches without merge semantics.</li>
 </ul>
-</li>
+<p><strong>Q8: What does the tools parameter in AddLLMNode do? When are tools actually called?</strong></p>
+<ul>
+<li><strong>tools parameter is declarative</strong>: The tools passed to <code>AddLLMNode</code> are placed in <code>model.Request.Tools</code>, telling the LLM what tools are available.</li>
+<li><strong>LLM decides whether to call tools</strong>: Based on the tools declaration and user input, the LLM decides whether to return <code>tool_calls</code> in its response.</li>
+<li><strong>tools are NOT automatically executed</strong>: <code>AddLLMNode</code> only declares tools and sends requests to the LLM; it does not execute tools.</li>
+<li><strong>Tool execution requires AddToolsNode + AddToolsConditionalEdges</strong>:
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-71-1">1</a></span>
+<span class="normal"><a href="#__codelineno-71-2">2</a></span>
+<span class="normal"><a href="#__codelineno-71-3">3</a></span>
+<span class="normal"><a href="#__codelineno-71-4">4</a></span>
+<span class="normal"><a href="#__codelineno-71-5">5</a></span>
+<span class="normal"><a href="#__codelineno-71-6">6</a></span>
+<span class="normal"><a href="#__codelineno-71-7">7</a></span>
+<span class="normal"><a href="#__codelineno-71-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1"></a><span class="c1">// 1. LLM node declares tools (tells LLM what tools are available)</span>
+</span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">,</span><span class="w"> </span><span class="nx">systemPrompt</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
+</span><span id="__span-71-3"><a id="__codelineno-71-3" name="__codelineno-71-3"></a>
+</span><span id="__span-71-4"><a id="__codelineno-71-4" name="__codelineno-71-4"></a><span class="c1">// 2. Tools node executes tools (based on tool_calls returned by LLM)</span>
+</span><span id="__span-71-5"><a id="__codelineno-71-5" name="__codelineno-71-5"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
+</span><span id="__span-71-6"><a id="__codelineno-71-6" name="__codelineno-71-6"></a>
+</span><span id="__span-71-7"><a id="__codelineno-71-7" name="__codelineno-71-7"></a><span class="c1">// 3. Conditional edges route based on LLM response (routes to tools node if tool_calls present)</span>
+</span><span id="__span-71-8"><a id="__codelineno-71-8" name="__codelineno-71-8"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsConditionalEdges</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fallback&quot;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div></li>
+<li><strong>Execution timing</strong>: When <code>AddToolsConditionalEdges</code> detects <code>tool_calls</code> in the LLM response, it routes to <code>AddToolsNode</code>, which executes the actual tool calls.</li>
 </ul>
 <h2 id="realworld-example">Real‑World Example</h2>
 <h3 id="approval-workflow">Approval Workflow</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-70-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-70-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-70-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-70-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-70-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-70-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-70-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-70-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-70-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-70-10">10</a></span>
-<span class="normal"><a href="#__codelineno-70-11">11</a></span>
-<span class="normal"><a href="#__codelineno-70-12">12</a></span>
-<span class="normal"><a href="#__codelineno-70-13">13</a></span>
-<span class="normal"><a href="#__codelineno-70-14">14</a></span>
-<span class="normal"><a href="#__codelineno-70-15">15</a></span>
-<span class="normal"><a href="#__codelineno-70-16">16</a></span>
-<span class="normal"><a href="#__codelineno-70-17">17</a></span>
-<span class="normal"><a href="#__codelineno-70-18">18</a></span>
-<span class="normal"><a href="#__codelineno-70-19">19</a></span>
-<span class="normal"><a href="#__codelineno-70-20">20</a></span>
-<span class="normal"><a href="#__codelineno-70-21">21</a></span>
-<span class="normal"><a href="#__codelineno-70-22">22</a></span>
-<span class="normal"><a href="#__codelineno-70-23">23</a></span>
-<span class="normal"><a href="#__codelineno-70-24">24</a></span>
-<span class="normal"><a href="#__codelineno-70-25">25</a></span>
-<span class="normal"><a href="#__codelineno-70-26">26</a></span>
-<span class="normal"><a href="#__codelineno-70-27">27</a></span>
-<span class="normal"><a href="#__codelineno-70-28">28</a></span>
-<span class="normal"><a href="#__codelineno-70-29">29</a></span>
-<span class="normal"><a href="#__codelineno-70-30">30</a></span>
-<span class="normal"><a href="#__codelineno-70-31">31</a></span>
-<span class="normal"><a href="#__codelineno-70-32">32</a></span>
-<span class="normal"><a href="#__codelineno-70-33">33</a></span>
-<span class="normal"><a href="#__codelineno-70-34">34</a></span>
-<span class="normal"><a href="#__codelineno-70-35">35</a></span>
-<span class="normal"><a href="#__codelineno-70-36">36</a></span>
-<span class="normal"><a href="#__codelineno-70-37">37</a></span>
-<span class="normal"><a href="#__codelineno-70-38">38</a></span>
-<span class="normal"><a href="#__codelineno-70-39">39</a></span>
-<span class="normal"><a href="#__codelineno-70-40">40</a></span>
-<span class="normal"><a href="#__codelineno-70-41">41</a></span>
-<span class="normal"><a href="#__codelineno-70-42">42</a></span>
-<span class="normal"><a href="#__codelineno-70-43">43</a></span>
-<span class="normal"><a href="#__codelineno-70-44">44</a></span>
-<span class="normal"><a href="#__codelineno-70-45">45</a></span>
-<span class="normal"><a href="#__codelineno-70-46">46</a></span>
-<span class="normal"><a href="#__codelineno-70-47">47</a></span>
-<span class="normal"><a href="#__codelineno-70-48">48</a></span>
-<span class="normal"><a href="#__codelineno-70-49">49</a></span>
-<span class="normal"><a href="#__codelineno-70-50">50</a></span>
-<span class="normal"><a href="#__codelineno-70-51">51</a></span>
-<span class="normal"><a href="#__codelineno-70-52">52</a></span>
-<span class="normal"><a href="#__codelineno-70-53">53</a></span>
-<span class="normal"><a href="#__codelineno-70-54">54</a></span>
-<span class="normal"><a href="#__codelineno-70-55">55</a></span>
-<span class="normal"><a href="#__codelineno-70-56">56</a></span>
-<span class="normal"><a href="#__codelineno-70-57">57</a></span>
-<span class="normal"><a href="#__codelineno-70-58">58</a></span>
-<span class="normal"><a href="#__codelineno-70-59">59</a></span>
-<span class="normal"><a href="#__codelineno-70-60">60</a></span>
-<span class="normal"><a href="#__codelineno-70-61">61</a></span>
-<span class="normal"><a href="#__codelineno-70-62">62</a></span>
-<span class="normal"><a href="#__codelineno-70-63">63</a></span>
-<span class="normal"><a href="#__codelineno-70-64">64</a></span>
-<span class="normal"><a href="#__codelineno-70-65">65</a></span>
-<span class="normal"><a href="#__codelineno-70-66">66</a></span>
-<span class="normal"><a href="#__codelineno-70-67">67</a></span>
-<span class="normal"><a href="#__codelineno-70-68">68</a></span>
-<span class="normal"><a href="#__codelineno-70-69">69</a></span>
-<span class="normal"><a href="#__codelineno-70-70">70</a></span>
-<span class="normal"><a href="#__codelineno-70-71">71</a></span>
-<span class="normal"><a href="#__codelineno-70-72">72</a></span>
-<span class="normal"><a href="#__codelineno-70-73">73</a></span>
-<span class="normal"><a href="#__codelineno-70-74">74</a></span>
-<span class="normal"><a href="#__codelineno-70-75">75</a></span>
-<span class="normal"><a href="#__codelineno-70-76">76</a></span>
-<span class="normal"><a href="#__codelineno-70-77">77</a></span>
-<span class="normal"><a href="#__codelineno-70-78">78</a></span>
-<span class="normal"><a href="#__codelineno-70-79">79</a></span>
-<span class="normal"><a href="#__codelineno-70-80">80</a></span>
-<span class="normal"><a href="#__codelineno-70-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-70-2"><a id="__codelineno-70-2" name="__codelineno-70-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-70-3"><a id="__codelineno-70-3" name="__codelineno-70-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-70-4"><a id="__codelineno-70-4" name="__codelineno-70-4"></a><span class="w">    </span><span class="s">&quot;strings&quot;</span>
-</span><span id="__span-70-5"><a id="__codelineno-70-5" name="__codelineno-70-5"></a>
-</span><span id="__span-70-6"><a id="__codelineno-70-6" name="__codelineno-70-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
-</span><span id="__span-70-7"><a id="__codelineno-70-7" name="__codelineno-70-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-70-8"><a id="__codelineno-70-8" name="__codelineno-70-8"></a><span class="p">)</span>
-</span><span id="__span-70-9"><a id="__codelineno-70-9" name="__codelineno-70-9"></a>
-</span><span id="__span-70-10"><a id="__codelineno-70-10" name="__codelineno-70-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildApprovalWorkflow</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">Graph</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-11"><a id="__codelineno-70-11" name="__codelineno-70-11"></a><span class="w">    </span><span class="nx">sg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateGraph</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">())</span>
-</span><span id="__span-70-12"><a id="__codelineno-70-12" name="__codelineno-70-12"></a>
-</span><span id="__span-70-13"><a id="__codelineno-70-13" name="__codelineno-70-13"></a><span class="w">    </span><span class="c1">// AI pre‑review (define LLM model)</span>
-</span><span id="__span-70-14"><a id="__codelineno-70-14" name="__codelineno-70-14"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-70-15"><a id="__codelineno-70-15" name="__codelineno-70-15"></a><span class="w">        </span><span class="nx">modelNameApprove</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;gpt-4o-mini&quot;</span>
-</span><span id="__span-70-16"><a id="__codelineno-70-16" name="__codelineno-70-16"></a><span class="w">        </span><span class="nx">promptApproveDecision</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;Decide whether the application meets requirements; reply approve or reject&quot;</span>
-</span><span id="__span-70-17"><a id="__codelineno-70-17" name="__codelineno-70-17"></a>
-</span><span id="__span-70-18"><a id="__codelineno-70-18" name="__codelineno-70-18"></a><span class="w">        </span><span class="nx">nodeAIReview</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;ai_review&quot;</span>
-</span><span id="__span-70-19"><a id="__codelineno-70-19" name="__codelineno-70-19"></a><span class="w">        </span><span class="nx">nodeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;human_review&quot;</span>
-</span><span id="__span-70-20"><a id="__codelineno-70-20" name="__codelineno-70-20"></a><span class="w">        </span><span class="nx">nodeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;approve&quot;</span>
-</span><span id="__span-70-21"><a id="__codelineno-70-21" name="__codelineno-70-21"></a><span class="w">        </span><span class="nx">nodeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;reject&quot;</span>
-</span><span id="__span-70-22"><a id="__codelineno-70-22" name="__codelineno-70-22"></a>
-</span><span id="__span-70-23"><a id="__codelineno-70-23" name="__codelineno-70-23"></a><span class="w">        </span><span class="nx">routeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_human_review&quot;</span>
-</span><span id="__span-70-24"><a id="__codelineno-70-24" name="__codelineno-70-24"></a><span class="w">        </span><span class="nx">routeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_reject&quot;</span>
-</span><span id="__span-70-25"><a id="__codelineno-70-25" name="__codelineno-70-25"></a><span class="w">        </span><span class="nx">routeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_approve&quot;</span>
-</span><span id="__span-70-26"><a id="__codelineno-70-26" name="__codelineno-70-26"></a>
-</span><span id="__span-70-27"><a id="__codelineno-70-27" name="__codelineno-70-27"></a><span class="w">        </span><span class="nx">stateKeyApplication</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;application&quot;</span>
-</span><span id="__span-70-28"><a id="__codelineno-70-28" name="__codelineno-70-28"></a><span class="w">        </span><span class="nx">stateKeyDecision</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;decision&quot;</span>
-</span><span id="__span-70-29"><a id="__codelineno-70-29" name="__codelineno-70-29"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-70-30"><a id="__codelineno-70-30" name="__codelineno-70-30"></a>
-</span><span id="__span-70-31"><a id="__codelineno-70-31" name="__codelineno-70-31"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelNameApprove</span><span class="p">)</span>
-</span><span id="__span-70-32"><a id="__codelineno-70-32" name="__codelineno-70-32"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">promptApproveDecision</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
-</span><span id="__span-70-33"><a id="__codelineno-70-33" name="__codelineno-70-33"></a>
-</span><span id="__span-70-34"><a id="__codelineno-70-34" name="__codelineno-70-34"></a><span class="w">    </span><span class="c1">// Route to human review or reject</span>
-</span><span id="__span-70-35"><a id="__codelineno-70-35" name="__codelineno-70-35"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span>
-</span><span id="__span-70-36"><a id="__codelineno-70-36" name="__codelineno-70-36"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-37"><a id="__codelineno-70-37" name="__codelineno-70-37"></a><span class="w">            </span><span class="nx">resp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
-</span><span id="__span-70-38"><a id="__codelineno-70-38" name="__codelineno-70-38"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-39"><a id="__codelineno-70-39" name="__codelineno-70-39"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-70-40"><a id="__codelineno-70-40" name="__codelineno-70-40"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-70-41"><a id="__codelineno-70-41" name="__codelineno-70-41"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-70-42"><a id="__codelineno-70-42" name="__codelineno-70-42"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-70-43"><a id="__codelineno-70-43" name="__codelineno-70-43"></a><span class="w">            </span><span class="nx">routeHumanReview</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeHumanReview</span><span class="p">,</span>
-</span><span id="__span-70-44"><a id="__codelineno-70-44" name="__codelineno-70-44"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">      </span><span class="nx">nodeReject</span><span class="p">,</span>
-</span><span id="__span-70-45"><a id="__codelineno-70-45" name="__codelineno-70-45"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-70-46"><a id="__codelineno-70-46" name="__codelineno-70-46"></a>
-</span><span id="__span-70-47"><a id="__codelineno-70-47" name="__codelineno-70-47"></a><span class="w">    </span><span class="c1">// Human review node</span>
-</span><span id="__span-70-48"><a id="__codelineno-70-48" name="__codelineno-70-48"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-49"><a id="__codelineno-70-49" name="__codelineno-70-49"></a><span class="w">        </span><span class="nx">app</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyApplication</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
-</span><span id="__span-70-50"><a id="__codelineno-70-50" name="__codelineno-70-50"></a><span class="w">        </span><span class="nx">decision</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approval&quot;</span><span class="p">,</span>
-</span><span id="__span-70-51"><a id="__codelineno-70-51" name="__codelineno-70-51"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;Please approve: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">app</span><span class="p">))</span>
-</span><span id="__span-70-52"><a id="__codelineno-70-52" name="__codelineno-70-52"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-53"><a id="__codelineno-70-53" name="__codelineno-70-53"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-70-54"><a id="__codelineno-70-54" name="__codelineno-70-54"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-70-55"><a id="__codelineno-70-55" name="__codelineno-70-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyDecision</span><span class="p">:</span><span class="w"> </span><span class="nx">decision</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-70-56"><a id="__codelineno-70-56" name="__codelineno-70-56"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-70-57"><a id="__codelineno-70-57" name="__codelineno-70-57"></a>
-</span><span id="__span-70-58"><a id="__codelineno-70-58" name="__codelineno-70-58"></a><span class="w">    </span><span class="c1">// Outcome handling</span>
-</span><span id="__span-70-59"><a id="__codelineno-70-59" name="__codelineno-70-59"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeApprove</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-60"><a id="__codelineno-70-60" name="__codelineno-70-60"></a><span class="w">        </span><span class="c1">// perform approval logic</span>
-</span><span id="__span-70-61"><a id="__codelineno-70-61" name="__codelineno-70-61"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;approved&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-70-62"><a id="__codelineno-70-62" name="__codelineno-70-62"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-70-63"><a id="__codelineno-70-63" name="__codelineno-70-63"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeReject</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-64"><a id="__codelineno-70-64" name="__codelineno-70-64"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rejected&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-70-65"><a id="__codelineno-70-65" name="__codelineno-70-65"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-70-66"><a id="__codelineno-70-66" name="__codelineno-70-66"></a>
-</span><span id="__span-70-67"><a id="__codelineno-70-67" name="__codelineno-70-67"></a><span class="w">    </span><span class="c1">// Wire the flow</span>
-</span><span id="__span-70-68"><a id="__codelineno-70-68" name="__codelineno-70-68"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">SetEntryPoint</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">)</span>
-</span><span id="__span-70-69"><a id="__codelineno-70-69" name="__codelineno-70-69"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span>
-</span><span id="__span-70-70"><a id="__codelineno-70-70" name="__codelineno-70-70"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-71"><a id="__codelineno-70-71" name="__codelineno-70-71"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyDecision</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-70-72"><a id="__codelineno-70-72" name="__codelineno-70-72"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeApprove</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-70-73"><a id="__codelineno-70-73" name="__codelineno-70-73"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-70-74"><a id="__codelineno-70-74" name="__codelineno-70-74"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-70-75"><a id="__codelineno-70-75" name="__codelineno-70-75"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-70-76"><a id="__codelineno-70-76" name="__codelineno-70-76"></a><span class="w">            </span><span class="nx">routeApprove</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeApprove</span><span class="p">,</span>
-</span><span id="__span-70-77"><a id="__codelineno-70-77" name="__codelineno-70-77"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">  </span><span class="nx">nodeReject</span><span class="p">,</span>
-</span><span id="__span-70-78"><a id="__codelineno-70-78" name="__codelineno-70-78"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-70-79"><a id="__codelineno-70-79" name="__codelineno-70-79"></a>
-</span><span id="__span-70-80"><a id="__codelineno-70-80" name="__codelineno-70-80"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
-</span><span id="__span-70-81"><a id="__codelineno-70-81" name="__codelineno-70-81"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-72-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-72-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-72-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-72-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-72-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-72-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-72-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-72-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-72-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-72-10">10</a></span>
+<span class="normal"><a href="#__codelineno-72-11">11</a></span>
+<span class="normal"><a href="#__codelineno-72-12">12</a></span>
+<span class="normal"><a href="#__codelineno-72-13">13</a></span>
+<span class="normal"><a href="#__codelineno-72-14">14</a></span>
+<span class="normal"><a href="#__codelineno-72-15">15</a></span>
+<span class="normal"><a href="#__codelineno-72-16">16</a></span>
+<span class="normal"><a href="#__codelineno-72-17">17</a></span>
+<span class="normal"><a href="#__codelineno-72-18">18</a></span>
+<span class="normal"><a href="#__codelineno-72-19">19</a></span>
+<span class="normal"><a href="#__codelineno-72-20">20</a></span>
+<span class="normal"><a href="#__codelineno-72-21">21</a></span>
+<span class="normal"><a href="#__codelineno-72-22">22</a></span>
+<span class="normal"><a href="#__codelineno-72-23">23</a></span>
+<span class="normal"><a href="#__codelineno-72-24">24</a></span>
+<span class="normal"><a href="#__codelineno-72-25">25</a></span>
+<span class="normal"><a href="#__codelineno-72-26">26</a></span>
+<span class="normal"><a href="#__codelineno-72-27">27</a></span>
+<span class="normal"><a href="#__codelineno-72-28">28</a></span>
+<span class="normal"><a href="#__codelineno-72-29">29</a></span>
+<span class="normal"><a href="#__codelineno-72-30">30</a></span>
+<span class="normal"><a href="#__codelineno-72-31">31</a></span>
+<span class="normal"><a href="#__codelineno-72-32">32</a></span>
+<span class="normal"><a href="#__codelineno-72-33">33</a></span>
+<span class="normal"><a href="#__codelineno-72-34">34</a></span>
+<span class="normal"><a href="#__codelineno-72-35">35</a></span>
+<span class="normal"><a href="#__codelineno-72-36">36</a></span>
+<span class="normal"><a href="#__codelineno-72-37">37</a></span>
+<span class="normal"><a href="#__codelineno-72-38">38</a></span>
+<span class="normal"><a href="#__codelineno-72-39">39</a></span>
+<span class="normal"><a href="#__codelineno-72-40">40</a></span>
+<span class="normal"><a href="#__codelineno-72-41">41</a></span>
+<span class="normal"><a href="#__codelineno-72-42">42</a></span>
+<span class="normal"><a href="#__codelineno-72-43">43</a></span>
+<span class="normal"><a href="#__codelineno-72-44">44</a></span>
+<span class="normal"><a href="#__codelineno-72-45">45</a></span>
+<span class="normal"><a href="#__codelineno-72-46">46</a></span>
+<span class="normal"><a href="#__codelineno-72-47">47</a></span>
+<span class="normal"><a href="#__codelineno-72-48">48</a></span>
+<span class="normal"><a href="#__codelineno-72-49">49</a></span>
+<span class="normal"><a href="#__codelineno-72-50">50</a></span>
+<span class="normal"><a href="#__codelineno-72-51">51</a></span>
+<span class="normal"><a href="#__codelineno-72-52">52</a></span>
+<span class="normal"><a href="#__codelineno-72-53">53</a></span>
+<span class="normal"><a href="#__codelineno-72-54">54</a></span>
+<span class="normal"><a href="#__codelineno-72-55">55</a></span>
+<span class="normal"><a href="#__codelineno-72-56">56</a></span>
+<span class="normal"><a href="#__codelineno-72-57">57</a></span>
+<span class="normal"><a href="#__codelineno-72-58">58</a></span>
+<span class="normal"><a href="#__codelineno-72-59">59</a></span>
+<span class="normal"><a href="#__codelineno-72-60">60</a></span>
+<span class="normal"><a href="#__codelineno-72-61">61</a></span>
+<span class="normal"><a href="#__codelineno-72-62">62</a></span>
+<span class="normal"><a href="#__codelineno-72-63">63</a></span>
+<span class="normal"><a href="#__codelineno-72-64">64</a></span>
+<span class="normal"><a href="#__codelineno-72-65">65</a></span>
+<span class="normal"><a href="#__codelineno-72-66">66</a></span>
+<span class="normal"><a href="#__codelineno-72-67">67</a></span>
+<span class="normal"><a href="#__codelineno-72-68">68</a></span>
+<span class="normal"><a href="#__codelineno-72-69">69</a></span>
+<span class="normal"><a href="#__codelineno-72-70">70</a></span>
+<span class="normal"><a href="#__codelineno-72-71">71</a></span>
+<span class="normal"><a href="#__codelineno-72-72">72</a></span>
+<span class="normal"><a href="#__codelineno-72-73">73</a></span>
+<span class="normal"><a href="#__codelineno-72-74">74</a></span>
+<span class="normal"><a href="#__codelineno-72-75">75</a></span>
+<span class="normal"><a href="#__codelineno-72-76">76</a></span>
+<span class="normal"><a href="#__codelineno-72-77">77</a></span>
+<span class="normal"><a href="#__codelineno-72-78">78</a></span>
+<span class="normal"><a href="#__codelineno-72-79">79</a></span>
+<span class="normal"><a href="#__codelineno-72-80">80</a></span>
+<span class="normal"><a href="#__codelineno-72-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-72-1"><a id="__codelineno-72-1" name="__codelineno-72-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-72-2"><a id="__codelineno-72-2" name="__codelineno-72-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-72-3"><a id="__codelineno-72-3" name="__codelineno-72-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-72-4"><a id="__codelineno-72-4" name="__codelineno-72-4"></a><span class="w">    </span><span class="s">&quot;strings&quot;</span>
+</span><span id="__span-72-5"><a id="__codelineno-72-5" name="__codelineno-72-5"></a>
+</span><span id="__span-72-6"><a id="__codelineno-72-6" name="__codelineno-72-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
+</span><span id="__span-72-7"><a id="__codelineno-72-7" name="__codelineno-72-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-72-8"><a id="__codelineno-72-8" name="__codelineno-72-8"></a><span class="p">)</span>
+</span><span id="__span-72-9"><a id="__codelineno-72-9" name="__codelineno-72-9"></a>
+</span><span id="__span-72-10"><a id="__codelineno-72-10" name="__codelineno-72-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildApprovalWorkflow</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">Graph</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-11"><a id="__codelineno-72-11" name="__codelineno-72-11"></a><span class="w">    </span><span class="nx">sg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateGraph</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">())</span>
+</span><span id="__span-72-12"><a id="__codelineno-72-12" name="__codelineno-72-12"></a>
+</span><span id="__span-72-13"><a id="__codelineno-72-13" name="__codelineno-72-13"></a><span class="w">    </span><span class="c1">// AI pre‑review (define LLM model)</span>
+</span><span id="__span-72-14"><a id="__codelineno-72-14" name="__codelineno-72-14"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-72-15"><a id="__codelineno-72-15" name="__codelineno-72-15"></a><span class="w">        </span><span class="nx">modelNameApprove</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;gpt-4o-mini&quot;</span>
+</span><span id="__span-72-16"><a id="__codelineno-72-16" name="__codelineno-72-16"></a><span class="w">        </span><span class="nx">promptApproveDecision</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;Decide whether the application meets requirements; reply approve or reject&quot;</span>
+</span><span id="__span-72-17"><a id="__codelineno-72-17" name="__codelineno-72-17"></a>
+</span><span id="__span-72-18"><a id="__codelineno-72-18" name="__codelineno-72-18"></a><span class="w">        </span><span class="nx">nodeAIReview</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;ai_review&quot;</span>
+</span><span id="__span-72-19"><a id="__codelineno-72-19" name="__codelineno-72-19"></a><span class="w">        </span><span class="nx">nodeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;human_review&quot;</span>
+</span><span id="__span-72-20"><a id="__codelineno-72-20" name="__codelineno-72-20"></a><span class="w">        </span><span class="nx">nodeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;approve&quot;</span>
+</span><span id="__span-72-21"><a id="__codelineno-72-21" name="__codelineno-72-21"></a><span class="w">        </span><span class="nx">nodeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;reject&quot;</span>
+</span><span id="__span-72-22"><a id="__codelineno-72-22" name="__codelineno-72-22"></a>
+</span><span id="__span-72-23"><a id="__codelineno-72-23" name="__codelineno-72-23"></a><span class="w">        </span><span class="nx">routeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_human_review&quot;</span>
+</span><span id="__span-72-24"><a id="__codelineno-72-24" name="__codelineno-72-24"></a><span class="w">        </span><span class="nx">routeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_reject&quot;</span>
+</span><span id="__span-72-25"><a id="__codelineno-72-25" name="__codelineno-72-25"></a><span class="w">        </span><span class="nx">routeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_approve&quot;</span>
+</span><span id="__span-72-26"><a id="__codelineno-72-26" name="__codelineno-72-26"></a>
+</span><span id="__span-72-27"><a id="__codelineno-72-27" name="__codelineno-72-27"></a><span class="w">        </span><span class="nx">stateKeyApplication</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;application&quot;</span>
+</span><span id="__span-72-28"><a id="__codelineno-72-28" name="__codelineno-72-28"></a><span class="w">        </span><span class="nx">stateKeyDecision</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;decision&quot;</span>
+</span><span id="__span-72-29"><a id="__codelineno-72-29" name="__codelineno-72-29"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-72-30"><a id="__codelineno-72-30" name="__codelineno-72-30"></a>
+</span><span id="__span-72-31"><a id="__codelineno-72-31" name="__codelineno-72-31"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelNameApprove</span><span class="p">)</span>
+</span><span id="__span-72-32"><a id="__codelineno-72-32" name="__codelineno-72-32"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">promptApproveDecision</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
+</span><span id="__span-72-33"><a id="__codelineno-72-33" name="__codelineno-72-33"></a>
+</span><span id="__span-72-34"><a id="__codelineno-72-34" name="__codelineno-72-34"></a><span class="w">    </span><span class="c1">// Route to human review or reject</span>
+</span><span id="__span-72-35"><a id="__codelineno-72-35" name="__codelineno-72-35"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span>
+</span><span id="__span-72-36"><a id="__codelineno-72-36" name="__codelineno-72-36"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-37"><a id="__codelineno-72-37" name="__codelineno-72-37"></a><span class="w">            </span><span class="nx">resp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-72-38"><a id="__codelineno-72-38" name="__codelineno-72-38"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-39"><a id="__codelineno-72-39" name="__codelineno-72-39"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-72-40"><a id="__codelineno-72-40" name="__codelineno-72-40"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-72-41"><a id="__codelineno-72-41" name="__codelineno-72-41"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-72-42"><a id="__codelineno-72-42" name="__codelineno-72-42"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-72-43"><a id="__codelineno-72-43" name="__codelineno-72-43"></a><span class="w">            </span><span class="nx">routeHumanReview</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeHumanReview</span><span class="p">,</span>
+</span><span id="__span-72-44"><a id="__codelineno-72-44" name="__codelineno-72-44"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">      </span><span class="nx">nodeReject</span><span class="p">,</span>
+</span><span id="__span-72-45"><a id="__codelineno-72-45" name="__codelineno-72-45"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-72-46"><a id="__codelineno-72-46" name="__codelineno-72-46"></a>
+</span><span id="__span-72-47"><a id="__codelineno-72-47" name="__codelineno-72-47"></a><span class="w">    </span><span class="c1">// Human review node</span>
+</span><span id="__span-72-48"><a id="__codelineno-72-48" name="__codelineno-72-48"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-49"><a id="__codelineno-72-49" name="__codelineno-72-49"></a><span class="w">        </span><span class="nx">app</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyApplication</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-72-50"><a id="__codelineno-72-50" name="__codelineno-72-50"></a><span class="w">        </span><span class="nx">decision</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approval&quot;</span><span class="p">,</span>
+</span><span id="__span-72-51"><a id="__codelineno-72-51" name="__codelineno-72-51"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;Please approve: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">app</span><span class="p">))</span>
+</span><span id="__span-72-52"><a id="__codelineno-72-52" name="__codelineno-72-52"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-53"><a id="__codelineno-72-53" name="__codelineno-72-53"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-72-54"><a id="__codelineno-72-54" name="__codelineno-72-54"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-72-55"><a id="__codelineno-72-55" name="__codelineno-72-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyDecision</span><span class="p">:</span><span class="w"> </span><span class="nx">decision</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-72-56"><a id="__codelineno-72-56" name="__codelineno-72-56"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-72-57"><a id="__codelineno-72-57" name="__codelineno-72-57"></a>
+</span><span id="__span-72-58"><a id="__codelineno-72-58" name="__codelineno-72-58"></a><span class="w">    </span><span class="c1">// Outcome handling</span>
+</span><span id="__span-72-59"><a id="__codelineno-72-59" name="__codelineno-72-59"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeApprove</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-60"><a id="__codelineno-72-60" name="__codelineno-72-60"></a><span class="w">        </span><span class="c1">// perform approval logic</span>
+</span><span id="__span-72-61"><a id="__codelineno-72-61" name="__codelineno-72-61"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;approved&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-72-62"><a id="__codelineno-72-62" name="__codelineno-72-62"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-72-63"><a id="__codelineno-72-63" name="__codelineno-72-63"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeReject</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-64"><a id="__codelineno-72-64" name="__codelineno-72-64"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rejected&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-72-65"><a id="__codelineno-72-65" name="__codelineno-72-65"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-72-66"><a id="__codelineno-72-66" name="__codelineno-72-66"></a>
+</span><span id="__span-72-67"><a id="__codelineno-72-67" name="__codelineno-72-67"></a><span class="w">    </span><span class="c1">// Wire the flow</span>
+</span><span id="__span-72-68"><a id="__codelineno-72-68" name="__codelineno-72-68"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">SetEntryPoint</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">)</span>
+</span><span id="__span-72-69"><a id="__codelineno-72-69" name="__codelineno-72-69"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span>
+</span><span id="__span-72-70"><a id="__codelineno-72-70" name="__codelineno-72-70"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-71"><a id="__codelineno-72-71" name="__codelineno-72-71"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyDecision</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-72-72"><a id="__codelineno-72-72" name="__codelineno-72-72"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeApprove</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-72-73"><a id="__codelineno-72-73" name="__codelineno-72-73"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-72-74"><a id="__codelineno-72-74" name="__codelineno-72-74"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-72-75"><a id="__codelineno-72-75" name="__codelineno-72-75"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-72-76"><a id="__codelineno-72-76" name="__codelineno-72-76"></a><span class="w">            </span><span class="nx">routeApprove</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeApprove</span><span class="p">,</span>
+</span><span id="__span-72-77"><a id="__codelineno-72-77" name="__codelineno-72-77"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">  </span><span class="nx">nodeReject</span><span class="p">,</span>
+</span><span id="__span-72-78"><a id="__codelineno-72-78" name="__codelineno-72-78"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-72-79"><a id="__codelineno-72-79" name="__codelineno-72-79"></a>
+</span><span id="__span-72-80"><a id="__codelineno-72-80" name="__codelineno-72-80"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
+</span><span id="__span-72-81"><a id="__codelineno-72-81" name="__codelineno-72-81"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="summary">Summary</h2>
 <p>This guide introduced the core usage of the <code>graph</code> package and GraphAgent: declaring nodes and routes, safely merging state via Schema + Reducers, and leveraging events, checkpoints, and interrupts for observability and recovery. For structured flows (approvals, content moderation, stepwise processing), Graph provides stable, auditable execution. For intelligent decisions, extend with LLM nodes and sub‑agents.</p>
@@ -7198,7 +7219,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 4, 2025 13:03:40 UTC">2025-12-04 13:03:40</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 5, 2025 12:47:32 UTC">2025-12-05 12:47:32</span>
   </span>
 
     
