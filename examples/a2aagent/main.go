@@ -303,12 +303,12 @@ func handleEvent(
 		return nil
 	}
 
-	// Handle tool calls.
+	// Handle tool calls (return early to avoid processing tool call content as assistant response)
 	if handleToolCalls(event, toolCallsDetected, assistantStarted) {
 		return nil
 	}
 
-	// Handle tool responses.
+	// Handle tool responses (return early to avoid processing tool response content as assistant response)
 	if handleToolResponses(event) {
 		return nil
 	}
@@ -353,23 +353,22 @@ func handleToolCalls(
 
 // handleToolResponses detects and displays tool responses.
 func handleToolResponses(event *event.Event) bool {
-	if event.Response != nil && len(event.Response.Choices) > 0 {
-		hasToolResponse := false
-		for _, choice := range event.Response.Choices {
-			// Tool responses are always in Message (never in Delta), even in streaming mode
-			// This follows trpc-agent-go convention
-			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
-					choice.Message.ToolID,
-					strings.TrimSpace(choice.Message.Content))
-				hasToolResponse = true
-			}
-		}
-		if hasToolResponse {
-			return true
+	if event.Response == nil || len(event.Response.Choices) == 0 {
+		return false
+	}
+
+	hasToolResponse := false
+	for _, choice := range event.Response.Choices {
+		// Tool responses are always in Message (never in Delta), even in streaming mode
+		// This follows trpc-agent-go convention
+		if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+			fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
+				choice.Message.ToolID,
+				strings.TrimSpace(choice.Message.Content))
+			hasToolResponse = true
 		}
 	}
-	return false
+	return hasToolResponse
 }
 
 // handleContent processes and displays content.

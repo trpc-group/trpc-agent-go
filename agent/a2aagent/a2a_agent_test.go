@@ -1130,16 +1130,16 @@ func TestConverterEdgeCases(t *testing.T) {
 		result := protocol.MessageResult{
 			Result: nil,
 		}
-		evt, err := converter.ConvertToEvent(result, "test-agent", invocation)
+		events, err := converter.ConvertToEvents(result, "test-agent", invocation)
 		if err != nil {
 			t.Errorf("should handle nil result gracefully, got error: %v", err)
 		}
-		if evt == nil {
-			t.Error("expected event, got nil")
+		if len(events) == 0 {
+			t.Error("expected at least one event, got none")
 		}
 	})
 
-	t.Run("ConvertStreamingToEvent_with_nil_result", func(t *testing.T) {
+	t.Run("ConvertStreamingToEvents_with_nil_result", func(t *testing.T) {
 		converter := &defaultA2AEventConverter{}
 		invocation := &agent.Invocation{
 			InvocationID: "test-inv",
@@ -1147,12 +1147,13 @@ func TestConverterEdgeCases(t *testing.T) {
 		result := protocol.StreamingMessageEvent{
 			Result: nil,
 		}
-		evt, err := converter.ConvertStreamingToEvent(result, "test-agent", invocation)
+		events, err := converter.ConvertStreamingToEvents(result, "test-agent", invocation)
 		if err != nil {
 			t.Errorf("should handle nil result gracefully, got error: %v", err)
 		}
-		// evt could be nil for unknown types
-		_ = evt
+		if len(events) == 0 {
+			t.Error("expected at least one event, got none")
+		}
 	})
 
 	t.Run("ConvertToA2AMessage_with_all_content_types", func(t *testing.T) {
