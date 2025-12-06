@@ -1,0 +1,231 @@
+{
+  "version": "1.0",
+  "name": "graph_timeline",
+  "description": "Demonstrates how node-level execution events and state deltas can be used to build a run timeline.",
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "node_type": "builtin.start",
+      "config": {}
+    },
+    {
+      "id": "classifier",
+      "label": "Classifier",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a helpful assistant.\n\nRead the user input and do two things:\n1. Classify how complex the user's request is using one of these labels:\n   - \"short\" for very simple questions that need only a brief answer.\n   - \"detailed\" for questions that would benefit from a longer, more detailed answer.\n2. Provide a short natural-language summary of what the user is asking for.\n\nYou MUST respond strictly as JSON that matches the provided schema.",
+        "description": "LLM agent that classifies the request as short or detailed and summarizes it.",
+        "structured_output": {
+          "type": "object",
+          "properties": {
+            "classification": {
+              "type": "string",
+              "enum": ["short", "detailed"],
+              "description": "How complex the answer should be (short or detailed)."
+            },
+            "summary": {
+              "type": "string",
+              "description": "Short natural-language summary of the user request."
+            }
+          },
+          "required": ["classification", "summary"],
+          "additionalProperties": false
+        },
+        "temperature": 0.7,
+        "max_tokens": 256
+      }
+    },
+    {
+      "id": "agent_short",
+      "label": "Short answer agent",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a helpful assistant. Answer the user's request briefly in 1-2 sentences.",
+        "description": "Produces a short answer when the classifier decides complexity is \"short\".",
+        "temperature": 0.7,
+        "max_tokens": 256
+      }
+    },
+    {
+      "id": "agent_detailed",
+      "label": "Detailed answer agent",
+      "node_type": "builtin.llmagent",
+      "config": {
+        "model_name": "deepseek-chat",
+        "instruction": "You are a helpful assistant. Provide a more detailed answer (3-5 sentences) with helpful context.",
+        "description": "Produces a detailed answer when the classifier decides complexity is \"detailed\".",
+        "temperature": 0.7,
+        "max_tokens": 512
+      }
+    },
+    {
+      "id": "transform",
+      "label": "Transform user_input",
+      "node_type": "builtin.transform",
+      "config": {
+        "expr": {
+          "expression": "{ \"original_text\": state.user_input, \"note\": \"This object was created by builtin.transform\" }",
+          "format": "cel"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "original_text": {
+              "type": "string",
+              "description": "Original graph input text"
+            },
+            "note": {
+              "type": "string",
+              "description": "Static note added by transform"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "id": "loop",
+      "label": "While loop (3 iterations)",
+      "node_type": "builtin.while",
+      "config": {
+        "body": {
+          "nodes": [
+            {
+              "id": "loop_step",
+              "label": "Loop step",
+              "node_type": "builtin.set_state",
+              "config": {
+                "assignments": [
+                  {
+                    "field": "loop_count",
+                    "expr": {
+                      "expression": "state.loop_count + 1",
+                      "format": "cel"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "edges": [],
+          "conditional_edges": [],
+          "start_node_id": "loop_step",
+          "exit_node_id": "loop_step"
+        },
+        "condition": {
+          "expression": "state.loop_count < 3",
+          "format": "cel"
+        }
+      }
+    },
+    {
+      "id": "init_loop",
+      "label": "Init loop counter",
+      "node_type": "builtin.set_state",
+      "config": {
+        "assignments": [
+          {
+            "field": "loop_count",
+            "expr": {
+              "expression": "0",
+              "format": "cel"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "end",
+      "label": "End",
+      "node_type": "builtin.end",
+      "config": {
+        "expr": {
+          "expression": "{ \"message\": \"Graph timeline demo completed\", \"transform_result\": state.result, \"agent_reply\": state.last_response }",
+          "format": "cel"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "High-level status message for the demo"
+            },
+            "transform_result": {
+              "type": "object",
+              "description": "Structured object produced by the transform node and stored in state.result"
+            },
+            "agent_reply": {
+              "type": "string",
+              "description": "Last response returned by the LLM agent (state.last_response)"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_start_classifier",
+      "source": "start",
+      "target": "classifier"
+    },
+    {
+      "id": "edge_agent_short_transform",
+      "source": "agent_short",
+      "target": "transform"
+    },
+    {
+      "id": "edge_agent_detailed_transform",
+      "source": "agent_detailed",
+      "target": "transform"
+    },
+    {
+      "id": "edge_transform_end",
+      "source": "transform",
+      "target": "init_loop"
+    },
+    {
+      "id": "edge_init_loop_while",
+      "source": "init_loop",
+      "target": "loop"
+    },
+    {
+      "id": "edge_loop_end",
+      "source": "loop",
+      "target": "end"
+    }
+  ],
+  "conditional_edges": [
+    {
+      "id": "route_by_classification",
+      "from": "classifier",
+      "condition": {
+        "type": "builtin",
+        "cases": [
+          {
+            "name": "short_answer",
+            "predicate": {
+              "expression": "input.output_parsed.classification == \"short\"",
+              "format": "cel"
+            },
+            "target": "agent_short"
+          },
+          {
+            "name": "detailed_answer",
+            "predicate": {
+              "expression": "input.output_parsed.classification == \"detailed\"",
+              "format": "cel"
+            },
+            "target": "agent_detailed"
+          }
+        ],
+        "default": "agent_detailed"
+      }
+    }
+  ],
+  "start_node_id": "start"
+}
