@@ -37,6 +37,17 @@ func WithMaxSummaryWords(maxWords int) Option {
 	}
 }
 
+// WithSkipRecentEvents sets the number of recent events to skip during summarization.
+// These events will be excluded from the summary input but remain in the session.
+// A value <= 0 means no events are skipped.
+func WithSkipRecentEvents(count int) Option {
+	return func(s *sessionSummarizer) {
+		if count > 0 {
+			s.skipRecentEvents = count
+		}
+	}
+}
+
 // WithTokenThreshold creates a token-based check function.
 func WithTokenThreshold(tokenCount int) Option {
 	return func(s *sessionSummarizer) {
