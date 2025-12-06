@@ -76,6 +76,8 @@ type EvalMetricResultDetails struct {
 	Reason string `json:"reason,omitempty"`
 	// Score is the score for the metric evaluation result.
 	Score float64 `json:"score,omitempty"`
+	// RubricScores contains the scores for the rubric items.
+	RubricScores []*RubricScore `json:"rubricScores,omitempty"`
 }
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
@@ -87,6 +89,20 @@ type EvalMetricResultPerInvocation struct {
 	ExpectedInvocation *evalset.Invocation `json:"expectedInvocation,omitempty"`
 	// EvalMetricResults contains results for each metric for this invocation.
 	EvalMetricResults []*EvalMetricResult `json:"evalMetricResults,omitempty"`
+}
+
+// ScoreResult represents the score and rationale for a single metric evaluation.
+// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
+type ScoreResult struct {
+	Reason       string         `json:"reason,omitempty"`
+	Score        float64        `json:"score,omitempty"`
+	RubricScores []*RubricScore `json:"rubricScores,omitempty"`
+}
+
+type RubricScore struct {
+	ID     string
+	Reason string
+	Score  *float64
 }
 
 // Manager defines the interface for managing evaluation results.

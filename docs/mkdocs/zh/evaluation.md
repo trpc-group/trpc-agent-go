@@ -570,6 +570,7 @@ Metric 表示一个评估指标，用于衡量 EvalSet 的某一方面表现，�
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 )
 
@@ -583,6 +584,7 @@ type EvalMetric struct {
 // Criterion 聚合各类评估准则
 type Criterion struct {
 	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion // 工具轨迹评估准则
+	LLMJudge       *llm.LLMCriterion                       // LLM 评估准则
 }
 ```
 
@@ -653,9 +655,9 @@ type Evaluator interface {
 
 // EvaluateResult 表示评估器在多次会话上的汇总结果
 type EvaluateResult struct {
-	OverallScore         float64               // 总体得分
-	OverallStatus        status.EvalStatus     // 总体状态，分为通过/未通过/未评估
-	PerInvocationResults []PerInvocationResult // 单次会话评估结果
+	OverallScore         float64                // 总体得分
+	OverallStatus        status.EvalStatus      // 总体状态，分为通过/未通过/未评估
+	PerInvocationResults []*PerInvocationResult // 单次会话评估结果
 }
 
 // PerInvocationResult 表示单次会话的评估结果
@@ -695,6 +697,9 @@ type Registry interface {
     - 若实际工具调用序列与预期完全一致，则计 1 分；
     - 若不一致，则计 0 分。
   - 对于多次会话：计算各会话得分的平均值作为最终得分。
+- `llm_final_response` LLM 最终响应评估器。
+  - 单次采样：评估模型返回 `is_the_agent_response_valid` 字段，`valid` 计 1 分，否则计 0 分。
+  - 多次采样：按多数表决决定最终判定，再与 `EvalMetric.Threshold` 比较得出通过/未通过，评估调用次数与生成参数由 `LLMCriterion.JudgeModel` 配置。
 
 ### 评估结果 -- EvalResult
 
@@ -742,12 +747,12 @@ import (
 
 // EvalMetricResult 表示单项指标的评估结果
 type EvalMetricResult struct {
-	MetricName string               // 指标名称
-	Score      float64              // 实际得分
-	EvalStatus status.EvalStatus    // 评测状态
-	Threshold  float64              // 阈值
-	Criterion  *criterion.Criterion // 评估准则
-	Details    map[string]any       // 额外信息，如评分过程、错误描述等
+	MetricName string                   // 指标名称
+	Score      float64                  // 实际得分
+	EvalStatus status.EvalStatus        // 评测状态
+	Threshold  float64                  // 阈值
+	Criterion  *criterion.Criterion     // 评估准则
+	Details    *EvalMetricResultDetails // 额外信息，如评分过程、错误描述等
 }
 ```
 
@@ -761,6 +766,15 @@ type EvalMetricResultPerInvocation struct {
 	ActualInvocation   *evalset.Invocation // 实际执行的对话
 	ExpectedInvocation *evalset.Invocation // 预期的对话结果
 	EvalMetricResults  []*EvalMetricResult // 各指标评估结果
+}
+
+// ScoreResult 表示单项指标的分数结果
+type ScoreResult struct {
+	Score float64 // 得分
+}
+
+// EvalMetricResultDetails 预留字段
+type EvalMetricResultDetails struct {
 }
 ```
 
@@ -1183,6 +1197,7 @@ func (l *customLocator) List(baseDir, appName string) ([]string, error) {
 | TextCriterion           | 文本字符串                             |
 | JSONCriterion           | JSON 对象，通常用于比较 map[string]any  |
 | ToolTrajectoryCriterion | 工具调用轨迹                           |
+| LLMCriterion            | 基于 LLM 评估模型的评估                 |
 | Criterion               | 多种准则的聚合                         |
 
 #### TextCriterion
@@ -1311,6 +1326,56 @@ criterion := criterion.New(
 )
 ```
 
+#### LLMCriterion
+
+LLMCriterion 用于配置基于大模型的评估准则，适用于需要由模型给出评估结论的场景。
+
+```go
+// LLMCriterion 配置评估模型
+type LLMCriterion struct {
+	JudgeModel *JudgeModelOptions // 评估模型配置
+}
+
+// JudgeModelOptions 定义评估模型的详细参数
+type JudgeModelOptions struct {
+	ProviderName string                  // 模型供应商名称
+	ModelName    string                  // 评估模型名称
+	BaseURL      string                  // 模型 Base URL
+	APIKey       string                  // 模型 API Key
+	ExtraFields  map[string]any          // 模型请求的额外参数
+	NumSamples   int                     // 评估采样次数
+	Generation   *model.GenerationConfig // 评估模型的生成配置
+}
+```
+
+- `NumSamples` 控制评估模型调用次数，未配置时默认值为 1。
+- `Generation` 默认使用 `MaxTokens=2000`、`Temperature=0.8`、`Stream=false`。
+
+可通过 `criterion.WithLLMJudge` 传入自定义配置，例如：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+criterion := criterion.New(
+	criterion.WithLLMJudge(
+		llm.New(
+			"openai",
+			"deepseek-chat",
+			llm.WithNumSamples(3),
+			llm.WithGeneration(&model.GenerationConfig{
+				MaxTokens:   floatPtr(512),
+				Temperature: floatPtr(1.0),
+				Stream:      false,
+			}),
+		),
+	),
+)
+```
+
 ### 评估器
 
 #### 工具轨迹评估器
@@ -1344,3 +1409,46 @@ evalMetric := &metric.EvalMetric{
 	),
 }
 ```
+
+#### LLM 最终响应评估器
+
+LLM 最终响应评估器对应的指标名称为 `llm_final_response`，通过评估模型判定 Agent 的最终回答是否有效。
+
+评估逻辑：
+
+- 使用 `LLMCriterion` 的 `JudgeModel` 调用评估模型，按配置的 `NumSamples` 采样多次。
+- 评估模型需返回字段 `is_the_agent_response_valid`，取值为 `valid` 或 `invalid`（大小写不敏感）；`valid` 记 1 分，`invalid` 记 0 分，其他结果或解析失败会报错。
+- 多次采样时按多数表决聚合，最终得分与 `EvalMetric.Threshold` 比较得到评估结论。
+
+典型配置示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "llm_final_response",
+	Threshold:  0.9,
+	Criterion: criterion.New(
+		criterion.WithLLMJudge(
+			cllm.New(
+				"openai",
+				"gpt-4o",
+				cllm.WithNumSamples(3),
+				cllm.WithGeneration(&model.GenerationConfig{
+					MaxTokens:   ptr(512),
+					Temperature: ptr(1.0),
+					Stream:      false,
+				}),
+			),
+		),
+	),
+}
+```
+
+评估提示词会包含用户输入、参考答案与 Agent 的最终回答，适用于自动化校验最终文本输出。
+其中 `ptr` 同样用于构造指针字段。
