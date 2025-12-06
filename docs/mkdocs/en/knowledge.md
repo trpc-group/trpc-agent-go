@@ -186,21 +186,22 @@ kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
 )
 
+// Note: Metadata fields must use the metadata. prefix
 filterCondition := &searchfilter.UniversalFilterCondition{
     Operator: searchfilter.OperatorAnd,
     Value: []*searchfilter.UniversalFilterCondition{
         {
-            Field: "tag",
+            Field: "metadata.tag",  // Metadata fields use metadata. prefix
             Operator: searchfilter.OperatorEqual,
             Value: "tag",
         },
         {
-            Field: "age",
+            Field: "metadata.age",
             Operator: searchfilter.OperatorGreaterThanOrEqual,
             Value: 18,
         },
         {
-            Field: "create_time",
+            Field: "metadata.create_time",
             Operator: searchfilter.OperatorBetween,
             Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
         },
@@ -208,12 +209,12 @@ filterCondition := &searchfilter.UniversalFilterCondition{
             Operator: searchfilter.OperatorOr,
             Value: []*searchfilter.UniversalFilterCondition{
                 {
-                    Field: "login_time",
+                    Field: "metadata.login_time",
                     Operator: searchfilter.OperatorLessThanOrEqual,
                     Value: "2025-01-11 12:11:00",
                 },
                 {
-                    Field: "status",
+                    Field: "metadata.status",
                     Operator: searchfilter.OperatorEqual,
                     Value: "logout",
                 },
@@ -693,6 +694,14 @@ err := kb.Load(ctx,
 
 The Knowledge system provides powerful filter functionality that allows precise search based on document metadata. This includes both static filters and intelligent filters.
 
+> **Important: Filter Field Naming Convention**
+>
+> When using filters, **metadata fields should use the `metadata.` prefix**:
+> - The `metadata.` prefix distinguishes metadata fields from system fields (e.g., `id`, `name`, `content`)
+> - Whether using `WithKnowledgeFilter()`, `tool.WithFilter()`, or `searchfilter.Equal()`, metadata fields should include the `metadata.` prefix
+> - If you customized the metadata field name via `WithMetadataField()`, still use the `metadata.` prefix; the framework will automatically convert it to the actual field name
+> - Custom table columns added via `WithDocBuilder` (e.g., `status`, `priority`) use the field name directly without prefix
+
 ### Basic Filters
 
 Basic filters support two configuration methods: Agent-level fixed filters and Runner-level runtime filters.
@@ -708,8 +717,8 @@ llmAgent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "documentation",
-        "topic":    "programming",
+        "metadata.category": "documentation",
+        "metadata.topic":    "programming",
     }),
 )
 ```
@@ -728,9 +737,9 @@ eventCh, err := runner.Run(
     sessionID,
     message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "user_level": "premium",     // Filter by user level
-        "region":     "china",       // Filter by region
-        "language":   "zh",          // Filter by language
+        "metadata.user_level": "premium",     // Filter by user level
+        "metadata.region":     "china",       // Filter by region
+        "metadata.language":   "zh",          // Filter by language
     }),
 )
 ```
@@ -743,8 +752,8 @@ llmAgent := llmagent.New(
     "assistant",
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "general",
-        "source":   "internal",
+        "metadata.category": "general",
+        "metadata.source":   "internal",
     }),
 )
 
@@ -752,16 +761,16 @@ llmAgent := llmagent.New(
 eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "source": "external",  // Will be overridden by Agent-level "internal"
-        "topic":  "api",       // Add new filter condition (not in Agent-level)
+        "metadata.source": "external",  // Will be overridden by Agent-level "internal"
+        "metadata.topic":  "api",       // Add new filter condition (not in Agent-level)
     }),
 )
 
 // Final effective filter:
 // {
-//     "category": "general",   // From Agent-level
-//     "source":   "internal",  // From Agent-level (overrode Runner-level "external")
-//     "topic":    "api",       // From Runner-level (added)
+//     "metadata.category": "general",   // From Agent-level
+//     "metadata.source":   "internal",  // From Agent-level (overrode Runner-level "external")
+//     "metadata.topic":    "api",       // From Runner-level (added)
 // }
 ```
 
@@ -828,12 +837,12 @@ llmAgent := llmagent.New(
     llmagent.WithKnowledge(kb),
     // Agent-level metadata filter
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "source":   "official",      // Official source
-        "category": "documentation", // Documentation category
+        "metadata.source":   "official",      // Official source
+        "metadata.category": "documentation", // Documentation category
     }),
-    // Agent-level complex condition filter
+    // Agent-level complex condition filter (metadata fields use metadata. prefix)
     llmagent.WithKnowledgeConditionedFilter(
-        searchfilter.Equal("status", "published"), // Published status
+        searchfilter.Equal("metadata.status", "published"), // Published status
     ),
 )
 
@@ -842,26 +851,26 @@ eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     // Runner-level metadata filter
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "region":   "china",  // China region
-        "language": "zh",     // Chinese language
+        "metadata.region":   "china",  // China region
+        "metadata.language": "zh",     // Chinese language
     }),
     // Runner-level complex condition filter
     agent.WithKnowledgeConditionedFilter(
-        searchfilter.GreaterThan("priority", 5), // Priority greater than 5
+        searchfilter.GreaterThan("metadata.priority", 5), // Priority greater than 5
     ),
 )
 
 // 3. LLM intelligent filter (dynamically generated by LLM)
-// Example: User asks "find API related docs", LLM might generate {"topic": "api"}
+// Example: User asks "find API related docs", LLM might generate {"field": "metadata.topic", "value": "api"}
 
 // Final effective filter conditions (all combined with AND):
-// source = "official" AND 
-// category = "documentation" AND 
-// status = "published" AND
-// region = "china" AND 
-// language = "zh" AND 
-// priority > 5 AND
-// topic = "api"
+// metadata.source = "official" AND 
+// metadata.category = "documentation" AND 
+// metadata.status = "published" AND
+// metadata.region = "china" AND 
+// metadata.language = "zh" AND 
+// metadata.priority > 5 AND
+// metadata.topic = "api"
 //
 // i.e., must satisfy all conditions at all levels
 ```
@@ -874,13 +883,13 @@ searchTool := tool.NewKnowledgeSearchTool(
     kb,
     // Agent-level metadata filter
     tool.WithFilter(map[string]interface{}{
-        "source": "official",
+        "metadata.source": "official",
     }),
-    // Agent-level complex condition filter
+    // Agent-level complex condition filter (metadata fields use metadata. prefix)
     tool.WithConditionedFilter(
         searchfilter.Or(
-            searchfilter.Equal("topic", "programming"),
-            searchfilter.Equal("topic", "llm"),
+            searchfilter.Equal("metadata.topic", "programming"),
+            searchfilter.Equal("metadata.topic", "llm"),
         ),
     ),
 )
@@ -892,35 +901,39 @@ llmAgent := llmagent.New(
 )
 
 // Final filter conditions:
-// source = "official" AND (topic = "programming" OR topic = "llm")
+// metadata.source = "official" AND (metadata.topic = "programming" OR metadata.topic = "llm")
 // i.e., must be official source AND topic is either programming or LLM
 ```
 
 ##### Common Filter Helper Functions
 
 ```go
-// Comparison operators
-searchfilter.Equal(field, value)              // field = value
-searchfilter.NotEqual(field, value)           // field != value
-searchfilter.GreaterThan(field, value)        // field > value
-searchfilter.GreaterThanOrEqual(field, value) // field >= value
-searchfilter.LessThan(field, value)           // field < value
-searchfilter.LessThanOrEqual(field, value)    // field <= value
-searchfilter.In(field, values...)             // field IN (...)
-searchfilter.NotIn(field, values...)          // field NOT IN (...)
-searchfilter.Like(field, pattern)             // field LIKE pattern
-searchfilter.Between(field, min, max)         // field BETWEEN min AND max
+// Comparison operators (Note: metadata fields need metadata. prefix)
+searchfilter.Equal("metadata.topic", value)              // metadata.topic = value
+searchfilter.NotEqual("metadata.status", value)          // metadata.status != value
+searchfilter.GreaterThan("metadata.priority", value)     // metadata.priority > value
+searchfilter.GreaterThanOrEqual("metadata.score", value) // metadata.score >= value
+searchfilter.LessThan("metadata.age", value)             // metadata.age < value
+searchfilter.LessThanOrEqual("metadata.level", value)    // metadata.level <= value
+searchfilter.In("metadata.category", values...)          // metadata.category IN (...)
+searchfilter.NotIn("metadata.type", values...)           // metadata.type NOT IN (...)
+searchfilter.Like("metadata.title", pattern)             // metadata.title LIKE pattern
+searchfilter.Between("metadata.date", min, max)          // metadata.date BETWEEN min AND max
+
+// Custom table columns (added via WithDocBuilder) don't need prefix
+searchfilter.NotEqual("status", "deleted")               // status != "deleted"
+searchfilter.GreaterThanOrEqual("priority", 3)           // priority >= 3
 
 // Logical operators
 searchfilter.And(conditions...)               // AND combination
 searchfilter.Or(conditions...)                // OR combination
 
-// Nested example: (status = 'published') AND (category = 'doc' OR category = 'tutorial')
+// Nested example: (metadata.status = 'published') AND (metadata.category = 'doc' OR metadata.category = 'tutorial')
 searchfilter.And(
-    searchfilter.Equal("status", "published"),
+    searchfilter.Equal("metadata.status", "published"),
     searchfilter.Or(
-        searchfilter.Equal("category", "documentation"),
-        searchfilter.Equal("category", "tutorial"),
+        searchfilter.Equal("metadata.category", "documentation"),
+        searchfilter.Equal("metadata.category", "tutorial"),
     ),
 )
 ```

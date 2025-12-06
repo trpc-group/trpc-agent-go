@@ -183,21 +183,22 @@ kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
 )
 
+// 注意：元数据字段需要使用 metadata. 前缀
 filterCondition := &searchfilter.UniversalFilterCondition{
     Operator: searchfilter.OperatorAnd,
     Value: []*searchfilter.UniversalFilterCondition{
         {
-            Field: "tag",
+            Field: "metadata.tag",  // 元数据字段使用 metadata. 前缀
             Operator: searchfilter.OperatorEqual,
             Value: "tag",
         },
         {
-            Field: "age",
+            Field: "metadata.age",
             Operator: searchfilter.OperatorGreaterThanOrEqual,
             Value: 18,
         },
         {
-            Field: "create_time",
+            Field: "metadata.create_time",
             Operator: searchfilter.OperatorBetween,
             Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
         },
@@ -205,12 +206,12 @@ filterCondition := &searchfilter.UniversalFilterCondition{
             Operator: searchfilter.OperatorOr,
             Value: []*searchfilter.UniversalFilterCondition{
                 {
-                    Field: "login_time",
+                    Field: "metadata.login_time",
                     Operator: searchfilter.OperatorLessThanOrEqual,
                     Value: "2025-01-11 12:11:00",
                 },
                 {
-                    Field: "status",
+                    Field: "metadata.status",
                     Operator: searchfilter.OperatorEqual,
                     Value: "logout",
                 },
@@ -691,6 +692,14 @@ err := kb.Load(ctx,
 
 Knowledge 系统提供了强大的过滤器功能，允许基于文档元数据进行精准搜索。这包括静态过滤器和智能过滤器两种模式。
 
+> **重要：过滤器字段命名规范**
+>
+> 在使用过滤器时，**元数据字段建议使用 `metadata.` 前缀**：
+> - `metadata.` 前缀用于区分元数据字段和系统字段（如 `id`、`name`、`content` 等）
+> - 无论是 `WithKnowledgeFilter()`、`tool.WithFilter()` 还是 `searchfilter.Equal()` 等，元数据字段都建议加 `metadata.` 前缀
+> - 如果通过 `WithMetadataField()` 自定义了元数据字段名，仍然使用 `metadata.` 前缀，框架会自动转换为实际的字段名
+> - 通过 `WithDocBuilder` 自定义的表字段（如 `status`、`priority` 等额外列）直接使用字段名，无需前缀
+
 ### 基础过滤器
 
 基础过滤器支持两种设置方式：Agent 级别的固定过滤器和 Runner 级别的运行时过滤器。
@@ -706,8 +715,8 @@ llmAgent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "documentation",
-        "topic":    "programming",
+        "metadata.category": "documentation",
+        "metadata.topic":    "programming",
     }),
 )
 ```
@@ -726,9 +735,9 @@ eventCh, err := runner.Run(
     sessionID,
     message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "user_level": "premium",     // 根据用户级别过滤
-        "region":     "china",       // 根据地区过滤
-        "language":   "zh",          // 根据语言过滤
+        "metadata.user_level": "premium",     // 根据用户级别过滤
+        "metadata.region":     "china",       // 根据地区过滤
+        "metadata.language":   "zh",          // 根据语言过滤
     }),
 )
 ```
@@ -741,8 +750,8 @@ llmAgent := llmagent.New(
     "assistant",
     llmagent.WithKnowledge(kb),
     llmagent.WithKnowledgeFilter(map[string]interface{}{
-        "category": "general",
-        "source":   "internal",
+        "metadata.category": "general",
+        "metadata.source":   "internal",
     }),
 )
 
@@ -750,16 +759,16 @@ llmAgent := llmagent.New(
 eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     agent.WithKnowledgeFilter(map[string]interface{}{
-        "source": "external",  // 会被 Agent 级的 "internal" 覆盖
-        "topic":  "api",       // 新增过滤条件（Agent 级没有此键）
+        "metadata.source": "external",  // 会被 Agent 级的 "internal" 覆盖
+        "metadata.topic":  "api",       // 新增过滤条件（Agent 级没有此键）
     }),
 )
 
 // 最终生效的过滤器：
 // {
-//     "category": "general",   // 来自 Agent 级
-//     "source":   "internal",  // 来自 Agent 级（覆盖了 Runner 级的 "external"）
-//     "topic":    "api",       // 来自 Runner 级（新增）
+//     "metadata.category": "general",   // 来自 Agent 级
+//     "metadata.source":   "internal",  // 来自 Agent 级（覆盖了 Runner 级的 "external"）
+//     "metadata.topic":    "api",       // 来自 Runner 级（新增）
 // }
 ```
 
@@ -826,12 +835,12 @@ llmAgent := llmagent.New(
     llmagent.WithKnowledge(kb),
     // Agent 级元数据过滤器
     llmagent.WithKnowledgeFilter(map[string]any{
-        "source":   "official",      // 官方来源
-        "category": "documentation", // 文档类别
+        "metadata.source":   "official",      // 官方来源
+        "metadata.category": "documentation", // 文档类别
     }),
-    // Agent 级复杂条件过滤器
+    // Agent 级复杂条件过滤器（元数据字段使用 metadata. 前缀）
     llmagent.WithKnowledgeConditionedFilter(
-        searchfilter.Equal("status", "published"), // 已发布状态
+        searchfilter.Equal("metadata.status", "published"), // 已发布状态
     ),
 )
 
@@ -840,26 +849,26 @@ eventCh, err := runner.Run(
     ctx, userID, sessionID, message,
     // Runner 级元数据过滤器
     agent.WithKnowledgeFilter(map[string]any{
-        "region":   "china",  // 中国区域
-        "language": "zh",     // 中文
+        "metadata.region":   "china",  // 中国区域
+        "metadata.language": "zh",     // 中文
     }),
     // Runner 级复杂条件过滤器
     agent.WithKnowledgeConditionedFilter(
-        searchfilter.GreaterThan("priority", 5), // 优先级大于 5
+        searchfilter.GreaterThan("metadata.priority", 5), // 优先级大于 5
     ),
 )
 
 // 3. LLM 智能过滤器（由 LLM 动态生成）
-// 例如：用户问 "查找 API 相关文档"，LLM 可能生成 {"topic": "api"}
+// 例如：用户问 "查找 API 相关文档"，LLM 可能生成 {"field": "metadata.topic", "value": "api"}
 
 // 最终生效的过滤条件（所有条件通过 AND 组合）：
-// source = "official" AND 
-// category = "documentation" AND 
-// status = "published" AND
-// region = "china" AND 
-// language = "zh" AND 
-// priority > 5 AND
-// topic = "api"
+// metadata.source = "official" AND
+// metadata.category = "documentation" AND
+// metadata.status = "published" AND
+// metadata.region = "china" AND
+// metadata.language = "zh" AND
+// metadata.priority > 5 AND
+// metadata.topic = "api"
 //
 // 即：必须同时满足所有层级的所有条件
 ```
@@ -872,13 +881,13 @@ searchTool := tool.NewKnowledgeSearchTool(
     kb,
     // Agent 级元数据过滤器
     tool.WithFilter(map[string]any{
-        "source": "official",
+        "metadata.source": "official",
     }),
-    // Agent 级复杂条件过滤器
+    // Agent 级复杂条件过滤器（元数据字段使用 metadata. 前缀）
     tool.WithConditionedFilter(
         searchfilter.Or(
-            searchfilter.Equal("topic", "programming"),
-            searchfilter.Equal("topic", "llm"),
+            searchfilter.Equal("metadata.topic", "programming"),
+            searchfilter.Equal("metadata.topic", "llm"),
         ),
     ),
 )
@@ -890,35 +899,39 @@ llmAgent := llmagent.New(
 )
 
 // 最终过滤条件：
-// source = "official" AND (topic = "programming" OR topic = "llm")
+// metadata.source = "official" AND (metadata.topic = "programming" OR metadata.topic = "llm")
 // 即：必须是官方来源，且主题是编程或 LLM
 ```
 
 ##### 常用过滤器辅助函数
 
 ```go
-// 比较操作符
-searchfilter.Equal(field, value)              // field = value
-searchfilter.NotEqual(field, value)           // field != value
-searchfilter.GreaterThan(field, value)        // field > value
-searchfilter.GreaterThanOrEqual(field, value) // field >= value
-searchfilter.LessThan(field, value)           // field < value
-searchfilter.LessThanOrEqual(field, value)    // field <= value
-searchfilter.In(field, values...)             // field IN (...)
-searchfilter.NotIn(field, values...)          // field NOT IN (...)
-searchfilter.Like(field, pattern)             // field LIKE pattern
-searchfilter.Between(field, min, max)         // field BETWEEN min AND max
+// 比较操作符（注意：元数据字段需要 metadata. 前缀）
+searchfilter.Equal("metadata.topic", value)              // metadata.topic = value
+searchfilter.NotEqual("metadata.status", value)          // metadata.status != value
+searchfilter.GreaterThan("metadata.priority", value)     // metadata.priority > value
+searchfilter.GreaterThanOrEqual("metadata.score", value) // metadata.score >= value
+searchfilter.LessThan("metadata.age", value)             // metadata.age < value
+searchfilter.LessThanOrEqual("metadata.level", value)    // metadata.level <= value
+searchfilter.In("metadata.category", values...)          // metadata.category IN (...)
+searchfilter.NotIn("metadata.type", values...)           // metadata.type NOT IN (...)
+searchfilter.Like("metadata.title", pattern)             // metadata.title LIKE pattern
+searchfilter.Between("metadata.date", min, max)          // metadata.date BETWEEN min AND max
+
+// 自定义表字段（通过 WithDocBuilder 添加的额外列）不需要前缀
+searchfilter.NotEqual("status", "deleted")               // status != "deleted"
+searchfilter.GreaterThanOrEqual("priority", 3)           // priority >= 3
 
 // 逻辑操作符
 searchfilter.And(conditions...)               // AND 组合
 searchfilter.Or(conditions...)                // OR 组合
 
-// 嵌套示例：(status = 'published') AND (category = 'doc' OR category = 'tutorial')
+// 嵌套示例：(metadata.status = 'published') AND (metadata.category = 'doc' OR metadata.category = 'tutorial')
 searchfilter.And(
-    searchfilter.Equal("status", "published"),
+    searchfilter.Equal("metadata.status", "published"),
     searchfilter.Or(
-        searchfilter.Equal("category", "documentation"),
-        searchfilter.Equal("category", "tutorial"),
+        searchfilter.Equal("metadata.category", "documentation"),
+        searchfilter.Equal("metadata.category", "tutorial"),
     ),
 )
 ```
