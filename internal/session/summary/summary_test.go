@@ -189,3 +189,295 @@ func TestComputeDeltaSince_WithTime(t *testing.T) {
 	require.Equal(t, "e3", delta[1].Response.Choices[0].Message.Content)
 	require.Equal(t, base.Events[2].Timestamp, latestTs)
 }
+
+func TestPickSummaryText(t *testing.T) {
+	tests := []struct {
+		name      string
+		summaries map[string]*session.Summary
+		filterKey string
+		wantText  string
+		wantOk    bool
+	}{
+		{
+			name:      "nil summaries",
+			summaries: nil,
+			filterKey: "",
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name:      "empty summaries",
+			summaries: map[string]*session.Summary{},
+			filterKey: "",
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name: "prefer all-contents summary when available",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: "full summary"},
+				"filter1": {Summary: "filtered summary 1"},
+			},
+			filterKey: "",
+			wantText:  "full summary",
+			wantOk:    true,
+		},
+		{
+			name: "all-contents summary exists but empty, should pick other non-empty",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: ""},
+				"filter1": {Summary: "filtered summary 1"},
+			},
+			filterKey: "",
+			wantText:  "filtered summary 1",
+			wantOk:    true,
+		},
+		{
+			name: "all-contents summary is nil, should pick other non-empty",
+			summaries: map[string]*session.Summary{
+				"":        nil,
+				"filter1": {Summary: "filtered summary 1"},
+			},
+			filterKey: "",
+			wantText:  "filtered summary 1",
+			wantOk:    true,
+		},
+		{
+			name: "only all-contents summary exists and is non-empty",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "full summary"},
+			},
+			filterKey: "",
+			wantText:  "full summary",
+			wantOk:    true,
+		},
+		{
+			name: "only all-contents summary exists but is empty",
+			summaries: map[string]*session.Summary{
+				"": {Summary: ""},
+			},
+			filterKey: "",
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name: "only all-contents summary exists but is nil",
+			summaries: map[string]*session.Summary{
+				"": nil,
+			},
+			filterKey: "",
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name: "no all-contents summary, pick first non-empty",
+			summaries: map[string]*session.Summary{
+				"filter1": {Summary: "filtered summary 1"},
+			},
+			filterKey: "",
+			wantText:  "filtered summary 1",
+			wantOk:    true,
+		},
+		{
+			name: "all summaries are empty",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: ""},
+				"filter1": {Summary: ""},
+				"filter2": {Summary: ""},
+			},
+			filterKey: "",
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name: "all summaries are nil",
+			summaries: map[string]*session.Summary{
+				"":        nil,
+				"filter1": nil,
+				"filter2": nil,
+			},
+			filterKey: "",
+			wantText:  "",
+			wantOk:    false,
+		},
+		{
+			name: "mixed nil and empty summaries, pick first non-empty",
+			summaries: map[string]*session.Summary{
+				"":        nil,
+				"filter1": {Summary: ""},
+				"filter2": {Summary: "valid summary"},
+			},
+			filterKey: "",
+			wantText:  "valid summary",
+			wantOk:    true,
+		},
+		{
+			name: "specific filter key exists",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: "full summary"},
+				"filter1": {Summary: "filtered summary 1"},
+			},
+			filterKey: "filter1",
+			wantText:  "filtered summary 1",
+			wantOk:    true,
+		},
+		{
+			name: "specific filter key not found, fallback to full",
+			summaries: map[string]*session.Summary{
+				"":        {Summary: "full summary"},
+				"filter1": {Summary: "filtered summary 1"},
+			},
+			filterKey: "nonexistent",
+			wantText:  "full summary",
+			wantOk:    true,
+		},
+		{
+			name: "specific filter key not found, no full fallback",
+			summaries: map[string]*session.Summary{
+				"filter1": {Summary: "filtered summary 1"},
+			},
+			filterKey: "nonexistent",
+			wantText:  "filtered summary 1",
+			wantOk:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotOk := PickSummaryText(tt.summaries, tt.filterKey)
+			require.Equal(t, tt.wantText, gotText)
+			require.Equal(t, tt.wantOk, gotOk)
+		})
+	}
+}
+
+func TestGetSummaryTextFromSession(t *testing.T) {
+	tests := []struct {
+		name     string
+		session  *session.Session
+		opts     []session.SummaryOption
+		wantText string
+		wantOk   bool
+	}{
+		{
+			name:     "nil session",
+			session:  nil,
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "session with no summaries",
+			session: &session.Session{
+				ID:        "s1",
+				AppName:   "app",
+				UserID:    "user",
+				Summaries: nil,
+			},
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "session with empty summaries",
+			session: &session.Session{
+				ID:        "s1",
+				AppName:   "app",
+				UserID:    "user",
+				Summaries: map[string]*session.Summary{},
+			},
+			opts:     nil,
+			wantText: "",
+			wantOk:   false,
+		},
+		{
+			name: "default filter key (empty string)",
+			session: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "user",
+				Summaries: map[string]*session.Summary{
+					"":        {Summary: "full summary"},
+					"filter1": {Summary: "filtered summary"},
+				},
+			},
+			opts:     nil,
+			wantText: "full summary",
+			wantOk:   true,
+		},
+		{
+			name: "specific filter key",
+			session: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "user",
+				Summaries: map[string]*session.Summary{
+					"":        {Summary: "full summary"},
+					"filter1": {Summary: "filtered summary"},
+				},
+			},
+			opts:     []session.SummaryOption{session.WithSummaryFilterKey("filter1")},
+			wantText: "filtered summary",
+			wantOk:   true,
+		},
+		{
+			name: "non-existent filter key with fallback",
+			session: &session.Session{
+				ID:      "s1",
+				AppName: "app",
+				UserID:  "user",
+				Summaries: map[string]*session.Summary{
+					"":        {Summary: "full summary"},
+					"filter1": {Summary: "filtered summary"},
+				},
+			},
+			opts:     []session.SummaryOption{session.WithSummaryFilterKey("nonexistent")},
+			wantText: "full summary",
+			wantOk:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotOk := GetSummaryTextFromSession(tt.session, tt.opts...)
+			require.Equal(t, tt.wantText, gotText)
+			require.Equal(t, tt.wantOk, gotOk)
+		})
+	}
+}
+
+func TestGetFilterKeyFromOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    []session.SummaryOption
+		wantKey string
+	}{
+		{
+			name:    "no options",
+			opts:    nil,
+			wantKey: "",
+		},
+		{
+			name:    "empty options",
+			opts:    []session.SummaryOption{},
+			wantKey: "",
+		},
+		{
+			name:    "with filter key",
+			opts:    []session.SummaryOption{session.WithSummaryFilterKey("test-key")},
+			wantKey: "test-key",
+		},
+		{
+			name:    "with empty filter key",
+			opts:    []session.SummaryOption{session.WithSummaryFilterKey("")},
+			wantKey: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotKey := GetFilterKeyFromOptions(tt.opts...)
+			require.Equal(t, tt.wantKey, gotKey)
+		})
+	}
+}

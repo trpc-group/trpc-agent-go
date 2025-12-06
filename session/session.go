@@ -416,6 +416,25 @@ func WithEventTime(time time.Time) Option {
 	}
 }
 
+// SummaryOption is the option for getting session summary.
+type SummaryOption func(*SummaryOptions)
+
+// SummaryOptions is the options for getting session summary.
+type SummaryOptions struct {
+	// FilterKey specifies which filter's summary to retrieve.
+	// When empty (SummaryFilterKeyAllContents), retrieves the full-session summary.
+	FilterKey string
+}
+
+// WithSummaryFilterKey sets the filter key for summary retrieval.
+// When empty (SummaryFilterKeyAllContents), retrieves the full-session summary.
+// Use this option to get summaries for specific event filters (e.g., "user-messages").
+func WithSummaryFilterKey(filterKey string) SummaryOption {
+	return func(o *SummaryOptions) {
+		o.FilterKey = filterKey
+	}
+}
+
 // Service is the interface that all session services must implement.
 type Service interface {
 	// CreateSession creates a new session.
@@ -475,7 +494,9 @@ type Service interface {
 
 	// GetSessionSummaryText returns the latest summary text for the session if any.
 	// The boolean indicates whether a summary exists.
-	GetSessionSummaryText(ctx context.Context, sess *Session) (string, bool)
+	// When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
+	// Use WithSummaryFilterKey to specify a different filter key.
+	GetSessionSummaryText(ctx context.Context, sess *Session, opts ...SummaryOption) (string, bool)
 
 	// Close closes the service.
 	Close() error

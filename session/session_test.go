@@ -91,6 +91,35 @@ func TestWithEventTime(t *testing.T) {
 	}
 }
 
+func TestWithSummaryFilterKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		filterKey string
+	}{
+		{
+			name:      "empty filter key",
+			filterKey: "",
+		},
+		{
+			name:      "specific filter key",
+			filterKey: "user-messages",
+		},
+		{
+			name:      "another filter key",
+			filterKey: "tool-calls",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			option := WithSummaryFilterKey(tt.filterKey)
+			opts := &SummaryOptions{}
+			option(opts)
+			assert.Equal(t, tt.filterKey, opts.FilterKey)
+		})
+	}
+}
+
 func TestKey_CheckSessionKey(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -692,7 +721,7 @@ func (m *MockService) EnqueueSummaryJob(ctx context.Context, sess *Session, filt
 	return nil
 }
 
-func (m *MockService) GetSessionSummaryText(ctx context.Context, sess *Session) (string, bool) {
+func (m *MockService) GetSessionSummaryText(ctx context.Context, sess *Session, opts ...SummaryOption) (string, bool) {
 	return "", false
 }
 
@@ -1451,7 +1480,7 @@ func TestSession_Clone(t *testing.T) {
 					UserID:  "user-333",
 					State:   StateMap{"test": []byte("value")},
 					Summaries: map[string]*Summary{
-						"test": &Summary{Summary: "test"},
+						"test": {Summary: "test"},
 					},
 					UpdatedAt: now,
 					CreatedAt: now.Add(-6 * time.Hour),
