@@ -109,6 +109,7 @@ var (
 		Variant:               VariantOpenAI, // The default variant is VariantOpenAI.
 		ChannelBufferSize:     defaultChannelBufferSize,
 		BatchCompletionWindow: defaultBatchCompletionWindow,
+		TokenCounter:          model.NewSimpleTokenCounter(),
 		TokenTailoringConfig: &model.TokenTailoringConfig{
 			ProtocolOverheadTokens: imodel.DefaultProtocolOverheadTokens,
 			ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
@@ -339,6 +340,9 @@ func modelUsageToCompletionUsage(usage model.Usage) openai.CompletionUsage {
 // If not provided and token limit is enabled, a SimpleTokenCounter will be used.
 func WithTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *options) {
+		if counter == nil {
+			return
+		}
 		opts.TokenCounter = counter
 	}
 }
