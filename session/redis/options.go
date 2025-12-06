@@ -12,6 +12,7 @@ package redis
 import (
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -44,6 +45,9 @@ type ServiceOpts struct {
 	summaryQueueSize int
 	// summaryJobTimeout is the timeout for processing a single summary job.
 	summaryJobTimeout time.Duration
+	// hooks for session operations.
+	appendEventHooks []session.AppendEventHook
+	getSessionHooks  []session.GetSessionHook
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -171,5 +175,19 @@ func WithSummaryJobTimeout(timeout time.Duration) ServiceOpt {
 			return
 		}
 		opts.summaryJobTimeout = timeout
+	}
+}
+
+// WithAppendEventHook adds AppendEvent hooks.
+func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.appendEventHooks = append(opts.appendEventHooks, hooks...)
+	}
+}
+
+// WithGetSessionHook adds GetSession hooks.
+func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
 	}
 }
