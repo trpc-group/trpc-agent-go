@@ -54,6 +54,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	vectormvtcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus"
 	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 
@@ -66,7 +67,7 @@ var (
 	modelName     = flag.String("model", "deepseek-chat", "Name of the model to use")
 	streaming     = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType  = flag.String("embedder", "openai", "Embedder type: openai, gemini, ollama, huggingface")
-	vectorStore   = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
+	vectorStore   = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch, milvus")
 	esVersion     = flag.String("es-version", "v9", "Elasticsearch version: v7, v8, v9 (only used when vectorstore=elasticsearch)")
 	agenticFilter = flag.Bool("agentic_filter", true, "Enable agentic filter for knowledge search")
 	recreate      = flag.Bool("recreate", false, "Recreate the vector store on startup, all data in vector store will be deleted.")
@@ -101,6 +102,11 @@ var (
 	elasticsearchPassword  = getEnvOrDefault("ELASTICSEARCH_PASSWORD", "")
 	elasticsearchAPIKey    = getEnvOrDefault("ELASTICSEARCH_API_KEY", "")
 	elasticsearchIndexName = getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_go")
+
+	// Milvus.
+	milvusAddress  = getEnvOrDefault("MILVUS_ADDRESS", "localhost:19530")
+	milvusUsername = getEnvOrDefault("MILVUS_USERNAME", "")
+	milvusPassword = getEnvOrDefault("MILVUS_PASSWORD", "")
 )
 
 func main() {
@@ -243,7 +249,7 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 }
 
 // setupVectorDB creates the appropriate vector store based on the selected type.
-func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
+func (c *knowledgeChat) setupVectorDB(ctx context.Context) (vectorstore.VectorStore, error) {
 	switch strings.ToLower(*vectorStore) {
 	case "inmemory":
 		return vectorinmemory.New(), nil
@@ -261,6 +267,16 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create pgvector store: %w", err)
+		}
+		return vs, nil
+	case "milvus":
+		vs, err := vectormvtcvector.New(ctx,
+			vectormvtcvector.WithAddress(milvusAddress),
+			vectormvtcvector.WithUsername(milvusUsername),
+			vectormvtcvector.WithPassword(milvusPassword),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create milvus store: %w", err)
 		}
 		return vs, nil
 	case "tcvector":
@@ -444,7 +460,7 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 	c.sources = c.createSources()
 
 	// Create vector store.
-	vs, err := c.setupVectorDB()
+	vs, err := c.setupVectorDB(ctx)
 	if err != nil {
 		return err
 	}
@@ -496,6 +512,8 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 		}
 	case "pgvector":
 		fmt.Printf("   PGVector: %s:%s/%s\n", pgvectorHost, pgvectorPort, pgvectorDatabase)
+	case "milvus":
+		fmt.Printf("   Milvus: %s\n", milvusAddress)
 	case "tcvector":
 		if tcvectorURL != "" {
 			fmt.Printf("   TCVector: %s\n", tcvectorURL)
