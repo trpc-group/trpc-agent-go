@@ -28,6 +28,7 @@ import (
 )
 
 var _ session.Service = (*Service)(nil)
+var _ session.TrackService = (*Service)(nil)
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -45,6 +46,7 @@ type Service struct {
 	appStateTTL     time.Duration            // TTL for app state
 	userStateTTL    time.Duration            // TTL for user state
 	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
+	trackEventChans []chan *trackEventPair   // channel for track events to persistence.
 	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
 	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
 	cleanupDone     chan struct{}            // signal to stop cleanup routine
@@ -56,6 +58,7 @@ type Service struct {
 	// Table names with prefix applied
 	tableSessionStates    string
 	tableSessionEvents    string
+	tableSessionTracks    string
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
@@ -64,6 +67,11 @@ type Service struct {
 type sessionEventPair struct {
 	key   session.Key
 	event *event.Event
+}
+
+type trackEventPair struct {
+	key   session.Key
+	event *session.TrackEvent
 }
 
 // summaryJob represents a summary job to be processed asynchronously.
@@ -103,6 +111,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Build table names with prefix
 	tableSessionStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionStates)
 	tableSessionEvents := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionEvents)
+	tableSessionTracks := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionTrackEvents)
 	tableSessionSummaries := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionSummaries)
 	tableAppStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameAppStates)
 	tableUserStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameUserStates)
@@ -116,6 +125,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL:          opts.userStateTTL,
 		tableSessionStates:    tableSessionStates,
 		tableSessionEvents:    tableSessionEvents,
+		tableSessionTracks:    tableSessionTracks,
 		tableSessionSummaries: tableSessionSummaries,
 		tableAppStates:        tableAppStates,
 		tableUserStates:       tableUserStates,
@@ -156,6 +166,11 @@ func (s *Service) Close() error {
 	// Close async persist workers
 	if s.eventPairChans != nil {
 		for _, ch := range s.eventPairChans {
+			close(ch)
+		}
+	}
+	if s.trackEventChans != nil {
+		for _, ch := range s.trackEventChans {
 			close(ch)
 		}
 	}
@@ -610,29 +625,91 @@ func (s *Service) AppendEvent(
 	return nil
 }
 
+// AppendTrackEvent appends a protocol-specific track event to a session.
+func (s *Service) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	trackEvent *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	key := session.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("mysql session service append track event failed: %w", err)
+	}
+
+	if s.opts.enableAsyncPersist {
+		defer func() {
+			if r := recover(); r != nil {
+				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
+					log.Errorf("mysql session service append track event failed: %v", r)
+					return
+				}
+				panic(r)
+			}
+		}()
+
+		index := sess.Hash % len(s.trackEventChans)
+		select {
+		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	if err := s.addTrackEvent(ctx, key, trackEvent); err != nil {
+		return fmt.Errorf("mysql session service append track event failed: %w", err)
+	}
+	return nil
+}
+
 // startAsyncPersistWorker starts worker goroutines for async event persistence.
 func (s *Service) startAsyncPersistWorker() {
 	persisterNum := s.opts.asyncPersisterNum
-	// init event pair chan
+	// init event pair chan and track pair chan.
 	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
+	s.trackEventChans = make([]chan *trackEventPair, persisterNum)
 	for i := 0; i < persisterNum; i++ {
 		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
+		s.trackEventChans[i] = make(chan *trackEventPair, defaultChanBufferSize)
 	}
 
-	s.persistWg.Add(persisterNum)
+	s.persistWg.Add(persisterNum * 2)
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			for eventPair := range eventPairChan {
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
 					cap(eventPairChan), len(eventPairChan), eventPair.key.AppName, eventPair.key.UserID, eventPair.key.SessionID)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
 					log.Errorf("async persist event failed: %w", err)
 				}
 				cancel()
 			}
 		}(eventPairChan)
+	}
+
+	for _, trackPairChan := range s.trackEventChans {
+		go func(trackPairChan chan *trackEventPair) {
+			defer s.persistWg.Done()
+			for pair := range trackPairChan {
+				log.Debugf("Session track persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
+					cap(trackPairChan), len(trackPairChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
+				if err := s.addTrackEvent(ctx, pair.key, pair.event); err != nil {
+					log.Errorf("async persist track event failed: %w", err)
+				}
+				cancel()
+			}
+		}(trackPairChan)
 	}
 }
 
@@ -754,6 +831,11 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 						s.tableSessionEvents, strings.Join(placeholders, ",")), append([]any{now}, args...)...); err != nil {
 					return fmt.Errorf("soft delete events: %w", err)
 				}
+				if _, err := tx.ExecContext(ctx,
+					fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
+						s.tableSessionTracks, strings.Join(placeholders, ",")), append([]any{now}, args...)...); err != nil {
+					return fmt.Errorf("soft delete track events: %w", err)
+				}
 			}
 
 			return nil
@@ -785,7 +867,12 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 				if _, err := tx.ExecContext(ctx,
 					fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
 						s.tableSessionEvents, strings.Join(placeholders, ",")), args...); err != nil {
-					return fmt.Errorf("soft delete summaries: %w", err)
+					return fmt.Errorf("hard delete events: %w", err)
+				}
+				if _, err := tx.ExecContext(ctx,
+					fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
+						s.tableSessionTracks, strings.Join(placeholders, ",")), args...); err != nil {
+					return fmt.Errorf("hard delete track events: %w", err)
 				}
 			}
 			return nil
@@ -871,12 +958,22 @@ func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.Use
 			now, userKey.AppName, userKey.UserID, now); err != nil {
 			log.Errorf("cleanup expired sessions for user failed: %v", err)
 		}
+		if _, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionTracks),
+			now, userKey.AppName, userKey.UserID, now); err != nil {
+			log.Errorf("cleanup expired track events for user failed: %v", err)
+		}
 	} else {
 		// Hard delete expired sessions for this user
 		if _, err := s.mysqlClient.Exec(ctx,
 			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
 			userKey.AppName, userKey.UserID, now); err != nil {
 			log.Errorf("cleanup expired sessions for user failed: %v", err)
+		}
+		if _, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionTracks),
+			userKey.AppName, userKey.UserID, now); err != nil {
+			log.Errorf("cleanup expired track events for user failed: %v", err)
 		}
 	}
 }
