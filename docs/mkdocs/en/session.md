@@ -51,8 +51,8 @@ func main() {
     summarizer := summary.NewSummarizer(
         llm, // Use same LLM model for summary generation
         summary.WithChecksAny(                         // Trigger when any condition is met
-            summary.CheckEventThreshold(20),           // Trigger when exceeds 20 events
-            summary.CheckTokenThreshold(4000),         // Trigger when exceeds 4000 tokens
+            summary.CheckEventThreshold(20),           // Trigger when 20+ new events since last summary
+            summary.CheckTokenThreshold(4000),         // Trigger when 4000+ new tokens since last summary
             summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
         ),
         summary.WithMaxSummaryWords(200), // Limit summary to 200 words
@@ -197,8 +197,8 @@ import (
 summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithChecksAny(                         // Trigger when any condition is met
-        summary.CheckEventThreshold(20),           // Trigger when exceeds 20 events
-        summary.CheckTokenThreshold(4000),         // Trigger when exceeds 4000 tokens
+        summary.CheckEventThreshold(20),           // Trigger when 20+ new events since last summary
+        summary.CheckTokenThreshold(4000),         // Trigger when 4000+ new tokens since last summary
         summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
     ),
     summary.WithMaxSummaryWords(200),              // Limit summary to 200 words
@@ -1120,8 +1120,8 @@ summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 // Create summarizer with trigger conditions.
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithEventThreshold(20),        // Trigger when exceeds 20 events.
-    summary.WithTokenThreshold(4000),      // Trigger when exceeds 4000 tokens.
+    summary.WithEventThreshold(20),        // Trigger when 20+ new events since last summary.
+    summary.WithTokenThreshold(4000),      // Trigger when 4000+ new tokens since last summary.
     summary.WithMaxSummaryWords(200),      // Limit summary to 200 words.
 )
 ```
@@ -1242,8 +1242,8 @@ Configure the summarizer behavior with the following options:
 
 **Trigger Conditions:**
 
-- **`WithEventThreshold(eventCount int)`**: Trigger summarization when the number of events exceeds the threshold. Example: `WithEventThreshold(20)` triggers when exceeds 20 events.
-- **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the total token count exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when exceeds 4000 tokens.
+- **`WithEventThreshold(eventCount int)`**: Trigger summarization when the number of new events since last summary exceeds the threshold. Example: `WithEventThreshold(20)` triggers when 20+ new events have occurred since last summary.
+- **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the new token count since last summary exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when 4000+ new tokens have been added since last summary.
 - **`WithTimeThreshold(interval time.Duration)`**: Trigger summarization when time elapsed since the last event exceeds the interval. Example: `WithTimeThreshold(5*time.Minute)` triggers after 5 minutes of inactivity.
 
 **Composite Conditions:**
@@ -1387,7 +1387,7 @@ if found {
 
 2. **Delta Summarization**: New events are combined with the previous summary (prepended as a system event) to generate an updated summary that incorporates both old context and new information.
 
-3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (event count, token count, time threshold). If conditions aren't met and `force=false`, summarization is skipped.
+3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (based on incremental event count, token count, and time threshold since last summary). If conditions aren't met and `force=false`, summarization is skipped.
 
 4. **Async Workers**: Summary jobs are distributed across multiple worker goroutines using hash-based distribution. This ensures jobs for the same session are processed sequentially while different sessions can be processed in parallel.
 

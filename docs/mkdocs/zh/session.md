@@ -1123,8 +1123,8 @@ summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithChecksAny(                     // 任一条件满足即触发
-        summary.CheckEventThreshold(20),       // 超过 20 个事件后触发
-        summary.CheckTokenThreshold(4000),     // 超过 4000 个 token 后触发
+        summary.CheckEventThreshold(20),       // 自上次摘要后新增 20 个事件后触发
+        summary.CheckTokenThreshold(4000),     // 自上次摘要后新增 4000 个 token 后触发
         summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
     ),
     summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
@@ -1368,8 +1368,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 **触发条件：**
 
-- **`WithEventThreshold(eventCount int)`**：当事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在超过 20 个事件后触发。
-- **`WithTokenThreshold(tokenCount int)`**：当总 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在超过 4000 个 token 后触发。
+- **`WithEventThreshold(eventCount int)`**：当自上次摘要后的事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在自上次摘要后新增 20 个事件后触发。
+- **`WithTokenThreshold(tokenCount int)`**：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在自上次摘要后新增 4000 个 token 后触发。
 - **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
 
 **组合条件：**
@@ -1474,7 +1474,7 @@ if found {
 
 2. **增量摘要**：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。
 
-3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
+3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
 
 4. **异步 Worker**：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。
 
