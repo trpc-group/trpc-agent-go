@@ -240,6 +240,71 @@ func TestTextMessageEventInvalidObject(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestTextMessageEventChunkFinishReasonEndsStream(t *testing.T) {
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
+	assert.True(t, ok)
+
+	firstChunk := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "hi"},
+		}},
+	}
+	initialEvents, err := translator.textMessageEvent(firstChunk)
+	assert.NoError(t, err)
+	assert.Len(t, initialEvents, 2)
+	assert.True(t, translator.receivingMessage)
+
+	reason := "stop"
+	finishChunk := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta:        model.Message{Role: model.RoleAssistant},
+			FinishReason: &reason,
+		}},
+	}
+	events, err := translator.textMessageEvent(finishChunk)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	end, ok := events[0].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-1", end.MessageID)
+	assert.False(t, translator.receivingMessage)
+}
+
+func TestTextMessageEventChunkWithContentAndFinishReason(t *testing.T) {
+	translator, ok := New(context.Background(), "thread", "run").(*translator)
+	assert.True(t, ok)
+
+	reason := "stop"
+	chunk := &model.Response{
+		ID:     "msg-finish",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta:        model.Message{Role: model.RoleAssistant, Content: "done"},
+			FinishReason: &reason,
+		}},
+	}
+	events, err := translator.textMessageEvent(chunk)
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-finish", start.MessageID)
+
+	content, ok := events[1].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "done", content.Delta)
+
+	end, ok := events[2].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-finish", end.MessageID)
+	assert.False(t, translator.receivingMessage)
+}
+
 func TestGraphModelMetadataProducesText(t *testing.T) {
 	tr, ok := New(context.Background(), "thread", "run").(*translator)
 	assert.True(t, ok)
