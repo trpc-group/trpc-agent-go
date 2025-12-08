@@ -248,3 +248,19 @@ func TestInjectSessionState_MustachePlaceholders(t *testing.T) {
 		t.Fatalf("InjectSessionState invalid mustache: got %q err=%v", s, err)
 	}
 }
+
+func TestInjectSessionState_RawNumericString(t *testing.T) {
+	// Prepare invocation session state with a raw numeric-looking string value.
+	sm := make(session.StateMap)
+	sm["code"] = []byte("123456789012345678901234567890")
+	inv := &agent.Invocation{Session: &session.Session{State: sm}}
+
+	s, err := InjectSessionState("Code: {code}", inv)
+	if err != nil {
+		t.Fatalf("InjectSessionState raw numeric string: unexpected error: %v", err)
+	}
+	const want = "Code: 123456789012345678901234567890"
+	if s != want {
+		t.Fatalf("InjectSessionState raw numeric string: got %q, want %q", s, want)
+	}
+}

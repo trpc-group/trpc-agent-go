@@ -4,7 +4,7 @@ This example demonstrates how to integrate a knowledge base with the LLM agent i
 
 ## Features
 
-- **Multiple Vector Store Support**: Choose between in-memory, pgvector (PostgreSQL), tcvector, or Elasticsearch storage backends
+- **Multiple Vector Store Support**: Choose between in-memory, pgvector (PostgreSQL), tcvector, milvus or Elasticsearch storage backends
 - **Elasticsearch Version Support**: Multi-version compatibility (v7, v8, v9) with automatic version selection
 - **Multiple Embedder Support**: OpenAI and Gemini embedder options
 - **Rich Knowledge Sources**: Supports file, directory, URL, and auto-detection sources
@@ -160,6 +160,17 @@ go run main.go -agentic_filter=false
   export TCVECTOR_URL="your_tcvector_service_url"
   export TCVECTOR_USERNAME="your_username"
   export TCVECTOR_PASSWORD="your_password"
+  ```
+
+### Milvus
+
+- **Use case**: Large-scale, high-performance vector search
+- **Setup**: Requires a running Milvus instance
+- **Environment Variables**:
+  ```bash
+  export MILVUS_ADDRESS="localhost:19530"
+  export MILVUS_USERNAME=""            # Optional
+  export MILVUS_PASSWORD=""            # Optional
   ```
 
 ### Elasticsearch
