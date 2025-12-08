@@ -586,6 +586,39 @@ stateGraph.
     SetFinishPoint("ask")
 ```
 
+#### 使用 RemoveAllMessages 清除消息历史
+
+当多个 LLM 节点串联时，`MessageReducer` 会累积消息。如果每个 LLM 节点
+需要独立的消息上下文（不继承前序节点的对话历史），可以使用
+`RemoveAllMessages` 操作清除之前的消息：
+
+```go
+// 在准备 prompt 的节点中，先清除消息再设置新的 UserInput.
+func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+    userMessage := buildUserMessage(...)
+    return graph.State{
+        // 关键：先清除之前的消息，避免累积.
+        graph.StateKeyMessages:  graph.RemoveAllMessages{},
+        graph.StateKeyUserInput: userMessage,
+    }, nil
+}
+```
+
+**适用场景**：
+
+- 同一个 Graph 内有多个独立的 LLM 节点，每个节点不需要前序节点的对话历史
+- 循环结构中，每次迭代需要全新的消息上下文
+- 需要完全重建消息列表的场景
+
+**注意**：
+
+- `RemoveAllMessages{}` 是一个特殊的 `MessageOp`，`MessageReducer` 会
+  识别它并清空消息列表
+- 必须在设置 `StateKeyUserInput` **之前**先设置 `RemoveAllMessages{}`
+- `WithSubgraphIsolatedMessages(true)` 只对 `AddSubgraphNode` 有效，
+  对 `AddLLMNode` 无效；如需在 LLM 节点间隔离消息，请使用
+  `RemoveAllMessages`
+
 ### 3. GraphAgent 配置选项
 
 GraphAgent 支持多种配置选项：
@@ -2872,6 +2905,24 @@ graphAgent, _ := graphagent.New("workflow", g,
   sg.AddToolsConditionalEdges("ask", "tools", "fallback")
   ```
 - **调用时机**：当 `AddToolsConditionalEdges` 检测到 LLM 响应中包含 `tool_calls` 时，会路由到 `AddToolsNode`，由工具节点执行实际调用。
+
+**Q9: 多个 LLM 节点串联时，req.Messages 中消息被重复追加**
+
+- **问题现象**：同一个用户输入在 `req.Messages` 中出现多次。
+- **根本原因**：使用 `MessagesStateSchema()` 时，`MessageReducer` 会累积消息。每个 LLM 节点执行时，如果 `StateKeyUserInput` 不为空，会追加新的 user message。当存在循环（如工具调用循环）或多个 LLM 节点串联时，消息会不断累积。
+- **解决方案**：在设置新的 `StateKeyUserInput` 之前，使用 `RemoveAllMessages` 清除之前的消息：
+  ```go
+  // 在准备 prompt 的节点中
+  func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+      userMessage := buildUserMessage(...)
+      return graph.State{
+          // 关键：先清除之前的消息，避免累积
+          graph.StateKeyMessages:  graph.RemoveAllMessages{},
+          graph.StateKeyUserInput: userMessage,
+      }, nil
+  }
+  ```
+- **注意**：`WithSubgraphIsolatedMessages(true)` 只对 `AddSubgraphNode` 有效，对 `AddLLMNode` 无效。
 
 ## 实际案例
 

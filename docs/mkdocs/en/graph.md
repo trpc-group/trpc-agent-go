@@ -508,6 +508,39 @@ stateGraph.
     SetFinishPoint("ask")
 ```
 
+#### Using RemoveAllMessages to Clear Message History
+
+When chaining multiple LLM nodes, `MessageReducer` accumulates messages. If each
+LLM node requires an isolated message context (without inheriting the previous
+node's conversation history), use `RemoveAllMessages` to clear previous messages:
+
+```go
+// In the prompt preparation node, clear messages before setting new UserInput.
+func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+    userMessage := buildUserMessage(...)
+    return graph.State{
+        // Key: Clear previous messages first to avoid accumulation.
+        graph.StateKeyMessages:  graph.RemoveAllMessages{},
+        graph.StateKeyUserInput: userMessage,
+    }, nil
+}
+```
+
+**Use cases**:
+
+- Multiple independent LLM nodes within the same Graph, where each node doesn't
+  need the previous node's conversation history
+- Loop structures where each iteration requires a fresh message context
+- Scenarios requiring complete message list reconstruction
+
+**Notes**:
+
+- `RemoveAllMessages{}` is a special `MessageOp` that `MessageReducer` recognizes
+  and uses to clear the message list
+- Must set `RemoveAllMessages{}` **before** setting `StateKeyUserInput`
+- `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for
+  `AddLLMNode`; use `RemoveAllMessages` to isolate messages between LLM nodes
+
 ### 3. GraphAgent Configuration Options
 
 GraphAgent supports various configuration options:
@@ -2848,6 +2881,24 @@ graphAgent, _ := graphagent.New("workflow", g,
   sg.AddToolsConditionalEdges("ask", "tools", "fallback")
   ```
 - **Execution timing**: When `AddToolsConditionalEdges` detects `tool_calls` in the LLM response, it routes to `AddToolsNode`, which executes the actual tool calls.
+
+**Q9: Messages are duplicated in req.Messages when chaining multiple LLM nodes**
+
+- **Symptom**: The same user input appears multiple times in `req.Messages`.
+- **Root cause**: When using `MessagesStateSchema()`, `MessageReducer` accumulates messages. Each LLM node execution appends a new user message if `StateKeyUserInput` is not empty. When there are loops (e.g., tool call loops) or multiple LLM nodes chained together, messages keep accumulating.
+- **Solution**: Use `RemoveAllMessages` to clear previous messages before setting a new `StateKeyUserInput`:
+  ```go
+  // In the prepare prompt node
+  func preparePromptNode(ctx context.Context, state graph.State) (any, error) {
+      userMessage := buildUserMessage(...)
+      return graph.State{
+          // Key: Clear previous messages to avoid accumulation
+          graph.StateKeyMessages:  graph.RemoveAllMessages{},
+          graph.StateKeyUserInput: userMessage,
+      }, nil
+  }
+  ```
+- **Note**: `WithSubgraphIsolatedMessages(true)` only works for `AddSubgraphNode`, not for `AddLLMNode`.
 
 ## Real‑World Example
 
