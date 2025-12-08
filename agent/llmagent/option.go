@@ -49,6 +49,24 @@ const (
 	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
 )
 
+// MessageFilterMode is the mode for filtering messages.
+type MessageFilterMode int
+
+const (
+	// FullContext Includes all messages with prefix matching (including historical messages).
+	// equivalent to TimelineFilterAll + BranchFilterModePrefix.
+	FullContext MessageFilterMode = iota
+	// RequestContext includes only messages from the current request cycle that match the branch prefix.
+	// equivalent to TimelineFilterCurrentRequest + BranchFilterModePrefix.
+	RequestContext
+	// IsolatedRequest includes only messages from the current request cycle that exactly match the branch.
+	// equivalent to TimelineFilterCurrentRequest + BranchFilterModeExact.
+	IsolatedRequest
+	// IsolatedInvocation includes only messages from current invocation session that exactly match the branch,
+	// equivalent to TimelineFilterCurrentInvocation + BranchFilterModeExact.
+	IsolatedInvocation
+)
+
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
@@ -514,5 +532,27 @@ func WithMessageBranchFilterMode(mode string) Option {
 func WithToolFilter(filter tool.FilterFunc) Option {
 	return func(opts *Options) {
 		opts.toolFilter = filter
+	}
+}
+
+// WithMessageFilterMode sets the message filter mode.
+func WithMessageFilterMode(mode MessageFilterMode) Option {
+	return func(opts *Options) {
+		switch mode {
+		case FullContext:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterAll
+		case RequestContext:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
+		case IsolatedRequest:
+			opts.messageBranchFilterMode = BranchFilterModeExact
+			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
+		case IsolatedInvocation:
+			opts.messageBranchFilterMode = BranchFilterModeExact
+			opts.messageTimelineFilterMode = TimelineFilterCurrentInvocation
+		default:
+			panic("invalid option value")
+		}
 	}
 }
