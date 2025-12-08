@@ -65,8 +65,8 @@ func TestGetAllMetadata(t *testing.T) {
 				},
 			},
 			expected: map[string][]any{
-				"category": {"docs"},
-				"version":  {"1.0"},
+				"metadata.category": {"docs"},
+				"metadata.version":  {"1.0"},
 			},
 		},
 		{
@@ -90,8 +90,8 @@ func TestGetAllMetadata(t *testing.T) {
 				},
 			},
 			expected: map[string][]any{
-				"category": {"docs", "api"},
-				"version":  {"1.0", "2.0"},
+				"metadata.category": {"docs", "api"},
+				"metadata.version":  {"1.0", "2.0"},
 			},
 		},
 		{
@@ -115,8 +115,8 @@ func TestGetAllMetadata(t *testing.T) {
 				},
 			},
 			expected: map[string][]any{
-				"category": {"docs"}, // should be deduplicated
-				"version":  {"1.0", "2.0"},
+				"metadata.category": {"docs"}, // should be deduplicated
+				"metadata.version":  {"1.0", "2.0"},
 			},
 		},
 		{
@@ -138,7 +138,7 @@ func TestGetAllMetadata(t *testing.T) {
 				},
 			},
 			expected: map[string][]any{
-				"count": {5, "5"},
+				"metadata.count": {5, "5"},
 			},
 		},
 	}
@@ -195,8 +195,8 @@ func TestGetAllMetadataWithoutValues(t *testing.T) {
 				},
 			},
 			expected: map[string][]any{
-				"category": {},
-				"version":  {},
+				"metadata.category": {},
+				"metadata.version":  {},
 			},
 		},
 		{
@@ -220,9 +220,9 @@ func TestGetAllMetadataWithoutValues(t *testing.T) {
 				},
 			},
 			expected: map[string][]any{
-				"category": {},
-				"version":  {},
-				"author":   {},
+				"metadata.category": {},
+				"metadata.version":  {},
+				"metadata.author":   {},
 			},
 		},
 	}
@@ -265,7 +265,7 @@ func TestGetAllMetadataKeys(t *testing.T) {
 					},
 				},
 			},
-			expected: []string{"category", "version"},
+			expected: []string{"metadata.category", "metadata.version"},
 		},
 		{
 			name: "multiple sources with overlapping keys",
@@ -287,7 +287,7 @@ func TestGetAllMetadataKeys(t *testing.T) {
 					},
 				},
 			},
-			expected: []string{"category", "version", "author"},
+			expected: []string{"metadata.category", "metadata.version", "metadata.author"},
 		},
 	}
 

@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -413,8 +414,8 @@ func isValidField(field string) bool {
 		return true
 	}
 
-	// metadata fields are prefixed with "metadata."
-	if strings.HasPrefix(field, "metadata.") {
+	// metadata fields are prefixed with source.MetadataFieldPrefix
+	if strings.HasPrefix(field, source.MetadataFieldPrefix) {
 		return true
 	}
 	return false
@@ -437,12 +438,12 @@ func fieldValue(doc *document.Document, field string) (any, bool) {
 	case updatedAtField:
 		return doc.UpdatedAt, true
 	default:
-		if !strings.HasPrefix(field, "metadata.") {
+		if !strings.HasPrefix(field, source.MetadataFieldPrefix) {
 			return nil, false
 		}
 
 		// metadata fields
-		elementKey := strings.TrimPrefix(field, "metadata.")
+		elementKey := strings.TrimPrefix(field, source.MetadataFieldPrefix)
 		if val, ok := doc.Metadata[elementKey]; ok {
 			return val, true
 		}

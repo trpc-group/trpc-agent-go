@@ -88,7 +88,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	vs := &VectorStore{
 		client:          client,
 		option:          option,
-		filterConverter: &esConverter{},
+		filterConverter: &esConverter{metadataFieldName: option.metadataFieldName},
 	}
 
 	// Ensure index exists with proper mapping.

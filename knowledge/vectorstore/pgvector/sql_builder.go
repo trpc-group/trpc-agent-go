@@ -240,10 +240,11 @@ func (qb *queryBuilder) addKeywordSearchConditions(query string, minScore float6
 	}
 }
 
-// addHybridFtsCondition adds full-text search condition for hybrid search.
+// addHybridFtsCondition sets up text query for hybrid search scoring.
 func (qb *queryBuilder) addHybridFtsCondition(query string) {
 	qb.textQueryPos = qb.argIndex
-	qb.addFtsCondition(query)
+	qb.args = append(qb.args, query)
+	qb.argIndex++
 }
 
 // addVectorArg adds vector argument to the query.
@@ -308,12 +309,14 @@ func (qb *queryBuilder) buildVectorSelectClause() string {
 }
 
 // buildHybridSelectClause generates SELECT clause for hybrid search.
+// Uses COALESCE to handle cases where text search doesn't match, returning 0 for text score.
 func (qb *queryBuilder) buildHybridSelectClause() string {
 	var scoreExpr string
 	if qb.textQueryPos > 0 {
 		// Hybrid search: vector + text.
+		// Use COALESCE to return 0 for text score when there's no match.
 		scoreExpr = fmt.Sprintf(
-			"(1 - (%s <=> $1)) * %.3f + ts_rank_cd(to_tsvector('%s', %s), plainto_tsquery('%s', $%d)) * %.3f",
+			"(1 - (%s <=> $1)) * %.3f + COALESCE(ts_rank_cd(to_tsvector('%s', %s), plainto_tsquery('%s', $%d)), 0) * %.3f",
 			qb.o.embeddingFieldName, qb.vectorWeight,
 			qb.o.language, qb.o.contentFieldName,
 			qb.o.language, qb.textQueryPos, qb.textWeight)
