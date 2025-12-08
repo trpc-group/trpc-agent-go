@@ -109,8 +109,8 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 
 	// Try in-memory session summaries first.
 	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
-		return text, true
-	}
+			return text, true
+		}
 
 	// Fall back to Redis-stored summaries.
 	if bytes, err := s.redisClient.HGet(ctx, getSessionSummaryKey(key), key.SessionID).Bytes(); err == nil && len(bytes) > 0 {

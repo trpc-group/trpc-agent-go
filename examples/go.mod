@@ -2,7 +2,9 @@ module trpc.group/trpc-go/trpc-agent-go/examples
 
 go 1.23.0
 
-replace trpc.group/trpc-go/trpc-agent-go => ../
+// replace trpc.group/trpc-go/trpc-agent-go => ../
+
+replace trpc.group/trpc-go/trpc-agent-go => github.com/hyprh/trpc-agent-go v0.0.0-20251208062136-097bc33762ca
 
 require (
 	github.com/google/uuid v1.6.0
