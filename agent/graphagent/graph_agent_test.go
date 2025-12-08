@@ -861,7 +861,13 @@ func TestGraphAgent_AfterCallbackReturnsResponse(t *testing.T) {
 
 	// Create callbacks with after agent.
 	callbacks := agent.NewCallbacks()
-	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+	var callbackErr error
+	callbacks.RegisterAfterAgent(func(
+		ctx context.Context,
+		inv *agent.Invocation,
+		err error,
+	) (*model.Response, error) {
+		callbackErr = err
 		return &model.Response{
 			Object: "after.custom",
 			Done:   true,
@@ -895,6 +901,9 @@ func TestGraphAgent_AfterCallbackReturnsResponse(t *testing.T) {
 
 	// Should have graph execution event(s) plus after callback event.
 	require.Greater(t, len(collected), 0)
+
+	// After-callback in success path should see nil error.
+	require.NoError(t, callbackErr)
 
 	// Last event should be from after callback.
 	last := collected[len(collected)-1]
@@ -952,4 +961,61 @@ func TestGraphAgent_AfterCallbackReturnsError(t *testing.T) {
 	require.NotNil(t, last.Error)
 	require.Equal(t, agent.ErrorTypeAgentCallbackError, last.Error.Type)
 	require.Contains(t, last.Error.Message, "after callback failed")
+}
+
+func TestGraphAgent_AfterCallbackReceivesExecutionError(t *testing.T) {
+	// Create a simple graph that fails at the node.
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("fail", func(
+			ctx context.Context,
+			state graph.State,
+		) (any, error) {
+			return nil, fmt.Errorf("node failed")
+		}).
+		SetEntryPoint("fail").
+		SetFinishPoint("fail").
+		Compile()
+	require.NoError(t, err)
+
+	// After-agent callback should receive non-nil error derived from the
+	// final response event.
+	callbacks := agent.NewCallbacks()
+	var callbackErr error
+	callbacks.RegisterAfterAgent(func(
+		ctx context.Context,
+		inv *agent.Invocation,
+		err error,
+	) (*model.Response, error) {
+		callbackErr = err
+		return nil, nil
+	})
+
+	ga, err := New(
+		"test-after-exec-err",
+		g,
+		WithAgentCallbacks(callbacks),
+	)
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-after-exec-err",
+		AgentName:    "test-after-exec-err",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	// Drain all events to ensure after-callback has run.
+	for range events {
+	}
+
+	require.Error(t, callbackErr)
+	require.Contains(t, callbackErr.Error(), "flow_error:")
 }
