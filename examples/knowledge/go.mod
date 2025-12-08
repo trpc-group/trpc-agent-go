@@ -19,9 +19,9 @@ require (
 	github.com/tencent/vectordatabase-sdk-go v1.8.0
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-20250917031858-f0ddbd5b2cb4
-	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface v0.0.0-20251119113046-0cbdb93921df
-	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama v0.0.0-20251111070215-8fe58a4f2ffa
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface v0.7.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama v0.7.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.0.0-00010101000000-000000000000
