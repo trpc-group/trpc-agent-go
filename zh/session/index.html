@@ -4320,8 +4320,8 @@
 </span><span id="__span-28-12"><a id="__codelineno-28-12" name="__codelineno-28-12"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
 </span><span id="__span-28-13"><a id="__codelineno-28-13" name="__codelineno-28-13"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
 </span><span id="__span-28-14"><a id="__codelineno-28-14" name="__codelineno-28-14"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithChecksAny</span><span class="p">(</span><span class="w">                     </span><span class="c1">// 任一条件满足即触发</span>
-</span><span id="__span-28-15"><a id="__codelineno-28-15" name="__codelineno-28-15"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span><span class="w">       </span><span class="c1">// 超过 20 个事件后触发</span>
-</span><span id="__span-28-16"><a id="__codelineno-28-16" name="__codelineno-28-16"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span><span class="w">     </span><span class="c1">// 超过 4000 个 token 后触发</span>
+</span><span id="__span-28-15"><a id="__codelineno-28-15" name="__codelineno-28-15"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span><span class="w">       </span><span class="c1">// 自上次摘要后新增 20 个事件后触发</span>
+</span><span id="__span-28-16"><a id="__codelineno-28-16" name="__codelineno-28-16"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span><span class="w">     </span><span class="c1">// 自上次摘要后新增 4000 个 token 后触发</span>
 </span><span id="__span-28-17"><a id="__codelineno-28-17" name="__codelineno-28-17"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span><span class="w"> </span><span class="c1">// 5 分钟无活动后触发</span>
 </span><span id="__span-28-18"><a id="__codelineno-28-18" name="__codelineno-28-18"></a><span class="w">    </span><span class="p">),</span>
 </span><span id="__span-28-19"><a id="__codelineno-28-19" name="__codelineno-28-19"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">200</span><span class="p">),</span><span class="w">          </span><span class="c1">// 限制摘要在 200 字以内</span>
@@ -4699,8 +4699,8 @@
 <p>使用以下选项配置摘要器行为：</p>
 <p><strong>触发条件：</strong></p>
 <ul>
-<li><strong><code>WithEventThreshold(eventCount int)</code></strong>：当事件数量超过阈值时触发摘要。示例：<code>WithEventThreshold(20)</code> 在超过 20 个事件后触发。</li>
-<li><strong><code>WithTokenThreshold(tokenCount int)</code></strong>：当总 token 数量超过阈值时触发摘要。示例：<code>WithTokenThreshold(4000)</code> 在超过 4000 个 token 后触发。</li>
+<li><strong><code>WithEventThreshold(eventCount int)</code></strong>：当自上次摘要后的事件数量超过阈值时触发摘要。示例：<code>WithEventThreshold(20)</code> 在自上次摘要后新增 20 个事件后触发。</li>
+<li><strong><code>WithTokenThreshold(tokenCount int)</code></strong>：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：<code>WithTokenThreshold(4000)</code> 在自上次摘要后新增 4000 个 token 后触发。</li>
 <li><strong><code>WithTimeThreshold(interval time.Duration)</code></strong>：当自上次事件后经过的时间超过间隔时触发摘要。示例：<code>WithTimeThreshold(5*time.Minute)</code> 在 5 分钟无活动后触发。</li>
 </ul>
 <p><strong>组合条件：</strong></p>
@@ -4864,7 +4864,7 @@
 <p><strong>增量摘要</strong>：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。</p>
 </li>
 <li>
-<p><strong>触发条件评估</strong>：在生成摘要之前，摘要器会评估配置的触发条件（事件计数、token 计数、时间阈值）。如果条件未满足且 <code>force=false</code>，则跳过摘要。</p>
+<p><strong>触发条件评估</strong>：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、token 计数、时间阈值）。如果条件未满足且 <code>force=false</code>，则跳过摘要。</p>
 </li>
 <li>
 <p><strong>异步 Worker</strong>：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。</p>
@@ -5051,7 +5051,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月8日 03:08:53 UTC">2025-12-08 03:08:53</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月8日 03:20:42 UTC">2025-12-08 03:20:42</span>
   </span>
 
     
