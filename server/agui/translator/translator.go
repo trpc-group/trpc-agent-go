@@ -157,11 +157,17 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 		if rsp.Choices[0].Delta.Content != "" {
 			events = append(events, aguievents.NewTextMessageContentEvent(rsp.ID, rsp.Choices[0].Delta.Content))
 		}
+		if rsp.Choices[0].FinishReason != nil && *rsp.Choices[0].FinishReason != "" {
+			t.receivingMessage = false
+			events = append(events, aguievents.NewTextMessageEndEvent(rsp.ID))
+		}
 	// For streaming response, don't need to emit final completion event.
 	// It means the response is ended.
 	case model.ObjectTypeChatCompletion:
-		t.receivingMessage = false
-		events = append(events, aguievents.NewTextMessageEndEvent(rsp.ID))
+		if t.receivingMessage {
+			t.receivingMessage = false
+			events = append(events, aguievents.NewTextMessageEndEvent(rsp.ID))
+		}
 	default:
 		return nil, errors.New("invalid response object")
 	}
