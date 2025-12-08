@@ -134,7 +134,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	vs := &VectorStore{
 		client:          client,
 		option:          option,
-		filterConverter: &pgVectorConverter{},
+		filterConverter: &pgVectorConverter{metadataFieldName: option.metadataFieldName},
 	}
 
 	if err := vs.initDB(context.Background()); err != nil {
@@ -745,6 +745,7 @@ func (vs *VectorStore) buildQueryFilter(qb queryFilterBuilder, cond *vectorstore
 	if cond.FilterCondition == nil {
 		return nil
 	}
+
 	filter, err := vs.filterConverter.Convert(cond.FilterCondition)
 	if err != nil {
 		return err
