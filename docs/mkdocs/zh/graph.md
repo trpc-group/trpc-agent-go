@@ -1725,6 +1725,181 @@ sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 和 branch2 会并行执行
 
 常量名：`graph.Start == "__start__"`，`graph.End == "__end__"`。
 
+### 消息可见性选项
+当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
+在与model交互时仅将可见的内容输入给模型。 
+
+TIPS:
+ - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
+ - Invocation.Message在任何场景下均可见
+ - 相关配置仅控制State[graph.StateKeyMessages]的初始值
+ - Agent node生成的消息filterKey为subAgent name, 因此使用`IsolatedRequest`或`IsolatedInvocation`过滤时对当前graphAgent不可见
+ - 未配置选项时，默认值为FullContext
+
+配置:
+- `graphagent.WithMessageFilterMode(MessageFilterMode)`:
+  - `FullContext`: 所有能通过filterKey做前缀匹配的消息
+  - `RequestContext`: 仅包含当前请求周期内通过filterKey前缀匹配的消息
+  - `IsolatedRequest`: 仅包含当前请求周期内通过filterKey完全匹配的消息
+  - `IsolatedInvocation`: 仅包含当前invocation周期内通过filterKey完全匹配的消息
+
+推荐用法示例（该用法仅基于高阶用法基础之上做了配置简化）: 
+
+案例1: 对graphAgent消息可见性控制
+```go
+subgraphAgentA := graphagent.New(
+    "subgraphA", subgraph,
+    // 对parentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 生成的所有消息可见（包含同一sessionID的历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.FullContext),
+    // 对parentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.RequestContext),
+    // 仅对subgraphAgentA 当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.IsolatedRequest),
+    // 仅对subgraphAgentA当前invocation期间生成的消息可见(此示例中subgraphAgentA仅执行一次， 效果等价于graphagent.IsolatedRequest)
+    graphagent.WithMessageFilterMode(graphagent.IsolatedInvocation),
+)
+
+subgraphAgentB := graphagent.New(
+    "subgraphB", subgraph,
+    // 对parentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 生成的所有消息可见（包含同一sessionID的历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.FullContext),
+    // 对parentAgent、subgraphAgentA、subgraphAgentB(包含task1、task2分别生成的消息) 当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.RequestContext),
+    // 仅对subgraphAgentB（包含task1、task2分别生成的消息）当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+    graphagent.WithMessageFilterMode(graphagent.IsolatedRequest),
+    // 仅对subgraphAgentB 当前Invocation中生成的消息可见，不包含历史消息（task1与task2执行期间生成的消息互不可见）。
+    graphagent.WithMessageFilterMode(graphagent.IsolatedInvocation),
+)
+
+sg.AddAgentNode("subgraphA")
+sg.AddNode("fanout", func(ctx context.Context, state graph.State) (any, error) {
+    return []*graph.Command{
+        {
+            GoTo: "subgraph",
+            Update: graph.State{
+                "task": "task 1"
+            },
+        },
+        {
+            GoTo: "subgraph",
+            Update: graph.State{
+                "task": "task 2"
+            },
+        },
+    }, nil
+})
+sg.AddAgentNode("subgraphB")
+sg.AddEdge("subgraphA", "fanout")
+sg.SetEntryPoint(subgraphA)
+graph, err := sg.Compile()
+if err != nil {
+    log.Fatalf("Failed to Compile state graph, err: %w", err)
+}
+parentAgent := graphagent.New(
+    "subgraph", graph,
+    // subagent
+    graphagent.WithSubAgents(subgraphAgent)
+)
+```
+
+案例2: 对节点Agent消息可见性控制
+```go
+taskagentA := llmagent.New(
+  "taskagentA",
+  llmagent.WithModel(modelInstance),
+  // 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.FullContext),
+  // 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.RequestContext),
+  // 仅对taskagentA当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
+  // agent执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3(当前执行阶段)
+  // 仅对taskagentA当前taskagentA-invocation3期间生成的消息可见（不包含自己的历史会话消息以及taskagentA-invocation1期间生成的消息）
+  llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation),
+)
+
+taskagentB := llmagent.New(
+  "taskagentB",
+  llmagent.WithModel(modelInstance),
+  // 对taskagentA、taskagentB生成的所有消息可见（包含同一sessionID的历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.FullContext),
+  // 对taskagentA、taskagentB当前runner.Run期间生成的所有消息可见（不包含历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.RequestContext),
+  // 仅对taskagentB当前runner.Run期间生成的消息可见（不包含自己的历史会话消息）
+  llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
+  // agent执性顺序：taskagentA-invocation1 -> taskagentB-invocation2 -> taskagentA-invocation3 -> taskagentB-invocation4(当前执行阶段)
+  // 仅对taskagentB当前taskagentB-invocation4期间生成的消息可见（不包含自己的历史会话消息以及taskagentB-invocation2期间生成的消息）
+  llmagent.WithMessageFilterMode(llmagent.IsolatedInvocation),
+)
+
+sg.AddAgentNode("taskagentA")
+// 同一个并行执行多个任务
+sg.AddNode("fanout", func(ctx context.Context, state graph.State) (any, error) {
+    return []*graph.Command{
+        {
+            GoTo: "taskB",
+            Update: graph.State{
+                "task": "task 1"
+            },
+        },
+        {
+            GoTo: "taskB",
+            Update: graph.State{
+                "task": "task 2"
+            },
+        },
+    }, nil
+})
+// 可将taskagentB的消息过滤模式设置为llmagent.IsolatedInvocation 以此来隔离多任务的上下文会话信息
+sg.AddNode("taskB", func(ctx context.Context, state graph.State) (any, error){
+    task := state["task-id"]
+    inv, _ := agent.InvocationFromContext(ctx)
+    inv.Message = model.NewUserMessage(task)
+    chan, err := taskagentB.Run(ctx, inv)
+    // do any thing
+})
+```
+
+高阶用法示例：
+可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`控制当前agent对历史消息与其他agent生成的消息可见性。
+当前agent在与模型交互时，最终将同时满足两个条件的消息输入给模型。
+
+`配置:`
+- `WithMessageTimelineFilterMode`: 时间维度可见性控制
+  - `TimelineFilterAll`: 包含历史消息以及当前请求中所生成的消息
+  - `TimelineFilterCurrentRequest`: 仅包含当前请求(一次runner.Run为一次请求)中所生成的消息
+  - `TimelineFilterCurrentInvocation`: 仅包含当前invocation上下文中生成的消息
+- `WithMessageBranchFilterMode`: 分支维度可见性控制（用于控制对其他agent生成消息的可见性）
+  - `BranchFilterModePrefix`: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配
+  - `BranchFilterModeAll`: 所有agent的均消息
+  - `BranchFilterModeExact`: 仅自己生成的消息可见
+  
+```go
+llmAgent := llmagent.New(
+    "demo-agent",                      // Agent 名称
+    llmagent.WithModel(modelInstance), // 设置模型
+    llmagent.WithDescription("A helpful AI assistant for demonstrations"),              // 设置描述
+    llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // 设置指令
+    llmagent.WithGenerationConfig(genConfig),                                           // 设置生成参数
+
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 时间维度过滤条件
+    // 默认值: llmagent.TimelineFilterAll
+    // 可选值:
+    //  - llmagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
+    //  - llmagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
+    //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
+    llmagent.WithMessageTimelineFilterMode(llmagent.BranchFilterModeAll),
+    // 分支维度过滤条件
+    // 默认值: llmagent.BranchFilterModePrefix
+    // 可选值:
+    //  - llmagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
+    //  - llmagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
+    //  - llmagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
+    llmagent.WithMessageBranchFilterMode(llmagent.TimelineFilterAll),
+)
+```
+
 ### 命令模式（动态路由 / Fan-out）
 
 节点除返回 `graph.State` 外，也可以返回 `*graph.Command` 或 `[]*graph.Command`，以同时更新状态并指定下一跳：
