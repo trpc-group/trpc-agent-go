@@ -111,7 +111,7 @@ func TestExecutor_VersionBasedPlanning(t *testing.T) {
 	ec := exec.buildExecutionContext(make(chan *event.Event, 1), "inv-pln", State{}, true, last)
 
 	// Make trigger channel available and version > seen
-	channels := exec.graph.getAllChannels()
+	channels := ec.channels.GetAllChannels()
 	for name, ch := range channels {
 		if strings.HasPrefix(name, "branch:to:b") {
 			ch.Update([]any{"x"}, 1) // Version becomes 1
@@ -151,17 +151,23 @@ func TestExecutor_GetNextChannelsInStep_And_ClearMarks_And_UpdateVersionsSeen(t 
 	c.Update([]any{"v"}, 5)
 
 	exec := &Executor{graph: g}
+	// Build execution context so per-run channels are created from definitions.
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+	// Mark the corresponding per-run channel as updated in step 5.
+	perRunCh, ok2 := ec.channels.GetChannel("branch:to:x")
+	require.True(t, ok2)
+	perRunCh.Update([]any{"v"}, 5)
+
 	// getNextChannelsInStep should include our channel
-	got := exec.getNextChannelsInStep(5)
+	got := exec.getNextChannelsInStep(ec, 5)
 	require.Contains(t, got, "branch:to:x")
 	// clear marks
-	exec.clearChannelStepMarks()
-	require.False(t, c.IsUpdatedInStep(5))
+	exec.clearChannelStepMarks(ec)
+	require.False(t, perRunCh.IsUpdatedInStep(5))
 
 	// updateVersionsSeen should record current version for triggers
-	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
 	exec.updateVersionsSeen(ec, "nodeA", []string{"branch:to:x"})
-	require.Equal(t, c.Version, ec.versionsSeen["nodeA"]["branch:to:x"])
+	require.Equal(t, perRunCh.Version, ec.versionsSeen["nodeA"]["branch:to:x"])
 }
 
 // mock saver for createCheckpoint
@@ -189,101 +195,6 @@ func (m *putMockSaver) PutFull(ctx context.Context, req PutFullRequest) (map[str
 }
 func (m *putMockSaver) DeleteLineage(ctx context.Context, lineageID string) error { return nil }
 func (m *putMockSaver) Close() error                                              { return nil }
-
-// resumeFromCheckpoint paths
-type resumeMockSaver struct {
-	tuple *CheckpointTuple
-	err   error
-}
-
-func (m *resumeMockSaver) Get(ctx context.Context, config map[string]any) (*Checkpoint, error) {
-	return nil, nil
-}
-func (m *resumeMockSaver) GetTuple(ctx context.Context, config map[string]any) (*CheckpointTuple, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.tuple, nil
-}
-func (m *resumeMockSaver) List(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
-	return nil, nil
-}
-func (m *resumeMockSaver) Put(ctx context.Context, req PutRequest) (map[string]any, error) {
-	return req.Config, nil
-}
-func (m *resumeMockSaver) PutWrites(ctx context.Context, req PutWritesRequest) error { return nil }
-func (m *resumeMockSaver) PutFull(ctx context.Context, req PutFullRequest) (map[string]any, error) {
-	return req.Config, nil
-}
-func (m *resumeMockSaver) DeleteLineage(ctx context.Context, lineageID string) error { return nil }
-func (m *resumeMockSaver) Close() error                                              { return nil }
-
-func TestExecutor_ResumeFromCheckpoint_Paths(t *testing.T) {
-	g := New(NewStateSchema())
-	exec := &Executor{graph: g}
-	// nil saver
-	st, ckpt, writes, err := exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
-	require.NoError(t, err)
-	require.Nil(t, st)
-	require.Nil(t, ckpt)
-	require.Nil(t, writes)
-
-	// saver error
-	exec.checkpointSaver = &resumeMockSaver{err: fmt.Errorf("err")}
-	_, _, _, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
-	require.Error(t, err)
-
-	// tuple with pending writes
-	g.addChannel("branch:to:N1", ichannel.BehaviorLastValue)
-	ck := &Checkpoint{ID: "c1", ChannelValues: map[string]any{"x": 1}}
-	tuple := &CheckpointTuple{Checkpoint: ck, PendingWrites: []PendingWrite{{Channel: "branch:to:N1", Value: 2, Sequence: 1}}}
-	exec.checkpointSaver = &resumeMockSaver{tuple: tuple}
-	st, ckpt, writes, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
-	require.NoError(t, err)
-	require.Equal(t, 1, st["x"])
-	require.NotNil(t, ckpt)
-	require.Len(t, writes, 1)
-
-	// tuple with NextNodes fallback
-	tuple2 := &CheckpointTuple{Checkpoint: &Checkpoint{ID: "c2", ChannelValues: map[string]any{"y": 3}, NextNodes: []string{"A"}}}
-	exec.checkpointSaver = &resumeMockSaver{tuple: tuple2}
-	st, ckpt, writes, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
-	require.NoError(t, err)
-	require.NotNil(t, st[StateKeyNextNodes])
-	require.NotNil(t, ckpt)
-	require.Len(t, writes, 0)
-}
-
-// Ensure NextChannels fallback in resumeFromCheckpoint updates channels
-// when there are no pending writes and no NextNodes.
-func TestExecutor_ResumeFromCheckpoint_NextChannelsFallback(t *testing.T) {
-	g := New(NewStateSchema())
-	// Pre-create the branch channel so resumeFromCheckpoint can update it.
-	g.addChannel(ChannelBranchPrefix+"A", ichannel.BehaviorLastValue)
-
-	exec := &Executor{graph: g}
-	tuple := &CheckpointTuple{Checkpoint: &Checkpoint{
-		ID:            "c3",
-		ChannelValues: map[string]any{},
-		NextChannels:  []string{ChannelBranchPrefix + "A"},
-	}}
-	exec.checkpointSaver = &resumeMockSaver{tuple: tuple}
-
-	st, ckpt, writes, err := exec.resumeFromCheckpoint(
-		context.Background(), nil,
-		CreateCheckpointConfig("ln", "id", "ns"),
-	)
-	require.NoError(t, err)
-	require.NotNil(t, ckpt)
-	require.Empty(t, writes)
-	// State should not contain next nodes key in this fallback path.
-	require.NotContains(t, st, StateKeyNextNodes)
-
-	// The channel should have been updated once by the fallback.
-	ch, _ := g.getChannel(ChannelBranchPrefix + "A")
-	require.NotNil(t, ch)
-	require.Equal(t, int64(1), ch.Version)
-}
 
 // Verify restoreStateFromCheckpoint fills schema defaults and zero values
 // for fields missing from the checkpoint.
@@ -436,12 +347,17 @@ func TestExecutor_GetNextNodes_Dedup(t *testing.T) {
 	g.addChannel("branch:to:dup2", ichannel.BehaviorLastValue)
 	g.addNodeTrigger("branch:to:dup", "dup")
 	g.addNodeTrigger("branch:to:dup2", "dup")
-	c1, _ := g.getChannel("branch:to:dup")
-	c2, _ := g.getChannel("branch:to:dup2")
-	c1.Update([]any{"v"}, 1)
-	c2.Update([]any{"v"}, 1)
 	exec := &Executor{graph: g}
-	nodes := exec.getNextNodes(State{})
+	// Build execution context and mark per-run channels available.
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+	if ch1, ok := ec.channels.GetChannel("branch:to:dup"); ok && ch1 != nil {
+		ch1.Update([]any{"v"}, 1)
+	}
+	if ch2, ok := ec.channels.GetChannel("branch:to:dup2"); ok && ch2 != nil {
+		ch2.Update([]any{"v"}, 1)
+	}
+
+	nodes := exec.getNextNodes(ec)
 	// dedup should keep only one instance of "dup"
 	count := 0
 	for _, n := range nodes {
@@ -497,16 +413,18 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 	// Setup trigger mapping for nodeX
 	g.addChannel("branch:to:nodeX", ichannel.BehaviorLastValue)
 	g.addNodeTrigger("branch:to:nodeX", "nodeX")
-	// Set channel available
-	chX, _ := g.getChannel("branch:to:nodeX")
-	chX.Update([]any{"v"}, 1)
 	exec := &Executor{graph: g}
+	// Build execution context so per-run channels are created and mark them
+	// as available.
+	ec := exec.buildExecutionContext(nil, "inv", State{"a": 1}, false, nil)
+	if chX, ok := ec.channels.GetChannel("branch:to:nodeX"); ok && chX != nil {
+		chX.Update([]any{"v"}, 1)
+	}
 	// getNextNodes should include nodeX
-	n := exec.getNextNodes(State{})
+	n := exec.getNextNodes(ec)
 	require.Contains(t, n, "nodeX")
 
 	// buildTaskStateCopy with overlay
-	ec := exec.buildExecutionContext(nil, "inv", State{"a": 1}, false, nil)
 	tsk := &Task{NodeID: "nodeX", Overlay: State{"b": 2}}
 	st := exec.buildTaskStateCopy(ec, tsk)
 	require.Equal(t, 1, st["a"])
@@ -527,6 +445,64 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 	merged := exec.getMergedCallbacks(st2, "nodeX")
 	require.Equal(t, 1, len(merged.BeforeNode))
 	require.Equal(t, 1, len(merged.AfterNode))
+}
+
+// Ensure buildExecutionContext seeds per-run channel versions from the last checkpoint.
+func TestExecutor_BuildExecutionContext_SeedsChannelVersions(t *testing.T) {
+	g := New(NewStateSchema())
+	g.addChannel("branch:to:X", ichannel.BehaviorLastValue)
+	exec := &Executor{graph: g}
+
+	last := &Checkpoint{
+		ChannelVersions: map[string]int64{
+			"branch:to:X": 7,
+		},
+	}
+	ec := exec.buildExecutionContext(nil, "inv", State{}, true, last)
+
+	ch, ok := ec.channels.GetChannel("branch:to:X")
+	require.True(t, ok)
+	require.NotNil(t, ch)
+	require.Equal(t, int64(7), ch.Version)
+}
+
+// Ensure applyPendingWrites replays writes into per-execution channels (not Graph channels)
+// and respects the PendingWrite.Sequence ordering.
+func TestExecutor_ApplyPendingWrites_UsesExecCtxChannels(t *testing.T) {
+	g := New(NewStateSchema())
+	g.addChannel("x", ichannel.BehaviorLastValue)
+	exec := &Executor{graph: g}
+
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+	writes := []PendingWrite{
+		{Channel: "x", Value: 1, Sequence: 2},
+		{Channel: "x", Value: 2, Sequence: 1},
+	}
+
+	exec.applyPendingWrites(context.Background(), nil, ec, writes)
+
+	// Graph-level channel definition should remain untouched.
+	graphCh, _ := g.getChannel("x")
+	require.NotNil(t, graphCh)
+	require.Equal(t, int64(0), graphCh.Version)
+
+	// Per-run channel should have applied both writes in sequence order
+	// (Sequence=1 then Sequence=2), ending with value 1 and version 2.
+	runCh, ok := ec.channels.GetChannel("x")
+	require.True(t, ok)
+	require.NotNil(t, runCh)
+	require.Equal(t, int64(2), runCh.Version)
+	require.Equal(t, 1, runCh.Get())
+}
+
+// Guard: ensure applyPendingWrites safely handles nil execCtx.
+func TestExecutor_ApplyPendingWrites_NilExecCtx_NoPanic(t *testing.T) {
+	exec := &Executor{graph: New(NewStateSchema())}
+	require.NotPanics(t, func() {
+		exec.applyPendingWrites(context.Background(), nil, nil, []PendingWrite{
+			{Channel: "x", Value: 1, Sequence: 1},
+		})
+	})
 }
 
 func TestRunModel_BeforeModelError(t *testing.T) {
