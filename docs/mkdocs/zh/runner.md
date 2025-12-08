@@ -510,13 +510,52 @@ for event := range eventChan {
 }
 ```
 
+### 安全中断执行
+
+- **取消上下文**：用 `context.WithCancel` 包裹 `runner.Run` 的 ctx，
+  当轮次或 token 超限时调用 `cancel()`。`llmflow` 将
+  `context.Canceled` 视为正常退出，会关闭 agent 事件通道，
+  runner 的消费循环也会正常结束，避免阻塞。
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+eventCh, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+
+turns := 0
+for evt := range eventCh {
+    if evt.Error != nil {
+        log.Printf("事件错误: %s", evt.Error.Message)
+        continue
+    }
+    // ... 处理事件 ...
+    if evt.IsFinalResponse() {
+        break
+    }
+    turns++
+    if turns >= maxTurns {
+        cancel() // 停止后续模型或工具调用
+    }
+}
+```
+
+- **发送停止事件**：在自定义处理器或工具内部返回 `agent.NewStopError("原因")`。`llmflow` 会把它转换为 `stop_agent_error` 事件并停止流程。
+  仍建议配合 ctx cancel 进行硬截止。详见 [回调中的停止用法](https://trpc-group.github.io/trpc-agent-go/zh/callbacks/#stop-agent-via-callbacks)。
+
+- **避免直接 break 事件循环**：直接在 runner 的事件消费循环里 break 会让 agent goroutine 继续运行并可能在写通道时阻塞。
+  优先使用上下文取消或 `StopError`。
+
 ### 资源管理
 
 #### 🔒 关闭 Runner（重要）
 
 **Runner 在不使用时必须调用 `Close()` 方法，否则会导致 goroutine 泄漏（要求 `trpc-agent-go >= v0.5.0`）。**
 
-**Runner 只关闭它自己创建的资源** 
+**Runner 只关闭它自己创建的资源**
 
 当 Runner 创建时如果未提供 Session Service，会自动创建默认的 inmemory Session Service。该 Service 内部会启动后台 goroutines（用于异步处理 summary、基于 TTL 的会话清理等任务）。**Runner 只管理这个自己创建的 inmemory Session Service 的生命周期。** 如果你通过 `WithSessionService()` 提供了自己的 Session Service，你需要自己管理它的生命周期——Runner 不会关闭它。
 
@@ -551,7 +590,7 @@ sessionService := redis.NewService(redis.WithRedisClientURL("redis://localhost:6
 defer sessionService.Close()  // 你负责关闭它
 
 // Runner 使用但不拥有这个 session service
-r := runner.NewRunner("my-app", agent, 
+r := runner.NewRunner("my-app", agent,
 	runner.WithSessionService(sessionService))
 defer r.Close()  // 这不会关闭 sessionService（因为是你提供的） (trpc-agent-go >= v0.5.0)
 
@@ -583,12 +622,12 @@ func (s *Service) Stop() error {
 	if err := s.runner.Close(); err != nil {
 		return err
 	}
-	
+
 	// 如果你提供了自己的 session service，在这里关闭它
 	if s.sessionService != nil {
 		return s.sessionService.Close()
 	}
-	
+
 	return nil
 }
 ```
