@@ -4,8 +4,8 @@ This example demonstrates a comprehensive knowledge base management system that 
 
 ## Features
 
-- **Multiple Vector Store Support**: Elasticsearch, TCVector, PGVector, InMemory
-- **Multiple Embedder Support**: OpenAI, Gemini embedding models
+- **Multiple Vector Store Support**: Elasticsearch, TCVector, PGVector, InMemory, Milvus
+- **Multiple Embedder Support**: OpenAI, Gemini, Ollama embedding models
 - **File Source Management**: Automatic document parsing, chunking, and metadata extraction
 - **Real-time Synchronization**: Detects file changes and updates knowledge base
 - **Metadata Filtering**: Advanced filtering by document metadata and tags
@@ -52,6 +52,11 @@ export PGVECTOR_DATABASE=vectordb
 export TCVECTOR_URL=your_tcvector_url
 export TCVECTOR_USERNAME=your_username
 export TCVECTOR_PASSWORD=your_password
+
+# Milvus (if using)
+export MILVUS_ADDRESS=localhost:19530
+export MILVUS_USERNAME=your_username
+export MILVUS_PASSWORD=your_password
 ```
 
 ## Usage
