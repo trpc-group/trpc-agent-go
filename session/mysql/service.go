@@ -703,17 +703,17 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 	now := time.Now()
 
 	// Clean up expired sessions
-	if s.sessionTTL > 0 {
+	if s.opts.sessionTTL > 0 {
 		s.cleanupExpiredSessions(ctx, now)
 	}
 
 	// Clean up expired app states
-	if s.appStateTTL > 0 {
+	if s.opts.appStateTTL > 0 {
 		s.cleanupExpiredAppStates(ctx, now)
 	}
 
 	// Clean up expired user states
-	if s.userStateTTL > 0 {
+	if s.opts.userStateTTL > 0 {
 		s.cleanupExpiredUserStates(ctx, now)
 	}
 }
@@ -732,7 +732,7 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 		if err := rows.Scan(&appName, &userID, &sessionID, &updatedAt); err != nil {
 			return err
 		}
-		if updatedAt.Before(now.Add(-s.sessionTTL)) {
+		if updatedAt.Before(now.Add(-s.opts.sessionTTL)) {
 			sessionKeys = append(sessionKeys, session.Key{
 				AppName:   appName,
 				UserID:    userID,

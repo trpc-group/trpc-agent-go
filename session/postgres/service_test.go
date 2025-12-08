@@ -135,8 +135,6 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 		tableSessionSummaries: "session_summaries",
 		tableAppStates:        "app_states",
 		tableUserStates:       "user_states",
-		appendEventHooks:      options.appendEventHooks,
-		getSessionHooks:       options.getSessionHooks,
 	}
 }
 
@@ -257,11 +255,11 @@ func setupMockService(t *testing.T, opts *TestServiceOpts) (*Service, sqlmock.Sq
 	prefix := ""
 
 	s := &Service{
-		pgClient:     client,
-		sessionTTL:   opts.sessionTTL,
-		appStateTTL:  opts.appStateTTL,
-		userStateTTL: opts.userStateTTL,
+		pgClient: client,
 		opts: ServiceOpts{
+			sessionTTL:         opts.sessionTTL,
+			appStateTTL:        opts.appStateTTL,
+			userStateTTL:       opts.userStateTTL,
 			sessionEventLimit:  opts.sessionEventLimit,
 			enableAsyncPersist: opts.enableAsyncPersist,
 			softDelete:         softDelete,
@@ -464,7 +462,7 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 	defer db.Close()
 
 	// Set sessionTTL so cleanup will be triggered
-	s.sessionTTL = 1 * time.Hour
+	s.opts.sessionTTL = 1 * time.Hour
 
 	key := session.Key{
 		AppName:   "test-app",
@@ -1800,7 +1798,7 @@ func TestGetSession_WithTTLRefresh(t *testing.T) {
 	defer db.Close()
 
 	// Enable session TTL to trigger refresh
-	s.sessionTTL = 1 * time.Hour
+	s.opts.sessionTTL = 1 * time.Hour
 
 	key := session.Key{
 		AppName:   "test-app",
@@ -2507,7 +2505,7 @@ func TestGetSessionHook(t *testing.T) {
 		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 
 		// Hook2 returns nil, so no DB call
-		s.getSessionHooks[1] = func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		s.opts.getSessionHooks[1] = func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
 			order = append(order, "hook2_before")
 			order = append(order, "hook2_after")
 			return nil, nil

@@ -123,7 +123,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	// Set default cleanup interval if any TTL is configured and auto cleanup is not disabled
 	if opts.cleanupInterval <= 0 {
-		if opts.sessionTTL > 0 || opts.opts.appStateTTL > 0 || opts.opts.userStateTTL > 0 {
+		if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
 			opts.cleanupInterval = defaultCleanupIntervalSecond
 		}
 	}

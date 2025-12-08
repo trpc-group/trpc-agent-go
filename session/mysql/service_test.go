@@ -101,16 +101,11 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 	return &Service{
 		opts:                  serviceOpts,
 		mysqlClient:           &mockMySQLClient{db: db},
-		sessionTTL:            serviceOpts.sessionTTL,
-		appStateTTL:           serviceOpts.appStateTTL,
-		userStateTTL:          serviceOpts.userStateTTL,
 		tableSessionStates:    "session_states",
 		tableSessionEvents:    "session_events",
 		tableSessionSummaries: "session_summaries",
 		tableAppStates:        "app_states",
 		tableUserStates:       "user_states",
-		appendEventHooks:      serviceOpts.appendEventHooks,
-		getSessionHooks:       serviceOpts.getSessionHooks,
 	}
 }
 
@@ -1587,7 +1582,7 @@ func TestNewService_WithDSN_Success(t *testing.T) {
 	require.NotNil(t, svc)
 
 	// Verify service configuration
-	assert.Equal(t, 1*time.Hour, svc.sessionTTL)
+	assert.Equal(t, 1*time.Hour, svc.opts.sessionTTL)
 	assert.Equal(t, defaultSessionEventLimit, svc.opts.sessionEventLimit)
 	assert.Equal(t, defaultAsyncPersisterNum, svc.opts.asyncPersisterNum)
 	assert.True(t, svc.opts.softDelete)
@@ -1866,9 +1861,9 @@ func TestNewService_WithAllOptions(t *testing.T) {
 
 	// Verify all options
 	assert.Equal(t, 500, svc.opts.sessionEventLimit)
-	assert.Equal(t, 1*time.Hour, svc.sessionTTL)
-	assert.Equal(t, 2*time.Hour, svc.appStateTTL)
-	assert.Equal(t, 3*time.Hour, svc.userStateTTL)
+	assert.Equal(t, 1*time.Hour, svc.opts.sessionTTL)
+	assert.Equal(t, 2*time.Hour, svc.opts.appStateTTL)
+	assert.Equal(t, 3*time.Hour, svc.opts.userStateTTL)
 	assert.True(t, svc.opts.enableAsyncPersist)
 	assert.Equal(t, 3, svc.opts.asyncPersisterNum)
 	assert.Equal(t, 2, svc.opts.asyncSummaryNum)
@@ -2098,7 +2093,7 @@ func TestGetSessionHook(t *testing.T) {
 		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 
 		// Hook2 returns nil, so no DB call
-		s.getSessionHooks[1] = func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		s.opts.getSessionHooks[1] = func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
 			order = append(order, "hook2_before")
 			order = append(order, "hook2_after")
 			return nil, nil
