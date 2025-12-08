@@ -800,10 +800,9 @@ func TestGraphAgent_BeforeCallbackReturnsResponse(t *testing.T) {
 		collected = append(collected, e)
 	}
 
-	require.GreaterOrEqual(t, len(collected), 1)
-	last := collected[len(collected)-1]
-	require.Equal(t, "before.custom", last.Object)
-	require.Equal(t, "early return", last.Response.Choices[0].Message.Content)
+	require.Equal(t, len(collected), 1)
+	require.Equal(t, "before.custom", collected[0].Object)
+	require.Equal(t, "early return", collected[0].Response.Choices[0].Message.Content)
 }
 
 func TestGraphAgent_BeforeCallbackReturnsError(t *testing.T) {

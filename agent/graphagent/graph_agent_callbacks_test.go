@@ -74,10 +74,10 @@ func TestGraphAgent_BeforeCallback_Error(t *testing.T) {
 	for e := range ch {
 		events = append(events, e)
 	}
-	require.GreaterOrEqual(t, len(events), 1)
-	last := events[len(events)-1]
-	require.Equal(t, model.ObjectTypeError, last.Object)
-	require.Equal(t, model.ErrorTypeFlowError, last.Error.Type)
+	require.Equal(t, len(events), 1)
+	require.Equal(t, model.ObjectTypeError, events[0].Object)
+	require.Equal(t, model.ErrorTypeFlowError, events[0].Error.Type)
+	require.NotNil(t, events[0].Error.Message)
 }
 
 func TestGraphAgent_AfterCallback_CustomResponseAppended(t *testing.T) {
