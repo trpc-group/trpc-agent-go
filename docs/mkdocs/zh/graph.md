@@ -2181,13 +2181,14 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 
 常量均定义在 `graph/state.go` 与 `graph/keys.go`，建议通过常量引用，避免硬编码。
 
-#### 节点级回调与生成参数
+#### 节点级回调、工具与生成参数
 
 节点可通过可选项注册回调或参数（见 `graph/state_graph.go`）：
 
 - `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
 - LLM 节点可用 `graph.WithGenerationConfig`、`graph.WithModelCallbacks`
-- 工具相关：`graph.WithToolCallbacks`、`graph.WithToolSets`（除 `tools []tool.Tool` 外，再额外提供 ToolSet）
+- 工具相关：`graph.WithToolCallbacks`、`graph.WithToolSets`（除 `tools []tool.Tool` 外，再额外提供 ToolSet`）、
+  `graph.WithRefreshToolSetsOnRun`（在每次运行时从 ToolSet 重新构造工具列表，适合 MCP 等动态工具源）
 - Agent 节点可用 `graph.WithAgentNodeEventCallback`
 
 #### Graph 中的 ToolSet 与 Agent 的区别
@@ -2811,32 +2812,66 @@ graphAgent, _ := graphagent.New("workflow", g,
 
 ## 常见问题排查
 
-- 报错 "graph must have an entry point"
+**Q1: 报错 "graph must have an entry point"**
 
-  - 未设置入口点。调用 `SetEntryPoint()`，并确保目标节点已定义。
+- 未设置入口点。调用 `SetEntryPoint()`，并确保目标节点已定义。
 
-- 报错目标/源节点不存在
+**Q2: 报错目标/源节点不存在**
 
-  - 在连边/条件路由前先定义节点；条件路由的 `pathMap` 目标也需存在。
+- 在连边/条件路由前先定义节点；条件路由的 `pathMap` 目标也需存在。
 
-- 工具未执行
+**Q3: 工具未执行**
 
-  - 确认 LLM 返回了 `tool_calls`，并使用了 `AddToolsConditionalEdges(ask, tools, fallback)`；
-  - 工具名需与模型声明一致；
-  - 配对规则是从最近一次 `assistant(tool_calls)` 回溯到下一个 `user`，检查消息顺序。
+- 确认 LLM 返回了 `tool_calls`，并使用了 `AddToolsConditionalEdges(ask, tools, fallback)`；
+- 工具名需与模型声明一致；
+- 配对规则是从最近一次 `assistant(tool_calls)` 回溯到下一个 `user`，检查消息顺序。
 
-- 没有观察到流式事件
+**Q4: LLM 返回 tool_calls 但工具节点未执行（永远路由到 fallback）**
 
-  - 调大 `WithChannelBufferSize` 并按 `Author`/对象类型过滤；
-  - 确认从 `Runner.Run(...)` 消费事件。
+- **根本原因**：使用了 `NewStateSchema()` 而非 `MessagesStateSchema()`。
+- `AddToolsConditionalEdges` 内部检查 `state[StateKeyMessages].([]model.Message)` 来判断是否有工具调用。
+- 如果 Schema 中没有 `StateKeyMessages` 字段，`MessageReducer` 不会被应用，LLM 节点返回的是 `[]graph.MessageOp` 类型而非 `[]model.Message`，导致类型断言失败，永远路由到 `fallbackNode`。
+- **解决方案**：将 `graph.NewStateSchema()` 改为 `graph.MessagesStateSchema()`，然后在其基础上添加业务字段：
+  ```go
+  // 错误写法
+  schema := graph.NewStateSchema()
 
-- 从检查点恢复未按预期继续
+  // 正确写法
+  schema := graph.MessagesStateSchema()
+  schema.AddField("my_field", graph.StateField{...})
+  ```
 
-  - 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })` 传入；
-  - HITL 恢复时提供 `ResumeMap`；纯 "resume" 文本不会注入到 `graph.StateKeyUserInput`。
+**Q5: 没有观察到流式事件**
 
-- 并行下状态冲突
-  - 为列表/映射等声明合并型 Reducer（如 `StringSliceReducer`、`MergeReducer`），避免多个分支覆盖同一键。
+- 调大 `WithChannelBufferSize` 并按 `Author`/对象类型过滤；
+- 确认从 `Runner.Run(...)` 消费事件。
+
+**Q6: 从检查点恢复未按预期继续**
+
+- 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })` 传入；
+- HITL 恢复时提供 `ResumeMap`；纯 "resume" 文本不会注入到 `graph.StateKeyUserInput`。
+
+**Q7: 并行下状态冲突**
+
+- 为列表/映射等声明合并型 Reducer（如 `StringSliceReducer`、`MergeReducer`），避免多个分支覆盖同一键。
+
+**Q8: AddLLMNode 的 tools 参数起什么作用？工具何时被调用？**
+
+- **tools 参数是声明性的**：传给 `AddLLMNode` 的 tools 会被放入 `model.Request.Tools` 字段，告诉 LLM 有哪些工具可用。
+- **LLM 决定是否调用工具**：LLM 根据 tools 声明和用户输入，决定是否在响应中返回 `tool_calls`。
+- **tools 不会自动执行**：`AddLLMNode` 只负责声明工具、发送请求给 LLM，不会执行工具。
+- **工具执行需要配合 AddToolsNode + AddToolsConditionalEdges**：
+  ```go
+  // 1. LLM 节点声明工具（告诉 LLM 有哪些工具可用）
+  sg.AddLLMNode("ask", model, systemPrompt, tools)
+
+  // 2. 工具节点负责执行工具（根据 LLM 返回的 tool_calls）
+  sg.AddToolsNode("tools", tools)
+
+  // 3. 条件边根据 LLM 响应路由（有 tool_calls 则路由到工具节点）
+  sg.AddToolsConditionalEdges("ask", "tools", "fallback")
+  ```
+- **调用时机**：当 `AddToolsConditionalEdges` 检测到 LLM 响应中包含 `tool_calls` 时，会路由到 `AddToolsNode`，由工具节点执行实际调用。
 
 ## 实际案例
 

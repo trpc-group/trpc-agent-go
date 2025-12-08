@@ -44,9 +44,16 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	if !updated {
 		return nil
 	}
+
 	// Persist to in-memory store under lock.
+	sess.SummariesMu.RLock()
+	sum := sess.Summaries[filterKey]
+	sess.SummariesMu.RUnlock()
+
 	app := s.getOrCreateAppSessions(key.AppName)
-	if err := s.writeSummaryUnderLock(app, key, filterKey, sess.Summaries[filterKey].Summary); err != nil {
+	if err := s.writeSummaryUnderLock(
+		app, key, filterKey, sum.Summary,
+	); err != nil {
 		return fmt.Errorf("write summary under lock failed: %w", err)
 	}
 	return nil

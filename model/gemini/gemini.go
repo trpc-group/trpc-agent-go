@@ -25,37 +25,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// ChatRequestCallbackFunc is the function type for the chat request callback.
-type ChatRequestCallbackFunc func(
-	ctx context.Context,
-	chatRequest []*genai.Content,
-)
-
-// ChatResponseCallbackFunc is the function type for the chat response callback.
-type ChatResponseCallbackFunc func(
-	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *genai.GenerateContentResponse,
-)
-
-// ChatChunkCallbackFunc is the function type for the chat chunk callback.
-type ChatChunkCallbackFunc func(
-	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *genai.GenerateContentResponse,
-)
-
-// ChatStreamCompleteCallbackFunc is the function type for the chat stream completion callback.
-// This callback is invoked when streaming is completely finished (success or error).
-type ChatStreamCompleteCallbackFunc func(
-	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *model.Response,
-)
-
 // Model implements the model.Model interface for Gemini API.
 type Model struct {
 	client                     Client
@@ -82,41 +51,9 @@ type Model struct {
 
 // New creates a new Gemini-like model.
 func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
-	o := &options{
-		channelBufferSize: defaultChannelBufferSize,
-	}
+	o := defaultOptions
 	for _, opt := range opts {
-		opt(o)
-	}
-
-	// Initialize token tailoring budget parameters with defaults.
-	protocolOverhead := protocolOverheadTokens
-	reserveOutput := reserveOutputTokens
-	inputFloor := inputTokensFloor
-	outputFloor := outputTokensFloor
-	safetyMargin := safetyMarginRatio
-	maxInputRatio := maxInputTokensRatio
-
-	// Apply custom token tailoring config if provided.
-	if o.tokenTailoringConfig != nil {
-		if o.tokenTailoringConfig.ProtocolOverheadTokens > 0 {
-			protocolOverhead = o.tokenTailoringConfig.ProtocolOverheadTokens
-		}
-		if o.tokenTailoringConfig.ReserveOutputTokens > 0 {
-			reserveOutput = o.tokenTailoringConfig.ReserveOutputTokens
-		}
-		if o.tokenTailoringConfig.InputTokensFloor > 0 {
-			inputFloor = o.tokenTailoringConfig.InputTokensFloor
-		}
-		if o.tokenTailoringConfig.OutputTokensFloor > 0 {
-			outputFloor = o.tokenTailoringConfig.OutputTokensFloor
-		}
-		if o.tokenTailoringConfig.SafetyMarginRatio > 0 {
-			safetyMargin = o.tokenTailoringConfig.SafetyMarginRatio
-		}
-		if o.tokenTailoringConfig.MaxInputTokensRatio > 0 {
-			maxInputRatio = o.tokenTailoringConfig.MaxInputTokensRatio
-		}
+		opt(&o)
 	}
 	// Provide defaults at construction time when token tailoring is enabled.
 	// These are best-effort defaults; user-provided counter/strategy always take priority.
@@ -135,13 +72,13 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 	return &Model{
 		client:                     &clientWrapper{client: client},
 		name:                       name,
-		protocolOverheadTokens:     protocolOverhead,
-		reserveOutputTokens:        reserveOutput,
-		inputTokensFloor:           inputFloor,
-		outputTokensFloor:          outputFloor,
-		safetyMarginRatio:          safetyMargin,
-		maxInputTokens:             inputTokensFloor,
-		maxInputTokensRatio:        maxInputRatio,
+		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
+		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
+		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
+		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
+		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
+		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
+		maxInputTokens:             o.maxInputTokens,
 		chatRequestCallback:        o.chatRequestCallback,
 		chatResponseCallback:       o.chatResponseCallback,
 		chatChunkCallback:          o.chatChunkCallback,
