@@ -670,16 +670,16 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, persistChan := range s.persistChans {
 		go func(persistChan chan *persistTask) {
 			defer s.persistWg.Done()
-			for pair := range persistChan {
+			for task := range persistChan {
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
-					cap(persistChan), len(persistChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
+					cap(persistChan), len(persistChan), task.key.AppName, task.key.UserID, task.key.SessionID)
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				if pair.event != nil {
-					if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
+				if task.event != nil {
+					if err := s.addEvent(ctx, task.key, task.event); err != nil {
 						log.Errorf("async persist event failed: %w", err)
 					}
-				} else if pair.trackEvent != nil {
-					if err := s.addTrackEvent(ctx, pair.key, pair.trackEvent); err != nil {
+				} else if task.trackEvent != nil {
+					if err := s.addTrackEvent(ctx, task.key, task.trackEvent); err != nil {
 						log.Errorf("async persist track event failed: %w", err)
 					}
 				}
