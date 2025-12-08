@@ -828,6 +828,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="3. GraphAgent Configuration Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#concurrency-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Concurrency considerations
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -2245,6 +2260,21 @@
       3. GraphAgent Configuration Options
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="3. GraphAgent Configuration Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#concurrency-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Concurrency considerations
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3740,6 +3770,45 @@
 <p>Model/tool callbacks are configured per node, e.g. <code>AddLLMNode(..., graph.WithModelCallbacks(...))</code>
 or <code>AddToolsNode(..., graph.WithToolCallbacks(...))</code>.</p>
 </blockquote>
+<h4 id="concurrency-considerations">Concurrency considerations</h4>
+<p>When using Graph + GraphAgent in a concurrent environment (for example, serving many requests from a single long‑lived process), keep the following in mind:</p>
+<ul>
+<li>CheckpointSaver and Cache implementations must be concurrency‑safe<br />
+  The <code>CheckpointSaver</code> and <code>Cache</code> interfaces are intentionally storage‑agnostic. A single <code>Executor</code>/<code>GraphAgent</code> instance may call their methods from multiple goroutines when several invocations run in parallel. If you provide your own implementations, ensure:<ul>
+<li>All exported methods (<code>Get</code>/<code>GetTuple</code>/<code>List</code>/<code>Put</code>/<code>PutWrites</code>/<code>PutFull</code>/<code>DeleteLineage</code> for <code>CheckpointSaver</code>, and <code>Get</code>/<code>Set</code>/<code>Clear</code> for <code>Cache</code>) are safe for concurrent use.</li>
+<li>Internal maps, connection pools, or in‑memory buffers are properly synchronized.</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li>NodeFunc, tools, and callbacks should treat state as per‑invocation, not global<br />
+  Each node receives an isolated copy of graph state for the current task. This copy is safe to mutate inside the node, but it is not safe to:<ul>
+<li>Store references to that state (or its internal maps/slices) in global variables and modify them from other goroutines later.</li>
+<li>Access <code>StateKeyExecContext</code> (<code>*graph.ExecutionContext</code>) and bypass its internal locks when reading/writing <code>execCtx.State</code> or <code>execCtx.pendingTasks</code>.
+If you need shared mutable state across nodes or invocations, protect it with your own synchronization (for example, <code>sync.Mutex</code> or <code>sync.RWMutex</code>) or use external services (such as databases or caches).</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li>Do not share a single *agent.Invocation across goroutines<br />
+  The framework expects each <code>Run</code> call (GraphAgent, Runner, or other Agent types) to operate on its own <code>*agent.Invocation</code>. Reusing the same <code>*agent.Invocation</code> instance in multiple goroutines and calling <code>Run</code> concurrently can cause data races on fields like <code>Branch</code>, <code>RunOptions</code>, or callback state. Prefer:<ul>
+<li>Creating a fresh <code>*agent.Invocation</code> per request, or</li>
+<li>Cloning from a parent invocation using <code>invocation.Clone(...)</code> when you need linkage.</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li>Parallel tools require tool implementations to be safe for concurrent use<br />
+  Tools in a <code>Tools</code> node can be executed in parallel when <code>WithEnableParallelTools(true)</code> is used on that node:<ul>
+<li>The framework guarantees that the <code>tools</code> map is only read during execution.</li>
+<li>It also guarantees that the shared graph state passed to tools is only read; updates are written back by nodes, not by tools.
+However, each <code>tool.Tool</code> implementation and its <code>tool.Callbacks</code> may be invoked from multiple goroutines at the same time. Make sure:</li>
+<li>Tool implementations do not mutate shared global state without proper locking.</li>
+<li>Any internal caches, HTTP clients, or client pools inside tools are safe for concurrent use.</li>
+</ul>
+</li>
+</ul>
+<p>These constraints are especially important in long‑running services where a single <code>Graph</code>/<code>Executor</code>/<code>GraphAgent</code> instance is reused for many invocations.</p>
 <p>Once sub-agents are registered you can delegate within the graph via agent nodes:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
 <span class="normal"><a href="#__codelineno-10-2">2</a></span>
@@ -7219,7 +7288,7 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 5, 2025 12:47:32 UTC">2025-12-05 12:47:32</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 8, 2025 08:06:55 UTC">2025-12-08 08:06:55</span>
   </span>
 
     
