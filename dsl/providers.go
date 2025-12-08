@@ -4,14 +4,24 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-// Package dsl defines high‑level abstractions for working with engine DSL
-// graphs. ToolProvider is the runtime abstraction used by the compiler and
-// builtin components to resolve logical tool names into concrete tool.Tool
-// implementations. Concrete implementations (such as registry.ToolRegistry)
-// live in sub‑packages and are injected by callers.
+// Package dsl defines high-level abstractions for working with engine DSL
+// graphs. Providers are runtime dependencies used by the compiler and
+// builtin components to resolve logical model and tool identifiers into
+// concrete implementations.
 package dsl
 
-import "trpc.group/trpc-go/trpc-agent-go/tool"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// ModelProvider resolves a logical model identifier into a model.Model.
+// Implementations are responsible for any caching or configuration lookup.
+type ModelProvider interface {
+	// Get returns the model associated with the given ID or an error if
+	// the model is not found or cannot be constructed.
+	Get(modelID string) (model.Model, error)
+}
 
 // ToolProvider resolves logical tool names into tool.Tool instances.
 // Implementations can apply user/tenant specific access control, dynamic
@@ -34,7 +44,7 @@ type ToolProvider interface {
 // ToolSetProvider resolves logical ToolSet names into tool.ToolSet instances.
 // It mirrors ToolProvider but operates on collections of tools instead of
 // individual tools. Implementations can decide how ToolSets are scoped (for
-// example per‑tenant file ToolSets with different base directories).
+// example per-tenant file ToolSets with different base directories).
 type ToolSetProvider interface {
 	// Get returns a single ToolSet by name or an error if the ToolSet is not found.
 	Get(name string) (tool.ToolSet, error)
