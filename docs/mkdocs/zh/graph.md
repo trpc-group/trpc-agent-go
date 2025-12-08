@@ -626,6 +626,37 @@ graphAgent, err := graphagent.New(
 > 模型/工具回调需要在节点级配置，例如 `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > 或 `AddToolsNode(..., graph.WithToolCallbacks(...))`。
 
+#### 并发使用注意事项
+
+在服务端将 Graph + GraphAgent 部署为长期运行、可并发复用的组件时（例如单个进程内同时处理多路请求），需要注意以下几点：
+
+- 自定义 CheckpointSaver / Cache 必须具备并发安全能力  
+  `CheckpointSaver` 与 `Cache` 接口本身是存储无关、线程无状态的抽象，同一个 `Executor` / `GraphAgent` 实例在并发执行多次时，会从多个 goroutine 调用它们的方法。如果你提供自定义实现，需要确保：
+  - `CheckpointSaver` 的 `Get` / `GetTuple` / `List` / `Put` / `PutWrites` / `PutFull` / `DeleteLineage` 等方法在并发场景下是安全的；
+  - `Cache` 的 `Get` / `Set` / `Clear` 等方法在并发场景下是安全的；
+  - 内部使用的 map、连接池、内存缓冲区等都经过适当加锁或使用其它并发原语保护。
+
+- NodeFunc / 工具 / 回调应把传入状态视为“本次调用本节点的局部数据”  
+  每个节点在执行时会拿到一份针对当前任务的状态副本，这份副本在当前 goroutine 内修改是安全的，但是不建议：
+  - 将该副本（或其中的 map / slice）保存到全局变量，再由其它 goroutine 后续修改；
+  - 从状态中取出 `StateKeyExecContext`（`*graph.ExecutionContext`）后，绕过内部锁直接读写 `execCtx.State` 或 `execCtx.pendingTasks` 等字段。
+  如果确实需要跨节点或跨调用共享可变数据，请使用你自己的同步手段（例如 `sync.Mutex` / `sync.RWMutex`），或者使用外部服务（数据库、缓存等）承载共享状态。
+
+- 不要在多个 goroutine 中复用同一个 *agent.Invocation  
+  框架设计假定每次调用 `Run`（无论是 GraphAgent、Runner 还是其它 Agent 实现）都使用独立的 `*agent.Invocation` 实例。如果在多个 goroutine 中复用同一个 `*agent.Invocation` 并并行调用 `Run`，会在 `Branch`、`RunOptions`、回调状态等字段上产生数据竞争。推荐的做法是：
+  - 每个请求构造一份新的 `*agent.Invocation`，或者
+  - 在需要保持关联时使用 `invocation.Clone(...)` 从父调用上克隆一份新的 Invocation。
+
+- 并行工具调用要求具体工具实现本身支持并发  
+  当某个 Tools 节点使用 `WithEnableParallelTools(true)` 配置为“并行工具执行”时，在同一轮 step 内该节点会为每个工具调用起一个 goroutine 并行执行：
+  - 框架保证 `tools` 映射在执行期间只读访问；
+  - 框架也保证传入工具的图状态在工具内部只读使用，状态更新由节点返回的 `State` 合并完成。
+  但每个具体的 `tool.Tool` 实现以及对应的 `tool.Callbacks` 可能会被多个 goroutine 同时调用，因此需要确保：
+  - 工具实现不会在没有加锁的情况下修改共享的全局变量或共享数据结构；
+  - 工具内部使用的缓存、HTTP 客户端、连接池等组件本身支持并发访问。
+
+这些约束在单进程多请求的高并发场景下尤为重要，可以帮助你安全地复用同一个 `Graph` / `Executor` / `GraphAgent` 实例。
+
 配置了子 Agent 后，可以在图中使用 Agent 节点委托执行：
 
 ```go
