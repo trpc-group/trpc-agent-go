@@ -104,7 +104,8 @@ var (
 			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 		},
-		host: defaultHost,
+		host:         defaultHost,
+		tokenCounter: model.NewSimpleTokenCounter(),
 	}
 )
 
@@ -181,6 +182,9 @@ func WithMaxInputTokens(limit int) Option {
 // WithTokenCounter sets the TokenCounter used for token tailoring.
 func WithTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *options) {
+		if counter == nil {
+			return
+		}
 		opts.tokenCounter = counter
 	}
 }
