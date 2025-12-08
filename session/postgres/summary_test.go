@@ -580,6 +580,68 @@ func TestGetSessionSummaryText_WithFilterKey(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetSessionSummaryText_FallbackToFullSession(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:      "session-123",
+		AppName: "test-app",
+		UserID:  "user-456",
+	}
+
+	// First query for specific filter key returns no rows.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "missing-key", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary"}))
+
+	// Fallback query for full-session summary returns data.
+	fullSummary := session.Summary{Summary: "full summary text"}
+	fullBytes, _ := json.Marshal(fullSummary)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary"}).AddRow(fullBytes))
+
+	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey("missing-key"))
+	assert.True(t, found)
+	assert.Equal(t, "full summary text", text)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSessionSummaryText_FallbackQueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:      "session-123",
+		AppName: "test-app",
+		UserID:  "user-456",
+	}
+
+	// First query for specific filter key returns no rows.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "missing-key", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary"}))
+
+	// Fallback query fails.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg()).
+		WillReturnError(fmt.Errorf("fallback query error"))
+
+	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey("missing-key"))
+	assert.False(t, found)
+	assert.Empty(t, text)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T) {
 	summarizer := &mockSummarizerImpl{summaryText: "test summary", shouldSummarize: true}
 	s, _, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer, asyncSummaryNum: 1})
