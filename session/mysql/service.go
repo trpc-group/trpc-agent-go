@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -41,9 +42,6 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	mysqlClient     storage.Client
-	sessionTTL      time.Duration            // TTL for session state and event list
-	appStateTTL     time.Duration            // TTL for app state
-	userStateTTL    time.Duration            // TTL for user state
 	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
 	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
 	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
@@ -59,10 +57,6 @@ type Service struct {
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
-
-	// hooks for session operations.
-	appendEventHooks []session.AppendEventHook
-	getSessionHooks  []session.GetSessionHook
 }
 
 type sessionEventPair struct {
@@ -115,16 +109,11 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	s := &Service{
 		opts:                  opts,
 		mysqlClient:           mysqlClient,
-		sessionTTL:            opts.sessionTTL,
-		appStateTTL:           opts.appStateTTL,
-		userStateTTL:          opts.userStateTTL,
 		tableSessionStates:    tableSessionStates,
 		tableSessionEvents:    tableSessionEvents,
 		tableSessionSummaries: tableSessionSummaries,
 		tableAppStates:        tableAppStates,
 		tableUserStates:       tableUserStates,
-		appendEventHooks:      opts.appendEventHooks,
-		getSessionHooks:       opts.getSessionHooks,
 	}
 
 	// Initialize database if needed
@@ -224,7 +213,7 @@ func (s *Service) CreateSession(
 	}
 
 	// Calculate expires_at based on TTL
-	expiresAt := calculateExpiresAt(s.sessionTTL)
+	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
 	// Check if session already exists (matching PostgreSQL behavior)
 	var sessionExists bool
@@ -303,33 +292,27 @@ func (s *Service) GetSession(
 	}
 	opt := applyOptions(opts...)
 
-	final := func() (*session.Session, error) {
-		sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+	hctx := &session.GetSessionContext{
+		Context: ctx,
+		Key:     key,
+		Options: opt,
+	}
+	final := func(c *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		sess, err := s.getSession(c.Context, c.Key, c.Options.EventNum, c.Options.EventTime)
 		if err != nil {
 			return nil, fmt.Errorf("mysql session service get session state failed: %w", err)
 		}
 
 		// Refresh session TTL if configured and session exists
-		if sess != nil && s.sessionTTL > 0 {
-			if err := s.refreshSessionTTL(ctx, key); err != nil {
+		if sess != nil && s.opts.sessionTTL > 0 {
+			if err := s.refreshSessionTTL(c.Context, c.Key); err != nil {
 				log.Warnf("failed to refresh session TTL: %v", err)
 				// Don't fail the GetSession call, just log the warning
 			}
 		}
 		return sess, nil
 	}
-
-	// Run GetSession hooks if configured
-	if len(s.getSessionHooks) > 0 {
-		hctx := &session.GetSessionContext{
-			Context: ctx,
-			Key:     key,
-			Options: opt,
-		}
-		return session.RunGetSessionHooks(s.getSessionHooks, hctx, final)
-	}
-
-	return final()
+	return hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
 }
 
 // ListSessions lists all sessions by user scope of session key.
@@ -371,7 +354,7 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 	}
 
 	now := time.Now()
-	expiresAt := calculateExpiresAt(s.appStateTTL)
+	expiresAt := calculateExpiresAt(s.opts.appStateTTL)
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
@@ -446,7 +429,7 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 	}
 
 	now := time.Now()
-	expiresAt := calculateExpiresAt(s.userStateTTL)
+	expiresAt := calculateExpiresAt(s.opts.userStateTTL)
 
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateUserPrefix)
@@ -543,7 +526,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 
 	// Update session state in database
 	now := time.Now()
-	expiresAt := calculateExpiresAt(s.sessionTTL)
+	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
 	_, err = s.mysqlClient.Exec(ctx,
 		fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
@@ -599,20 +582,16 @@ func (s *Service) AppendEvent(
 		return err
 	}
 
-	// Run AppendEvent hooks if configured
-	if len(s.appendEventHooks) > 0 {
-		hctx := &session.AppendEventContext{
-			Context: ctx,
-			Session: sess,
-			Event:   e,
-			Key:     key,
-		}
-		return session.RunAppendEventHooks(s.appendEventHooks, hctx, func() error {
-			return s.appendEventInternal(ctx, sess, hctx.Event, key, opts...)
-		})
+	hctx := &session.AppendEventContext{
+		Context: ctx,
+		Session: sess,
+		Event:   e,
+		Key:     key,
 	}
-
-	return s.appendEventInternal(ctx, sess, e, key, opts...)
+	final := func(c *session.AppendEventContext, next func() error) error {
+		return s.appendEventInternal(c.Context, c.Session, c.Event, c.Key, opts...)
+	}
+	return hook.RunAppendEventHooks(s.opts.appendEventHooks, hctx, final)
 }
 
 // appendEventInternal is the internal implementation of AppendEvent.

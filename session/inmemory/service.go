@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -238,19 +239,15 @@ func (s *SessionService) GetSession(
 		o(opt)
 	}
 
-	// Run GetSession hooks if configured
-	if len(s.opts.getSessionHooks) > 0 {
-		hctx := &session.GetSessionContext{
-			Context: ctx,
-			Key:     key,
-			Options: opt,
-		}
-		return session.RunGetSessionHooks(s.opts.getSessionHooks, hctx, func() (*session.Session, error) {
-			return s.getSession(ctx, key, opt)
-		})
+	hctx := &session.GetSessionContext{
+		Context: ctx,
+		Key:     key,
+		Options: opt,
 	}
-
-	return s.getSession(ctx, key, opt)
+	final := func(c *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		return s.getSession(c.Context, c.Key, c.Options)
+	}
+	return hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
 }
 
 func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *session.Options) (*session.Session, error) {
@@ -625,20 +622,16 @@ func (s *SessionService) AppendEvent(
 		return err
 	}
 
-	// Run AppendEvent hooks if configured
-	if len(s.opts.appendEventHooks) > 0 {
-		hctx := &session.AppendEventContext{
-			Context: ctx,
-			Session: sess,
-			Event:   evt,
-			Key:     key,
-		}
-		return session.RunAppendEventHooks(s.opts.appendEventHooks, hctx, func() error {
-			return s.appendEvent(ctx, sess, evt, key, opts...)
-		})
+	hctx := &session.AppendEventContext{
+		Context: ctx,
+		Session: sess,
+		Event:   evt,
+		Key:     key,
 	}
-
-	return s.appendEvent(ctx, sess, evt, key, opts...)
+	final := func(c *session.AppendEventContext, next func() error) error {
+		return s.appendEvent(c.Context, c.Session, c.Event, c.Key, opts...)
+	}
+	return hook.RunAppendEventHooks(s.opts.appendEventHooks, hctx, final)
 }
 
 func (s *SessionService) appendEvent(
