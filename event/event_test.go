@@ -733,3 +733,15 @@ func TestEventJSON_RoundTrip(t *testing.T) {
 		require.Nil(t, dst.Response)
 	})
 }
+
+func TestEvent_Filter_LegacyBranchCompatibility(t *testing.T) {
+	legacy := &Event{
+		Branch:  "legacy/branch",
+		Version: InitVersion,
+	}
+
+	require.True(t, legacy.Filter("legacy"))
+	require.True(t, legacy.Filter("legacy/branch"))
+	require.True(t, legacy.Filter("legacy/branch/sub"))
+	require.False(t, legacy.Filter("legacy-other"))
+}
