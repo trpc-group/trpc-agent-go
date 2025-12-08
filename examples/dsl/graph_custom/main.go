@@ -11,7 +11,9 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Import built-in components
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -57,7 +59,7 @@ func main() {
 	}
 
 	// Validate DSL
-	validator := dsl.NewValidator(registry.DefaultRegistry)
+	validator := dslvalidator.New()
 	if err := validator.Validate(workflow); err != nil {
 		log.Fatalf("DSL validation failed: %v", err)
 	}
@@ -85,11 +87,12 @@ func main() {
 	fmt.Printf("✅ Tool registered in ToolRegistry: analyze_complexity\n")
 
 	// Compile DSL to Graph with Model Registry and Tool Registry
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelProvider(modelRegistry).
-		WithToolProvider(toolRegistry)
+	comp := compiler.New(
+		compiler.WithModelProvider(modelRegistry),
+		compiler.WithToolProvider(toolRegistry),
+	)
 
-	compiledGraph, err := compiler.Compile(workflow)
+	compiledGraph, err := comp.Compile(workflow)
 	if err != nil {
 		log.Fatalf("Failed to compile DSL: %v", err)
 	}

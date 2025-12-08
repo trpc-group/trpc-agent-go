@@ -12,7 +12,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Import to register builtin components
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	checkpointinmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
@@ -57,17 +59,26 @@ func runInteractive() error {
 	if err != nil {
 		return fmt.Errorf("failed to read workflow.json: %w", err)
 	}
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(data, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(data)
+	if err != nil {
 		return fmt.Errorf("failed to parse workflow.json: %w", err)
 	}
 	fmt.Printf("✅ Graph loaded: %s\n", graphDef.Name)
 
-	// Compile
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelProvider(modelRegistry)
+	// Validate graph definition
+	validator := dslvalidator.New()
+	if err := validator.Validate(graphDef); err != nil {
+		return fmt.Errorf("graph validation failed: %w", err)
+	}
+	fmt.Println("✅ Graph validated successfully")
 
-	graphCompiled, err := compiler.Compile(&graphDef)
+	// Compile
+	comp := compiler.New(
+		compiler.WithModelProvider(modelRegistry),
+	)
+
+	graphCompiled, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}

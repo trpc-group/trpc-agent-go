@@ -38,6 +38,16 @@ func NewSchemaInference(reg *registry.Registry) *SchemaInference {
 	}
 }
 
+// SetReducerRegistry overrides the reducer registry used by schema inference.
+// This allows external callers (such as the DSL compiler) to share a
+// reducer registry instance between SchemaInference and other components.
+func (si *SchemaInference) SetReducerRegistry(reducerRegistry *registry.ReducerRegistry) {
+	if si == nil {
+		return
+	}
+	si.reducerRegistry = reducerRegistry
+}
+
 // addBuiltinFields adds framework built-in fields to the schema.
 // These fields are commonly used by LLM nodes, Tools nodes, and the framework itself.
 func (si *SchemaInference) addBuiltinFields(schema *graph.StateSchema) {

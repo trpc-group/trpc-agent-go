@@ -9,7 +9,9 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Register builtin components
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -60,9 +62,15 @@ func run() error {
 		return fmt.Errorf("failed to read workflow.json: %w", err)
 	}
 
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(data, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(data)
+	if err != nil {
 		return fmt.Errorf("failed to parse workflow.json: %w", err)
+	}
+
+	validator := dslvalidator.New()
+	if err := validator.Validate(graphDef); err != nil {
+		return fmt.Errorf("graph validation failed: %w", err)
 	}
 
 	fmt.Printf("✅ Loaded graph: %s\n", graphDef.Name)
@@ -71,10 +79,11 @@ func run() error {
 	fmt.Println()
 
 	// Compile graph with ModelRegistry so builtin.llmagent can resolve model_id.
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelProvider(modelRegistry)
+	comp := compiler.New(
+		compiler.WithModelProvider(modelRegistry),
+	)
 
-	compiledGraph, err := compiler.Compile(&graphDef)
+	compiledGraph, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}

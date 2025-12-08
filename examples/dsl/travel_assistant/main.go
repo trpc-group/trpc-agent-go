@@ -10,7 +10,9 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Import to register builtin components
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -69,18 +71,26 @@ func run() error {
 		return fmt.Errorf("failed to read graph file: %w", err)
 	}
 
-	var graphDef dsl.Graph
-	if err := json.Unmarshal(graphData, &graphDef); err != nil {
+	parser := dsl.NewParser()
+	graphDef, err := parser.Parse(graphData)
+	if err != nil {
 		return fmt.Errorf("failed to parse graph: %w", err)
 	}
 	fmt.Printf("✅ Graph loaded: %s\n", graphDef.Name)
 
-	// Step 3: Compile graph
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelProvider(modelRegistry).
-		WithToolProvider(registry.DefaultToolRegistry)
+	validator := dslvalidator.New()
+	if err := validator.Validate(graphDef); err != nil {
+		return fmt.Errorf("graph validation failed: %w", err)
+	}
+	fmt.Println("✅ Graph validated successfully")
 
-	compiledGraph, err := compiler.Compile(&graphDef)
+	// Step 3: Compile graph
+	comp := compiler.New(
+		compiler.WithModelProvider(modelRegistry),
+		compiler.WithToolProvider(registry.DefaultToolRegistry),
+	)
+
+	compiledGraph, err := comp.Compile(graphDef)
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}

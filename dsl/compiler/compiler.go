@@ -3,7 +3,7 @@
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-package dsl
+package compiler
 
 import (
 	"context"
@@ -11,34 +11,38 @@ import (
 	"fmt"
 	"strings"
 
+	dsl "trpc.group/trpc-go/trpc-agent-go/dsl"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// Option configures a Compiler instance.
+type Option func(*Compiler)
+
 // Compiler compiles DSL graphs into executable StateGraphs.
 // This is the core of the DSL system, transforming declarative JSON
 // into imperative Go code that can be executed by trpc-agent-go.
 type Compiler struct {
 	registry        *registry.Registry
-	modelProvider   ModelProvider
-	toolProvider    ToolProvider
-	toolSetProvider ToolSetProvider
+	modelProvider   dsl.ModelProvider
+	toolProvider    dsl.ToolProvider
+	toolSetProvider dsl.ToolSetProvider
 	reducerRegistry *registry.ReducerRegistry
 	agentRegistry   *registry.AgentRegistry
-	schemaInference *SchemaInference
+	schemaInference *dsl.SchemaInference
 }
 
 // whileBodyConfig describes the nested subgraph that forms the body of a
 // builtin.while node. It mirrors a minimal Graph shape (nodes/edges +
 // start/exit) but is scoped locally to the while node.
 type whileBodyConfig struct {
-	Nodes            []Node            `json:"nodes"`
-	Edges            []Edge            `json:"edges"`
-	ConditionalEdges []ConditionalEdge `json:"conditional_edges,omitempty"`
-	StartNodeID      string            `json:"start_node_id"`
-	ExitNodeID       string            `json:"exit_node_id"`
+	Nodes            []dsl.Node            `json:"nodes"`
+	Edges            []dsl.Edge            `json:"edges"`
+	ConditionalEdges []dsl.ConditionalEdge `json:"conditional_edges,omitempty"`
+	StartNodeID      string                `json:"start_node_id"`
+	ExitNodeID       string                `json:"exit_node_id"`
 }
 
 // whileConfig describes the DSL-level configuration for a builtin.while node
@@ -46,7 +50,7 @@ type whileBodyConfig struct {
 // tripping to keep the EngineNode struct simple.
 type whileConfig struct {
 	Body      whileBodyConfig `json:"body"`
-	Condition Expression      `json:"condition"`
+	Condition dsl.Expression `json:"condition"`
 }
 
 // whileExpansion contains the preprocessed information needed by the compiler
@@ -56,74 +60,110 @@ type whileExpansion struct {
 	BodyEntry string
 	BodyExit  string
 	AfterNode string
-	Cond      Expression
+	Cond      dsl.Expression
 
-	BodyNodes            []Node
-	BodyEdges            []Edge
-	BodyConditionalEdges []ConditionalEdge
+	BodyNodes            []dsl.Node
+	BodyEdges            []dsl.Edge
+	BodyConditionalEdges []dsl.ConditionalEdge
 }
 
-// NewCompiler creates a new DSL compiler.
-func NewCompiler(reg *registry.Registry) *Compiler {
+// New creates a new DSL compiler with sensible defaults and applies the
+// provided options. Callers typically supply only the options that need to
+// differ from the defaults (e.g., custom ModelProvider or ToolProvider).
+func New(opts ...Option) *Compiler {
 	c := &Compiler{
-		registry:        reg,
+		registry:        registry.DefaultRegistry,
 		modelProvider:   registry.NewModelRegistry(),
 		toolProvider:    registry.DefaultToolRegistry,
 		toolSetProvider: registry.DefaultToolSetRegistry,
 		reducerRegistry: registry.NewReducerRegistry(),
 		agentRegistry:   registry.NewAgentRegistry(),
-		schemaInference: NewSchemaInference(reg),
 	}
-	// Pass reducer registry to schema inference
-	c.schemaInference.reducerRegistry = c.reducerRegistry
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(c)
+		}
+	}
+
+	if c.registry == nil {
+		c.registry = registry.DefaultRegistry
+	}
+
+	// Schema inference depends on both the component registry and reducer
+	// registry, so we construct it after options have been applied.
+	c.schemaInference = dsl.NewSchemaInference(c.registry)
+	c.schemaInference.SetReducerRegistry(c.reducerRegistry)
+
 	return c
+}
+
+// WithComponentRegistry sets the component registry used by the compiler.
+// This is primarily used by higher-level runners/servers that maintain their
+// own *registry.Registry instance. Most callers can rely on the default.
+func WithComponentRegistry(reg *registry.Registry) Option {
+	return func(c *Compiler) {
+		if reg != nil {
+			c.registry = reg
+		}
+	}
 }
 
 // WithModelProvider sets a custom model provider for the compiler. This
 // allows integration with platform-level model services or other dynamic
 // resolution strategies.
-func (c *Compiler) WithModelProvider(provider ModelProvider) *Compiler {
-	c.modelProvider = provider
-	return c
+func WithModelProvider(provider dsl.ModelProvider) Option {
+	return func(c *Compiler) {
+		c.modelProvider = provider
+	}
 }
 
 // WithToolProvider sets the tool provider for the compiler. This allows
 // callers to supply a user/tenant specific provider that may combine
 // framework built‑in tools with application or user defined tools.
-func (c *Compiler) WithToolProvider(provider ToolProvider) *Compiler {
-	c.toolProvider = provider
-	return c
+func WithToolProvider(provider dsl.ToolProvider) Option {
+	return func(c *Compiler) {
+		c.toolProvider = provider
+	}
 }
 
 // WithToolSetProvider sets the ToolSet provider for the compiler. This allows
 // callers to supply a user/tenant specific provider that may combine
 // framework built‑in ToolSets with application or user defined ToolSets.
-func (c *Compiler) WithToolSetProvider(provider ToolSetProvider) *Compiler {
-	c.toolSetProvider = provider
-	return c
+func WithToolSetProvider(provider dsl.ToolSetProvider) Option {
+	return func(c *Compiler) {
+		c.toolSetProvider = provider
+	}
 }
 
 // WithToolSetRegistry is a convenience helper for callers that build a
 // concrete ToolSetRegistry. It simply forwards to WithToolSetProvider.
-func (c *Compiler) WithToolSetRegistry(toolSetRegistry *registry.ToolSetRegistry) *Compiler {
-	c.toolSetProvider = toolSetRegistry
-	return c
+func WithToolSetRegistry(toolSetRegistry *registry.ToolSetRegistry) Option {
+	return func(c *Compiler) {
+		if toolSetRegistry != nil {
+			c.toolSetProvider = toolSetRegistry
+		}
+	}
 }
 
 // WithReducerRegistry sets the reducer registry for the compiler.
 // This allows the compiler to resolve reducer references in state schema inference.
-func (c *Compiler) WithReducerRegistry(reducerRegistry *registry.ReducerRegistry) *Compiler {
-	c.reducerRegistry = reducerRegistry
-	// Update schema inference to use the new reducer registry
-	c.schemaInference.reducerRegistry = reducerRegistry
-	return c
+func WithReducerRegistry(reducerRegistry *registry.ReducerRegistry) Option {
+	return func(c *Compiler) {
+		if reducerRegistry != nil {
+			c.reducerRegistry = reducerRegistry
+		}
+	}
 }
 
 // WithAgentRegistry sets the agent registry for the compiler.
 // This allows the compiler to resolve agent references in agent nodes.
-func (c *Compiler) WithAgentRegistry(agentRegistry *registry.AgentRegistry) *Compiler {
-	c.agentRegistry = agentRegistry
-	return c
+func WithAgentRegistry(agentRegistry *registry.AgentRegistry) Option {
+	return func(c *Compiler) {
+		if agentRegistry != nil {
+			c.agentRegistry = agentRegistry
+		}
+	}
 }
 
 // AgentRegistry returns the agent registry used by the compiler.
@@ -134,7 +174,7 @@ func (c *Compiler) AgentRegistry() *registry.AgentRegistry {
 // Compile compiles an engine-level graph definition into an executable StateGraph.
 // The graph here is the engine DSL representation without any UI-specific
 // concepts such as positions or visual layout.
-func (c *Compiler) Compile(graphDef *Graph) (*graph.Graph, error) {
+func (c *Compiler) Compile(graphDef *dsl.Graph) (*graph.Graph, error) {
 	if graphDef == nil {
 		return nil, fmt.Errorf("graph is nil")
 	}
@@ -263,7 +303,7 @@ func (c *Compiler) Compile(graphDef *Graph) (*graph.Graph, error) {
 
 // buildWhileExpansion preprocesses a builtin.while node and its surrounding
 // edges into a whileExpansion structure used by the compiler.
-func (c *Compiler) buildWhileExpansion(node Node, edges []Edge, nodeIDs map[string]bool) (*whileExpansion, error) {
+func (c *Compiler) buildWhileExpansion(node dsl.Node, edges []dsl.Edge, nodeIDs map[string]bool) (*whileExpansion, error) {
 	engine := node.EngineNode
 
 	rawCfg := engine.Config
@@ -374,45 +414,8 @@ func (c *Compiler) buildWhileExpansion(node Node, edges []Edge, nodeIDs map[stri
 	}, nil
 }
 
-// buildNodeInputView constructs the "input" object exposed to CEL expressions
-// for conditional routing and while conditions. It currently mirrors the
-// structured per-node cache stored under state["node_structured"][nodeID],
-// allowing expressions such as input.output_parsed.classification.
-func buildNodeInputView(state graph.State, nodeID string) map[string]any {
-	input := map[string]any{}
-	if nodeID == "" {
-		return input
-	}
-
-	raw, ok := state["node_structured"]
-	if !ok {
-		return input
-	}
-
-	ns, ok := raw.(map[string]any)
-	if !ok {
-		return input
-	}
-
-	nodeRaw, ok := ns[nodeID]
-	if !ok {
-		return input
-	}
-
-	nodeMap, ok := nodeRaw.(map[string]any)
-	if !ok {
-		return input
-	}
-
-	for k, v := range nodeMap {
-		input[k] = v
-	}
-
-	return input
-}
-
 // createNodeFunc creates a NodeFunc for an engine-level node instance.
-func (c *Compiler) createNodeFunc(node Node) (graph.NodeFunc, error) {
+func (c *Compiler) createNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 	engine := node.EngineNode
 
 	// Handle LLM components specially (use AddLLMNode pattern)
@@ -472,7 +475,7 @@ func (c *Compiler) createNodeFunc(node Node) (graph.NodeFunc, error) {
 // createLLMNodeFunc creates a NodeFunc for an LLM component.
 // This uses the AddLLMNode pattern from trpc-agent-go, where the model instance
 // is obtained from ModelRegistry and passed via closure, not through state.
-func (c *Compiler) createLLMNodeFunc(node Node) (graph.NodeFunc, error) {
+func (c *Compiler) createLLMNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 	engine := node.EngineNode
 
 	// Get model_id from config
@@ -570,7 +573,7 @@ func (c *Compiler) createLLMNodeFunc(node Node) (graph.NodeFunc, error) {
 // createToolsNodeFunc creates a NodeFunc for a Tools component.
 // This uses the AddToolsNode pattern from trpc-agent-go, where tools are
 // obtained from ToolRegistry and passed via closure, not through state.
-func (c *Compiler) createToolsNodeFunc(node Node) (graph.NodeFunc, error) {
+func (c *Compiler) createToolsNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 	engine := node.EngineNode
 
 	// Get tools from config (optional)
@@ -625,7 +628,7 @@ func (c *Compiler) createToolsNodeFunc(node Node) (graph.NodeFunc, error) {
 // createMCPNodeFunc creates a NodeFunc for a standalone MCP node.
 // The MCP node calls a single MCP tool on a remote MCP server and exposes
 // the result under node_structured[nodeID].results for downstream nodes.
-func (c *Compiler) createMCPNodeFunc(node Node) (graph.NodeFunc, error) {
+func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 	engine := node.EngineNode
 
 	rawServerURL, ok := engine.Config["server_url"].(string)
@@ -739,18 +742,18 @@ func (c *Compiler) createMCPNodeFunc(node Node) (graph.NodeFunc, error) {
 }
 
 // createConditionalFunc creates a ConditionalFunc for a conditional edge.
-func (c *Compiler) createConditionalFunc(condEdge ConditionalEdge) (graph.ConditionalFunc, error) {
+func (c *Compiler) createConditionalFunc(condEdge dsl.ConditionalEdge) (graph.ConditionalFunc, error) {
 	return c.createBuiltinCondition(condEdge)
 }
 
 // createBuiltinCondition creates a condition function from a builtin structured condition.
-func (c *Compiler) createBuiltinCondition(condEdge ConditionalEdge) (graph.ConditionalFunc, error) {
-	return NewBuiltinConditionFunc(condEdge.From, condEdge.Condition)
+func (c *Compiler) createBuiltinCondition(condEdge dsl.ConditionalEdge) (graph.ConditionalFunc, error) {
+	return newBuiltinConditionFunc(condEdge.From, condEdge.Condition)
 }
 
 // applyOutputMapping applies output mapping from DSL node outputs configuration.
 // It transforms the component's output according to the target specifications.
-func (c *Compiler) applyOutputMapping(result interface{}, outputs []NodeIO, component registry.Component) (interface{}, error) {
+func (c *Compiler) applyOutputMapping(result interface{}, outputs []dsl.NodeIO, component registry.Component) (interface{}, error) {
 	// If result is a Command slice, we can't apply output mapping
 	// (Commands are for dynamic fan-out and handle their own state updates)
 	if _, isCommands := result.([]*graph.Command); isCommands {
@@ -918,88 +921,19 @@ func (c *llmPseudoComponent) Execute(ctx context.Context, config registry.Compon
 
 // createLLMAgentNodeFunc creates a NodeFunc for an LLMAgent component.
 // This dynamically creates an LLMAgent based on DSL configuration and executes it.
-func (c *Compiler) createLLMAgentNodeFunc(node Node) (graph.NodeFunc, error) {
-	return NewLLMAgentNodeFuncFromConfig(node.ID, node.EngineNode.Config, c.modelProvider, c.toolProvider)
+func (c *Compiler) createLLMAgentNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
+	return newLLMAgentNodeFuncFromConfig(node.ID, node.EngineNode.Config, c.modelProvider, c.toolProvider)
 }
 
 // createUserApprovalNodeFunc creates a NodeFunc for a user approval step.
 // It uses graph.Interrupt to pause execution and waits for a resume value.
 // The resume value is normalized into "approve"/"reject" and exposed via
 // approval_result, while also echoing the message as last_response.
-func (c *Compiler) createUserApprovalNodeFunc(node Node) (graph.NodeFunc, error) {
-	return NewUserApprovalNodeFuncFromConfig(node.ID, node.EngineNode.Config)
+func (c *Compiler) createUserApprovalNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
+	return newUserApprovalNodeFuncFromConfig(node.ID, node.EngineNode.Config)
 }
 
 // createMCPToolSet creates an MCP ToolSet from DSL configuration.
 func (c *Compiler) createMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
-	return CreateMCPToolSet(config)
-}
-
-// extractFirstJSONObjectFromText tries to extract the first balanced top-level
-// JSON object or array from the given text. This mirrors the behavior of the
-// internal flow processor's extraction logic but keeps the dependency entirely
-// within the DSL layer.
-func extractFirstJSONObjectFromText(s string) (string, bool) {
-	start := findJSONStartInText(s)
-	if start == -1 {
-		return "", false
-	}
-	return scanBalancedJSONInText(s, start)
-}
-
-// findJSONStartInText finds the index of the first opening brace/bracket.
-func findJSONStartInText(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '{' || s[i] == '[' {
-			return i
-		}
-	}
-	return -1
-}
-
-// scanBalancedJSONInText scans for a balanced JSON object/array starting at start.
-func scanBalancedJSONInText(s string, start int) (string, bool) {
-	stack := make([]byte, 0, 8)
-	inString := false
-	escaped := false
-
-	for i := start; i < len(s); i++ {
-		c := s[i]
-
-		if escaped {
-			escaped = false
-			continue
-		}
-
-		if inString {
-			switch c {
-			case '\\':
-				escaped = true
-			case '"':
-				inString = false
-			}
-			continue
-		}
-
-		switch c {
-		case '"':
-			inString = true
-		case '{', '[':
-			stack = append(stack, c)
-		case '}', ']':
-			if len(stack) == 0 {
-				return "", false
-			}
-			top := stack[len(stack)-1]
-			if (top == '{' && c == '}') || (top == '[' && c == ']') {
-				stack = stack[:len(stack)-1]
-				if len(stack) == 0 {
-					return s[start : i+1], true
-				}
-			} else {
-				return "", false
-			}
-		}
-	}
-	return "", false
+	return createMCPToolSet(config)
 }

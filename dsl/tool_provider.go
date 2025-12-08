@@ -48,4 +48,3 @@ type ToolSetProvider interface {
 	// read‑only.
 	GetAll() map[string]tool.ToolSet
 }
-

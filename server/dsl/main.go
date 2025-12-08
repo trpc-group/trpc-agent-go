@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Register builtin components
 )
@@ -82,7 +83,7 @@ type Server struct {
 	modelRegistry     *registry.ModelRegistry
 	toolRegistry      *registry.ToolRegistry
 	toolSetRegistry   *registry.ToolSetRegistry
-	compiler          *dsl.Compiler
+	compiler          *compiler.Compiler
 
 	// TODO: Add graph storage (database/in-memory)
 	// graphStore GraphStore
@@ -100,17 +101,19 @@ func NewServer() *Server {
 	toolSetRegistry := registry.DefaultToolSetRegistry // Use DefaultToolSetRegistry with built-in toolsets
 
 	// Create compiler
-	compiler := dsl.NewCompiler(componentRegistry).
-		WithModelProvider(modelRegistry).
-		WithToolProvider(toolRegistry).
-		WithToolSetRegistry(toolSetRegistry)
+	comp := compiler.New(
+		compiler.WithComponentRegistry(componentRegistry),
+		compiler.WithModelProvider(modelRegistry),
+		compiler.WithToolProvider(toolRegistry),
+		compiler.WithToolSetRegistry(toolSetRegistry),
+	)
 
 	return &Server{
 		componentRegistry: componentRegistry,
 		modelRegistry:     modelRegistry,
 		toolRegistry:      toolRegistry,
 		toolSetRegistry:   toolSetRegistry,
-		compiler:          compiler,
+		compiler:          comp,
 	}
 }
 

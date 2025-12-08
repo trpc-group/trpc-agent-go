@@ -21,7 +21,9 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	engine "trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
@@ -59,8 +61,8 @@ type Options struct {
 // running engine‑level DSL graphs.
 type Runner struct {
 	parser    *engine.Parser
-	validator *engine.Validator
-	compiler  *engine.Compiler
+	validator *dslvalidator.Validator
+	compiler  *compiler.Compiler
 }
 
 // NewRunner constructs a Runner using the provided Options. When specific
@@ -71,29 +73,33 @@ func NewRunner(opts Options) *Runner {
 		reg = registry.DefaultRegistry
 	}
 
-	validator := engine.NewValidator(reg)
-	compiler := engine.NewCompiler(reg)
-
+	validator := dslvalidator.New(dslvalidator.WithComponentRegistry(reg))
+	var compilerOpts []compiler.Option
 	if opts.ModelRegistry != nil {
-		compiler.WithModelProvider(opts.ModelRegistry)
+		compilerOpts = append(compilerOpts, compiler.WithModelProvider(opts.ModelRegistry))
 	}
 	if opts.ToolRegistry != nil {
-		compiler.WithToolProvider(opts.ToolRegistry)
+		compilerOpts = append(compilerOpts, compiler.WithToolProvider(opts.ToolRegistry))
 	}
 	if opts.ToolSetRegistry != nil {
-		compiler.WithToolSetRegistry(opts.ToolSetRegistry)
+		compilerOpts = append(compilerOpts, compiler.WithToolSetProvider(opts.ToolSetRegistry))
 	}
 	if opts.ReducerRegistry != nil {
-		compiler.WithReducerRegistry(opts.ReducerRegistry)
+		compilerOpts = append(compilerOpts, compiler.WithReducerRegistry(opts.ReducerRegistry))
 	}
 	if opts.AgentRegistry != nil {
-		compiler.WithAgentRegistry(opts.AgentRegistry)
+		compilerOpts = append(compilerOpts, compiler.WithAgentRegistry(opts.AgentRegistry))
 	}
+	// Always pass the component registry explicitly so Validator and Compiler
+	// stay in sync, while still defaulting to DefaultRegistry for callers
+	// that don't provide one.
+	compilerOpts = append(compilerOpts, compiler.WithComponentRegistry(reg))
+	comp := compiler.New(compilerOpts...)
 
 	return &Runner{
 		parser:    engine.NewParser(),
 		validator: validator,
-		compiler:  compiler,
+		compiler:  comp,
 	}
 }
 

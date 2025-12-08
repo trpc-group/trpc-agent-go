@@ -1,14 +1,4 @@
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-// Package dsl provides shared helpers for constructing NodeFunc implementations
-// for builtin components. These helpers are used both by the DSL compiler
-// (DSL‑run) and by code generation (codegen‑run) to ensure that builtin node
-// behavior is defined in a single place.
-package dsl
+package compiler
 
 import (
 	"context"
@@ -20,6 +10,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
+	"trpc.group/trpc-go/trpc-agent-go/dsl"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -29,16 +20,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 )
 
-// NewLLMAgentNodeFuncFromConfig creates a NodeFunc for a builtin.llmagent node
+// newLLMAgentNodeFuncFromConfig creates a NodeFunc for a builtin.llmagent node
 // given its ID, configuration and model/tool providers. It is a refactoring
 // of the compiler's createLLMAgentNodeFunc method so that codegen and other
 // callers can reuse the same behavior while remaining agnostic to how
 // models are sourced (env vars, platform model service, etc.).
-func NewLLMAgentNodeFuncFromConfig(
+func newLLMAgentNodeFuncFromConfig(
 	nodeID string,
 	cfg map[string]any,
-	models ModelProvider,
-	toolsProvider ToolProvider,
+	models dsl.ModelProvider,
+	toolsProvider dsl.ToolProvider,
 ) (graph.NodeFunc, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("nodeID is required for NewLLMAgentNodeFuncFromConfig")
@@ -151,7 +142,7 @@ func NewLLMAgentNodeFuncFromConfig(
 					cfgMap["tool_filter"] = toolFilter
 				}
 
-				if toolSet, err := CreateMCPToolSet(cfgMap); err == nil {
+				if toolSet, err := createMCPToolSet(cfgMap); err == nil {
 					mcpToolSets = append(mcpToolSets, toolSet)
 				} else {
 					log.Warnf("builtin.llmagent: failed to create MCP toolset for server %q: %v", serverURL, err)
@@ -404,10 +395,10 @@ func NewLLMAgentNodeFuncFromConfig(
 	}, nil
 }
 
-// NewUserApprovalNodeFuncFromConfig creates a NodeFunc for a builtin.user_approval
+// newUserApprovalNodeFuncFromConfig creates a NodeFunc for a builtin.user_approval
 // node given its ID and configuration. It mirrors the compiler's
 // createUserApprovalNodeFunc behavior.
-func NewUserApprovalNodeFuncFromConfig(nodeID string, cfg map[string]any) (graph.NodeFunc, error) {
+func newUserApprovalNodeFuncFromConfig(nodeID string, cfg map[string]any) (graph.NodeFunc, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("nodeID is required for NewUserApprovalNodeFuncFromConfig")
 	}
@@ -455,17 +446,16 @@ func NewUserApprovalNodeFuncFromConfig(nodeID string, cfg map[string]any) (graph
 	}, nil
 }
 
-// NewBuiltinConditionFunc creates a ConditionalFunc for a builtin CEL-based
+// newBuiltinConditionFunc creates a ConditionalFunc for a builtin CEL-based
 // condition. It mirrors the compiler's createBuiltinCondition behavior and is
-// shared between the compiler and codegen so that conditional routing logic is
-// defined in a single place.
-func NewBuiltinConditionFunc(fromNodeID string, cond Condition) (graph.ConditionalFunc, error) {
+// used internally so that conditional routing logic is defined in a single place.
+func newBuiltinConditionFunc(fromNodeID string, cond dsl.Condition) (graph.ConditionalFunc, error) {
 	if len(cond.Cases) == 0 {
 		return nil, fmt.Errorf("builtin condition requires at least one case")
 	}
 
 	// Create a local copy of cases to avoid capturing a mutable slice from the caller.
-	cases := make([]Case, len(cond.Cases))
+	cases := make([]dsl.Case, len(cond.Cases))
 	copy(cases, cond.Cases)
 
 	return func(ctx context.Context, state graph.State) (string, error) {
@@ -498,9 +488,9 @@ func NewBuiltinConditionFunc(fromNodeID string, cond Condition) (graph.Condition
 	}, nil
 }
 
-// CreateMCPToolSet is a helper that constructs an MCP ToolSet from DSL
-// configuration. It is shared by the compiler and by NewLLMAgentNodeFuncFromConfig.
-func CreateMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
+// createMCPToolSet is a helper that constructs an MCP ToolSet from DSL
+// configuration.
+func createMCPToolSet(config map[string]interface{}) (tool.ToolSet, error) {
 	transport, ok := config["transport"].(string)
 	if !ok || transport == "" {
 		return nil, fmt.Errorf("transport is required in MCP tool config")

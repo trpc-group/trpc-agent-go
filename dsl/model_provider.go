@@ -20,4 +20,3 @@ type ModelProvider interface {
 	// the model is not found or cannot be constructed.
 	Get(name string) (model.Model, error)
 }
-

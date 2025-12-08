@@ -9,6 +9,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
+	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Auto-register builtin components
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -63,11 +64,12 @@ func run() error {
 	fmt.Println()
 
 	// Step 5: Compile workflow
-	compiler := dsl.NewCompiler(registry.DefaultRegistry).
-		WithModelProvider(modelRegistry).
-		WithToolProvider(registry.DefaultToolRegistry)
+	comp := compiler.New(
+		compiler.WithModelProvider(modelRegistry),
+		compiler.WithToolProvider(registry.DefaultToolRegistry),
+	)
 
-	compiledGraph, err := compiler.Compile(workflow)
+	compiledGraph, err := comp.Compile(workflow)
 	if err != nil {
 		return fmt.Errorf("failed to compile workflow: %w", err)
 	}
