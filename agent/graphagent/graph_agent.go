@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -122,7 +123,7 @@ func (ga *GraphAgent) emitStartBarrierAndWait(ctx context.Context, invocation *a
 	if err := agent.EmitEvent(ctx, invocation, ch, barrier); err != nil {
 		return fmt.Errorf("emit barrier event: %w", err)
 	}
-	timeout := processor.WaitEventTimeout(ctx, processor.EventCompletionTimeout)
+	timeout := llmflow.WaitEventTimeout(ctx)
 	if err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout); err != nil {
 		return fmt.Errorf("wait for barrier completion: %w", err)
 	}
@@ -132,9 +133,6 @@ func (ga *GraphAgent) emitStartBarrierAndWait(ctx context.Context, invocation *a
 // runWithCallbacks executes the GraphAgent flow: prepare initial state, run before-agent callbacks, execute the graph,
 // and wrap with after-agent callbacks when present.
 func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	// Prepare initial state.
-	initialState := ga.createInitialState(ctx, invocation)
-
 	// Execute the graph.
 	if ga.agentCallbacks != nil {
 		result, err := ga.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
