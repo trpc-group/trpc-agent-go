@@ -15,6 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -877,222 +878,153 @@ func TestConvertTaskArtifactToMessage(t *testing.T) {
 	}
 }
 
-// TestBuildRespEvent_ToolCall tests handling of tool call DataParts
-func TestBuildRespEvent_ToolCall(t *testing.T) {
+// TestBuildRespEvent_ToolScenarios covers tool call/response flows in both streaming and non-streaming modes.
+func TestBuildRespEvent_ToolScenarios(t *testing.T) {
 	converter := &defaultA2AEventConverter{}
-	invocation := &agent.Invocation{
-		InvocationID: "test-id",
-	}
+	invocation := &agent.Invocation{InvocationID: "test-id"}
 
-	// Create a message with a tool call DataPart
-	toolCallData := map[string]any{
-		"id":   "call-123",
-		"type": "function",
-		"name": "get_weather",
-		"args": `{"location": "New York"}`,
-	}
-	dataPart := &protocol.DataPart{
-		Data: toolCallData,
-		Metadata: map[string]any{
-			"type": "function_call",
+	cases := []struct {
+		name        string
+		isStreaming bool
+		msg         *protocol.Message
+		validate    func(t *testing.T, evt *event.Event)
+	}{
+		{
+			name:        "tool call non-streaming with text",
+			isStreaming: false,
+			msg: &protocol.Message{
+				MessageID: "msg-1",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "I'll check the weather for you."},
+					&protocol.DataPart{
+						Data: map[string]any{
+							"id":   "call-123",
+							"type": "function",
+							"name": "get_weather",
+							"args": `{"location": "New York"}`,
+						},
+						Metadata: map[string]any{"type": "function_call"},
+					},
+				},
+			},
+			validate: func(t *testing.T, evt *event.Event) {
+				choice := evt.Response.Choices[0]
+				if choice.Message.Role != model.RoleAssistant {
+					t.Errorf("expected role assistant, got %s", choice.Message.Role)
+				}
+				if choice.Message.Content != "I'll check the weather for you." {
+					t.Errorf("unexpected content: %s", choice.Message.Content)
+				}
+				if len(choice.Message.ToolCalls) != 1 {
+					t.Fatalf("expected 1 tool call, got %d", len(choice.Message.ToolCalls))
+				}
+				tc := choice.Message.ToolCalls[0]
+				if tc.ID != "call-123" || tc.Function.Name != "get_weather" || string(tc.Function.Arguments) != `{"location": "New York"}` {
+					t.Fatalf("unexpected tool call: %+v", tc)
+				}
+			},
+		},
+		{
+			name:        "tool response non-streaming",
+			isStreaming: false,
+			msg: &protocol.Message{
+				MessageID: "msg-2",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"id":       "call-123",
+							"name":     "get_weather",
+							"response": "The weather in New York is sunny, 72°F",
+						},
+						Metadata: map[string]any{"type": "function_response"},
+					},
+				},
+			},
+			validate: func(t *testing.T, evt *event.Event) {
+				choice := evt.Response.Choices[0]
+				if choice.Message.Role != model.RoleTool {
+					t.Fatalf("expected role tool, got %s", choice.Message.Role)
+				}
+				if choice.Message.ToolID != "call-123" || choice.Message.ToolName != "get_weather" {
+					t.Fatalf("unexpected tool id/name: %s %s", choice.Message.ToolID, choice.Message.ToolName)
+				}
+				if choice.Message.Content != "The weather in New York is sunny, 72°F" {
+					t.Fatalf("unexpected content: %s", choice.Message.Content)
+				}
+			},
+		},
+		{
+			name:        "tool call streaming",
+			isStreaming: true,
+			msg: &protocol.Message{
+				MessageID: "msg-3",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.DataPart{
+						Data: map[string]any{
+							"id":   "call-456",
+							"type": "function",
+							"name": "calculate",
+							"args": `{"x": 10, "y": 20}`,
+						},
+						Metadata: map[string]any{"type": "function_call"},
+					},
+				},
+			},
+			validate: func(t *testing.T, evt *event.Event) {
+				if evt.Response.IsPartial {
+					t.Fatal("expected IsPartial to be false")
+				}
+				if evt.Response.Done {
+					t.Fatal("expected Done to be false")
+				}
+				choice := evt.Response.Choices[0]
+				if len(choice.Message.ToolCalls) != 1 {
+					t.Fatalf("expected 1 tool call, got %d", len(choice.Message.ToolCalls))
+				}
+			},
+		},
+		{
+			name:        "mixed text and tool call",
+			isStreaming: false,
+			msg: &protocol.Message{
+				MessageID: "msg-4",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "Let me search for that."},
+					&protocol.DataPart{
+						Data: map[string]any{
+							"id":   "call-789",
+							"type": "function",
+							"name": "search",
+							"args": `{"query": "golang"}`,
+						},
+						Metadata: map[string]any{"type": "function_call"},
+					},
+				},
+			},
+			validate: func(t *testing.T, evt *event.Event) {
+				choice := evt.Response.Choices[0]
+				if choice.Message.Content != "Let me search for that." {
+					t.Fatalf("unexpected content: %s", choice.Message.Content)
+				}
+				if len(choice.Message.ToolCalls) != 1 {
+					t.Fatalf("expected 1 tool call, got %d", len(choice.Message.ToolCalls))
+				}
+			},
 		},
 	}
 
-	msg := &protocol.Message{
-		MessageID: "msg-1",
-		Role:      protocol.MessageRoleAgent,
-		Parts: []protocol.Part{
-			&protocol.TextPart{Text: "I'll check the weather for you."},
-			dataPart,
-		},
-	}
-
-	event := converter.buildRespEvent(false, msg, "test-agent", invocation)
-
-	if event == nil {
-		t.Fatal("expected event, got nil")
-	}
-	if event.Response == nil {
-		t.Fatal("expected response, got nil")
-	}
-	if len(event.Response.Choices) != 1 {
-		t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
-	}
-
-	choice := event.Response.Choices[0]
-	if choice.Message.Role != model.RoleAssistant {
-		t.Errorf("expected role Assistant, got %s", choice.Message.Role)
-	}
-	if len(choice.Message.ToolCalls) != 1 {
-		t.Errorf("expected 1 tool call, got %d", len(choice.Message.ToolCalls))
-	}
-	if choice.Message.ToolCalls[0].ID != "call-123" {
-		t.Errorf("expected tool call ID 'call-123', got %s", choice.Message.ToolCalls[0].ID)
-	}
-	if choice.Message.ToolCalls[0].Function.Name != "get_weather" {
-		t.Errorf("expected function name 'get_weather', got %s", choice.Message.ToolCalls[0].Function.Name)
-	}
-	if string(choice.Message.ToolCalls[0].Function.Arguments) != `{"location": "New York"}` {
-		t.Errorf("expected arguments '{\"location\": \"New York\"}', got %s", string(choice.Message.ToolCalls[0].Function.Arguments))
-	}
-}
-
-// TestBuildRespEvent_ToolResponse tests handling of tool response DataParts
-func TestBuildRespEvent_ToolResponse(t *testing.T) {
-	converter := &defaultA2AEventConverter{}
-	invocation := &agent.Invocation{
-		InvocationID: "test-id",
-	}
-
-	// Create a message with a tool response DataPart
-	toolResponseData := map[string]any{
-		"id":       "call-123",
-		"name":     "get_weather",
-		"response": "The weather in New York is sunny, 72°F",
-	}
-	dataPart := &protocol.DataPart{
-		Data: toolResponseData,
-		Metadata: map[string]any{
-			"type": "function_response",
-		},
-	}
-
-	msg := &protocol.Message{
-		MessageID: "msg-2",
-		Role:      protocol.MessageRoleAgent,
-		Parts: []protocol.Part{
-			dataPart,
-		},
-	}
-
-	event := converter.buildRespEvent(false, msg, "test-agent", invocation)
-
-	if event == nil {
-		t.Fatal("expected event, got nil")
-	}
-	if event.Response == nil {
-		t.Fatal("expected response, got nil")
-	}
-	if len(event.Response.Choices) != 1 {
-		t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
-	}
-
-	choice := event.Response.Choices[0]
-	if choice.Message.Role != model.RoleTool {
-		t.Errorf("expected role Tool, got %s", choice.Message.Role)
-	}
-	if choice.Message.ToolID != "call-123" {
-		t.Errorf("expected tool ID 'call-123', got %s", choice.Message.ToolID)
-	}
-	if choice.Message.ToolName != "get_weather" {
-		t.Errorf("expected tool name 'get_weather', got %s", choice.Message.ToolName)
-	}
-	if choice.Message.Content != "The weather in New York is sunny, 72°F" {
-		t.Errorf("expected content 'The weather in New York is sunny, 72°F', got %s", choice.Message.Content)
-	}
-}
-
-// TestBuildRespEvent_StreamingToolCall tests handling of tool call in streaming mode
-func TestBuildRespEvent_StreamingToolCall(t *testing.T) {
-	converter := &defaultA2AEventConverter{}
-	invocation := &agent.Invocation{
-		InvocationID: "test-id",
-	}
-
-	// Create a message with a tool call DataPart
-	toolCallData := map[string]any{
-		"id":   "call-456",
-		"type": "function",
-		"name": "calculate",
-		"args": `{"x": 10, "y": 20}`,
-	}
-	dataPart := &protocol.DataPart{
-		Data: toolCallData,
-		Metadata: map[string]any{
-			"type": "function_call",
-		},
-	}
-
-	msg := &protocol.Message{
-		MessageID: "msg-3",
-		Role:      protocol.MessageRoleAgent,
-		Parts: []protocol.Part{
-			dataPart,
-		},
-	}
-
-	event := converter.buildRespEvent(true, msg, "test-agent", invocation)
-
-	if event == nil {
-		t.Fatal("expected event, got nil")
-	}
-	if event.Response == nil {
-		t.Fatal("expected response, got nil")
-	}
-	if event.Response.IsPartial {
-		t.Error("expected IsPartial to be false for tool calls")
-	}
-	if event.Response.Done {
-		t.Error("expected Done to be false for tool calls")
-	}
-	if len(event.Response.Choices) != 1 {
-		t.Errorf("expected 1 choice, got %d", len(event.Response.Choices))
-	}
-
-	choice := event.Response.Choices[0]
-	if choice.Message.Role != model.RoleAssistant {
-		t.Errorf("expected role Assistant, got %s", choice.Message.Role)
-	}
-	if len(choice.Message.ToolCalls) != 1 {
-		t.Errorf("expected 1 tool call, got %d", len(choice.Message.ToolCalls))
-	}
-}
-
-// TestBuildRespEvent_MixedContent tests handling of mixed text and tool call content
-func TestBuildRespEvent_MixedContent(t *testing.T) {
-	converter := &defaultA2AEventConverter{}
-	invocation := &agent.Invocation{
-		InvocationID: "test-id",
-	}
-
-	// Create a message with both text and tool call
-	toolCallData := map[string]any{
-		"id":   "call-789",
-		"type": "function",
-		"name": "search",
-		"args": `{"query": "golang"}`,
-	}
-	dataPart := &protocol.DataPart{
-		Data: toolCallData,
-		Metadata: map[string]any{
-			"type": "function_call",
-		},
-	}
-
-	msg := &protocol.Message{
-		MessageID: "msg-4",
-		Role:      protocol.MessageRoleAgent,
-		Parts: []protocol.Part{
-			&protocol.TextPart{Text: "Let me search for that."},
-			dataPart,
-		},
-	}
-
-	event := converter.buildRespEvent(false, msg, "test-agent", invocation)
-
-	if event == nil {
-		t.Fatal("expected event, got nil")
-	}
-	if event.Response == nil {
-		t.Fatal("expected response, got nil")
-	}
-
-	choice := event.Response.Choices[0]
-	if choice.Message.Content != "Let me search for that." {
-		t.Errorf("expected content 'Let me search for that.', got %s", choice.Message.Content)
-	}
-	if len(choice.Message.ToolCalls) != 1 {
-		t.Errorf("expected 1 tool call, got %d", len(choice.Message.ToolCalls))
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			evt := converter.buildRespEvent(tt.isStreaming, tt.msg, "test-agent", invocation)
+			if evt == nil || evt.Response == nil {
+				t.Fatalf("expected event/response, got nil")
+			}
+			tt.validate(t, evt)
+		})
 	}
 }
 
@@ -2256,4 +2188,92 @@ func TestConvertToEvents_CodeExecutionWithTag(t *testing.T) {
 // Helper function to create string pointer
 func stringPtr(s string) *string {
 	return &s
+}
+
+// TestProcessTextAndDataPart_EdgeCases covers ignored/non-text parts.
+func TestProcessTextAndDataPart_EdgeCases(t *testing.T) {
+	cases := []struct {
+		name  string
+		part  protocol.Part
+		check func(t *testing.T, res *parseResult, text string)
+	}{
+		{
+			name: "non-text in text processor",
+			part: &protocol.DataPart{},
+			check: func(t *testing.T, res *parseResult, text string) {
+				if text != "" {
+					t.Fatalf("expected empty string for non text part, got %q", text)
+				}
+				if res.textContent != "" || len(res.toolCalls) > 0 || len(res.toolResponses) > 0 || res.codeExecution != "" || res.codeExecutionResult != "" {
+					t.Fatalf("expected parseResult to remain empty, got %+v", res)
+				}
+			},
+		},
+		{
+			name: "text part ignored by data processor",
+			part: &protocol.TextPart{Text: "hi"},
+			check: func(t *testing.T, res *parseResult, text string) {
+				if text != "hi" {
+					t.Fatalf("expected text 'hi', got %q", text)
+				}
+				if res.textContent != "" || len(res.toolCalls) > 0 || len(res.toolResponses) > 0 || res.codeExecution != "" || res.codeExecutionResult != "" {
+					t.Fatalf("expected parseResult unchanged for text part, got %+v", res)
+				}
+			},
+		},
+		{
+			name: "unknown data type",
+			part: &protocol.DataPart{Metadata: map[string]any{"type": "unknown"}, Data: map[string]any{}},
+			check: func(t *testing.T, res *parseResult, text string) {
+				if text != "" {
+					t.Fatalf("expected empty text for data part in text processor, got %q", text)
+				}
+				if res.textContent != "" || len(res.toolCalls) > 0 || len(res.toolResponses) > 0 || res.codeExecution != "" || res.codeExecutionResult != "" {
+					t.Fatalf("expected no parsed content for unknown type: %+v", res)
+				}
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			res := &parseResult{}
+			text := processTextPart(tt.part)
+			processDataPart(tt.part, res)
+			tt.check(t, res, text)
+		})
+	}
+}
+
+func TestProcessFunctionCall_MissingName(t *testing.T) {
+	call := processFunctionCall(&protocol.DataPart{
+		Data: map[string]any{
+			ia2a.ToolCallFieldID: "id",
+		},
+		Metadata: map[string]any{
+			"type": ia2a.DataPartMetadataTypeFunctionCall,
+		},
+	})
+	if call != nil {
+		t.Fatalf("expected nil when function name missing, got %+v", call)
+	}
+}
+
+func TestBuildStreamingResponse_ToolResponses(t *testing.T) {
+	resp := buildStreamingResponse("msg-123", &parseResult{
+		toolResponses: []toolResponseData{{id: "tool-1", name: "tool", content: "resp"}},
+	})
+	if resp == nil {
+		t.Fatalf("expected response, got nil")
+	}
+	if resp.Object != model.ObjectTypeChatCompletion {
+		t.Fatalf("unexpected object type: %s", resp.Object)
+	}
+	if len(resp.Choices) != 1 {
+		t.Fatalf("expected one choice, got %d", len(resp.Choices))
+	}
+	msg := resp.Choices[0].Message
+	if msg.Role != model.RoleTool || msg.ToolID != "tool-1" || msg.ToolName != "tool" || msg.Content != "resp" {
+		t.Fatalf("unexpected tool response message: %+v", msg)
+	}
 }
