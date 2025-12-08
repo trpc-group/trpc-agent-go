@@ -58,7 +58,6 @@ type Service struct {
 	// Table names with prefix applied
 	tableSessionStates    string
 	tableSessionEvents    string
-	tableSessionTracks    string
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
@@ -111,7 +110,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Build table names with prefix
 	tableSessionStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionStates)
 	tableSessionEvents := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionEvents)
-	tableSessionTracks := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionTrackEvents)
 	tableSessionSummaries := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionSummaries)
 	tableAppStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameAppStates)
 	tableUserStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameUserStates)
@@ -125,7 +123,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL:          opts.userStateTTL,
 		tableSessionStates:    tableSessionStates,
 		tableSessionEvents:    tableSessionEvents,
-		tableSessionTracks:    tableSessionTracks,
 		tableSessionSummaries: tableSessionSummaries,
 		tableAppStates:        tableAppStates,
 		tableUserStates:       tableUserStates,
@@ -831,11 +828,6 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 						s.tableSessionEvents, strings.Join(placeholders, ",")), append([]any{now}, args...)...); err != nil {
 					return fmt.Errorf("soft delete events: %w", err)
 				}
-				if _, err := tx.ExecContext(ctx,
-					fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
-						s.tableSessionTracks, strings.Join(placeholders, ",")), append([]any{now}, args...)...); err != nil {
-					return fmt.Errorf("soft delete track events: %w", err)
-				}
 			}
 
 			return nil
@@ -868,11 +860,6 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 					fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
 						s.tableSessionEvents, strings.Join(placeholders, ",")), args...); err != nil {
 					return fmt.Errorf("hard delete events: %w", err)
-				}
-				if _, err := tx.ExecContext(ctx,
-					fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
-						s.tableSessionTracks, strings.Join(placeholders, ",")), args...); err != nil {
-					return fmt.Errorf("hard delete track events: %w", err)
 				}
 			}
 			return nil
@@ -958,22 +945,12 @@ func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.Use
 			now, userKey.AppName, userKey.UserID, now); err != nil {
 			log.Errorf("cleanup expired sessions for user failed: %v", err)
 		}
-		if _, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionTracks),
-			now, userKey.AppName, userKey.UserID, now); err != nil {
-			log.Errorf("cleanup expired track events for user failed: %v", err)
-		}
 	} else {
 		// Hard delete expired sessions for this user
 		if _, err := s.mysqlClient.Exec(ctx,
 			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
 			userKey.AppName, userKey.UserID, now); err != nil {
 			log.Errorf("cleanup expired sessions for user failed: %v", err)
-		}
-		if _, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionTracks),
-			userKey.AppName, userKey.UserID, now); err != nil {
-			log.Errorf("cleanup expired track events for user failed: %v", err)
 		}
 	}
 }

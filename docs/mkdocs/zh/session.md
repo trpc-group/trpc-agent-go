@@ -979,27 +979,14 @@ CREATE TABLE session_events (
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
+    track VARCHAR(255) NULL,
     event JSON NOT NULL,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     expires_at TIMESTAMP(6) NULL,
     deleted_at TIMESTAMP(6) NULL,
-    KEY idx_session_events (app_name, user_id, session_id, deleted_at, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- 会话 Track 事件表（按 track 维度记录事件）
-CREATE TABLE session_track_events (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    session_id VARCHAR(255) NOT NULL,
-    track VARCHAR(255) NOT NULL,
-    event JSON NOT NULL,
-    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-    expires_at TIMESTAMP(6) NULL,
-    deleted_at TIMESTAMP(6) NULL,
-    KEY idx_session_track_events (app_name, user_id, session_id, track, deleted_at, created_at)
+    KEY idx_session_events (app_name, user_id, session_id, deleted_at, created_at),
+    KEY idx_session_events_track (app_name, user_id, session_id, track, deleted_at, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 会话摘要表

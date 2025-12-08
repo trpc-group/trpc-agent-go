@@ -38,10 +38,6 @@ func TestInitDB_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_events")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock: Create session_track_events table
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_track_events")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
 	// Mock: Create session_summaries table
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_summaries")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -54,8 +50,8 @@ func TestInitDB_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS user_states")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock: Create indexes (12 indexes total: 4 unique + 2 lookup + 6 TTL)
-	for i := 0; i < 12; i++ {
+	// Mock: Create indexes (11 indexes total: 4 unique + 2 lookup + 5 TTL)
+	for i := 0; i < 11; i++ {
 		mock.ExpectExec(regexp.QuoteMeta("CREATE")).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -92,7 +88,7 @@ func TestInitDB_IndexCreationError(t *testing.T) {
 	ctx := context.Background()
 
 	// Mock: Create all tables successfully
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 5; i++ {
 		mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS")).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -128,7 +124,6 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 		userStateTTL:          serviceOpts.userStateTTL,
 		tableSessionStates:    "trpc_session_states",
 		tableSessionEvents:    "trpc_session_events",
-		tableSessionTracks:    "trpc_session_track_events",
 		tableSessionSummaries: "trpc_session_summaries",
 		tableAppStates:        "trpc_app_states",
 		tableUserStates:       "trpc_user_states",
@@ -138,7 +133,6 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 	// Verify table names contain prefix
 	assert.Equal(t, "trpc_session_states", s.tableSessionStates)
 	assert.Equal(t, "trpc_session_events", s.tableSessionEvents)
-	assert.Equal(t, "trpc_session_track_events", s.tableSessionTracks)
 	assert.Equal(t, "trpc_session_summaries", s.tableSessionSummaries)
 	assert.Equal(t, "trpc_app_states", s.tableAppStates)
 	assert.Equal(t, "trpc_user_states", s.tableUserStates)
@@ -148,8 +142,6 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_session_events")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_session_track_events")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_session_summaries")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_app_states")).
@@ -158,7 +150,7 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	// Mock: Create indexes with prefix
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 11; i++ {
 		mock.ExpectExec(regexp.QuoteMeta("CREATE")).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -177,13 +169,13 @@ func TestInitDB_DuplicateIndexIgnored(t *testing.T) {
 	ctx := context.Background()
 
 	// Mock: Create all tables successfully
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 5; i++ {
 		mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS")).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
 	// Mock: Some indexes already exist (simulate duplicate key error)
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 11; i++ {
 		if i%3 == 0 {
 			// Simulate duplicate index error
 			mock.ExpectExec(regexp.QuoteMeta("CREATE")).

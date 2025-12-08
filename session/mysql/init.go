@@ -41,20 +41,7 @@ const (
 			app_name VARCHAR(255) NOT NULL,
 			user_id VARCHAR(255) NOT NULL,
 			session_id VARCHAR(255) NOT NULL,
-			event JSON NOT NULL,
-			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
-			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-
-	sqlCreateSessionTrackEventsTable = `
-		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			app_name VARCHAR(255) NOT NULL,
-			user_id VARCHAR(255) NOT NULL,
-			session_id VARCHAR(255) NOT NULL,
-			track VARCHAR(255) NOT NULL,
+			track VARCHAR(255) NULL,
 			event JSON NOT NULL,
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -123,18 +110,13 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name(191), user_id(191), session_id(191), created_at)`
 
-	// session_events: TTL index on (expires_at)
-	sqlCreateSessionEventsExpiresIndex = `
-		CREATE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(expires_at)`
-
-	// session_track_events: lookup index on (app_name, user_id, session_id, track, created_at)
-	sqlCreateSessionTracksIndex = `
+	// session_events: lookup index on (app_name, user_id, session_id, track, created_at) for track events
+	sqlCreateSessionEventsTrackIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name(191), user_id(191), session_id(191), track(191), created_at)`
 
-	// session_track_events: TTL index on (expires_at)
-	sqlCreateSessionTracksExpiresIndex = `
+	// session_events: TTL index on (expires_at)
+	sqlCreateSessionEventsExpiresIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
@@ -186,7 +168,6 @@ type indexDefinition struct {
 var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, sqlCreateSessionStatesTable},
 	{sqldb.TableNameSessionEvents, sqlCreateSessionEventsTable},
-	{sqldb.TableNameSessionTrackEvents, sqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
 	{sqldb.TableNameAppStates, sqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates, sqlCreateUserStatesTable},
@@ -201,11 +182,10 @@ var indexDefs = []indexDefinition{
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
 	// Lookup indexes
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, sqlCreateSessionEventsIndex},
-	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixLookup, sqlCreateSessionTracksIndex},
+	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookupTrack, sqlCreateSessionEventsTrackIndex},
 	// TTL indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
-	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, sqlCreateAppStatesExpiresIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, sqlCreateUserStatesExpiresIndex},

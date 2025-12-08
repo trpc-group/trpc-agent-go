@@ -381,7 +381,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		// Insert track event.
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionTracks),
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
 			key.AppName, key.UserID, key.SessionID, trackEvent.Track, eventBytes,
 			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
 		if err != nil {
@@ -446,15 +446,6 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			if err != nil {
 				return err
 			}
-
-			// Soft delete session track events.
-			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionTracks),
-				now, key.AppName, key.UserID, key.SessionID)
-			if err != nil {
-				return err
-			}
 		} else {
 			// Hard delete: permanently remove records
 
@@ -480,15 +471,6 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf(`DELETE FROM %s
 				 WHERE app_name = ? AND user_id = ? AND session_id = ?`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID)
-			if err != nil {
-				return err
-			}
-
-			// Delete session track events.
-			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`DELETE FROM %s
-				 WHERE app_name = ? AND user_id = ? AND session_id = ?`, s.tableSessionTracks),
 				key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err
@@ -528,6 +510,7 @@ func (s *Service) getEventsList(
 	// The limit is applied per session in memory after grouping by session key
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
+		AND track IS NULL
 		AND deleted_at IS NULL
 		ORDER BY app_name, user_id, session_id, created_at ASC`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
@@ -615,7 +598,7 @@ func (s *Service) getTrackEvents(
 					AND created_at > ?
 					AND deleted_at IS NULL
 					ORDER BY created_at DESC
-					LIMIT ?`, s.tableSessionTracks)
+					LIMIT ?`, s.tableSessionEvents)
 				args = []any{key.AppName, key.UserID, key.SessionID, track, now, afterTime, limit}
 			} else {
 				query = fmt.Sprintf(`SELECT event FROM %s
@@ -623,7 +606,7 @@ func (s *Service) getTrackEvents(
 					AND (expires_at IS NULL OR expires_at > ?)
 					AND created_at > ?
 					AND deleted_at IS NULL
-					ORDER BY created_at DESC`, s.tableSessionTracks)
+					ORDER BY created_at DESC`, s.tableSessionEvents)
 				args = []any{key.AppName, key.UserID, key.SessionID, track, now, afterTime}
 			}
 			queries = append(queries, &trackQuery{

@@ -106,7 +106,6 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 		userStateTTL:          serviceOpts.userStateTTL,
 		tableSessionStates:    "session_states",
 		tableSessionEvents:    "session_events",
-		tableSessionTracks:    "session_track_events",
 		tableSessionSummaries: "session_summaries",
 		tableAppStates:        "app_states",
 		tableUserStates:       "user_states",
@@ -415,7 +414,7 @@ func TestAppendTrackEvent_Sync(t *testing.T) {
 			"test-app", "test-user", "test-session").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_track_events")).
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
 		WithArgs("test-app", "test-user", "test-session", "agui",
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -691,7 +690,7 @@ func TestStartAsyncPersistWorker_Success(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			key.AppName, key.UserID, key.SessionID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_track_events")).
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
 		WithArgs(
 			key.AppName,
 			key.UserID,
@@ -788,9 +787,6 @@ func TestDeleteSession_SoftDelete(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
-		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	err = s.DeleteSession(ctx, key)
@@ -829,8 +825,6 @@ func TestCleanupExpiredSessions(t *testing.T) {
 					WillReturnResult(sqlmock.NewResult(0, 3))
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 					WillReturnResult(sqlmock.NewResult(0, 10))
-				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
-					WillReturnResult(sqlmock.NewResult(0, 5))
 
 				mock.ExpectCommit()
 			} else {
@@ -843,8 +837,6 @@ func TestCleanupExpiredSessions(t *testing.T) {
 					WillReturnResult(sqlmock.NewResult(0, 3))
 				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE")).
 					WillReturnResult(sqlmock.NewResult(0, 10))
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events WHERE")).
-					WillReturnResult(sqlmock.NewResult(0, 5))
 				mock.ExpectCommit()
 			}
 
@@ -1054,14 +1046,14 @@ func TestCleanupExpiredForUser(t *testing.T) {
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 					WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(0, 1))
-				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 					WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(0, 1))
 			} else {
 				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
 					WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(0, 1))
-				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events")).
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events")).
 					WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(0, 1))
 			}
@@ -1465,7 +1457,7 @@ func TestGetTrackEvents_WithLimit(t *testing.T) {
 	eventBytes, _ := json.Marshal(event)
 	rows := sqlmock.NewRows([]string{"event"}).AddRow(eventBytes)
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_events")).
 		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg(), 1).
 		WillReturnRows(rows)
 
@@ -1850,8 +1842,6 @@ func TestCleanupExpiredData(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 		WillReturnResult(sqlmock.NewResult(0, 10))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
-		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 
 	// Mock cleanup app states
@@ -1889,8 +1879,6 @@ func TestCleanupExpiredSessions_HardDelete(t *testing.T) {
 		WithArgs(now).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE")).
-		WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events WHERE")).
 		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 
@@ -1965,7 +1953,7 @@ func TestDeleteSession_HardDelete(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	// Mock hard delete session track events
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_track_events WHERE app_name = ? AND user_id = ? AND session_id = ?")).
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_events WHERE app_name = ? AND user_id = ? AND session_id = ?")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
