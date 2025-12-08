@@ -16,14 +16,20 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -150,20 +156,42 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", nil)
+
 	if r.a2aClient == nil {
-		return nil, fmt.Errorf("A2A client not initialized")
+		span.SetStatus(codes.Error, "A2A client is nil")
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.End()
+		return nil, fmt.Errorf("A2A client is nil")
 	}
 
 	// Validate A2A request options early
 	if err := r.validateA2ARequestOptions(invocation); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.End()
 		return nil, err
 	}
 
 	useStreaming := r.shouldUseStreaming()
+	var (
+		eventChan <-chan *event.Event
+		err       error
+	)
 	if useStreaming {
-		return r.runStreaming(ctx, invocation)
+		eventChan, err = r.runStreaming(ctx, invocation)
+	} else {
+		eventChan, err = r.runNonStreaming(ctx, invocation)
 	}
-	return r.runNonStreaming(ctx, invocation)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.End()
+		return nil, err
+	}
+
+	return r.wrapEventChannelWithTelemetry(ctx, invocation, eventChan, span), nil
 }
 
 // shouldUseStreaming determines whether to use streaming protocol
@@ -350,6 +378,38 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 		agent.EmitEvent(ctx, invocation, eventChan, evt)
 	}()
 	return eventChan, nil
+}
+
+func (r *A2AAgent) wrapEventChannelWithTelemetry(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	originalChan <-chan *event.Event,
+	span sdktrace.Span,
+) <-chan *event.Event {
+	wrappedChan := make(chan *event.Event, cap(originalChan))
+
+	go func() {
+		var fullRespEvent *event.Event
+		defer func() {
+			if fullRespEvent != nil {
+				log.Debug("fullRespEvent is not ni")
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, nil)
+			}
+			span.End()
+			close(wrappedChan)
+		}()
+
+		for evt := range originalChan {
+			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+				fullRespEvent = evt
+			}
+			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
+				return
+			}
+		}
+	}()
+
+	return wrappedChan
 }
 
 // Tools implements the Agent interface
