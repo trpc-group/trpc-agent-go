@@ -1880,6 +1880,379 @@ func TestConvertToEvents_WithHistory(t *testing.T) {
 	}
 }
 
+// TestParseA2AMessageParts_Tag tests parsing of tag field from A2A message metadata
+func TestParseA2AMessageParts_Tag(t *testing.T) {
+	tests := []struct {
+		name         string
+		msg          *protocol.Message
+		expectedTag  string
+		validateFunc func(t *testing.T, result *parseResult)
+	}{
+		{
+			name: "message with tag in metadata",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "content"},
+				},
+				Metadata: map[string]any{
+					"tag": "code_execution_code",
+				},
+			},
+			expectedTag: "code_execution_code",
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.tag != "code_execution_code" {
+					t.Errorf("expected tag 'code_execution_code', got %s", result.tag)
+				}
+			},
+		},
+		{
+			name: "message with tag and object_type in metadata",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "content"},
+				},
+				Metadata: map[string]any{
+					"object_type": "postprocessing.code_execution",
+					"tag":         "code_execution_result",
+				},
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.tag != "code_execution_result" {
+					t.Errorf("expected tag 'code_execution_result', got %s", result.tag)
+				}
+				if result.objectType != "postprocessing.code_execution" {
+					t.Errorf("expected objectType 'postprocessing.code_execution', got %s", result.objectType)
+				}
+			},
+		},
+		{
+			name: "message without tag in metadata",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "content"},
+				},
+				Metadata: map[string]any{
+					"other_key": "other_value",
+				},
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.tag != "" {
+					t.Errorf("expected empty tag, got %s", result.tag)
+				}
+			},
+		},
+		{
+			name: "message with nil metadata",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "content"},
+				},
+				Metadata: nil,
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.tag != "" {
+					t.Errorf("expected empty tag, got %s", result.tag)
+				}
+			},
+		},
+		{
+			name: "message with non-string tag value",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "content"},
+				},
+				Metadata: map[string]any{
+					"tag": 12345,
+				},
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.tag != "" {
+					t.Errorf("expected empty tag for non-string value, got %s", result.tag)
+				}
+			},
+		},
+		{
+			name: "message with semicolon-delimited tags",
+			msg: &protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "content"},
+				},
+				Metadata: map[string]any{
+					"tag": "code_execution_code;custom_tag",
+				},
+			},
+			validateFunc: func(t *testing.T, result *parseResult) {
+				if result.tag != "code_execution_code;custom_tag" {
+					t.Errorf("expected tag 'code_execution_code;custom_tag', got %s", result.tag)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseA2AMessageParts(tt.msg)
+			tt.validateFunc(t, result)
+		})
+	}
+}
+
+// TestBuildEventResponse_WithTag tests that buildEventResponse correctly sets tag on event
+func TestBuildEventResponse_WithTag(t *testing.T) {
+	invocation := &agent.Invocation{
+		InvocationID: "test-id",
+	}
+
+	tests := []struct {
+		name        string
+		result      *parseResult
+		isStreaming bool
+		expectedTag string
+	}{
+		{
+			name: "event with code execution tag",
+			result: &parseResult{
+				textContent: "print('hello')",
+				objectType:  model.ObjectTypePostprocessingCodeExecution,
+				tag:         event.CodeExecutionTag,
+			},
+			isStreaming: false,
+			expectedTag: event.CodeExecutionTag,
+		},
+		{
+			name: "event with code execution result tag",
+			result: &parseResult{
+				textContent: "hello world",
+				objectType:  model.ObjectTypePostprocessingCodeExecution,
+				tag:         event.CodeExecutionResultTag,
+			},
+			isStreaming: false,
+			expectedTag: event.CodeExecutionResultTag,
+		},
+		{
+			name: "streaming event with tag",
+			result: &parseResult{
+				textContent: "streaming content",
+				tag:         "custom_tag",
+			},
+			isStreaming: true,
+			expectedTag: "custom_tag",
+		},
+		{
+			name: "event without tag",
+			result: &parseResult{
+				textContent: "plain content",
+			},
+			isStreaming: false,
+			expectedTag: "",
+		},
+		{
+			name: "event with multiple tags (semicolon-delimited)",
+			result: &parseResult{
+				textContent: "content",
+				tag:         "tag1;tag2;tag3",
+			},
+			isStreaming: false,
+			expectedTag: "tag1;tag2;tag3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evt := buildEventResponse(tt.isStreaming, "msg-id", tt.result, invocation, "test-agent")
+
+			if evt == nil {
+				t.Fatal("expected event, got nil")
+			}
+
+			if evt.Tag != tt.expectedTag {
+				t.Errorf("expected tag '%s', got '%s'", tt.expectedTag, evt.Tag)
+			}
+
+			// Verify tag is correctly restored for code execution events
+			if tt.expectedTag == event.CodeExecutionTag {
+				if !evt.ContainsTag(event.CodeExecutionTag) {
+					t.Error("expected event to contain CodeExecutionTag")
+				}
+			}
+			if tt.expectedTag == event.CodeExecutionResultTag {
+				if !evt.ContainsTag(event.CodeExecutionResultTag) {
+					t.Error("expected event to contain CodeExecutionResultTag")
+				}
+			}
+		})
+	}
+}
+
+// TestConvertStreamingToEvents_CodeExecutionWithTag tests streaming conversion preserves tag
+func TestConvertStreamingToEvents_CodeExecutionWithTag(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{
+		InvocationID: "test-id",
+	}
+
+	tests := []struct {
+		name        string
+		result      protocol.StreamingMessageEvent
+		expectedTag string
+	}{
+		{
+			name: "streaming code execution with tag",
+			result: protocol.StreamingMessageEvent{
+				Result: &protocol.Message{
+					Kind:      protocol.KindMessage,
+					MessageID: "stream-ce-1",
+					Role:      protocol.MessageRoleAgent,
+					Parts: []protocol.Part{
+						&protocol.DataPart{
+							Data: map[string]any{
+								"code":     "print('hello')",
+								"language": "python",
+							},
+							Metadata: map[string]any{
+								"type": "executable_code",
+							},
+						},
+					},
+					Metadata: map[string]any{
+						"object_type": model.ObjectTypePostprocessingCodeExecution,
+						"tag":         event.CodeExecutionTag,
+					},
+				},
+			},
+			expectedTag: event.CodeExecutionTag,
+		},
+		{
+			name: "streaming code execution result with tag",
+			result: protocol.StreamingMessageEvent{
+				Result: &protocol.Message{
+					Kind:      protocol.KindMessage,
+					MessageID: "stream-cer-1",
+					Role:      protocol.MessageRoleAgent,
+					Parts: []protocol.Part{
+						&protocol.DataPart{
+							Data: map[string]any{
+								"output":  "hello world",
+								"outcome": "OUTCOME_OK",
+							},
+							Metadata: map[string]any{
+								"type": "code_execution_result",
+							},
+						},
+					},
+					Metadata: map[string]any{
+						"object_type": model.ObjectTypePostprocessingCodeExecution,
+						"tag":         event.CodeExecutionResultTag,
+					},
+				},
+			},
+			expectedTag: event.CodeExecutionResultTag,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events, err := converter.ConvertStreamingToEvents(tt.result, "test-agent", invocation)
+			if err != nil {
+				t.Fatalf("ConvertStreamingToEvents() error: %v", err)
+			}
+
+			if len(events) == 0 {
+				t.Fatal("expected at least one event, got none")
+			}
+
+			evt := events[0]
+			if evt.Tag != tt.expectedTag {
+				t.Errorf("expected tag '%s', got '%s'", tt.expectedTag, evt.Tag)
+			}
+		})
+	}
+}
+
+// TestConvertToEvents_CodeExecutionWithTag tests non-streaming conversion preserves tag
+func TestConvertToEvents_CodeExecutionWithTag(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{
+		InvocationID: "test-id",
+	}
+
+	tests := []struct {
+		name        string
+		result      protocol.MessageResult
+		expectedTag string
+	}{
+		{
+			name: "code execution message with tag",
+			result: protocol.MessageResult{
+				Result: &protocol.Message{
+					Kind:      protocol.KindMessage,
+					MessageID: "msg-ce-tag",
+					Role:      protocol.MessageRoleAgent,
+					Parts: []protocol.Part{
+						&protocol.DataPart{
+							Data: map[string]any{
+								"code": "x = 1 + 1",
+							},
+							Metadata: map[string]any{
+								"type": "executable_code",
+							},
+						},
+					},
+					Metadata: map[string]any{
+						"object_type": model.ObjectTypePostprocessingCodeExecution,
+						"tag":         event.CodeExecutionTag,
+					},
+				},
+			},
+			expectedTag: event.CodeExecutionTag,
+		},
+		{
+			name: "code execution result message with tag",
+			result: protocol.MessageResult{
+				Result: &protocol.Message{
+					Kind:      protocol.KindMessage,
+					MessageID: "msg-cer-tag",
+					Role:      protocol.MessageRoleAgent,
+					Parts: []protocol.Part{
+						&protocol.DataPart{
+							Data: map[string]any{
+								"output": "2",
+							},
+							Metadata: map[string]any{
+								"type": "code_execution_result",
+							},
+						},
+					},
+					Metadata: map[string]any{
+						"object_type": model.ObjectTypePostprocessingCodeExecution,
+						"tag":         event.CodeExecutionResultTag,
+					},
+				},
+			},
+			expectedTag: event.CodeExecutionResultTag,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events, err := converter.ConvertToEvents(tt.result, "test-agent", invocation)
+			if err != nil {
+				t.Fatalf("ConvertToEvents() error: %v", err)
+			}
+
+			if len(events) == 0 {
+				t.Fatal("expected at least one event, got none")
+			}
+
+			// Check the last event (final response)
+			evt := events[len(events)-1]
+			if evt.Tag != tt.expectedTag {
+				t.Errorf("expected tag '%s', got '%s'", tt.expectedTag, evt.Tag)
+			}
+		})
+	}
+}
+
 // Helper function to create string pointer
 func stringPtr(s string) *string {
 	return &s
