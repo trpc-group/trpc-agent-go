@@ -180,7 +180,7 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `(name == {name} and age > {age})`,
+			wantFilter: `(name == {name}) and (age > {age})`,
 			wantErr:    false,
 			wantParams: map[string]any{"name": "test", "age": 25},
 		},
@@ -201,7 +201,7 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `(status == {status} or score < {score})`,
+			wantFilter: `(status == {status}) or (score < {score})`,
 			wantErr:    false,
 			wantParams: map[string]any{"status": "active", "score": 80},
 		},
@@ -232,7 +232,7 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `(name == {name} and (status == {status} or score < {score}))`,
+			wantFilter: `(name == {name}) and ((status == {status}) or (score < {score}))`,
 			wantErr:    false,
 			wantParams: map[string]any{"name": "test", "status": "active", "score": 80},
 		},
@@ -504,10 +504,7 @@ func TestMilvusFilterConverter_ConvertCondition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cr := &convertResult{
-				params: make(map[string]any),
-			}
-			err := c.convertCondition(tt.condition, cr)
+			cr, err := c.convertCondition(tt.condition)
 
 			if tt.wantErr {
 				assert.Error(t, err)
