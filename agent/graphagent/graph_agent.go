@@ -181,10 +181,6 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	// Setup invocation.
 	ga.setupInvocation(invocation)
 
-	// Prepare initial state.
-	initialState := ga.createInitialState(ctx, invocation)
-
-	// Execute the graph.
 	if ga.agentCallbacks != nil {
 		result, err := ga.agentCallbacks.RunBeforeAgent(ctx, &agent.BeforeAgentArgs{
 			Invocation: invocation,
@@ -206,6 +202,13 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 			return eventChan, nil
 		}
 	}
+
+	// Prepare initial state after callbacks so that any modifications
+	// made by callbacks to the invocation (for example, RuntimeState,
+	// Session, or Message) are visible to the graph execution.
+	initialState := ga.createInitialState(ctx, invocation)
+
+	// Execute the graph.
 	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
 	if err != nil {
 		return nil, err
