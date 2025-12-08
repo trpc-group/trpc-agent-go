@@ -71,6 +71,10 @@ type sessionSummarizer struct {
 	checks           []Checker
 	maxSummaryWords  int
 	skipRecentEvents int
+
+	preHook          PreSummaryHook
+	postHook         PostSummaryHook
+	hookAbortOnError bool
 }
 
 // NewSummarizer creates a new session summarizer.
@@ -123,6 +127,25 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	eventsToSummarize := s.filterEventsForSummary(sess.Events)
 
 	conversationText := s.extractConversationText(eventsToSummarize)
+	if s.preHook != nil {
+		hookCtx := &PreSummaryHookContext{
+			Ctx:     ctx,
+			Session: sess,
+			Events:  eventsToSummarize,
+			Text:    conversationText,
+		}
+		hookErr := s.preHook(hookCtx)
+		if hookErr != nil && s.hookAbortOnError {
+			return "", fmt.Errorf("pre-summary hook failed: %w", hookErr)
+		}
+		if hookErr == nil {
+			if hookCtx.Text != "" {
+				conversationText = hookCtx.Text
+			} else if len(hookCtx.Events) > 0 {
+				conversationText = s.extractConversationText(hookCtx.Events)
+			}
+		}
+	}
 	if conversationText == "" {
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
 	}
@@ -133,6 +156,21 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 	if summaryText == "" {
 		return "", fmt.Errorf("failed to generate summary for session %s (input_chars=%d)", sess.ID, len(conversationText))
+	}
+
+	if s.postHook != nil {
+		hookCtx := &PostSummaryHookContext{
+			Ctx:     ctx,
+			Session: sess,
+			Summary: summaryText,
+		}
+		hookErr := s.postHook(hookCtx)
+		if hookErr != nil && s.hookAbortOnError {
+			return "", fmt.Errorf("post-summary hook failed: %w", hookErr)
+		}
+		if hookErr == nil && hookCtx.Summary != "" {
+			summaryText = hookCtx.Summary
+		}
 	}
 
 	return summaryText, nil
