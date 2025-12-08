@@ -850,12 +850,12 @@ func TestProcessAgentEvents_NilEventSkipped(t *testing.T) {
 	r := NewRunner("app", &nilEventAgent{name: "n"}, WithSessionService(sessioninmemory.NewSessionService()))
 	ch, err := r.Run(context.Background(), "u", "s", model.NewUserMessage(""))
 	require.NoError(t, err)
-	// Expect only the runner completion event to arrive.
+	// Expect no events when agent emits a nil event.
 	var count int
 	for range ch {
 		count++
 	}
-	require.Equal(t, 1, count)
+	require.Equal(t, 0, count)
 }
 
 func TestRunner_Run_AppendUserEventError(t *testing.T) {

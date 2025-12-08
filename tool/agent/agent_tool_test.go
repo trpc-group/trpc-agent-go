@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -328,16 +329,20 @@ func TestTool_HistoryScope_ParentBranch_Call_InheritsParentHistory(t *testing.T)
 	ia := &inspectAgent{name: "child"}
 	at := NewTool(ia, WithHistoryScope(HistoryScopeParentBranch))
 
-	// Build parent session with a prior assistant event under parent branch.
-	sess := &session.Session{}
+	// Build parent session with a prior user event under parent branch so that
+	// session filtering preserves it when seeding the snapshot.
+	sess := session.NewSession("parent-app", "parent-user", "parent-session")
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationEventFilterKey("parent-branch"),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), parent)
 
-	// Append a parent assistant event (author parent, content "PARENT").
-	parentEvt := event.NewResponseEvent(parent.InvocationID, "parent", &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("PARENT")}}})
+	// Append a parent user event (content "PARENT") so that snapshot/session
+	// filtering retains it as part of history.
+	parentEvt := event.NewResponseEvent(parent.InvocationID, "parent", &model.Response{
+		Choices: []model.Choice{{Message: model.NewUserMessage("PARENT")}},
+	})
 	agent.InjectIntoEvent(parent, parentEvt)
 	sess.Events = append(sess.Events, *parentEvt)
 
@@ -515,7 +520,10 @@ func TestTool_Call_EventError(t *testing.T) {
 func TestTool_Call_WithParentInvocation_EventError(t *testing.T) {
 	at := NewTool(&eventErrorMockAgent{name: "err-event-agent"})
 
-	sess := &session.Session{}
+	sess := &session.Session{
+		ID:     "s",
+		UserID: "u",
+	}
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationEventFilterKey("parent"),
@@ -689,12 +697,10 @@ func TestTool_StreamableCall_NilEvent(t *testing.T) {
 	}
 	defer r.Close()
 
-	// Should receive the non-nil event (nil event is skipped in fallback path)
-	ch, err := r.Recv()
-	if err != nil {
-		t.Fatalf("unexpected stream read error: %v", err)
-	}
-	if ch.Content == nil {
-		t.Fatalf("expected non-nil content")
+	// When the underlying agent emits a nil event, the runner will treat it as an error and
+	// terminate the stream. We expect the stream to end without yielding any chunks.
+	_, err = r.Recv()
+	if err != io.EOF {
+		t.Fatalf("expected EOF from stream, got: %v", err)
 	}
 }

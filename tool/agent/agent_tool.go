@@ -19,9 +19,11 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flush"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -169,26 +171,30 @@ func (at *Tool) callWithParentInvocation(
 	parentInv *agent.Invocation,
 	message model.Message,
 ) (string, error) {
+	// If the parent invocation does not have a session, fall back to isolated mode.
+	if parentInv.Session == nil {
+		return at.callWithIsolatedRunner(ctx, message)
+	}
+	// Flush all events emitted before this tool call so that the snapshot sees all events.
+	if err := flush.Invoke(ctx, parentInv); err != nil {
+		log.Warnf("AgentTool: flush parent invocation session failed: %v.", err)
+	}
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(parentInv)
-
-	// Clone parent invocation with child-specific settings.
-	subInv := parentInv.Clone(
-		agent.WithInvocationAgent(at.agent),
-		agent.WithInvocationMessage(message),
-		agent.WithInvocationEventFilterKey(childKey),
-	)
-
-	// Ensure current tool input is visible to the child content processor by
-	// appending it into the shared session.
-	at.injectToolInputEvent(subInv, message)
-
-	// Run the agent and collect response.
-	evCh, err := at.agent.Run(agent.NewInvocationContext(ctx, subInv), subInv)
+	// Clone the parent session to obtain a stable snapshot of history.
+	snapshot := parentInv.Session.Clone()
+	// Build an session service seeded with the cloned session so that the child runner sees a copy of parent history.
+	svc, userID, sessionID, err := buildSnapshotSessionService(ctx, childKey, snapshot)
+	if err != nil {
+		return "", fmt.Errorf("failed to build snapshot session service: %w", err)
+	}
+	// Run the child agent with a dedicated runner bound to the snapshot.
+	r := runner.NewRunner(childKey, at.agent, runner.WithSessionService(svc))
+	ch, err := r.Run(ctx, userID, sessionID, message)
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	return at.collectResponse(evCh)
+	return at.collectResponse(ch)
 }
 
 // callWithIsolatedRunner executes the agent in an isolated environment using
@@ -208,6 +214,33 @@ func (at *Tool) callWithIsolatedRunner(
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
 	return at.collectResponse(evCh)
+}
+
+// newClonedInMemorySessionService builds an in-memory session service seeded with the provided snapshot session.
+// This allows a child runner to see the parent's full history while keeping child events isolated from the parent.
+func buildSnapshotSessionService(
+	ctx context.Context,
+	appName string,
+	snapshot *session.Session,
+) (session.Service, string, string, error) {
+	svc := inmemory.NewSessionService()
+	userID := snapshot.UserID
+	sessionID := snapshot.ID
+	key := session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+	sess, err := svc.CreateSession(ctx, key, snapshot.State)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("create session: %w", err)
+	}
+	for i := range snapshot.Events {
+		if err := svc.AppendEvent(ctx, sess, snapshot.Events[i].Clone()); err != nil {
+			return nil, "", "", fmt.Errorf("append event %v: %w", snapshot.Events[i], err)
+		}
+	}
+	return svc, userID, sessionID, nil
 }
 
 // buildChildFilterKey constructs a child filter key based on the history scope
