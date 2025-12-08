@@ -1466,6 +1466,147 @@ func TestAppendTrackEvent_AsyncRecover(t *testing.T) {
 	})
 }
 
+func TestStartAsyncPersistWorker_ProcessesEvents(t *testing.T) {
+	db, mock, err := sqlmock.New(
+		sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp),
+	)
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.MatchExpectationsInOrder(false)
+
+	s := createTestService(
+		t,
+		db,
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(1),
+	)
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	baseState := &SessionState{
+		ID:    key.SessionID,
+		State: session.StateMap{},
+	}
+	stateBytes, err := json.Marshal(baseState)
+	require.NoError(t, err)
+
+	stateRows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(stateRows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_events").
+		WithArgs(
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	trackState := &SessionState{
+		ID:    key.SessionID,
+		State: session.StateMap{},
+	}
+	trackStateBytes, err := json.Marshal(trackState)
+	require.NoError(t, err)
+
+	trackRows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(trackStateBytes, nil)
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(trackRows)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_track_events").
+		WithArgs(
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+			"agui",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	s.startAsyncPersistWorker()
+
+	evt := event.New("inv-1", "author")
+	evt.StateDelta = map[string][]byte{
+		"key1": []byte(`"value1"`),
+	}
+	evt.Response = &model.Response{
+		Object: model.ObjectTypeChatCompletion,
+		Done:   true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "ok",
+				},
+			},
+		},
+	}
+
+	trackEvent := &session.TrackEvent{
+		Track:     "agui",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}
+
+	s.eventPairChans[0] <- &sessionEventPair{
+		key:   key,
+		event: evt,
+	}
+	s.trackEventChans[0] <- &trackEventPair{
+		key:   key,
+		event: trackEvent,
+	}
+
+	for _, ch := range s.eventPairChans {
+		close(ch)
+	}
+	for _, ch := range s.trackEventChans {
+		close(ch)
+	}
+	s.persistWg.Wait()
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestAppendTrackEvent_Errors(t *testing.T) {
 	t.Run("invalid key", func(t *testing.T) {
 		s, _, db := setupMockService(t, nil)
