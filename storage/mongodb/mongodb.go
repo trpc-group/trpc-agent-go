@@ -90,31 +90,31 @@ func GetMongoDBInstance(name string) ([]ClientBuilderOpt, bool) {
 // containing only the methods needed by the session layer.
 type Client interface {
 	// InsertOne executes an insert command to insert a single document into the collection.
-	InsertOne(ctx context.Context, database string, coll string, document interface{},
+	InsertOne(ctx context.Context, database string, coll string, document any,
 		opts ...*options.InsertOneOptions) (*mongo.InsertOneResult, error)
 
 	// UpdateOne executes an update command to update at most one document in the collection.
-	UpdateOne(ctx context.Context, database string, coll string, filter interface{}, update interface{},
+	UpdateOne(ctx context.Context, database string, coll string, filter any, update any,
 		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
 
 	// DeleteOne executes a delete command to delete at most one document from the collection.
-	DeleteOne(ctx context.Context, database string, coll string, filter interface{},
+	DeleteOne(ctx context.Context, database string, coll string, filter any,
 		opts ...*options.DeleteOptions) (*mongo.DeleteResult, error)
 
 	// DeleteMany executes a delete command to delete documents from the collection.
-	DeleteMany(ctx context.Context, database string, coll string, filter interface{},
+	DeleteMany(ctx context.Context, database string, coll string, filter any,
 		opts ...*options.DeleteOptions) (*mongo.DeleteResult, error)
 
 	// FindOne executes a find command and returns a SingleResult for one document in the collection.
-	FindOne(ctx context.Context, database string, coll string, filter interface{},
+	FindOne(ctx context.Context, database string, coll string, filter any,
 		opts ...*options.FindOneOptions) *mongo.SingleResult
 
 	// Find executes a find command and returns a Cursor over the matching documents in the collection.
-	Find(ctx context.Context, database string, coll string, filter interface{},
+	Find(ctx context.Context, database string, coll string, filter any,
 		opts ...*options.FindOptions) (*mongo.Cursor, error)
 
 	// CountDocuments returns the number of documents in the collection.
-	CountDocuments(ctx context.Context, database string, coll string, filter interface{},
+	CountDocuments(ctx context.Context, database string, coll string, filter any,
 		opts ...*options.CountOptions) (int64, error)
 
 	// Transaction executes a transaction.
@@ -129,8 +129,8 @@ type Client interface {
 // session defines the interface for MongoDB session operations.
 type session interface {
 	EndSession(ctx context.Context)
-	WithTransaction(ctx context.Context, fn func(sc mongo.SessionContext) (interface{}, error),
-		opts ...*options.TransactionOptions) (interface{}, error)
+	WithTransaction(ctx context.Context, fn func(sc mongo.SessionContext) (any, error),
+		opts ...*options.TransactionOptions) (any, error)
 }
 
 // defaultClient wraps *mongo.Client to implement the Client interface.
@@ -150,43 +150,43 @@ func newDefaultClient(client *mongo.Client) *defaultClient {
 }
 
 // InsertOne implements Client.InsertOne.
-func (c *defaultClient) InsertOne(ctx context.Context, database string, coll string, document interface{},
+func (c *defaultClient) InsertOne(ctx context.Context, database string, coll string, document any,
 	opts ...*options.InsertOneOptions) (*mongo.InsertOneResult, error) {
 	return c.client.Database(database).Collection(coll).InsertOne(ctx, document, opts...)
 }
 
 // UpdateOne implements Client.UpdateOne.
-func (c *defaultClient) UpdateOne(ctx context.Context, database string, coll string, filter interface{},
-	update interface{}, opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
+func (c *defaultClient) UpdateOne(ctx context.Context, database string, coll string, filter any,
+	update any, opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
 	return c.client.Database(database).Collection(coll).UpdateOne(ctx, filter, update, opts...)
 }
 
 // DeleteOne implements Client.DeleteOne.
-func (c *defaultClient) DeleteOne(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) DeleteOne(ctx context.Context, database string, coll string, filter any,
 	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	return c.client.Database(database).Collection(coll).DeleteOne(ctx, filter, opts...)
 }
 
 // DeleteMany implements Client.DeleteMany.
-func (c *defaultClient) DeleteMany(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) DeleteMany(ctx context.Context, database string, coll string, filter any,
 	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	return c.client.Database(database).Collection(coll).DeleteMany(ctx, filter, opts...)
 }
 
 // FindOne implements Client.FindOne.
-func (c *defaultClient) FindOne(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) FindOne(ctx context.Context, database string, coll string, filter any,
 	opts ...*options.FindOneOptions) *mongo.SingleResult {
 	return c.client.Database(database).Collection(coll).FindOne(ctx, filter, opts...)
 }
 
 // Find implements Client.Find.
-func (c *defaultClient) Find(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) Find(ctx context.Context, database string, coll string, filter any,
 	opts ...*options.FindOptions) (*mongo.Cursor, error) {
 	return c.client.Database(database).Collection(coll).Find(ctx, filter, opts...)
 }
 
 // CountDocuments implements Client.CountDocuments.
-func (c *defaultClient) CountDocuments(ctx context.Context, database string, coll string, filter interface{},
+func (c *defaultClient) CountDocuments(ctx context.Context, database string, coll string, filter any,
 	opts ...*options.CountOptions) (int64, error) {
 	return c.client.Database(database).Collection(coll).CountDocuments(ctx, filter, opts...)
 }
@@ -205,7 +205,7 @@ func (c *defaultClient) Transaction(ctx context.Context, sf func(sc mongo.Sessio
 		txOpt = tOpts[0]
 	}
 
-	_, err = session.WithTransaction(ctx, func(sc mongo.SessionContext) (interface{}, error) {
+	_, err = session.WithTransaction(ctx, func(sc mongo.SessionContext) (any, error) {
 		return nil, sf(sc)
 	}, txOpt)
 	return err

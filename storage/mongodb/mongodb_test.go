@@ -70,18 +70,18 @@ func TestSetAndGetClientBuilder(t *testing.T) {
 
 // mockMongoClient is a mock implementation of the Client interface for testing.
 type mockMongoClient struct {
-	insertOneFunc   func(ctx context.Context, database, coll string, document interface{}) error
-	updateOneFunc   func(ctx context.Context, database, coll string, filter, update interface{}) error
-	deleteOneFunc   func(ctx context.Context, database, coll string, filter interface{}) error
-	deleteManyFunc  func(ctx context.Context, database, coll string, filter interface{}) error
-	findOneFunc     func(ctx context.Context, database, coll string, filter interface{})
-	findFunc        func(ctx context.Context, database, coll string, filter interface{}) error
-	countFunc       func(ctx context.Context, database, coll string, filter interface{}) (int64, error)
+	insertOneFunc   func(ctx context.Context, database, coll string, document any) error
+	updateOneFunc   func(ctx context.Context, database, coll string, filter, update any) error
+	deleteOneFunc   func(ctx context.Context, database, coll string, filter any) error
+	deleteManyFunc  func(ctx context.Context, database, coll string, filter any) error
+	findOneFunc     func(ctx context.Context, database, coll string, filter any)
+	findFunc        func(ctx context.Context, database, coll string, filter any) error
+	countFunc       func(ctx context.Context, database, coll string, filter any) (int64, error)
 	transactionFunc func(ctx context.Context) error
 	disconnectFunc  func(ctx context.Context) error
 }
 
-func (m *mockMongoClient) InsertOne(ctx context.Context, database, coll string, document interface{},
+func (m *mockMongoClient) InsertOne(ctx context.Context, database, coll string, document any,
 	opts ...*options.InsertOneOptions) (*mongo.InsertOneResult, error) {
 	if m.insertOneFunc != nil {
 		err := m.insertOneFunc(ctx, database, coll, document)
@@ -90,7 +90,7 @@ func (m *mockMongoClient) InsertOne(ctx context.Context, database, coll string, 
 	return &mongo.InsertOneResult{InsertedID: "test-id"}, nil
 }
 
-func (m *mockMongoClient) UpdateOne(ctx context.Context, database, coll string, filter, update interface{},
+func (m *mockMongoClient) UpdateOne(ctx context.Context, database, coll string, filter, update any,
 	opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
 	if m.updateOneFunc != nil {
 		err := m.updateOneFunc(ctx, database, coll, filter, update)
@@ -99,7 +99,7 @@ func (m *mockMongoClient) UpdateOne(ctx context.Context, database, coll string, 
 	return &mongo.UpdateResult{ModifiedCount: 1}, nil
 }
 
-func (m *mockMongoClient) DeleteOne(ctx context.Context, database, coll string, filter interface{},
+func (m *mockMongoClient) DeleteOne(ctx context.Context, database, coll string, filter any,
 	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	if m.deleteOneFunc != nil {
 		err := m.deleteOneFunc(ctx, database, coll, filter)
@@ -108,7 +108,7 @@ func (m *mockMongoClient) DeleteOne(ctx context.Context, database, coll string, 
 	return &mongo.DeleteResult{DeletedCount: 1}, nil
 }
 
-func (m *mockMongoClient) DeleteMany(ctx context.Context, database, coll string, filter interface{},
+func (m *mockMongoClient) DeleteMany(ctx context.Context, database, coll string, filter any,
 	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	if m.deleteManyFunc != nil {
 		err := m.deleteManyFunc(ctx, database, coll, filter)
@@ -117,7 +117,7 @@ func (m *mockMongoClient) DeleteMany(ctx context.Context, database, coll string,
 	return &mongo.DeleteResult{DeletedCount: 5}, nil
 }
 
-func (m *mockMongoClient) FindOne(ctx context.Context, database, coll string, filter interface{},
+func (m *mockMongoClient) FindOne(ctx context.Context, database, coll string, filter any,
 	opts ...*options.FindOneOptions) *mongo.SingleResult {
 	if m.findOneFunc != nil {
 		m.findOneFunc(ctx, database, coll, filter)
@@ -125,7 +125,7 @@ func (m *mockMongoClient) FindOne(ctx context.Context, database, coll string, fi
 	return nil
 }
 
-func (m *mockMongoClient) Find(ctx context.Context, database, coll string, filter interface{},
+func (m *mockMongoClient) Find(ctx context.Context, database, coll string, filter any,
 	opts ...*options.FindOptions) (*mongo.Cursor, error) {
 	if m.findFunc != nil {
 		err := m.findFunc(ctx, database, coll, filter)
@@ -134,7 +134,7 @@ func (m *mockMongoClient) Find(ctx context.Context, database, coll string, filte
 	return nil, nil
 }
 
-func (m *mockMongoClient) CountDocuments(ctx context.Context, database, coll string, filter interface{},
+func (m *mockMongoClient) CountDocuments(ctx context.Context, database, coll string, filter any,
 	opts ...*options.CountOptions) (int64, error) {
 	if m.countFunc != nil {
 		return m.countFunc(ctx, database, coll, filter)
@@ -169,7 +169,7 @@ func TestMockClientOperations(t *testing.T) {
 
 	t.Run("UpdateOne", func(t *testing.T) {
 		result, err := mock.UpdateOne(ctx, "testdb", "testcoll",
-			map[string]string{"_id": "1"}, map[string]interface{}{"$set": map[string]string{"key": "newvalue"}})
+			map[string]string{"_id": "1"}, map[string]any{"$set": map[string]string{"key": "newvalue"}})
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), result.ModifiedCount)
 	})
@@ -221,7 +221,7 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 
 	t.Run("InsertOne with error", func(t *testing.T) {
 		mock := &mockMongoClient{
-			insertOneFunc: func(ctx context.Context, database, coll string, document interface{}) error {
+			insertOneFunc: func(ctx context.Context, database, coll string, document any) error {
 				return errors.New("insert error")
 			},
 		}
@@ -231,7 +231,7 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 
 	t.Run("UpdateOne with error", func(t *testing.T) {
 		mock := &mockMongoClient{
-			updateOneFunc: func(ctx context.Context, database, coll string, filter, update interface{}) error {
+			updateOneFunc: func(ctx context.Context, database, coll string, filter, update any) error {
 				return errors.New("update error")
 			},
 		}
@@ -241,7 +241,7 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 
 	t.Run("DeleteOne with error", func(t *testing.T) {
 		mock := &mockMongoClient{
-			deleteOneFunc: func(ctx context.Context, database, coll string, filter interface{}) error {
+			deleteOneFunc: func(ctx context.Context, database, coll string, filter any) error {
 				return errors.New("delete error")
 			},
 		}
@@ -251,7 +251,7 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 
 	t.Run("DeleteMany with error", func(t *testing.T) {
 		mock := &mockMongoClient{
-			deleteManyFunc: func(ctx context.Context, database, coll string, filter interface{}) error {
+			deleteManyFunc: func(ctx context.Context, database, coll string, filter any) error {
 				return errors.New("delete many error")
 			},
 		}
@@ -261,7 +261,7 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 
 	t.Run("Find with error", func(t *testing.T) {
 		mock := &mockMongoClient{
-			findFunc: func(ctx context.Context, database, coll string, filter interface{}) error {
+			findFunc: func(ctx context.Context, database, coll string, filter any) error {
 				return errors.New("find error")
 			},
 		}
@@ -271,7 +271,7 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 
 	t.Run("CountDocuments with error", func(t *testing.T) {
 		mock := &mockMongoClient{
-			countFunc: func(ctx context.Context, database, coll string, filter interface{}) (int64, error) {
+			countFunc: func(ctx context.Context, database, coll string, filter any) (int64, error) {
 				return 0, errors.New("count error")
 			},
 		}
@@ -302,7 +302,7 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 	t.Run("FindOne with custom func", func(t *testing.T) {
 		called := false
 		mock := &mockMongoClient{
-			findOneFunc: func(ctx context.Context, database, coll string, filter interface{}) {
+			findOneFunc: func(ctx context.Context, database, coll string, filter any) {
 				called = true
 			},
 		}
@@ -330,7 +330,7 @@ func TestDefaultClientErrorCases(t *testing.T) {
 				assert.NotNil(t, r)
 			}
 		}()
-		_, _ = client.InsertOne(ctx, "testdb", "testcoll", map[string]interface{}{"test": "data"})
+		_, _ = client.InsertOne(ctx, "testdb", "testcoll", map[string]any{"test": "data"})
 	})
 
 	t.Run("UpdateOne with nil client", func(t *testing.T) {
@@ -339,7 +339,7 @@ func TestDefaultClientErrorCases(t *testing.T) {
 				assert.NotNil(t, r)
 			}
 		}()
-		_, _ = client.UpdateOne(ctx, "testdb", "testcoll", map[string]interface{}{"_id": "1"}, map[string]interface{}{"$set": map[string]interface{}{"updated": true}})
+		_, _ = client.UpdateOne(ctx, "testdb", "testcoll", map[string]any{"_id": "1"}, map[string]any{"$set": map[string]any{"updated": true}})
 	})
 
 	t.Run("DeleteOne with nil client", func(t *testing.T) {
@@ -348,7 +348,7 @@ func TestDefaultClientErrorCases(t *testing.T) {
 				assert.NotNil(t, r)
 			}
 		}()
-		_, _ = client.DeleteOne(ctx, "testdb", "testcoll", map[string]interface{}{"_id": "1"})
+		_, _ = client.DeleteOne(ctx, "testdb", "testcoll", map[string]any{"_id": "1"})
 	})
 
 	t.Run("DeleteMany with nil client", func(t *testing.T) {
@@ -357,7 +357,7 @@ func TestDefaultClientErrorCases(t *testing.T) {
 				assert.NotNil(t, r)
 			}
 		}()
-		_, _ = client.DeleteMany(ctx, "testdb", "testcoll", map[string]interface{}{"status": "inactive"})
+		_, _ = client.DeleteMany(ctx, "testdb", "testcoll", map[string]any{"status": "inactive"})
 	})
 
 	t.Run("FindOne with nil client", func(t *testing.T) {
@@ -366,7 +366,7 @@ func TestDefaultClientErrorCases(t *testing.T) {
 				assert.NotNil(t, r)
 			}
 		}()
-		_ = client.FindOne(ctx, "testdb", "testcoll", map[string]interface{}{"_id": "1"})
+		_ = client.FindOne(ctx, "testdb", "testcoll", map[string]any{"_id": "1"})
 	})
 
 	t.Run("Find with nil client", func(t *testing.T) {
@@ -375,7 +375,7 @@ func TestDefaultClientErrorCases(t *testing.T) {
 				assert.NotNil(t, r)
 			}
 		}()
-		_, _ = client.Find(ctx, "testdb", "testcoll", map[string]interface{}{})
+		_, _ = client.Find(ctx, "testdb", "testcoll", map[string]any{})
 	})
 
 	t.Run("CountDocuments with nil client", func(t *testing.T) {
@@ -384,7 +384,7 @@ func TestDefaultClientErrorCases(t *testing.T) {
 				assert.NotNil(t, r)
 			}
 		}()
-		_, _ = client.CountDocuments(ctx, "testdb", "testcoll", map[string]interface{}{})
+		_, _ = client.CountDocuments(ctx, "testdb", "testcoll", map[string]any{})
 	})
 
 	t.Run("Transaction with nil client", func(t *testing.T) {
@@ -583,15 +583,15 @@ func TestInitFunction(t *testing.T) {
 type mockSession struct {
 	endSessionCalled bool
 	withTxErr        error
-	withTxResult     interface{}
+	withTxResult     any
 }
 
 func (m *mockSession) EndSession(ctx context.Context) {
 	m.endSessionCalled = true
 }
 
-func (m *mockSession) WithTransaction(ctx context.Context, fn func(sc mongo.SessionContext) (interface{}, error),
-	opts ...*options.TransactionOptions) (interface{}, error) {
+func (m *mockSession) WithTransaction(ctx context.Context, fn func(sc mongo.SessionContext) (any, error),
+	opts ...*options.TransactionOptions) (any, error) {
 	if m.withTxErr != nil {
 		return nil, m.withTxErr
 	}
