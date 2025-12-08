@@ -109,6 +109,8 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 		tableSessionSummaries: "session_summaries",
 		tableAppStates:        "app_states",
 		tableUserStates:       "user_states",
+		appendEventHooks:      serviceOpts.appendEventHooks,
+		getSessionHooks:       serviceOpts.getSessionHooks,
 	}
 }
 
@@ -1932,4 +1934,123 @@ func TestCreateSession_InvalidAppName(t *testing.T) {
 
 	_, err = s.CreateSession(ctx, key, session.StateMap{})
 	assert.Error(t, err)
+}
+
+func TestAppendEventHook(t *testing.T) {
+	t.Run("hook can abort event storage", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db,
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				return nil // skip next()
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hello"}}},
+		}
+
+		// No DB expectations - hook aborts before DB call
+		err = s.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+	})
+
+	t.Run("multiple hooks execute in order", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		order := []string{}
+		s := createTestService(t, db,
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				order = append(order, "hook1_before")
+				err := next()
+				order = append(order, "hook1_after")
+				return err
+			}),
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				order = append(order, "hook2_before")
+				err := next()
+				order = append(order, "hook2_after")
+				return err
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hello"}}},
+		}
+
+		// Hook2 aborts, so no DB call
+		_ = s.AppendEvent(ctx, sess, evt)
+		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
+	})
+}
+
+func TestGetSessionHook(t *testing.T) {
+	t.Run("hook can return nil session", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db,
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				return nil, nil // skip next()
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+		// No DB expectations - hook aborts before DB call
+		sess, err := s.GetSession(ctx, key)
+		require.NoError(t, err)
+		assert.Nil(t, sess)
+	})
+
+	t.Run("multiple hooks execute in order", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		order := []string{}
+		s := createTestService(t, db,
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				order = append(order, "hook1_before")
+				sess, err := next()
+				order = append(order, "hook1_after")
+				return sess, err
+			}),
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				order = append(order, "hook2_before")
+				sess, err := next()
+				order = append(order, "hook2_after")
+				return sess, err
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+		// Hook2 returns nil, so no DB call
+		s.getSessionHooks[1] = func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+			order = append(order, "hook2_before")
+			order = append(order, "hook2_after")
+			return nil, nil
+		}
+
+		_, _ = s.GetSession(ctx, key)
+		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
+	})
 }
