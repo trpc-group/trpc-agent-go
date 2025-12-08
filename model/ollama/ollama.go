@@ -22,7 +22,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ollama/ollama/api"
@@ -31,29 +30,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-)
-
-const (
-	defaultChannelBufferSize = 256
-	functionToolType         = "function"
-	// OllamaHost is the environment variable for the Ollama host.
-	OllamaHost = "OLLAMA_HOST"
-)
-
-var (
-	// DefaultHost is the default Ollama host port.
-	defaultPort = "11434"
-	// DefaultHost is the default Ollama host.
-	defaultHost = "http://localhost:11434"
-)
-
-var (
-	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
-	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
-	inputTokensFloor       = imodel.DefaultInputTokensFloor
-	outputTokensFloor      = imodel.DefaultOutputTokensFloor
-	safetyMarginRatio      = imodel.DefaultSafetyMarginRatio
-	maxInputTokensRatio    = imodel.DefaultMaxInputTokensRatio
 )
 
 // Model implements the model.Model interface for Ollama API.
@@ -70,9 +46,7 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
-	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
-	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
 	protocolOverheadTokens int
@@ -86,217 +60,15 @@ type Model struct {
 	keepAlive *api.Duration
 }
 
-// ChatRequestCallbackFunc is the function type for the chat request callback.
-type ChatRequestCallbackFunc func(
-	ctx context.Context,
-	chatRequest *api.ChatRequest,
-)
-
-// ChatResponseCallbackFunc is the function type for the chat response callback.
-type ChatResponseCallbackFunc func(
-	ctx context.Context,
-	chatRequest *api.ChatRequest,
-	chatResponse *api.ChatResponse,
-)
-
-// ChatChunkCallbackFunc is the function type for the chat chunk callback.
-type ChatChunkCallbackFunc func(
-	ctx context.Context,
-	chatRequest *api.ChatRequest,
-	chatChunk *api.ChatResponse,
-)
-
-// ChatStreamCompleteCallbackFunc is the function type for the chat stream completion callback.
-type ChatStreamCompleteCallbackFunc func(
-	ctx context.Context,
-	chatRequest *api.ChatRequest,
-	streamErr error,
-)
-
-// options contains configuration options for creating an Ollama model.
-type options struct {
-	// Host URL for the Ollama server.
-	host string
-	// HTTP client for the Ollama client.
-	httpClient *http.Client
-	// Buffer size for response channels (default: 256)
-	channelBufferSize int
-	// Callback for the chat request.
-	chatRequestCallback ChatRequestCallbackFunc
-	// Callback for the chat response.
-	chatResponseCallback ChatResponseCallbackFunc
-	// Callback for the chat chunk.
-	chatChunkCallback ChatChunkCallbackFunc
-	// Callback for the chat stream completion.
-	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
-	// enableTokenTailoring enables automatic token tailoring based on model context window.
-	enableTokenTailoring bool
-	// tokenCounter count tokens for token tailoring.
-	tokenCounter model.TokenCounter
-	// tailoringStrategy defines the strategy for token tailoring.
-	tailoringStrategy model.TailoringStrategy
-	// maxInputTokens is the max input tokens for token tailoring.
-	maxInputTokens int
-	// tokenTailoringConfig allows customization of token tailoring parameters.
-	tokenTailoringConfig *model.TokenTailoringConfig
-	// Additional options for Ollama API.
-	options   map[string]any
-	keepAlive *api.Duration
-}
-
-// Option is a function that configures an Ollama model.
-type Option func(*options)
-
-// WithHost sets the host URL for the Ollama server.
-func WithHost(host string) Option {
-	return func(o *options) {
-		o.host = host
-	}
-}
-
-// withHttpClient sets the HTTP client to use.
-// The site is temporarily not open to the public, as we may implement injection of an internal http client.
-func withHttpClient(client *http.Client) Option {
-	return func(o *options) {
-		o.httpClient = client
-	}
-}
-
-// WithChannelBufferSize sets the channel buffer size for the Ollama client, 256 by default.
-func WithChannelBufferSize(size int) Option {
-	return func(o *options) {
-		if size <= 0 {
-			size = defaultChannelBufferSize
-		}
-		o.channelBufferSize = size
-	}
-}
-
-// WithChatRequestCallback sets the function to be called before sending a chat request.
-func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
-	return func(opts *options) {
-		opts.chatRequestCallback = fn
-	}
-}
-
-// WithChatResponseCallback sets the function to be called after receiving a chat response.
-func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
-	return func(opts *options) {
-		opts.chatResponseCallback = fn
-	}
-}
-
-// WithChatChunkCallback sets the function to be called after receiving a chat chunk.
-func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
-	return func(opts *options) {
-		opts.chatChunkCallback = fn
-	}
-}
-
-// WithChatStreamCompleteCallback sets the function to be called when streaming is completed.
-func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
-	return func(opts *options) {
-		opts.chatStreamCompleteCallback = fn
-	}
-}
-
-// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
-func WithEnableTokenTailoring(enabled bool) Option {
-	return func(opts *options) {
-		opts.enableTokenTailoring = enabled
-	}
-}
-
-// WithMaxInputTokens sets only the input token limit for token tailoring.
-func WithMaxInputTokens(limit int) Option {
-	return func(opts *options) {
-		opts.maxInputTokens = limit
-	}
-}
-
-// WithTokenCounter sets the TokenCounter used for token tailoring.
-func WithTokenCounter(counter model.TokenCounter) Option {
-	return func(opts *options) {
-		opts.tokenCounter = counter
-	}
-}
-
-// WithTailoringStrategy sets the TailoringStrategy used for token tailoring.
-func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
-	return func(opts *options) {
-		opts.tailoringStrategy = strategy
-	}
-}
-
-// WithTokenTailoringConfig sets custom token tailoring budget parameters.
-func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
-	return func(opts *options) {
-		opts.tokenTailoringConfig = config
-	}
-}
-
-// WithOptions sets additional options for Ollama API.
-func WithOptions(opt map[string]any) Option {
-	return func(opts *options) {
-		opts.options = opt
-	}
-}
-
-// WithKeepAlive sets the keep alive duration for the Ollama API.
-func WithKeepAlive(duration time.Duration) Option {
-	return func(opts *options) {
-		d := api.Duration{Duration: duration}
-		opts.keepAlive = &d
-	}
-}
-
 // New creates a new Ollama model adapter.
 func New(name string, opts ...Option) *Model {
-	o := &options{
-		channelBufferSize: defaultChannelBufferSize,
-		host:              defaultHost,
-		httpClient:        http.DefaultClient,
-	}
-
-	// Get host from environment variable if set.
+	o := defaultOptions
 	if ollamaHost := os.Getenv(OllamaHost); ollamaHost != "" {
 		o.host = ollamaHost
 	}
-
 	for _, opt := range opts {
-		opt(o)
+		opt(&o)
 	}
-
-	// Initialize token tailoring budget parameters with defaults.
-	protocolOverhead := protocolOverheadTokens
-	reserveOutput := reserveOutputTokens
-	inputFloor := inputTokensFloor
-	outputFloor := outputTokensFloor
-	safetyMargin := safetyMarginRatio
-	maxInputRatio := maxInputTokensRatio
-
-	// Apply custom token tailoring config if provided.
-	if o.tokenTailoringConfig != nil {
-		if o.tokenTailoringConfig.ProtocolOverheadTokens > 0 {
-			protocolOverhead = o.tokenTailoringConfig.ProtocolOverheadTokens
-		}
-		if o.tokenTailoringConfig.ReserveOutputTokens > 0 {
-			reserveOutput = o.tokenTailoringConfig.ReserveOutputTokens
-		}
-		if o.tokenTailoringConfig.InputTokensFloor > 0 {
-			inputFloor = o.tokenTailoringConfig.InputTokensFloor
-		}
-		if o.tokenTailoringConfig.OutputTokensFloor > 0 {
-			outputFloor = o.tokenTailoringConfig.OutputTokensFloor
-		}
-		if o.tokenTailoringConfig.SafetyMarginRatio > 0 {
-			safetyMargin = o.tokenTailoringConfig.SafetyMarginRatio
-		}
-		if o.tokenTailoringConfig.MaxInputTokensRatio > 0 {
-			maxInputRatio = o.tokenTailoringConfig.MaxInputTokensRatio
-		}
-	}
-
 	s := strings.TrimSpace(o.host)
 	scheme, hostport, ok := strings.Cut(s, "://")
 	switch {
@@ -336,14 +108,8 @@ func New(name string, opts ...Option) *Model {
 	// Create Ollama API client.
 	client := api.NewClient(baseURL, o.httpClient)
 
-	// Provide defaults at construction time when token tailoring is enabled.
-	if o.maxInputTokens > 0 {
-		if o.tokenCounter == nil {
-			o.tokenCounter = model.NewSimpleTokenCounter()
-		}
-		if o.tailoringStrategy == nil {
-			o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
-		}
+	if o.tailoringStrategy == nil {
+		o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
 	}
 	m := &Model{
 		client:                     client,
@@ -358,12 +124,12 @@ func New(name string, opts ...Option) *Model {
 		tokenCounter:               o.tokenCounter,
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
-		protocolOverheadTokens:     protocolOverhead,
-		reserveOutputTokens:        reserveOutput,
-		inputTokensFloor:           inputFloor,
-		outputTokensFloor:          outputFloor,
-		safetyMarginRatio:          safetyMargin,
-		maxInputTokensRatio:        maxInputRatio,
+		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
+		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
+		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
+		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
+		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
+		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 		options:                    o.options,
 		keepAlive:                  o.keepAlive,
 	}
@@ -445,30 +211,8 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			m.name, contextWindow, maxInputTokens)
 	}
 
-	// Determine token counter using priority: user config > default.
-	tokenCounter := m.tokenCounter
-	if tokenCounter == nil {
-		m.tokenCounterOnce.Do(func() {
-			if m.tokenCounter == nil {
-				m.tokenCounter = model.NewSimpleTokenCounter()
-			}
-		})
-		tokenCounter = m.tokenCounter
-	}
-
-	// Determine tailoring strategy using priority: user config > default.
-	tailoringStrategy := m.tailoringStrategy
-	if tailoringStrategy == nil {
-		m.tailoringStrategyOnce.Do(func() {
-			if m.tailoringStrategy == nil {
-				m.tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
-			}
-		})
-		tailoringStrategy = m.tailoringStrategy
-	}
-
 	// Apply token tailoring.
-	tailored, err := tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
 		log.Warn("token tailoring failed in ollama.Model", err)
 		return
@@ -477,7 +221,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	request.Messages = tailored
 
 	// Calculate remaining tokens for output based on context window.
-	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	usedTokens, err := m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
 	if err != nil {
 		log.Warn("failed to count tokens after tailoring", err)
 		return

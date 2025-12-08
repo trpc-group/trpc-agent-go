@@ -49,6 +49,24 @@ const (
 	TimelineFilterCurrentInvocation = processor.TimelineFilterCurrentInvocation
 )
 
+// MessageFilterMode is the mode for filtering messages.
+type MessageFilterMode int
+
+const (
+	// FullContext Includes all messages with prefix matching (including historical messages).
+	// equivalent to TimelineFilterAll + BranchFilterModePrefix.
+	FullContext MessageFilterMode = iota
+	// RequestContext includes only messages from the current request cycle that match the branch prefix.
+	// equivalent to TimelineFilterCurrentRequest + BranchFilterModePrefix.
+	RequestContext
+	// IsolatedRequest includes only messages from the current request cycle that exactly match the branch.
+	// equivalent to TimelineFilterCurrentRequest + BranchFilterModeExact.
+	IsolatedRequest
+	// IsolatedInvocation includes only messages from current invocation session that exactly match the branch,
+	// equivalent to TimelineFilterCurrentInvocation + BranchFilterModeExact.
+	IsolatedInvocation
+)
+
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:          defaultChannelBufferSize,
@@ -166,6 +184,13 @@ type Options struct {
 	//   - Configured with non-empty: use the provided message.
 	DefaultTransferMessage *string
 
+	// RefreshToolSetsOnRun controls whether tools from ToolSets are
+	// refreshed from the underlying ToolSet on each run.
+	// When false (default), tools from ToolSets are resolved once at
+	// construction time. When true, the agent will call ToolSet.Tools
+	// again when building the tools list for each invocation.
+	RefreshToolSetsOnRun bool
+
 	// SkillsRepository enables Agent Skills if non-nil.
 	SkillsRepository          skill.Repository
 	messageTimelineFilterMode string
@@ -248,6 +273,18 @@ func WithTools(tools []tool.Tool) Option {
 func WithToolSets(toolSets []tool.ToolSet) Option {
 	return func(opts *Options) {
 		opts.ToolSets = toolSets
+	}
+}
+
+// WithRefreshToolSetsOnRun controls whether tools from ToolSets are
+// refreshed from the underlying ToolSet on each run.
+// When enabled, the agent will call ToolSet.Tools again when building
+// the tools list for each invocation instead of using a fixed snapshot.
+// This is useful when ToolSets provide a dynamic tool list (for example,
+// MCP ToolSets that support ListTools at runtime).
+func WithRefreshToolSetsOnRun(refresh bool) Option {
+	return func(opts *Options) {
+		opts.RefreshToolSetsOnRun = refresh
 	}
 }
 
@@ -495,5 +532,27 @@ func WithMessageBranchFilterMode(mode string) Option {
 func WithToolFilter(filter tool.FilterFunc) Option {
 	return func(opts *Options) {
 		opts.toolFilter = filter
+	}
+}
+
+// WithMessageFilterMode sets the message filter mode.
+func WithMessageFilterMode(mode MessageFilterMode) Option {
+	return func(opts *Options) {
+		switch mode {
+		case FullContext:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterAll
+		case RequestContext:
+			opts.messageBranchFilterMode = BranchFilterModePrefix
+			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
+		case IsolatedRequest:
+			opts.messageBranchFilterMode = BranchFilterModeExact
+			opts.messageTimelineFilterMode = TimelineFilterCurrentRequest
+		case IsolatedInvocation:
+			opts.messageBranchFilterMode = BranchFilterModeExact
+			opts.messageTimelineFilterMode = TimelineFilterCurrentInvocation
+		default:
+			panic("invalid option value")
+		}
 	}
 }

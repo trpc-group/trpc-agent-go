@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"time"
 
 	"google.golang.org/genai"
@@ -23,37 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-)
-
-// ChatRequestCallbackFunc is the function type for the chat request callback.
-type ChatRequestCallbackFunc func(
-	ctx context.Context,
-	chatRequest []*genai.Content,
-)
-
-// ChatResponseCallbackFunc is the function type for the chat response callback.
-type ChatResponseCallbackFunc func(
-	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *genai.GenerateContentResponse,
-)
-
-// ChatChunkCallbackFunc is the function type for the chat chunk callback.
-type ChatChunkCallbackFunc func(
-	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *genai.GenerateContentResponse,
-)
-
-// ChatStreamCompleteCallbackFunc is the function type for the chat stream completion callback.
-// This callback is invoked when streaming is completely finished (success or error).
-type ChatStreamCompleteCallbackFunc func(
-	ctx context.Context,
-	chatRequest []*genai.Content,
-	generateConfig *genai.GenerateContentConfig,
-	chatResponse *model.Response,
 )
 
 // Model implements the model.Model interface for Gemini API.
@@ -67,9 +35,7 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
-	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
-	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
 	protocolOverheadTokens int
@@ -82,51 +48,12 @@ type Model struct {
 
 // New creates a new Gemini-like model.
 func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
-	o := &options{
-		channelBufferSize: defaultChannelBufferSize,
-	}
+	o := defaultOptions
 	for _, opt := range opts {
-		opt(o)
+		opt(&o)
 	}
-
-	// Initialize token tailoring budget parameters with defaults.
-	protocolOverhead := protocolOverheadTokens
-	reserveOutput := reserveOutputTokens
-	inputFloor := inputTokensFloor
-	outputFloor := outputTokensFloor
-	safetyMargin := safetyMarginRatio
-	maxInputRatio := maxInputTokensRatio
-
-	// Apply custom token tailoring config if provided.
-	if o.tokenTailoringConfig != nil {
-		if o.tokenTailoringConfig.ProtocolOverheadTokens > 0 {
-			protocolOverhead = o.tokenTailoringConfig.ProtocolOverheadTokens
-		}
-		if o.tokenTailoringConfig.ReserveOutputTokens > 0 {
-			reserveOutput = o.tokenTailoringConfig.ReserveOutputTokens
-		}
-		if o.tokenTailoringConfig.InputTokensFloor > 0 {
-			inputFloor = o.tokenTailoringConfig.InputTokensFloor
-		}
-		if o.tokenTailoringConfig.OutputTokensFloor > 0 {
-			outputFloor = o.tokenTailoringConfig.OutputTokensFloor
-		}
-		if o.tokenTailoringConfig.SafetyMarginRatio > 0 {
-			safetyMargin = o.tokenTailoringConfig.SafetyMarginRatio
-		}
-		if o.tokenTailoringConfig.MaxInputTokensRatio > 0 {
-			maxInputRatio = o.tokenTailoringConfig.MaxInputTokensRatio
-		}
-	}
-	// Provide defaults at construction time when token tailoring is enabled.
-	// These are best-effort defaults; user-provided counter/strategy always take priority.
-	if o.maxInputTokens > 0 {
-		if o.tokenCounter == nil {
-			o.tokenCounter = model.NewSimpleTokenCounter()
-		}
-		if o.tailoringStrategy == nil {
-			o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
-		}
+	if o.tailoringStrategy == nil {
+		o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
 	}
 	client, err := genai.NewClient(ctx, o.geminiClientConfig)
 	if err != nil {
@@ -135,13 +62,13 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 	return &Model{
 		client:                     &clientWrapper{client: client},
 		name:                       name,
-		protocolOverheadTokens:     protocolOverhead,
-		reserveOutputTokens:        reserveOutput,
-		inputTokensFloor:           inputFloor,
-		outputTokensFloor:          outputFloor,
-		safetyMarginRatio:          safetyMargin,
-		maxInputTokens:             inputTokensFloor,
-		maxInputTokensRatio:        maxInputRatio,
+		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
+		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
+		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
+		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
+		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
+		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
+		maxInputTokens:             o.maxInputTokens,
 		chatRequestCallback:        o.chatRequestCallback,
 		chatResponseCallback:       o.chatResponseCallback,
 		chatChunkCallback:          o.chatChunkCallback,
@@ -378,30 +305,8 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			m.name, contextWindow, maxInputTokens)
 	}
 
-	// Determine token counter using priority: user config > default.
-	tokenCounter := m.tokenCounter
-	if tokenCounter == nil {
-		m.tokenCounterOnce.Do(func() {
-			if m.tokenCounter == nil {
-				m.tokenCounter = model.NewSimpleTokenCounter()
-			}
-		})
-		tokenCounter = m.tokenCounter
-	}
-
-	// Determine tailoring strategy using priority: user config > default.
-	tailoringStrategy := m.tailoringStrategy
-	if tailoringStrategy == nil {
-		m.tailoringStrategyOnce.Do(func() {
-			if m.tailoringStrategy == nil {
-				m.tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
-			}
-		})
-		tailoringStrategy = m.tailoringStrategy
-	}
-
 	// Apply token tailoring.
-	tailored, err := tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
 		log.Warn("token tailoring failed in openai.Model", err)
 		return
@@ -410,7 +315,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	request.Messages = tailored
 
 	// Calculate remaining tokens for output based on context window.
-	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	usedTokens, err := m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
 	if err != nil {
 		log.Warn("failed to count tokens after tailoring", err)
 		return

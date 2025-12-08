@@ -33,6 +33,13 @@ import (
 const (
 	// Timeout for event completion signaling.
 	eventCompletionTimeout = 5 * time.Second
+
+	// stateKeyToolsSnapshot is the invocation state key used to cache the
+	// final tool list for a single Invocation. This ensures that the tool
+	// set (including ToolSet-based tools and filters) stays stable for the
+	// entire lifetime of an Invocation, even when underlying ToolSets are
+	// dynamic.
+	stateKeyToolsSnapshot = "llmflow:tools_snapshot"
 )
 
 // Options contains configuration options for creating a Flow.
@@ -426,14 +433,26 @@ type ToolFilterProvider interface {
 //
 // This method is called during the preprocess stage, before sending the request to the model.
 func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocation) []tool.Tool {
+	if invocation == nil || invocation.Agent == nil {
+		return nil
+	}
+
+	if cached, ok := agent.GetStateValue[[]tool.Tool](
+		invocation,
+		stateKeyToolsSnapshot,
+	); ok && cached != nil {
+		return cached
+	}
+
 	// Get all tools from the agent.
 	allTools := invocation.Agent.Tools()
 	if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
 		allTools = provider.FilterTools(ctx)
 	}
 
-	// If no filter is specified, return all tools.
+	// If no filter is specified, return all tools for this invocation.
 	if invocation.RunOptions.ToolFilter == nil {
+		invocation.SetState(stateKeyToolsSnapshot, allTools)
 		return allTools
 	}
 
@@ -472,6 +491,8 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 			filtered = append(filtered, t)
 		}
 	}
+
+	invocation.SetState(stateKeyToolsSnapshot, filtered)
 
 	return filtered
 }

@@ -350,6 +350,48 @@ sseToolSet := mcp.NewMCPToolSet(
 - 🎯 **独立重试**：每次工具调用独立计数，不会因早期失败影响后续调用
 - 🛡️ **保守策略**：仅针对明确的连接/会话错误触发重连，避免配置错误导致的无限循环
 
+### MCP 工具的动态发现与更新（LLMAgent 配置项）
+
+对于 MCP 工具集，服务器端的工具列表是可以变化的（例如在运行
+过程中新增了一个 MCP 工具）。如果希望 LLMAgent 在**每次调用**
+时自动看到最新的工具列表，可以在使用 `WithToolSets` 的同时，
+开启 `llmagent.WithRefreshToolSetsOnRun(true)`。
+
+#### LLMAgent 配置示例
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+// 1. 创建 MCP 工具集（可以是 STDIO、SSE 或 Streamable HTTP）
+mcpToolSet := mcp.NewMCPToolSet(connectionConfig)
+
+// 2. 创建 LLMAgent，并开启 ToolSets 的自动刷新
+agent := llmagent.New(
+    "mcp-assistant",
+    llmagent.WithModel(openai.New("gpt-4o-mini")),
+    llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}),
+    llmagent.WithRefreshToolSetsOnRun(true),
+)
+```
+
+当启用 `WithRefreshToolSetsOnRun(true)` 时：
+
+- LLMAgent 在构造工具列表时，会再次调用
+  `ToolSet.Tools(context.Background())`；
+- 如果 MCP 服务器新增或删除了工具，该 Agent **下一次执行** 时，
+  会自动使用更新后的工具列表。
+
+这个配置项的侧重点是**动态发现工具**。如果你还需要基于
+`context.Context` 的**每次请求动态 HTTP 请求头**（例如从上下文
+中提取认证信息），仍然可以参考 `examples/mcptool/http_headers`
+示例，手动调用 `toolSet.Tools(ctx)`，然后配合
+`WithTools` 使用。
+
 ## Agent 工具 (AgentTool)
 
 AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：
