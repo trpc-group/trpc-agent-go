@@ -53,6 +53,7 @@ type sessionState struct {
 	mu         sync.Mutex            // mu guards the aggregator and the done channel.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
 	done       chan struct{}         // done is closed when the session state is removed.
+	session    *session.Session      // session caches the session to reduce store lookups.
 }
 
 // New creates a new tracker.
@@ -87,7 +88,7 @@ func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguiev
 	if err != nil {
 		return fmt.Errorf("aggregate event: %w", err)
 	}
-	return t.persistEvents(ctx, key, aggregated)
+	return t.persistEvents(ctx, key, state, aggregated)
 }
 
 // GetEvents retrieves the AG-UI track events from the session.
@@ -123,11 +124,11 @@ func (t *tracker) Flush(ctx context.Context, key session.Key) error {
 }
 
 // persistEvents ensures the session exists and appends track events to storage.
-func (t *tracker) persistEvents(ctx context.Context, key session.Key, events []aguievents.Event) error {
+func (t *tracker) persistEvents(ctx context.Context, key session.Key, state *sessionState, events []aguievents.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	sess, err := t.ensureSessionExists(ctx, key)
+	sess, err := t.ensureSessionExists(ctx, key, state)
 	if err != nil {
 		return fmt.Errorf("ensure session exists: %w", err)
 	}
@@ -154,17 +155,22 @@ func (t *tracker) persistEvents(ctx context.Context, key session.Key, events []a
 }
 
 // ensureSessionExists fetches the session or creates one when absent.
-func (t *tracker) ensureSessionExists(ctx context.Context, key session.Key) (*session.Session, error) {
+func (t *tracker) ensureSessionExists(ctx context.Context, key session.Key, state *sessionState) (*session.Session, error) {
+	if state != nil && state.session != nil {
+		return state.session, nil
+	}
 	sess, err := t.sessionService.GetSession(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
-	if sess != nil {
-		return sess, nil
+	if sess == nil {
+		sess, err = t.sessionService.CreateSession(ctx, key, session.StateMap{})
+		if err != nil {
+			return nil, fmt.Errorf("create session: %w", err)
+		}
 	}
-	sess, err = t.sessionService.CreateSession(ctx, key, session.StateMap{})
-	if err != nil {
-		return nil, fmt.Errorf("create session: %w", err)
+	if state != nil {
+		state.session = sess
 	}
 	return sess, nil
 }
@@ -224,5 +230,5 @@ func (t *tracker) flush(ctx context.Context, key session.Key, state *sessionStat
 	if err != nil {
 		return fmt.Errorf("aggregator flush: %w", err)
 	}
-	return t.persistEvents(ctx, key, events)
+	return t.persistEvents(ctx, key, state, events)
 }

@@ -13,7 +13,6 @@ package runner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -272,7 +271,7 @@ func (r *runner) processAgentEvents(
 	}
 	// Attach a flush function to the invocation so that dependent components (e.g., AgentTool) can flush
 	// all in-flight events before proceeding.
-	flush.Attach(invocation, loop.flushChan)
+	flush.Attach(ctx, invocation, loop.flushChan)
 	go r.runEventLoop(ctx, loop)
 	return processedEventCh
 }
@@ -302,8 +301,12 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 			}
 		case req, ok := <-loop.flushChan:
 			// Flush channel closed, disable further flush handling.
-			if !ok || req == nil || req.ACK == nil {
+			if !ok {
 				loop.flushChan = nil
+				continue
+			}
+			if req == nil || req.ACK == nil {
+				log.Errorf("flush request is nil or ACK is nil")
 				continue
 			}
 			// Handle the flush request.
@@ -320,7 +323,8 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopContext, agentEvent *event.Event) error {
 	if agentEvent == nil {
 		// Preserve existing behavior: skip nil events without failing the loop.
-		return errors.New("agentEvent is nil")
+		log.Errorf("agentEvent is nil")
+		return nil
 	}
 
 	// Append qualifying events to session and trigger summarization.
@@ -348,18 +352,19 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 // handleFlushRequest drains buffered agent events when a flush request arrives and closes the request's ACK channel
 // once all events currently buffered in the agent event channel have been processed.
 func (r *runner) handleFlushRequest(ctx context.Context, loop *eventLoopContext, req *flush.FlushRequest) error {
+	defer close(req.ACK)
 	for {
 		select {
 		case agentEvent, ok := <-loop.agentEventCh:
 			if !ok {
-				close(req.ACK)
 				return nil
 			}
 			if err := r.processSingleAgentEvent(ctx, loop, agentEvent); err != nil {
 				return fmt.Errorf("process single agent event: %w", err)
 			}
+		case <-ctx.Done():
+			return ctx.Err()
 		default:
-			close(req.ACK)
 			return nil
 		}
 	}

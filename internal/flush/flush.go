@@ -32,7 +32,7 @@ type flusher func(context.Context) error
 
 // Attach binds a flush function to the given invocation using its state map, wiring it to the provided flush channel.
 // When Invoke is called, the function will enqueue a FlushRequest on ch and wait for ACK to be closed by the runner.
-func Attach(inv *agent.Invocation, ch chan *FlushRequest) {
+func Attach(ctx context.Context, inv *agent.Invocation, ch chan *FlushRequest) {
 	var fn flusher = func(ctx context.Context) error {
 		req := &FlushRequest{ACK: make(chan struct{})}
 		// Enqueue the flush request on the flush channel.

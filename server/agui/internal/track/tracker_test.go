@@ -137,6 +137,25 @@ func TestTrackerAppendEventUsesCurrentTimestamp(t *testing.T) {
 	require.WithinDuration(t, before, recorded, time.Second*2)
 }
 
+func TestTrackerEnsureSessionCached(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	var getCalls int
+	svc.getSessionFn = func(ctx context.Context, key session.Key, opts ...session.Option) (*session.Session, error) {
+		getCalls++
+		return svc.SessionService.GetSession(ctx, key, opts...)
+	}
+	tracker, err := New(svc, WithFlushInterval(0))
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunFinishedEvent("thread", "run")))
+
+	require.Equal(t, 1, getCalls)
+}
+
 func TestTrackerGetEventsErrors(t *testing.T) {
 	ctx := context.Background()
 	validKey := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
