@@ -248,6 +248,7 @@ func (t *translator) graphModelEvents(evt *agentevent.Event) []aguievents.Event 
 	var events []aguievents.Event
 	if t.receivingMessage && t.lastMessageID != responseID {
 		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+		t.receivingMessage = false
 	}
 	events = append(events,
 		aguievents.NewTextMessageStartEvent(responseID, aguievents.WithRole(model.RoleAssistant.String())),
