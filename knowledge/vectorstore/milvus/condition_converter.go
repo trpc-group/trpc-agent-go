@@ -186,7 +186,7 @@ func (c *milvusFilterConverter) convertBetweenCondition(condition *searchfilter.
 // - Numeric values (int, float) should not be quoted
 // - Boolean values should not be quoted
 // - Time values should be converted to Unix timestamp and not be quoted
-func formatValue(value interface{}) string {
+func formatValue(value any) string {
 	switch v := value.(type) {
 	case string:
 		return fmt.Sprintf("\"%s\"", escapeDoubleQuotes(v))

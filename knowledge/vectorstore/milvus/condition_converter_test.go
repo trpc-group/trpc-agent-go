@@ -124,22 +124,22 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "name",
 				Operator: searchfilter.OperatorIn,
-				Value:    []interface{}{"Alice", "Bob", "Charlie"},
+				Value:    []any{"Alice", "Bob", "Charlie"},
 			},
 			wantFilter: `name in {name}`,
 			wantErr:    false,
-			wantParams: map[string]any{"name": []interface{}{"Alice", "Bob", "Charlie"}},
+			wantParams: map[string]any{"name": []any{"Alice", "Bob", "Charlie"}},
 		},
 		{
 			name: "not in operator with numeric values",
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
 				Operator: searchfilter.OperatorNotIn,
-				Value:    []interface{}{18, 25, 30},
+				Value:    []any{18, 25, 30},
 			},
 			wantFilter: `age not in {age}`,
 			wantErr:    false,
-			wantParams: map[string]any{"age": []interface{}{18, 25, 30}},
+			wantParams: map[string]any{"age": []any{18, 25, 30}},
 		},
 		{
 			name: "like operator",
@@ -467,7 +467,7 @@ func TestMilvusFilterConverter_ConvertCondition(t *testing.T) {
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
 				Operator: searchfilter.OperatorIn,
-				Value:    []interface{}{},
+				Value:    []any{},
 			},
 			wantErr: true,
 		},
@@ -476,7 +476,7 @@ func TestMilvusFilterConverter_ConvertCondition(t *testing.T) {
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "",
 				Operator: searchfilter.OperatorIn,
-				Value:    []interface{}{1, 2, 3},
+				Value:    []any{1, 2, 3},
 			},
 			wantErr: true,
 		},
@@ -485,7 +485,7 @@ func TestMilvusFilterConverter_ConvertCondition(t *testing.T) {
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "age",
 				Operator: searchfilter.OperatorBetween,
-				Value:    []interface{}{},
+				Value:    []any{},
 			},
 			wantErr: true,
 		},
@@ -494,7 +494,7 @@ func TestMilvusFilterConverter_ConvertCondition(t *testing.T) {
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "",
 				Operator: searchfilter.OperatorBetween,
-				Value:    []interface{}{1, 2},
+				Value:    []any{1, 2},
 			},
 			wantErr: true,
 		},
