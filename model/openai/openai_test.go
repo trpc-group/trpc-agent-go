@@ -2318,12 +2318,11 @@ func TestOpenAI_TokenCounterInitialization(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create OpenAI client
-			client := &Model{
-				name:                 "gpt-3.5-turbo",
-				apiKey:               "test-api-key",
-				enableTokenTailoring: true, // Enable token tailoring to trigger initialization
-				tokenCounter:         tt.initialTokenCounter,
-			}
+			client := New("gpt-3.5-turbo",
+				WithAPIKey("test-api-key"),
+				WithEnableTokenTailoring(true),
+				WithTokenCounter(tt.initialTokenCounter),
+			)
 
 			// Create a simple conversation to trigger the initialization logic
 			conv := []model.Message{
@@ -2403,12 +2402,11 @@ func TestOpenAI_TailoringStrategyInitialization(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create OpenAI client
-			client := &Model{
-				name:                 "gpt-3.5-turbo",
-				apiKey:               "test-api-key",
-				enableTokenTailoring: true, // Enable token tailoring to trigger initialization
-				tailoringStrategy:    tt.initialTailoringStrategy,
-			}
+			client := New("gpt-3.5-turbo",
+				WithAPIKey("test-api-key"),
+				WithEnableTokenTailoring(true),
+				WithTailoringStrategy(tt.initialTailoringStrategy),
+			)
 
 			// Create a simple conversation to trigger the initialization logic
 			conv := []model.Message{
@@ -2469,12 +2467,11 @@ func TestOpenAI_TailoringStrategyInitialization(t *testing.T) {
 
 func TestOpenAI_ConcurrentInitialization(t *testing.T) {
 	// Test concurrent access to ensure sync.Once works correctly
-	client := &Model{
-		name:                 "gpt-3.5-turbo",
-		apiKey:               "test-api-key",
-		enableTokenTailoring: true, // Enable token tailoring to trigger initialization
-		// Don't set tokenCounter or tailoringStrategy to test default initialization
-	}
+	client := New(
+		"gpt-3.5-turbo",
+		WithAPIKey("test-api-key"),
+		WithEnableTokenTailoring(true),
+	)
 
 	// Create a mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
