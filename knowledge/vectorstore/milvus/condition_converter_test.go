@@ -120,7 +120,7 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 			wantParams: map[string]any{"active": true},
 		},
 		{
-			name: "metata.xx field",
+			name: "metadata.xx field",
 			condition: &searchfilter.UniversalFilterCondition{
 				Field:    "metadata.active",
 				Operator: searchfilter.OperatorEqual,
