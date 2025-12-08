@@ -47,6 +47,7 @@ Command-line flags:
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
 - `-time-sec`: Time threshold in seconds to trigger summarization (0=disabled). Default: `0`.
 - `-max-words`: Max summary words (0=unlimited). Default: `0`.
+- `-skip-recent`: Number of recent events to skip during summarization (0=skip none). Default: `0`.
 - `-add-summary`: Prepend latest filter summary as system message. Default: `true`.
 - `-max-history`: Max history messages when add-summary=false (0=unlimited). Default: `0`.
 
@@ -68,6 +69,7 @@ EventThreshold: 1
 TokenThreshold: 0
 TimeThreshold: 0s
 MaxWords: 0
+SkipRecent: 0
 Streaming: true
 AddSummary: true
 MaxHistory: 0
@@ -201,6 +203,8 @@ The `SessionSummarizer` supports various configuration options to customize summ
 
 - **`WithPrompt(prompt string)`**: Customizes the prompt template used for summary generation. The prompt must include the `{conversation_text}` placeholder. See the [Prompt Customization](#prompt-customization) section for details and examples.
 
+- **`WithSkipRecentEvents(count int)`**: Sets the number of recent events to skip during summarization. These events will be excluded from the summary input but remain in the session. This is useful for avoiding summarization of very recent, potentially incomplete conversations. A value <= 0 means no events are skipped.
+
 ### Trigger Options
 
 - **`WithEventThreshold(eventCount int)`**: Triggers summarization when the number of events exceeds the threshold.
@@ -221,6 +225,12 @@ The `SessionSummarizer` supports various configuration options to customize summ
 // Basic configuration
 sum := summary.NewSummarizer(model,
     summary.WithMaxSummaryWords(500),
+    summary.WithEventThreshold(10),
+)
+
+// Skip recent events to avoid incomplete conversations
+sum := summary.NewSummarizer(model,
+    summary.WithSkipRecentEvents(2),  // Skip the last 2 events during summarization
     summary.WithEventThreshold(10),
 )
 

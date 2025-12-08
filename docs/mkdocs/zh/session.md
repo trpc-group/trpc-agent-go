@@ -517,7 +517,6 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 - **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
 - **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
 
-
 **摘要配置：**
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
@@ -810,7 +809,6 @@ CREATE TABLE user_states (
 
 - **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
 - **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
-
 
 **摘要配置：**
 
@@ -1397,6 +1395,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 - **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
 - **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
+- **`WithSkipRecentEvents(count int)`**：在摘要生成时跳过最近的事件。这些事件会被排除在摘要输入之外，但仍保留在会话中。适用于避免对最近的、可能不完整的对话进行摘要。值 <= 0 表示不跳过任何事件。示例：`WithSkipRecentEvents(2)` 跳过最后 2 个事件。
 
 **自定义提示词示例：**
 
@@ -1412,8 +1411,9 @@ customPrompt := `分析以下对话并提供简洁的摘要，重点关注关键
 
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithPrompt(customPrompt),
-    summary.WithMaxSummaryWords(100),
+    summary.WithPrompt(customPrompt), // 自定义 Prompt
+    summary.WithMaxSummaryWords(100), // 注入 Prompt 里面的 {max_summary_words}
+    summary.WithSkipRecentEvents(2),  // 跳过最后 2 个事件
     summary.WithEventThreshold(15),
 )
 ```
