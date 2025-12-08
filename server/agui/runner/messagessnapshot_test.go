@@ -417,7 +417,7 @@ func (s *testSessionService) EnqueueSummaryJob(ctx context.Context, sess *sessio
 	return nil
 }
 
-func (s *testSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+func (s *testSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
 	return "", false
 }
 

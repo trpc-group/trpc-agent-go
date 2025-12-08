@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
+	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -37,7 +37,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 
 	// Run summarization based on the provided session. Persistence path will
 	// validate app/session existence under lock.
-	updated, err := summary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
@@ -87,23 +87,10 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 }
 
 // GetSessionSummaryText returns previously stored summary from session summaries if present.
-func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
-	if sess == nil {
-		return "", false
-	}
-	// Prefer structured summaries on session.
-	if sess.Summaries != nil {
-		// Prefer full-summary under the all-contents filter key.
-		if sum, ok := sess.Summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
-			return sum.Summary, true
-		}
-		for _, s := range sess.Summaries {
-			if s != nil && s.Summary != "" {
-				return s.Summary, true
-			}
-		}
-	}
-	return "", false
+// When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
+// Use session.WithSummaryFilterKey to specify a different filter key.
+func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
+	return isummary.GetSummaryTextFromSession(sess, opts...)
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.

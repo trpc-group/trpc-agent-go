@@ -1462,11 +1462,28 @@ err := sessionService.EnqueueSummaryJob(
 从会话中获取最新的摘要文本：
 
 ```go
+// 获取全量会话摘要（默认行为）
 summaryText, found := sessionService.GetSessionSummaryText(ctx, sess)
 if found {
     fmt.Printf("摘要：%s\n", summaryText)
 }
+
+// 获取特定 filter key 的摘要
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("user-messages"),
+)
+if found {
+    fmt.Printf("用户消息摘要：%s\n", userSummary)
+}
 ```
+
+**Filter Key 支持：**
+
+`GetSessionSummaryText` 方法支持可选的 `WithSummaryFilterKey` 选项，用于获取特定事件过滤器的摘要：
+
+- 不提供选项时，返回全量会话摘要（`SummaryFilterKeyAllContents`）
+- 提供特定 filter key 但未找到时，回退到全量会话摘要
+- 如果都不存在，兜底返回任意可用的摘要
 
 ### 工作原理
 

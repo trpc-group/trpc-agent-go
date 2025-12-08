@@ -852,3 +852,87 @@ func TestMemoryService_TryEnqueueJob_ChannelsNotInitialized(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "test", sum.Summary)
 }
+
+func TestMemoryService_GetSessionSummaryText_WithFilterKey(t *testing.T) {
+	s := NewSessionService()
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"":              {Summary: "full-summary", UpdatedAt: time.Now()},
+			"user-messages": {Summary: "user-only-summary", UpdatedAt: time.Now()},
+			"tool-usage":    {Summary: "tool-summary", UpdatedAt: time.Now()},
+		},
+	}
+
+	// Test getting summary for specific filterKey.
+	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("user-messages"))
+	require.True(t, ok)
+	require.Equal(t, "user-only-summary", text)
+
+	// Test getting summary for another filterKey.
+	text, ok = s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("tool-usage"))
+	require.True(t, ok)
+	require.Equal(t, "tool-summary", text)
+
+	// Test returning full-session summary when no options provided.
+	text, ok = s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	require.Equal(t, "full-summary", text)
+
+	// Test explicitly passing empty string (full-session key).
+	text, ok = s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey(session.SummaryFilterKeyAllContents))
+	require.True(t, ok)
+	require.Equal(t, "full-summary", text)
+}
+
+func TestMemoryService_GetSessionSummaryText_FilterKeyFallback(t *testing.T) {
+	s := NewSessionService()
+
+	// Only full-session summary available, no specific filterKey.
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"": {Summary: "full-summary", UpdatedAt: time.Now()},
+		},
+	}
+
+	// Request non-existent filterKey, should fallback to full-session summary.
+	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("non-existent"))
+	require.True(t, ok)
+	require.Equal(t, "full-summary", text)
+}
+
+func TestMemoryService_GetSessionSummaryText_FilterKeyNotFoundNoFallback(t *testing.T) {
+	s := NewSessionService()
+
+	// Only specific filterKey summary available, no full-session summary.
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"branch1": {Summary: "branch-summary", UpdatedAt: time.Now()},
+		},
+	}
+
+	// Request non-existent filterKey, full-session doesn't exist either, should fallback to any available summary.
+	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("non-existent"))
+	require.True(t, ok)
+	require.Equal(t, "branch-summary", text)
+}
+
+func TestMemoryService_GetSessionSummaryText_FilterKeyEmptySummary(t *testing.T) {
+	s := NewSessionService()
+
+	// filterKey exists but summary is empty.
+	sess := &session.Session{
+		ID: "s1",
+		Summaries: map[string]*session.Summary{
+			"user-messages": {Summary: "", UpdatedAt: time.Now()},
+			"":              {Summary: "full-summary", UpdatedAt: time.Now()},
+		},
+	}
+
+	// Requested filterKey exists but is empty, should fallback to full-session summary.
+	text, ok := s.GetSessionSummaryText(context.Background(), sess, session.WithSummaryFilterKey("user-messages"))
+	require.True(t, ok)
+	require.Equal(t, "full-summary", text)
+}
