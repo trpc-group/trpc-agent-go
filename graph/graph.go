@@ -111,7 +111,8 @@ type Node struct {
 	Function    NodeFunc
 	Type        NodeType // Type of the node (function, llm, tool, etc.)
 
-	toolSets []tool.ToolSet
+	toolSets             []tool.ToolSet
+	refreshToolSetsOnRun bool
 	// Per-node callbacks for fine-grained control
 	callbacks *NodeCallbacks
 	// Optional per-node cache policy. If nil, graph-level policy applies.
@@ -368,6 +369,11 @@ type ExecutionContext struct {
 	EventChan    chan<- *event.Event
 	InvocationID string
 
+	// channels holds the per-execution Pregel channels. These are constructed
+	// from the Graph's static channel definitions when the execution starts
+	// and are never shared across concurrent runs.
+	channels *channel.Manager
+
 	// stateMutex protects State reads/writes.
 	stateMutex sync.RWMutex
 	State      State
@@ -485,12 +491,17 @@ func (g *Graph) addChannel(name string, channelType channel.Behavior) {
 	g.channelManager.AddChannel(name, channelType)
 }
 
-// getChannel retrieves a channel by name.
+// getChannel retrieves a channel definition by name. This is primarily used
+// during graph construction and in tests. Runtime execution should operate on
+// the per-execution channels stored in ExecutionContext.
 func (g *Graph) getChannel(name string) (*channel.Channel, bool) {
 	return g.channelManager.GetChannel(name)
 }
 
-// getAllChannels returns all channels in the graph.
+// getAllChannels returns all channel definitions in the graph. Callers must
+// treat the returned channels as immutable templates (name + behavior).
+// Per-execution channel state (values, versions, availability) is stored in
+// ExecutionContext.channels.
 func (g *Graph) getAllChannels() map[string]*channel.Channel {
 	return g.channelManager.GetAllChannels()
 }

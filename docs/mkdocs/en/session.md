@@ -51,8 +51,8 @@ func main() {
     summarizer := summary.NewSummarizer(
         llm, // Use same LLM model for summary generation
         summary.WithChecksAny(                         // Trigger when any condition is met
-            summary.CheckEventThreshold(20),           // Trigger when exceeds 20 events
-            summary.CheckTokenThreshold(4000),         // Trigger when exceeds 4000 tokens
+            summary.CheckEventThreshold(20),           // Trigger when 20+ new events since last summary
+            summary.CheckTokenThreshold(4000),         // Trigger when 4000+ new tokens since last summary
             summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
         ),
         summary.WithMaxSummaryWords(200), // Limit summary to 200 words
@@ -197,8 +197,8 @@ import (
 summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithChecksAny(                         // Trigger when any condition is met
-        summary.CheckEventThreshold(20),           // Trigger when exceeds 20 events
-        summary.CheckTokenThreshold(4000),         // Trigger when exceeds 4000 tokens
+        summary.CheckEventThreshold(20),           // Trigger when 20+ new events since last summary
+        summary.CheckTokenThreshold(4000),         // Trigger when 4000+ new tokens since last summary
         summary.CheckTimeThreshold(5*time.Minute), // Trigger after 5 minutes of inactivity
     ),
     summary.WithMaxSummaryWords(200),              // Limit summary to 200 words
@@ -1135,8 +1135,8 @@ summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 // Create summarizer with trigger conditions.
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithEventThreshold(20),        // Trigger when exceeds 20 events.
-    summary.WithTokenThreshold(4000),      // Trigger when exceeds 4000 tokens.
+    summary.WithEventThreshold(20),        // Trigger when 20+ new events since last summary.
+    summary.WithTokenThreshold(4000),      // Trigger when 4000+ new tokens since last summary.
     summary.WithMaxSummaryWords(200),      // Limit summary to 200 words.
 )
 ```
@@ -1257,8 +1257,8 @@ Configure the summarizer behavior with the following options:
 
 **Trigger Conditions:**
 
-- **`WithEventThreshold(eventCount int)`**: Trigger summarization when the number of events exceeds the threshold. Example: `WithEventThreshold(20)` triggers when exceeds 20 events.
-- **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the total token count exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when exceeds 4000 tokens.
+- **`WithEventThreshold(eventCount int)`**: Trigger summarization when the number of new events since last summary exceeds the threshold. Example: `WithEventThreshold(20)` triggers when 20+ new events have occurred since last summary.
+- **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the new token count since last summary exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when 4000+ new tokens have been added since last summary.
 - **`WithTimeThreshold(interval time.Duration)`**: Trigger summarization when time elapsed since the last event exceeds the interval. Example: `WithTimeThreshold(5*time.Minute)` triggers after 5 minutes of inactivity.
 
 **Composite Conditions:**
@@ -1284,6 +1284,7 @@ Configure the summarizer behavior with the following options:
 
 - **`WithMaxSummaryWords(maxWords int)`**: Limit the summary to a maximum word count. The limit is included in the prompt to guide the model's generation. Example: `WithMaxSummaryWords(150)` requests summaries within 150 words.
 - **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. Optionally include `{max_summary_words}` for word limit instructions.
+- **`WithSkipRecentEvents(count int)`**: Skip the most recent events during summarization. These events will be excluded from the summary input but remain in the session. Useful for avoiding summarization of very recent, potentially incomplete conversations. A value <= 0 means no events are skipped. Example: `WithSkipRecentEvents(2)` skips the last 2 events.
 
 **Example with custom prompt:**
 
@@ -1300,8 +1301,9 @@ Summary:`
 
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithPrompt(customPrompt),
-    summary.WithMaxSummaryWords(100),
+    summary.WithPrompt(customPrompt), // Custom Prompt
+    summary.WithMaxSummaryWords(100), // Inject into {max_summary_words}
+    summary.WithSkipRecentEvents(2),  // Skip the last 2 events
     summary.WithEventThreshold(15),
 )
 ```
@@ -1388,11 +1390,28 @@ err := sessionService.CreateSessionSummary(
 Get the latest summary text from a session:
 
 ```go
+// Get the full-session summary (default behavior)
 summaryText, found := sessionService.GetSessionSummaryText(ctx, sess)
 if found {
     fmt.Printf("Summary: %s\n", summaryText)
 }
+
+// Get summary for a specific filter key
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("user-messages"),
+)
+if found {
+    fmt.Printf("User messages summary: %s\n", userSummary)
+}
 ```
+
+**Filter Key Support:**
+
+The `GetSessionSummaryText` method supports an optional `WithSummaryFilterKey` option to retrieve summaries for specific event filters:
+
+- When no option is provided, returns the full-session summary (`SummaryFilterKeyAllContents`)
+- When a specific filter key is provided but not found, falls back to the full-session summary
+- If neither exists, returns any available summary as a last resort
 
 ### How It Works
 
@@ -1400,7 +1419,7 @@ if found {
 
 2. **Delta Summarization**: New events are combined with the previous summary (prepended as a system event) to generate an updated summary that incorporates both old context and new information.
 
-3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (event count, token count, time threshold). If conditions aren't met and `force=false`, summarization is skipped.
+3. **Trigger Evaluation**: Before generating a summary, the summarizer evaluates configured trigger conditions (based on incremental event count, token count, and time threshold since last summary). If conditions aren't met and `force=false`, summarization is skipped.
 
 4. **Async Workers**: Summary jobs are distributed across multiple worker goroutines using hash-based distribution. This ensures jobs for the same session are processed sequentially while different sessions can be processed in parallel.
 

@@ -62,7 +62,9 @@ func NewStopError(message string) *StopError {
 type Agent interface {
 	// Run executes the provided invocation within the given context and returns
 	// a channel of events that represent the progress and results of the execution.
-	Run(ctx context.Context, invocation *Invocation) (<-chan *event.Event, error)
+	Run(ctx context.Context, invocation *Invocation) (
+		<-chan *event.Event, error,
+	)
 
 	// Tools returns the list of tools that this agent has access to and can execute.
 	// These tools represent the capabilities available to the agent during invocations.
@@ -78,6 +80,19 @@ type Agent interface {
 	// FindSubAgent finds a sub-agent by name.
 	// Returns nil if no sub-agent with the given name is found.
 	FindSubAgent(name string) Agent
+}
+
+// SubAgentSetter is implemented by agents that support updating
+// their sub-agent list at runtime.
+//
+// This is useful when sub-agents are discovered dynamically from a
+// registry or other configuration source and you want to refresh the
+// main agent without recreating it.
+type SubAgentSetter interface {
+	// SetSubAgents replaces the sub-agent list available to this agent.
+	// Implementations should be safe to call while the agent is serving
+	// requests so dynamic discovery can run in the background.
+	SetSubAgents(subAgents []Agent)
 }
 
 // CodeExecutor may move to Agent interface, will cause large scale change, consider later.

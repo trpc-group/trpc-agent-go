@@ -517,7 +517,6 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 - **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
 - **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
 
-
 **摘要配置：**
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
@@ -810,7 +809,6 @@ CREATE TABLE user_states (
 
 - **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
 - **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
-
 
 **摘要配置：**
 
@@ -1140,8 +1138,8 @@ summaryModel := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithChecksAny(                     // 任一条件满足即触发
-        summary.CheckEventThreshold(20),       // 超过 20 个事件后触发
-        summary.CheckTokenThreshold(4000),     // 超过 4000 个 token 后触发
+        summary.CheckEventThreshold(20),       // 自上次摘要后新增 20 个事件后触发
+        summary.CheckTokenThreshold(4000),     // 自上次摘要后新增 4000 个 token 后触发
         summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
     ),
     summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
@@ -1385,8 +1383,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 **触发条件：**
 
-- **`WithEventThreshold(eventCount int)`**：当事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在超过 20 个事件后触发。
-- **`WithTokenThreshold(tokenCount int)`**：当总 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在超过 4000 个 token 后触发。
+- **`WithEventThreshold(eventCount int)`**：当自上次摘要后的事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在自上次摘要后新增 20 个事件后触发。
+- **`WithTokenThreshold(tokenCount int)`**：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在自上次摘要后新增 4000 个 token 后触发。
 - **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
 
 **组合条件：**
@@ -1412,6 +1410,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 - **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
 - **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
+- **`WithSkipRecentEvents(count int)`**：在摘要生成时跳过最近的事件。这些事件会被排除在摘要输入之外，但仍保留在会话中。适用于避免对最近的、可能不完整的对话进行摘要。值 <= 0 表示不跳过任何事件。示例：`WithSkipRecentEvents(2)` 跳过最后 2 个事件。
 
 **自定义提示词示例：**
 
@@ -1427,8 +1426,9 @@ customPrompt := `分析以下对话并提供简洁的摘要，重点关注关键
 
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithPrompt(customPrompt),
-    summary.WithMaxSummaryWords(100),
+    summary.WithPrompt(customPrompt), // 自定义 Prompt
+    summary.WithMaxSummaryWords(100), // 注入 Prompt 里面的 {max_summary_words}
+    summary.WithSkipRecentEvents(2),  // 跳过最后 2 个事件
     summary.WithEventThreshold(15),
 )
 ```
@@ -1477,11 +1477,28 @@ err := sessionService.EnqueueSummaryJob(
 从会话中获取最新的摘要文本：
 
 ```go
+// 获取全量会话摘要（默认行为）
 summaryText, found := sessionService.GetSessionSummaryText(ctx, sess)
 if found {
     fmt.Printf("摘要：%s\n", summaryText)
 }
+
+// 获取特定 filter key 的摘要
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("user-messages"),
+)
+if found {
+    fmt.Printf("用户消息摘要：%s\n", userSummary)
+}
 ```
+
+**Filter Key 支持：**
+
+`GetSessionSummaryText` 方法支持可选的 `WithSummaryFilterKey` 选项，用于获取特定事件过滤器的摘要：
+
+- 不提供选项时，返回全量会话摘要（`SummaryFilterKeyAllContents`）
+- 提供特定 filter key 但未找到时，回退到全量会话摘要
+- 如果都不存在，兜底返回任意可用的摘要
 
 ### 工作原理
 
@@ -1489,7 +1506,7 @@ if found {
 
 2. **增量摘要**：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。
 
-3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
+3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
 
 4. **异步 Worker**：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。
 
