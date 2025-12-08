@@ -507,7 +507,7 @@ func TestAppendTrackEvent_AsyncSuccess(t *testing.T) {
 		opts: ServiceOpts{
 			enableAsyncPersist: true,
 		},
-		trackEventChans: []chan *trackEventPair{make(chan *trackEventPair, 1)},
+		persistChans: []chan *persistTask{make(chan *persistTask, 1)},
 	}
 
 	sess := &session.Session{
@@ -527,8 +527,8 @@ func TestAppendTrackEvent_AsyncSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	select {
-	case pair := <-s.trackEventChans[0]:
-		require.Equal(t, trackEvent, pair.event)
+	case pair := <-s.persistChans[0]:
+		require.Equal(t, trackEvent, pair.trackEvent)
 		assert.Equal(t, sess.AppName, pair.key.AppName)
 		assert.Equal(t, sess.UserID, pair.key.UserID)
 		assert.Equal(t, sess.ID, pair.key.SessionID)
@@ -541,12 +541,12 @@ func TestAppendTrackEvent_AsyncSuccess(t *testing.T) {
 }
 
 func TestAppendTrackEvent_AsyncContextCanceled(t *testing.T) {
-	ch := make(chan *trackEventPair)
+	ch := make(chan *persistTask)
 	s := &Service{
 		opts: ServiceOpts{
 			enableAsyncPersist: true,
 		},
-		trackEventChans: []chan *trackEventPair{ch},
+		persistChans: []chan *persistTask{ch},
 	}
 
 	sess := &session.Session{
@@ -569,14 +569,14 @@ func TestAppendTrackEvent_AsyncContextCanceled(t *testing.T) {
 }
 
 func TestAppendTrackEvent_AsyncRecover(t *testing.T) {
-	ch := make(chan *trackEventPair, 1)
+	ch := make(chan *persistTask, 1)
 	close(ch)
 
 	s := &Service{
 		opts: ServiceOpts{
 			enableAsyncPersist: true,
 		},
-		trackEventChans: []chan *trackEventPair{ch},
+		persistChans: []chan *persistTask{ch},
 	}
 
 	sess := &session.Session{
@@ -601,7 +601,7 @@ func TestAppendTrackEvent_AsyncUnexpectedPanic(t *testing.T) {
 		opts: ServiceOpts{
 			enableAsyncPersist: true,
 		},
-		trackEventChans: nil,
+		persistChans: nil,
 	}
 
 	sess := &session.Session{
@@ -711,14 +711,11 @@ func TestStartAsyncPersistWorker_Success(t *testing.T) {
 	}
 
 	// Send one event pair and one track pair to exercise worker loops.
-	s.eventPairChans[0] <- &sessionEventPair{key: key, event: evt}
-	s.trackEventChans[0] <- &trackEventPair{key: key, event: trackEvt}
+	s.persistChans[0] <- &persistTask{key: key, event: evt}
+	s.persistChans[1%len(s.persistChans)] <- &persistTask{key: key, trackEvent: trackEvt}
 
 	// Close channels so workers can exit and persistWg can be waited.
-	for _, ch := range s.eventPairChans {
-		close(ch)
-	}
-	for _, ch := range s.trackEventChans {
+	for _, ch := range s.persistChans {
 		close(ch)
 	}
 
@@ -749,13 +746,10 @@ func TestStartAsyncPersistWorker_Error(t *testing.T) {
 
 	// Sending pairs will cause addEvent/addTrackEvent to return errors,
 	// exercising the error logging branches in the workers.
-	s.eventPairChans[0] <- &sessionEventPair{key: key, event: evt}
-	s.trackEventChans[0] <- &trackEventPair{key: key, event: trackEvt}
+	s.persistChans[0] <- &persistTask{key: key, event: evt}
+	s.persistChans[0] <- &persistTask{key: key, trackEvent: trackEvt}
 
-	for _, ch := range s.eventPairChans {
-		close(ch)
-	}
-	for _, ch := range s.trackEventChans {
+	for _, ch := range s.persistChans {
 		close(ch)
 	}
 
@@ -1075,7 +1069,7 @@ func TestAppendEvent_Async(t *testing.T) {
 	// Start async workers
 	s.startAsyncPersistWorker()
 	defer func() {
-		for _, ch := range s.eventPairChans {
+		for _, ch := range s.persistChans {
 			close(ch)
 		}
 	}()
@@ -1692,7 +1686,7 @@ func TestClose(t *testing.T) {
 	s := createTestService(t, db)
 
 	// Initialize channels
-	s.eventPairChans = []chan *sessionEventPair{make(chan *sessionEventPair)}
+	s.persistChans = []chan *persistTask{make(chan *persistTask)}
 	s.summaryJobChans = []chan *summaryJob{make(chan *summaryJob)}
 	s.cleanupDone = make(chan struct{})
 
@@ -2231,8 +2225,8 @@ func TestNewService_WithAsyncPersist(t *testing.T) {
 	// Verify async persist is enabled
 	assert.True(t, svc.opts.enableAsyncPersist)
 	assert.Equal(t, 5, svc.opts.asyncPersisterNum)
-	assert.NotNil(t, svc.eventPairChans)
-	assert.Len(t, svc.eventPairChans, 5)
+	assert.NotNil(t, svc.persistChans)
+	assert.Len(t, svc.persistChans, 5)
 
 	err = svc.Close()
 	assert.NoError(t, err)

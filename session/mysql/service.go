@@ -42,17 +42,16 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	mysqlClient     storage.Client
-	sessionTTL      time.Duration            // TTL for session state and event list
-	appStateTTL     time.Duration            // TTL for app state
-	userStateTTL    time.Duration            // TTL for user state
-	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
-	trackEventChans []chan *trackEventPair   // channel for track events to persistence.
-	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
-	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
-	cleanupDone     chan struct{}            // signal to stop cleanup routine
-	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
-	summaryWg       sync.WaitGroup           // wait group for summary workers
-	persistWg       sync.WaitGroup           // wait group for persist workers
+	sessionTTL      time.Duration       // TTL for session state and event list
+	appStateTTL     time.Duration       // TTL for app state
+	userStateTTL    time.Duration       // TTL for user state
+	persistChans    []chan *persistTask // unified channel for events/track events to persistence.
+	summaryJobChans []chan *summaryJob  // channel for summary jobs to processing
+	cleanupTicker   *time.Ticker        // ticker for automatic cleanup
+	cleanupDone     chan struct{}       // signal to stop cleanup routine
+	cleanupOnce     sync.Once           // ensure cleanup routine is stopped only once
+	summaryWg       sync.WaitGroup      // wait group for summary workers
+	persistWg       sync.WaitGroup      // wait group for persist workers
 	once            sync.Once
 
 	// Table names with prefix applied
@@ -63,14 +62,10 @@ type Service struct {
 	tableUserStates       string
 }
 
-type sessionEventPair struct {
-	key   session.Key
-	event *event.Event
-}
-
-type trackEventPair struct {
-	key   session.Key
-	event *session.TrackEvent
+type persistTask struct {
+	key        session.Key
+	event      *event.Event
+	trackEvent *session.TrackEvent
 }
 
 // summaryJob represents a summary job to be processed asynchronously.
@@ -161,13 +156,8 @@ func (s *Service) Close() error {
 	s.stopCleanupRoutine()
 
 	// Close async persist workers
-	if s.eventPairChans != nil {
-		for _, ch := range s.eventPairChans {
-			close(ch)
-		}
-	}
-	if s.trackEventChans != nil {
-		for _, ch := range s.trackEventChans {
+	if s.persistChans != nil {
+		for _, ch := range s.persistChans {
 			close(ch)
 		}
 	}
@@ -606,9 +596,9 @@ func (s *Service) AppendEvent(
 		}()
 
 		// Hash key to determine which worker channel to use
-		index := sess.Hash % len(s.eventPairChans)
+		index := sess.Hash % len(s.persistChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case s.persistChans[index] <- &persistTask{key: key, event: event}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -652,9 +642,9 @@ func (s *Service) AppendTrackEvent(
 			}
 		}()
 
-		index := sess.Hash % len(s.trackEventChans)
+		index := sess.Hash % len(s.persistChans)
 		select {
-		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
+		case s.persistChans[index] <- &persistTask{key: key, trackEvent: trackEvent}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -671,42 +661,31 @@ func (s *Service) AppendTrackEvent(
 func (s *Service) startAsyncPersistWorker() {
 	persisterNum := s.opts.asyncPersisterNum
 	// init event pair chan and track pair chan.
-	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
-	s.trackEventChans = make([]chan *trackEventPair, persisterNum)
+	s.persistChans = make([]chan *persistTask, persisterNum)
 	for i := 0; i < persisterNum; i++ {
-		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
-		s.trackEventChans[i] = make(chan *trackEventPair, defaultChanBufferSize)
+		s.persistChans[i] = make(chan *persistTask, defaultChanBufferSize)
 	}
 
-	s.persistWg.Add(persisterNum * 2)
-	for _, eventPairChan := range s.eventPairChans {
-		go func(eventPairChan chan *sessionEventPair) {
+	s.persistWg.Add(persisterNum)
+	for _, persistChan := range s.persistChans {
+		go func(persistChan chan *persistTask) {
 			defer s.persistWg.Done()
-			for eventPair := range eventPairChan {
+			for pair := range persistChan {
 				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
-					cap(eventPairChan), len(eventPairChan), eventPair.key.AppName, eventPair.key.UserID, eventPair.key.SessionID)
+					cap(persistChan), len(persistChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
-					log.Errorf("async persist event failed: %w", err)
+				if pair.event != nil {
+					if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
+						log.Errorf("async persist event failed: %w", err)
+					}
+				} else if pair.trackEvent != nil {
+					if err := s.addTrackEvent(ctx, pair.key, pair.trackEvent); err != nil {
+						log.Errorf("async persist track event failed: %w", err)
+					}
 				}
 				cancel()
 			}
-		}(eventPairChan)
-	}
-
-	for _, trackPairChan := range s.trackEventChans {
-		go func(trackPairChan chan *trackEventPair) {
-			defer s.persistWg.Done()
-			for pair := range trackPairChan {
-				log.Debugf("Session track persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
-					cap(trackPairChan), len(trackPairChan), pair.key.AppName, pair.key.UserID, pair.key.SessionID)
-				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				if err := s.addTrackEvent(ctx, pair.key, pair.event); err != nil {
-					log.Errorf("async persist track event failed: %w", err)
-				}
-				cancel()
-			}
-		}(trackPairChan)
+		}(persistChan)
 	}
 }
 
