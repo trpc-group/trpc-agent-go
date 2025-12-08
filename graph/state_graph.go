@@ -1408,16 +1408,30 @@ func buildAgentInvocationWithStateAndScope(
 	}
 
 	// Clone from parent invocation if available to preserve linkage and filtering.
-	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
+	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
+		parentInvocation != nil {
 		base := scope
 		if base == "" {
 			base = targetAgent.Info().Name
 		}
-		filterKey := parentInvocation.GetEventFilterKey() + agent.EventFilterKeyDelimiter + base + uuid.NewString()
+		parentKey := parentInvocation.GetEventFilterKey()
+		var filterKey string
+		if parentKey == "" {
+			filterKey = base + agent.EventFilterKeyDelimiter +
+				uuid.NewString()
+		} else {
+			filterKey = parentKey + agent.EventFilterKeyDelimiter +
+				base + agent.EventFilterKeyDelimiter +
+				uuid.NewString()
+		}
 		inv := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
-			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
-			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
+			agent.WithInvocationMessage(
+				model.NewUserMessage(userInput),
+			),
+			agent.WithInvocationRunOptions(agent.RunOptions{
+				RuntimeState: runtime,
+			}),
 			agent.WithInvocationEventFilterKey(filterKey),
 		)
 		return inv
