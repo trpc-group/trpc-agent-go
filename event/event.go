@@ -95,9 +95,6 @@ type Event struct {
 
 	// version for handling version compatibility issues.
 	Version int `json:"version,omitempty"`
-
-	// Metadata stores extensible event-level data by user.
-	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // EventActions represents optional actions/hints attached to an event.
@@ -138,30 +135,7 @@ func (e *Event) Clone() *Event {
 			SkipSummarization: e.Actions.SkipSummarization,
 		}
 	}
-	if e.Metadata != nil {
-		clone.Metadata = make(map[string]any, len(e.Metadata))
-		for k, v := range e.Metadata {
-			clone.Metadata[k] = v
-		}
-	}
 	return &clone
-}
-
-// SetMetadata sets a custom metadata key-value pair.
-func (e *Event) SetMetadata(key string, value any) {
-	if e.Metadata == nil {
-		e.Metadata = make(map[string]any)
-	}
-	e.Metadata[key] = value
-}
-
-// GetMetadata retrieves a metadata value by key.
-func (e *Event) GetMetadata(key string) (any, bool) {
-	if e.Metadata == nil {
-		return nil, false
-	}
-	v, ok := e.Metadata[key]
-	return v, ok
 }
 
 // Filter checks if the event matches the specified filter key.

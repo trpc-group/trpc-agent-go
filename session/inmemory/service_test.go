@@ -1422,7 +1422,7 @@ func TestAppendEventHook(t *testing.T) {
 		service := NewSessionService(
 			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
 				hookCalled = true
-				ctx.Event.SetMetadata("hook_processed", true)
+				ctx.Event.Tag = "hook_processed"
 				return next()
 			}),
 		)
@@ -1455,9 +1455,7 @@ func TestAppendEventHook(t *testing.T) {
 		require.Len(t, retrieved.Events, 2)
 
 		// Check the assistant event has the metadata
-		val, ok := retrieved.Events[1].GetMetadata("hook_processed")
-		assert.True(t, ok)
-		assert.Equal(t, true, val)
+		assert.Equal(t, "hook_processed", retrieved.Events[1].Tag)
 	})
 
 	t.Run("hook can abort event storage", func(t *testing.T) {
@@ -1554,7 +1552,7 @@ func TestGetSessionHook(t *testing.T) {
 				}
 				filtered := make([]event.Event, 0)
 				for _, e := range sess.Events {
-					if _, ok := e.GetMetadata("skip"); !ok {
+					if e.Tag != "skip" {
 						filtered = append(filtered, e)
 					}
 				}
@@ -1572,7 +1570,7 @@ func TestGetSessionHook(t *testing.T) {
 		evt1.Response = &model.Response{
 			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "Q1"}}},
 		}
-		evt1.SetMetadata("skip", true)
+		evt1.Tag = "skip"
 		err = service.AppendEvent(context.Background(), sess, evt1)
 		require.NoError(t, err)
 

@@ -1937,6 +1937,35 @@ func TestCreateSession_InvalidAppName(t *testing.T) {
 }
 
 func TestAppendEventHook(t *testing.T) {
+	t.Run("hook modifies event before storage (skip db)", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		hookCalled := false
+		s := createTestService(t, db,
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				hookCalled = true
+				ctx.Event.Tag = "hook_processed"
+				return nil // abort before DB
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hello"}}},
+		}
+
+		err = s.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+		assert.True(t, hookCalled)
+		assert.Equal(t, "hook_processed", evt.Tag)
+	})
+
 	t.Run("hook can abort event storage", func(t *testing.T) {
 		db, _, err := sqlmock.New()
 		require.NoError(t, err)
@@ -1999,6 +2028,31 @@ func TestAppendEventHook(t *testing.T) {
 }
 
 func TestGetSessionHook(t *testing.T) {
+	t.Run("hook returns custom session without db", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		hookCalled := false
+		s := createTestService(t, db,
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				hookCalled = true
+				custom := session.NewSession(ctx.Key.AppName, ctx.Key.UserID, ctx.Key.SessionID)
+				custom.State["hook_added"] = []byte("true")
+				return custom, nil
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+		sess, err := s.GetSession(ctx, key)
+		require.NoError(t, err)
+		assert.True(t, hookCalled)
+		require.NotNil(t, sess)
+		assert.Equal(t, []byte("true"), sess.State["hook_added"])
+	})
+
 	t.Run("hook can return nil session", func(t *testing.T) {
 		db, _, err := sqlmock.New()
 		require.NoError(t, err)

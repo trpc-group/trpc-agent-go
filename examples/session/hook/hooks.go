@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	// MetadataKeyViolation marks an event as containing prohibited content.
-	MetadataKeyViolation = "violation"
+	// ViolationTagPrefix prefixes the tag carrying the matched word.
+	// Tag format: "violation=<word>", separated with event.TagDelimiter when multiple tags exist.
+	ViolationTagPrefix = "violation="
 )
 
 // ProhibitedWords is the list of prohibited words to filter.
@@ -37,7 +38,7 @@ func MarkViolationHook() session.AppendEventHook {
 
 		content := getEventContent(ctx.Event)
 		if word := containsProhibitedWord(content); word != "" {
-			ctx.Event.SetMetadata(MetadataKeyViolation, word)
+			ctx.Event.Tag = appendTags(ctx.Event.Tag, ViolationTagPrefix+word)
 			role := "assistant"
 			if ctx.Event.IsUserMessage() {
 				role = "user"
@@ -91,9 +92,13 @@ func filterViolationEvents(sess *session.Session) int {
 	// First pass: mark indices to skip
 	skipIndices := make(map[int]bool)
 	for i, evt := range sess.Events {
-		if _, ok := evt.GetMetadata(MetadataKeyViolation); ok {
+		if word, ok := parseViolationTag(evt.Tag); ok {
 			skipIndices[i] = true
-			fmt.Printf("  [Filtered violation: %s]\n", truncate(getEventContent(&evt), 30))
+			if word != "" {
+				fmt.Printf("  [Filtered violation: %s] tag=%s\n", truncate(getEventContent(&evt), 30), word)
+			} else {
+				fmt.Printf("  [Filtered violation: %s]\n", truncate(getEventContent(&evt), 30))
+			}
 
 			// If user message is violated, also skip the next assistant response
 			if evt.IsUserMessage() && i+1 < len(sess.Events) {
@@ -138,4 +143,25 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen] + "..."
 	}
 	return s
+}
+
+func parseViolationTag(tag string) (string, bool) {
+	if tag == "" {
+		return "", false
+	}
+	for _, p := range strings.Split(tag, event.TagDelimiter) {
+		if strings.HasPrefix(p, ViolationTagPrefix) {
+			return strings.TrimPrefix(p, ViolationTagPrefix), true
+		}
+	}
+	return "", false
+}
+
+func appendTags(existing string, tags ...string) string {
+	var parts []string
+	if existing != "" {
+		parts = append(parts, strings.Split(existing, event.TagDelimiter)...)
+	}
+	parts = append(parts, tags...)
+	return strings.Join(parts, event.TagDelimiter)
 }

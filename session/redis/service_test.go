@@ -2907,7 +2907,7 @@ func TestAppendEventHook(t *testing.T) {
 			WithRedisClientURL(redisURL),
 			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
 				hookCalled = true
-				ctx.Event.SetMetadata("hook_processed", true)
+				ctx.Event.Tag = "hook_processed"
 				return next()
 			}),
 		)
@@ -2938,9 +2938,7 @@ func TestAppendEventHook(t *testing.T) {
 		assert.True(t, hookCalled)
 
 		// Verify the event was modified by hook
-		val, ok := evt.GetMetadata("hook_processed")
-		assert.True(t, ok)
-		assert.Equal(t, true, val)
+		assert.Equal(t, "hook_processed", evt.Tag)
 
 		// Verify storage
 		retrieved, err := service.GetSession(ctx, key)
@@ -3056,7 +3054,7 @@ func TestGetSessionHook(t *testing.T) {
 				}
 				filtered := make([]event.Event, 0)
 				for _, e := range sess.Events {
-					if _, ok := e.GetMetadata("skip"); !ok {
+					if e.Tag != "skip" {
 						filtered = append(filtered, e)
 					}
 				}
@@ -3076,7 +3074,7 @@ func TestGetSessionHook(t *testing.T) {
 		evt1.Response = &model.Response{
 			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "Q1"}}},
 		}
-		evt1.SetMetadata("skip", true)
+		evt1.Tag = "skip"
 		err = service.AppendEvent(ctx, sess, evt1)
 		require.NoError(t, err)
 

@@ -151,9 +151,8 @@ func getEventPreview(evt *event.Event) string {
 			content = content[:50] + "..."
 		}
 	}
-	violation := ""
-	if word, ok := evt.GetMetadata(MetadataKeyViolation); ok {
-		violation = fmt.Sprintf(" [VIOLATION: %s]", word)
+	if word, ok := parseViolationTag(evt.Tag); ok {
+		return fmt.Sprintf("%s: %s [VIOLATION: %s]", role, content, word)
 	}
-	return fmt.Sprintf("%s: %s%s", role, content, violation)
+	return fmt.Sprintf("%s: %s", role, content)
 }
