@@ -4729,6 +4729,7 @@
 <ul>
 <li><strong><code>WithMaxSummaryWords(maxWords int)</code></strong>：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：<code>WithMaxSummaryWords(150)</code> 请求在 150 字以内的摘要。</li>
 <li><strong><code>WithPrompt(prompt string)</code></strong>：提供自定义摘要提示词。提示词必须包含占位符 <code>{conversation_text}</code>，它会被对话内容替换。可选包含 <code>{max_summary_words}</code> 用于字数限制指令。</li>
+<li><strong><code>WithSkipRecentEvents(count int)</code></strong>：在摘要生成时跳过最近的事件。这些事件会被排除在摘要输入之外，但仍保留在会话中。适用于避免对最近的、可能不完整的对话进行摘要。值 &lt;= 0 表示不跳过任何事件。示例：<code>WithSkipRecentEvents(2)</code> 跳过最后 2 个事件。</li>
 </ul>
 <p><strong>自定义提示词示例：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-38-1"> 1</a></span>
@@ -4745,7 +4746,8 @@
 <span class="normal"><a href="#__codelineno-38-12">12</a></span>
 <span class="normal"><a href="#__codelineno-38-13">13</a></span>
 <span class="normal"><a href="#__codelineno-38-14">14</a></span>
-<span class="normal"><a href="#__codelineno-38-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="nx">customPrompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`分析以下对话并提供简洁的摘要，重点关注关键决策、行动项和重要上下文。</span>
+<span class="normal"><a href="#__codelineno-38-15">15</a></span>
+<span class="normal"><a href="#__codelineno-38-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="nx">customPrompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`分析以下对话并提供简洁的摘要，重点关注关键决策、行动项和重要上下文。</span>
 </span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2"></a><span class="s">请控制在 {max_summary_words} 字以内。</span>
 </span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3"></a>
 </span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4"></a><span class="s">&lt;conversation&gt;</span>
@@ -4756,10 +4758,11 @@
 </span><span id="__span-38-9"><a id="__codelineno-38-9" name="__codelineno-38-9"></a>
 </span><span id="__span-38-10"><a id="__codelineno-38-10" name="__codelineno-38-10"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
 </span><span id="__span-38-11"><a id="__codelineno-38-11" name="__codelineno-38-11"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-38-12"><a id="__codelineno-38-12" name="__codelineno-38-12"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithPrompt</span><span class="p">(</span><span class="nx">customPrompt</span><span class="p">),</span>
-</span><span id="__span-38-13"><a id="__codelineno-38-13" name="__codelineno-38-13"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
-</span><span id="__span-38-14"><a id="__codelineno-38-14" name="__codelineno-38-14"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">15</span><span class="p">),</span>
-</span><span id="__span-38-15"><a id="__codelineno-38-15" name="__codelineno-38-15"></a><span class="p">)</span>
+</span><span id="__span-38-12"><a id="__codelineno-38-12" name="__codelineno-38-12"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithPrompt</span><span class="p">(</span><span class="nx">customPrompt</span><span class="p">),</span><span class="w"> </span><span class="c1">// 自定义 Prompt</span>
+</span><span id="__span-38-13"><a id="__codelineno-38-13" name="__codelineno-38-13"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span><span class="w"> </span><span class="c1">// 注入 Prompt 里面的 {max_summary_words}</span>
+</span><span id="__span-38-14"><a id="__codelineno-38-14" name="__codelineno-38-14"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecentEvents</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w">  </span><span class="c1">// 跳过最后 2 个事件</span>
+</span><span id="__span-38-15"><a id="__codelineno-38-15" name="__codelineno-38-15"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">15</span><span class="p">),</span>
+</span><span id="__span-38-16"><a id="__codelineno-38-16" name="__codelineno-38-16"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="_40">会话服务选项</h4>
 <p>在会话服务中配置异步摘要处理：</p>
@@ -5023,7 +5026,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月3日 14:35:26 UTC">2025-12-03 14:35:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月8日 02:08:04 UTC">2025-12-08 02:08:04</span>
   </span>
 
     
