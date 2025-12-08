@@ -33,7 +33,9 @@ var comparisonOperators = map[string]string{
 }
 
 // milvusFilterConverter converts searchfilter conditions to Milvus expressions
-type milvusFilterConverter struct{}
+type milvusFilterConverter struct {
+	metadataFieldName string
+}
 
 type convertResult struct {
 	exprStr string
@@ -160,9 +162,8 @@ func (c *milvusFilterConverter) convertBetweenCondition(cond *searchfilter.Unive
 
 // convertFieldName converts metadata.xxx fields to ES field path.
 func (c *milvusFilterConverter) convertFieldName(field string) string {
-	if strings.HasPrefix(field, "metadata.") {
-		actualField := strings.TrimPrefix(field, "metadata.")
-		return fmt.Sprintf("%s[\"%s\"]", "metadata", actualField)
+	if actualField, ok := strings.CutPrefix(field, c.metadataFieldName+"."); ok {
+		return fmt.Sprintf("%s[\"%s\"]", c.metadataFieldName, actualField)
 	}
 	return field
 }

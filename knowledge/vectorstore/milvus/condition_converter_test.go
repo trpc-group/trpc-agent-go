@@ -269,7 +269,7 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 		},
 	}
 
-	c := &milvusFilterConverter{}
+	c := &milvusFilterConverter{metadataFieldName: "metadata"}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

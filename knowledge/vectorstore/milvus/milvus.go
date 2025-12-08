@@ -81,7 +81,7 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 	vs := &VectorStore{
 		client:          milvusClient,
 		option:          option,
-		filterConverter: &milvusFilterConverter{},
+		filterConverter: &milvusFilterConverter{metadataFieldName: option.metadataField},
 	}
 
 	if err := vs.initCollection(ctx); err != nil {
