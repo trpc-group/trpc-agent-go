@@ -232,10 +232,25 @@ func (ga *GraphAgent) wrapEventChannel(
 				return
 			}
 		}
+
+		// Collect error from the final response event so after-agent
+		// callbacks can observe execution failures, matching LLMAgent
+		// semantics.
+		var agentErr error
+		if fullRespEvent != nil &&
+			fullRespEvent.Response != nil &&
+			fullRespEvent.Response.Error != nil {
+			agentErr = fmt.Errorf(
+				"%s: %s",
+				fullRespEvent.Response.Error.Type,
+				fullRespEvent.Response.Error.Message,
+			)
+		}
+
 		// After all events are processed, run after agent callbacks
 		result, err := ga.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
 			Invocation:        invocation,
-			Error:             nil,
+			Error:             agentErr,
 			FullResponseEvent: fullRespEvent,
 		})
 		// Use the context from result if provided.
