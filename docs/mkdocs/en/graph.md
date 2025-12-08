@@ -549,6 +549,36 @@ graphAgent, err := graphagent.New(
 > Model/tool callbacks are configured per node, e.g. `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > or `AddToolsNode(..., graph.WithToolCallbacks(...))`.
 
+#### Concurrency considerations
+
+When using Graph + GraphAgent in a concurrent environment (for example, serving many requests from a single long‑lived process), keep the following in mind:
+
+- CheckpointSaver and Cache implementations must be concurrency‑safe  
+  The `CheckpointSaver` and `Cache` interfaces are intentionally storage‑agnostic. A single `Executor`/`GraphAgent` instance may call their methods from multiple goroutines when several invocations run in parallel. If you provide your own implementations, ensure:
+  - All exported methods (`Get`/`GetTuple`/`List`/`Put`/`PutWrites`/`PutFull`/`DeleteLineage` for `CheckpointSaver`, and `Get`/`Set`/`Clear` for `Cache`) are safe for concurrent use.
+  - Internal maps, connection pools, or in‑memory buffers are properly synchronized.
+
+- NodeFunc, tools, and callbacks should treat state as per‑invocation, not global  
+  Each node receives an isolated copy of graph state for the current task. This copy is safe to mutate inside the node, but it is not safe to:
+  - Store references to that state (or its internal maps/slices) in global variables and modify them from other goroutines later.
+  - Access `StateKeyExecContext` (`*graph.ExecutionContext`) and bypass its internal locks when reading/writing `execCtx.State` or `execCtx.pendingTasks`.
+  If you need shared mutable state across nodes or invocations, protect it with your own synchronization (for example, `sync.Mutex` or `sync.RWMutex`) or use external services (such as databases or caches).
+
+- Do not share a single *agent.Invocation across goroutines  
+  The framework expects each `Run` call (GraphAgent, Runner, or other Agent types) to operate on its own `*agent.Invocation`. Reusing the same `*agent.Invocation` instance in multiple goroutines and calling `Run` concurrently can cause data races on fields like `Branch`, `RunOptions`, or callback state. Prefer:
+  - Creating a fresh `*agent.Invocation` per request, or
+  - Cloning from a parent invocation using `invocation.Clone(...)` when you need linkage.
+
+- Parallel tools require tool implementations to be safe for concurrent use  
+  Tools in a `Tools` node can be executed in parallel when `WithEnableParallelTools(true)` is used on that node:
+  - The framework guarantees that the `tools` map is only read during execution.
+  - It also guarantees that the shared graph state passed to tools is only read; updates are written back by nodes, not by tools.
+  However, each `tool.Tool` implementation and its `tool.Callbacks` may be invoked from multiple goroutines at the same time. Make sure:
+  - Tool implementations do not mutate shared global state without proper locking.
+  - Any internal caches, HTTP clients, or client pools inside tools are safe for concurrent use.
+
+These constraints are especially important in long‑running services where a single `Graph`/`Executor`/`GraphAgent` instance is reused for many invocations.
+
 Once sub-agents are registered you can delegate within the graph via agent nodes:
 
 ```go
