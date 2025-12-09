@@ -280,6 +280,7 @@ func TestInvocation_NotifyCompletion(t *testing.T) {
 
 func TestInvocation_CleanupNotice(t *testing.T) {
 	inv := NewInvocation()
+	inv.noticeChanMap = nil
 	ch := inv.AddNoticeChannel(context.Background(), "test-channel-1")
 	require.Equal(t, 1, len(inv.noticeChanMap))
 
