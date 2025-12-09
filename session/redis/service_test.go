@@ -2977,6 +2977,70 @@ func TestProcessEventCmd_SkipMalformed(t *testing.T) {
 	require.Equal(t, "ok", events[0].ID)
 }
 
+func Test_normalizeSessionEvents(t *testing.T) {
+	t.Run("nil_when_no_slices", func(t *testing.T) {
+		assert.Nil(t, normalizeSessionEvents(nil))
+	})
+	t.Run("first_slice_returned", func(t *testing.T) {
+		evts := []event.Event{{ID: "a"}}
+		res := normalizeSessionEvents([][]event.Event{evts})
+		require.Len(t, res, 1)
+		assert.Equal(t, "a", res[0].ID)
+	})
+}
+
+func Test_attachSummaries(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("skip_when_no_events", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "sess")
+		cmd := redis.NewStringCmd(ctx, "hget", "k")
+		attachSummaries(sess, cmd)
+		assert.Empty(t, sess.Summaries)
+	})
+
+	t.Run("attach_when_events_present", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "sess")
+		sess.Events = []event.Event{{ID: "evt"}}
+
+		summary := map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary:   "hi",
+				UpdatedAt: time.Now(),
+			},
+		}
+		bytes, err := json.Marshal(summary)
+		require.NoError(t, err)
+
+		cmd := redis.NewStringCmd(ctx, "hget", "k")
+		cmd.SetVal(string(bytes))
+
+		attachSummaries(sess, cmd)
+		require.NotNil(t, sess.Summaries)
+		assert.Contains(t, sess.Summaries, session.SummaryFilterKeyAllContents)
+	})
+}
+
+func Test_collectTrackQueryResultsSkipNil(t *testing.T) {
+	ctx := context.Background()
+	cmd := redis.NewStringSliceCmd(ctx, "zrange", "k")
+	cmd.SetErr(redis.Nil)
+
+	results, err := collectTrackQueryResults(
+		[]*trackQuery{
+			{
+				sessionIdx: 0,
+				track:      session.Track("alpha"),
+				cmd:        cmd,
+			},
+		},
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0])
+}
+
 func fetchSessionState(t *testing.T, ctx context.Context, client *redis.Client, key session.Key) *SessionState {
 	t.Helper()
 	raw, err := client.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
