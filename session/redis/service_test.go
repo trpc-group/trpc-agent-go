@@ -940,6 +940,49 @@ func TestService_SessionTTL(t *testing.T) {
 	}
 }
 
+func TestService_getSessionSummaryTTL(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	ttl := 3 * time.Second
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionTTL(ttl),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "summary-app",
+		UserID:    "summary-user",
+		SessionID: "summary-session",
+	}
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	summary := map[string]*session.Summary{
+		session.SummaryFilterKeyAllContents: {
+			Summary:   "hello",
+			UpdatedAt: time.Now(),
+		},
+	}
+	summaryBytes, err := json.Marshal(summary)
+	require.NoError(t, err)
+
+	client := buildRedisClient(t, redisURL)
+	summaryKey := getSessionSummaryKey(key)
+	err = client.HSet(ctx, summaryKey, key.SessionID, summaryBytes).Err()
+	require.NoError(t, err)
+
+	_, err = service.getSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+
+	ttlVal := client.TTL(ctx, summaryKey).Val()
+	assert.Greater(t, ttlVal, time.Duration(0))
+	assert.LessOrEqual(t, ttlVal, ttl)
+}
+
 // TestService_AppStateTTL tests app state TTL functionality
 func TestService_AppStateTTL(t *testing.T) {
 	tests := []struct {
@@ -2805,6 +2848,55 @@ func TestService_getTrackEventsLimitAndTTL(t *testing.T) {
 	trackTTL := client.TTL(ctx, getTrackKey(key, "alpha")).Val()
 	require.Greater(t, trackTTL, time.Duration(0))
 	require.LessOrEqual(t, trackTTL, ttl)
+}
+
+func TestService_getTrackEventsAfterTime(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "filter-app",
+		UserID:    "filter-user",
+		SessionID: "filter-session",
+	}
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	oldEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"first"`),
+		Timestamp: time.Now().Add(-2 * time.Hour),
+	}
+	newEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"second"`),
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, service.addTrackEvent(ctx, key, oldEvent))
+	require.NoError(t, service.addTrackEvent(ctx, key, newEvent))
+
+	client := buildRedisClient(t, redisURL)
+	state := fetchSessionState(t, ctx, client, key)
+	cutoff := newEvent.Timestamp.Add(-time.Minute)
+
+	result, err := service.getTrackEvents(
+		ctx,
+		[]session.Key{key},
+		[]*SessionState{state},
+		0,
+		cutoff,
+	)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	events := result[0]["alpha"]
+	require.Len(t, events, 1)
+	assert.Equal(t, json.RawMessage(`"second"`), events[0].Payload)
 }
 
 func TestService_getTrackEventsOrderingAndEmpty(t *testing.T) {
