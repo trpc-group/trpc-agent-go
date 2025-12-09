@@ -223,6 +223,30 @@ r := runner.NewRunner("my-agent", llmAgent,
     runner.WithSessionService(sessionService))
 ```
 
+#### 摘要前后置 Hook
+
+可以通过 Hook 调整摘要输入或输出：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPreSummaryHook(func(ctx *summary.PreSummaryHookContext) error {
+        // 可在摘要前修改 ctx.Text 或 ctx.Events
+        return nil
+    }),
+    summary.WithPostSummaryHook(func(ctx *summary.PostSummaryHookContext) error {
+        // 可在摘要返回前修改 ctx.Summary
+        return nil
+    }),
+    summary.WithSummaryHookAbortOnError(true), // Hook 报错时中断（可选）。
+)
+```
+
+说明：
+
+- Pre-hook 主要修改 `ctx.Text`，也可调整 `ctx.Events`；Post-hook 可修改 `ctx.Summary`。
+- 默认忽略 Hook 错误，需中断时使用 `WithSummaryHookAbortOnError(true)`。
+
 **上下文注入机制：**
 
 启用摘要后，框架会将摘要作为系统消息前置到 LLM 输入，同时包含摘要时间点之后的所有增量事件，保证完整上下文：

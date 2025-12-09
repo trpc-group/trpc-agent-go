@@ -223,6 +223,31 @@ r := runner.NewRunner("my-agent", llmAgent,
     runner.WithSessionService(sessionService))
 ```
 
+#### Summary hooks (pre/post)
+
+You can inject hooks to tweak summary input or output:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPreSummaryHook(func(ctx *summary.PreSummaryHookContext) error {
+        // Optionally modify ctx.Text or ctx.Events before summarization.
+        return nil
+    }),
+    summary.WithPostSummaryHook(func(ctx *summary.PostSummaryHookContext) error {
+        // Optionally modify ctx.Summary before returning to caller.
+        return nil
+    }),
+    summary.WithSummaryHookAbortOnError(true), // Abort when hook returns error (optional).
+)
+```
+
+Notes:
+
+- Pre-hook can mutate `ctx.Text` (preferred) or `ctx.Events`; post-hook can mutate `ctx.Summary`.
+- Default behavior ignores hook errors; enable abort with
+  `WithSummaryHookAbortOnError(true)`.
+
 **Context Injection Mechanism:**
 
 After enabling summary, the framework prepends the summary as a system message to the LLM input, while including all incremental events after the summary timestamp to ensure complete context:
