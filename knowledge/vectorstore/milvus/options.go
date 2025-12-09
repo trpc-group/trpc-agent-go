@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/column"
+	"github.com/milvus-io/milvus/client/v2/entity"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
 	"google.golang.org/grpc"
 
@@ -72,6 +73,7 @@ type options struct {
 	enableHNSW         bool
 	hnswM              int
 	hnswEfConstruction int
+	metricType         entity.MetricType
 
 	// docBuilder is the function to build document
 	docBuilder DocBuilderFunc
@@ -89,6 +91,7 @@ var defaultOptions = options{
 	enableHNSW:         true,
 	hnswM:              16,
 	hnswEfConstruction: 128,
+	metricType:         entity.IP,
 	idField:            idFieldName,
 	nameField:          nameFieldName,
 	contentField:       contentFieldName,
@@ -168,6 +171,15 @@ func WithHNSWParams(m, efConstruction int) Option {
 		o.enableHNSW = true
 		o.hnswM = m
 		o.hnswEfConstruction = efConstruction
+	}
+}
+
+// WithMetricType sets the metric type for vector similarity search.
+// Supported types: entity.IP (inner product), entity.L2 (Euclidean distance), entity.COSINE.
+// Default is entity.IP which returns higher scores for more similar vectors.
+func WithMetricType(metricType entity.MetricType) Option {
+	return func(o *options) {
+		o.metricType = metricType
 	}
 }
 
