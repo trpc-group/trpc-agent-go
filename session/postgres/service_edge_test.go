@@ -127,10 +127,6 @@ func TestDeleteSessionState_HardDelete(t *testing.T) {
 	mock.ExpectExec("DELETE FROM session_events").
 		WithArgs("test-app", "test-user", "test-session").
 		WillReturnResult(sqlmock.NewResult(0, 5))
-	// Mock hard delete session tracks.
-	mock.ExpectExec("DELETE FROM session_track_events").
-		WithArgs("test-app", "test-user", "test-session").
-		WillReturnResult(sqlmock.NewResult(0, 5))
 
 	mock.ExpectCommit()
 
@@ -192,7 +188,7 @@ func TestAppendEvent_WithEventLimit(t *testing.T) {
 	// Mock insert event
 	mock.ExpectExec("INSERT INTO session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()
@@ -250,7 +246,7 @@ func TestAppendEvent_ToExpiredSession(t *testing.T) {
 	// Mock insert event
 	mock.ExpectExec("INSERT INTO session_events").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()
@@ -282,7 +278,7 @@ func TestGetSession(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		sess, err := s.getSession(context.Background(), key, 0, time.Time{})
+		sess, err := s.getSession(context.Background(), key, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, sess)
 		assert.Contains(t, err.Error(), "unmarshal session state failed")
@@ -326,7 +322,7 @@ func TestGetSession(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}).
 				AddRow("session1", []byte("invalid-event-json")))
 
-		sess, err := s.getSession(context.Background(), key, 0, time.Time{})
+		sess, err := s.getSession(context.Background(), key, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, sess)
 		assert.Contains(t, err.Error(), "get events failed")
@@ -474,7 +470,7 @@ func TestListSessions(t *testing.T) {
 			WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{})
+		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, sessions)
 		assert.Contains(t, err.Error(), "unmarshal session state failed")
@@ -505,7 +501,7 @@ func TestGetEventsList(t *testing.T) {
 		defer db.Close()
 
 		s := createTestService(t, db)
-		result, err := s.getEventsList(context.Background(), []session.Key{}, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), []session.Key{}, 0, time.Time{}, "")
 		assert.NoError(t, err)
 		assert.Nil(t, result)
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -528,7 +524,7 @@ func TestGetEventsList(t *testing.T) {
 			WithArgs("app1", "user1", sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "unmarshal event failed")
@@ -589,7 +585,7 @@ func TestGetEventsList(t *testing.T) {
 			WithArgs(keys[0].AppName, keys[0].UserID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 2, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 2, time.Time{}, "")
 		assert.NoError(t, err)
 		require.Len(t, result, 1)
 		require.Len(t, result[0], 2)
@@ -652,7 +648,7 @@ func TestGetEventsList(t *testing.T) {
 			WithArgs("app1", "user1", sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, "")
 		assert.NoError(t, err)
 		require.Len(t, result, 1)
 		require.Len(t, result[0], 3)
@@ -679,7 +675,7 @@ func TestGetEventsList(t *testing.T) {
 			WithArgs("app1", "user1", sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "unmarshal event failed")

@@ -28,7 +28,6 @@ import (
 )
 
 var _ session.Service = (*Service)(nil)
-var _ session.TrackService = (*Service)(nil)
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -42,16 +41,16 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	mysqlClient     storage.Client
-	sessionTTL      time.Duration       // TTL for session state and event list
-	appStateTTL     time.Duration       // TTL for app state
-	userStateTTL    time.Duration       // TTL for user state
-	persistChans    []chan *persistTask // unified channel for events/track events to persistence.
-	summaryJobChans []chan *summaryJob  // channel for summary jobs to processing
-	cleanupTicker   *time.Ticker        // ticker for automatic cleanup
-	cleanupDone     chan struct{}       // signal to stop cleanup routine
-	cleanupOnce     sync.Once           // ensure cleanup routine is stopped only once
-	summaryWg       sync.WaitGroup      // wait group for summary workers
-	persistWg       sync.WaitGroup      // wait group for persist workers
+	sessionTTL      time.Duration            // TTL for session state and event list
+	appStateTTL     time.Duration            // TTL for app state
+	userStateTTL    time.Duration            // TTL for user state
+	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
+	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
+	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
+	cleanupDone     chan struct{}            // signal to stop cleanup routine
+	cleanupOnce     sync.Once                // ensure cleanup routine is stopped only once
+	summaryWg       sync.WaitGroup           // wait group for summary workers
+	persistWg       sync.WaitGroup           // wait group for persist workers
 	once            sync.Once
 
 	// Table names with prefix applied
@@ -62,10 +61,9 @@ type Service struct {
 	tableUserStates       string
 }
 
-type persistTask struct {
-	key        session.Key
-	event      *event.Event
-	trackEvent *session.TrackEvent
+type sessionEventPair struct {
+	key   session.Key
+	event *event.Event
 }
 
 // summaryJob represents a summary job to be processed asynchronously.
@@ -156,8 +154,8 @@ func (s *Service) Close() error {
 	s.stopCleanupRoutine()
 
 	// Close async persist workers
-	if s.persistChans != nil {
-		for _, ch := range s.persistChans {
+	if s.eventPairChans != nil {
+		for _, ch := range s.eventPairChans {
 			close(ch)
 		}
 	}
@@ -298,7 +296,7 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime, opt.Track)
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get session state failed: %w", err)
 	}
@@ -324,7 +322,7 @@ func (s *Service) ListSessions(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
+	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime, opt.Track)
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get session list failed: %w", err)
 	}
@@ -596,9 +594,9 @@ func (s *Service) AppendEvent(
 		}()
 
 		// Hash key to determine which worker channel to use
-		index := sess.Hash % len(s.persistChans)
+		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.persistChans[index] <- &persistTask{key: key, event: event}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -612,80 +610,29 @@ func (s *Service) AppendEvent(
 	return nil
 }
 
-// AppendTrackEvent appends a protocol-specific track event to a session.
-func (s *Service) AppendTrackEvent(
-	ctx context.Context,
-	sess *session.Session,
-	trackEvent *session.TrackEvent,
-	opts ...session.Option,
-) error {
-	key := session.Key{
-		AppName:   sess.AppName,
-		UserID:    sess.UserID,
-		SessionID: sess.ID,
-	}
-	if err := key.CheckSessionKey(); err != nil {
-		return err
-	}
-	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
-		return fmt.Errorf("mysql session service append track event failed: %w", err)
-	}
-
-	if s.opts.enableAsyncPersist {
-		defer func() {
-			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
-					log.Errorf("mysql session service append track event failed: %v", r)
-					return
-				}
-				panic(r)
-			}
-		}()
-
-		index := sess.Hash % len(s.persistChans)
-		select {
-		case s.persistChans[index] <- &persistTask{key: key, trackEvent: trackEvent}:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		return nil
-	}
-
-	if err := s.addTrackEvent(ctx, key, trackEvent); err != nil {
-		return fmt.Errorf("mysql session service append track event failed: %w", err)
-	}
-	return nil
-}
-
 // startAsyncPersistWorker starts worker goroutines for async event persistence.
 func (s *Service) startAsyncPersistWorker() {
 	persisterNum := s.opts.asyncPersisterNum
-	// init event pair chan and track pair chan.
-	s.persistChans = make([]chan *persistTask, persisterNum)
+	// init event pair chan
+	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
 	for i := 0; i < persisterNum; i++ {
-		s.persistChans[i] = make(chan *persistTask, defaultChanBufferSize)
+		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
 	}
 
 	s.persistWg.Add(persisterNum)
-	for _, persistChan := range s.persistChans {
-		go func(persistChan chan *persistTask) {
+	for _, eventPairChan := range s.eventPairChans {
+		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
-			for task := range persistChan {
-				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
-					cap(persistChan), len(persistChan), task.key.AppName, task.key.UserID, task.key.SessionID)
+			for eventPair := range eventPairChan {
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				if task.event != nil {
-					if err := s.addEvent(ctx, task.key, task.event); err != nil {
-						log.Errorf("async persist event failed: %w", err)
-					}
-				} else if task.trackEvent != nil {
-					if err := s.addTrackEvent(ctx, task.key, task.trackEvent); err != nil {
-						log.Errorf("async persist track event failed: %w", err)
-					}
+				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, (app=%s, user=%s, session=%s)",
+					cap(eventPairChan), len(eventPairChan), eventPair.key.AppName, eventPair.key.UserID, eventPair.key.SessionID)
+				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
+					log.Errorf("async persist event failed: %w", err)
 				}
 				cancel()
 			}
-		}(persistChan)
+		}(eventPairChan)
 	}
 }
 

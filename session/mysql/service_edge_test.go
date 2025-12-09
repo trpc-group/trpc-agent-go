@@ -47,7 +47,7 @@ func TestGetSession(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		sess, err := s.getSession(context.Background(), key, 0, time.Time{})
+		sess, err := s.getSession(context.Background(), key, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, sess)
 		assert.Contains(t, err.Error(), "unmarshal session state failed")
@@ -91,7 +91,7 @@ func TestGetSession(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event"}).
 				AddRow("app1", "user1", "session1", []byte("invalid-event-json")))
 
-		sess, err := s.getSession(context.Background(), key, 0, time.Time{})
+		sess, err := s.getSession(context.Background(), key, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, sess)
 		assert.Contains(t, err.Error(), "get events failed")
@@ -239,7 +239,7 @@ func TestListSessions(t *testing.T) {
 			WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{})
+		sessions, err := s.listSessions(context.Background(), userKey, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, sessions)
 		assert.Contains(t, err.Error(), "unmarshal session state failed")
@@ -347,7 +347,7 @@ func TestGetEventsList(t *testing.T) {
 		defer db.Close()
 
 		s := createTestService(t, db)
-		result, err := s.getEventsList(context.Background(), []session.Key{}, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), []session.Key{}, 0, time.Time{}, "")
 		assert.NoError(t, err)
 		assert.Nil(t, result)
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -370,7 +370,7 @@ func TestGetEventsList(t *testing.T) {
 			WithArgs("app1", "user1", "sess1").
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "unmarshal event failed")
@@ -431,7 +431,7 @@ func TestGetEventsList(t *testing.T) {
 			WithArgs(keys[0].AppName, keys[0].UserID, keys[0].SessionID).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 2, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 2, time.Time{}, "")
 		assert.NoError(t, err)
 		require.Len(t, result, 1)
 		require.Len(t, result[0], 2)
@@ -494,7 +494,7 @@ func TestGetEventsList(t *testing.T) {
 			WithArgs("app1", "user1", "sess1").
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, "")
 		assert.NoError(t, err)
 		require.Len(t, result, 1)
 		require.Len(t, result[0], 3)
@@ -521,7 +521,7 @@ func TestGetEventsList(t *testing.T) {
 			WithArgs("app1", "user1", "sess1").
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, "")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "batch get events failed")
