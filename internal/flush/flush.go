@@ -19,7 +19,7 @@ import (
 
 const (
 	// StateKeyFlushSession is the invocation state key used to store the flush function.
-	StateKeyFlushSession = "__flush_session__"
+	stateKeyFlushSession = "__flush_session__"
 )
 
 // FlushRequest represents a single session flush request.
@@ -56,16 +56,16 @@ func Attach(ctx context.Context, inv *agent.Invocation, ch chan *FlushRequest) {
 		}
 	}
 	// Reuse existing holder if present; otherwise create one.
-	if holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession); ok && holder != nil {
+	if holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession); ok && holder != nil {
 		holder.fn = fn
 	} else {
-		inv.SetState(StateKeyFlushSession, &flusherHolder{fn: fn})
+		inv.SetState(stateKeyFlushSession, &flusherHolder{fn: fn})
 	}
 }
 
 // Invoke executes the flush function stored on the invocation state if present.
 func Invoke(ctx context.Context, inv *agent.Invocation) error {
-	holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
+	holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession)
 	if !ok || holder == nil || holder.fn == nil {
 		return nil
 	}
@@ -78,8 +78,8 @@ func Clear(inv *agent.Invocation) {
 	if inv == nil {
 		return
 	}
-	if holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession); ok && holder != nil {
+	if holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession); ok && holder != nil {
 		holder.fn = nil
 	}
-	inv.DeleteState(StateKeyFlushSession)
+	inv.DeleteState(stateKeyFlushSession)
 }
