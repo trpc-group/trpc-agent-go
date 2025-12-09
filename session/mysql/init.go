@@ -29,10 +29,10 @@ const (
 			user_id VARCHAR(255) NOT NULL,
 			session_id VARCHAR(255) NOT NULL,
 			state JSON DEFAULT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP NULL DEFAULT NULL,
-			deleted_at TIMESTAMP NULL DEFAULT NULL
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
 	sqlCreateSessionEventsTable = `
@@ -41,11 +41,12 @@ const (
 			app_name VARCHAR(255) NOT NULL,
 			user_id VARCHAR(255) NOT NULL,
 			session_id VARCHAR(255) NOT NULL,
+			track VARCHAR(255) NULL,
 			event JSON NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP NULL DEFAULT NULL,
-			deleted_at TIMESTAMP NULL DEFAULT NULL
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
 	sqlCreateSessionSummariesTable = `
@@ -56,9 +57,9 @@ const (
 			session_id VARCHAR(255) NOT NULL,
 			filter_key VARCHAR(255) NOT NULL DEFAULT '',
 			summary JSON DEFAULT NULL,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP NULL DEFAULT NULL,
-			deleted_at TIMESTAMP NULL DEFAULT NULL
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
 	sqlCreateAppStatesTable = `
@@ -67,10 +68,10 @@ const (
 			app_name VARCHAR(255) NOT NULL,
 			` + "`key`" + ` VARCHAR(255) NOT NULL,
 			value TEXT DEFAULT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP NULL DEFAULT NULL,
-			deleted_at TIMESTAMP NULL DEFAULT NULL
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
 	sqlCreateUserStatesTable = `
@@ -80,10 +81,10 @@ const (
 			user_id VARCHAR(255) NOT NULL,
 			` + "`key`" + ` VARCHAR(255) NOT NULL,
 			value TEXT DEFAULT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP NULL DEFAULT NULL,
-			deleted_at TIMESTAMP NULL DEFAULT NULL
+			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
 	// Index creation SQL (MySQL syntax)
@@ -108,6 +109,11 @@ const (
 	sqlCreateSessionEventsIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name(191), user_id(191), session_id(191), created_at)`
+
+	// session_events: lookup index on (app_name, user_id, session_id, track, created_at) for track events
+	sqlCreateSessionEventsTrackIndex = `
+		CREATE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name(191), user_id(191), session_id(191), track(191), created_at)`
 
 	// session_events: TTL index on (expires_at)
 	sqlCreateSessionEventsExpiresIndex = `
@@ -176,6 +182,7 @@ var indexDefs = []indexDefinition{
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
 	// Lookup indexes
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup, sqlCreateSessionEventsIndex},
+	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookupTrack, sqlCreateSessionEventsTrackIndex},
 	// TTL indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},

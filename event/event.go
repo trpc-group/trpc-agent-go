@@ -101,11 +101,20 @@ type Event struct {
 	// by the runner/flow (e.g., skip summarization after a tool response).
 	Actions *EventActions `json:"actions,omitempty"`
 
+	// Track holds protocol-specific track event payloads when present.
+	Track *TrackEvent `json:"track,omitempty"`
+
 	// filterKey is identifier for hierarchical event filtering.
 	FilterKey string `json:"filterKey,omitempty"`
 
 	// version for handling version compatibility issues.
 	Version int `json:"version,omitempty"`
+}
+
+// TrackEvent represents a protocol-specific track event embedded in Event.
+type TrackEvent struct {
+	Track   string          `json:"track"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 // ContainsTag checks if the event contains the specified tag.
@@ -148,6 +157,11 @@ func (e *Event) Clone() *Event {
 	}
 	for k := range e.LongRunningToolIDs {
 		clone.LongRunningToolIDs[k] = struct{}{}
+	}
+	if e.Track != nil {
+		cp := *e.Track
+		cp.Payload = append([]byte(nil), e.Track.Payload...)
+		clone.Track = &cp
 	}
 	if e.StateDelta != nil {
 		clone.StateDelta = make(map[string][]byte)

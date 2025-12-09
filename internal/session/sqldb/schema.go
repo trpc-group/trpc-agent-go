@@ -41,6 +41,9 @@ const (
 	// IndexSuffixLookup is the suffix for general lookup indexes
 	IndexSuffixLookup = "lookup"
 
+	// IndexSuffixLookupTrack is the suffix for track lookup indexes
+	IndexSuffixLookupTrack = "lookup_track"
+
 	// IndexSuffixExpires is the suffix for TTL/expiration indexes
 	IndexSuffixExpires = "expires"
 

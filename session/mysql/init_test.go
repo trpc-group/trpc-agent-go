@@ -50,8 +50,8 @@ func TestInitDB_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS user_states")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock: Create indexes (10 indexes total: 4 unique + 1 lookup + 5 TTL)
-	for i := 0; i < 10; i++ {
+	// Mock: Create indexes (11 indexes total: 4 unique + 2 lookup + 5 TTL)
+	for i := 0; i < 11; i++ {
 		mock.ExpectExec(regexp.QuoteMeta("CREATE")).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -147,7 +147,7 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	// Mock: Create indexes with prefix
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		mock.ExpectExec(regexp.QuoteMeta("CREATE")).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -172,7 +172,7 @@ func TestInitDB_DuplicateIndexIgnored(t *testing.T) {
 	}
 
 	// Mock: Some indexes already exist (simulate duplicate key error)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		if i%3 == 0 {
 			// Simulate duplicate index error
 			mock.ExpectExec(regexp.QuoteMeta("CREATE")).

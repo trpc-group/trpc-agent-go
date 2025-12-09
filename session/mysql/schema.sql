@@ -12,10 +12,10 @@ CREATE TABLE IF NOT EXISTS session_states (
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
     state JSON DEFAULT NULL COMMENT 'Session state in JSON format',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    expires_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Session states table';
 
 -- Unique index on (app_name, user_id, session_id, deleted_at)
@@ -36,17 +36,22 @@ CREATE TABLE IF NOT EXISTS session_events (
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
+    track VARCHAR(255) NULL,
     event JSON NOT NULL COMMENT 'Event data in JSON format',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    expires_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Session events table';
 
--- Lookup index for querying events by session
+-- Lookup index for querying events by session (non-track)
 CREATE INDEX idx_session_events_lookup
 ON session_events(app_name, user_id, session_id, created_at);
+
+-- Lookup index for querying track events by session and track
+CREATE INDEX idx_session_events_track_lookup
+ON session_events(app_name, user_id, session_id, track, created_at);
 
 -- TTL cleanup index
 CREATE INDEX idx_session_events_expires
@@ -63,9 +68,9 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     session_id VARCHAR(255) NOT NULL,
     filter_key VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'Filter key for multiple summaries per session',
     summary JSON DEFAULT NULL COMMENT 'Summary data in JSON format',
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    expires_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Session summaries table';
 
@@ -86,10 +91,10 @@ CREATE TABLE IF NOT EXISTS app_states (
     app_name VARCHAR(255) NOT NULL,
     `key` VARCHAR(255) NOT NULL COMMENT 'State key (backticks because key is a reserved word)',
     value TEXT DEFAULT NULL COMMENT 'State value',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    expires_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Application states table';
 
@@ -111,10 +116,10 @@ CREATE TABLE IF NOT EXISTS user_states (
     user_id VARCHAR(255) NOT NULL,
     `key` VARCHAR(255) NOT NULL COMMENT 'State key (backticks because key is a reserved word)',
     value TEXT DEFAULT NULL COMMENT 'State value',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
-    deleted_at TIMESTAMP NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    expires_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Expiration time for TTL',
+    deleted_at TIMESTAMP(6) NULL DEFAULT NULL COMMENT 'Soft delete timestamp'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='User states table';
 

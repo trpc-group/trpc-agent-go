@@ -179,6 +179,10 @@ func TestGetSession_WithLimit(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetSession_WithTrackEvents(t *testing.T) {
+	// Track-specific retrieval is no longer supported separately from events.
+}
+
 func TestGetSession_WithRefreshTTL(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -305,6 +309,7 @@ func TestListSessions_Success(t *testing.T) {
 
 	// Mock: Batch load events (empty)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event FROM session_events")).
+		WithArgs(userKey.AppName, userKey.UserID, "session-1").
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event"}))
 
 	// Mock: Batch load summaries (empty)
@@ -316,6 +321,10 @@ func TestListSessions_Success(t *testing.T) {
 	assert.Len(t, sessions, 1)
 	assert.Equal(t, "session-1", sessions[0].ID)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListSessions_WithTrackEvents(t *testing.T) {
+	// Track-specific retrieval is no longer supported separately from events.
 }
 
 func TestListSessions_WithMultipleSessions(t *testing.T) {
@@ -358,6 +367,7 @@ func TestListSessions_WithMultipleSessions(t *testing.T) {
 
 	// Mock: Batch load events
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event FROM session_events")).
+		WithArgs(userKey.AppName, userKey.UserID, "session-1", userKey.AppName, userKey.UserID, "session-2").
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event"}))
 
 	// Mock: Batch load summaries
@@ -481,7 +491,7 @@ func TestAddEvent_ExpiredSession(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
-		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 

@@ -325,7 +325,7 @@ func (s *Service) ListSessions(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
+	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime, opt.Track)
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get session list failed: %w", err)
 	}
@@ -809,7 +809,7 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 				if _, err := tx.ExecContext(ctx,
 					fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
 						s.tableSessionEvents, strings.Join(placeholders, ",")), args...); err != nil {
-					return fmt.Errorf("soft delete summaries: %w", err)
+					return fmt.Errorf("hard delete events: %w", err)
 				}
 			}
 			return nil
@@ -895,12 +895,32 @@ func (s *Service) cleanupExpiredForUser(ctx context.Context, userKey session.Use
 			now, userKey.AppName, userKey.UserID, now); err != nil {
 			log.Errorf("cleanup expired sessions for user failed: %v", err)
 		}
+		if _, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionEvents),
+			now, userKey.AppName, userKey.UserID, now); err != nil {
+			log.Errorf("cleanup expired session events for user failed: %v", err)
+		}
+		if _, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+			now, userKey.AppName, userKey.UserID, now); err != nil {
+			log.Errorf("cleanup expired session summaries for user failed: %v", err)
+		}
 	} else {
 		// Hard delete expired sessions for this user
 		if _, err := s.mysqlClient.Exec(ctx,
 			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionStates),
 			userKey.AppName, userKey.UserID, now); err != nil {
 			log.Errorf("cleanup expired sessions for user failed: %v", err)
+		}
+		if _, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionEvents),
+			userKey.AppName, userKey.UserID, now); err != nil {
+			log.Errorf("cleanup expired session events for user failed: %v", err)
+		}
+		if _, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionSummaries),
+			userKey.AppName, userKey.UserID, now); err != nil {
+			log.Errorf("cleanup expired session summaries for user failed: %v", err)
 		}
 	}
 }

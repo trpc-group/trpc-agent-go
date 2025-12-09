@@ -28,6 +28,7 @@ func (s *Service) getSession(
 	key session.Key,
 	limit int,
 	afterTime time.Time,
+	track string,
 ) (*session.Session, error) {
 	// Query session state (MySQL syntax with ?)
 	var sessState *SessionState
@@ -75,7 +76,7 @@ func (s *Service) getSession(
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime, track)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -110,6 +111,7 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	track string,
 ) ([]*session.Session, error) {
 	// Query app state
 	appState, err := s.ListAppStates(ctx, key.AppName)
@@ -166,7 +168,7 @@ func (s *Service) listSessions(
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime, track)
 	if err != nil {
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
@@ -258,12 +260,16 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			return fmt.Errorf("update session state failed: %w", err)
 		}
 
-		// Insert event if it has response and is not partial
-		if event.Response != nil && !event.IsPartial && event.IsValidContent() {
+		shouldStore := event.Track != nil || (event.Response != nil && !event.IsPartial && event.IsValidContent())
+		if shouldStore {
+			var track any
+			if event.Track != nil {
+				track = event.Track.Track
+			}
 			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID, eventBytes, now, now)
+				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
+				key.AppName, key.UserID, key.SessionID, track, eventBytes, now, now)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
 			}
@@ -373,6 +379,7 @@ func (s *Service) getEventsList(
 	sessionKeys []session.Key,
 	limit int,
 	afterTime time.Time,
+	track string,
 ) ([][]event.Event, error) {
 	if len(sessionKeys) == 0 {
 		return nil, nil
@@ -390,11 +397,22 @@ func (s *Service) getEventsList(
 
 	// Note: We cannot apply LIMIT in SQL because we're querying multiple sessions
 	// The limit is applied per session in memory after grouping by session key
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
-		WHERE (app_name, user_id, session_id) IN (%s)
-		AND deleted_at IS NULL
-		ORDER BY app_name, user_id, session_id, created_at ASC`,
-		s.tableSessionEvents, strings.Join(placeholders, ","))
+	var query string
+	if track == "" {
+		query = fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
+			WHERE (app_name, user_id, session_id) IN (%s)
+			AND deleted_at IS NULL
+			ORDER BY app_name, user_id, session_id, created_at ASC`,
+			s.tableSessionEvents, strings.Join(placeholders, ","))
+	} else {
+		query = fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s
+			WHERE (app_name, user_id, session_id) IN (%s)
+			AND track = ?
+			AND deleted_at IS NULL
+			ORDER BY app_name, user_id, session_id, created_at ASC`,
+			s.tableSessionEvents, strings.Join(placeholders, ","))
+		args = append(args, track)
+	}
 
 	// Map to collect events by session
 	eventsMap := make(map[string][]event.Event)
@@ -433,9 +451,16 @@ func (s *Service) getEventsList(
 		sess := session.Session{
 			Events: eventsMap[keyStr],
 		}
-		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
-		result[i] = sess.Events
+	options := []session.Option{
+		session.WithEventNum(limit),
+		session.WithEventTime(afterTime),
 	}
+	if track != "" {
+		options = append(options, session.WithTrack(track))
+	}
+	sess.ApplyEventFiltering(options...)
+	result[i] = sess.Events
+}
 
 	return result, nil
 }

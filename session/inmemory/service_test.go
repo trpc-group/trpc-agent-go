@@ -1165,7 +1165,7 @@ func TestGetSession_AllAssistantEvents_Integration(t *testing.T) {
 	assert.Equal(t, 0, len(retrievedSess.Events), "Should filter out all assistant events when no user events exist")
 }
 
-func TestSessionServiceAppendTrackEvent(t *testing.T) {
+func TestSessionServiceAppendEventWithTrack(t *testing.T) {
 	service := NewSessionService()
 	defer service.Close()
 
@@ -1178,12 +1178,15 @@ func TestSessionServiceAppendTrackEvent(t *testing.T) {
 	sess, err := service.CreateSession(ctx, key, session.StateMap{})
 	require.NoError(t, err)
 
-	eventA := &session.TrackEvent{
-		Track:     "alpha",
-		Payload:   json.RawMessage(`"a1"`),
+	payload := json.RawMessage(`{"foo":"bar"}`)
+	err = service.AppendEvent(ctx, sess, &event.Event{
+		ID:        "evt-1",
 		Timestamp: time.Now(),
-	}
-	err = service.AppendTrackEvent(ctx, sess, eventA)
+		Track: &event.TrackEvent{
+			Track:   "alpha",
+			Payload: payload,
+		},
+	})
 	require.NoError(t, err)
 
 	app, ok := service.getAppSessions(key.AppName)
@@ -1195,155 +1198,71 @@ func TestSessionServiceAppendTrackEvent(t *testing.T) {
 	storedSess := stored.session
 	app.mu.RUnlock()
 
-	require.NotNil(t, storedSess.Tracks)
-	require.Contains(t, storedSess.Tracks, session.Track("alpha"))
-	require.Len(t, storedSess.Tracks["alpha"].Events, 1)
-	assert.Equal(t, json.RawMessage(`"a1"`), storedSess.Tracks["alpha"].Events[0].Payload)
-
-	sessTracks, err := session.TracksFromState(storedSess.State)
-	require.NoError(t, err)
-	assert.Equal(t, []session.Track{"alpha"}, sessTracks)
-
-	eventB := &session.TrackEvent{
-		Track:     "beta",
-		Payload:   json.RawMessage(`"b1"`),
-		Timestamp: time.Now(),
-	}
-	err = service.AppendTrackEvent(ctx, sess, eventB)
-	require.NoError(t, err)
-
-	app.mu.RLock()
-	storedSess = app.sessions[key.UserID][key.SessionID].session
-	app.mu.RUnlock()
-	require.Len(t, storedSess.Tracks["beta"].Events, 1)
-	assert.Equal(t, json.RawMessage(`"b1"`), storedSess.Tracks["beta"].Events[0].Payload)
-
-	allTracks, err := session.TracksFromState(storedSess.State)
-	require.NoError(t, err)
-	assert.Equal(t, []session.Track{"alpha", "beta"}, allTracks)
+	require.Len(t, storedSess.Events, 1)
+	require.NotNil(t, storedSess.Events[0].Track)
+	assert.Equal(t, "alpha", storedSess.Events[0].Track.Track)
+	assert.JSONEq(t, `{"foo":"bar"}`, string(storedSess.Events[0].Track.Payload))
 }
 
-func TestSessionServiceAppendTrackEventErrors(t *testing.T) {
+func TestSessionServiceGetSessionWithTrackFilter(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
 	ctx := context.Background()
+	key := session.Key{
+		AppName:   "track-app",
+		UserID:    "track-user",
+		SessionID: "track-session",
+	}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
 
-	t.Run("session append failure surfaced", func(t *testing.T) {
-		service := NewSessionService()
-		defer service.Close()
-
-		sess := &session.Session{
-			ID:      "s1",
-			AppName: "app",
-			UserID:  "user",
-			State: session.StateMap{
-				"tracks": []byte("{"),
+	now := time.Now()
+	events := []*event.Event{
+		{
+			ID:        "alpha-1",
+			Timestamp: now.Add(-2 * time.Minute),
+			Track: &event.TrackEvent{
+				Track:   "alpha",
+				Payload: json.RawMessage(`"a1"`),
 			},
-		}
-		err := service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "append track event")
-	})
-
-	t.Run("invalid session key", func(t *testing.T) {
-		service := NewSessionService()
-		defer service.Close()
-
-		sess := &session.Session{
-			ID:     "s1",
-			UserID: "user",
-			State:  make(session.StateMap),
-		}
-		err := service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha"})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, session.ErrAppNameRequired)
-	})
-
-	t.Run("app not found", func(t *testing.T) {
-		service := NewSessionService()
-		defer service.Close()
-
-		sess := &session.Session{
-			ID:      "s1",
-			AppName: "missing-app",
-			UserID:  "user",
-			State:   make(session.StateMap),
-		}
-		err := service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "app not found")
-	})
-
-	t.Run("user not found", func(t *testing.T) {
-		service := NewSessionService()
-		defer service.Close()
-
-		app := service.getOrCreateAppSessions("app")
-		app.mu.Lock()
-		app.sessions["other-user"] = make(map[string]*sessionWithTTL)
-		app.mu.Unlock()
-
-		sess := &session.Session{
-			ID:      "s1",
-			AppName: "app",
-			UserID:  "user",
-			State:   make(session.StateMap),
-		}
-		err := service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "user not found")
-	})
-
-	t.Run("session not found", func(t *testing.T) {
-		service := NewSessionService()
-		defer service.Close()
-
-		app := service.getOrCreateAppSessions("app")
-		app.mu.Lock()
-		app.sessions["user"] = map[string]*sessionWithTTL{}
-		app.mu.Unlock()
-
-		sess := &session.Session{
-			ID:      "missing-session",
-			AppName: "app",
-			UserID:  "user",
-			State:   make(session.StateMap),
-		}
-		err := service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "session not found")
-	})
-
-	t.Run("session expired", func(t *testing.T) {
-		service := NewSessionService(WithSessionTTL(time.Second))
-		defer service.Close()
-
-		app := service.getOrCreateAppSessions("app")
-		app.mu.Lock()
-		app.sessions["user"] = map[string]*sessionWithTTL{
-			"expired-session": {
-				session: &session.Session{
-					ID:      "expired-session",
-					AppName: "app",
-					UserID:  "user",
-					State:   make(session.StateMap),
-				},
-				expiredAt: time.Now().Add(-time.Minute),
+		},
+		{
+			ID:        "beta-1",
+			Timestamp: now.Add(-time.Minute),
+			Track: &event.TrackEvent{
+				Track:   "beta",
+				Payload: json.RawMessage(`"b1"`),
 			},
-		}
-		app.mu.Unlock()
+		},
+		{
+			ID:        "chat-1",
+			Timestamp: now,
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleUser, Content: "hi"},
+				}},
+			},
+		},
+	}
+	for _, e := range events {
+		require.NoError(t, service.AppendEvent(ctx, sess, e))
+	}
 
-		sess := &session.Session{
-			ID:      "expired-session",
-			AppName: "app",
-			UserID:  "user",
-			State:   make(session.StateMap),
-		}
-		err := service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "session expired")
-	})
+	filtered, err := service.GetSession(ctx, key, session.WithTrack("alpha"))
+	require.NoError(t, err)
+	require.NotNil(t, filtered)
+	require.Len(t, filtered.Events, 1)
+	assert.Equal(t, "alpha-1", filtered.Events[0].ID)
+
+	full, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, full.Events, 1)
+	assert.Equal(t, "chat-1", full.Events[0].ID)
 }
 
-func TestCopySessionTracks(t *testing.T) {
+func TestCopySessionEventsWithTrack(t *testing.T) {
 	now := time.Now()
 	original := &session.Session{
 		ID:      "sess",
@@ -1353,17 +1272,12 @@ func TestCopySessionTracks(t *testing.T) {
 			"key": []byte("v"),
 		},
 		Events: []event.Event{
-			{ID: "evt"},
-		},
-		Tracks: map[session.Track]*session.TrackEvents{
-			"alpha": {
-				Track: "alpha",
-				Events: []session.TrackEvent{
-					{
-						Track:     "alpha",
-						Payload:   json.RawMessage(`"payload"`),
-						Timestamp: now,
-					},
+			{
+				ID:        "evt",
+				Timestamp: now,
+				Track: &event.TrackEvent{
+					Track:   "alpha",
+					Payload: json.RawMessage(`"payload"`),
 				},
 			},
 		},
@@ -1380,14 +1294,14 @@ func TestCopySessionTracks(t *testing.T) {
 	require.NotNil(t, copied)
 
 	require.NotSame(t, original, copied)
-	require.NotSame(t, original.Tracks["alpha"], copied.Tracks["alpha"])
-	require.Len(t, copied.Tracks["alpha"].Events, 1)
+	require.NotSame(t, original.Events[0].Track, copied.Events[0].Track)
+	require.JSONEq(t, `"payload"`, string(copied.Events[0].Track.Payload))
 
-	copied.Tracks["alpha"].Events[0].Payload = json.RawMessage(`"changed"`)
-	assert.Equal(t, json.RawMessage(`"payload"`), original.Tracks["alpha"].Events[0].Payload)
+	copied.Events[0].Track.Payload = json.RawMessage(`"changed"`)
+	assert.JSONEq(t, `"payload"`, string(original.Events[0].Track.Payload))
 
-	original.Tracks["alpha"].Events[0].Payload = json.RawMessage(`"mutated"`)
-	assert.Equal(t, json.RawMessage(`"changed"`), copied.Tracks["alpha"].Events[0].Payload)
+	original.Events[0].Track.Payload = json.RawMessage(`"mutated"`)
+	assert.JSONEq(t, `"changed"`, string(copied.Events[0].Track.Payload))
 
 	copied.State["key"][0] = 'x'
 	assert.Equal(t, byte('v'), original.State["key"][0])
@@ -1411,7 +1325,6 @@ func TestCopySessionWithoutTracks(t *testing.T) {
 
 	copied := sess.Clone()
 	require.NotNil(t, copied)
-	assert.Nil(t, copied.Tracks)
 	copied.State["foo"][0] = 'x'
 	assert.Equal(t, byte('b'), sess.State["foo"][0])
 }
