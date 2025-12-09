@@ -37,6 +37,8 @@ Knowledge 系统与 Agent 的集成方式：
 
 ## 快速开始
 
+> **完整示例**: [examples/knowledge/basic](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/basic)
+
 ### 环境要求
 
 - Go 1.24.1 或更高版本
@@ -63,19 +65,19 @@ import (
     "context"
     "log"
 
-    // 核心组件
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/knowledge"
     openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
     dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
     filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
 
     // 如需支持 PDF 文件，需手动引入 PDF reader（独立 go.mod，避免引入不必要的第三方依赖）
     // _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
@@ -92,8 +94,7 @@ func main() {
     // 2. 创建向量存储
     vectorStore := vectorinmemory.New()
 
-    // 3. 创建知识源（确保这些路径存在或替换为你自己的路径）
-    // 以下文件在 https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge
+    // 3. 创建知识源
     sources := []source.Source{
         filesource.New([]string{"./data/llm.md"}),
         dirsource.New([]string{"./dir"}),
@@ -104,135 +105,39 @@ func main() {
         knowledge.WithEmbedder(embedder),
         knowledge.WithVectorStore(vectorStore),
         knowledge.WithSources(sources),
-        knowledge.WithEnableSourceSync(true), // 启用增量同步，保持向量存储与源一致
+        knowledge.WithEnableSourceSync(true),
     )
 
     // 5. 加载文档
-    log.Println("🚀 开始加载 Knowledge ...")
     if err := kb.Load(ctx); err != nil {
         log.Fatalf("Failed to load knowledge base: %v", err)
     }
-    log.Println("✅ Knowledge 加载完成！")
 
-    // 6. 创建 LLM 模型
+    // 6. 创建搜索工具
+    searchTool := knowledgetool.NewKnowledgeSearchTool(
+        kb,
+        knowledgetool.WithToolName("knowledge_search"),
+        knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
+    )
+
+    // 7. 创建 Agent 并添加工具
     modelInstance := openai.New("claude-4-sonnet-20250514")
-
-    // 7. 创建 Agent 并集成 Knowledge
     llmAgent := llmagent.New(
         "knowledge-assistant",
         llmagent.WithModel(modelInstance),
-        llmagent.WithDescription("具有 Knowledge 访问能力的智能助手"),
-        llmagent.WithInstruction("使用 knowledge_search 工具从 Knowledge 检索相关信息，并基于检索内容回答问题。"),
-        llmagent.WithKnowledge(kb), // 自动添加 knowledge_search 工具
+        llmagent.WithTools([]tool.Tool{searchTool}),
     )
 
-    // 8. 创建 Runner
+    // 8. 创建 Runner 并执行
     sessionService := inmemory.NewSessionService()
-    appRunner := runner.NewRunner(
-        "knowledge-chat",
-        llmAgent,
-        runner.WithSessionService(sessionService),
-    )
+    appRunner := runner.NewRunner("knowledge-chat", llmAgent, runner.WithSessionService(sessionService))
 
-    // 9. 执行对话（Agent 会自动使用 knowledge_search 工具）
-    log.Println("🔍 开始搜索 Knowledge ...")
     message := model.NewUserMessage("请告诉我关于 LLM 的信息")
-    eventChan, err := appRunner.Run(ctx, "user123", "session456", message)
+    _, err := appRunner.Run(ctx, "user123", "session456", message)
     if err != nil {
         log.Fatalf("Failed to run agent: %v", err)
     }
 }
-```
-
-### 手动调用示例
-
-```go
-
-package main
-
-import (
-    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
-    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
-    "trpc.group/trpc-go/trpc-agent-go/knowledge"
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
-)
-
-// 创建支持多版本 (v7, v8, v9) 的 Elasticsearch 向量存储
-esVS, err := vectorelasticsearch.New(
-    vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
-    vectorelasticsearch.WithUsername(os.Getenv("ELASTICSEARCH_USERNAME")),
-    vectorelasticsearch.WithPassword(os.Getenv("ELASTICSEARCH_PASSWORD")),
-    vectorelasticsearch.WithAPIKey(os.Getenv("ELASTICSEARCH_API_KEY")),
-    vectorelasticsearch.WithIndexName(getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")),
-    vectorelasticsearch.WithMaxRetries(3),
-    // 版本可选："v7"、"v8"、"v9"（默认 "v9"）
-    vectorelasticsearch.WithVersion("v9"),
-    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
-    vectorelasticsearch.WithDocBuilder(docBuilder),
-)
-if err != nil {
-    // 处理 error
-}
-
-embedder := openaiembedder.New(
-    openaiembedder.WithModel("text-embedding-3-small"), // embedding 模型，也可通过 OPENAI_EMBEDDING_MODEL 环境变量设置
-)
-
-kb := knowledge.New(
-    knowledge.WithVectorStore(esVS),
-    knowledge.WithEmbedder(embedder),
-)
-
-// 注意：元数据字段需要使用 metadata. 前缀
-filterCondition := &searchfilter.UniversalFilterCondition{
-    Operator: searchfilter.OperatorAnd,
-    Value: []*searchfilter.UniversalFilterCondition{
-        {
-            Field: "metadata.tag",  // 元数据字段使用 metadata. 前缀
-            Operator: searchfilter.OperatorEqual,
-            Value: "tag",
-        },
-        {
-            Field: "metadata.age",
-            Operator: searchfilter.OperatorGreaterThanOrEqual,
-            Value: 18,
-        },
-        {
-            Field: "metadata.create_time",
-            Operator: searchfilter.OperatorBetween,
-            Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
-        },
-        {
-            Operator: searchfilter.OperatorOr,
-            Value: []*searchfilter.UniversalFilterCondition{
-                {
-                    Field: "metadata.login_time",
-                    Operator: searchfilter.OperatorLessThanOrEqual,
-                    Value: "2025-01-11 12:11:00",
-                },
-                {
-                    Field: "metadata.status",
-                    Operator: searchfilter.OperatorEqual,
-                    Value: "logout",
-                },
-            },
-        },
-    },
-}
-
-req := &knowledge.SearchRequest{
-    Query: "any text"
-    MaxResults: 5,
-    MinScore: 0.7,
-    SearchFilter: &knowledge.SearchFilter{
-        DocumentIDs: []string{"id1","id2"},
-        Metadata: map[string]any{
-            "title": "title test",
-        },
-        FilterCondition: filterCondition,
-    }
-}
-searchResult, err := kb.Search(ctx, req)
 ```
 
 
@@ -274,59 +179,42 @@ knowledge/
 
 ### 与 Agent 集成
 
-Knowledge 系统提供了两种与 Agent 集成的方式：自动集成和手动构建工具。
+Knowledge 系统提供了两种与 Agent 集成的方式：手动构建工具和自动集成。
 
-#### 方式一：自动集成（推荐）
+#### 方式一：手动构建工具（推荐）
 
-使用 `llmagent.WithKnowledge(kb)` 将 Knowledge 集成到 Agent，框架会自动注册 `knowledge_search` 工具，无需手动创建自定义工具。
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/tool" // 可选：需要附加其他工具时使用
-)
-
-// 创建 Knowledge
-// kb := ...
-
-// 创建 Agent 并集成 Knowledge
-llmAgent := llmagent.New(
-    "knowledge-assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithDescription("具有 Knowledge 访问能力的智能助手"),
-    llmagent.WithInstruction("使用 knowledge_search 工具从 Knowledge 检索相关信息，并基于检索内容回答问题。"),
-    llmagent.WithKnowledge(kb), // 自动添加 knowledge_search 工具
-    // llmagent.WithTools([]tool.Tool{otherTool}), // 可选：附加其他工具
-)
-```
-
-#### 方式二：手动构建工具
-
-使用手动构建SearchTool的方法来配置知识库，通过这个方法可以构建多个知识库
-
-**使用 NewKnowledgeSearchTool 创建基础搜索工具：**
+使用 `NewKnowledgeSearchTool` 手动创建搜索工具，可以灵活配置工具名称、描述，并支持构建多个知识库。
 
 ```go
 import (
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// 创建 Knowledge
-// kb := ...
-
-// 创建基础搜索工具
+// 创建搜索工具
 searchTool := knowledgetool.NewKnowledgeSearchTool(
-    kb,                    // Knowledge 实例
+    kb,
     knowledgetool.WithToolName("knowledge_search"),
     knowledgetool.WithToolDescription("Search for relevant information in the knowledge base."),
 )
 
-// 创建 Agent 并手动添加工具
+// 创建 Agent 并添加工具
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
     llmagent.WithTools([]tool.Tool{searchTool}),
+)
+```
+
+#### 方式二：自动集成
+
+使用 `llmagent.WithKnowledge(kb)` 将 Knowledge 集成到 Agent，框架会自动注册 `knowledge_search` 工具。
+
+```go
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithKnowledge(kb), // 自动添加 knowledge_search 工具
 )
 ```
 
@@ -358,14 +246,17 @@ llmAgent := llmagent.New(
 
 ### 向量存储 (VectorStore)
 
+> **示例代码**: [examples/knowledge/vectorstores](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores)
+
 向量存储可在代码中通过选项配置，配置来源可以是配置文件、命令行参数或环境变量，用户可以自行实现。
 
 trpc-agent-go 支持多种向量存储实现：
 
 - **Memory**：内存向量存储，适用于测试和小规模数据
-- **PgVector**：基于 PostgreSQL + pgvector 扩展的向量存储，支持混合检索
-- **TcVector**：腾讯云向量数据库，支持远程 embedding 计算和混合检索
-- **Elasticsearch**：支持 v7/v8/v9 多版本的 Elasticsearch 向量存储
+- **PgVector**：基于 PostgreSQL + pgvector 扩展的向量存储，支持混合检索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/postgres)
+- **TcVector**：腾讯云向量数据库，支持远程 embedding 计算和混合检索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/tcvector)
+- **Elasticsearch**：支持 v7/v8/v9 多版本的 Elasticsearch 向量存储 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/elasticsearch)
+- **Milvus**：高性能向量数据库，支持十亿级向量搜索 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus)
 
 #### 向量存储配置示例
 
@@ -594,7 +485,14 @@ kb := knowledge.New(
 
 ### 文档源配置
 
+> 📁 **示例代码**: [examples/knowledge/sources](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources)
+
 源模块提供了多种文档源类型，每种类型都支持丰富的配置选项：
+
+- **文件源 (file)**: 单个文件处理 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/file-source)
+- **目录源 (dir)**: 批量处理目录 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/directory-source)
+- **URL 源 (url)**: 从网页获取内容 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/url-source)
+- **自动源 (auto)**: 智能识别类型 - [示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/auto-source)
 
 ```go
 import (
@@ -690,6 +588,8 @@ err := kb.Load(ctx,
 
 ## 过滤器功能
 
+> 📁 **示例代码**: [examples/knowledge/features/metadata-filter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/metadata-filter)
+
 Knowledge 系统提供了强大的过滤器功能，允许基于文档元数据进行精准搜索。这包括静态过滤器和智能过滤器两种模式。
 
 > **重要：过滤器字段命名规范**
@@ -773,6 +673,8 @@ eventCh, err := runner.Run(
 ```
 
 ### 智能过滤器 (Agentic Filter)
+
+> 📁 **示例代码**: [examples/knowledge/features/agentic-filter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/agentic-filter)
 
 智能过滤器是 Knowledge 系统的高级功能，允许 LLM Agent 根据用户查询动态选择合适的过滤条件。
 
@@ -1054,6 +956,8 @@ vectorStore, err := vectortcvector.New(
 
 ### 知识库管理功能
 
+> 📁 **示例代码**: [examples/knowledge/features/management](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/management)
+
 Knowledge 系统提供了强大的知识库管理功能，支持动态源管理和智能同步机制。
 
 #### 启用源同步 (enableSourceSync)
@@ -1194,6 +1098,8 @@ kb := knowledge.New(
 ```
 
 ## 完整示例
+
+> 📁 **所有示例**: [examples/knowledge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge)
 
 以下是一个完整的示例，展示了如何创建具有 Knowledge 访问能力的 Agent：
 
