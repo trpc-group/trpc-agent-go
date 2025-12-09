@@ -25,12 +25,13 @@ import (
 
 // A2AEventConverter defines an interface for converting A2A protocol types to Event.
 type A2AEventConverter interface {
-	// ConvertToEvent converts an A2A protocol type to an Event.
+	// ConvertToEvents converts an A2A protocol type to multiple Events.
+	// In non-streaming mode, A2A server returns a Task with history containing
+	// intermediate messages (tool calls, tool responses, etc.) and artifacts for final response.
+	ConvertToEvents(result protocol.MessageResult, agentName string, invocation *agent.Invocation) ([]*event.Event, error)
 
-	ConvertToEvent(result protocol.MessageResult, agentName string, invocation *agent.Invocation) (*event.Event, error)
-
-	// ConvertStreamingToEvent converts a streaming A2A protocol type to an Event.
-	ConvertStreamingToEvent(result protocol.StreamingMessageEvent, agentName string, invocation *agent.Invocation) (*event.Event, error)
+	// ConvertStreamingToEvents converts a streaming A2A protocol type to Events.
+	ConvertStreamingToEvents(result protocol.StreamingMessageEvent, agentName string, invocation *agent.Invocation) ([]*event.Event, error)
 }
 
 // InvocationA2AConverter defines an interface for converting invocations to A2A protocol messages.
@@ -42,73 +43,98 @@ type InvocationA2AConverter interface {
 type defaultA2AEventConverter struct {
 }
 
-func (d *defaultA2AEventConverter) ConvertToEvent(
+func (d *defaultA2AEventConverter) ConvertToEvents(
 	result protocol.MessageResult,
 	agentName string,
 	invocation *agent.Invocation,
-) (*event.Event, error) {
+) ([]*event.Event, error) {
 	if result.Result == nil {
-		return event.NewResponseEvent(
+		return []*event.Event{event.NewResponseEvent(
 			invocation.InvocationID,
 			agentName,
 			&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-		), nil
+		)}, nil
 	}
 
-	var responseMsg *protocol.Message
-	var event *event.Event
+	var events []*event.Event
+
 	switch v := result.Result.(type) {
 	case *protocol.Message:
-		responseMsg = v
-		event = d.buildRespEvent(false, responseMsg, agentName, invocation)
+		// Single message: build event from its parts
+		if evt := d.buildRespEvent(false, v, agentName, invocation); evt != nil {
+			events = append(events, evt)
+		}
 	case *protocol.Task:
-		responseMsg = convertTaskToMessage(v)
-		event = d.buildRespEvent(false, responseMsg, agentName, invocation)
+		// Task with history: convert history messages first, then artifacts
+		// History contains intermediate messages (tool calls, tool responses, etc.)
+		for i := range v.History {
+			if evt := d.buildRespEvent(false, &v.History[i], agentName, invocation); evt != nil {
+				events = append(events, evt)
+			}
+		}
+		// Artifacts contain the final response
+		for i := range v.Artifacts {
+			artifactMsg := &protocol.Message{
+				Role:      protocol.MessageRoleAgent,
+				MessageID: v.Artifacts[i].ArtifactID,
+				Parts:     v.Artifacts[i].Parts,
+			}
+			if evt := d.buildRespEvent(false, artifactMsg, agentName, invocation); evt != nil {
+				events = append(events, evt)
+			}
+		}
 	default:
 		// Handle unknown response types
-		responseMsg = &protocol.Message{
+		responseMsg := &protocol.Message{
 			Role:  protocol.MessageRoleAgent,
 			Parts: []protocol.Part{protocol.NewTextPart("Received unknown response type")},
 		}
-		event = d.buildRespEvent(false, responseMsg, agentName, invocation)
+		if evt := d.buildRespEvent(false, responseMsg, agentName, invocation); evt != nil {
+			events = append(events, evt)
+		}
 	}
-	event.Done = true
-	event.IsPartial = false
-	return event, nil
+
+	if len(events) > 0 {
+		// Mark the last event as done
+		events[len(events)-1].Done = true
+		events[len(events)-1].IsPartial = false
+	}
+	return events, nil
 }
 
-func (d *defaultA2AEventConverter) ConvertStreamingToEvent(
+func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	result protocol.StreamingMessageEvent,
 	agentName string,
 	invocation *agent.Invocation,
-) (*event.Event, error) {
+) ([]*event.Event, error) {
 	if result.Result == nil {
-		return event.NewResponseEvent(
+		return []*event.Event{event.NewResponseEvent(
 			invocation.InvocationID,
 			agentName,
 			&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-		), nil
+		)}, nil
 	}
 
-	var event *event.Event
+	var events []*event.Event
 	var responseMsg *protocol.Message
 	switch v := result.Result.(type) {
 	case *protocol.Message:
 		responseMsg = v
-		event = d.buildRespEvent(true, responseMsg, agentName, invocation)
 	case *protocol.Task:
 		responseMsg = convertTaskToMessage(v)
-		event = d.buildRespEvent(true, responseMsg, agentName, invocation)
 	case *protocol.TaskStatusUpdateEvent:
 		responseMsg = convertTaskStatusToMessage(v)
-		event = d.buildRespEvent(true, responseMsg, agentName, invocation)
 	case *protocol.TaskArtifactUpdateEvent:
 		responseMsg = convertTaskArtifactToMessage(v)
-		event = d.buildRespEvent(true, responseMsg, agentName, invocation)
 	default:
 		log.Infof("unexpected event type: %T", result.Result)
+		return nil, nil
 	}
-	return event, nil
+
+	if evt := d.buildRespEvent(true, responseMsg, agentName, invocation); evt != nil {
+		events = append(events, evt)
+	}
+	return events, nil
 }
 
 type defaultEventA2AConverter struct {
@@ -190,7 +216,7 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 	return &message, nil
 }
 
-// buildRespEvent converts A2A response to tRPC event
+// buildRespEvent converts A2A response to tRPC event (used for both streaming and non-streaming mode)
 func (d *defaultA2AEventConverter) buildRespEvent(
 	isStreaming bool,
 	msg *protocol.Message,
@@ -198,58 +224,70 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	invocation *agent.Invocation) *event.Event {
 
 	// Parse A2A message parts to extract content and tool information
-	parseResult := parseA2AMessageParts(msg.Parts)
-
-	// Build model message based on parsed result
-	message := buildModelMessage(parseResult)
+	parseResult := parseA2AMessageParts(msg)
 
 	// Create event with appropriate response structure
-	return buildEventResponse(isStreaming, msg.MessageID, message, parseResult, invocation, agentName)
+	return buildEventResponse(isStreaming, msg.MessageID, parseResult, invocation, agentName)
 }
 
 // parseResult holds the parsed information from A2A message parts
 type parseResult struct {
-	content          string
-	toolCalls        []model.ToolCall
-	toolResponseRole model.Role
-	toolResponseID   string
-	toolResponseName string
+	// textContent holds plain text content from TextParts
+	textContent string
+
+	// toolCalls holds function call requests (assistant -> tool)
+	toolCalls []model.ToolCall
+
+	// toolResponses holds function response data (tool -> assistant)
+	// Multiple tool responses can exist in a single message
+	toolResponses []toolResponseData
+
+	// codeExecution holds executable code content
+	codeExecution string
+
+	// codeExecutionResult holds code execution result content
+	codeExecutionResult string
+
+	// objectType holds the type of the object
+	objectType string
+
+	// tag holds the event tag from A2A message metadata
+	tag string
+}
+
+// toolResponseData holds tool response information
+type toolResponseData struct {
+	id      string
+	name    string
+	content string
 }
 
 // parseA2AMessageParts processes all parts in the A2A message and extracts content and tool information
-func parseA2AMessageParts(parts []protocol.Part) *parseResult {
-	var content strings.Builder
+func parseA2AMessageParts(msg *protocol.Message) *parseResult {
+	parts := msg.Parts
+	var textContent strings.Builder
 	result := &parseResult{}
 
 	for _, part := range parts {
 		switch part.GetKind() {
 		case protocol.KindText:
-			textContent := processTextPart(part)
-			content.WriteString(textContent)
+			textContent.WriteString(processTextPart(part))
 		case protocol.KindData:
-			dataContent, toolCall, toolResp := processDataPart(part)
-			content.WriteString(dataContent)
-
-			if toolCall != nil {
-				result.toolCalls = append(result.toolCalls, *toolCall)
-			}
-
-			if toolResp != nil {
-				result.toolResponseRole = model.RoleTool
-				result.toolResponseID = toolResp.id
-				result.toolResponseName = toolResp.name
-			}
+			processDataPart(part, result)
 		}
 	}
 
-	result.content = content.String()
-	return result
-}
+	if msg.Metadata != nil {
+		if objectType, ok := msg.Metadata[ia2a.MessageMetadataObjectTypeKey].(string); ok {
+			result.objectType = objectType
+		}
+		if tag, ok := msg.Metadata[ia2a.MessageMetadataTagKey].(string); ok {
+			result.tag = tag
+		}
+	}
 
-// toolResponseInfo holds tool response metadata
-type toolResponseInfo struct {
-	id   string
-	name string
+	result.textContent = textContent.String()
+	return result
 }
 
 // processTextPart processes a TextPart and returns its content
@@ -262,193 +300,49 @@ func processTextPart(part protocol.Part) string {
 	return p.Text
 }
 
-// processDataPart processes a DataPart and returns content, tool call, and tool response info
-func processDataPart(part protocol.Part) (content string, toolCall *model.ToolCall, toolResp *toolResponseInfo) {
+// processDataPart processes a DataPart and updates the parseResult accordingly
+func processDataPart(part protocol.Part, result *parseResult) {
 	d, ok := part.(*protocol.DataPart)
 	if !ok {
 		return
 	}
 
-	// Check metadata type
-	if d.Metadata == nil {
-		return
-	}
-
-	// Try both standard "type" and ADK-compatible "adk_type" metadata keys
-	typeVal, hasType := d.Metadata[ia2a.DataPartMetadataTypeKey]
-	if !hasType {
-		typeVal, hasType = d.Metadata[ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)]
-		if !hasType {
-			return
-		}
-	}
-
-	// Convert typeVal to string for comparison
-	typeStr, ok := typeVal.(string)
-	if !ok {
+	// Use GetDataPartType to get the type with correct precedence (adk_type first, then type)
+	// GetDataPartType handles nil metadata internally
+	typeStr := ia2a.GetDataPartType(d.Metadata)
+	if typeStr == "" {
 		return
 	}
 
 	switch typeStr {
 	case ia2a.DataPartMetadataTypeFunctionCall:
-		// Process function call
-		toolCall = processFunctionCall(d)
-	case ia2a.DataPartMetadataTypeFunctionResp:
-		// Process function response
-		var id, name string
-		content, id, name = processFunctionResponse(d)
-		if id != "" || name != "" {
-			toolResp = &toolResponseInfo{id: id, name: name}
+		if toolCall := processFunctionCall(d); toolCall != nil {
+			result.toolCalls = append(result.toolCalls, *toolCall)
 		}
+	case ia2a.DataPartMetadataTypeFunctionResp:
+		content, id, name := processFunctionResponse(d)
+		result.toolResponses = append(result.toolResponses, toolResponseData{
+			id:      id,
+			name:    name,
+			content: content,
+		})
+	case ia2a.DataPartMetadataTypeExecutableCode:
+		result.codeExecution = processExecutableCode(d)
+	case ia2a.DataPartMetadataTypeCodeExecutionResult:
+		result.codeExecutionResult = processCodeExecutionResult(d)
+	default:
+		log.Debugf("unknown DataPart type: %s", typeStr)
 	}
-
-	return
 }
 
 // processFunctionCall processes a function call DataPart and returns the ToolCall
 func processFunctionCall(d *protocol.DataPart) *model.ToolCall {
-	return convertDataPartToToolCall(d)
-}
-
-// processFunctionResponse processes a function response DataPart and returns the response content and metadata
-func processFunctionResponse(d *protocol.DataPart) (content string, id string, name string) {
-	// Extract tool response metadata
 	data, ok := d.Data.(map[string]any)
-	if ok {
-		if toolID, ok := data[ia2a.ToolCallFieldID].(string); ok {
-			id = toolID
-		}
-		if toolName, ok := data[ia2a.ToolCallFieldName].(string); ok {
-			name = toolName
-		}
-	}
-
-	// Extract and return response content
-	content = convertDataPartToToolResponse(d)
-	return
-}
-
-// buildModelMessage creates a model.Message based on the parse result
-func buildModelMessage(result *parseResult) model.Message {
-	// tool call event
-	if len(result.toolCalls) > 0 {
-		return model.Message{
-			Role:      model.RoleAssistant,
-			Content:   result.content,
-			ToolCalls: result.toolCalls,
-		}
-	}
-
-	// tool call resp event
-	if result.toolResponseRole == model.RoleTool {
-		return model.Message{
-			Role:     model.RoleTool,
-			Content:  result.content,
-			ToolID:   result.toolResponseID,
-			ToolName: result.toolResponseName,
-		}
-	}
-
-	return model.Message{
-		Role:    model.RoleAssistant,
-		Content: result.content,
-	}
-}
-
-// buildEventResponse creates an event with the appropriate response structure
-func buildEventResponse(
-	isStreaming bool,
-	messageID string,
-	message model.Message,
-	result *parseResult,
-	invocation *agent.Invocation,
-	agentName string,
-) *event.Event {
-	evt := event.New(invocation.InvocationID, agentName)
-
-	if isStreaming {
-		evt.Response = buildStreamingResponse(messageID, message, result)
-	} else {
-		evt.Response = buildNonStreamingResponse(messageID, message, result)
-	}
-
-	return evt
-}
-
-// buildStreamingResponse creates a response for streaming mode
-func buildStreamingResponse(messageID string, message model.Message, result *parseResult) *model.Response {
-	// tool calls resp
-	if len(result.toolCalls) > 0 || result.toolResponseRole == model.RoleTool {
-		return &model.Response{
-			ID:        messageID,
-			Choices:   []model.Choice{{Message: message}},
-			Timestamp: time.Now(),
-			Created:   time.Now().Unix(),
-			IsPartial: false,
-			Done:      false,
-			Object:    model.ObjectTypeChatCompletion,
-		}
-	}
-
-	// Regular content: use Delta in streaming mode
-	response := &model.Response{
-		ID:        messageID,
-		Choices:   []model.Choice{{Delta: message}},
-		Timestamp: time.Now(),
-		Created:   time.Now().Unix(),
-		IsPartial: true,
-		Done:      false,
-	}
-	if message.Content != "" {
-		response.Object = model.ObjectTypeChatCompletionChunk
-	}
-	return response
-}
-
-// buildNonStreamingResponse creates a response for non-streaming mode
-func buildNonStreamingResponse(messageID string, message model.Message, result *parseResult) *model.Response {
-	response := &model.Response{
-		ID:        messageID,
-		Choices:   []model.Choice{{Message: message}},
-		Timestamp: time.Now(),
-		Created:   time.Now().Unix(),
-		IsPartial: false,
-		Done:      true,
-	}
-	if message.Content != "" || len(result.toolCalls) > 0 {
-		response.Object = model.ObjectTypeChatCompletion
-	}
-	return response
-}
-
-// convertDataPartToToolResponse converts a DataPart with function_response metadata to content
-func convertDataPartToToolResponse(dataPart *protocol.DataPart) string {
-	data, ok := dataPart.Data.(map[string]any)
 	if !ok {
-		log.Warnf("DataPart data is not a map: %T", dataPart.Data)
-		return ""
-	}
-
-	// Extract response content - server sends it as raw string
-	if response, ok := data[ia2a.ToolCallFieldResponse]; ok {
-		if responseStr, ok := response.(string); ok {
-			return responseStr
-		}
-		log.Debugf("Tool response is not a string: %T, skip")
-	}
-
-	return ""
-}
-
-// convertDataPartToToolCall converts a DataPart with function_call metadata to ToolCall
-func convertDataPartToToolCall(dataPart *protocol.DataPart) *model.ToolCall {
-	data, ok := dataPart.Data.(map[string]any)
-	if !ok {
-		log.Warnf("DataPart data is not a map: %T", dataPart.Data)
+		log.Warnf("DataPart data is not a map: %T", d.Data)
 		return nil
 	}
 
-	// Extract tool call fields
 	var toolCall model.ToolCall
 
 	if id, ok := data[ia2a.ToolCallFieldID].(string); ok {
@@ -476,6 +370,265 @@ func convertDataPartToToolCall(dataPart *protocol.DataPart) *model.ToolCall {
 	return &toolCall
 }
 
+// processFunctionResponse processes a function response DataPart and returns the response content and metadata
+func processFunctionResponse(d *protocol.DataPart) (content string, id string, name string) {
+	data, ok := d.Data.(map[string]any)
+	if !ok {
+		log.Warnf("DataPart data is not a map: %T", d.Data)
+		return
+	}
+
+	// Extract tool response metadata
+	if toolID, ok := data[ia2a.ToolCallFieldID].(string); ok {
+		id = toolID
+	}
+	if toolName, ok := data[ia2a.ToolCallFieldName].(string); ok {
+		name = toolName
+	}
+
+	// Extract response content - server sends it as raw string
+	if response, ok := data[ia2a.ToolCallFieldResponse]; ok {
+		if responseStr, ok := response.(string); ok {
+			content = responseStr
+		} else {
+			log.Debugf("Tool response is not a string: %T, skip", response)
+		}
+	}
+
+	return
+}
+
+// extractStringField extracts a string value from data map, trying primary key first, then fallback key
+func extractStringField(data map[string]any, primary, fallback string) string {
+	if v, ok := data[primary].(string); ok {
+		return v
+	}
+	if v, ok := data[fallback].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// processExecutableCode processes an executable code DataPart and returns the code content
+func processExecutableCode(d *protocol.DataPart) string {
+	data, ok := d.Data.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return extractStringField(data, ia2a.CodeExecutionFieldCode, ia2a.CodeExecutionFieldContent)
+}
+
+// processCodeExecutionResult processes a code execution result DataPart and returns the result content
+func processCodeExecutionResult(d *protocol.DataPart) string {
+	data, ok := d.Data.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return extractStringField(data, ia2a.CodeExecutionFieldOutput, ia2a.CodeExecutionFieldContent)
+}
+
+// buildEventResponse creates an event with the appropriate response structure
+func buildEventResponse(
+	isStreaming bool,
+	messageID string,
+	result *parseResult,
+	invocation *agent.Invocation,
+	agentName string,
+) *event.Event {
+	var opts []event.Option
+	// Restore tag from A2A message metadata if present
+	if result.tag != "" {
+		opts = append(opts, event.WithTag(result.tag))
+	}
+
+	evt := event.New(invocation.InvocationID, agentName, opts...)
+
+	if isStreaming {
+		evt.Response = buildStreamingResponse(messageID, result)
+	} else {
+		evt.Response = buildNonStreamingResponse(messageID, result)
+	}
+
+	return evt
+}
+
+// buildStreamingResponse creates a response for streaming mode.
+// In streaming mode:
+// - Tool calls and tool responses use Message (not Delta) since they are complete units
+// - Text content uses Delta for incremental updates
+func buildStreamingResponse(messageID string, result *parseResult) *model.Response {
+	now := time.Now()
+
+	// Tool call: use Message (tool calls are complete units, not streamed incrementally)
+	if len(result.toolCalls) > 0 {
+		return &model.Response{
+			ID: messageID,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					Content:   result.textContent,
+					ToolCalls: result.toolCalls,
+				},
+			}},
+			Object:    model.ObjectTypeChatCompletion,
+			Timestamp: now,
+			Created:   now.Unix(),
+			IsPartial: false,
+			Done:      false,
+		}
+	}
+
+	// Tool response: use Message (tool responses are complete units)
+	if len(result.toolResponses) > 0 {
+		choices := make([]model.Choice, 0, len(result.toolResponses))
+		for _, resp := range result.toolResponses {
+			choices = append(choices, model.Choice{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					Content:  resp.content,
+					ToolID:   resp.id,
+					ToolName: resp.name,
+				},
+			})
+		}
+		return &model.Response{
+			ID:        messageID,
+			Choices:   choices,
+			Object:    model.ObjectTypeChatCompletion,
+			Timestamp: now,
+			Created:   now.Unix(),
+			IsPartial: false,
+			Done:      false,
+		}
+	}
+
+	// Text content: use Delta for streaming incremental updates
+	content := result.textContent
+	if result.codeExecution != "" {
+		content = result.codeExecution
+	} else if result.codeExecutionResult != "" {
+		content = result.codeExecutionResult
+	}
+
+	objectType := extractObjectType(result)
+	if objectType == "" {
+		objectType = model.ObjectTypeChatCompletionChunk
+	}
+
+	return &model.Response{
+		ID: messageID,
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: content,
+			},
+		}},
+		Object:    objectType,
+		Timestamp: now,
+		Created:   now.Unix(),
+		IsPartial: true,
+		Done:      false,
+	}
+}
+
+// extractObjectType determines the response object type from parseResult.
+// Priority: 1) objectType from message metadata (for third-party framework compatibility,
+// as some frameworks like ADK include object type in metadata)
+// 2) Infer from content type (toolCalls, codeExecution, codeExecutionResult)
+// 3) Return empty string to let caller use default value
+func extractObjectType(result *parseResult) string {
+	if result.objectType != "" {
+		return result.objectType
+	}
+
+	if len(result.toolCalls) > 0 {
+		return model.ObjectTypeChatCompletion
+	}
+
+	// Both code execution and code execution result use the same ObjectType.
+	// The distinction is made via the Tag field.
+	if len(result.codeExecution) > 0 || len(result.codeExecutionResult) > 0 {
+		return model.ObjectTypePostprocessingCodeExecution
+	}
+
+	return ""
+}
+
+// buildNonStreamingResponse creates a response for non-streaming mode.
+// In non-streaming mode, all content uses Message (not Delta).
+func buildNonStreamingResponse(messageID string, result *parseResult) *model.Response {
+	now := time.Now()
+
+	var choices []model.Choice
+
+	// Tool call: assistant requesting tool execution
+	if len(result.toolCalls) > 0 {
+		choices = append(choices, model.Choice{
+			Message: model.Message{
+				Role:      model.RoleAssistant,
+				Content:   result.textContent,
+				ToolCalls: result.toolCalls,
+			},
+		})
+	}
+
+	// Tool response: tool returning results
+	if len(result.toolResponses) > 0 {
+		for _, resp := range result.toolResponses {
+			choices = append(choices, model.Choice{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					Content:  resp.content,
+					ToolID:   resp.id,
+					ToolName: resp.name,
+				},
+			})
+		}
+	}
+
+	// Text content: final assistant response
+	// Only add if no tool calls (tool calls already include text content)
+	if len(result.toolCalls) == 0 && (result.textContent != "" || result.codeExecution != "" || result.codeExecutionResult != "") {
+		content := result.textContent
+		if result.codeExecution != "" {
+			content = result.codeExecution
+		} else if result.codeExecutionResult != "" {
+			content = result.codeExecutionResult
+		}
+		choices = append(choices, model.Choice{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: content,
+			},
+		})
+	}
+
+	// If no content at all, add empty assistant message
+	if len(choices) == 0 {
+		choices = []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "",
+			},
+		}}
+	}
+
+	objectType := extractObjectType(result)
+	if objectType == "" {
+		objectType = model.ObjectTypeChatCompletion
+	}
+
+	return &model.Response{
+		ID:        messageID,
+		Choices:   choices,
+		Object:    objectType,
+		Timestamp: now,
+		Created:   now.Unix(),
+		IsPartial: false,
+		Done:      false,
+	}
+}
+
 // convertTaskToMessage converts a Task to a Message
 func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 	var (
@@ -495,6 +648,7 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 		Parts:     parts,
 		TaskID:    &task.ID,
 		ContextID: &task.ContextID,
+		Metadata:  task.Metadata,
 	}
 }
 
@@ -505,6 +659,7 @@ func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol
 		Kind:      protocol.KindMessage,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
+		Metadata:  event.Metadata,
 	}
 	if event.Status.Message != nil {
 		msg.Parts = event.Status.Message.Parts
@@ -515,12 +670,14 @@ func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol
 
 // convertTaskArtifactToMessage converts a TaskArtifactUpdateEvent to a Message.
 func convertTaskArtifactToMessage(event *protocol.TaskArtifactUpdateEvent) *protocol.Message {
-	return &protocol.Message{
+	msg := &protocol.Message{
 		Role:      protocol.MessageRoleAgent,
 		Kind:      protocol.KindMessage,
 		MessageID: event.Artifact.ArtifactID,
 		Parts:     event.Artifact.Parts,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
+		Metadata:  event.Metadata,
 	}
+	return msg
 }
