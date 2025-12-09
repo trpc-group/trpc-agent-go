@@ -744,12 +744,12 @@ func (vs *VectorStore) buildFilterExpression(filter *vectorstore.SearchFilter) (
 		}
 	}
 
-	// for json path, query like 'metadata["trpc_agent_go_source_name"] == {metadata["trpc_agent_go_source_name"]}' is invalid
-	// and JSON_CONTAINS/JSON_CONTAINS_ALL/JSON_CONTAINS_ANY does not suit our needs
 	if len(filter.Metadata) > 0 {
 		for key, value := range filter.Metadata {
 			jsonPath := fmt.Sprintf("%s[\"%s\"]", vs.option.metadataField, key)
-			conditions = append(conditions, fmt.Sprintf("%s == %s", jsonPath, formatValue(value)))
+			paramName := metadataParamPrefix + key
+			conditions = append(conditions, fmt.Sprintf("%s == {%s}", jsonPath, paramName))
+			allParams[paramName] = value
 		}
 	}
 
