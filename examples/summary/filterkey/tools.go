@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // calculate performs basic mathematical operations.
@@ -106,6 +107,7 @@ type timeResult struct {
 }
 
 // Helper functions for creating pointers to primitive types.
+func intPtr(i int) *int { return &i }
 
 // extractContent extracts content from event for aggregation.
 func extractContent(evt *event.Event) string {
@@ -113,4 +115,15 @@ func extractContent(evt *event.Event) string {
 		return ""
 	}
 	return evt.Response.Choices[0].Message.Content
+}
+
+// getSummaryFromSession returns a structured summary from the session if present.
+func getSummaryFromSession(sess *session.Session, filterKey string) (string, bool) {
+	if sess == nil || sess.Summaries == nil {
+		return "", false
+	}
+	if s, ok := sess.Summaries[filterKey]; ok && s != nil && s.Summary != "" {
+		return s.Summary, true
+	}
+	return "", false
 }

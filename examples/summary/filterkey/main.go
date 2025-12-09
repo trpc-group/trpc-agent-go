@@ -90,8 +90,10 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 
 	// Create tools for the agent.
 	tools := []tool.Tool{
-		function.NewFunctionTool(c.calculate, function.WithName("calculate"), function.WithDescription("Performs basic arithmetic operations like addition, subtraction, multiplication, and division. Use this for any mathematical calculations.")),
-		function.NewFunctionTool(c.getCurrentTime, function.WithName("get_current_time"), function.WithDescription("Gets the current time and date information for different timezones. Use this when asked about current time.")),
+		function.NewFunctionTool(c.calculate, function.WithName("calculate"),
+			function.WithDescription("Performs basic arithmetic operations like addition, subtraction, multiplication, and division. Use this for any mathematical calculations.")),
+		function.NewFunctionTool(c.getCurrentTime, function.WithName("get_current_time"),
+			function.WithDescription("Gets the current time and date information for different timezones. Use this when asked about current time.")),
 	}
 
 	// Agent and runner with tools.
@@ -125,21 +127,25 @@ func (c *filterKeyChat) setup(_ context.Context) error {
 	return nil
 }
 
-// setEventFilterKey demonstrates how to set custom filterKey based on event author.
-// This would typically be done via an AppendEventHook in a real implementation.
+// setEventFilterKey demonstrates how to set custom filterKey based on event
+// author. Always prefix with app so it matches the runner's invocation
+// filter key; otherwise history gets filtered out and models may keep
+// re-triggering tools.
 func (c *filterKeyChat) setEventFilterKey(evt *event.Event) {
 	if evt == nil {
 		return
 	}
 	// Set filterKey based on author to demonstrate custom filtering.
+	// Use app-prefixed keys so they match the invocation's filter prefix.
+	prefix := c.app + "/"
 	switch evt.Author {
 	case "user":
-		evt.FilterKey = "user-messages"
+		evt.FilterKey = prefix + "user-messages"
 	case "tool":
-		evt.FilterKey = "tool-calls"
+		evt.FilterKey = prefix + "tool-calls"
 	default:
 		// Assistant messages and others go to misc
-		evt.FilterKey = "misc"
+		evt.FilterKey = prefix + "misc"
 	}
 }
 
@@ -149,6 +155,7 @@ func (c *filterKeyChat) startChat(ctx context.Context) error {
 	fmt.Println("💡 Special commands:")
 	fmt.Println("   /summary [filterKey] - Force summarize by filter (default: full)")
 	fmt.Println("   /show [filterKey]    - Show summary by filter (default: full)")
+	fmt.Println("   /list                - List all filterKeys and summaries in session")
 	fmt.Println("   /exit                - End the conversation")
 	fmt.Println()
 	for {
@@ -183,6 +190,9 @@ func (c *filterKeyChat) processMessage(ctx context.Context, userMessage string) 
 	}
 	if strings.HasPrefix(userMessage, "/show") {
 		return c.handleSummaryCommand(ctx, userMessage, false)
+	}
+	if strings.EqualFold(userMessage, "/list") {
+		return c.handleListSummaries(ctx)
 	}
 
 	// Normal chat turn
@@ -273,6 +283,40 @@ func (c *filterKeyChat) displaySummary(sess *session.Session, filterKey string, 
 			fmt.Printf("📝 Summary[%s]%s: <empty>.\n", filterKey, forceText)
 		}
 	}
+}
+
+// handleListSummaries prints all filterKeys and their summaries in the session.
+func (c *filterKeyChat) handleListSummaries(ctx context.Context) error {
+	sess, err := c.sessionService.GetSession(ctx, session.Key{
+		AppName: c.app, UserID: c.userID, SessionID: c.sessionID,
+	})
+	if err != nil || sess == nil {
+		fmt.Printf("⚠️ load session failed: %v\n", err)
+		return nil
+	}
+
+	if len(sess.Summaries) == 0 {
+		ensureAggregated(sess)
+	}
+
+	if len(sess.Summaries) == 0 {
+		fmt.Println("📝 Summaries: <empty>.")
+		return nil
+	}
+
+	fmt.Println("📝 Summaries (filterKey -> summary):")
+	for k, v := range sess.Summaries {
+		s := ""
+		if v != nil {
+			s = v.Summary
+		}
+		if s == "" {
+			s = "<empty>"
+		}
+		fmt.Printf("- %s: %s\n", k, s)
+	}
+	fmt.Println()
+	return nil
 }
 
 // ensureAggregated ensures session has aggregated summaries as fallback.
@@ -478,17 +522,3 @@ func (c *filterKeyChat) extractContent(event *event.Event, streaming bool) strin
 
 	return content
 }
-
-// getSummaryFromSession returns a structured summary from the session if present.
-func getSummaryFromSession(sess *session.Session, filterKey string) (string, bool) {
-	if sess == nil || sess.Summaries == nil {
-		return "", false
-	}
-	if s, ok := sess.Summaries[filterKey]; ok && s != nil && s.Summary != "" {
-		return s.Summary, true
-	}
-	return "", false
-}
-
-// Helpers for pointers.
-func intPtr(i int) *int { return &i }

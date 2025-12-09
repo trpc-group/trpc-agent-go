@@ -11,11 +11,12 @@ Key concepts:
 
 ## What the demo does
 
-1. **Event Categorization**: Shows how events are automatically categorized by author via AppendEventHook:
+1. **Event Categorization**: Shows how events are automatically categorized by
+   author via AppendEventHook (with `app` prefix to match runner filtering):
 
-   - `"user"` messages → `filterKey: "user-messages"`
-   - `"tool"` calls → `filterKey: "tool-calls"`
-   - Other events → `filterKey: "misc"`
+   - `"user"` messages → `filterKey: "<app>/user-messages"`
+   - `"tool"` calls → `filterKey: "<app>/tool-calls"`
+   - Other events → `filterKey: "<app>/misc"`
 
 2. **Tool Integration**: Includes calculator and time tools for the agent to use
 
@@ -77,8 +78,9 @@ MaxWords: 120
 
 ## Implementation Notes
 
-- **AppendEventHook**: Uses `inmemory.WithAppendEventHook()` to automatically set `event.FilterKey` based on `event.Author`
-- **FilterKey Assignment**: Events are categorized automatically: user→"user-messages", tool→"tool-calls", other→"misc"
+- **AppendEventHook**: Uses `inmemory.WithAppendEventHook()` to automatically set `event.FilterKey` based on `event.Author`.
+- **FilterKey Assignment**: Events are categorized automatically with an `app` prefix (e.g., `filterkey-demo-app/user-messages`). Runner injects the same prefix into invocation filter keys; without the prefix, history will be filtered out and the model may repeatedly trigger tools.
+- **Commands**: `/summary [filterKey]`, `/show [filterKey]`, `/list` (list all filterKeys and summaries), `/exit`.
 - **LLM vs Local**: With API key, summaries use LLM; without it, local aggregation provides basic summaries
 - **Filter Options**: Common filters include `"user-messages"`, `"tool-calls"`, `"misc"`, or `""` (all events)
 - **Code Structure**: Refactored to reduce cyclomatic complexity with separate command handlers
