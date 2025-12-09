@@ -59,8 +59,8 @@ func (s *Service) CreateSessionSummary(
 	}
 
 	var expiresAt *time.Time
-	if s.sessionTTL > 0 {
-		t := summary.UpdatedAt.Add(s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		t := summary.UpdatedAt.Add(s.opts.sessionTTL)
 		expiresAt = &t
 	}
 

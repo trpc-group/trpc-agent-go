@@ -1061,6 +1061,14 @@ CREATE TABLE user_states (
 
 ## Advanced Usage
 
+### Hook Capabilities (Append/Get)
+
+- **AppendEventHook**: Intercept/modify/abort events before they are stored. Useful for content safety or auditing (e.g., tagging `violation=<word>`), or short-circuiting persistence.
+- **GetSessionHook**: Intercept/modify/filter sessions after they are read. Useful for removing tagged events or dynamically augmenting the returned session state.
+- **Chain-of-responsibility**: Hooks call `next()` to continue; returning early short-circuits later hooks, and errors bubble up.
+- **Backend parity**: Memory, Redis, MySQL, and PostgreSQL share the same hook interface—inject hook slices when constructing the service.
+- **Example**: See `examples/session/hook` ([code](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)) 
+
 ### Direct Use of Session Service API
 
 In most cases, you should use session management through Runner, which automatically handles all details. However, in some special scenarios (such as session management backend, data migration, statistical analysis, etc.), you may need to directly operate the Session Service.

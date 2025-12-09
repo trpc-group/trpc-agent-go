@@ -1061,6 +1061,14 @@ CREATE TABLE user_states (
 
 ## 高级用法
 
+### Hook 能力（Append/Get）
+
+- **AppendEventHook**：事件写入前的拦截/修改/终止。可用于内容安全、审计打标（如写入 `violation=<word>`），或直接阻断存储。
+- **GetSessionHook**：会话读取后的拦截/修改/过滤。可用来剔除带特定标签的事件，或动态补充返回的 Session 状态。
+- **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
+- **跨后端一致**：内存、Redis、MySQL、PostgreSQL 实现已统一接入 Hook，构造服务时注入 Hook 切片即可。
+- **示例**：见 `examples/session/hook`（[代码](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)）
+
 ### 直接使用 Session Service API
 
 在大多数情况下，您应该通过 Runner 使用会话管理，Runner 会自动处理所有细节。但在某些特殊场景下（如会话管理后台、数据迁移、统计分析等），您可能需要直接操作 Session Service。
