@@ -776,6 +776,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#positioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Positioning
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1442,6 +1457,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#positioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Positioning
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1753,6 +1783,10 @@ provides persistent memory and context management for Agents. By integrating
 the memory service, session management, and memory tools, the Memory system
 helps Agents remember user information, maintain conversation context, and
 offer personalized responses across multi-turn dialogs.</p>
+<h3 id="positioning">Positioning</h3>
+<p>Memory is used to manage long-term user-related information, with isolation dimensions of <code>&lt;appName, userID&gt;</code>. It can be understood as a "personal profile" gradually accumulated around a single user.</p>
+<p>In cross-session scenarios, Memory allows the system to retain key information about the current user, avoiding the need to repeatedly retrieve user information from scratch for each session.</p>
+<p>It is suitable for recording stable, reusable facts, such as "user name is Zhang San," "occupation is backend engineer," "prefers short answers," and "favorite language is English," and directly using this information in subsequent interactions.</p>
 <h2 id="breaking-changes-notice">⚠️ Breaking Changes Notice</h2>
 <p><strong>Important</strong>: The memory integration approach has been updated to provide better separation of concerns and explicit control. This is a <strong>breaking change</strong> that affects how memory services are integrated with Agents.</p>
 <h3 id="what-changed">What Changed</h3>
@@ -2986,7 +3020,7 @@ capabilities.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 10, 2025 02:36:27 UTC">2025-11-10 02:36:27</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 9, 2025 13:54:24 UTC">2025-12-09 13:54:24</span>
   </span>
 
     

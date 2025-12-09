@@ -872,6 +872,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#positioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Positioning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#key-features" class="md-nav__link">
     <span class="md-ellipsis">
       🎯 Key Features
@@ -1845,6 +1854,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#positioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Positioning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#key-features" class="md-nav__link">
     <span class="md-ellipsis">
       🎯 Key Features
@@ -2547,6 +2565,9 @@
 <h1 id="session-management">Session Management</h1>
 <h2 id="overview">Overview</h2>
 <p>tRPC-Agent-Go provides powerful session management capabilities to maintain conversation history and context information during Agent-user interactions. Through automatic persistence of conversation records, intelligent summary compression, and flexible storage backends, session management offers complete infrastructure for building stateful intelligent Agents.</p>
+<h3 id="positioning">Positioning</h3>
+<p>A Session manages the context of the current conversation, with isolation dimensions <code>&lt;appName, userID, SessionID&gt;</code>. It stores user messages, Agent responses, tool call results, and brief summaries generated based on this content within the conversation, supporting multi-turn question-and-answer scenarios.</p>
+<p>Within the same conversation, it allows for seamless transitions between multiple turns of question-and-answer, preventing users from restating the same question or providing the same parameters in each turn.</p>
 <h3 id="key-features">🎯 Key Features</h3>
 <ul>
 <li><strong>Context Management</strong>: Automatically load conversation history for true multi-turn dialogues</li>
@@ -3617,7 +3638,7 @@
 <tr>
 <td><code>softDelete=true</code></td>
 <td><code>UPDATE SET deleted_at = NOW()</code></td>
-<td>Filter <code>deleted_at IS NULL</code></td>
+<td>Queries include <code>WHERE deleted_at IS NULL</code>, returning only non-soft-deleted rows</td>
 <td>Recoverable</td>
 </tr>
 <tr>
@@ -3651,7 +3672,7 @@
 </span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a><span class="c1">// Cleanup behavior:</span>
 </span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a><span class="c1">// - softDelete=true: Expired data marked as deleted_at = NOW()</span>
 </span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11"></a><span class="c1">// - softDelete=false: Expired data physically deleted</span>
-</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12"></a><span class="c1">// - Queries always filter deleted_at IS NULL</span>
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12"></a><span class="c1">// - Queries always append `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows.</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="use-with-summary_2">Use with Summary</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1"> 1</a></span>
@@ -4040,7 +4061,7 @@
 <tr>
 <td><code>softDelete=true</code></td>
 <td><code>UPDATE SET deleted_at = NOW()</code></td>
-<td>Filter <code>deleted_at IS NULL</code></td>
+<td>Queries include <code>WHERE deleted_at IS NULL</code>, returning only non-soft-deleted rows</td>
 <td>Recoverable</td>
 </tr>
 <tr>
@@ -4074,7 +4095,7 @@
 </span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="c1">// Cleanup behavior:</span>
 </span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a><span class="c1">// - softDelete=true: Expired data marked as deleted_at = NOW()</span>
 </span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a><span class="c1">// - softDelete=false: Expired data physically deleted</span>
-</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a><span class="c1">// - Queries always filter deleted_at IS NULL</span>
+</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a><span class="c1">// - Queries always append `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows.</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="use-with-summary_3">Use with Summary</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1"> 1</a></span>
@@ -5048,7 +5069,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 9, 2025 13:47:35 UTC">2025-12-09 13:47:35</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 9, 2025 13:54:24 UTC">2025-12-09 13:54:24</span>
   </span>
 
     
