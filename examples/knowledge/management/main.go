@@ -25,6 +25,7 @@ import (
 	// Embedder.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
+	ollamaembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
@@ -36,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	vectormvtcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus"
 	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 
@@ -46,7 +48,7 @@ import (
 // Command line flags
 var (
 	embedderType = flag.String("embedder", "openai", "Embedder type: openai")
-	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory/pgvector/tcvector/elasticsearch")
+	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory/pgvector/tcvector/elasticsearch/milvus")
 	sourceSync   = flag.Bool("source_sync", true, "Enable source sync for incremental sync")
 )
 
@@ -77,6 +79,11 @@ var (
 	elasticsearchAPIKey    = getEnvOrDefault("ELASTICSEARCH_API_KEY", "")
 	elasticsearchIndexName = getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")
 	esVersion              = getEnvOrDefault("ELASTICSEARCH_VERSION", "v8")
+
+	// Milvus.
+	milvusAddress  = getEnvOrDefault("MILVUS_ADDRESS", "localhost:19530")
+	milvusUsername = getEnvOrDefault("MILVUS_USERNAME", "")
+	milvusPassword = getEnvOrDefault("MILVUS_PASSWORD", "")
 )
 
 // knowledgeChat manages knowledge base and chat functionality
@@ -432,7 +439,7 @@ func (chat *knowledgeChat) setupKnowledgeBase() error {
 		return fmt.Errorf("Failed to setup embedder: %v", err)
 	}
 
-	vs, err := chat.setupVectorDB()
+	vs, err := chat.setupVectorDB(chat.ctx)
 	if err != nil {
 		return fmt.Errorf("Failed to setup vector store: %v", err)
 	}
@@ -475,7 +482,7 @@ func (chat *knowledgeChat) setupKnowledgeBase() error {
 }
 
 // setupVectorDB creates the appropriate vector store based on the selected type.
-func (chat *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
+func (chat *knowledgeChat) setupVectorDB(ctx context.Context) (vectorstore.VectorStore, error) {
 	switch strings.ToLower(*vectorStore) {
 	case "inmemory":
 		return vectorinmemory.New(), nil
@@ -526,6 +533,16 @@ func (chat *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			return nil, fmt.Errorf("failed to create elasticsearch store: %w", err)
 		}
 		return vs, nil
+	case "milvus":
+		vs, err := vectormvtcvector.New(ctx,
+			vectormvtcvector.WithAddress(milvusAddress),
+			vectormvtcvector.WithUsername(milvusUsername),
+			vectormvtcvector.WithPassword(milvusPassword),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create milvus store: %w", err)
+		}
+		return vs, nil
 	default:
 		return nil, fmt.Errorf("unsupported vector store type: %s", *vectorStore)
 	}
@@ -536,6 +553,8 @@ func (chat *knowledgeChat) setupEmbedder(ctx context.Context) (embedder.Embedder
 	switch strings.ToLower(*embedderType) {
 	case "gemini":
 		return geminiembedder.New(ctx)
+	case "ollama":
+		return ollamaembedder.New(), nil
 	default: // openai
 		return openaiembedder.New(
 			openaiembedder.WithModel(openaiEmbeddingModel),

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -34,7 +35,9 @@ type condConvertResult struct {
 }
 
 // pgVectorConverter converts a filter condition to a postgres vector query.
-type pgVectorConverter struct{}
+type pgVectorConverter struct {
+	metadataFieldName string
+}
 
 // Convert converts a filter condition to a postgres vector query filter.
 func (c *pgVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
@@ -46,6 +49,15 @@ func (c *pgVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 	}()
 
 	return c.convertCondition(cond)
+}
+
+// convertFieldName converts metadata.xxx fields to JSONB syntax.
+func (c *pgVectorConverter) convertFieldName(field string) string {
+	if strings.HasPrefix(field, source.MetadataFieldPrefix) {
+		actualField := strings.TrimPrefix(field, source.MetadataFieldPrefix)
+		return fmt.Sprintf("%s->>'%s'", c.metadataFieldName, actualField)
+	}
+	return field
 }
 
 func (c *pgVectorConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
@@ -81,6 +93,7 @@ func (c *pgVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 		return nil, fmt.Errorf("in operator value must be a slice with at least one value: %v", cond.Value)
 	}
 
+	fieldName := c.convertFieldName(cond.Field)
 	itemNum := value.Len()
 	condResult := condConvertResult{args: make([]any, 0, itemNum)}
 	args := make([]string, 0, itemNum)
@@ -88,7 +101,7 @@ func (c *pgVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 		condResult.args = append(condResult.args, value.Index(i).Interface())
 		args = append(args, "$%d")
 	}
-	condResult.cond = fmt.Sprintf(`%s %s (%s)`, cond.Field, strings.ToUpper(cond.Operator), strings.Join(args, ", "))
+	condResult.cond = fmt.Sprintf(`%s %s (%s)`, fieldName, strings.ToUpper(cond.Operator), strings.Join(args, ", "))
 	return &condResult, nil
 }
 
@@ -132,8 +145,9 @@ func (c *pgVectorConverter) buildComparisonCondition(cond *searchfilter.Universa
 		return nil, fmt.Errorf("field is empty")
 	}
 
+	fieldName := c.convertFieldName(cond.Field)
 	return &condConvertResult{
-		cond: fmt.Sprintf(`%s %s `, cond.Field, operator) + "$%d",
+		cond: fmt.Sprintf(`%s %s `, fieldName, operator) + "$%d",
 		args: []any{cond.Value},
 	}, nil
 }
@@ -146,8 +160,9 @@ func (c *pgVectorConverter) buildLikeCondition(cond *searchfilter.UniversalFilte
 		return nil, fmt.Errorf("like operator value must be a string: %v", cond.Value)
 	}
 
+	fieldName := c.convertFieldName(cond.Field)
 	return &condConvertResult{
-		cond: fmt.Sprintf(`%s %s `, cond.Field, strings.ToUpper(cond.Operator)) + "$%d",
+		cond: fmt.Sprintf(`%s %s `, fieldName, strings.ToUpper(cond.Operator)) + "$%d",
 		args: []any{cond.Value},
 	}, nil
 }
@@ -161,8 +176,9 @@ func (c *pgVectorConverter) buildBetweenCondition(cond *searchfilter.UniversalFi
 		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
 	}
 
+	fieldName := c.convertFieldName(cond.Field)
 	return &condConvertResult{
-		cond: cond.Field + " >= $%d AND " + cond.Field + " <= $%d",
+		cond: fieldName + " >= $%d AND " + fieldName + " <= $%d",
 		args: []any{value.Index(0).Interface(), value.Index(1).Interface()},
 	}, nil
 }
