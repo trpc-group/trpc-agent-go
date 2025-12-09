@@ -266,6 +266,7 @@ func TestInvocation_AddNoticeChannelAndWait_before_notify(t *testing.T) {
 
 func TestInvocation_NotifyCompletion(t *testing.T) {
 	inv := NewInvocation()
+	inv.noticeChanMap = nil
 	defer inv.CleanupNotice(context.Background())
 	noticeKey := "test-channel-1"
 	err := inv.NotifyCompletion(context.Background(), noticeKey)
