@@ -1271,6 +1271,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#hook-appendget" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hook 能力（Append/Get）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#session-service-api" class="md-nav__link">
     <span class="md-ellipsis">
       直接使用 Session Service API
@@ -2257,6 +2266,15 @@
   
     <nav class="md-nav" aria-label="高级用法">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hook-appendget" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hook 能力（Append/Get）
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#session-service-api" class="md-nav__link">
@@ -4269,6 +4287,14 @@
 <li>MySQL 使用 <code>ON DUPLICATE KEY UPDATE</code> 语法实现 UPSERT</li>
 </ul>
 <h2 id="_26">高级用法</h2>
+<h3 id="hook-appendget">Hook 能力（Append/Get）</h3>
+<ul>
+<li><strong>AppendEventHook</strong>：事件写入前的拦截/修改/终止。可用于内容安全、审计打标（如写入 <code>violation=&lt;word&gt;</code>），或直接阻断存储。</li>
+<li><strong>GetSessionHook</strong>：会话读取后的拦截/修改/过滤。可用来剔除带特定标签的事件，或动态补充返回的 Session 状态。</li>
+<li><strong>责任链执行</strong>：Hook 通过 <code>next()</code> 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。</li>
+<li><strong>跨后端一致</strong>：内存、Redis、MySQL、PostgreSQL 实现已统一接入 Hook，构造服务时注入 Hook 切片即可。</li>
+<li><strong>示例</strong>：见 <code>examples/session/hook</code>（<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook">代码</a>）</li>
+</ul>
 <h3 id="session-service-api">直接使用 Session Service API</h3>
 <p>在大多数情况下，您应该通过 Runner 使用会话管理，Runner 会自动处理所有细节。但在某些特殊场景下（如会话管理后台、数据迁移、统计分析等），您可能需要直接操作 Session Service。</p>
 <p><strong>注意：</strong> 以下 API 仅用于特殊场景，日常使用 Runner 即可。</p>
@@ -5112,7 +5138,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月9日 01:35:21 UTC">2025-12-09 01:35:21</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月9日 02:37:07 UTC">2025-12-09 02:37:07</span>
   </span>
 
     

@@ -1271,6 +1271,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#hook-capabilities-appendget" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hook Capabilities (Append/Get)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#direct-use-of-session-service-api" class="md-nav__link">
     <span class="md-ellipsis">
       Direct Use of Session Service API
@@ -2191,6 +2200,15 @@
   
     <nav class="md-nav" aria-label="Advanced Usage">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hook-capabilities-appendget" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hook Capabilities (Append/Get)
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#direct-use-of-session-service-api" class="md-nav__link">
@@ -4140,6 +4158,14 @@
 <li>MySQL uses <code>ON DUPLICATE KEY UPDATE</code> syntax for UPSERT</li>
 </ul>
 <h2 id="advanced-usage">Advanced Usage</h2>
+<h3 id="hook-capabilities-appendget">Hook Capabilities (Append/Get)</h3>
+<ul>
+<li><strong>AppendEventHook</strong>: Intercept/modify/abort events before they are stored. Useful for content safety or auditing (e.g., tagging <code>violation=&lt;word&gt;</code>), or short-circuiting persistence.</li>
+<li><strong>GetSessionHook</strong>: Intercept/modify/filter sessions after they are read. Useful for removing tagged events or dynamically augmenting the returned session state.</li>
+<li><strong>Chain-of-responsibility</strong>: Hooks call <code>next()</code> to continue; returning early short-circuits later hooks, and errors bubble up.</li>
+<li><strong>Backend parity</strong>: Memory, Redis, MySQL, and PostgreSQL share the same hook interface—inject hook slices when constructing the service.</li>
+<li><strong>Example</strong>: See <code>examples/session/hook</code> (<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook">code</a>) </li>
+</ul>
 <h3 id="direct-use-of-session-service-api">Direct Use of Session Service API</h3>
 <p>In most cases, you should use session management through Runner, which automatically handles all details. However, in some special scenarios (such as session management backend, data migration, statistical analysis, etc.), you may need to directly operate the Session Service.</p>
 <p><strong>Note:</strong> The following APIs are only for special scenarios, daily use of Runner is sufficient.</p>
@@ -4854,7 +4880,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 9, 2025 01:35:21 UTC">2025-12-09 01:35:21</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 9, 2025 02:37:07 UTC">2025-12-09 02:37:07</span>
   </span>
 
     
