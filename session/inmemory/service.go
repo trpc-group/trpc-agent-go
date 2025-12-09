@@ -280,7 +280,7 @@ func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *s
 	copiedSess.ApplyEventFiltering(
 		session.WithEventNum(opt.EventNum),
 		session.WithEventTime(opt.EventTime),
-		opts...,
+		session.WithTrack(opt.Track),
 	)
 
 	appState := getValidState(app.appState)
@@ -752,14 +752,14 @@ func (s *SessionService) Close() error {
 // updateStoredSession updates the stored session with the given event.
 func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Event) {
 	if e.Track != nil || (e.Response != nil && !e.IsPartial && e.IsValidContent()) {
-		evtCopy := *e
+		evt := *e
 		if e.Track != nil {
-			trackCopy := *e.Track
-			trackCopy.Payload = append([]byte(nil), e.Track.Payload...)
-			evtCopy.Track = &trackCopy
+			track := *e.Track
+			track.Payload = append([]byte(nil), e.Track.Payload...)
+			evt.Track = &track
 		}
 		sess.EventMu.Lock()
-		sess.Events = append(sess.Events, evtCopy)
+		sess.Events = append(sess.Events, evt)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
 			start := len(sess.Events) - s.opts.sessionEventLimit
 			if start < 0 {
