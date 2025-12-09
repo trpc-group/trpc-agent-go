@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime/debug"
+	"strings"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -89,30 +90,26 @@ func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 
-	var filter *tcvectordb.Filter
+	var condStr string
 	for _, child := range conds {
 		childFilter, err := c.convertCondition(child)
 		if err != nil {
 			return nil, err
 		}
 
-		if filter == nil {
-			filter = childFilter
+		childCond := childFilter.Cond()
+		if condStr == "" {
+			condStr = childCond
 			continue
 		}
-
-		if cond.Operator == searchfilter.OperatorAnd {
-			filter.And(childFilter.Cond())
-		} else {
-			filter.Or(childFilter.Cond())
-		}
+		condStr = fmt.Sprintf("(%s) %s (%s)", condStr, strings.ToLower(cond.Operator), childCond)
 	}
 
-	if filter == nil {
+	if condStr == "" {
 		return nil, fmt.Errorf("empty logical condition")
 	}
 
-	return filter, nil
+	return tcvectordb.NewFilter(condStr), nil
 }
 
 func (c *tcVectorConverter) buildComparisonCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {

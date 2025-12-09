@@ -157,7 +157,7 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `name = "test" and (age > 25)`,
+			wantFilter: `(name = "test") and (age > 25)`,
 			wantErr:    false,
 		},
 		{
@@ -177,7 +177,7 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `status = "active" or (score < 80)`,
+			wantFilter: `(status = "active") or (score < 80)`,
 			wantErr:    false,
 		},
 		{
@@ -227,7 +227,47 @@ func Test_tcVectorConverter_convertCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `name = "test" and (status = "active" or (score < 80))`,
+			wantFilter: `(name = "test") and ((status = "active") or (score < 80))`,
+			wantErr:    false,
+		},
+		{
+			name: "multiple names grouped with permissions",
+			condition: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorAnd,
+				Value: []*searchfilter.UniversalFilterCondition{
+					{
+						Operator: searchfilter.OperatorOr,
+						Value: []*searchfilter.UniversalFilterCondition{
+							{
+								Field:    "name",
+								Operator: searchfilter.OperatorEqual,
+								Value:    "name1",
+							},
+							{
+								Field:    "name",
+								Operator: searchfilter.OperatorEqual,
+								Value:    "name2",
+							},
+						},
+					},
+					{
+						Operator: searchfilter.OperatorOr,
+						Value: []*searchfilter.UniversalFilterCondition{
+							{
+								Field:    "permission",
+								Operator: searchfilter.OperatorEqual,
+								Value:    1,
+							},
+							{
+								Field:    "user",
+								Operator: searchfilter.OperatorEqual,
+								Value:    "user1",
+							},
+						},
+					},
+				},
+			},
+			wantFilter: `((name = "name1") or (name = "name2")) and ((permission = 1) or (user = "user1"))`,
 			wantErr:    false,
 		},
 		{
@@ -314,7 +354,7 @@ func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `name = "test" and (age > 25)`,
+			wantFilter: `(name = "test") and (age > 25)`,
 			wantErr:    false,
 		},
 		{
@@ -334,7 +374,7 @@ func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `status = "active" or (score < 80)`,
+			wantFilter: `(status = "active") or (score < 80)`,
 			wantErr:    false,
 		},
 		{
@@ -364,7 +404,7 @@ func TestTcVectorConverter_buildLogicalCondition(t *testing.T) {
 					},
 				},
 			},
-			wantFilter: `name = "test" and (status = "active" or (score < 80))`,
+			wantFilter: `(name = "test") and ((status = "active") or (score < 80))`,
 			wantErr:    false,
 		},
 		{
