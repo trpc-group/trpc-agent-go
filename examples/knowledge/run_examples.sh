@@ -8,7 +8,7 @@
 #   ./run_examples.sh [OPTIONS]
 #
 # Options:
-#   -v, --vectorstore TYPE   Vector store type: inmemory|pgvector|tcvector|elasticsearch (default: inmemory)
+#   -v, --vectorstore TYPE   Vector store type: inmemory|pgvector|tcvector|elasticsearch|milvus (default: inmemory)
 #   -o, --output DIR         Output directory for results (default: ./output)
 #   -e, --examples LIST      Comma-separated list of examples to run (default: all)
 #                            Available examples:
@@ -29,6 +29,7 @@
 #   TCVector:      TCVECTOR_URL, TCVECTOR_USERNAME, TCVECTOR_PASSWORD, TCVECTOR_COLLECTION
 #   PGVector:      PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_TABLE
 #   Elasticsearch: ELASTICSEARCH_HOSTS, ELASTICSEARCH_USERNAME, ELASTICSEARCH_PASSWORD, ELASTICSEARCH_INDEX_NAME
+#   Milvus:        MILVUS_ADDRESS, MILVUS_USERNAME, MILVUS_PASSWORD, MILVUS_DB_NAME, MILVUS_COLLECTION
 #   OpenAI:        OPENAI_API_KEY, OPENAI_BASE_URL, MODEL_NAME
 #
 
@@ -50,7 +51,7 @@ ALL_STORES=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # All available vector stores
-ALL_VECTORSTORES=("inmemory" "tcvector" "pgvector" "elasticsearch")
+ALL_VECTORSTORES=("inmemory" "tcvector" "pgvector" "elasticsearch" "milvus")
 
 # Generate random table/collection name
 generate_random_name() {
@@ -113,11 +114,11 @@ done
 
 # Validate vector store type
 case $VECTORSTORE in
-    inmemory|pgvector|tcvector|elasticsearch)
+    inmemory|pgvector|tcvector|elasticsearch|milvus)
         ;;
     *)
         echo -e "${RED}Invalid vector store type: $VECTORSTORE${NC}"
-        echo "Valid types: inmemory, pgvector, tcvector, elasticsearch"
+        echo "Valid types: inmemory, pgvector, tcvector, elasticsearch, milvus"
         exit 1
         ;;
 esac
@@ -218,6 +219,35 @@ print_env_status() {
         echo -e "  Index: ${YELLOW}default (trpc_agent_go)${NC}"
     fi
     
+    # Milvus
+    echo ""
+    echo "Milvus:"
+    if [[ -n "$MILVUS_ADDRESS" ]]; then
+        echo -e "  Address: ${GREEN}$MILVUS_ADDRESS${NC}"
+    else
+        echo -e "  Address: ${YELLOW}default (localhost:19530)${NC}"
+    fi
+    if [[ -n "$MILVUS_USERNAME" ]]; then
+        echo -e "  Username: ${GREEN}configured${NC}"
+    else
+        echo -e "  Username: ${YELLOW}not set${NC}"
+    fi
+    if [[ -n "$MILVUS_PASSWORD" ]]; then
+        echo -e "  Password: ${GREEN}configured${NC}"
+    else
+        echo -e "  Password: ${YELLOW}not set${NC}"
+    fi
+    if [[ -n "$MILVUS_DB_NAME" ]]; then
+        echo -e "  DB Name: ${GREEN}$MILVUS_DB_NAME${NC}"
+    else
+        echo -e "  DB Name: ${YELLOW}not set${NC}"
+    fi
+    if [[ -n "$MILVUS_COLLECTION" ]]; then
+        echo -e "  Collection: ${GREEN}$MILVUS_COLLECTION${NC}"
+    else
+        echo -e "  Collection: ${YELLOW}default (trpc_agent_go)${NC}"
+    fi
+    
     echo -e "${BLUE}========================================${NC}"
     echo ""
 }
@@ -252,6 +282,12 @@ check_vectorstore_env() {
             # Elasticsearch has defaults, just info
             if [[ -z "$ELASTICSEARCH_HOSTS" ]]; then
                 echo -e "${YELLOW}Info: Using default ELASTICSEARCH_HOSTS (http://localhost:9200)${NC}"
+            fi
+            ;;
+        milvus)
+            # Milvus has defaults, just info
+            if [[ -z "$MILVUS_ADDRESS" ]]; then
+                echo -e "${YELLOW}Info: Using default MILVUS_ADDRESS (localhost:19530)${NC}"
             fi
             ;;
     esac
@@ -340,11 +376,13 @@ main() {
         export TCVECTOR_COLLECTION=$(generate_random_name "kb")
         export PGVECTOR_TABLE=$(generate_random_name "kb")
         export ELASTICSEARCH_INDEX_NAME=$(generate_random_name "kb")
+        export MILVUS_COLLECTION=$(generate_random_name "kb")
         
         echo -e "${YELLOW}Generated random names:${NC}"
         echo -e "  TCVECTOR_COLLECTION: $TCVECTOR_COLLECTION"
         echo -e "  PGVECTOR_TABLE: $PGVECTOR_TABLE"
         echo -e "  ELASTICSEARCH_INDEX_NAME: $ELASTICSEARCH_INDEX_NAME"
+        echo -e "  MILVUS_COLLECTION: $MILVUS_COLLECTION"
         echo ""
     fi
     
@@ -379,6 +417,7 @@ main() {
         echo "  TCVECTOR_COLLECTION: $TCVECTOR_COLLECTION" >> "$summary_file"
         echo "  PGVECTOR_TABLE: $PGVECTOR_TABLE" >> "$summary_file"
         echo "  ELASTICSEARCH_INDEX_NAME: $ELASTICSEARCH_INDEX_NAME" >> "$summary_file"
+        echo "  MILVUS_COLLECTION: $MILVUS_COLLECTION" >> "$summary_file"
     fi
     echo "Date: $(date)" >> "$summary_file"
     echo "" >> "$summary_file"
@@ -403,6 +442,7 @@ main() {
             export TCVECTOR_COLLECTION=$(generate_random_name "kb_${example_suffix}")
             export PGVECTOR_TABLE=$(generate_random_name "kb_${example_suffix}")
             export ELASTICSEARCH_INDEX_NAME=$(generate_random_name "kb_${example_suffix}")
+            export MILVUS_COLLECTION=$(generate_random_name "kb_${example_suffix}")
         fi
         
         ((total++)) || true
@@ -489,11 +529,13 @@ run_for_store() {
         export TCVECTOR_COLLECTION=$(generate_random_name "kb")
         export PGVECTOR_TABLE=$(generate_random_name "kb")
         export ELASTICSEARCH_INDEX_NAME=$(generate_random_name "kb")
+        export MILVUS_COLLECTION=$(generate_random_name "kb")
         
         echo -e "${YELLOW}Generated random names:${NC}"
         echo -e "  TCVECTOR_COLLECTION: $TCVECTOR_COLLECTION"
         echo -e "  PGVECTOR_TABLE: $PGVECTOR_TABLE"
         echo -e "  ELASTICSEARCH_INDEX_NAME: $ELASTICSEARCH_INDEX_NAME"
+        echo -e "  MILVUS_COLLECTION: $MILVUS_COLLECTION"
         echo ""
     fi
     
@@ -533,6 +575,7 @@ run_for_store() {
             export TCVECTOR_COLLECTION=$(generate_random_name "kb_${example_suffix}")
             export PGVECTOR_TABLE=$(generate_random_name "kb_${example_suffix}")
             export ELASTICSEARCH_INDEX_NAME=$(generate_random_name "kb_${example_suffix}")
+            export MILVUS_COLLECTION=$(generate_random_name "kb_${example_suffix}")
         fi
         
         echo -e "${BLUE}----------------------------------------${NC}"

@@ -11,6 +11,7 @@
 package util
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -26,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 )
@@ -39,6 +41,7 @@ const (
 	VectorStorePGVector      VectorStoreType = "pgvector"
 	VectorStoreTCVector      VectorStoreType = "tcvector"
 	VectorStoreElasticsearch VectorStoreType = "elasticsearch"
+	VectorStoreMilvus        VectorStoreType = "milvus"
 )
 
 // NewVectorStoreByType creates a vector store based on the specified type.
@@ -50,6 +53,8 @@ func NewVectorStoreByType(storeType VectorStoreType) (vectorstore.VectorStore, e
 		return newTCVectorStore()
 	case VectorStoreElasticsearch:
 		return newElasticsearchStore()
+	case VectorStoreMilvus:
+		return newMilvusStore()
 	case VectorStoreInMemory:
 		fallthrough
 	default:
@@ -112,11 +117,35 @@ func newElasticsearchStore() (vectorstore.VectorStore, error) {
 	)
 }
 
+func newMilvusStore() (vectorstore.VectorStore, error) {
+	address := GetEnvOrDefault("MILVUS_ADDRESS", "localhost:19530")
+	username := GetEnvOrDefault("MILVUS_USERNAME", "")
+	password := GetEnvOrDefault("MILVUS_PASSWORD", "")
+	dbName := GetEnvOrDefault("MILVUS_DB_NAME", "")
+	collection := GetEnvOrDefault("MILVUS_COLLECTION", "trpc_agent_go")
+
+	if address == "" {
+		return nil, fmt.Errorf("MILVUS_ADDRESS is required")
+	}
+
+	return milvus.New(context.Background(),
+		milvus.WithAddress(address),
+		milvus.WithUsername(username),
+		milvus.WithPassword(password),
+		milvus.WithDBName(dbName),
+		milvus.WithCollectionName(collection),
+	)
+}
+
 // WaitForIndexRefresh waits for Elasticsearch index refresh.
 // Elasticsearch need a short time to refresh index after index creation or data insertion.
+// Milvus also needs a short time to load collection after data insertion.
 func WaitForIndexRefresh(storeType VectorStoreType) {
 	if storeType == VectorStoreElasticsearch {
 		time.Sleep(30 * time.Second)
+	}
+	if storeType == VectorStoreMilvus {
+		time.Sleep(5 * time.Second)
 	}
 }
 

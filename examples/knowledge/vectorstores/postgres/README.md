@@ -19,12 +19,14 @@ docker run -d \
 2. Set environment variables:
 
 ```bash
+export OPENAI_BASE_URL=xxx
+export OPENAI_API_KEY=xxx
+export MODEL_NAME=xxx
 export PGVECTOR_HOST=127.0.0.1
 export PGVECTOR_PORT=5432
 export PGVECTOR_USER=postgres
 export PGVECTOR_PASSWORD=yourpassword
 export PGVECTOR_DATABASE=vectordb
-export OPENAI_API_KEY=your-api-key
 ```
 
 ## Run

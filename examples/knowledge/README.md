@@ -41,6 +41,7 @@ Persistent vector storage options:
 | postgres/ | PostgreSQL with pgvector extension | `PGVECTOR_HOST`, `PGVECTOR_PORT`, `PGVECTOR_USER`, `PGVECTOR_PASSWORD`, `PGVECTOR_DATABASE`, `PGVECTOR_TABLE` |
 | elasticsearch/ | Elasticsearch (v7/v8/v9) | `ELASTICSEARCH_HOSTS`, `ELASTICSEARCH_USERNAME`, `ELASTICSEARCH_PASSWORD`, `ELASTICSEARCH_INDEX_NAME` |
 | tcvector/ | Tencent VectorDB | `TCVECTOR_URL`, `TCVECTOR_USERNAME`, `TCVECTOR_PASSWORD`, `TCVECTOR_COLLECTION` |
+| milvus/ | Milvus vector database | `MILVUS_ADDRESS`, `MILVUS_USERNAME`, `MILVUS_PASSWORD`, `MILVUS_DB_NAME`, `MILVUS_COLLECTION` |
 
 ### features/
 Advanced features:
