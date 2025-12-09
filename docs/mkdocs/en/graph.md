@@ -588,7 +588,7 @@ Session summary notes:
 
 - `WithAddSessionSummary(true)` takes effect only when `Session.Summaries` contains a summary for the invocation’s filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
 - GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
-- TimelineFilterMode must be `TimelineFilterAll` (default FullContext) to read summaries. If you want only the summary without history, combine with `include_contents="none"` or a stricter MessageFilterMode.
+- Summary injection works only when `TimelineFilterMode` is `TimelineFilterAll`.
 
 #### Concurrency considerations
 

@@ -665,7 +665,7 @@ graphAgent, err := graphagent.New(
 
 - `WithAddSessionSummary(true)` 仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
 - GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
-- TimelineFilterMode 需为 `TimelineFilterAll`（默认 FullContext）才能读取摘要；若想仅用摘要不拉历史，可配合 `include_contents="none"` 或收紧 MessageFilterMode。
+- 摘要仅在 `TimelineFilterAll` 下生效。
 
 #### 并发使用注意事项
 

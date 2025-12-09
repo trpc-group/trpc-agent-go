@@ -686,9 +686,11 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary(t *testing.T) {
 	state := graphAgent.createInitialState(context.Background(), invocation)
 	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
 	require.True(t, ok)
-	require.Len(t, messages, 1)
+	require.Len(t, messages, 2)
 	require.Equal(t, model.RoleSystem, messages[0].Role)
 	require.Equal(t, "branch summary content", messages[0].Content)
+	require.Equal(t, model.RoleUser, messages[1].Role)
+	require.Equal(t, "hello", messages[1].Content)
 }
 
 func TestGraphAgent_CreateInitialStateWithSessionSummary_Disabled(t *testing.T) {
