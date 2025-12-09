@@ -276,7 +276,7 @@ func (r *runner) processAgentEvents(
 			r.handleEventPersistence(ctx, sess, agentEvent)
 
 			// Capture graph-level completion snapshot for final event.
-			if agentEvent.Done && agentEvent.Object == graph.ObjectTypeGraphExecution {
+			if agentEvent.Response != nil && agentEvent.Done && agentEvent.Object == graph.ObjectTypeGraphExecution {
 				finalStateDelta, finalChoices = r.captureGraphCompletion(agentEvent)
 			}
 
