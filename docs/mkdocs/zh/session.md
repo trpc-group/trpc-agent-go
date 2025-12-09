@@ -4,6 +4,12 @@
 
 tRPC-Agent-Go 框架提供了强大的会话（Session）管理功能，用于维护 Agent 与用户交互过程中的对话历史和上下文信息。通过自动持久化对话记录、智能摘要压缩和灵活的存储后端，会话管理为构建有状态的智能 Agent 提供了完整的基础设施。
 
+### 定位
+
+Session 用于管理当前会话的上下文，保存这一段对话里的用户消息、Agent 回复、工具调用结果以及基于这些内容生成的简要摘要，用于支撑多轮问答场景。
+
+在同一条对话中，它让多轮问答之间能够自然承接，避免用户在每一轮都重新描述同一个问题或提供相同参数。
+
 ### 🎯 核心特性
 
 - **上下文管理**：自动加载历史对话，实现真正的多轮对话
@@ -327,7 +333,6 @@ tRPC-Agent-Go 提供四种会话存储后端，满足不同场景需求：
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 
 ### 基础配置示例
@@ -657,7 +662,7 @@ sessionService, err := postgres.NewService(
 
 | 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
 | ------------------ | ------------------------------- | ------------------------- | -------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复   |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
 | `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
 
 **TTL 自动清理：**
@@ -674,7 +679,7 @@ sessionService, err := postgres.NewService(
 // 清理行为：
 // - softDelete=true：过期数据标记为 deleted_at = NOW()
 // - softDelete=false：过期数据被物理删除
-// - 查询时始终过滤 deleted_at IS NULL
+// - 查询时始终附加 `WHERE deleted_at IS NULL`，仅返回未软删除数据
 ```
 
 ### 配合摘要使用
@@ -919,7 +924,7 @@ sessionService, err := mysql.NewService(
 
 | 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
 | ------------------ | ------------------------------- | ------------------------- | -------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复   |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
 | `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
 
 **TTL 自动清理：**
@@ -936,7 +941,7 @@ sessionService, err := mysql.NewService(
 // 清理行为：
 // - softDelete=true：过期数据标记为 deleted_at = NOW()
 // - softDelete=false：过期数据被物理删除
-// - 查询时始终过滤 deleted_at IS NULL
+// - 查询时始终附加 `WHERE deleted_at IS NULL`，仅返回未软删除数据
 ```
 
 ### 配合摘要使用
