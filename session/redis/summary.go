@@ -87,8 +87,8 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	).Result(); err != nil {
 		return fmt.Errorf("store summaries (lua) failed: %w", err)
 	}
-	if s.sessionTTL > 0 {
-		if err := s.redisClient.Expire(ctx, sumKey, s.sessionTTL).Err(); err != nil {
+	if s.opts.sessionTTL > 0 {
+		if err := s.redisClient.Expire(ctx, sumKey, s.opts.sessionTTL).Err(); err != nil {
 			return fmt.Errorf("expire summaries failed: %w", err)
 		}
 	}

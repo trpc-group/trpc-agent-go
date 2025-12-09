@@ -1924,3 +1924,43 @@ func (s *mockToolSet) Close() error {
 func (s *mockToolSet) Name() string {
 	return "mock"
 }
+
+func TestExecuteSingleToolCallSequential_SetsTransferTag(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	inv := &agent.Invocation{
+		AgentName:    "coordinator",
+		InvocationID: "inv-transfer",
+		Model:        &mockModel{},
+	}
+
+	tools := map[string]tool.Tool{
+		transfer.TransferToolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: transfer.TransferToolName, Description: "transfer"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return map[string]any{"args": string(args)}, nil
+			},
+		},
+	}
+
+	tc := model.ToolCall{
+		ID: "call-transfer",
+		Function: model.FunctionDefinitionParam{
+			Name:      transfer.TransferToolName,
+			Arguments: []byte(`{"message":"hi"}`),
+		},
+	}
+	rsp := &model.Response{
+		Model: "model-x",
+		Choices: []model.Choice{
+			{Message: model.Message{ToolCalls: []model.ToolCall{tc}}},
+		},
+	}
+
+	evt, err := p.executeSingleToolCallSequential(ctx, inv, rsp, tools, nil, 0, tc)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.Equal(t, event.TransferTag, evt.Tag)
+	require.Equal(t, transfer.TransferToolName, evt.Response.Choices[0].Message.ToolName)
+}
