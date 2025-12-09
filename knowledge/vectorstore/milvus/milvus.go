@@ -23,6 +23,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/index"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
 
+	internalknowledge "trpc.group/trpc-go/trpc-agent-go/internal/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -171,7 +172,7 @@ func (vs *VectorStore) createCollection(ctx context.Context) error {
 	indexOpts := make([]client.CreateIndexOption, 0)
 	indexOpts = append(indexOpts, indexOption)
 	if vs.option.enableHNSW {
-		hnswIndexOption := client.NewCreateIndexOption(vs.option.collectionName, vs.option.vectorField, index.NewHNSWIndex(entity.L2, vs.option.hnswM, vs.option.hnswEfConstruction))
+		hnswIndexOption := client.NewCreateIndexOption(vs.option.collectionName, vs.option.vectorField, index.NewHNSWIndex(vs.option.metricType, vs.option.hnswM, vs.option.hnswEfConstruction))
 		indexOpts = append(indexOpts, hnswIndexOption)
 	}
 	if err := vs.client.CreateCollection(ctx, client.NewCreateCollectionOption(vs.option.collectionName, schema).WithIndexOptions(indexOpts...)); err != nil {
@@ -940,10 +941,14 @@ func (vs *VectorStore) convertSearchResult(result []client.ResultSet) (*vectorst
 	if err != nil {
 		return nil, fmt.Errorf("convert result to document failed: %w", err)
 	}
+
+	// Normalize scores based on metric type
+	normalizedScores := vs.normalizeScores(scores, query.SearchMode)
+
 	for i, doc := range docs {
 		searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
 			Document: doc,
-			Score:    scores[i],
+			Score:    normalizedScores[i],
 		})
 	}
 
@@ -963,10 +968,14 @@ func (vs *VectorStore) convertQueryResult(result client.ResultSet) (*vectorstore
 	if err != nil {
 		return nil, fmt.Errorf("convert result to document failed: %w", err)
 	}
+
+	// Normalize scores based on metric type
+	normalizedScores := vs.normalizeScores(scores, query.SearchMode)
+
 	for i, doc := range docs {
 		searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
 			Document: doc,
-			Score:    scores[i],
+			Score:    normalizedScores[i],
 		})
 	}
 	return searchResult, nil
@@ -997,4 +1006,48 @@ func convertToFloat32Vector(embedding []float64) []float32 {
 		vector32[i] = float32(v)
 	}
 	return vector32
+}
+
+// normalizeScores normalizes raw scores based on the metric type and search mode.
+// After normalization, higher scores always indicate better similarity (range [0, 1]).
+func (vs *VectorStore) normalizeScores(scores []float64, searchMode int) []float64 {
+	if len(scores) == 0 {
+		return scores
+	}
+
+	result := make([]float64, len(scores))
+
+	// Determine metric type based on search mode
+	var metricType internalknowledge.MetricType
+	switch searchMode {
+	case vectorstore.SearchModeKeyword:
+		// BM25 sparse vector search
+		metricType = internalknowledge.MetricTypeBM25
+	case vectorstore.SearchModeHybrid:
+		// Hybrid search scores are already fused by reranker
+		// Use min-max normalization for hybrid results
+		return internalknowledge.MinMaxNormalize(scores)
+	default:
+		// Vector search - use configured metric type
+		metricType = vs.metricTypeToInternal()
+	}
+
+	for i, score := range scores {
+		result[i] = internalknowledge.NormalizeScore(score, metricType)
+	}
+	return result
+}
+
+// metricTypeToInternal converts Milvus entity.MetricType to internal MetricType.
+func (vs *VectorStore) metricTypeToInternal() internalknowledge.MetricType {
+	switch vs.option.metricType {
+	case entity.L2:
+		return internalknowledge.MetricTypeL2
+	case entity.IP:
+		return internalknowledge.MetricTypeIP
+	case entity.COSINE:
+		return internalknowledge.MetricTypeCosine
+	default:
+		return internalknowledge.MetricTypeIP
+	}
 }
