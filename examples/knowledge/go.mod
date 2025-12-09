@@ -16,12 +16,8 @@ replace (
 )
 
 require (
-	github.com/tencent/vectordatabase-sdk-go v1.8.0
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/huggingface v0.7.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/ollama v0.7.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.0.0-00010101000000-000000000000
@@ -30,9 +26,6 @@ require (
 )
 
 require (
-	cloud.google.com/go v0.118.3 // indirect
-	cloud.google.com/go/auth v0.15.0 // indirect
-	cloud.google.com/go/compute/metadata v0.6.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
@@ -54,7 +47,6 @@ require (
 	github.com/elastic/go-elasticsearch/v7 v7.17.10 // indirect
 	github.com/elastic/go-elasticsearch/v8 v8.19.0 // indirect
 	github.com/elastic/go-elasticsearch/v9 v9.1.0 // indirect
-	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/form3tech-oss/jwt-go v3.2.3+incompatible // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
@@ -66,12 +58,8 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/btree v1.1.2 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
-	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/googleapis/enterprise-certificate-proxy v0.3.5 // indirect
-	github.com/googleapis/gax-go/v2 v2.14.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
@@ -100,7 +88,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mozillazg/go-httpheader v0.4.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/ollama/ollama v0.12.9 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/opencontainers/runtime-spec v1.0.2 // indirect
 	github.com/otiai10/gosseract/v2 v2.4.1 // indirect
@@ -124,6 +111,7 @@ require (
 	github.com/spf13/cast v1.3.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
+	github.com/tencent/vectordatabase-sdk-go v1.8.0 // indirect
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.69 // indirect
 	github.com/tidwall/gjson v1.17.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -148,7 +136,6 @@ require (
 	go.etcd.io/etcd/server/v3 v3.5.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.59.0 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.59.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.29.0 // indirect
@@ -169,7 +156,6 @@ require (
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
-	google.golang.org/genai v1.0.0 // indirect
 	google.golang.org/genproto v0.0.0-20250303144028-a0af3efb3deb // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250324211829-b45e905df463 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect

@@ -7,7 +7,7 @@
 //
 //
 
-// Package main demonstrates programmatic metadata filtering.
+// Package main demonstrates programmatic metadata filtering using search tools.
 //
 // Required environment variables:
 //   - OPENAI_API_KEY: Your OpenAI API key for LLM and embeddings
@@ -27,26 +27,35 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	util "trpc.group/trpc-go/trpc-agent-go/examples/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var (
-	vectorStore = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
+	defaultModelName = "deepseek-chat"
+	vectorStore      = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
 )
 
 func main() {
 	flag.Parse()
 	ctx := context.Background()
+	modelName := util.GetEnvOrDefault("MODEL_NAME", defaultModelName)
 
 	fmt.Println("🔎 Metadata Filter Demo")
 	fmt.Println("=======================")
+	fmt.Printf("Model: %s\n", modelName)
 
 	// Create sources with metadata
 	sources := []source.Source{
@@ -85,73 +94,78 @@ func main() {
 	// Wait for data refresh if needed
 	util.WaitForIndexRefresh(storeType)
 
-	// Example 1: Simple equality filter
-	// Note: Use "metadata." prefix for metadata fields in filter conditions
-	fmt.Println("\n1️⃣ Filter: metadata.topic=programming")
-	result, err := kb.Search(ctx, &knowledge.SearchRequest{
-		Query:      "programming concepts",
-		MaxResults: 5,
-		SearchFilter: &knowledge.SearchFilter{
-			FilterCondition: searchfilter.Equal("metadata.topic", "programming"),
-		},
-	})
-	if err != nil {
-		log.Printf("Search failed: %v", err)
-	} else {
-		printResults(result)
-	}
+	// Example 1: Simple equality filter using WithFilter
+	fmt.Println("\n1️⃣ Filter: metadata.topic=programming (using WithFilter)")
+	programmingTool := knowledgetool.NewKnowledgeSearchTool(
+		kb,
+		knowledgetool.WithToolName("search_programming"),
+		knowledgetool.WithToolDescription("Search programming-related documentation"),
+		knowledgetool.WithFilter(map[string]any{
+			"metadata.topic": "programming",
+		}),
+		knowledgetool.WithMaxResults(5),
+	)
+	runToolDemo(ctx, modelName, programmingTool, "What are the key features of Go programming language?")
 
-	// Example 2: OR filter
-	fmt.Println("\n2️⃣ Filter: metadata.topic=programming OR metadata.topic=machine_learning")
-	result, err = kb.Search(ctx, &knowledge.SearchRequest{
-		Query:      "advanced topics",
-		MaxResults: 5,
-		SearchFilter: &knowledge.SearchFilter{
-			FilterCondition: searchfilter.Or(
+	// Example 2: OR filter using WithConditionedFilter
+	fmt.Println("\n2️⃣ Filter: metadata.topic=programming OR metadata.topic=machine_learning (using WithConditionedFilter)")
+	orFilterTool := knowledgetool.NewKnowledgeSearchTool(
+		kb,
+		knowledgetool.WithToolName("search_all_topics"),
+		knowledgetool.WithToolDescription("Search all technical documentation"),
+		knowledgetool.WithConditionedFilter(
+			searchfilter.Or(
 				searchfilter.Equal("metadata.topic", "programming"),
 				searchfilter.Equal("metadata.topic", "machine_learning"),
 			),
-		},
-	})
-	if err != nil {
-		log.Printf("Search failed: %v", err)
-	} else {
-		printResults(result)
-	}
+		),
+		knowledgetool.WithMaxResults(5),
+	)
+	runToolDemo(ctx, modelName, orFilterTool, "What advanced topics are covered?")
 
-	// Example 3: AND filter
-	fmt.Println("\n3️⃣ Filter: metadata.topic=programming AND metadata.difficulty=beginner")
-	result, err = kb.Search(ctx, &knowledge.SearchRequest{
-		Query:      "basics",
-		MaxResults: 5,
-		SearchFilter: &knowledge.SearchFilter{
-			FilterCondition: searchfilter.And(
+	// Example 3: AND filter using WithConditionedFilter
+	fmt.Println("\n3️⃣ Filter: metadata.topic=programming AND metadata.difficulty=beginner (using WithConditionedFilter)")
+	andFilterTool := knowledgetool.NewKnowledgeSearchTool(
+		kb,
+		knowledgetool.WithToolName("search_beginner_programming"),
+		knowledgetool.WithToolDescription("Search beginner-level programming documentation"),
+		knowledgetool.WithConditionedFilter(
+			searchfilter.And(
 				searchfilter.Equal("metadata.topic", "programming"),
 				searchfilter.Equal("metadata.difficulty", "beginner"),
 			),
-		},
-	})
+		),
+		knowledgetool.WithMaxResults(5),
+	)
+	runToolDemo(ctx, modelName, andFilterTool, "How do I get started with Go?")
+}
+
+func runToolDemo(ctx context.Context, modelName string, searchTool tool.Tool, query string) {
+	agent := llmagent.New(
+		"filter-assistant",
+		llmagent.WithModel(openaimodel.New(modelName)),
+		llmagent.WithTools([]tool.Tool{searchTool}),
+	)
+
+	r := runner.NewRunner(
+		"filter-chat",
+		agent,
+		runner.WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	defer r.Close()
+
+	fmt.Printf("   🔍 Query: %s\n", query)
+	eventChan, err := r.Run(ctx, "user", "session-1", model.NewUserMessage(query))
 	if err != nil {
-		log.Printf("Search failed: %v", err)
-	} else {
-		printResults(result)
+		log.Printf("Query failed: %v", err)
+		return
 	}
-}
 
-func printResults(result *knowledge.SearchResult) {
-	fmt.Printf("   Found %d results:\n", len(result.Documents))
-	for i, doc := range result.Documents {
-		fmt.Printf("   %d. %s (score: %.3f)\n", i+1, doc.Document.Name, doc.Score)
-		fmt.Printf("      Metadata: %v\n", filterInternalMetadata(doc.Document.Metadata))
-	}
-}
-
-func filterInternalMetadata(metadata map[string]any) map[string]any {
-	filtered := make(map[string]any)
-	for k, v := range metadata {
-		if !strings.HasPrefix(k, source.MetaPrefix) {
-			filtered[k] = v
+	fmt.Print("   🤖 Response: ")
+	for evt := range eventChan {
+		util.PrintEventWithToolCalls(evt)
+		if evt.IsFinalResponse() && len(evt.Response.Choices) > 0 {
+			fmt.Println(evt.Response.Choices[0].Message.Content)
 		}
 	}
-	return filtered
 }
