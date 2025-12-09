@@ -113,3 +113,25 @@ func WithChecksAny(checks ...Checker) Option {
 		}
 	}
 }
+
+// WithPreSummaryHook sets a pre-summary hook to modify text before the model call.
+func WithPreSummaryHook(h PreSummaryHook) Option {
+	return func(s *sessionSummarizer) {
+		s.preHook = h
+	}
+}
+
+// WithPostSummaryHook sets a post-summary hook to modify the summary before returning.
+func WithPostSummaryHook(h PostSummaryHook) Option {
+	return func(s *sessionSummarizer) {
+		s.postHook = h
+	}
+}
+
+// WithSummaryHookAbortOnError decides whether to abort when a hook returns an error.
+// Default false: ignore hook errors and use original text/summary; true: return error.
+func WithSummaryHookAbortOnError(abort bool) Option {
+	return func(s *sessionSummarizer) {
+		s.hookAbortOnError = abort
+	}
+}
