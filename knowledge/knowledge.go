@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // Knowledge is the main interface for knowledge management operations.
@@ -91,3 +92,9 @@ type SearchFilter struct {
 	// It is compatible with all storage engines.
 	FilterCondition *searchfilter.UniversalFilterCondition
 }
+
+// MetadataFieldPrefix is re-exported from source package for convenience.
+// Fields with this prefix (e.g., "metadata.category") are treated as metadata fields
+// and will be processed accordingly by each vector store implementation.
+// Fields without this prefix are treated as system fields or custom top-level fields.
+const MetadataFieldPrefix = source.MetadataFieldPrefix

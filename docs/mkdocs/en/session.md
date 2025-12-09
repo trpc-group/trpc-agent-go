@@ -223,6 +223,31 @@ r := runner.NewRunner("my-agent", llmAgent,
     runner.WithSessionService(sessionService))
 ```
 
+#### Summary hooks (pre/post)
+
+You can inject hooks to tweak summary input or output:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPreSummaryHook(func(ctx *summary.PreSummaryHookContext) error {
+        // Optionally modify ctx.Text or ctx.Events before summarization.
+        return nil
+    }),
+    summary.WithPostSummaryHook(func(ctx *summary.PostSummaryHookContext) error {
+        // Optionally modify ctx.Summary before returning to caller.
+        return nil
+    }),
+    summary.WithSummaryHookAbortOnError(true), // Abort when hook returns error (optional).
+)
+```
+
+Notes:
+
+- Pre-hook can mutate `ctx.Text` (preferred) or `ctx.Events`; post-hook can mutate `ctx.Summary`.
+- Default behavior ignores hook errors; enable abort with
+  `WithSummaryHookAbortOnError(true)`.
+
 **Context Injection Mechanism:**
 
 After enabling summary, the framework prepends the summary as a system message to the LLM input, while including all incremental events after the summary timestamp to ensure complete context:
@@ -1035,6 +1060,14 @@ CREATE TABLE user_states (
 - MySQL uses `ON DUPLICATE KEY UPDATE` syntax for UPSERT
 
 ## Advanced Usage
+
+### Hook Capabilities (Append/Get)
+
+- **AppendEventHook**: Intercept/modify/abort events before they are stored. Useful for content safety or auditing (e.g., tagging `violation=<word>`), or short-circuiting persistence.
+- **GetSessionHook**: Intercept/modify/filter sessions after they are read. Useful for removing tagged events or dynamically augmenting the returned session state.
+- **Chain-of-responsibility**: Hooks call `next()` to continue; returning early short-circuits later hooks, and errors bubble up.
+- **Backend parity**: Memory, Redis, MySQL, and PostgreSQL share the same hook interface—inject hook slices when constructing the service.
+- **Example**: See `examples/session/hook` ([code](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)) 
 
 ### Direct Use of Session Service API
 
