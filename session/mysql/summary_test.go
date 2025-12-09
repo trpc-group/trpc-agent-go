@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -415,6 +416,101 @@ func TestGetSessionSummaryText_WithNilSession(t *testing.T) {
 	text, found := s.GetSessionSummaryText(ctx, nil)
 	assert.False(t, found)
 	assert.Empty(t, text)
+}
+
+func TestGetSessionSummaryText_WithFilterKey(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:      "session-123",
+		AppName: "test-app",
+		UserID:  "user-456",
+	}
+
+	filterKey := "user-messages"
+	summary := session.Summary{
+		Summary: "Filtered summary text",
+		Topics:  []string{},
+	}
+	summaryBytes, _ := json.Marshal(summary)
+
+	// Mock: Query summary with specific filter key
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, filterKey, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary"}).
+			AddRow(summaryBytes))
+
+	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey(filterKey))
+	assert.True(t, found)
+	assert.Equal(t, "Filtered summary text", text)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSessionSummaryText_FallbackToFullSession(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:      "session-123",
+		AppName: "test-app",
+		UserID:  "user-456",
+	}
+
+	// First query for specific filter key returns no rows.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "missing-key", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary"}))
+
+	// Fallback query for full-session summary returns data.
+	fullSummary := session.Summary{Summary: "full summary text"}
+	fullBytes, _ := json.Marshal(fullSummary)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary"}).AddRow(fullBytes))
+
+	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey("missing-key"))
+	assert.True(t, found)
+	assert.Equal(t, "full summary text", text)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSessionSummaryText_FallbackQueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:      "session-123",
+		AppName: "test-app",
+		UserID:  "user-456",
+	}
+
+	// First query for specific filter key returns no rows.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "missing-key", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary"}))
+
+	// Fallback query fails.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, session.SummaryFilterKeyAllContents, sqlmock.AnyArg()).
+		WillReturnError(fmt.Errorf("fallback query error"))
+
+	text, found := s.GetSessionSummaryText(ctx, sess, session.WithSummaryFilterKey("missing-key"))
+	assert.False(t, found)
+	assert.Empty(t, text)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // func TestPickSummaryText
@@ -1210,7 +1306,7 @@ func TestPickSummaryText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotText, gotOk := pickSummaryText(tt.summaries)
+			gotText, gotOk := isummary.PickSummaryText(tt.summaries, "")
 			if gotText != tt.wantText {
 				t.Errorf("pickSummaryText() text = %v, want %v", gotText, tt.wantText)
 			}
@@ -1219,4 +1315,153 @@ func TestPickSummaryText(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "async summary"}
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSummarizer(summarizer),
+		WithAsyncSummaryNum(1), WithSummaryQueueSize(10))
+
+	// Start async workers
+	s.startAsyncSummaryWorker()
+	defer func() {
+		for _, ch := range s.summaryJobChans {
+			close(ch)
+		}
+	}()
+
+	ctx := context.Background()
+
+	sess := &session.Session{
+		ID:        "session-123",
+		AppName:   "test-app",
+		UserID:    "user-456",
+		UpdatedAt: time.Now(),
+	}
+
+	// Mock: Insert summary via async worker
+	mock.ExpectExec(regexp.QuoteMeta("REPLACE INTO session_summaries")).
+		WithArgs(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			"",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = s.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
+
+	// Wait for async processing
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestTryEnqueueJob_QueueFull(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db,
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+
+	// Start async workers to initialize channels
+	s.startAsyncSummaryWorker()
+	defer s.Close() // This will close the channels
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "user-456", "session-123")
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+
+	// Fill the queue by sending to the channel directly
+	index := sess.Hash % len(s.summaryJobChans)
+	select {
+	case s.summaryJobChans[index] <- job:
+		// Successfully sent, now try to enqueue another which should fail
+	default:
+		t.Skip("Could not fill queue for testing")
+	}
+
+	// Try to enqueue when queue is full - should return false
+	result := s.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+}
+
+func TestTryEnqueueJob_ContextCancelled(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db,
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+
+	// Start async workers to initialize channels
+	s.startAsyncSummaryWorker()
+	defer s.Close() // This will close the channels
+
+	sess := session.NewSession("test-app", "user-456", "session-123")
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+
+	// First, fill the queue to make subsequent enqueue operations check ctx.Done()
+	index := sess.Hash % len(s.summaryJobChans)
+	select {
+	case s.summaryJobChans[index] <- job:
+		// Successfully filled the queue
+	default:
+		t.Skip("Could not fill queue for testing")
+	}
+
+	// Create cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Try to enqueue with cancelled context when queue is full - should return false
+	result := s.tryEnqueueJob(ctx, job)
+	assert.False(t, result, "tryEnqueueJob should return false when context is cancelled and queue is full")
+}
+
+func TestProcessSummaryJob_Timeout(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	summarizer := &fakeSummarizer{allow: true, out: "timeout summary"}
+
+	s := createTestService(t, db, WithSummarizer(summarizer),
+		WithSummaryJobTimeout(10*time.Millisecond))
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session: &session.Session{
+			ID:        "session-123",
+			AppName:   "test-app",
+			UserID:    "user-456",
+			UpdatedAt: time.Now(),
+		},
+	}
+
+	// This should not panic even with timeout
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
 }

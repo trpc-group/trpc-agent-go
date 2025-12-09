@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
+	isummary "trpc.group/trpc-go/trpc-agent-go/internal/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -41,7 +41,7 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	updated, err := summary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
@@ -154,9 +154,12 @@ func (s *Service) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
 }
 
 // GetSessionSummaryText gets the summary text for a session.
+// When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
+// Use session.WithSummaryFilterKey to specify a different filter key.
 func (s *Service) GetSessionSummaryText(
 	ctx context.Context,
 	sess *session.Session,
+	opts ...session.SummaryOption,
 ) (string, bool) {
 	if sess == nil {
 		return "", false
@@ -165,16 +168,16 @@ func (s *Service) GetSessionSummaryText(
 	if err := key.CheckSessionKey(); err != nil {
 		return "", false
 	}
-	// Prefer local in-memory session summaries when available.
-	if len(sess.Summaries) > 0 {
-		if text, ok := pickSummaryText(sess.Summaries); ok {
-			return text, true
-		}
+
+	// Try in-memory session summaries first.
+	if text, ok := isummary.GetSummaryTextFromSession(sess, opts...); ok {
+		return text, true
 	}
-	// Use empty filterKey to get the default summary
+
+	// Query database with specified filterKey.
 	var summaryText string
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		// rows.Next() is already called by the Query loop
+		// rows.Next() is already called by the Query loop.
 		var summaryBytes []byte
 		if err := rows.Scan(&summaryBytes); err != nil {
 			return err
@@ -189,10 +192,34 @@ func (s *Service) GetSessionSummaryText(
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now())
+		key.AppName, key.UserID, key.SessionID, isummary.GetFilterKeyFromOptions(opts...), time.Now())
 
 	if err != nil {
 		return "", false
+	}
+
+	// If requested filterKey not found, try fallback to full-session summary.
+	filterKey := isummary.GetFilterKeyFromOptions(opts...)
+	if summaryText == "" && filterKey != session.SummaryFilterKeyAllContents {
+		err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+			var summaryBytes []byte
+			if err := rows.Scan(&summaryBytes); err != nil {
+				return err
+			}
+			var sum session.Summary
+			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+				return fmt.Errorf("unmarshal summary failed: %w", err)
+			}
+			summaryText = sum.Summary
+			return nil
+		}, fmt.Sprintf(`SELECT summary FROM %s
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
+			AND (expires_at IS NULL OR expires_at > ?)
+			AND deleted_at IS NULL`, s.tableSessionSummaries),
+			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now())
+		if err != nil {
+			return "", false
+		}
 	}
 
 	if summaryText == "" {
@@ -200,24 +227,6 @@ func (s *Service) GetSessionSummaryText(
 	}
 
 	return summaryText, true
-}
-
-// pickSummaryText picks a non-empty summary string with preference for the
-// all-contents key "" (empty filterKey). No special handling for "root".
-func pickSummaryText(summaries map[string]*session.Summary) (string, bool) {
-	if summaries == nil {
-		return "", false
-	}
-	// Prefer full-summary stored under empty filterKey.
-	if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
-		return sum.Summary, true
-	}
-	for _, s := range summaries {
-		if s != nil && s.Summary != "" {
-			return s.Summary, true
-		}
-	}
-	return "", false
 }
 
 // startAsyncSummaryWorker starts worker goroutines for async summary generation.
