@@ -28,6 +28,7 @@ import (
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -1408,16 +1409,27 @@ func buildAgentInvocationWithStateAndScope(
 	}
 
 	// Clone from parent invocation if available to preserve linkage and filtering.
-	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
-		base := scope
-		if base == "" {
-			base = targetAgent.Info().Name
+	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
+		parentInvocation != nil {
+		base := util.If(scope != "", scope, targetAgent.Info().Name)
+		parentKey := parentInvocation.GetEventFilterKey()
+		var filterKey string
+		if parentKey == "" {
+			filterKey = base + agent.EventFilterKeyDelimiter +
+				uuid.NewString()
+		} else {
+			filterKey = parentKey + agent.EventFilterKeyDelimiter +
+				base + agent.EventFilterKeyDelimiter +
+				uuid.NewString()
 		}
-		filterKey := parentInvocation.GetEventFilterKey() + agent.EventFilterKeyDelimiter + base + uuid.NewString()
 		inv := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
-			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
-			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
+			agent.WithInvocationMessage(
+				model.NewUserMessage(userInput),
+			),
+			agent.WithInvocationRunOptions(agent.RunOptions{
+				RuntimeState: runtime,
+			}),
 			agent.WithInvocationEventFilterKey(filterKey),
 		)
 		return inv
