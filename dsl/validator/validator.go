@@ -89,7 +89,7 @@ func (v *Validator) validateStructure(graphDef *dsl.Graph) error {
 
 	// Check for duplicate node IDs and component references. Track builtin.start
 	// node (if present) so we can enforce related invariants.
-	nodeIDs := make(map[string]bool)
+	nodeIDs := make(map[string]bool, len(graphDef.Nodes))
 	startNodeID := ""
 	for _, node := range graphDef.Nodes {
 		if node.ID == "" {

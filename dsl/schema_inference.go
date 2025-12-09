@@ -157,11 +157,11 @@ func (si *SchemaInference) addDeclaredStateVariables(
 // This method only cares about executable semantics and is intentionally
 // decoupled from any UI-specific concepts.
 func (si *SchemaInference) InferSchema(graphDef *Graph) (*graph.StateSchema, error) {
-	paramMap, err := si.buildParameterMap(graphDef)
+	params, err := si.buildParameterMap(graphDef)
 	if err != nil {
 		return nil, err
 	}
-	schema := si.buildSchemaFromParams(paramMap)
+	schema := si.buildSchemaFromParams(params)
 	// Enrich with graph-declared state variables (e.g., for builtin.set_state).
 	si.addDeclaredStateVariables(schema, graphDef, nil)
 	return schema, nil
@@ -186,16 +186,16 @@ type FieldUsage struct {
 // information (which nodes read/write which fields). This is intended for
 // platform / UI layers that need to present variable suggestions.
 func (si *SchemaInference) InferSchemaAndUsage(graphDef *Graph) (*graph.StateSchema, map[string]FieldUsage, error) {
-	paramMap, err := si.buildParameterMap(graphDef)
+	params, err := si.buildParameterMap(graphDef)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Enrich parameter info with component-level context where useful (e.g., structured_output).
-	si.attachComponentContext(graphDef, paramMap)
+	si.attachComponentContext(graphDef, params)
 
-	schema := si.buildSchemaFromParams(paramMap)
-	usage := si.buildUsageFromParams(paramMap)
+	schema := si.buildSchemaFromParams(params)
+	usage := si.buildUsageFromParams(params)
 
 	// Enrich schema and usage with graph-declared state variables so that
 	// editor-facing variables include explicitly declared fields (e.g., via Start).
@@ -207,13 +207,13 @@ func (si *SchemaInference) InferSchemaAndUsage(graphDef *Graph) (*graph.StateSch
 // buildSchemaFromParams constructs a StateSchema from a collected parameter map.
 // It is intentionally focused on execution semantics and does not attach any
 // editor-facing usage information.
-func (si *SchemaInference) buildSchemaFromParams(paramMap map[string]*parameterInfo) *graph.StateSchema {
+func (si *SchemaInference) buildSchemaFromParams(params map[string]*parameterInfo) *graph.StateSchema {
 	schema := graph.NewStateSchema()
 	// Add framework built-in fields first.
 	si.addBuiltinFields(schema)
 
 	// Convert parameter map to StateSchema.
-	for name, param := range paramMap {
+	for name, param := range params {
 		reducer := si.getReducer(param.Reducer)
 
 		schema.AddField(name, graph.StateField{
@@ -229,10 +229,10 @@ func (si *SchemaInference) buildSchemaFromParams(paramMap map[string]*parameterI
 // buildUsageFromParams constructs FieldUsage information from a collected
 // parameter map. It is used by higher layers (e.g., editors) to drive
 // variable pickers and type hints.
-func (si *SchemaInference) buildUsageFromParams(paramMap map[string]*parameterInfo) map[string]FieldUsage {
-	usage := make(map[string]FieldUsage, len(paramMap))
+func (si *SchemaInference) buildUsageFromParams(params map[string]*parameterInfo) map[string]FieldUsage {
+	usage := make(map[string]FieldUsage, len(params))
 
-	for name, param := range paramMap {
+	for name, param := range params {
 		fieldUsage := FieldUsage{
 			Name:       name,
 			Type:       param.GoType.String(),
@@ -271,7 +271,9 @@ func (si *SchemaInference) buildUsageFromParams(paramMap map[string]*parameterIn
 // buildParameterMap collects all input/output parameters from components and DSL NodeIO
 // into a map keyed by state field name.
 func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*parameterInfo, error) {
-	parameterMap := make(map[string]*parameterInfo)
+	// Rough capacity hint: each node typically contributes a small number of
+	// inputs and outputs, so we start with 2x node count to reduce map growth.
+	params := make(map[string]*parameterInfo, len(graphDef.Nodes)*2)
 
 	for _, node := range graphDef.Nodes {
 		engine := node.EngineNode
@@ -282,7 +284,7 @@ func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*param
 			// For builtin components not present in the registry, fall back to
 			// processing DSL-level outputs only.
 			if engine.NodeType == "builtin.llm" || engine.NodeType == "builtin.tools" {
-				if err := si.addDSLOutputs(node, parameterMap); err != nil {
+				if err := si.addDSLOutputs(node, params); err != nil {
 					return nil, fmt.Errorf("node %s: %w", node.ID, err)
 				}
 				continue
@@ -294,26 +296,26 @@ func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*param
 
 		// Add input parameters (mark as readers tied to this node)
 		for _, input := range metadata.Inputs {
-			if err := si.addParameter(parameterMap, input, fmt.Sprintf("input:%s", node.ID)); err != nil {
+			if err := si.addParameter(params, input, fmt.Sprintf("input:%s", node.ID)); err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
 		}
 
 		// Add output parameters from component metadata (writers tied to this node)
 		for _, output := range metadata.Outputs {
-			if err := si.addParameter(parameterMap, output, fmt.Sprintf("output:%s", node.ID)); err != nil {
+			if err := si.addParameter(params, output, fmt.Sprintf("output:%s", node.ID)); err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
 		}
 
 		// Add DSL-level output overrides (if specified)
 		// These take precedence over component metadata outputs
-		if err := si.addDSLOutputs(node, parameterMap); err != nil {
+		if err := si.addDSLOutputs(node, params); err != nil {
 			return nil, fmt.Errorf("node %s: %w", node.ID, err)
 		}
 	}
 
-	return parameterMap, nil
+	return params, nil
 }
 
 // parameterInfo holds information about a parameter during inference.
@@ -331,8 +333,8 @@ type parameterInfo struct {
 }
 
 // addParameter adds a parameter to the parameter map.
-func (si *SchemaInference) addParameter(paramMap map[string]*parameterInfo, param registry.ParameterSchema, source string) error {
-	existing, exists := paramMap[param.Name]
+func (si *SchemaInference) addParameter(params map[string]*parameterInfo, param registry.ParameterSchema, source string) error {
+	existing, exists := params[param.Name]
 
 	if !exists {
 		// First time seeing this parameter
@@ -344,7 +346,7 @@ func (si *SchemaInference) addParameter(paramMap map[string]*parameterInfo, para
 
 		kind, schemaRef := classifyGoType(param.GoType, param.Name)
 
-		paramMap[param.Name] = &parameterInfo{
+		params[param.Name] = &parameterInfo{
 			Name:        param.Name,
 			GoType:      param.GoType,
 			Reducer:     param.Reducer,
@@ -379,7 +381,7 @@ func (si *SchemaInference) addParameter(paramMap map[string]*parameterInfo, para
 
 // addDSLOutputs adds output parameters from DSL node outputs configuration.
 // This handles output remapping specified in the graph DSL.
-func (si *SchemaInference) addDSLOutputs(node Node, paramMap map[string]*parameterInfo) error {
+func (si *SchemaInference) addDSLOutputs(node Node, params map[string]*parameterInfo) error {
 	engine := node.EngineNode
 
 	if len(engine.Outputs) == 0 {
@@ -412,7 +414,7 @@ func (si *SchemaInference) addDSLOutputs(node Node, paramMap map[string]*paramet
 		}
 
 		// Add to parameter map
-		if err := si.addParameter(paramMap, param, fmt.Sprintf("dsl:%s", node.ID)); err != nil {
+		if err := si.addParameter(params, param, fmt.Sprintf("dsl:%s", node.ID)); err != nil {
 			return err
 		}
 	}
