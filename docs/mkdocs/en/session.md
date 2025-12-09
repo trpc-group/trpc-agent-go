@@ -4,6 +4,12 @@
 
 tRPC-Agent-Go provides powerful session management capabilities to maintain conversation history and context information during Agent-user interactions. Through automatic persistence of conversation records, intelligent summary compression, and flexible storage backends, session management offers complete infrastructure for building stateful intelligent Agents.
 
+### Positioning
+
+A Session manages the context of the current conversation, with isolation dimensions `<appName, userID, SessionID>`. It stores user messages, Agent responses, tool call results, and brief summaries generated based on this content within the conversation, supporting multi-turn question-and-answer scenarios.
+
+Within the same conversation, it allows for seamless transitions between multiple turns of question-and-answer, preventing users from restating the same question or providing the same parameters in each turn.
+
 ### 🎯 Key Features
 
 - **Context Management**: Automatically load conversation history for true multi-turn dialogues
@@ -681,7 +687,7 @@ sessionService, err := postgres.NewService(
 
 | Configuration      | Delete Operation                | Query Behavior              | Data Recovery   |
 | ------------------ | ------------------------------- | --------------------------- | --------------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable     |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Queries include `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows | Recoverable     |
 | `softDelete=false` | `DELETE FROM ...`               | Query all records           | Not recoverable |
 
 **TTL Auto Cleanup:**
@@ -698,7 +704,7 @@ sessionService, err := postgres.NewService(
 // Cleanup behavior:
 // - softDelete=true: Expired data marked as deleted_at = NOW()
 // - softDelete=false: Expired data physically deleted
-// - Queries always filter deleted_at IS NULL
+// - Queries always append `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows.
 ```
 
 ### Use with Summary
@@ -943,7 +949,7 @@ sessionService, err := mysql.NewService(
 
 | Configuration      | Delete Operation                | Query Behavior              | Data Recovery   |
 | ------------------ | ------------------------------- | --------------------------- | --------------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Filter `deleted_at IS NULL` | Recoverable     |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | Queries include `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows | Recoverable     |
 | `softDelete=false` | `DELETE FROM ...`               | Query all records           | Not recoverable |
 
 **TTL Auto Cleanup:**
@@ -960,7 +966,7 @@ sessionService, err := mysql.NewService(
 // Cleanup behavior:
 // - softDelete=true: Expired data marked as deleted_at = NOW()
 // - softDelete=false: Expired data physically deleted
-// - Queries always filter deleted_at IS NULL
+// - Queries always append `WHERE deleted_at IS NULL`, returning only non-soft-deleted rows.
 ```
 
 ### Use with Summary
