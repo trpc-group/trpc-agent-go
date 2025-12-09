@@ -86,17 +86,16 @@ func newLLMAgentNodeFuncFromConfig(
 	var mcpToolSets []tool.ToolSet
 	if mcpToolsConfig, ok := cfg["mcp_tools"]; ok {
 		if mcpToolsList, ok := mcpToolsConfig.([]interface{}); ok {
-			for _, mcpToolInterface := range mcpToolsList {
+			for idx, mcpToolInterface := range mcpToolsList {
 				mcpToolConfig, ok := mcpToolInterface.(map[string]interface{})
 				if !ok {
-					continue
+					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d] must be an object", nodeID, idx)
 				}
 
 				rawServerURL, ok := mcpToolConfig["server_url"].(string)
 				serverURL := strings.TrimSpace(rawServerURL)
 				if !ok || serverURL == "" {
-					log.Warnf("builtin.llmagent: skipping MCP tool config without server_url")
-					continue
+					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d].server_url is required", nodeID, idx)
 				}
 
 				transport := "streamable_http"
@@ -104,8 +103,7 @@ func newLLMAgentNodeFuncFromConfig(
 					transport = strings.TrimSpace(t)
 				}
 				if transport != "streamable_http" && transport != "sse" {
-					log.Warnf("builtin.llmagent: skipping MCP tool config with unsupported transport %q", transport)
-					continue
+					return nil, fmt.Errorf("builtin.llmagent[%s]: mcp_tools[%d].transport %q is not supported (must be \"streamable_http\" or \"sse\")", nodeID, idx, transport)
 				}
 
 				var headers map[string]any
@@ -142,11 +140,11 @@ func newLLMAgentNodeFuncFromConfig(
 					cfgMap["tool_filter"] = toolFilter
 				}
 
-				if toolSet, err := createMCPToolSet(cfgMap); err == nil {
-					mcpToolSets = append(mcpToolSets, toolSet)
-				} else {
-					log.Warnf("builtin.llmagent: failed to create MCP toolset for server %q: %v", serverURL, err)
+				toolSet, err := createMCPToolSet(cfgMap)
+				if err != nil {
+					return nil, fmt.Errorf("builtin.llmagent[%s]: failed to create MCP toolset for server %q: %w", nodeID, serverURL, err)
 				}
+				mcpToolSets = append(mcpToolSets, toolSet)
 			}
 		}
 	}
@@ -454,29 +452,42 @@ func newBuiltinConditionFunc(fromNodeID string, cond dsl.Condition) (graph.Condi
 		return nil, fmt.Errorf("builtin condition requires at least one case")
 	}
 
-	// Create a local copy of cases to avoid capturing a mutable slice from the caller.
-	cases := make([]dsl.Case, len(cond.Cases))
-	copy(cases, cond.Cases)
+	// Create a local copy of cases and compile their predicates once so that
+	// runtime evaluation only needs to execute the compiled CEL programs.
+	type compiledCase struct {
+		caseDef dsl.Case
+		prog    *dslcel.BoolProgram
+	}
+	compiled := make([]compiledCase, 0, len(cond.Cases))
+	for idx, kase := range cond.Cases {
+		expr := strings.TrimSpace(kase.Predicate.Expression)
+		if expr == "" {
+			return nil, fmt.Errorf("builtin case %d predicate.expression is required", idx)
+		}
+		prog, err := dslcel.CompileBool(expr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compile builtin case %d expression: %w", idx, err)
+		}
+		compiled = append(compiled, compiledCase{
+			caseDef: kase,
+			prog:    prog,
+		})
+	}
 
 	return func(ctx context.Context, state graph.State) (string, error) {
 		input := buildNodeInputView(state, fromNodeID)
 
-		for idx, kase := range cases {
-			expr := strings.TrimSpace(kase.Predicate.Expression)
-			if expr == "" {
-				continue
-			}
-
-			ok, err := dslcel.EvalBool(expr, state, input)
+		for idx, c := range compiled {
+			ok, err := c.prog.Eval(state, input)
 			if err != nil {
 				return "", fmt.Errorf("failed to evaluate builtin case %d: %w", idx, err)
 			}
 			if ok {
-				log.Debugf("[COND] builtin case matched index=%d name=%q target=%q", idx, kase.Name, kase.Target)
-				if kase.Target == "" {
+				log.Debugf("[COND] builtin case matched index=%d name=%q target=%q", idx, c.caseDef.Name, c.caseDef.Target)
+				if c.caseDef.Target == "" {
 					return "", fmt.Errorf("builtin case %d has empty target", idx)
 				}
-				return kase.Target, nil
+				return c.caseDef.Target, nil
 			}
 		}
 

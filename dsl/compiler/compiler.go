@@ -254,6 +254,13 @@ func (c *Compiler) Compile(graphDef *dsl.Graph) (*graph.Graph, error) {
 		}
 
 		condExpr := exp.Cond.Expression
+		// Compile the CEL expression once at compile time so that runtime
+		// execution of the while loop only evaluates the already compiled
+		// program instead of re-parsing on each iteration.
+		condProg, err := dslcel.CompileBool(condExpr)
+		if err != nil {
+			return nil, fmt.Errorf("while node %s has invalid condition expression: %w", whileID, err)
+		}
 
 		condFunc := func(ctx context.Context, state graph.State) (string, error) {
 			// Build the input view from the body exit node so that CEL
@@ -261,7 +268,7 @@ func (c *Compiler) Compile(graphDef *dsl.Graph) (*graph.Graph, error) {
 			// OpenAI workflow semantics.
 			input := buildNodeInputView(state, exp.BodyExit)
 
-			ok, err := dslcel.EvalBool(condExpr, state, input)
+			ok, err := condProg.Eval(state, input)
 			if err != nil {
 				return "", fmt.Errorf("while condition evaluation failed: %w", err)
 			}
