@@ -92,6 +92,7 @@ var defaultOptions = options{
 	hnswM:              16,
 	hnswEfConstruction: 128,
 	metricType:         entity.IP,
+	reranker:           client.NewRRFReranker(),
 	idField:            idFieldName,
 	nameField:          nameFieldName,
 	contentField:       contentFieldName,

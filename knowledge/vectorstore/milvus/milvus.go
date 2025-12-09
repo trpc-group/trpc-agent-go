@@ -82,7 +82,7 @@ func New(ctx context.Context, opts ...Option) (*VectorStore, error) {
 	vs := &VectorStore{
 		client:          milvusClient,
 		option:          option,
-		filterConverter: &milvusFilterConverter{},
+		filterConverter: newMilvusFilterConverter(option.metadataField),
 	}
 
 	if err := vs.initCollection(ctx); err != nil {
@@ -451,16 +451,22 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 
 	annReqs := make([]*client.AnnRequest, 0)
 	if len(vector) > 0 {
-		annReqs = append(annReqs, client.NewAnnRequest(vs.option.vectorField, query.Limit, entity.FloatVector(vector)))
+		annReq := client.NewAnnRequest(vs.option.vectorField, query.Limit, entity.FloatVector(vector))
+		if filterExpr != "" {
+			annReq.WithFilter(filterExpr)
+			for k, v := range filterParams {
+				annReq.WithTemplateParam(k, v)
+			}
+		}
+		annReqs = append(annReqs, annReq)
 	}
 	if query.Query != "" {
-		annReqs = append(annReqs, client.NewAnnRequest(vs.option.contentSparseField, query.Limit, entity.Text(query.Query)).WithANNSField(vs.option.contentSparseField))
-	}
-	if len(filterExpr) > 0 {
-		annReq := client.NewAnnRequest(vs.option.metadataField, query.Limit)
-		annReq.WithFilter(filterExpr)
-		for k, v := range filterParams {
-			annReq.WithTemplateParam(k, v)
+		annReq := client.NewAnnRequest(vs.option.contentSparseField, query.Limit, entity.Text(query.Query)).WithANNSField(vs.option.contentSparseField)
+		if filterExpr != "" {
+			annReq.WithFilter(filterExpr)
+			for k, v := range filterParams {
+				annReq.WithTemplateParam(k, v)
+			}
 		}
 		annReqs = append(annReqs, annReq)
 	}
@@ -984,6 +990,18 @@ func (vs *VectorStore) convertQueryResult(result client.ResultSet, query *vector
 	docs, _, scores, err := vs.convertResultToDocument(result)
 	if err != nil {
 		return nil, fmt.Errorf("convert result to document failed: %w", err)
+	}
+
+	// For filter-only queries, Query API doesn't return scores
+	// Assign default score of 1.0 to all documents
+	if len(scores) == 0 {
+		for _, doc := range docs {
+			searchResult.Results = append(searchResult.Results, &vectorstore.ScoredDocument{
+				Document: doc,
+				Score:    1.0,
+			})
+		}
+		return searchResult, nil
 	}
 
 	// Normalize scores based on metric type
