@@ -252,16 +252,27 @@ func TestInvocation_AddNoticeChannelAndWait_before_notify(t *testing.T) {
 
 func TestInvocation_NotifyCompletion(t *testing.T) {
 	inv := NewInvocation()
+	defer inv.CleanupNotice(context.Background())
 	noticeKey := "test-channel-1"
 	err := inv.NotifyCompletion(context.Background(), noticeKey)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(inv.noticeChanMap))
+
+	inv.AddNoticeChannel(context.Background(), "test-channel-1")
+	require.Equal(t, 1, len(inv.noticeChanMap))
+	err = inv.NotifyCompletion(context.Background(), noticeKey)
+	require.NoError(t, err)
 }
 
 func TestInvocation_CleanupNotice(t *testing.T) {
 	inv := NewInvocation()
 	ch := inv.AddNoticeChannel(context.Background(), "test-channel-1")
 	require.Equal(t, 1, len(inv.noticeChanMap))
+
+	ch2 := inv.AddNoticeChannel(context.Background(), "test-channel-2")
+	require.Equal(t, 2, len(inv.noticeChanMap))
+	require.NotNil(t, ch2)
+	inv.NotifyCompletion(context.Background(), "test-channel-2")
 
 	// Cleanup notice channel
 	inv.CleanupNotice(context.Background())
