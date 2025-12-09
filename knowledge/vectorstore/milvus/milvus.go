@@ -460,6 +460,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		}
 		annReqs = append(annReqs, annReq)
 	}
+
 	if query.Query != "" {
 		annReq := client.NewAnnRequest(vs.option.contentSparseField, query.Limit, entity.Text(query.Query)).WithANNSField(vs.option.contentSparseField)
 		if filterExpr != "" {
@@ -746,10 +747,18 @@ func (vs *VectorStore) buildFilterExpression(filter *vectorstore.SearchFilter) (
 
 	if len(filter.Metadata) > 0 {
 		for key, value := range filter.Metadata {
-			jsonPath := fmt.Sprintf("%s[\"%s\"]", vs.option.metadataField, key)
-			paramName := metadataParamPrefix + key
-			conditions = append(conditions, fmt.Sprintf("%s == {%s}", jsonPath, paramName))
-			allParams[paramName] = value
+			metaCR, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorEqual,
+				Field:    key,
+				Value:    value,
+			})
+			if err != nil {
+				return "", nil, err
+			}
+			conditions = append(conditions, metaCR.exprStr)
+			for k, v := range metaCR.params {
+				allParams[k] = v
+			}
 		}
 	}
 

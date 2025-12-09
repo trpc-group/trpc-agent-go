@@ -21,8 +21,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
-const metadataParamPrefix = "trpc_metadata_"
-
 var comparisonOperators = map[string]string{
 	searchfilter.OperatorEqual:              "==",
 	searchfilter.OperatorNotEqual:           "!=",
@@ -59,16 +57,6 @@ func (c *milvusFilterConverter) getFieldExpression(field string) string {
 		// Extract the actual field name after "metadata."
 		actualField := strings.TrimPrefix(field, source.MetadataFieldPrefix)
 		return fmt.Sprintf("%s[\"%s\"]", c.metadataField, actualField)
-	}
-	return field
-}
-
-// getParamName returns a sanitized parameter name for template parameters.
-// For metadata fields (metadata.xxx), returns trpc_metadata_xxx to avoid JSON path syntax issues.
-// For schema fields, returns the field name directly.
-func (c *milvusFilterConverter) getParamName(field string) string {
-	if c.isMetadataField(field) {
-		return strings.Replace(field, source.MetadataFieldPrefix, metadataParamPrefix, 1)
 	}
 	return field
 }
@@ -130,11 +118,8 @@ func (c *milvusFilterConverter) convertGeneralComparisonCondition(condition *sea
 	operator := comparisonOperators[condition.Operator]
 	fieldExpr := c.getFieldExpression(condition.Field)
 
-	// Use a sanitized parameter name for template parameters
-	// Replace special characters to avoid issues with JSON path syntax
-	paramName := c.getParamName(condition.Field)
-	cr.params[paramName] = condition.Value
-	cr.exprStr = fmt.Sprintf("%s %s {%s}", fieldExpr, operator, paramName)
+	cr.params[condition.Field] = condition.Value
+	cr.exprStr = fmt.Sprintf("%s %s {%s}", fieldExpr, operator, condition.Field)
 	return nil
 }
 
@@ -194,16 +179,15 @@ func (c *milvusFilterConverter) convertInCondition(condition *searchfilter.Unive
 	}
 
 	fieldExpr := c.getFieldExpression(condition.Field)
-	paramName := c.getParamName(condition.Field)
 
-	cr.params[paramName] = condition.Value
+	cr.params[condition.Field] = condition.Value
 
 	if condition.Operator == searchfilter.OperatorNotIn {
-		cr.exprStr = fmt.Sprintf("%s not in {%s}", fieldExpr, paramName)
+		cr.exprStr = fmt.Sprintf("%s not in {%s}", fieldExpr, condition.Field)
 		return nil
 	}
 
-	cr.exprStr = fmt.Sprintf("%s in {%s}", fieldExpr, paramName)
+	cr.exprStr = fmt.Sprintf("%s in {%s}", fieldExpr, condition.Field)
 	return nil
 }
 
@@ -218,10 +202,9 @@ func (c *milvusFilterConverter) convertBetweenCondition(condition *searchfilter.
 	}
 
 	fieldExpr := c.getFieldExpression(condition.Field)
-	paramName := c.getParamName(condition.Field)
 
-	paramName1 := fmt.Sprintf("%s_%d", paramName, 0)
-	paramName2 := fmt.Sprintf("%s_%d", paramName, 1)
+	paramName1 := fmt.Sprintf("%s_%d", condition.Field, 0)
+	paramName2 := fmt.Sprintf("%s_%d", condition.Field, 1)
 	cr.params[paramName1] = value.Index(0).Interface()
 	cr.params[paramName2] = value.Index(1).Interface()
 	cr.exprStr = fmt.Sprintf("(%s >= {%s} and %s <= {%s})", fieldExpr, paramName1, fieldExpr, paramName2)
