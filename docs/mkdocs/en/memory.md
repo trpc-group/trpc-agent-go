@@ -10,9 +10,11 @@ offer personalized responses across multi-turn dialogs.
 
 ### Positioning
 
-Memory is used to manage long-term information about a user and can be regarded as a personal profile that is gradually accumulated for each individual user. In cross-session scenarios, it allows the system to retain key information about the current user, so that each conversation does not need to start from scratch by re-collecting the same user details.
+Memory is used to manage long-term user-related information, with isolation dimensions of `<appName, userID>`. It can be understood as a "personal profile" gradually accumulated around a single user.
 
-It is well suited for recording stable, reusable facts such as “the user's name is Zhang San”, “the user is a backend engineer”, “the user prefers concise answers”, or “the user's preferred language is English”, and for directly reusing this information in subsequent interactions.
+In cross-session scenarios, Memory allows the system to retain key information about the current user, avoiding the need to repeatedly retrieve user information from scratch for each session.
+
+It is suitable for recording stable, reusable facts, such as "user name is Zhang San," "occupation is backend engineer," "prefers short answers," and "favorite language is English," and directly using this information in subsequent interactions.
 
 ## ⚠️ Breaking Changes Notice
 

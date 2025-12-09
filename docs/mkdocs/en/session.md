@@ -6,7 +6,7 @@ tRPC-Agent-Go provides powerful session management capabilities to maintain conv
 
 ### Positioning
 
-A session manages the context of the current conversation, storing user messages, agent responses, tool call results, and brief summaries generated based on this content to support multi-turn question-and-answer scenarios.
+A Session manages the context of the current conversation, with isolation dimensions `<appName, userID, SessionID>`. It stores user messages, Agent responses, tool call results, and brief summaries generated based on this content within the conversation, supporting multi-turn question-and-answer scenarios.
 
 Within the same conversation, it allows for seamless transitions between multiple turns of question-and-answer, preventing users from restating the same question or providing the same parameters in each turn.
 
