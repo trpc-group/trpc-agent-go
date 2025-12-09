@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -162,7 +163,7 @@ func (c *milvusFilterConverter) convertBetweenCondition(cond *searchfilter.Unive
 
 // convertFieldName converts metadata.xxx fields to ES field path.
 func (c *milvusFilterConverter) convertFieldName(field string) string {
-	if actualField, ok := strings.CutPrefix(field, c.metadataFieldName+"."); ok {
+	if actualField, ok := strings.CutPrefix(field, source.MetadataFieldPrefix); ok {
 		return fmt.Sprintf("%s[\"%s\"]", c.metadataFieldName, actualField)
 	}
 	return field
