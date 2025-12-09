@@ -38,7 +38,7 @@ OPENAI_API_KEY=sk-xxx go run ./examples/summary/filterkey -model gpt-4o-mini -ma
 go run ./examples/summary/filterkey -model deepseek-chat -max-words 120 -streaming=false
 ```
 
-Expected output:
+Expected output (sample):
 
 ```
 📝 Filter-Key Summarization Chat
@@ -55,22 +55,36 @@ MaxWords: 120
 
 👤 You: Calculate 25 * 4
 💡 FilterKey Demo: Events are automatically categorized by author via AppendEvent hooks:
-   - User messages → filterKey: 'user-messages'
-   - Tool calls → filterKey: 'tool-calls'
-   - Assistant/other → filterKey: 'misc'
+   - User messages → filterKey: '<app>/user-messages'
+   - Tool calls → filterKey: '<app>/tool-calls'
+   - Assistant/other → filterKey: '<app>/misc'
 
-🤖 Assistant: The result of 25 * 4 is 100.
+🤖 Assistant: ✅ Callable tool response (ID: ...): {"operation":"multiply","a":25,"b":4,"result":100}
+25 multiplied by 4 equals 100.
 
-👤 You: /show user-messages
-📝 Summary[user-messages]:
-[user-messages] 1 event(s): Calculate 25 * 4
+👤 You: /show <app>/user-messages
+📝 Summary[<app>/user-messages]:
+The user requested a multiplication calculation (25 * 4). The assistant provided the correct result (100) in both a structured format and a plain text response.
 
 👤 You: What time is it in EST?
-🤖 Assistant: The current time in EST is 14:30:00 on 2025-01-01.
+🤖 Assistant: ✅ Callable tool response (ID: ...): {"timezone":"EST","time":"13:05:32","date":"2025-12-09","weekday":"Tuesday"}
+The current time in EST is 1:05 PM on Tuesday, December 9, 2025.
 
-👤 You: /summary tool-calls
-📝 Summary[tool-calls] (forced):
-[tool-calls] 2 event(s): calculate, get_current_time
+👤 You: /summary <app>/tool-calls
+📝 Summary[<app>/tool-calls] (forced):
+- User requested and received a correct multiplication calculation (25 * 4 = 100).
+- User asked for the current time in EST and received the time, date, and weekday in both structured and plain text formats.
+
+👤 You: /list
+📝 Summaries (filterKey → summary):
+- <app>/misc
+  - Assistant can perform basic arithmetic (e.g., 25 * 4 = 100).
+  - Provides current time/date in EST (e.g., 1:05 PM, Tuesday, December 9, 2025).
+- <app>/user-messages
+  The user requested a multiplication calculation (25 * 4). The assistant provided the correct result (100) in both a structured format and a plain text response.
+- <app>/tool-calls
+  - User requested and received a correct multiplication calculation (25 * 4 = 100).
+  - User asked for the current time in EST and received the time, date, and weekday in both structured and plain text formats.
 
 👤 You: /exit
 👋 Bye.

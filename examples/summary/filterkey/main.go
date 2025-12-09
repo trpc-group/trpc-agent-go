@@ -234,9 +234,9 @@ func (c *filterKeyChat) handleSummaryCommand(ctx context.Context, userMessage st
 // handleChatTurn handles normal chat messages.
 func (c *filterKeyChat) handleChatTurn(ctx context.Context, userMessage string) error {
 	fmt.Println("💡 FilterKey Demo: Events are automatically categorized by author via AppendEvent hooks:")
-	fmt.Println("   - User messages → filterKey: 'user-messages'")
-	fmt.Println("   - Tool calls → filterKey: 'tool-calls'")
-	fmt.Println("   - Assistant/other → filterKey: 'misc'")
+	fmt.Printf("   - User messages → filterKey: '%s/user-messages'\n", c.app)
+	fmt.Printf("   - Tool calls → filterKey: '%s/tool-calls'\n", c.app)
+	fmt.Printf("   - Assistant/other → filterKey: '%s/misc'\n", c.app)
 	fmt.Println()
 
 	// Run the agent with the user message
@@ -304,7 +304,7 @@ func (c *filterKeyChat) handleListSummaries(ctx context.Context) error {
 		return nil
 	}
 
-	fmt.Println("📝 Summaries (filterKey -> summary):")
+	fmt.Println("📝 Summaries (filterKey → summary):")
 	for k, v := range sess.Summaries {
 		s := ""
 		if v != nil {
@@ -313,7 +313,7 @@ func (c *filterKeyChat) handleListSummaries(ctx context.Context) error {
 		if s == "" {
 			s = "<empty>"
 		}
-		fmt.Printf("- %s: %s\n", k, s)
+		fmt.Printf("- %s\n  %s\n", k, s)
 	}
 	fmt.Println()
 	return nil
