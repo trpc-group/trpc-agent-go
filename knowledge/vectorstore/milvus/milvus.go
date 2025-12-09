@@ -499,6 +499,11 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		filterParams = params
 	}
 
+	// Filter-only search requires a non-empty filter expression
+	if filterExpr == "" {
+		return nil, fmt.Errorf("empty filter condition")
+	}
+
 	queryOption := client.NewQueryOption(vs.option.collectionName)
 	if filterExpr != "" {
 		queryOption.WithFilter(filterExpr)
