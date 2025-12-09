@@ -110,7 +110,7 @@ func TestCreateSessionSummary_CreateNewSummary(t *testing.T) {
 func TestCreateSessionSummary_WithTTL(t *testing.T) {
 	summarizer := &mockSummarizerImpl{summaryText: "new summary", shouldSummarize: true}
 	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: summarizer})
-	s.sessionTTL = 1 * time.Hour
+	s.opts.sessionTTL = 1 * time.Hour
 	defer db.Close()
 
 	sess := &session.Session{

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -72,6 +73,9 @@ type ServiceOpts struct {
 	// schema is the PostgreSQL schema name where tables are created.
 	// Default is empty string (uses default schema, typically "public").
 	schema string
+	// hooks for session operations.
+	appendEventHooks []session.AppendEventHook
+	getSessionHooks  []session.GetSessionHook
 }
 
 // ServiceOpt is the option for the postgres session service.
@@ -312,5 +316,19 @@ func WithSchema(schema string) ServiceOpt {
 			sqldb.MustValidateTableName(schema)
 		}
 		opts.schema = schema
+	}
+}
+
+// WithAppendEventHook adds AppendEvent hooks.
+func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.appendEventHooks = append(opts.appendEventHooks, hooks...)
+	}
+}
+
+// WithGetSessionHook adds GetSession hooks.
+func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
 	}
 }

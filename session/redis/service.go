@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
@@ -49,9 +50,6 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	redisClient     redis.UniversalClient
-	sessionTTL      time.Duration            // TTL for session state and event list
-	appStateTTL     time.Duration            // TTL for app state
-	userStateTTL    time.Duration            // TTL for user state
 	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
 	trackEventChans []chan *trackEventPair   // channel for track events to persistence.
 	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
@@ -102,11 +100,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	s := &Service{
-		opts:         opts,
-		redisClient:  redisClient,
-		sessionTTL:   opts.sessionTTL,
-		appStateTTL:  opts.appStateTTL,
-		userStateTTL: opts.userStateTTL,
+		opts:        opts,
+		redisClient: redisClient,
 	}
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
@@ -153,9 +148,9 @@ func (s *Service) CreateSession(
 	pipe := s.redisClient.Pipeline()
 	// Store session state
 	pipe.HSet(ctx, sessKey, key.SessionID, sessBytes)
-	if s.sessionTTL > 0 {
+	if s.opts.sessionTTL > 0 {
 		// expire session state, don't expire event list, it's still empty
-		pipe.Expire(ctx, sessKey, s.sessionTTL)
+		pipe.Expire(ctx, sessKey, s.opts.sessionTTL)
 	}
 	// Query app and user states
 	userStateCmd := pipe.HGetAll(ctx, userStateKey)
@@ -197,7 +192,16 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+
+	hctx := &session.GetSessionContext{
+		Context: ctx,
+		Key:     key,
+		Options: opt,
+	}
+	final := func(c *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		return s.getSession(c.Context, c.Key, c.Options.EventNum, c.Options.EventTime)
+	}
+	sess, err := hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
 	if err != nil {
 		return nil, fmt.Errorf("redis session service get session state failed: %w", err)
 	}
@@ -249,8 +253,8 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 		pipe.HSet(ctx, appStateKey, k, v)
 	}
 	// Set TTL for app state if configured
-	if s.appStateTTL > 0 {
-		pipe.Expire(ctx, appStateKey, s.appStateTTL)
+	if s.opts.appStateTTL > 0 {
+		pipe.Expire(ctx, appStateKey, s.opts.appStateTTL)
 	}
 
 	// should not return redis.Nil error
@@ -315,8 +319,8 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 		pipe.HSet(ctx, userStateKey, k, v)
 	}
 	// Set TTL for user state if configured
-	if s.userStateTTL > 0 {
-		pipe.Expire(ctx, userStateKey, s.userStateTTL)
+	if s.opts.userStateTTL > 0 {
+		pipe.Expire(ctx, userStateKey, s.opts.userStateTTL)
 	}
 
 	// should not return redis.Nil error
@@ -407,8 +411,8 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	pipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 
 	// Refresh TTL if configured
-	if s.sessionTTL > 0 {
-		pipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		pipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -456,8 +460,29 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+
+	hctx := &session.AppendEventContext{
+		Context: ctx,
+		Session: sess,
+		Event:   event,
+		Key:     key,
+	}
+	final := func(c *session.AppendEventContext, next func() error) error {
+		return s.appendEventInternal(c.Context, c.Session, c.Event, c.Key, opts...)
+	}
+	return hook.RunAppendEventHooks(s.opts.appendEventHooks, hctx, final)
+}
+
+// appendEventInternal is the internal implementation of AppendEvent.
+func (s *Service) appendEventInternal(
+	ctx context.Context,
+	sess *session.Session,
+	e *event.Event,
+	key session.Key,
+	opts ...session.Option,
+) error {
 	// update user session with the given event
-	sess.UpdateUserSession(event, opts...)
+	sess.UpdateUserSession(e, opts...)
 
 	// persist event to redis asynchronously
 	if s.opts.enableAsyncPersist {
@@ -473,14 +498,14 @@ func (s *Service) AppendEvent(
 
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, event); err != nil {
+	if err := s.addEvent(ctx, key, e); err != nil {
 		return fmt.Errorf("redis session service append event failed: %w", err)
 	}
 
@@ -601,16 +626,16 @@ func (s *Service) getSession(
 	// Read summaries from separate hash in the same pipeline.
 	summariesCmd := pipe.HGet(ctx, sessSummaryKey, key.SessionID)
 	// Add TTL refresh commands to the same pipeline if configured
-	if s.sessionTTL > 0 {
-		pipe.Expire(ctx, sessKey, s.sessionTTL)
-		pipe.Expire(ctx, getEventKey(key), s.sessionTTL)
-		pipe.Expire(ctx, sessSummaryKey, s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		pipe.Expire(ctx, sessKey, s.opts.sessionTTL)
+		pipe.Expire(ctx, getEventKey(key), s.opts.sessionTTL)
+		pipe.Expire(ctx, sessSummaryKey, s.opts.sessionTTL)
 	}
-	if s.appStateTTL > 0 {
-		pipe.Expire(ctx, appStateKey, s.appStateTTL)
+	if s.opts.appStateTTL > 0 {
+		pipe.Expire(ctx, appStateKey, s.opts.appStateTTL)
 	}
-	if s.userStateTTL > 0 {
-		pipe.Expire(ctx, userStateKey, s.userStateTTL)
+	if s.opts.userStateTTL > 0 {
+		pipe.Expire(ctx, userStateKey, s.opts.userStateTTL)
 	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("get session state failed: %w", err)
@@ -848,8 +873,8 @@ func (s *Service) getTrackEvents(
 				zrangeBy.Count = int64(limit)
 			}
 			cmd := dataPipe.ZRevRangeByScore(ctx, trackKey, zrangeBy)
-			if s.sessionTTL > 0 {
-				dataPipe.Expire(ctx, trackKey, s.sessionTTL)
+			if s.opts.sessionTTL > 0 {
+				dataPipe.Expire(ctx, trackKey, s.opts.sessionTTL)
 			}
 			queries = append(queries, &trackQuery{
 				sessionIdx: i,
@@ -1010,8 +1035,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	// update session state
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	// Set TTL for session state and event list if configured
-	if s.sessionTTL > 0 {
-		txPipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		txPipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	// update event list if the event has response and is not partial
@@ -1021,8 +1046,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			Member: eventBytes,
 		})
 		// Set TTL for session state and event list if configured
-		if s.sessionTTL > 0 {
-			txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)
+		if s.opts.sessionTTL > 0 {
+			txPipe.Expire(ctx, getEventKey(key), s.opts.sessionTTL)
 		}
 	}
 
@@ -1069,8 +1094,8 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 	// Update session state.
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	// Set TTL for session state if configured.
-	if s.sessionTTL > 0 {
-		txPipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		txPipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	// Update track event list.
@@ -1080,8 +1105,8 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		Member: eventBytes,
 	})
 	// Set TTL for track event list if configured.
-	if s.sessionTTL > 0 {
-		txPipe.Expire(ctx, trackKey, s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		txPipe.Expire(ctx, trackKey, s.opts.sessionTTL)
 	}
 
 	if _, err := txPipe.Exec(ctx); err != nil {
