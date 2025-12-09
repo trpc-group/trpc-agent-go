@@ -324,8 +324,8 @@ r := runner.NewRunner("my-app", agent)
 Runner can register multiple optional agents at construction time and pick one per Run:
 
 ```go
-reader := llmagent.New("reader", llmagent.WithModel(model))
-writer := llmagent.New("writer", llmagent.WithModel(model))
+reader := llmagent.New("agent1", llmagent.WithModel(model))
+writer := llmagent.New("agent2", llmagent.WithModel(model))
 
 r := runner.NewRunner("my-app", reader, // Use reader as the default agent.
     runner.WithAgent("writer", writer), // Register an optional agent by name.

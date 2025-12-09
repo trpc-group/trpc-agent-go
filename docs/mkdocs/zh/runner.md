@@ -322,8 +322,8 @@ r := runner.NewRunner("my-app", agent)
 Runner 支持在构造时注册多个可选 Agent，并在单次 Run 时切换：
 
 ```go
-reader := llmagent.New("reader", llmagent.WithModel(model))
-writer := llmagent.New("writer", llmagent.WithModel(model))
+reader := llmagent.New("agent1", llmagent.WithModel(model))
+writer := llmagent.New("agent2", llmagent.WithModel(model))
 
 r := runner.NewRunner("my-app", reader, // 使用 reader agent 作为默认 agent
     runner.WithAgent("writer", writer), // 按名称注册可选 Agent

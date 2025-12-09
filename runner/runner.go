@@ -190,7 +190,7 @@ func (r *runner) Run(
 
 	ag, err := r.selectAgent(ctx, ro)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("select agent: %w", err)
 	}
 
 	invocation := agent.NewInvocation(
