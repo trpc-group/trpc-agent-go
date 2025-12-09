@@ -41,6 +41,17 @@ const (
 	TagDelimiter = ";"
 )
 
+const (
+	// CodeExecutionTag is the tag value for code execution code event.
+	CodeExecutionTag = "code_execution_code"
+
+	// CodeExecutionResultTag is the tag value for code execution result event.
+	CodeExecutionResultTag = "code_execution_result"
+
+	// TransferTag is the tag for transfer event.
+	TransferTag = "transfer"
+)
+
 // Event represents an event in conversation between agents and users.
 type Event struct {
 	// Response is the base struct for all LLM response functionality.
@@ -95,6 +106,21 @@ type Event struct {
 
 	// version for handling version compatibility issues.
 	Version int `json:"version,omitempty"`
+}
+
+// ContainsTag checks if the event contains the specified tag.
+func (e *Event) ContainsTag(tag string) bool {
+	if e.Tag == "" {
+		return false
+	}
+
+	tags := strings.Split(e.Tag, TagDelimiter)
+	for _, t := range tags {
+		if strings.TrimSpace(t) == strings.TrimSpace(tag) {
+			return true
+		}
+	}
+	return false
 }
 
 // EventActions represents optional actions/hints attached to an event.

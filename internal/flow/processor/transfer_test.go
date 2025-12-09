@@ -102,3 +102,29 @@ func TestTransferResponseProc_Target404(t *testing.T) {
 	require.NotNil(t, evt.Error)
 	require.Equal(t, model.ErrorTypeFlowError, evt.Error.Type)
 }
+
+func TestTransferResponseProc_SetsTransferTags(t *testing.T) {
+	target := &mockAgent{name: "child", emit: true}
+	parent := &parentAgent{child: target}
+
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-tag",
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "hi"},
+	}
+	rsp := &model.Response{ID: "r-tag", Created: time.Now().Unix(), Model: "m"}
+
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+
+	transferTagCount := 0
+	for evt := range out {
+		if evt.Tag == event.TransferTag {
+			transferTagCount++
+		}
+	}
+
+	require.GreaterOrEqual(t, transferTagCount, 2)
+}
