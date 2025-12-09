@@ -74,6 +74,7 @@ func TestInvocation_Clone(t *testing.T) {
 
 func TestInvocation_AddNoticeChannel(t *testing.T) {
 	inv := NewInvocation()
+	defer inv.CleanupNotice(context.Background())
 	ctx := context.Background()
 	ch := inv.AddNoticeChannel(ctx, "test-channel")
 
@@ -157,6 +158,7 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inv := NewInvocation()
 			ctx := context.Background()
+			defer inv.CleanupNotice(ctx)
 			if tt.ctxDelay > 0 {
 				innerCtx, cancel := context.WithTimeout(ctx, tt.ctxDelay)
 				defer cancel()
