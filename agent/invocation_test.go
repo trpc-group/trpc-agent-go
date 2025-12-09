@@ -242,12 +242,24 @@ func TestInvocation_AddNoticeChannelAndWait_after_notify(t *testing.T) {
 
 func TestInvocation_AddNoticeChannelAndWait_before_notify(t *testing.T) {
 	inv := NewInvocation()
+	defer inv.CleanupNotice(context.Background())
 	key := "test-channel-1"
 
 	startTime := time.Now()
 	err := inv.AddNoticeChannelAndWait(context.Background(), key, 2*time.Second)
+	// timeout after 2s
 	require.Error(t, err)
 	require.Greater(t, time.Since(startTime), 2*time.Second)
+
+	err = inv.NotifyCompletion(context.Background(), key)
+	require.NoError(t, err)
+	err = inv.NotifyCompletion(context.Background(), key)
+	require.NoError(t, err)
+
+	startTime = time.Now()
+	err = inv.AddNoticeChannelAndWait(context.Background(), key, 2*time.Second)
+	require.NoError(t, err)
+	require.Less(t, time.Since(startTime), 2*time.Second)
 }
 
 func TestInvocation_NotifyCompletion(t *testing.T) {
