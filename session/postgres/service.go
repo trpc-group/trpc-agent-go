@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -41,9 +42,6 @@ type SessionState struct {
 type Service struct {
 	opts            ServiceOpts
 	pgClient        storage.Client
-	sessionTTL      time.Duration            // TTL for session state and event list
-	appStateTTL     time.Duration            // TTL for app state
-	userStateTTL    time.Duration            // TTL for user state
 	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
 	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
 	cleanupTicker   *time.Ticker             // ticker for automatic cleanup
@@ -140,12 +138,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	s := &Service{
-		opts:         opts,
-		pgClient:     pgClient,
-		sessionTTL:   opts.sessionTTL,
-		appStateTTL:  opts.appStateTTL,
-		userStateTTL: opts.userStateTTL,
-		cleanupDone:  make(chan struct{}),
+		opts:        opts,
+		pgClient:    pgClient,
+		cleanupDone: make(chan struct{}),
 
 		// Initialize table names with schema and prefix using internal/session/sqldb
 		tableSessionStates:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionStates),
@@ -206,8 +201,8 @@ func (s *Service) CreateSession(
 
 	// Calculate expires_at based on TTL
 	var expiresAt *time.Time
-	if s.sessionTTL > 0 {
-		t := now.Add(s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		t := now.Add(s.opts.sessionTTL)
 		expiresAt = &t
 	}
 
@@ -282,20 +277,28 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime, opt.Track)
-	if err != nil {
-		return nil, fmt.Errorf("postgres session service get session state failed: %w", err)
-	}
 
-	// Refresh session TTL if configured and session exists
-	if sess != nil && s.sessionTTL > 0 {
-		if err := s.refreshSessionTTL(ctx, key); err != nil {
-			log.Warnf("failed to refresh session TTL: %v", err)
-			// Don't fail the GetSession call, just log the warning
+	hctx := &session.GetSessionContext{
+		Context: ctx,
+		Key:     key,
+		Options: opt,
+	}
+	final := func(c *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		sess, err := s.getSession(c.Context, c.Key, c.Options.EventNum, c.Options.EventTime)
+		if err != nil {
+			return nil, fmt.Errorf("postgres session service get session state failed: %w", err)
 		}
-	}
 
-	return sess, nil
+		// Refresh session TTL if configured and session exists
+		if sess != nil && s.opts.sessionTTL > 0 {
+			if err := s.refreshSessionTTL(c.Context, c.Key); err != nil {
+				log.Warnf("failed to refresh session TTL: %v", err)
+				// Don't fail the GetSession call, just log the warning
+			}
+		}
+		return sess, nil
+	}
+	return hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
 }
 
 // ListSessions lists all sessions by user scope of session key.
@@ -338,8 +341,8 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 
 	now := time.Now()
 	var expiresAt *time.Time
-	if s.appStateTTL > 0 {
-		t := now.Add(s.appStateTTL)
+	if s.opts.appStateTTL > 0 {
+		t := now.Add(s.opts.appStateTTL)
 		expiresAt = &t
 	}
 
@@ -430,8 +433,8 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 
 	now := time.Now()
 	var expiresAt *time.Time
-	if s.userStateTTL > 0 {
-		t := now.Add(s.userStateTTL)
+	if s.opts.userStateTTL > 0 {
+		t := now.Add(s.opts.userStateTTL)
 		expiresAt = &t
 	}
 
@@ -546,8 +549,8 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	// Update session state in database
 	now := time.Now()
 	var expiresAt *time.Time
-	if s.sessionTTL > 0 {
-		t := now.Add(s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		t := now.Add(s.opts.sessionTTL)
 		expiresAt = &t
 	}
 
@@ -595,7 +598,7 @@ func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, 
 func (s *Service) AppendEvent(
 	ctx context.Context,
 	sess *session.Session,
-	event *event.Event,
+	e *event.Event,
 	opts ...session.Option,
 ) error {
 	key := session.Key{
@@ -606,8 +609,29 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+
+	hctx := &session.AppendEventContext{
+		Context: ctx,
+		Session: sess,
+		Event:   e,
+		Key:     key,
+	}
+	final := func(c *session.AppendEventContext, next func() error) error {
+		return s.appendEventInternal(c.Context, c.Session, c.Event, c.Key, opts...)
+	}
+	return hook.RunAppendEventHooks(s.opts.appendEventHooks, hctx, final)
+}
+
+// appendEventInternal is the internal implementation of AppendEvent.
+func (s *Service) appendEventInternal(
+	ctx context.Context,
+	sess *session.Session,
+	e *event.Event,
+	key session.Key,
+	opts ...session.Option,
+) error {
 	// update user session with the given event
-	sess.UpdateUserSession(event, opts...)
+	sess.UpdateUserSession(e, opts...)
 
 	// persist event to postgres asynchronously
 	if s.opts.enableAsyncPersist {
@@ -623,14 +647,14 @@ func (s *Service) AppendEvent(
 
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, event); err != nil {
+	if err := s.addEvent(ctx, key, e); err != nil {
 		return fmt.Errorf("postgres session service append event failed: %w", err)
 	}
 
@@ -896,8 +920,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	}
 
 	var expiresAt *time.Time
-	if s.sessionTTL > 0 {
-		t := now.Add(s.sessionTTL)
+	if s.opts.sessionTTL > 0 {
+		t := now.Add(s.opts.sessionTTL)
 		expiresAt = &t
 	}
 
@@ -935,11 +959,12 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	}
 	return nil
 }
+
 // refreshSessionTTL updates the session's updated_at and expires_at timestamps.
 // This effectively "renews" the session, extending its lifetime by the configured TTL.
 func (s *Service) refreshSessionTTL(ctx context.Context, key session.Key) error {
 	now := time.Now()
-	expiresAt := now.Add(s.sessionTTL)
+	expiresAt := now.Add(s.opts.sessionTTL)
 
 	_, err := s.pgClient.ExecContext(ctx,
 		fmt.Sprintf(`UPDATE %s
@@ -978,15 +1003,15 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 				return err
 			}
 
-		// Soft delete session events
-		_, err = tx.ExecContext(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = $1
+			// Soft delete session events
+			_, err = tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = $1
 			 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`, s.tableSessionEvents),
-			now, key.AppName, key.UserID, key.SessionID)
-		if err != nil {
-			return err
-		}
-	} else {
+				now, key.AppName, key.UserID, key.SessionID)
+			if err != nil {
+				return err
+			}
+		} else {
 			// Hard delete: permanently remove records
 
 			// Delete session state
@@ -1007,15 +1032,15 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 				return err
 			}
 
-		// Delete session events
-		_, err = tx.ExecContext(ctx,
-			fmt.Sprintf(`DELETE FROM %s
+			// Delete session events
+			_, err = tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s
 			 WHERE app_name = $1 AND user_id = $2 AND session_id = $3`, s.tableSessionEvents),
-			key.AppName, key.UserID, key.SessionID)
-		if err != nil {
-			return err
+				key.AppName, key.UserID, key.SessionID)
+			if err != nil {
+				return err
+			}
 		}
-	}
 
 		return nil
 	})
@@ -1252,11 +1277,11 @@ func (s *Service) cleanupExpiredData(ctx context.Context, userKey *session.UserK
 	}
 
 	tasks := []cleanupTask{
-		{s.tableSessionStates, s.sessionTTL},
-		{s.tableSessionEvents, s.sessionTTL},
-		{s.tableSessionSummaries, s.sessionTTL},
-		{s.tableAppStates, s.appStateTTL},
-		{s.tableUserStates, s.userStateTTL},
+		{s.tableSessionStates, s.opts.sessionTTL},
+		{s.tableSessionEvents, s.opts.sessionTTL},
+		{s.tableSessionSummaries, s.opts.sessionTTL},
+		{s.tableAppStates, s.opts.appStateTTL},
+		{s.tableUserStates, s.opts.userStateTTL},
 	}
 
 	validTasks := []cleanupTask{}
@@ -1308,7 +1333,7 @@ func (s *Service) softDeleteExpiredTableInTx(
 				if err := rows.Scan(&appName, &userID, &sessionID, &updatedAt); err != nil {
 					return err
 				}
-				if updatedAt.Before(now.Add(-s.sessionTTL)) {
+				if updatedAt.Before(now.Add(-s.opts.sessionTTL)) {
 					sessionKeys = append(sessionKeys, session.Key{
 						AppName:   appName,
 						UserID:    userID,
@@ -1387,7 +1412,7 @@ func (s *Service) hardDeleteExpiredTableInTx(
 				if err := rows.Scan(&appName, &userID, &sessionID, &updatedAt); err != nil {
 					return err
 				}
-				if updatedAt.Before(now.Add(-s.sessionTTL)) {
+				if updatedAt.Before(now.Add(-s.opts.sessionTTL)) {
 					sessionKeys = append(sessionKeys, session.Key{
 						AppName:   appName,
 						UserID:    userID,

@@ -223,6 +223,30 @@ r := runner.NewRunner("my-agent", llmAgent,
     runner.WithSessionService(sessionService))
 ```
 
+#### 摘要前后置 Hook
+
+可以通过 Hook 调整摘要输入或输出：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPreSummaryHook(func(ctx *summary.PreSummaryHookContext) error {
+        // 可在摘要前修改 ctx.Text 或 ctx.Events
+        return nil
+    }),
+    summary.WithPostSummaryHook(func(ctx *summary.PostSummaryHookContext) error {
+        // 可在摘要返回前修改 ctx.Summary
+        return nil
+    }),
+    summary.WithSummaryHookAbortOnError(true), // Hook 报错时中断（可选）。
+)
+```
+
+说明：
+
+- Pre-hook 主要修改 `ctx.Text`，也可调整 `ctx.Events`；Post-hook 可修改 `ctx.Summary`。
+- 默认忽略 Hook 错误，需中断时使用 `WithSummaryHookAbortOnError(true)`。
+
 **上下文注入机制：**
 
 启用摘要后，框架会将摘要作为系统消息前置到 LLM 输入，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
@@ -1038,6 +1062,14 @@ CREATE TABLE user_states (
 - MySQL 使用 `ON DUPLICATE KEY UPDATE` 语法实现 UPSERT
 
 ## 高级用法
+
+### Hook 能力（Append/Get）
+
+- **AppendEventHook**：事件写入前的拦截/修改/终止。可用于内容安全、审计打标（如写入 `violation=<word>`），或直接阻断存储。
+- **GetSessionHook**：会话读取后的拦截/修改/过滤。可用来剔除带特定标签的事件，或动态补充返回的 Session 状态。
+- **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
+- **跨后端一致**：内存、Redis、MySQL、PostgreSQL 实现已统一接入 Hook，构造服务时注入 Hook 切片即可。
+- **示例**：见 `examples/session/hook`（[代码](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)）
 
 ### 直接使用 Session Service API
 

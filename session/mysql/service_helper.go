@@ -246,7 +246,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		return fmt.Errorf("marshal event failed: %w", err)
 	}
 
-	expiresAt := calculateExpiresAt(s.sessionTTL)
+	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
 	// Use transaction to update session state and insert event
 	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
@@ -286,7 +286,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 // refreshSessionTTL updates the session's updated_at and expires_at timestamps.
 func (s *Service) refreshSessionTTL(ctx context.Context, key session.Key) error {
 	now := time.Now()
-	expiresAt := now.Add(s.sessionTTL)
+	expiresAt := now.Add(s.opts.sessionTTL)
 
 	_, err := s.mysqlClient.Exec(ctx,
 		fmt.Sprintf(`UPDATE %s

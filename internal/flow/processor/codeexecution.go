@@ -66,6 +66,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 			},
 		}),
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		event.WithTag(event.CodeExecutionTag),
 	))
 
 	codeExecutionResult, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
@@ -84,6 +85,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 				},
 			}),
 			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+			event.WithTag(event.CodeExecutionResultTag), // Add tag for error result
 		))
 		return
 	}
@@ -98,6 +100,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 			},
 		}),
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		event.WithTag(event.CodeExecutionResultTag),
 	))
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
 	rsp.Choices[0].Message.Content = ""
