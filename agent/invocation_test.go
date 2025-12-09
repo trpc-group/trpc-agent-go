@@ -289,6 +289,19 @@ func TestInvocation_CleanupNotice(t *testing.T) {
 	require.NotNil(t, ch2)
 	inv.NotifyCompletion(context.Background(), "test-channel-2")
 
+	ch3 := inv.AddNoticeChannel(context.Background(), "test-channel-3")
+	require.Equal(t, 3, len(inv.noticeChanMap))
+	require.NotNil(t, ch3)
+
+	go func() {
+		ch <- 1
+	}()
+	go func() {
+		ch3 <- 1
+	}()
+
+	time.Sleep(500 * time.Microsecond)
+	inv.NotifyCompletion(context.Background(), "test-channel-3")
 	// Cleanup notice channel
 	inv.CleanupNotice(context.Background())
 	<-ch
