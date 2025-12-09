@@ -113,6 +113,10 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 // ensuring that all prior events have been appended to the session before GraphAgent reads history.
 func (ga *GraphAgent) emitStartBarrierAndWait(ctx context.Context, invocation *agent.Invocation,
 	ch chan<- *event.Event) error {
+	// If no invocation is present in context (i.e., running outside Runner), do not emit barrier.
+	if _, ok := agent.InvocationFromContext(ctx); !ok {
+		return nil
+	}
 	barrier := event.New(invocation.InvocationID, invocation.AgentName,
 		event.WithObject(graph.ObjectTypeGraphBarrier))
 	barrier.RequiresCompletion = true

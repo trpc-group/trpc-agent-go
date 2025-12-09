@@ -20,6 +20,8 @@ import (
 const (
 	// StateKeyFlushSession is the invocation state key used to store the flush function.
 	stateKeyFlushSession = "__flush_session__"
+	// StateKeyFlushSession is the exported key for storing the flush function in invocation state.
+	StateKeyFlushSession = stateKeyFlushSession
 )
 
 // FlushRequest represents a single session flush request.

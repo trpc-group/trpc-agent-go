@@ -48,13 +48,13 @@ func TestAttachReusesHolderAndUpdatesChannel(t *testing.T) {
 	inv := agent.NewInvocation()
 	ch1 := make(chan *FlushRequest, 1)
 	Attach(ctx, inv, ch1)
-	holder1, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
+	holder1, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession)
 	require.True(t, ok)
 	require.NotNil(t, holder1)
 
 	ch2 := make(chan *FlushRequest, 1)
 	Attach(ctx, inv, ch2)
-	holder2, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
+	holder2, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession)
 	require.True(t, ok)
 	require.Equal(t, holder1, holder2)
 
@@ -108,7 +108,7 @@ func TestClearRemovesFlusher(t *testing.T) {
 	Attach(context.Background(), inv, ch)
 
 	Clear(inv)
-	_, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
+	_, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession)
 	require.False(t, ok)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
