@@ -703,13 +703,27 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	defer inv.noticeMu.Unlock()
 
 	ch, ok := inv.noticeChanMap[key]
+	// channel not found, create a new one and close it.
+	// May involve notification followed by waiting.
 	if !ok {
-		log.Warnf("notice channel not found for %s", key)
-		return fmt.Errorf("notice channel not found for %s", key)
+		ch = make(chan any)
+		if inv.noticeChanMap == nil {
+			inv.noticeChanMap = make(map[string]chan any)
+		}
+		inv.noticeChanMap[key] = ch
+		close(ch)
+		return nil
 	}
 
-	close(ch)
-	delete(inv.noticeChanMap, key)
+	// channel found, close it if it's not closed
+	select {
+	case _, isOpen := <-ch:
+		if isOpen {
+			close(ch)
+		}
+	default:
+		close(ch)
+	}
 
 	return nil
 }
@@ -726,7 +740,14 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	defer inv.noticeMu.Unlock()
 
 	for _, ch := range inv.noticeChanMap {
-		close(ch)
+		select {
+		case _, isOpen := <-ch:
+			if isOpen {
+				close(ch)
+			}
+		default:
+			close(ch)
+		}
 	}
 	inv.noticeChanMap = nil
 }
