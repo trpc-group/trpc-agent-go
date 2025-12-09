@@ -29,8 +29,8 @@ const (
 	metadataKeyModelAvailable = "model_available"
 	// metadataKeyCheckFunctions is the key for check functions count in metadata.
 	metadataKeyCheckFunctions = "check_functions"
-	// metadataKeySkipRecentEvents is the key for skip recent events count in metadata.
-	metadataKeySkipRecentEvents = "skip_recent_events"
+	// metadataKeySkipRecentEnabled indicates whether skip recent logic is configured.
+	metadataKeySkipRecentEnabled = "skip_recent_enabled"
 )
 
 const (
@@ -66,20 +66,20 @@ func getDefaultSummarizerPrompt(maxWords int) string {
 
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
-	model            model.Model
-	prompt           string
-	checks           []Checker
-	maxSummaryWords  int
-	skipRecentEvents int
+	model           model.Model
+	prompt          string
+	checks          []Checker
+	maxSummaryWords int
+	skipRecentFunc  SkipRecentFunc
 }
 
 // NewSummarizer creates a new session summarizer.
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
-		prompt:           "",          // Will be set after processing options.
-		checks:           []Checker{}, // No default checks - summarization only when explicitly configured.
-		maxSummaryWords:  0,           // 0 means no word limit.
-		skipRecentEvents: 0,           // 0 means no events are skipped.
+		prompt:          "",          // Will be set after processing options.
+		checks:          []Checker{}, // No default checks - summarization only when explicitly configured.
+		maxSummaryWords: 0,           // 0 means no word limit.
+		skipRecentFunc:  nil,         // nil means no events are skipped.
 	}
 	s.model = m
 
@@ -141,14 +141,18 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 // filterEventsForSummary filters events for summarization, excluding recent events
 // and ensuring at least one user message is included for context.
 func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event.Event {
-	if s.skipRecentEvents <= 0 || len(events) <= s.skipRecentEvents {
+	if s.skipRecentFunc == nil {
 		return events
 	}
 
-	// Skip the most recent events
-	filteredEvents := events[:len(events)-s.skipRecentEvents]
+	skipCount := s.skipRecentFunc(events)
+	if skipCount <= 0 || len(events) <= skipCount {
+		return events
+	}
 
-	// Ensure the filtered events contain at least one user message for context
+	filteredEvents := events[:len(events)-skipCount]
+
+	// Ensure the filtered events contain at least one user message for context.
 	for _, e := range filteredEvents {
 		if e.Author == authorUser && e.Response != nil &&
 			len(e.Response.Choices) > 0 &&
@@ -158,8 +162,8 @@ func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event
 		}
 	}
 
-	// If no user message found in filtered events, return empty slice
-	// This prevents generating summaries without proper context
+	// If no user message found in filtered events, return empty slice.
+	// This prevents generating summaries without proper context.
 	return []event.Event{}
 }
 
@@ -172,11 +176,11 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:        modelName,
-		metadataKeyMaxSummaryWords:  s.maxSummaryWords,
-		metadataKeyModelAvailable:   modelAvailable,
-		metadataKeyCheckFunctions:   len(s.checks),
-		metadataKeySkipRecentEvents: s.skipRecentEvents,
+		metadataKeyModelName:         modelName,
+		metadataKeyMaxSummaryWords:   s.maxSummaryWords,
+		metadataKeyModelAvailable:    modelAvailable,
+		metadataKeyCheckFunctions:    len(s.checks),
+		metadataKeySkipRecentEnabled: s.skipRecentFunc != nil,
 	}
 }
 
