@@ -317,6 +317,31 @@ agent := llmagent.New("assistant",
 r := runner.NewRunner("my-app", agent)
 ```
 
+### 在请求级别切换 Agent
+
+Runner 支持在构造时注册多个可选 Agent，并在单次 Run 时切换：
+
+```go
+reader := llmagent.New("reader", llmagent.WithModel(model))
+writer := llmagent.New("writer", llmagent.WithModel(model))
+
+r := runner.NewRunner("my-app", reader, // 使用 reader agent 作为默认 agent
+    runner.WithAgent("writer", writer), // 按名称注册可选 Agent
+)
+
+// 使用 reader agent 作为默认 agent
+ch, err := r.Run(ctx, userID, sessionID, msg)
+
+// 通过 AgentName 指定使用 writer agent
+ch, err := r.Run(ctx, userID, sessionID, msg, agent.WithAgentName("writer"))
+
+// 直接传入实例，无需预注册。
+custom := llmagent.New("custom", llmagent.WithModel(model))
+ch, err := r.Run(ctx, userID, sessionID, msg, agent.WithAgent(custom))
+```
+
+Agent 生效优先级：`WithAgent` > `WithAgentName` > 默认 Agent。
+
 ### 生成配置
 
 Runner 会将生成配置传递给 Agent：
