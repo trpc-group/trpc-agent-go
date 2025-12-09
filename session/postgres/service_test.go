@@ -116,6 +116,59 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
+type sessionStateJSONMatcher struct {
+	t             *testing.T
+	expectedID    string
+	expectedState session.StateMap
+	createdAt     time.Time
+	previousAt    time.Time
+}
+
+func (m *sessionStateJSONMatcher) Match(v driver.Value) bool {
+	m.t.Helper()
+	stateBytes, ok := v.([]byte)
+	if !ok {
+		m.t.Errorf("expected []byte for state, got %T", v)
+		return false
+	}
+
+	var stored SessionState
+	if err := json.Unmarshal(stateBytes, &stored); err != nil {
+		m.t.Errorf("unmarshal state failed: %v", err)
+		return false
+	}
+
+	if stored.ID != m.expectedID {
+		m.t.Errorf("unexpected session id, got %s", stored.ID)
+		return false
+	}
+	if !stored.CreatedAt.Equal(m.createdAt) {
+		m.t.Errorf("createdAt changed, expected %v got %v", m.createdAt, stored.CreatedAt)
+		return false
+	}
+	if stored.UpdatedAt.IsZero() {
+		m.t.Errorf("updatedAt should be set")
+		return false
+	}
+	if !m.previousAt.IsZero() && !stored.UpdatedAt.After(m.previousAt) {
+		m.t.Errorf("updatedAt should be refreshed")
+		return false
+	}
+
+	for key, expected := range m.expectedState {
+		got, ok := stored.State[key]
+		if !ok {
+			m.t.Errorf("state missing key %s", key)
+			return false
+		}
+		if string(got) != string(expected) {
+			m.t.Errorf("state mismatch for key %s", key)
+			return false
+		}
+	}
+	return true
+}
+
 // createTestService creates a Service with mock database for testing
 func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 	t.Helper()
@@ -1274,6 +1327,59 @@ func TestDeleteUserState_EmptyKey(t *testing.T) {
 
 	err := s.DeleteUserState(context.Background(), userKey, "")
 	require.Error(t, err)
+}
+
+func TestUpdateSessionState_UnmarshalSessionEnvelope(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+	createdAt := time.Date(2024, 12, 31, 12, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(time.Minute)
+
+	existing := &SessionState{
+		ID:        key.SessionID,
+		State:     session.StateMap{"existing": []byte("old")},
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}
+	stateBytes, err := json.Marshal(existing)
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT state FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(stateBytes))
+
+	expectedState := session.StateMap{
+		"existing": []byte("old"),
+		"new":      []byte("fresh"),
+	}
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = $1, updated_at = $2, expires_at = $3 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL")).
+		WithArgs(
+			&sessionStateJSONMatcher{
+				t:             t,
+				expectedID:    key.SessionID,
+				expectedState: expectedState,
+				createdAt:     createdAt,
+				previousAt:    updatedAt,
+			},
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = s.UpdateSessionState(context.Background(), key, session.StateMap{
+		"new": []byte("fresh"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAppendEvent_SyncMode(t *testing.T) {
