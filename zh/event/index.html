@@ -965,7 +965,16 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="过滤委托提示（Transfer Announcements）">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      代码执行事件标签
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="代码执行事件标签">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1034,7 +1043,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_1" class="md-nav__link">
+  <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
       核心流程
     </span>
@@ -1043,7 +1052,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
+  <a href="#_3" class="md-nav__link">
     <span class="md-ellipsis">
       代码示例
     </span>
@@ -1326,7 +1335,16 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="过滤委托提示（Transfer Announcements）">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      代码执行事件标签
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="代码执行事件标签">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1395,7 +1413,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_1" class="md-nav__link">
+  <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
       核心流程
     </span>
@@ -1404,7 +1422,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
+  <a href="#_3" class="md-nav__link">
     <span class="md-ellipsis">
       代码示例
     </span>
@@ -1850,6 +1868,13 @@
  - 按对象类型过滤：隐藏 <code>Response.Object == "agent.transfer"</code> 的事件。
  - 按标签（Tag）过滤：隐藏 <code>Event.Tag</code> 中包含 <code>transfer</code> 的事件。框架会为与委托相关的事件（包括 transfer 工具结果）统一打上 <code>transfer</code> 标签，按标签过滤不会破坏 ToolCall/ToolResult 的配对关系。</p>
 <p>标签以分号（<code>;</code>）分隔。自定义事件可使用 <code>event.WithTag(tag)</code> 追加标签，多标签格式为 <code>tag1;tag2;...</code>。</p>
+<h3 id="_1">代码执行事件标签</h3>
+<p>对于代码执行（Code Execution）相关的事件，可通过 <code>Event.Tag</code> 区分代码和执行结果：</p>
+<ul>
+<li><strong>代码执行事件</strong>：<code>Response.Object == "postprocessing.code_execution"</code> 且 <code>Event.ContainsTag(event.TagCodeExecution)</code></li>
+<li><strong>执行结果事件</strong>：<code>Response.Object == "postprocessing.code_execution"</code> 且 <code>Event.ContainsTag(event.TagCodeExecutionResult)</code></li>
+</ul>
+<p>相关常量定义在 <code>trpc.group/trpc-go/trpc-agent-go/event</code> 包中。</p>
 <h4 id="runner">辅助方法：检测 Runner 完成</h4>
 <p>使用便捷方法来判断整次运行是否已完成，无论 Agent 类型如何：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
@@ -1978,14 +2003,14 @@
 </span></code></pre></div></td></tr></table></div>
 <h2 id="event_6">Event 使用示例</h2>
 <p>这个示例展示了如何在实际应用中使用 Event 处理 Agent 的流式响应、工具调用和错误处理。</p>
-<h3 id="_1">核心流程</h3>
+<h3 id="_2">核心流程</h3>
 <ol>
 <li><strong>发送用户消息</strong>：通过 <code>runner.Run()</code> 启动 Agent 处理</li>
 <li><strong>接收事件流</strong>：实时处理 Agent 返回的事件</li>
 <li><strong>处理不同类型事件</strong>：区分流式内容、工具调用、错误等</li>
 <li><strong>可视化输出</strong>：为用户提供友好的交互体验</li>
 </ol>
-<h3 id="_2">代码示例</h3>
+<h3 id="_3">代码示例</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">  1</a></span>
 <span class="normal"><a href="#__codelineno-8-2">  2</a></span>
 <span class="normal"><a href="#__codelineno-8-3">  3</a></span>
@@ -2329,7 +2354,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年11月22日 13:00:43 UTC">2025-11-22 13:00:43</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月9日 06:43:03 UTC">2025-12-09 06:43:03</span>
   </span>
 
     

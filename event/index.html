@@ -965,7 +965,16 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Filtering Transfer Announcements">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#code-execution-event-tags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code Execution Event Tags
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Code Execution Event Tags">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1326,7 +1335,16 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Filtering Transfer Announcements">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#code-execution-event-tags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code Execution Event Tags
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Code Execution Event Tags">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1851,6 +1869,13 @@
  - Filter by <code>Object</code>: hide events where <code>Response.Object == "agent.transfer"</code>.
  - Filter by <code>Tag</code>: hide events whose <code>Event.Tag</code> contains the <code>transfer</code> tag. The framework adds this tag to delegation-related events (including transfer tool results), so filtering by tag avoids breaking ToolCall/ToolResult alignment.</p>
 <p>Tags are appended using a semicolon delimiter (<code>;</code>). Use <code>event.WithTag(tag)</code> when creating custom events; multiple tags are stored as <code>tag1;tag2;...</code>.</p>
+<h3 id="code-execution-event-tags">Code Execution Event Tags</h3>
+<p>For code execution related events, use <code>Event.Tag</code> to distinguish between code and execution results:</p>
+<ul>
+<li><strong>Code Execution Event</strong>: <code>Response.Object == "postprocessing.code_execution"</code> and <code>Event.ContainsTag(event.TagCodeExecution)</code></li>
+<li><strong>Execution Result Event</strong>: <code>Response.Object == "postprocessing.code_execution"</code> and <code>Event.ContainsTag(event.TagCodeExecutionResult)</code></li>
+</ul>
+<p>The related constants are defined in the <code>trpc.group/trpc-go/trpc-agent-go/event</code> package.</p>
 <h4 id="helper-detect-runner-completion">Helper: Detect Runner Completion</h4>
 <p>Use the convenience method to detect when the whole run has finished regardless of Agent type:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
@@ -2330,7 +2355,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 22, 2025 13:00:43 UTC">2025-11-22 13:00:43</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 9, 2025 06:43:03 UTC">2025-12-09 06:43:03</span>
   </span>
 
     
