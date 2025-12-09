@@ -40,3 +40,90 @@ func TestInvokeFindsParentFlusher(t *testing.T) {
 func TestInvokeNoFlusher(t *testing.T) {
 	require.NoError(t, Invoke(context.Background(), agent.NewInvocation()))
 }
+
+func TestAttachReusesHolderAndUpdatesChannel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	inv := agent.NewInvocation()
+	ch1 := make(chan *FlushRequest, 1)
+	Attach(ctx, inv, ch1)
+	holder1, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
+	require.True(t, ok)
+	require.NotNil(t, holder1)
+
+	ch2 := make(chan *FlushRequest, 1)
+	Attach(ctx, inv, ch2)
+	holder2, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
+	require.True(t, ok)
+	require.Equal(t, holder1, holder2)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Invoke(ctx, inv)
+	}()
+
+	var req *FlushRequest
+	select {
+	case req = <-ch2:
+	case <-ctx.Done():
+		t.Fatalf("invoke did not send flush request: %v", ctx.Err())
+	}
+	require.NotNil(t, req)
+	require.NotNil(t, req.ACK)
+	close(req.ACK)
+	require.NoError(t, <-done)
+
+	select {
+	case unexpected := <-ch1:
+		t.Fatalf("received unexpected request on old channel: %+v", unexpected)
+	default:
+	}
+}
+
+func TestInvokeContextCancelBeforeAck(t *testing.T) {
+	inv := agent.NewInvocation()
+	ch := make(chan *FlushRequest, 1)
+	Attach(context.Background(), inv, ch)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Invoke(ctx, inv)
+	}()
+
+	req := <-ch
+	require.NotNil(t, req)
+	cancel()
+
+	require.ErrorIs(t, <-errCh, context.Canceled)
+	close(req.ACK)
+}
+
+func TestClearRemovesFlusher(t *testing.T) {
+	inv := agent.NewInvocation()
+	ch := make(chan *FlushRequest, 1)
+	Attach(context.Background(), inv, ch)
+
+	Clear(inv)
+	_, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
+	require.False(t, ok)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	require.NoError(t, Invoke(ctx, inv))
+
+	select {
+	case req := <-ch:
+		t.Fatalf("unexpected flush request after clear: %+v", req)
+	default:
+	}
+
+	Clear(nil)
+}
+
+func TestInvokeNilInvocation(t *testing.T) {
+	require.NoError(t, Invoke(context.Background(), nil))
+}
