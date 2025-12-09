@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -23,6 +24,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -400,6 +403,18 @@ type mockAgent struct {
 	tools          []tool.Tool
 }
 
+type stubSummarizer struct {
+	summary string
+}
+
+func (s *stubSummarizer) ShouldSummarize(_ *session.Session) bool { return true }
+func (s *stubSummarizer) Summarize(_ context.Context, _ *session.Session) (string, error) {
+	return s.summary, nil
+}
+func (s *stubSummarizer) Metadata() map[string]any { return nil }
+
+var _ summary.SessionSummarizer = (*stubSummarizer)(nil)
+
 func (m *mockAgent) Info() agent.Info {
 	return agent.Info{
 		Name:        m.name,
@@ -629,6 +644,156 @@ func TestGraphAgent_CreateInitialStateWithSession(t *testing.T) {
 	}
 
 	require.Greater(t, eventCount, 0)
+}
+
+func TestGraphAgent_CreateInitialStateWithSessionSummary(t *testing.T) {
+	const agentName = "test-agent"
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(agentName, g, WithAddSessionSummary(true))
+	require.NoError(t, err)
+
+	sess := &session.Session{
+		ID: "test-session",
+		Summaries: map[string]*session.Summary{
+			agentName: {
+				Summary:   "branch summary content",
+				UpdatedAt: time.Now(),
+			},
+		},
+	}
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	require.Equal(t, model.RoleSystem, messages[0].Role)
+	require.Equal(t, "branch summary content", messages[0].Content)
+}
+
+func TestGraphAgent_CreateInitialStateWithSessionSummary_Disabled(t *testing.T) {
+	const agentName = "test-agent"
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(agentName, g)
+	require.NoError(t, err)
+
+	sess := &session.Session{
+		ID: "test-session",
+		Summaries: map[string]*session.Summary{
+			agentName: {
+				Summary:   "branch summary content",
+				UpdatedAt: time.Now(),
+			},
+		},
+	}
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	require.Equal(t, model.RoleUser, messages[0].Role)
+	require.Equal(t, "hello", messages[0].Content)
+}
+
+func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.T) {
+	const agentName = "test-agent"
+	ctx := context.Background()
+
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(agentName, g, WithAddSessionSummary(true))
+	require.NoError(t, err)
+
+	// Session service with a stub summarizer to emulate real summarization flow.
+	sum := &stubSummarizer{summary: "auto summary from service"}
+	sessSvc := inmemory.NewSessionService(inmemory.WithSummarizer(sum))
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := sessSvc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	evt := event.NewResponseEvent("inv-1", agentName, &model.Response{
+		Choices: []model.Choice{{Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "hi there",
+		}}},
+	})
+	evt.FilterKey = agentName
+	require.NoError(t, sessSvc.AppendEvent(ctx, sess, evt))
+	require.NoError(t, sessSvc.CreateSessionSummary(ctx, sess, agentName, true))
+
+	// Reload session to ensure we read persisted summaries.
+	storedSess, err := sessSvc.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, storedSess)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(storedSess),
+		agent.WithInvocationMessage(model.NewUserMessage("next turn")),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(ctx, invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, len(messages), 1)
+	require.Equal(t, model.RoleSystem, messages[0].Role)
+	require.Equal(t, "auto summary from service", messages[0].Content)
+	// Summary already covers prior history, so the latest run may start with summary only.
 }
 
 // TestGraphAgent_CreateInitialStateWithResume tests checkpoint resume behavior.

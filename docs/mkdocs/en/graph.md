@@ -557,6 +557,8 @@ graphAgent, err := graphagent.New(
     graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
+    graphagent.WithAddSessionSummary(true),            // Inject session summary as system message
+    graphagent.WithMaxHistoryRuns(5),                  // Truncate history when summaries are off
     // Set the filter mode for messages passed to the model. The final messages passed to the model must satisfy both WithMessageTimelineFilterMode and WithMessageBranchFilterMode conditions.
     // Timeline dimension filter conditions
     // Default: graphagent.TimelineFilterAll
@@ -581,6 +583,12 @@ graphAgent, err := graphagent.New(
 
 > Model/tool callbacks are configured per node, e.g. `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > or `AddToolsNode(..., graph.WithToolCallbacks(...))`.
+
+Session summary notes:
+
+- `WithAddSessionSummary(true)` takes effect only when `Session.Summaries` contains a summary for the invocation’s filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
+- GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
+- TimelineFilterMode must be `TimelineFilterAll` (default FullContext) to read summaries. If you want only the summary without history, combine with `include_contents="none"` or a stricter MessageFilterMode.
 
 #### Concurrency considerations
 
