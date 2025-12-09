@@ -421,14 +421,14 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 		assert.Equal(t, events, filtered)
 	})
 
-	t.Run("no filtering when events count <= skip count", func(t *testing.T) {
+	t.Run("returns empty when skip count >= events length", func(t *testing.T) {
 		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 5 }}
 		events := []event.Event{
 			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "msg1"}}}}},
 			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "msg2"}}}}},
 		}
 		filtered := s.filterEventsForSummary(events)
-		assert.Equal(t, events, filtered)
+		assert.Empty(t, filtered)
 	})
 
 	t.Run("filters recent events and keeps user message context", func(t *testing.T) {
@@ -476,6 +476,7 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 		assert.Equal(t, expected, filtered)
 		assert.Len(t, filtered, 5)
 	})
+
 }
 
 func TestSessionSummarizer_SummarizeWithSkipRecent(t *testing.T) {

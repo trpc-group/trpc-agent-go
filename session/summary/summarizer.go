@@ -184,8 +184,11 @@ func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event
 	}
 
 	skipCount := s.skipRecentFunc(events)
-	if skipCount <= 0 || len(events) <= skipCount {
+	if skipCount <= 0 {
 		return events
+	}
+	if len(events) <= skipCount {
+		return []event.Event{}
 	}
 
 	filteredEvents := events[:len(events)-skipCount]
