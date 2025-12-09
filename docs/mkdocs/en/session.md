@@ -1063,11 +1063,11 @@ CREATE TABLE user_states (
 
 ### Hook Capabilities (Append/Get)
 
-- **AppendEventHook**: Intercept/modify/abort events before they are stored. Useful for content safety or auditing (e.g., tagging `violation=<word>`), or short-circuiting persistence.
+- **AppendEventHook**: Intercept/modify/abort events before they are stored. Useful for content safety or auditing (e.g., tagging `violation=<word>`), or short-circuiting persistence. For filterKey usage, see the “Session Summarization / FilterKey with AppendEventHook” section below.
 - **GetSessionHook**: Intercept/modify/filter sessions after they are read. Useful for removing tagged events or dynamically augmenting the returned session state.
 - **Chain-of-responsibility**: Hooks call `next()` to continue; returning early short-circuits later hooks, and errors bubble up.
 - **Backend parity**: Memory, Redis, MySQL, and PostgreSQL share the same hook interface—inject hook slices when constructing the service.
-- **Example**: See `examples/session/hook` ([code](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)) 
+- **Example**: See `examples/session/hook` ([code](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook))
 
 ### Direct Use of Session Service API
 
@@ -1456,6 +1456,80 @@ The `GetSessionSummaryText` method supports an optional `WithSummaryFilterKey` o
 5. **Balance word limits**: Set `WithMaxSummaryWords` to balance between preserving context and reducing token usage. Typical values range from 100-300 words.
 
 6. **Test trigger conditions**: Experiment with different combinations of `WithChecksAny` and `WithChecksAll` to find the right balance between summary frequency and cost.
+
+### Summarizing by Event Type
+
+In real-world applications, you may want to generate separate summaries for different types of events. For example:
+
+- **User Message Summary**: Summarize user needs and questions
+- **Tool Call Summary**: Record which tools were used and their results
+- **System Event Summary**: Track system state changes
+
+To achieve this, you need to set the `FilterKey` field on events to identify their type.
+
+#### Setting FilterKey with AppendEventHook
+
+The recommended approach is to use `AppendEventHook` to automatically set `FilterKey` before events are persisted:
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+        // Auto-categorize by event author
+        prefix := "my-app/"  // Must add appName prefix
+        switch ctx.Event.Author {
+        case "user":
+            ctx.Event.FilterKey = prefix + "user-messages"
+        case "tool":
+            ctx.Event.FilterKey = prefix + "tool-calls"
+        default:
+            ctx.Event.FilterKey = prefix + "misc"
+        }
+        return next()
+    }),
+)
+```
+
+Once FilterKey is set, you can generate independent summaries for different event types:
+
+```go
+// Generate summary for user messages
+err := sessionService.CreateSessionSummary(ctx, sess, "my-app/user-messages", false)
+
+// Generate summary for tool calls
+err := sessionService.CreateSessionSummary(ctx, sess, "my-app/tool-calls", false)
+
+// Retrieve summary for specific type
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("my-app/user-messages"))
+```
+
+#### FilterKey Prefix Convention
+
+**⚠️ Important: FilterKey must include the `appName + "/"` prefix.**
+
+**Why:** The Runner uses `appName + "/"` as the filter prefix when filtering events. If your FilterKey lacks this prefix, events will be filtered out, causing:
+
+- LLM cannot see conversation history, may repeatedly trigger tool calls
+- Summary content is incomplete, losing important context
+
+**Example:**
+
+```go
+// ✅ Correct: with appName prefix
+evt.FilterKey = "my-app/user-messages"
+
+// ❌ Wrong: no prefix, events will be filtered out
+evt.FilterKey = "user-messages"
+```
+
+**Technical Details:** The framework uses prefix matching (`strings.HasPrefix`) to determine which events should be included in the context. See `ContentRequestProcessor` filtering logic for details.
+
+#### Complete Examples
+
+See the following examples for complete FilterKey usage scenarios:
+
+- [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook basics
+- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - Summarizing by FilterKey
 
 ### Performance Considerations
 
