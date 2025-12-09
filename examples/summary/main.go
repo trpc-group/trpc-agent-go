@@ -259,7 +259,6 @@ func (c *summaryChat) consumeResponse(evtCh <-chan *event.Event) string {
 		// Don't break on Done - wait for all events including finalizeRun.
 		if event.Done {
 			fmt.Printf("\n")
-			break
 		}
 	}
 
