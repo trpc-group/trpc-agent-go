@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -34,6 +35,10 @@ const (
 )
 
 const (
+	// lastIncludedTsKey is the key for last included timestamp in summary.
+	// This key is used to store the last included timestamp in the session state.
+	lastIncludedTsKey = "summary:last_included_ts"
+
 	// conversationTextPlaceholder is the placeholder for conversation text.
 	conversationTextPlaceholder = "{conversation_text}"
 	// maxSummaryWordsPlaceholder is the placeholder for max summary words.
@@ -158,6 +163,8 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("failed to generate summary for session %s (input_chars=%d)", sess.ID, len(conversationText))
 	}
 
+	s.recordLastIncludedTimestamp(sess, eventsToSummarize)
+
 	if s.postHook != nil {
 		hookCtx := &PostSummaryHookContext{
 			Ctx:     ctx,
@@ -174,6 +181,17 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	return summaryText, nil
+}
+
+func (s *sessionSummarizer) recordLastIncludedTimestamp(sess *session.Session, events []event.Event) {
+	if sess == nil || len(events) == 0 {
+		return
+	}
+	if sess.State == nil {
+		sess.State = make(session.StateMap)
+	}
+	last := events[len(events)-1].Timestamp.UTC()
+	sess.State[lastIncludedTsKey] = []byte(last.Format(time.RFC3339Nano))
 }
 
 // filterEventsForSummary filters events for summarization, excluding recent events

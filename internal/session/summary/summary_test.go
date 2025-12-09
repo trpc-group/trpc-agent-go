@@ -31,6 +31,23 @@ func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (
 }
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
+type fakeSummarizerWithTs struct {
+	out string
+	ts  time.Time
+}
+
+func (f *fakeSummarizerWithTs) ShouldSummarize(sess *session.Session) bool { return true }
+func (f *fakeSummarizerWithTs) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	if sess.State == nil {
+		sess.State = make(session.StateMap)
+	}
+	if !f.ts.IsZero() {
+		sess.State[lastIncludedTsKey] = []byte(f.ts.UTC().Format(time.RFC3339Nano))
+	}
+	return f.out, nil
+}
+func (f *fakeSummarizerWithTs) Metadata() map[string]any { return map[string]any{} }
+
 func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 	return event.Event{
 		Branch:    filterKey,
@@ -188,6 +205,32 @@ func TestComputeDeltaSince_WithTime(t *testing.T) {
 	require.Equal(t, "e2", delta[0].Response.Choices[0].Message.Content)
 	require.Equal(t, "e3", delta[1].Response.Choices[0].Message.Content)
 	require.Equal(t, base.Events[2].Timestamp, latestTs)
+}
+
+func TestSummarizeSession_UsesLastIncludedTimestampWhenProvided(t *testing.T) {
+	now := time.Now()
+	t1 := now.Add(-3 * time.Minute)
+	t2 := now.Add(-2 * time.Minute)
+	t3 := now.Add(-1 * time.Minute)
+
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", t1, ""),
+		makeEvent("e2", t2, ""),
+		makeEvent("e3", t3, ""),
+	}
+
+	s := &fakeSummarizerWithTs{
+		out: "sum",
+		ts:  t2, // simulate summarizer skipping the latest event and using t2 as last included
+	}
+
+	updated, err := SummarizeSession(context.Background(), s, base, "", false)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NotNil(t, base.Summaries)
+	require.Equal(t, "sum", base.Summaries[""].Summary)
+	require.Equal(t, t2.UTC(), base.Summaries[""].UpdatedAt)
 }
 
 func TestPickSummaryText(t *testing.T) {
