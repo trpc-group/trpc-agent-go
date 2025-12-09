@@ -739,11 +739,6 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 		completionEvent        *event.Event
 	)
 	for event := range eventChan {
-		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("❌ Error: %s\n", event.Error.Message)
-			continue
-		}
 		// Track node/tool/model execution events via metadata (author may be nodeID).
 		if event.StateDelta != nil {
 			// Try to extract node metadata from StateDelta.
@@ -860,6 +855,12 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 					}
 				}
 			}
+		}
+		// Handle errors after metadata so error-phase
+		// node/tool/model events are observable.
+		if event.Error != nil {
+			fmt.Printf("❌ Error: %s\n", event.Error.Message)
+			continue
 		}
 		// Process streaming content from LLM nodes (events with model names as authors).
 		if len(event.Response.Choices) > 0 {

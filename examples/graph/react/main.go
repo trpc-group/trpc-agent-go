@@ -174,12 +174,6 @@ func streamEvents(eventChan <-chan *event.Event) error {
 		if evt == nil {
 			continue
 		}
-		if evt.Error != nil {
-			fmt.Printf("error: %s\n", evt.Error.Message)
-			lineOpen = false
-			continue
-		}
-
 		if label := maybeStartNode(evt); label != "" {
 			flushStream()
 			if lineOpen {
@@ -240,6 +234,12 @@ func streamEvents(eventChan <-chan *event.Event) error {
 
 		if evt.Response != nil && evt.Response.Done {
 			flushStream()
+		}
+
+		if evt.Error != nil {
+			fmt.Printf("error: %s\n", evt.Error.Message)
+			lineOpen = false
+			continue
 		}
 	}
 
