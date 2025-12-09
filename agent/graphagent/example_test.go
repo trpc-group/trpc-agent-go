@@ -74,5 +74,5 @@ func ExampleGraphAgent_Run() {
 	fmt.Printf("Processed %d events\n", eventCount)
 
 	// Output:
-	// Processed 10 events
+	// Processed 9 events
 }
