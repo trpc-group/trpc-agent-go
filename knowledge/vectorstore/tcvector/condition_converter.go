@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime/debug"
+	"strings"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -101,12 +102,7 @@ func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 			condStr = childCond
 			continue
 		}
-
-		op := "and"
-		if cond.Operator == searchfilter.OperatorOr {
-			op = "or"
-		}
-		condStr = fmt.Sprintf("(%s) %s (%s)", condStr, op, childCond)
+		condStr = fmt.Sprintf("(%s) %s (%s)", condStr, strings.ToLower(cond.Operator), childCond)
 	}
 
 	if condStr == "" {
