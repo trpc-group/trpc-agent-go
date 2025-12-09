@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 
@@ -697,10 +696,12 @@ func TestTool_StreamableCall_NilEvent(t *testing.T) {
 	}
 	defer r.Close()
 
-	// When the underlying agent emits a nil event, the runner will treat it as an error and
-	// terminate the stream. We expect the stream to end without yielding any chunks.
-	_, err = r.Recv()
-	if err != io.EOF {
-		t.Fatalf("expected EOF from stream, got: %v", err)
+	// Should receive the non-nil event (nil event is skipped in fallback path)
+	ch, err := r.Recv()
+	if err != nil {
+		t.Fatalf("unexpected stream read error: %v", err)
+	}
+	if ch.Content == nil {
+		t.Fatalf("expected non-nil content")
 	}
 }

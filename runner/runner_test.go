@@ -22,6 +22,7 @@ import (
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flush"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -917,7 +918,9 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 	sess, _ := rr.sessionService.CreateSession(context.Background(), session.Key{AppName: "app", UserID: "u", SessionID: "s"}, session.StateMap{})
 
 	agentCh := make(chan *event.Event)
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh)
+	flushCh := make(chan *flush.FlushRequest)
+	// No Attach needed because processAgentEvents will attach using this channel.
+	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh)
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}

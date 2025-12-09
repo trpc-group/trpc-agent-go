@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	// stateKeyFlushSession is the invocation state key used to store the flush function.
-	stateKeyFlushSession = "__flush_session__"
+	// StateKeyFlushSession is the invocation state key used to store the flush function.
+	StateKeyFlushSession = "__flush_session__"
 )
 
 // FlushRequest represents a single session flush request.
@@ -28,9 +28,15 @@ type FlushRequest struct {
 	ACK chan struct{} // ACK is closed by the runner when the flush is complete.
 }
 
+// Flusher defines a flush function used to synchronize session events.
 type flusher func(context.Context) error
 
-// Attach binds a flush function to the given invocation using its state map, wiring it to the provided flush channel.
+// flusherHolder holds a shared flusher so Clear can invalidate it for all clones.
+type flusherHolder struct {
+	fn flusher
+}
+
+// Attach binds a flush function to the given invocation and wires it to the provided flush channel.
 // When Invoke is called, the function will enqueue a FlushRequest on ch and wait for ACK to be closed by the runner.
 func Attach(ctx context.Context, inv *agent.Invocation, ch chan *FlushRequest) {
 	var fn flusher = func(ctx context.Context) error {
@@ -49,20 +55,31 @@ func Attach(ctx context.Context, inv *agent.Invocation, ch chan *FlushRequest) {
 			return nil
 		}
 	}
-	inv.SetState(stateKeyFlushSession, fn)
+	// Reuse existing holder if present; otherwise create one.
+	if holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession); ok && holder != nil {
+		holder.fn = fn
+	} else {
+		inv.SetState(StateKeyFlushSession, &flusherHolder{fn: fn})
+	}
 }
 
 // Invoke executes the flush function stored on the invocation state if present.
 func Invoke(ctx context.Context, inv *agent.Invocation) error {
-	fn, ok := agent.GetStateValue[flusher](inv, stateKeyFlushSession)
-	if !ok || fn == nil {
+	holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
+	if !ok || holder == nil || holder.fn == nil {
 		return nil
 	}
-	return fn(ctx)
+	return holder.fn(ctx)
 }
 
 // Clear removes any flush function stored on the invocation state.
 // This is intended to be called by the runner when the event loop finishes.
 func Clear(inv *agent.Invocation) {
-	inv.DeleteState(stateKeyFlushSession)
+	if inv == nil {
+		return
+	}
+	if holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession); ok && holder != nil {
+		holder.fn = nil
+	}
+	inv.DeleteState(StateKeyFlushSession)
 }

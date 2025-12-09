@@ -218,6 +218,10 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
+	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
+	flushChan := make(chan *flush.FlushRequest)
+	flush.Attach(ctx, invocation, flushChan)
+
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
@@ -226,7 +230,7 @@ func (r *runner) Run(
 	}
 
 	// Process the agent events and emit them to the output channel.
-	return r.processAgentEvents(ctx, sess, invocation, agentEventCh), nil
+	return r.processAgentEvents(ctx, sess, invocation, agentEventCh, flushChan), nil
 }
 
 // getOrCreateSession returns an existing session or creates a new one.
@@ -260,18 +264,16 @@ func (r *runner) processAgentEvents(
 	sess *session.Session,
 	invocation *agent.Invocation,
 	agentEventCh <-chan *event.Event,
+	flushChan chan *flush.FlushRequest,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
 		sess:             sess,
 		invocation:       invocation,
 		agentEventCh:     agentEventCh,
-		flushChan:        make(chan *flush.FlushRequest),
+		flushChan:        flushChan,
 		processedEventCh: processedEventCh,
 	}
-	// Attach a flush function to the invocation so that dependent components (e.g., AgentTool) can flush
-	// all in-flight events before proceeding.
-	flush.Attach(ctx, invocation, loop.flushChan)
 	go r.runEventLoop(ctx, loop)
 	return processedEventCh
 }
