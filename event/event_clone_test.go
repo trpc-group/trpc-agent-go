@@ -6,6 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
+//
 
 package event
 
@@ -39,5 +40,35 @@ func TestEvent_Clone_DeepCopy(t *testing.T) {
 	}
 	if string(e.StateDelta["k"]) == string(c.StateDelta["k"]) {
 		t.Errorf("expected deep copy of StateDelta")
+	}
+}
+
+func TestEvent_Clone_LegacyVersionMigratesFilterKey(t *testing.T) {
+	e := &Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+		},
+		InvocationID: "inv-legacy",
+		Author:       "tester",
+		Branch:       "legacy/branch",
+		Version:      InitVersion,
+	}
+
+	clone := e.Clone()
+	if clone == nil {
+		t.Fatalf("expected clone to be non-nil")
+	}
+	if clone.Version != CurrentVersion {
+		t.Fatalf("expected clone version %d, got %d", CurrentVersion, clone.Version)
+	}
+	if clone.FilterKey != e.Branch {
+		t.Fatalf("expected clone filter key %q from legacy branch, got %q", e.Branch, clone.FilterKey)
+	}
+	if clone.Branch != e.Branch {
+		t.Fatalf("expected clone branch to remain %q, got %q", e.Branch, clone.Branch)
+	}
+	if clone.ID == e.ID {
+		t.Fatalf("expected clone to generate a new ID")
 	}
 }
