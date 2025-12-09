@@ -255,8 +255,8 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 				Value:    "AI",
 			},
 			wantErr:    false,
-			wantFilter: `metadata["topic"] == {trpc_metadata_topic}`,
-			wantParams: map[string]any{"trpc_metadata_topic": "AI"},
+			wantFilter: `metadata["topic"] == {metadata.topic}`,
+			wantParams: map[string]any{"metadata.topic": "AI"},
 		},
 		{
 			name: "metadata field in operator",
@@ -266,8 +266,8 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 				Value:    []any{"AI", "ML", "NLP"},
 			},
 			wantErr:    false,
-			wantFilter: `metadata["tags"] in {trpc_metadata_tags}`,
-			wantParams: map[string]any{"trpc_metadata_tags": []any{"AI", "ML", "NLP"}},
+			wantFilter: `metadata["tags"] in {metadata.tags}`,
+			wantParams: map[string]any{"metadata.tags": []any{"AI", "ML", "NLP"}},
 		},
 		{
 			name: "metadata field between operator",
@@ -276,10 +276,10 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 				Operator: searchfilter.OperatorBetween,
 				Value:    []float64{0.5, 1.0},
 			},
-			wantErr:    false,
-			wantFilter: `(metadata["score"] >= {trpc_metadata_score_0} and ` +
-				`metadata["score"] <= {trpc_metadata_score_1})`,
-			wantParams: map[string]any{"trpc_metadata_score_0": 0.5, "trpc_metadata_score_1": 1.0},
+			wantErr: false,
+			wantFilter: `(metadata["score"] >= {metadata.score_0} and ` +
+				`metadata["score"] <= {metadata.score_1})`,
+			wantParams: map[string]any{"metadata.score_0": 0.5, "metadata.score_1": 1.0},
 		},
 		{
 			name: "metadata field greater than operator",
@@ -289,8 +289,8 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 				Value:    100,
 			},
 			wantErr:    false,
-			wantFilter: `metadata["count"] > {trpc_metadata_count}`,
-			wantParams: map[string]any{"trpc_metadata_count": 100},
+			wantFilter: `metadata["count"] > {metadata.count}`,
+			wantParams: map[string]any{"metadata.count": 100},
 		},
 		{
 			name: "metadata field not in operator",
@@ -300,8 +300,8 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 				Value:    []any{"spam", "ads"},
 			},
 			wantErr:    false,
-			wantFilter: `metadata["category"] not in {trpc_metadata_category}`,
-			wantParams: map[string]any{"trpc_metadata_category": []any{"spam", "ads"}},
+			wantFilter: `metadata["category"] not in {metadata.category}`,
+			wantParams: map[string]any{"metadata.category": []any{"spam", "ads"}},
 		},
 		{
 			name: "mixed schema and metadata fields with AND",
@@ -321,8 +321,8 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 				},
 			},
 			wantErr:    false,
-			wantFilter: `(doc_id == {doc_id} and metadata["topic"] in {trpc_metadata_topic})`,
-			wantParams: map[string]any{"doc_id": "doc123", "trpc_metadata_topic": []any{"AI", "ML"}},
+			wantFilter: `(doc_id == {doc_id} and metadata["topic"] in {metadata.topic})`,
+			wantParams: map[string]any{"doc_id": "doc123", "metadata.topic": []any{"AI", "ML"}},
 		},
 		{
 			name: "metadata field with string containing quotes",
@@ -332,8 +332,8 @@ func TestMilvusFilterConverter_Convert(t *testing.T) {
 				Value:    `He said "Hello"`,
 			},
 			wantErr:    false,
-			wantFilter: `metadata["title"] == {trpc_metadata_title}`,
-			wantParams: map[string]any{"trpc_metadata_title": `He said "Hello"`},
+			wantFilter: `metadata["title"] == {metadata.title}`,
+			wantParams: map[string]any{"metadata.title": `He said "Hello"`},
 		},
 		{
 			name: "invalid operator",
