@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -24,7 +23,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -213,28 +211,10 @@ func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, s
 					log.Errorf("AgentTool: notify completion failed: %v", err)
 				}
 			}
-			at.appendEventToSession(inv.Session, evt)
 			out <- evt
 		}
 	}()
 	return out
-}
-
-// appendEventToSession persists important events back to the shared session so parent history stays complete.
-func (at *Tool) appendEventToSession(sess *session.Session, evt *event.Event) {
-	if sess == nil || evt == nil {
-		return
-	}
-	if len(evt.StateDelta) == 0 && evt.Error == nil {
-		if evt.Response == nil || evt.Response.IsPartial || !evt.Response.IsValidContent() {
-			return
-		}
-	}
-	sess.EventMu.Lock()
-	sess.Events = append(sess.Events, *evt)
-	sess.EventMu.Unlock()
-	sess.ApplyEventStateDelta(evt)
-	sess.UpdatedAt = time.Now()
 }
 
 // callWithIsolatedRunner executes the agent in an isolated environment using
