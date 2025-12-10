@@ -940,6 +940,49 @@ func TestService_SessionTTL(t *testing.T) {
 	}
 }
 
+func TestService_getSessionSummaryTTL(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	ttl := 3 * time.Second
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionTTL(ttl),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "summary-app",
+		UserID:    "summary-user",
+		SessionID: "summary-session",
+	}
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	summary := map[string]*session.Summary{
+		session.SummaryFilterKeyAllContents: {
+			Summary:   "hello",
+			UpdatedAt: time.Now(),
+		},
+	}
+	summaryBytes, err := json.Marshal(summary)
+	require.NoError(t, err)
+
+	client := buildRedisClient(t, redisURL)
+	summaryKey := getSessionSummaryKey(key)
+	err = client.HSet(ctx, summaryKey, key.SessionID, summaryBytes).Err()
+	require.NoError(t, err)
+
+	_, err = service.getSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+
+	ttlVal := client.TTL(ctx, summaryKey).Val()
+	assert.Greater(t, ttlVal, time.Duration(0))
+	assert.LessOrEqual(t, ttlVal, ttl)
+}
+
 // TestService_AppStateTTL tests app state TTL functionality
 func TestService_AppStateTTL(t *testing.T) {
 	tests := []struct {
@@ -2867,6 +2910,55 @@ func TestService_getTrackEventsLimitAndTTL(t *testing.T) {
 	require.LessOrEqual(t, trackTTL, ttl)
 }
 
+func TestService_getTrackEventsAfterTime(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "filter-app",
+		UserID:    "filter-user",
+		SessionID: "filter-session",
+	}
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	oldEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"first"`),
+		Timestamp: time.Now().Add(-2 * time.Hour),
+	}
+	newEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"second"`),
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, service.addTrackEvent(ctx, key, oldEvent))
+	require.NoError(t, service.addTrackEvent(ctx, key, newEvent))
+
+	client := buildRedisClient(t, redisURL)
+	state := fetchSessionState(t, ctx, client, key)
+	cutoff := newEvent.Timestamp.Add(-time.Minute)
+
+	result, err := service.getTrackEvents(
+		ctx,
+		[]session.Key{key},
+		[]*SessionState{state},
+		0,
+		cutoff,
+	)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	events := result[0]["alpha"]
+	require.Len(t, events, 1)
+	assert.Equal(t, json.RawMessage(`"second"`), events[0].Payload)
+}
+
 func TestService_getTrackEventsOrderingAndEmpty(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
@@ -2943,6 +3035,70 @@ func TestProcessEventCmd_SkipMalformed(t *testing.T) {
 	// Only the valid one should be returned.
 	require.Len(t, events, 1)
 	require.Equal(t, "ok", events[0].ID)
+}
+
+func Test_normalizeSessionEvents(t *testing.T) {
+	t.Run("nil_when_no_slices", func(t *testing.T) {
+		assert.Nil(t, normalizeSessionEvents(nil))
+	})
+	t.Run("first_slice_returned", func(t *testing.T) {
+		evts := []event.Event{{ID: "a"}}
+		res := normalizeSessionEvents([][]event.Event{evts})
+		require.Len(t, res, 1)
+		assert.Equal(t, "a", res[0].ID)
+	})
+}
+
+func Test_attachSummaries(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("skip_when_no_events", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "sess")
+		cmd := redis.NewStringCmd(ctx, "hget", "k")
+		attachSummaries(sess, cmd)
+		assert.Empty(t, sess.Summaries)
+	})
+
+	t.Run("attach_when_events_present", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "sess")
+		sess.Events = []event.Event{{ID: "evt"}}
+
+		summary := map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary:   "hi",
+				UpdatedAt: time.Now(),
+			},
+		}
+		bytes, err := json.Marshal(summary)
+		require.NoError(t, err)
+
+		cmd := redis.NewStringCmd(ctx, "hget", "k")
+		cmd.SetVal(string(bytes))
+
+		attachSummaries(sess, cmd)
+		require.NotNil(t, sess.Summaries)
+		assert.Contains(t, sess.Summaries, session.SummaryFilterKeyAllContents)
+	})
+}
+
+func Test_collectTrackQueryResultsSkipNil(t *testing.T) {
+	ctx := context.Background()
+	cmd := redis.NewStringSliceCmd(ctx, "zrange", "k")
+	cmd.SetErr(redis.Nil)
+
+	results, err := collectTrackQueryResults(
+		[]*trackQuery{
+			{
+				sessionIdx: 0,
+				track:      session.Track("alpha"),
+				cmd:        cmd,
+			},
+		},
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0])
 }
 
 func fetchSessionState(t *testing.T, ctx context.Context, client *redis.Client, key session.Key) *SessionState {

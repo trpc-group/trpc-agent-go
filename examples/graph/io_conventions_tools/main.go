@@ -271,10 +271,6 @@ func stream(ch <-chan *event.Event, verbose bool) error {
 		if e == nil {
 			continue
 		}
-		if e.Error != nil {
-			fmt.Printf("❌ %s\n", e.Error.Message)
-			continue
-		}
 		if verbose && e.StateDelta != nil {
 			if b, ok := e.StateDelta[graph.MetadataKeyModel]; ok && len(b) > 0 {
 				var md graph.ModelExecutionMetadata
@@ -298,6 +294,10 @@ func stream(ch <-chan *event.Event, verbose bool) error {
 					}
 				}
 			}
+		}
+		if e.Error != nil {
+			fmt.Printf("❌ %s\n", e.Error.Message)
+			continue
 		}
 		if len(e.Choices) > 0 {
 			c := e.Choices[0]
