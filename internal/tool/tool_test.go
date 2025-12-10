@@ -14,6 +14,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -73,9 +75,7 @@ func TestNamedToolSet_Idempotent(t *testing.T) {
 	nts := itool.NewNamedToolSet(ts)
 	// Calling again with an already wrapped toolset should return the same instance.
 	nts2 := itool.NewNamedToolSet(nts)
-	if nts != nts2 {
-		t.Fatalf("expected idempotent wrapping to return same instance")
-	}
+	require.Same(t, nts, nts2, "idempotent wrapper should be same instance")
 }
 
 func TestNamedToolSet_Tools_PrefixingAndPassthrough(t *testing.T) {
@@ -86,20 +86,14 @@ func TestNamedToolSet_Tools_PrefixingAndPassthrough(t *testing.T) {
 	}
 	nts := itool.NewNamedToolSet(base)
 	got := nts.Tools(context.Background())
-	if len(got) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(got))
-	}
-	if got[0].Declaration().Name != "fs_read" {
-		t.Fatalf("expected prefixed name 'fs_read', got %q", got[0].Declaration().Name)
-	}
+	require.Len(t, got, 1)
+	require.Equal(t, "fs_read", got[0].Declaration().Name)
 
 	// Without a name, names should be unchanged.
 	base2 := &fakeToolSet{name: "", tools: []tool.Tool{&simpleTool{name: "write", desc: "write file"}}}
 	nts2 := itool.NewNamedToolSet(base2)
 	got2 := nts2.Tools(context.Background())
-	if got2[0].Declaration().Name != "write" {
-		t.Fatalf("expected unmodified name 'write', got %q", got2[0].Declaration().Name)
-	}
+	require.Equal(t, "write", got2[0].Declaration().Name)
 }
 
 func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {
@@ -110,21 +104,11 @@ func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {
 	base.tools = []tool.Tool{t1}
 	got := nts.Tools(context.Background())
 	nt, ok := got[0].(*itool.NamedTool)
-	if !ok {
-		t.Fatalf("expected NamedTool, got %T", got[0])
-	}
-	if nt.Original() != t1 {
-		t.Fatalf("Original() mismatch")
-	}
-	if nts.Name() != "fs" {
-		t.Fatalf("Name() forward mismatch: %q", nts.Name())
-	}
-	if err := nts.Close(); err != nil {
-		t.Fatalf("Close() returned error: %v", err)
-	}
-	if !base.closed {
-		t.Fatalf("underlying Close() not called")
-	}
+	require.True(t, ok, "expected NamedTool, got %T", got[0])
+	require.Equal(t, t1, nt.Original())
+	require.Equal(t, "fs", nts.Name())
+	require.NoError(t, nts.Close())
+	require.True(t, base.closed, "underlying Close() not called")
 }
 
 func TestNamedTool_CallAndStreamableCall(t *testing.T) {
@@ -133,32 +117,18 @@ func TestNamedTool_CallAndStreamableCall(t *testing.T) {
 	nts := itool.NewNamedToolSet(&fakeToolSet{name: "math", tools: []tool.Tool{f}})
 	ts := nts.Tools(context.Background())
 	nt, ok := ts[0].(*itool.NamedTool)
-	if !ok {
-		t.Fatalf("expected NamedTool, got %T", ts[0])
-	}
+	require.True(t, ok, "expected NamedTool, got %T", ts[0])
 	v, err := nt.Call(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("Call() unexpected error: %v", err)
-	}
-	if v != 42 {
-		t.Fatalf("Call() result = %v, want 42", v)
-	}
+	require.NoError(t, err)
+	require.Equal(t, 42, v)
 
 	r, err := nt.StreamableCall(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("StreamableCall() unexpected error: %v", err)
-	}
-	if f.stream == nil {
-		t.Fatalf("stream should be initialized")
-	}
+	require.NoError(t, err)
+	require.NotNil(t, f.stream, "stream should be initialized")
 	f.stream.Writer.Send(tool.StreamChunk{Content: "ok"}, nil)
 	chunk, recvErr := r.Recv()
-	if recvErr != nil {
-		t.Fatalf("Recv() unexpected error: %v", recvErr)
-	}
-	if chunk.Content != "ok" {
-		t.Fatalf("Recv() content = %v, want ok", chunk.Content)
-	}
+	require.NoError(t, recvErr)
+	require.Equal(t, "ok", chunk.Content)
 	f.stream.Writer.Close()
 }
 
@@ -166,12 +136,11 @@ func TestNamedTool_CallFailures(t *testing.T) {
 	// Negative path through wrapper (not callable or streamable).
 	nts := itool.NewNamedToolSet(&fakeToolSet{name: "fs", tools: []tool.Tool{&simpleTool{name: "noop"}}})
 	nt := nts.Tools(context.Background())[0].(*itool.NamedTool)
-	if _, err := nt.Call(context.Background(), nil); err == nil || err.Error() != "tool is not callable" {
-		t.Fatalf("Call() expected not callable error, got %v", err)
-	}
-	if _, err := nt.StreamableCall(context.Background(), nil); err == nil || err.Error() != "tool is not streamable" {
-		t.Fatalf("StreamableCall() expected not streamable error, got %v", err)
-	}
+	_, err := nt.Call(context.Background(), nil)
+	require.EqualError(t, err, "tool is not callable")
+
+	_, err = nt.StreamableCall(context.Background(), nil)
+	require.EqualError(t, err, "tool is not streamable")
 }
 
 func TestNamedTool_SkipSummarizationDelegation(t *testing.T) {
@@ -181,18 +150,14 @@ func TestNamedTool_SkipSummarizationDelegation(t *testing.T) {
 		tools: []tool.Tool{&skipperTool{name: "raw", skip: true}},
 	})
 	t1 := nts.Tools(context.Background())[0].(*itool.NamedTool)
-	if !t1.SkipSummarization() {
-		t.Fatalf("expected delegated SkipSummarization=true")
-	}
+	require.True(t, t1.SkipSummarization())
 
 	nts2 := itool.NewNamedToolSet(&fakeToolSet{
 		name:  "fs",
 		tools: []tool.Tool{&skipperTool{name: "raw", skip: false}},
 	})
 	t2 := nts2.Tools(context.Background())[0].(*itool.NamedTool)
-	if t2.SkipSummarization() {
-		t.Fatalf("expected delegated SkipSummarization=false")
-	}
+	require.False(t, t2.SkipSummarization())
 }
 
 func TestGenerateJSONSchema_Primitives(t *testing.T) {
@@ -226,9 +191,7 @@ func TestGenerateJSONSchema_Primitives(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			result := itool.GenerateJSONSchema(reflect.TypeOf(tc.input))
-			if result.Type != tc.expected.Type {
-				t.Errorf("expected type %s, got %s", tc.expected.Type, result.Type)
-			}
+			require.Equal(t, tc.expected.Type, result.Type)
 		})
 	}
 }
@@ -238,43 +201,27 @@ func TestGenerateJSONSchema_ComplexTypes(t *testing.T) {
 		input := []string{}
 		result := itool.GenerateJSONSchema(reflect.TypeOf(input))
 
-		if result.Type != "array" {
-			t.Errorf("expected array type, got %s", result.Type)
-		}
-		if result.Items == nil {
-			t.Fatal("expected items schema, got nil")
-		}
-		if result.Items.Type != "string" {
-			t.Errorf("expected items type string, got %s", result.Items.Type)
-		}
+		require.Equal(t, "array", result.Type)
+		require.NotNil(t, result.Items)
+		require.Equal(t, "string", result.Items.Type)
 	})
 
 	t.Run("map type", func(t *testing.T) {
 		input := map[string]int{}
 		result := itool.GenerateJSONSchema(reflect.TypeOf(input))
 
-		if result.Type != "object" {
-			t.Errorf("expected object type, got %s", result.Type)
-		}
-		if result.AdditionalProperties == nil {
-			t.Fatal("expected additionalProperties, got nil")
-		}
+		require.Equal(t, "object", result.Type)
+		require.NotNil(t, result.AdditionalProperties)
 		propSchema, ok := result.AdditionalProperties.(*tool.Schema)
-		if !ok {
-			t.Fatalf("expected additionalProperties to be *tool.Schema, got %T", result.AdditionalProperties)
-		}
-		if propSchema.Type != "integer" {
-			t.Errorf("expected additionalProperties type integer, got %s", propSchema.Type)
-		}
+		require.True(t, ok, "additionalProperties should be *tool.Schema")
+		require.Equal(t, "integer", propSchema.Type)
 	})
 
 	t.Run("pointer type", func(t *testing.T) {
 		var input *string
 		result := itool.GenerateJSONSchema(reflect.TypeOf(input))
 
-		if result.Type != "string" {
-			t.Errorf("expected string type, got %s", result.Type)
-		}
+		require.Equal(t, "string", result.Type)
 	})
 }
 
@@ -290,47 +237,24 @@ func TestGenerateJSONSchema_StructTypes(t *testing.T) {
 	t.Run("struct with fields", func(t *testing.T) {
 		result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
-		if result.Type != "object" {
-			t.Errorf("expected object type for struct, got %s", result.Type)
-		}
+		require.Equal(t, "object", result.Type)
 
-		if len(result.Properties) != 3 {
-			t.Errorf("expected 3 properties, got %d", len(result.Properties))
-		}
+		require.Len(t, result.Properties, 3)
 
-		if result.Properties["name"] == nil || result.Properties["name"].Type != "string" {
-			t.Errorf("expected name property of type string")
-		}
+		require.NotNil(t, result.Properties["name"])
+		require.Equal(t, "string", result.Properties["name"].Type)
 
-		if result.Properties["age"] == nil || result.Properties["age"].Type != "integer" {
-			t.Errorf("expected age property of type integer")
-		}
+		require.NotNil(t, result.Properties["age"])
+		require.Equal(t, "integer", result.Properties["age"].Type)
 
-		if result.Properties["optional"] == nil || result.Properties["optional"].Type != "string" {
-			t.Errorf("expected optional property of type string")
-		}
+		require.NotNil(t, result.Properties["optional"])
+		require.Equal(t, "string", result.Properties["optional"].Type)
 
-		// Check required fields
-		requiredFound := false
-		for _, req := range result.Required {
-			if req == "name" || req == "age" {
-				requiredFound = true
-			}
-			if req == "optional" {
-				t.Errorf("optional field should not be in required list")
-			}
-		}
-		if !requiredFound {
-			t.Errorf("name and age should be in required list")
-		}
+		require.ElementsMatch(t, []string{"name", "age"}, result.Required)
 
 		// Make sure ignored and unexported fields are not included
-		if result.Properties["Ignored"] != nil {
-			t.Errorf("ignored field should not be included")
-		}
-		if result.Properties["unexported"] != nil {
-			t.Errorf("unexported field should not be included")
-		}
+		require.Nil(t, result.Properties["Ignored"])
+		require.Nil(t, result.Properties["unexported"])
 	})
 }
 
@@ -348,26 +272,19 @@ func TestGenerateJSONSchema_Nested(t *testing.T) {
 
 	result := itool.GenerateJSONSchema(reflect.TypeOf(Person{}))
 
-	if result.Properties["address"] == nil {
-		t.Fatal("expected address property")
-	}
+	require.NotNil(t, result.Properties["address"], "expected address property")
 
 	addressProps := result.Properties["address"].Properties
-	if addressProps == nil {
-		t.Fatal("expected address to have properties")
-	}
+	require.NotNil(t, addressProps, "expected address to have properties")
 
-	if addressProps["street"] == nil || addressProps["street"].Type != "string" {
-		t.Errorf("expected street property of type string")
-	}
+	require.NotNil(t, addressProps["street"])
+	require.Equal(t, "string", addressProps["street"].Type)
 
-	if result.Properties["tags"] == nil || result.Properties["tags"].Type != "array" {
-		t.Errorf("expected tags property of type array")
-	}
+	require.NotNil(t, result.Properties["tags"])
+	require.Equal(t, "array", result.Properties["tags"].Type)
 
-	if result.Properties["tags"].Items == nil || result.Properties["tags"].Items.Type != "string" {
-		t.Errorf("expected tags items to be of type string")
-	}
+	require.NotNil(t, result.Properties["tags"].Items)
+	require.Equal(t, "string", result.Properties["tags"].Items.Type)
 }
 
 func TestGenerateJSONSchema_PointerTypeFix(t *testing.T) {
@@ -383,23 +300,17 @@ func TestGenerateJSONSchema_PointerTypeFix(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(input))
 
 	// Should generate "object" instead of "object,null"
-	if result.Type != "object" {
-		t.Errorf("expected object type for pointer to struct, got %s", result.Type)
-	}
+	require.Equal(t, "object", result.Type)
 
 	// Should have properties
-	if result.Properties == nil {
-		t.Errorf("expected properties for struct schema")
-	}
+	require.NotNil(t, result.Properties)
 
 	// Check that properties are correctly generated
-	if result.Properties["name"] == nil || result.Properties["name"].Type != "string" {
-		t.Errorf("expected name property of type string")
-	}
+	require.NotNil(t, result.Properties["name"])
+	require.Equal(t, "string", result.Properties["name"].Type)
 
-	if result.Properties["age"] == nil || result.Properties["age"].Type != "integer" {
-		t.Errorf("expected age property of type integer")
-	}
+	require.NotNil(t, result.Properties["age"])
+	require.Equal(t, "integer", result.Properties["age"].Type)
 }
 
 func TestGenerateJSONSchema_JSONSchemaTag_Description(t *testing.T) {
@@ -411,14 +322,10 @@ func TestGenerateJSONSchema_JSONSchemaTag_Description(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Check description for name field
-	if result.Properties["name"].Description != "User's full name" {
-		t.Errorf("expected description 'User's full name', got '%s'", result.Properties["name"].Description)
-	}
+	require.Equal(t, "User's full name", result.Properties["name"].Description)
 
 	// Check description for age field
-	if result.Properties["age"].Description != "User's age in years" {
-		t.Errorf("expected description 'User's age in years', got '%s'", result.Properties["age"].Description)
-	}
+	require.Equal(t, "User's age in years", result.Properties["age"].Description)
 }
 
 func TestGenerateJSONSchema_JSONSchemaTag_StringEnum(t *testing.T) {
@@ -429,15 +336,11 @@ func TestGenerateJSONSchema_JSONSchemaTag_StringEnum(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	statusSchema := result.Properties["status"]
-	if len(statusSchema.Enum) != 3 {
-		t.Errorf("expected 3 enum values, got %d", len(statusSchema.Enum))
-	}
+	require.Len(t, statusSchema.Enum, 3)
 
 	expectedEnums := []string{"active", "inactive", "pending"}
 	for i, expected := range expectedEnums {
-		if statusSchema.Enum[i] != expected {
-			t.Errorf("expected enum[%d] to be '%s', got '%v'", i, expected, statusSchema.Enum[i])
-		}
+		require.Equal(t, expected, statusSchema.Enum[i])
 	}
 }
 
@@ -449,15 +352,11 @@ func TestGenerateJSONSchema_JSONSchemaTag_IntEnum(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	prioritySchema := result.Properties["priority"]
-	if len(prioritySchema.Enum) != 3 {
-		t.Errorf("expected 3 enum values, got %d", len(prioritySchema.Enum))
-	}
+	require.Len(t, prioritySchema.Enum, 3)
 
 	expectedEnums := []int64{1, 2, 3}
 	for i, expected := range expectedEnums {
-		if prioritySchema.Enum[i] != expected {
-			t.Errorf("expected enum[%d] to be %d, got %v", i, expected, prioritySchema.Enum[i])
-		}
+		require.Equal(t, expected, prioritySchema.Enum[i])
 	}
 }
 
@@ -469,15 +368,11 @@ func TestGenerateJSONSchema_JSONSchemaTag_FloatEnum(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	rateSchema := result.Properties["rate"]
-	if len(rateSchema.Enum) != 3 {
-		t.Errorf("expected 3 enum values, got %d", len(rateSchema.Enum))
-	}
+	require.Len(t, rateSchema.Enum, 3)
 
 	expectedEnums := []float64{1.5, 2.0, 3.5}
 	for i, expected := range expectedEnums {
-		if rateSchema.Enum[i] != expected {
-			t.Errorf("expected enum[%d] to be %f, got %v", i, expected, rateSchema.Enum[i])
-		}
+		require.Equal(t, expected, rateSchema.Enum[i])
 	}
 }
 
@@ -489,15 +384,11 @@ func TestGenerateJSONSchema_JSONSchemaTag_BoolEnum(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	enabledSchema := result.Properties["enabled"]
-	if len(enabledSchema.Enum) != 2 {
-		t.Errorf("expected 2 enum values, got %d", len(enabledSchema.Enum))
-	}
+	require.Len(t, enabledSchema.Enum, 2)
 
 	expectedEnums := []bool{true, false}
 	for i, expected := range expectedEnums {
-		if enabledSchema.Enum[i] != expected {
-			t.Errorf("expected enum[%d] to be %t, got %v", i, expected, enabledSchema.Enum[i])
-		}
+		require.Equal(t, expected, enabledSchema.Enum[i])
 	}
 }
 
@@ -512,21 +403,10 @@ func TestGenerateJSONSchema_JSONSchemaTag_Required(t *testing.T) {
 
 	// Check required fields
 	expectedRequired := []string{"required_field", "non_optional_field"}
-	if len(result.Required) != len(expectedRequired) {
-		t.Errorf("expected %d required fields, got %d", len(expectedRequired), len(result.Required))
-	}
+	require.Len(t, result.Required, len(expectedRequired))
 
 	for _, expected := range expectedRequired {
-		found := false
-		for _, required := range result.Required {
-			if required == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected field '%s' to be required", expected)
-		}
+		require.Contains(t, result.Required, expected)
 	}
 }
 
@@ -540,26 +420,17 @@ func TestGenerateJSONSchema_JSONSchemaTag_Combined(t *testing.T) {
 
 	// Check status field
 	statusSchema := result.Properties["status"]
-	if statusSchema.Description != "Current status" {
-		t.Errorf("expected status description 'Current status', got '%s'", statusSchema.Description)
-	}
-	if len(statusSchema.Enum) != 2 {
-		t.Errorf("expected 2 status enum values, got %d", len(statusSchema.Enum))
-	}
+	require.Equal(t, "Current status", statusSchema.Description)
+	require.Len(t, statusSchema.Enum, 2)
 
 	// Check count field
 	countSchema := result.Properties["count"]
-	if countSchema.Description != "Item count" {
-		t.Errorf("expected count description 'Item count', got '%s'", countSchema.Description)
-	}
-	if len(countSchema.Enum) != 3 {
-		t.Errorf("expected 3 count enum values, got %d", len(countSchema.Enum))
-	}
+	require.Equal(t, "Item count", countSchema.Description)
+	require.Len(t, countSchema.Enum, 3)
 
 	// Check required fields (only status should be required)
-	if len(result.Required) != 1 || result.Required[0] != "status" {
-		t.Errorf("expected only 'status' to be required, got %v", result.Required)
-	}
+	require.Len(t, result.Required, 1)
+	require.Equal(t, "status", result.Required[0])
 }
 
 func TestGenerateJSONSchema_JSONSchemaTag_InvalidEnum(t *testing.T) {
@@ -571,18 +442,11 @@ func TestGenerateJSONSchema_JSONSchemaTag_InvalidEnum(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Should return a struct schema with properties despite the error
-	if result.Type != "object" {
-		t.Errorf("expected object type, got %s", result.Type)
-	}
+	require.Equal(t, "object", result.Type)
 
 	// Should have the field property even with invalid enum
-	if result.Properties["invalid_int"] == nil {
-		t.Errorf("expected invalid_int property to be present")
-	}
-
-	if result.Properties["invalid_int"].Type != "string" {
-		t.Errorf("expected invalid_int to be string type, got %s", result.Properties["invalid_int"].Type)
-	}
+	require.NotNil(t, result.Properties["invalid_int"])
+	require.Equal(t, "string", result.Properties["invalid_int"].Type)
 }
 
 func TestGenerateJSONSchema_JSONSchemaTag_EdgeCases(t *testing.T) {
@@ -597,15 +461,11 @@ func TestGenerateJSONSchema_JSONSchemaTag_EdgeCases(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Check that description is set correctly without trimming
-	if result.Properties["simple"].Description != "Test Description" {
-		t.Errorf("expected description 'Test Description', got '%s'", result.Properties["simple"].Description)
-	}
+	require.Equal(t, "Test Description", result.Properties["simple"].Description)
 
 	// Check required fields
 	expectedRequired := []string{"simple", "single", "empty_tag", "only_commas", "no_equals"}
-	if len(result.Required) != len(expectedRequired) {
-		t.Errorf("expected %d required fields, got %d", len(expectedRequired), len(result.Required))
-	}
+	require.Len(t, result.Required, len(expectedRequired))
 }
 
 func TestGenerateJSONSchema_JSONSchemaTag_UnsupportedEnumType(t *testing.T) {
@@ -621,16 +481,78 @@ func TestGenerateJSONSchema_JSONSchemaTag_UnsupportedEnumType(t *testing.T) {
 	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Should return a struct schema with properties despite the error
-	if result.Type != "object" {
-		t.Errorf("expected object type, got %s", result.Type)
-	}
+	require.Equal(t, "object", result.Type)
 
 	// Should have the field property even with unsupported enum type
-	if result.Properties["custom"] == nil {
-		t.Errorf("expected custom property to be present")
+	require.NotNil(t, result.Properties["custom"])
+	require.Equal(t, "object", result.Properties["custom"].Type)
+}
+
+func TestGenerateJSONSchema_RecursiveStructUsesDefs(t *testing.T) {
+	require := require.New(t)
+
+	type Node struct {
+		Value string `json:"value"`
+		Next  *Node  `json:"next,omitempty"`
 	}
 
-	if result.Properties["custom"].Type != "object" {
-		t.Errorf("expected custom to be object type, got %s", result.Properties["custom"].Type)
+	result := itool.GenerateJSONSchema(reflect.TypeOf(Node{}))
+
+	require.NotEmpty(
+		result.Defs,
+		"expected $defs to contain recursive struct schema",
+	)
+
+	nodeDef, ok := result.Defs["node"]
+	require.True(ok, "expected $defs entry named node")
+
+	nextSchema := result.Properties["next"]
+	require.NotNil(nextSchema, "expected next property to be present")
+	require.Equal(
+		"#/$defs/node",
+		nextSchema.Ref,
+		"expected next to reference node definition",
+	)
+
+	valueSchema := nodeDef.Properties["value"]
+	require.NotNil(valueSchema, "expected node definition to keep value")
+	require.Equal("string", valueSchema.Type)
+}
+
+func TestGenerateJSONSchema_NonRecursiveNestedStructInline(t *testing.T) {
+	require := require.New(t)
+
+	type Address struct {
+		City string `json:"city"`
 	}
+
+	type Person struct {
+		Name   string   `json:"name"`
+		Home   Address  `json:"home"`
+		Office *Address `json:"office,omitempty"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(Person{}))
+
+	require.Empty(
+		result.Defs,
+		"expected no $defs for non recursive struct",
+	)
+
+	homeSchema := result.Properties["home"]
+	require.NotNil(homeSchema, "expected home property schema")
+	require.Empty(homeSchema.Ref, "expected home schema inline")
+
+	citySchema := homeSchema.Properties["city"]
+	require.NotNil(citySchema, "expected home.city property schema")
+	require.Equal("string", citySchema.Type)
+
+	required := make(map[string]bool, len(result.Required))
+	for _, field := range result.Required {
+		required[field] = true
+	}
+
+	require.True(required["name"], "expected name to be required")
+	require.True(required["home"], "expected home to be required")
+	require.False(required["office"], "office should not be required")
 }
