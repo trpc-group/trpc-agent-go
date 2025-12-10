@@ -600,3 +600,43 @@ func TestGenerateJSONSchema_UntaggedAndIgnoredFields(t *testing.T) {
 	require.NotContains(t, schema.Properties, "Ignored")
 	require.Contains(t, schema.Required, "Untagged")
 }
+
+func TestGenerateJSONSchema_PrimitiveDefaultFallback(t *testing.T) {
+	ifaceType := reflect.TypeOf((*any)(nil)).Elem()
+	schema := itool.GenerateJSONSchema(ifaceType)
+
+	require.Equal(t, "object", schema.Type)
+}
+
+func TestGenerateJSONSchema_MapWithoutDefs(t *testing.T) {
+	schema := itool.GenerateJSONSchema(reflect.TypeOf(map[string]string{}))
+
+	require.Equal(t, "object", schema.Type)
+	require.Nil(t, schema.Defs)
+	propSchema, ok := schema.AdditionalProperties.(*tool.Schema)
+	require.True(t, ok)
+	require.Equal(t, "string", propSchema.Type)
+}
+
+func TestGenerateJSONSchema_ParseJSONSchemaTagError(t *testing.T) {
+	type BadEnum struct {
+		Priority int `json:"priority" jsonschema:"enum=not_a_number"`
+	}
+
+	schema := itool.GenerateJSONSchema(reflect.TypeOf(BadEnum{}))
+
+	require.NotNil(t, schema.Properties["priority"])
+	require.Equal(t, "integer", schema.Properties["priority"].Type)
+	require.Contains(t, schema.Required, "priority")
+}
+
+func TestGenerateJSONSchema_PointerRequiredByTag(t *testing.T) {
+	type WithPointer struct {
+		Ptr *string `json:"ptr" jsonschema:"required"`
+	}
+
+	schema := itool.GenerateJSONSchema(reflect.TypeOf(WithPointer{}))
+
+	require.Contains(t, schema.Required, "ptr")
+	require.Equal(t, "string", schema.Properties["ptr"].Type)
+}
