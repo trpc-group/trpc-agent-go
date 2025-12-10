@@ -13,11 +13,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flush"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -210,6 +214,43 @@ func (m *streamingMockAgent) Info() agent.Info {
 func (m *streamingMockAgent) SubAgents() []agent.Agent        { return nil }
 func (m *streamingMockAgent) FindSubAgent(string) agent.Agent { return nil }
 
+type completionWaitAgent struct {
+	name string
+}
+
+func (m *completionWaitAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+
+		barrier := event.New(inv.InvocationID, m.name)
+		barrier.RequiresCompletion = true
+		completionID := agent.GetAppendEventNoticeKey(barrier.ID)
+		_ = inv.AddNoticeChannel(ctx, completionID)
+		_ = agent.EmitEvent(ctx, inv, ch, barrier)
+
+		if err := inv.AddNoticeChannelAndWait(ctx, completionID, 500*time.Millisecond); err != nil {
+			errEvt := event.NewErrorEvent(inv.InvocationID, m.name, model.ErrorTypeFlowError, err.Error())
+			_ = agent.EmitEvent(ctx, inv, ch, errEvt)
+			return
+		}
+
+		done := event.NewResponseEvent(inv.InvocationID, m.name, &model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: model.NewAssistantMessage("done")}},
+		})
+		_ = agent.EmitEvent(ctx, inv, ch, done)
+	}()
+	return ch, nil
+}
+
+func (m *completionWaitAgent) Tools() []tool.Tool { return nil }
+func (m *completionWaitAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "wait completion"}
+}
+func (m *completionWaitAgent) SubAgents() []agent.Agent        { return nil }
+func (m *completionWaitAgent) FindSubAgent(string) agent.Agent { return nil }
+
 func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	sa := &streamingMockAgent{name: "stream-agent"}
 	at := NewTool(sa, WithStreamInner(true))
@@ -270,7 +311,7 @@ func TestTool_HistoryScope_ParentBranch_Streamable_FilterKeyPrefix(t *testing.T)
 	at := NewTool(sa, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
 
 	// Parent invocation with base filter key.
-	sess := &session.Session{}
+	sess := session.NewSession("app", "user", "session")
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationEventFilterKey("parent-agent"),
@@ -293,6 +334,84 @@ func TestTool_HistoryScope_ParentBranch_Streamable_FilterKeyPrefix(t *testing.T)
 	if !strings.HasPrefix(sa.seenFilterKey, "parent-agent/"+sa.name+"-") {
 		t.Fatalf("expected child filter key to start with %q, got %q", "parent-agent/"+sa.name+"-", sa.seenFilterKey)
 	}
+}
+
+func TestTool_StreamableCall_FlushesParentSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	flushCh := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushCh)
+
+	at := NewTool(&streamingMockAgent{name: "stream-agent"}, WithStreamInner(true))
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+
+	acked := make(chan struct{}, 1)
+	go func() {
+		select {
+		case req := <-flushCh:
+			require.NotNil(t, req)
+			require.NotNil(t, req.ACK)
+			close(req.ACK)
+			acked <- struct{}{}
+		case <-ctx.Done():
+		}
+	}()
+
+	reader, err := at.StreamableCall(toolCtx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+
+	for i := 0; i < 4; i++ {
+		_, recvErr := reader.Recv()
+		require.NoError(t, recvErr)
+	}
+
+	select {
+	case <-acked:
+	default:
+		t.Fatalf("expected flush request to be handled")
+	}
+}
+
+func TestTool_StreamableCall_NotifiesCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	at := NewTool(&completionWaitAgent{name: "waiter"}, WithStreamInner(true))
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+
+	reader, err := at.StreamableCall(toolCtx, []byte(`{"request":"payload"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var contents []string
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		ev, ok := chunk.Content.(*event.Event)
+		require.True(t, ok)
+		require.Nil(t, ev.Error)
+		if ev.Response != nil && len(ev.Response.Choices) > 0 {
+			msg := ev.Response.Choices[0].Message
+			if msg.Content != "" {
+				contents = append(contents, msg.Content)
+			}
+		}
+	}
+
+	require.Contains(t, contents, "done")
 }
 
 // inspectAgent collects matched contents from session using the invocation's filter key

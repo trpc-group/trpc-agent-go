@@ -176,7 +176,7 @@ func (at *Tool) callWithParentInvocation(
 	}
 	// Flush all events emitted before this tool call so that the snapshot sees all events.
 	if err := flush.Invoke(ctx, parentInv); err != nil {
-		log.Warnf("AgentTool: flush parent invocation session failed: %v.", err)
+		log.Errorf("AgentTool: flush parent invocation session failed: %v.", err)
 	}
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(parentInv)
@@ -306,35 +306,31 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 		message := model.NewUserMessage(string(jsonArgs))
 
 		if ok && parentInv != nil && parentInv.Session != nil {
-			// Build child filter key based on history scope.
-			uniqueFilterKey := at.agent.Info().Name + "-" + uuid.NewString()
-			if at.historyScope == HistoryScopeParentBranch {
-				if pk := parentInv.GetEventFilterKey(); pk != "" {
-					uniqueFilterKey = pk + agent.EventFilterKeyDelimiter + uniqueFilterKey
-				}
+			if err := flush.Invoke(ctx, parentInv); err != nil {
+				log.Errorf("AgentTool: flush parent invocation session failed: %v.", err)
 			}
-
+			childKey := at.buildChildFilterKey(parentInv)
 			subInv := parentInv.Clone(
 				agent.WithInvocationAgent(at.agent),
 				agent.WithInvocationMessage(message),
 				// Reset event filter key to the sub-agent name so that content
 				// processors fetch session messages belonging to the sub-agent,
 				// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
-				agent.WithInvocationEventFilterKey(uniqueFilterKey),
+				agent.WithInvocationEventFilterKey(childKey),
 			)
+			subInv.Session = parentInv.Session.Clone()
 			// Store tool input as Event via sub-agent's event channel (safe concurrency).
 			// This ensures the tool input is available throughout all LLM calls within this AgentTool invocation.
+			var evt *event.Event
 			if message.Content != "" {
-				evt := event.NewResponseEvent(
+				evt = event.NewResponseEvent(
 					subInv.InvocationID,
 					"user", // Use "user" as author like Runner does for user messages.
 					&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
 				)
 				agent.InjectIntoEvent(subInv, evt) // This will set the uniqueFilterKey.
-
-				// Send the tool input event as the first event in the stream.
-				if stream.Writer.Send(tool.StreamChunk{Content: evt}, nil) {
-					return
+				if subInv.Session != nil {
+					subInv.Session.Events = append(subInv.Session.Events, *evt)
 				}
 			}
 
@@ -344,7 +340,14 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
 				return
 			}
-			for ev := range evCh {
+			wrapped := at.wrapWithCompletion(subCtx, subInv, evCh)
+
+			if evt != nil {
+				if stream.Writer.Send(tool.StreamChunk{Content: evt}, nil) {
+					return
+				}
+			}
+			for ev := range wrapped {
 				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {
 					return
 				}
