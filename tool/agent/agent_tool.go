@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -23,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -186,8 +188,6 @@ func (at *Tool) callWithParentInvocation(
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationEventFilterKey(childKey),
 	)
-	subInv.Session = parentInv.Session.Clone()
-
 	// Ensure current tool input is visible to the child content processor by
 	// appending it into the cloned session snapsho.
 	at.injectToolInputEvent(subInv, message)
@@ -216,10 +216,28 @@ func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, s
 					log.Errorf("AgentTool: notify completion failed: %v", err)
 				}
 			}
+			at.appendEventToSession(inv.Session, evt)
 			out <- evt
 		}
 	}()
 	return out
+}
+
+// appendEventToSession persists important events back to the shared session so parent history stays complete.
+func (at *Tool) appendEventToSession(sess *session.Session, evt *event.Event) {
+	if sess == nil || evt == nil {
+		return
+	}
+	if len(evt.StateDelta) == 0 && evt.Error == nil {
+		if evt.Response == nil || evt.Response.IsPartial || !evt.Response.IsValidContent() {
+			return
+		}
+	}
+	sess.EventMu.Lock()
+	sess.Events = append(sess.Events, *evt)
+	sess.EventMu.Unlock()
+	sess.ApplyEventStateDelta(evt)
+	sess.UpdatedAt = time.Now()
 }
 
 // callWithIsolatedRunner executes the agent in an isolated environment using
@@ -270,7 +288,7 @@ func (at *Tool) injectToolInputEvent(
 			},
 		)
 		agent.InjectIntoEvent(subInv, evt)
-		subInv.Session.Events = append(subInv.Session.Events, *evt)
+		at.appendEventToSession(subInv.Session, evt)
 	}
 }
 
@@ -320,7 +338,7 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
 				agent.WithInvocationEventFilterKey(childKey),
 			)
-			subInv.Session = parentInv.Session.Clone()
+			subInv.Session = parentInv.Session
 			// Store tool input as Event via sub-agent's event channel (safe concurrency).
 			// This ensures the tool input is available throughout all LLM calls within this AgentTool invocation.
 			var evt *event.Event
@@ -331,9 +349,7 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 					&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
 				)
 				agent.InjectIntoEvent(subInv, evt) // This will set the uniqueFilterKey.
-				if subInv.Session != nil {
-					subInv.Session.Events = append(subInv.Session.Events, *evt)
-				}
+				at.appendEventToSession(subInv.Session, evt)
 			}
 
 			subCtx := agent.NewInvocationContext(ctx, subInv)

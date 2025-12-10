@@ -127,3 +127,26 @@ func TestClearRemovesFlusher(t *testing.T) {
 func TestInvokeNilInvocation(t *testing.T) {
 	require.NoError(t, Invoke(context.Background(), nil))
 }
+
+func TestInvokeConcurrentClear(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	inv := agent.NewInvocation()
+	ch := make(chan *FlushRequest, 1)
+	Attach(ctx, inv, ch)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Invoke(ctx, inv)
+	}()
+
+	req := <-ch
+	require.NotNil(t, req)
+	Clear(inv)
+	close(req.ACK)
+
+	require.NoError(t, <-errCh)
+	// After Clear, Invoke should no-op.
+	require.NoError(t, Invoke(ctx, inv))
+}

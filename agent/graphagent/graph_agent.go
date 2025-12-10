@@ -90,7 +90,12 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	// Emit a barrier event and wait for completion in a dedicated goroutine so that the runner can append all prior
 	// events before GraphAgent reads history.
 	if err := ga.emitStartBarrierAndWait(ctx, invocation, out); err != nil {
-		log.Errorf("graphagent: start barrier failed: %v.", err)
+		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
+			model.ErrorTypeFlowError, err.Error())
+		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
+			log.Errorf("graphagent: emit error event failed: %v", emitErr)
+		}
+		return
 	}
 	innerChan, err := ga.runWithCallbacks(ctx, invocation)
 	if err != nil {

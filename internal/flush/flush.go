@@ -13,6 +13,7 @@ package flush
 
 import (
 	"context"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 )
@@ -35,7 +36,26 @@ type flusher func(context.Context) error
 
 // flusherHolder holds a shared flusher so Clear can invalidate it for all clones.
 type flusherHolder struct {
+	mu sync.RWMutex
 	fn flusher
+}
+
+func (h *flusherHolder) set(fn flusher) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fn = fn
+}
+
+func (h *flusherHolder) get() flusher {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.fn
+}
+
+func (h *flusherHolder) clear() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fn = nil
 }
 
 // Attach binds a flush function to the given invocation and wires it to the provided flush channel.
@@ -59,7 +79,7 @@ func Attach(ctx context.Context, inv *agent.Invocation, ch chan *FlushRequest) {
 	}
 	// Reuse existing holder if present; otherwise create one.
 	if holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession); ok && holder != nil {
-		holder.fn = fn
+		holder.set(fn)
 	} else {
 		inv.SetState(stateKeyFlushSession, &flusherHolder{fn: fn})
 	}
@@ -68,10 +88,14 @@ func Attach(ctx context.Context, inv *agent.Invocation, ch chan *FlushRequest) {
 // Invoke executes the flush function stored on the invocation state if present.
 func Invoke(ctx context.Context, inv *agent.Invocation) error {
 	holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession)
-	if !ok || holder == nil || holder.fn == nil {
+	if !ok || holder == nil {
 		return nil
 	}
-	return holder.fn(ctx)
+	fn := holder.get()
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx)
 }
 
 // Clear removes any flush function stored on the invocation state.
@@ -81,7 +105,7 @@ func Clear(inv *agent.Invocation) {
 		return
 	}
 	if holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession); ok && holder != nil {
-		holder.fn = nil
+		holder.clear()
 	}
 	inv.DeleteState(stateKeyFlushSession)
 }
