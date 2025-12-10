@@ -794,13 +794,13 @@ func TestGraphAgent_BeforeCallbackReturnsResponse(t *testing.T) {
 	events, err := ga.Run(context.Background(), inv)
 	require.NoError(t, err)
 
-	// Collect events (barrier plus custom response).
+	// Collect events.
 	var collected []*event.Event
 	for e := range events {
 		collected = append(collected, e)
 	}
 
-	require.Equal(t, len(collected), 1)
+	require.Len(t, collected, 1)
 	require.Equal(t, "before.custom", collected[0].Object)
 	require.Equal(t, "early return", collected[0].Response.Choices[0].Message.Content)
 }
@@ -845,11 +845,10 @@ func TestGraphAgent_BeforeCallbackReturnsError(t *testing.T) {
 	for e := range events {
 		collected = append(collected, e)
 	}
-	require.GreaterOrEqual(t, len(collected), 1)
-	last := collected[len(collected)-1]
-	require.NotNil(t, last.Error)
-	require.Equal(t, model.ErrorTypeFlowError, last.Error.Type)
-	require.Contains(t, last.Error.Message, "before callback failed")
+	require.Len(t, collected, 1)
+	require.NotNil(t, collected[0].Error)
+	require.Equal(t, model.ErrorTypeFlowError, collected[0].Error.Type)
+	require.Contains(t, collected[0].Error.Message, "before callback failed")
 }
 
 func TestGraphAgent_AfterCallbackReturnsResponse(t *testing.T) {

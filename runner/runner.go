@@ -284,6 +284,8 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		if rr := recover(); rr != nil {
 			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
+		// Agent event stream completed.
+		r.emitRunnerCompletion(ctx, loop)
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		close(loop.processedEventCh)
@@ -293,8 +295,6 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		select {
 		case agentEvent, ok := <-loop.agentEventCh:
 			if !ok {
-				// Agent event stream completed.
-				r.emitRunnerCompletion(ctx, loop)
 				return
 			}
 			if err := r.processSingleAgentEvent(ctx, loop, agentEvent); err != nil {
