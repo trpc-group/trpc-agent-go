@@ -626,38 +626,46 @@ GraphAgent 支持多种配置选项：
 ```go
 // 创建 GraphAgent 时可以使用多种选项
 graphAgent, err := graphagent.New(
-    "workflow-name",
-    compiledGraph,
-    graphagent.WithDescription("工作流描述"),
-    graphagent.WithInitialState(graph.State{
-        "initial_data": "初始数据",
-    }),
-    graphagent.WithChannelBufferSize(1024),           // 调整事件通道缓冲区
-    graphagent.WithCheckpointSaver(memorySaver),      // 使用持久化检查点
-    graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
-    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
-    // 时间维度过滤条件
-    // 默认值: graphagent.TimelineFilterAll
-    // 可选值:
-    //  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
-    //  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
-    //  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
-    graphagent.WithMessageTimelineFilterMode(graphagent.BranchFilterModeAll),
-    // 分支维度过滤条件
-    // 默认值: graphagent.BranchFilterModePrefix
-    // 可选值:
-    //  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
-    //  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
-    //  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
-    graphagent.WithMessageBranchFilterMode(graphagent.TimelineFilterAll),
-    graphagent.WithAgentCallbacks(&agent.Callbacks{
-        // Agent 级回调配置
-    }),
+	"workflow-name",
+	compiledGraph,
+	graphagent.WithDescription("工作流描述"),
+	graphagent.WithInitialState(graph.State{
+		"initial_data": "初始数据",
+	}),
+	graphagent.WithChannelBufferSize(1024),            // 调整事件通道缓冲区
+	graphagent.WithCheckpointSaver(memorySaver),       // 使用持久化检查点
+	graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
+	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息
+	graphagent.WithMaxHistoryRuns(5),                  // 未开启摘要时截断历史轮次
+	// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+	// 时间维度过滤条件
+	// 默认值: graphagent.TimelineFilterAll
+	// 可选值:
+	//  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
+	//  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
+	//  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
+	graphagent.WithMessageTimelineFilterMode(graphagent.BranchFilterModeAll),
+	// 分支维度过滤条件
+	// 默认值: graphagent.BranchFilterModePrefix
+	// 可选值:
+	//  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
+	//  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
+	//  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
+	graphagent.WithMessageBranchFilterMode(graphagent.TimelineFilterAll),
+	graphagent.WithAgentCallbacks(&agent.Callbacks{
+		// Agent 级回调配置
+	}),
 )
 ```
 
 > 模型/工具回调需要在节点级配置，例如 `AddLLMNode(..., graph.WithModelCallbacks(...))`
 > 或 `AddToolsNode(..., graph.WithToolCallbacks(...))`。
+
+使用会话摘要的注意事项：
+
+- `WithAddSessionSummary(true)` 仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
+- GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
+- 摘要仅在 `TimelineFilterAll` 下生效。
 
 #### 并发使用注意事项
 
