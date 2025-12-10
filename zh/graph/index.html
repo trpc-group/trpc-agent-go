@@ -3889,7 +3889,9 @@
 <span class="normal"><a href="#__codelineno-12-27">27</a></span>
 <span class="normal"><a href="#__codelineno-12-28">28</a></span>
 <span class="normal"><a href="#__codelineno-12-29">29</a></span>
-<span class="normal"><a href="#__codelineno-12-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="c1">// 创建 GraphAgent 时可以使用多种选项</span>
+<span class="normal"><a href="#__codelineno-12-30">30</a></span>
+<span class="normal"><a href="#__codelineno-12-31">31</a></span>
+<span class="normal"><a href="#__codelineno-12-32">32</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="c1">// 创建 GraphAgent 时可以使用多种选项</span>
 </span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="nx">graphAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="s">&quot;workflow-name&quot;</span><span class="p">,</span>
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="nx">compiledGraph</span><span class="p">,</span>
@@ -3897,33 +3899,41 @@
 </span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithInitialState</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span>
 </span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="w">        </span><span class="s">&quot;initial_data&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;初始数据&quot;</span><span class="p">,</span>
 </span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="mi">1024</span><span class="p">),</span><span class="w">           </span><span class="c1">// 调整事件通道缓冲区</span>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithCheckpointSaver</span><span class="p">(</span><span class="nx">memorySaver</span><span class="p">),</span><span class="w">      </span><span class="c1">// 使用持久化检查点</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithChannelBufferSize</span><span class="p">(</span><span class="mi">1024</span><span class="p">),</span><span class="w">            </span><span class="c1">// 调整事件通道缓冲区</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithCheckpointSaver</span><span class="p">(</span><span class="nx">memorySaver</span><span class="p">),</span><span class="w">       </span><span class="c1">// 使用持久化检查点</span>
 </span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithSubAgents</span><span class="p">([]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span><span class="nx">subAgent</span><span class="p">}),</span><span class="w"> </span><span class="c1">// 配置子 Agent</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">    </span><span class="c1">// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件</span>
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="w">    </span><span class="c1">// 时间维度过滤条件</span>
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="w">    </span><span class="c1">// 默认值: graphagent.TimelineFilterAll</span>
-</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="w">    </span><span class="c1">// 可选值:</span>
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a><span class="w">    </span><span class="c1">//  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息</span>
-</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="w">    </span><span class="c1">//  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息</span>
-</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="w">    </span><span class="c1">//  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息</span>
-</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithMessageTimelineFilterMode</span><span class="p">(</span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">BranchFilterModeAll</span><span class="p">),</span>
-</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a><span class="w">    </span><span class="c1">// 分支维度过滤条件</span>
-</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="w">    </span><span class="c1">// 默认值: graphagent.BranchFilterModePrefix</span>
-</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a><span class="w">    </span><span class="c1">// 可选值:</span>
-</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23"></a><span class="w">    </span><span class="c1">//  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值</span>
-</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24"></a><span class="w">    </span><span class="c1">//  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值</span>
-</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25"></a><span class="w">    </span><span class="c1">//  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值</span>
-</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithMessageBranchFilterMode</span><span class="p">(</span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">TimelineFilterAll</span><span class="p">),</span>
-</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Callbacks</span><span class="p">{</span>
-</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28"></a><span class="w">        </span><span class="c1">// Agent 级回调配置</span>
-</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30"></a><span class="p">)</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAddSessionSummary</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">            </span><span class="c1">// 将会话摘要注入 system 消息</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithMaxHistoryRuns</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span><span class="w">                  </span><span class="c1">// 未开启摘要时截断历史轮次</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="w">    </span><span class="c1">// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="w">    </span><span class="c1">// 时间维度过滤条件</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a><span class="w">    </span><span class="c1">// 默认值: graphagent.TimelineFilterAll</span>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="w">    </span><span class="c1">// 可选值:</span>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="w">    </span><span class="c1">//  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息</span>
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a><span class="w">    </span><span class="c1">//  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息</span>
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a><span class="w">    </span><span class="c1">//  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息</span>
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithMessageTimelineFilterMode</span><span class="p">(</span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">BranchFilterModeAll</span><span class="p">),</span>
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a><span class="w">    </span><span class="c1">// 分支维度过滤条件</span>
+</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23"></a><span class="w">    </span><span class="c1">// 默认值: graphagent.BranchFilterModePrefix</span>
+</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24"></a><span class="w">    </span><span class="c1">// 可选值:</span>
+</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25"></a><span class="w">    </span><span class="c1">//  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值</span>
+</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26"></a><span class="w">    </span><span class="c1">//  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值</span>
+</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27"></a><span class="w">    </span><span class="c1">//  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值</span>
+</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithMessageBranchFilterMode</span><span class="p">(</span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">TimelineFilterAll</span><span class="p">),</span>
+</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Callbacks</span><span class="p">{</span>
+</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30"></a><span class="w">        </span><span class="c1">// Agent 级回调配置</span>
+</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <blockquote>
 <p>模型/工具回调需要在节点级配置，例如 <code>AddLLMNode(..., graph.WithModelCallbacks(...))</code>
 或 <code>AddToolsNode(..., graph.WithToolCallbacks(...))</code>。</p>
 </blockquote>
+<p>使用会话摘要的注意事项：</p>
+<ul>
+<li><code>WithAddSessionSummary(true)</code> 仅在 <code>Session.Summaries</code> 中已有对应 <code>FilterKey</code> 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 <code>EnqueueSummaryJob</code>。</li>
+<li>GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 <code>sessionService.CreateSessionSummary</code> 或 <code>EnqueueSummaryJob</code>。</li>
+<li>摘要仅在 <code>TimelineFilterAll</code> 下生效。</li>
+</ul>
 <h4 id="_10">并发使用注意事项</h4>
 <p>在服务端将 Graph + GraphAgent 部署为长期运行、可并发复用的组件时（例如单个进程内同时处理多路请求），需要注意以下几点：</p>
 <ul>
@@ -7710,7 +7720,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月9日 13:45:09 UTC">2025-12-09 13:45:09</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月10日 09:33:47 UTC">2025-12-10 09:33:47</span>
   </span>
 
     
