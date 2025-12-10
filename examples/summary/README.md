@@ -203,7 +203,7 @@ The `SessionSummarizer` supports various configuration options to customize summ
 
 - **`WithPrompt(prompt string)`**: Customizes the prompt template used for summary generation. The prompt must include the `{conversation_text}` placeholder. See the [Prompt Customization](#prompt-customization) section for details and examples.
 
-- **`WithSkipRecentEvents(count int)`**: Sets the number of recent events to skip during summarization. These events will be excluded from the summary input but remain in the session. This is useful for avoiding summarization of very recent, potentially incomplete conversations. A value <= 0 means no events are skipped.
+- **`WithSkipRecent(skipFunc SkipRecentFunc)`**: Sets a custom function that returns how many recent events to skip during summarization. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete turns, or applying time/content-based skipping strategies.
 
 ### Trigger Options
 
@@ -228,9 +228,9 @@ sum := summary.NewSummarizer(model,
     summary.WithEventThreshold(10),
 )
 
-// Skip recent events to avoid incomplete conversations
+// Skip recent events (fixed count, similar to old API)
 sum := summary.NewSummarizer(model,
-    summary.WithSkipRecentEvents(2),  // Skip the last 2 events during summarization
+    summary.WithSkipRecent(func(_ []event.Event) int { return 2 }), // skip last 2 events
     summary.WithEventThreshold(10),
 )
 
@@ -247,7 +247,42 @@ sum := summary.NewSummarizer(model,
 // Custom prompt
 sum := summary.NewSummarizer(model,
     summary.WithPrompt("Summarize this conversation focusing on key decisions: {conversation_text}"),
+    summary.WithSkipRecent(func(_ []event.Event) int { return 1 }),
     summary.WithEventThreshold(3),
+)
+
+// Skip events from the last 5 minutes (time window)
+sum := summary.NewSummarizer(model,
+    summary.WithSkipRecent(func(events []event.Event) int {
+        cutoff := time.Now().Add(-5 * time.Minute)
+        skip := 0
+        for i := len(events) - 1; i >= 0; i-- {
+            if events[i].Timestamp.After(cutoff) {
+                skip++
+            } else {
+                break
+            }
+        }
+        return skip
+    }),
+    summary.WithEventThreshold(10),
+)
+
+// Skip trailing tool-call messages only
+sum := summary.NewSummarizer(model,
+    summary.WithSkipRecent(func(events []event.Event) int {
+        skip := 0
+        for i := len(events) - 1; i >= 0; i-- {
+            if events[i].Response != nil && len(events[i].Response.Choices) > 0 &&
+                events[i].Response.Choices[0].Message.Role == model.RoleTool {
+                skip++
+            } else {
+                break
+            }
+        }
+        return skip
+    }),
+    summary.WithEventThreshold(10),
 )
 ```
 

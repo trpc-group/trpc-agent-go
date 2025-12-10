@@ -10,10 +10,17 @@ package summary
 
 import (
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 // Option is a function that configures a SessionSummarizer.
 type Option func(*sessionSummarizer)
+
+// SkipRecentFunc defines a function that determines how many recent events to skip during summarization.
+// It receives all events and returns the number of recent events to skip.
+// Return 0 to skip no events.
+type SkipRecentFunc func(events []event.Event) int
 
 // WithPrompt sets the custom prompt for summarization.
 // The prompt must include the placeholder {conversation_text}, which will be
@@ -37,14 +44,34 @@ func WithMaxSummaryWords(maxWords int) Option {
 	}
 }
 
-// WithSkipRecentEvents sets the number of recent events to skip during summarization.
-// These events will be excluded from the summary input but remain in the session.
-// A value <= 0 means no events are skipped.
-func WithSkipRecentEvents(count int) Option {
+// WithSkipRecent sets a custom function to determine how many of the most recent
+// events (from the tail) should be skipped during summarization. The function
+// receives all events and returns the count of tail events to skip. Return 0 to
+// skip none.
+//
+// Example:
+//
+//	WithSkipRecent(func(events []event.Event) int {
+//	    // Skip the last 3 events
+//	    return 3
+//	})
+//
+//	WithSkipRecent(func(events []event.Event) int {
+//	    // Skip events from the last 5 minutes
+//	    cutoff := time.Now().Add(-5 * time.Minute)
+//	    skipCount := 0
+//	    for i := len(events) - 1; i >= 0; i-- {
+//	        if events[i].Timestamp.After(cutoff) {
+//	            skipCount++
+//	        } else {
+//	            break
+//	        }
+//	    }
+//	    return skipCount
+//	})
+func WithSkipRecent(skipFunc SkipRecentFunc) Option {
 	return func(s *sessionSummarizer) {
-		if count > 0 {
-			s.skipRecentEvents = count
-		}
+		s.skipRecentFunc = skipFunc
 	}
 }
 

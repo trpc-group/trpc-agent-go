@@ -2000,6 +2000,51 @@ func TestService_GetSession_WithOptions(t *testing.T) {
 	assert.NotNil(t, sess2)
 }
 
+func TestService_GetSession_AttachSummaries(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session-with-summary",
+	}
+
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	evt := createTestEvent("evt-summary", "agent", "content", time.Now(), false)
+	err = service.AppendEvent(ctx, sess, evt)
+	require.NoError(t, err)
+
+	sumMap := map[string]*session.Summary{
+		"": {
+			Summary:   "cached-summary",
+			UpdatedAt: time.Now().UTC(),
+		},
+	}
+	payload, err := json.Marshal(sumMap)
+	require.NoError(t, err)
+	client := buildRedisClient(t, redisURL)
+	err = client.HSet(
+		ctx, getSessionSummaryKey(key), key.SessionID, string(payload),
+	).Err()
+	require.NoError(t, err)
+
+	got, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Summaries)
+	sum, ok := got.Summaries[""]
+	require.True(t, ok)
+	assert.Equal(t, "cached-summary", sum.Summary)
+}
+
 func TestService_ListSessions_WithOptions(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
@@ -2747,6 +2792,21 @@ func TestService_ListSessionsWithTrackEvents(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, alpha.Events, 1)
 	assert.Equal(t, payload, alpha.Events[0].Payload)
+}
+
+func TestGetTrackEvents_EmptyKeys(t *testing.T) {
+	s := &Service{}
+	trackEvents, err := s.getTrackEvents(context.Background(), nil, nil, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Nil(t, trackEvents)
+}
+
+func TestGetTrackEvents_Mismatch(t *testing.T) {
+	s := &Service{}
+	keys := []session.Key{{AppName: "a", UserID: "u", SessionID: "s"}}
+	_, err := s.getTrackEvents(context.Background(), keys, nil, 0, time.Time{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mismatch")
 }
 
 func TestService_AppendTrackEventRecover(t *testing.T) {
