@@ -1432,7 +1432,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 
 - **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
 - **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
-- **`WithSkipRecentEvents(count int)`**：在摘要生成时跳过最近的事件。这些事件会被排除在摘要输入之外，但仍保留在会话中。适用于避免对最近的、可能不完整的对话进行摘要。值 <= 0 表示不跳过任何事件。示例：`WithSkipRecentEvents(2)` 跳过最后 2 个事件。
+- **`WithSkipRecent(skipFunc SkipRecentFunc)`**：通过自定义函数在摘要时跳过**最近**事件。函数接收所有事件并返回应跳过的尾部事件数量，返回 0 表示不跳过。适合避免总结最近、可能不完整的对话，或实现基于时间/内容的跳过策略。
 
 **自定义提示词示例：**
 
@@ -1450,8 +1450,50 @@ summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithPrompt(customPrompt), // 自定义 Prompt
     summary.WithMaxSummaryWords(100), // 注入 Prompt 里面的 {max_summary_words}
-    summary.WithSkipRecentEvents(2),  // 跳过最后 2 个事件
     summary.WithEventThreshold(15),
+)
+
+// 跳过固定数量（兼容旧用法）
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(_ []event.Event) int { return 2 }), // 跳过最后 2 条
+    summary.WithEventThreshold(10),
+)
+
+// 跳过最近 5 分钟内的消息（时间窗口）
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(events []event.Event) int {
+        cutoff := time.Now().Add(-5 * time.Minute)
+        skip := 0
+        for i := len(events) - 1; i >= 0; i-- {
+            if events[i].Timestamp.After(cutoff) {
+                skip++
+            } else {
+                break
+            }
+        }
+        return skip
+    }),
+    summary.WithEventThreshold(10),
+)
+
+// 仅跳过末尾的工具调用消息
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecent(func(events []event.Event) int {
+        skip := 0
+        for i := len(events) - 1; i >= 0; i-- {
+            if events[i].Response != nil && len(events[i].Response.Choices) > 0 &&
+                events[i].Response.Choices[0].Message.Role == model.RoleTool {
+                skip++
+            } else {
+                break
+            }
+        }
+        return skip
+    }),
+    summary.WithEventThreshold(10),
 )
 ```
 

@@ -401,7 +401,9 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 		return true, true
 	}
 
-	if !isZeroTime && evt.Timestamp.Before(since) {
+	// Use strict After so events stamped exactly at summary UpdatedAt are
+	// treated as already summarized and not re-sent.
+	if !isZeroTime && !evt.Timestamp.After(since) {
 		return false, false
 	}
 
