@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -435,6 +436,23 @@ func TestTool_StreamableCall_NotifiesCompletion(t *testing.T) {
 	}
 
 	require.Contains(t, contents, "done")
+}
+
+func TestTool_wrapWithCompletion_NilInvocation(t *testing.T) {
+	at := NewTool(&mockAgent{name: "wrap", description: "wrap"})
+	src := make(chan *event.Event, 1)
+	src <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}}}}
+	close(src)
+
+	out := at.wrapWithCompletion(context.Background(), nil, src)
+	require.Equal(t, reflect.ValueOf(src).Pointer(), reflect.ValueOf(out).Pointer())
+
+	evt, ok := <-out
+	require.True(t, ok)
+	require.NotNil(t, evt)
+
+	_, ok = <-out
+	require.False(t, ok)
 }
 
 // inspectAgent collects matched contents from session using the invocation's filter key
