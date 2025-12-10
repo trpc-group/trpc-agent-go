@@ -19,7 +19,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"

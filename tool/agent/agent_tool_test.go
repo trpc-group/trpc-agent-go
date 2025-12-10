@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"

@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -1194,4 +1195,77 @@ func TestGraphAgent_AfterCallbackReceivesExecutionError(t *testing.T) {
 
 	require.Error(t, callbackErr)
 	require.Contains(t, callbackErr.Error(), "flow_error:")
+}
+
+func TestGraphAgent_BarrierWaitsForCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	schema := graph.NewStateSchema().
+		AddField(graph.StateKeyMessages, graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"ok": true}, nil
+		}).
+		SetEntryPoint("done").
+		SetFinishPoint("done").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New("barrier-test", g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "u", "s")),
+	)
+	barrier.Enable(inv)
+
+	ch, err := ga.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var barrierEvt *event.Event
+	select {
+	case barrierEvt = <-ch:
+	case <-ctx.Done():
+		t.Fatalf("did not receive barrier event: %v", ctx.Err())
+	}
+	require.NotNil(t, barrierEvt)
+	require.Equal(t, graph.ObjectTypeGraphBarrier, barrierEvt.Object)
+	require.True(t, barrierEvt.RequiresCompletion)
+
+	select {
+	case evt, ok := <-ch:
+		if ok {
+			t.Fatalf("unexpected event before completion: %+v", evt)
+		}
+	default:
+	}
+
+	completionID := agent.GetAppendEventNoticeKey(barrierEvt.ID)
+	require.NoError(t, inv.NotifyCompletion(ctx, completionID))
+
+	var received []*event.Event
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				goto done
+			}
+			received = append(received, evt)
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for graph events: %v", ctx.Err())
+		}
+	}
+done:
+	require.NotEmpty(t, received)
+	var hasGraphExec bool
+	for _, evt := range received {
+		if evt.Object == graph.ObjectTypeGraphExecution {
+			hasGraphExec = true
+		}
+	}
+	require.True(t, hasGraphExec)
 }

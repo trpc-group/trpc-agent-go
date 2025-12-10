@@ -24,7 +24,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -221,6 +222,7 @@ func (r *runner) Run(
 	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
 	flushChan := make(chan *flush.FlushRequest)
 	flush.Attach(ctx, invocation, flushChan)
+	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)

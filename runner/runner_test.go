@@ -22,7 +22,7 @@ import (
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"

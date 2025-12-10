@@ -18,12 +18,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 )
 
-const (
-	// StateKeyFlushSession is the invocation state key used to store the flush function.
-	stateKeyFlushSession = "__flush_session__"
-	// StateKeyFlushSession is the exported key for storing the flush function in invocation state.
-	StateKeyFlushSession = stateKeyFlushSession
-)
+// StateKeyFlushSession is the invocation state key used by flush.Attach.
+const StateKeyFlushSession = "__flush_session__"
 
 // FlushRequest represents a single session flush request.
 // The runner will close ACK when it has appended all events that were enqueued before this request was processed.
@@ -60,7 +56,7 @@ func (h *flusherHolder) clear() {
 
 // IsAttached reports whether a flush function has been attached to the invocation.
 func IsAttached(inv *agent.Invocation) bool {
-	holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession)
+	holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
 	if !ok || holder == nil {
 		return false
 	}
@@ -87,16 +83,16 @@ func Attach(ctx context.Context, inv *agent.Invocation, ch chan *FlushRequest) {
 		}
 	}
 	// Reuse existing holder if present; otherwise create one.
-	if holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession); ok && holder != nil {
+	if holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession); ok && holder != nil {
 		holder.set(fn)
 	} else {
-		inv.SetState(stateKeyFlushSession, &flusherHolder{fn: fn})
+		inv.SetState(StateKeyFlushSession, &flusherHolder{fn: fn})
 	}
 }
 
 // Invoke executes the flush function stored on the invocation state if present.
 func Invoke(ctx context.Context, inv *agent.Invocation) error {
-	holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession)
+	holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession)
 	if !ok || holder == nil {
 		return nil
 	}
@@ -113,8 +109,8 @@ func Clear(inv *agent.Invocation) {
 	if inv == nil {
 		return
 	}
-	if holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession); ok && holder != nil {
+	if holder, ok := agent.GetStateValue[*flusherHolder](inv, StateKeyFlushSession); ok && holder != nil {
 		holder.clear()
 	}
-	inv.DeleteState(stateKeyFlushSession)
+	inv.DeleteState(StateKeyFlushSession)
 }

@@ -19,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -119,8 +119,8 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 // ensuring that all prior events have been appended to the session before GraphAgent reads history.
 func (ga *GraphAgent) emitStartBarrierAndWait(ctx context.Context, invocation *agent.Invocation,
 	ch chan<- *event.Event) error {
-	// If the invocation is not attached with a flusher, skip barrier.
-	if !flush.IsAttached(invocation) {
+	// If graph barrier is not enabled, skip.
+	if !barrier.Enabled(invocation) {
 		return nil
 	}
 	barrier := event.New(invocation.InvocationID, invocation.AgentName,

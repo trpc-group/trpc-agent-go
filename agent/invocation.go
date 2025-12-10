@@ -44,6 +44,8 @@ const (
 
 	// flusherStateKey is the invocation state key used by flush.Attach.
 	flusherStateKey = "__flush_session__"
+	// barrierStateKey is the invocation state key used by internal barrier flag.
+	barrierStateKey = "__graph_barrier__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -494,9 +496,11 @@ func (inv *Invocation) cloneState() map[string]any {
 	inv.stateMu.RLock()
 	defer inv.stateMu.RUnlock()
 	copied := make(map[string]any)
-	// Ensure flusher holder uses shared pointer if present.
 	if holder, ok := inv.state[flusherStateKey]; ok {
 		copied[flusherStateKey] = holder
+	}
+	if barrier, ok := inv.state[barrierStateKey]; ok {
+		copied[barrierStateKey] = barrier
 	}
 	return copied
 }
