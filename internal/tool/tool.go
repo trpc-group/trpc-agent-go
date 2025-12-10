@@ -381,6 +381,7 @@ func handleStructType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Sch
 			Type:       "object",
 			Properties: make(map[string]*tool.Schema),
 		}
+		required := make([]string, 0)
 
 		for i := 0; i < t.NumField(); i++ {
 			field := t.Field(i)
@@ -392,14 +393,33 @@ func handleStructType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Sch
 				continue
 			}
 			fieldName := field.Name
+			isOmitEmpty := false
 			if jsonTag != "" {
 				if commaIdx := strings.Index(jsonTag, ","); commaIdx != -1 {
 					fieldName = jsonTag[:commaIdx]
+					isOmitEmpty = strings.Contains(jsonTag[commaIdx:], "omitempty")
 				} else {
 					fieldName = jsonTag
 				}
 			}
-			nestedSchema.Properties[fieldName] = generateFieldSchema(field.Type, ctx, false)
+			fieldSchema := generateFieldSchema(field.Type, ctx, false)
+			nestedSchema.Properties[fieldName] = fieldSchema
+
+			isRequiredByTag := false
+			if fieldSchema.Ref == "" {
+				var err error
+				isRequiredByTag, err = parseJSONSchemaTag(field.Type, field.Tag, fieldSchema)
+				if err != nil {
+					log.Errorf("parseJSONSchemaTag error for field %s: %v", fieldName, err)
+				}
+			}
+
+			if (field.Type.Kind() != reflect.Ptr && !isOmitEmpty) || isRequiredByTag {
+				required = append(required, fieldName)
+			}
+		}
+		if len(required) > 0 {
+			nestedSchema.Required = required
 		}
 		return nestedSchema
 	}
@@ -412,6 +432,7 @@ func handleStructType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Sch
 		Type:       "object",
 		Properties: make(map[string]*tool.Schema),
 	}
+	required := make([]string, 0)
 
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
@@ -423,14 +444,34 @@ func handleStructType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Sch
 			continue
 		}
 		fieldName := field.Name
+		isOmitEmpty := false
 		if jsonTag != "" {
 			if commaIdx := strings.Index(jsonTag, ","); commaIdx != -1 {
 				fieldName = jsonTag[:commaIdx]
+				isOmitEmpty = strings.Contains(jsonTag[commaIdx:], "omitempty")
 			} else {
 				fieldName = jsonTag
 			}
 		}
-		nestedSchema.Properties[fieldName] = generateFieldSchema(field.Type, ctx, false)
+		fieldSchema := generateFieldSchema(field.Type, ctx, false)
+		nestedSchema.Properties[fieldName] = fieldSchema
+
+		isRequiredByTag := false
+		if fieldSchema.Ref == "" {
+			var err error
+			isRequiredByTag, err = parseJSONSchemaTag(field.Type, field.Tag, fieldSchema)
+			if err != nil {
+				log.Errorf("parseJSONSchemaTag error for field %s: %v", fieldName, err)
+			}
+		}
+
+		if (field.Type.Kind() != reflect.Ptr && !isOmitEmpty) || isRequiredByTag {
+			required = append(required, fieldName)
+		}
+	}
+
+	if len(required) > 0 {
+		nestedSchema.Required = required
 	}
 
 	// Store the definition
