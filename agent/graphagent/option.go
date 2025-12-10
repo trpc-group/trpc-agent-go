@@ -76,6 +76,9 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available.
 	AddSessionSummary bool
+	// SummaryAsSeparateSystemMessage keeps the session summary as a standalone
+	// system message instead of merging it into the first system prompt.
+	SummaryAsSeparateSystemMessage bool
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -140,6 +143,14 @@ func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
 func WithAddSessionSummary(addSummary bool) Option {
 	return func(opts *Options) {
 		opts.AddSessionSummary = addSummary
+	}
+}
+
+// WithSummaryAsSeparateSystemMessage keeps the session summary as its own
+// system message instead of merging it into the first system prompt.
+func WithSummaryAsSeparateSystemMessage(separate bool) Option {
+	return func(opts *Options) {
+		opts.SummaryAsSeparateSystemMessage = separate
 	}
 }
 

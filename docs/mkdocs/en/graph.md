@@ -558,6 +558,9 @@ graphAgent, err := graphagent.New(
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
     graphagent.WithAddSessionSummary(true),            // Inject session summary as system message
+    // Keep summary as a separate system message (default merges into the first
+    // system prompt when present). It only takes effect when WithAddSessionSummary(true) is enabled.
+    graphagent.WithSummaryAsSeparateSystemMessage(true),
     graphagent.WithMaxHistoryRuns(5),                  // Truncate history when summaries are off
     // Set the filter mode for messages passed to the model. The final messages passed to the model must satisfy both WithMessageTimelineFilterMode and WithMessageBranchFilterMode conditions.
     // Timeline dimension filter conditions
@@ -587,6 +590,11 @@ graphAgent, err := graphagent.New(
 Session summary notes:
 
 - `WithAddSessionSummary(true)` takes effect only when `Session.Summaries` contains a summary for the invocation’s filter key. Summaries are typically produced by SessionService + SessionSummarizer, and Runner will auto‑enqueue summarization after persisting events.
+- By default the summary is merged into the first system message. Set
+  `graphagent.WithSummaryAsSeparateSystemMessage(true)` to keep it as a
+  dedicated system message (inserted after the first system prompt when
+  present). This option is effective only when `WithAddSessionSummary(true)`
+  is enabled.
 - GraphAgent reads summaries only; it does not generate them. If you bypass Runner, call `sessionService.CreateSessionSummary` or `EnqueueSummaryJob` after appending events.
 - Summary injection works only when `TimelineFilterMode` is `TimelineFilterAll`.
 
@@ -596,17 +604,20 @@ When using Graph + GraphAgent in a concurrent environment (for example, serving 
 
 - CheckpointSaver and Cache implementations must be concurrency‑safe  
   The `CheckpointSaver` and `Cache` interfaces are intentionally storage‑agnostic. A single `Executor`/`GraphAgent` instance may call their methods from multiple goroutines when several invocations run in parallel. If you provide your own implementations, ensure:
+
   - All exported methods (`Get`/`GetTuple`/`List`/`Put`/`PutWrites`/`PutFull`/`DeleteLineage` for `CheckpointSaver`, and `Get`/`Set`/`Clear` for `Cache`) are safe for concurrent use.
   - Internal maps, connection pools, or in‑memory buffers are properly synchronized.
 
 - NodeFunc, tools, and callbacks should treat state as per‑invocation, not global  
   Each node receives an isolated copy of graph state for the current task. This copy is safe to mutate inside the node, but it is not safe to:
+
   - Store references to that state (or its internal maps/slices) in global variables and modify them from other goroutines later.
   - Access `StateKeyExecContext` (`*graph.ExecutionContext`) and bypass its internal locks when reading/writing `execCtx.State` or `execCtx.pendingTasks`.
-  If you need shared mutable state across nodes or invocations, protect it with your own synchronization (for example, `sync.Mutex` or `sync.RWMutex`) or use external services (such as databases or caches).
+    If you need shared mutable state across nodes or invocations, protect it with your own synchronization (for example, `sync.Mutex` or `sync.RWMutex`) or use external services (such as databases or caches).
 
 - Do not share a single *agent.Invocation across goroutines  
-  The framework expects each `Run` call (GraphAgent, Runner, or other Agent types) to operate on its own `*agent.Invocation`. Reusing the same `*agent.Invocation` instance in multiple goroutines and calling `Run` concurrently can cause data races on fields like `Branch`, `RunOptions`, or callback state. Prefer:
+  The framework expects each `Run` call (GraphAgent, Runner, or other Agent types) to operate on its own `*agent.Invocation`. Reusing the same `\*agent.Invocation`instance in multiple goroutines and calling`Run`concurrently can cause data races on fields like`Branch`, `RunOptions`, or callback state. Prefer:
+
   - Creating a fresh `*agent.Invocation` per request, or
   - Cloning from a parent invocation using `invocation.Clone(...)` when you need linkage.
 
@@ -614,7 +625,7 @@ When using Graph + GraphAgent in a concurrent environment (for example, serving 
   Tools in a `Tools` node can be executed in parallel when `WithEnableParallelTools(true)` is used on that node:
   - The framework guarantees that the `tools` map is only read during execution.
   - It also guarantees that the shared graph state passed to tools is only read; updates are written back by nodes, not by tools.
-  However, each `tool.Tool` implementation and its `tool.Callbacks` may be invoked from multiple goroutines at the same time. Make sure:
+    However, each `tool.Tool` implementation and its `tool.Callbacks` may be invoked from multiple goroutines at the same time. Make sure:
   - Tool implementations do not mutate shared global state without proper locking.
   - Any internal caches, HTTP clients, or client pools inside tools are safe for concurrent use.
 
@@ -1760,10 +1771,12 @@ Tip: setting entry and finish points implicitly connects to virtual Start/End no
 Constants: `graph.Start == "__start__"`, `graph.End == "__end__"`.
 
 ### Message Visibility Options
+
 The Agent can dynamically manage the visibility of messages generated by other Agents and historical session messages based on different scenarios. This is configurable through relevant options.
 When interacting with the model, only the visible content is passed as input.
 
 TIPS:
+
 - Messages from different sessionIDs are never visible to each other under any circumstances. The following control strategies only apply to messages sharing the same sessionID.
 - Invocation.Message always visible regardless of the configuration.
 - The related configuration only controls the initial value of State[graph.StateKeyMessages].
@@ -1771,6 +1784,7 @@ TIPS:
 - When the option is not configured, the default value is FullContext.
 
 Config:
+
 - `llmagent.WithMessageFilterMode(MessageFilterMode)`:
   - `FullContext`: Includes historical messages and messages generated in the current request, filtered by prefix matching with the filterKey.
   - `RequestContext`: Only includes messages generated in the current request, filtered by prefix matching with the filterKey.
@@ -1780,6 +1794,7 @@ Config:
 Recommended Usage Examples (These examples are simplified configurations based on advanced usage):
 
 Example 1: Message Visibility Control for graphAgent
+
 ```go
 subgraphAgentA := graphagent.New(
     "subgraphA", subgraph,
@@ -1837,6 +1852,7 @@ parentAgent := graphagent.New(
 ```
 
 Example 2: Message Visibility Control for LLM Agent node
+
 ```go
 taskagentA := llmagent.New(
   "coordinator",
@@ -1905,6 +1921,7 @@ sg.AddNode("taskB", func(ctx context.Context, state graph.State) (any, error){
 Advanced Usage Examples:
 You can independently control the visibility of historical messages and messages generated by other Agents for the current agent using WithMessageTimelineFilterModeand WithMessageBranchFilterMode.
 When the current agent interacts with the model, only messages satisfying both conditions are input to the model. (invocation.Messageis always visible in any scenario.)
+
 - `WithMessageTimelineFilterMode`: Controls visibility from a temporal dimension
   - `TimelineFilterAll`: Includes historical messages and messages generated in the current request.
   - `TimelineFilterCurrentRequest`: Only includes messages generated in the current request (one runner.Runcounts as one request).
@@ -3060,6 +3077,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 - `AddToolsConditionalEdges` internally checks `state[StateKeyMessages].([]model.Message)` to determine if there are tool calls.
 - If the Schema lacks the `StateKeyMessages` field, `MessageReducer` won't be applied. The LLM node returns `[]graph.MessageOp` instead of `[]model.Message`, causing type assertion to fail and always routing to `fallbackNode`.
 - **Solution**: Replace `graph.NewStateSchema()` with `graph.MessagesStateSchema()`, then add custom fields on top:
+
   ```go
   // Wrong
   schema := graph.NewStateSchema()
@@ -3089,6 +3107,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 - **LLM decides whether to call tools**: Based on the tools declaration and user input, the LLM decides whether to return `tool_calls` in its response.
 - **tools are NOT automatically executed**: `AddLLMNode` only declares tools and sends requests to the LLM; it does not execute tools.
 - **Tool execution requires AddToolsNode + AddToolsConditionalEdges**:
+
   ```go
   // 1. LLM node declares tools (tells LLM what tools are available)
   sg.AddLLMNode("ask", model, systemPrompt, tools)
@@ -3099,6 +3118,7 @@ graphAgent, _ := graphagent.New("workflow", g,
   // 3. Conditional edges route based on LLM response (routes to tools node if tool_calls present)
   sg.AddToolsConditionalEdges("ask", "tools", "fallback")
   ```
+
 - **Execution timing**: When `AddToolsConditionalEdges` detects `tool_calls` in the LLM response, it routes to `AddToolsNode`, which executes the actual tool calls.
 
 **Q9: Messages are duplicated in req.Messages when chaining multiple LLM nodes**

@@ -334,6 +334,45 @@ func TestProcessRequest_SessionSummary_MergeWithSystemMessages(t *testing.T) {
 	require.Equal(t, "user question", req3.Messages[2].Content)
 }
 
+func TestProcessRequest_SessionSummary_AsSeparateSystemMessage(t *testing.T) {
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   "Session summary content",
+				UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("existing system prompt"),
+			model.NewUserMessage("user question"),
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewUserMessage("current request")),
+	)
+	inv.AgentName = "test-agent"
+
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithSummaryAsSeparateSystemMessage(true),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 4)
+	require.Equal(t, "existing system prompt", req.Messages[0].Content)
+	require.Equal(t, model.RoleSystem, req.Messages[1].Role)
+	require.Equal(t, "Session summary content", req.Messages[1].Content)
+	require.Equal(t, model.RoleUser, req.Messages[2].Role)
+	require.Equal(t, "user question", req.Messages[2].Content)
+	require.Equal(t, "current request", req.Messages[3].Content)
+}
+
 func newSessionEventWithBranch(author, filterKey, branch string, msg model.Message) event.Event {
 	return event.Event{
 		Response: &model.Response{

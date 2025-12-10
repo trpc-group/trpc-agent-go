@@ -173,6 +173,36 @@ func TestBuildRequestProcessors_AddSessionSummaryWiring(t *testing.T) {
 	require.False(t, crp.AddSessionSummary)
 }
 
+// Test that buildRequestProcessors wires SummaryAsSeparateSystemMessage
+// into ContentRequestProcessor correctly.
+func TestBuildRequestProcessors_SummaryAsSeparateSystemMessageWiring(
+	t *testing.T,
+) {
+	optsSeparate := &Options{}
+	WithSummaryAsSeparateSystemMessage(true)(optsSeparate)
+	procs := buildRequestProcessors("test-agent", optsSeparate)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.SummaryAsSeparateSystemMessage)
+
+	optsMerged := &Options{}
+	WithSummaryAsSeparateSystemMessage(false)(optsMerged)
+	procs = buildRequestProcessors("test-agent", optsMerged)
+	crp = nil
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.False(t, crp.SummaryAsSeparateSystemMessage)
+}
+
 // Test that buildRequestProcessors wires MaxHistoryRuns into
 // ContentRequestProcessor correctly.
 func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {

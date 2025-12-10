@@ -57,6 +57,10 @@ type ContentRequestProcessor struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message to the request if available.
 	AddSessionSummary bool
+	// SummaryAsSeparateSystemMessage keeps the summary as its own system message
+	// instead of merging into the first system message when AddSessionSummary is
+	// enabled.
+	SummaryAsSeparateSystemMessage bool
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -104,6 +108,15 @@ func WithAddContextPrefix(addPrefix bool) ContentOption {
 func WithAddSessionSummary(add bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.AddSessionSummary = add
+	}
+}
+
+// WithSummaryAsSeparateSystemMessage controls whether the session summary stays
+// as a standalone system message instead of being merged into the first system
+// prompt.
+func WithSummaryAsSeparateSystemMessage(separate bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.SummaryAsSeparateSystemMessage = separate
 	}
 }
 
@@ -192,15 +205,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			// Add session summary as a system message if enabled and available.
 			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Merge existing system messages first, then merge summary into the single system message.
-				systemMsgIndex := findSystemMessageIndex(req.Messages)
-				if systemMsgIndex >= 0 {
-					// Merge summary into the existing system message.
-					req.Messages[systemMsgIndex].Content += "\n\n" + msg.Content
-				} else {
-					// No system message exists, prepend new system message.
-					req.Messages = append([]model.Message{*msg}, req.Messages...)
-				}
+				p.insertSummaryMessage(req, msg)
 				summaryUpdatedAt = updatedAt
 			}
 		}
@@ -247,6 +252,26 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 		return nil, time.Time{}
 	}
 	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}, sum.UpdatedAt
+}
+
+func (p *ContentRequestProcessor) insertSummaryMessage(
+	req *model.Request,
+	msg *model.Message,
+) {
+	systemMsgIndex := findSystemMessageIndex(req.Messages)
+	if systemMsgIndex < 0 {
+		req.Messages = append([]model.Message{*msg}, req.Messages...)
+		return
+	}
+	// Merge summary into the existing system message or insert as a standalone system message.
+	if p.SummaryAsSeparateSystemMessage {
+		insertIdx := systemMsgIndex + 1
+		req.Messages = append(req.Messages, model.Message{})
+		copy(req.Messages[insertIdx+1:], req.Messages[insertIdx:])
+		req.Messages[insertIdx] = *msg
+	} else {
+		req.Messages[systemMsgIndex].Content += "\n\n" + msg.Content
+	}
 }
 
 // getHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.

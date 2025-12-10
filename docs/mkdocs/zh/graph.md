@@ -636,6 +636,8 @@ graphAgent, err := graphagent.New(
 	graphagent.WithCheckpointSaver(memorySaver),       // 使用持久化检查点
 	graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
 	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息
+	// 默认会把摘要合并到第一条 system 消息，如需让摘要单独作为 system 消息，仅当 WithAddSessionSummary(true) 时生效
+	graphagent.WithSummaryAsSeparateSystemMessage(true),
 	graphagent.WithMaxHistoryRuns(5),                  // 未开启摘要时截断历史轮次
 	// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
 	// 时间维度过滤条件
@@ -664,6 +666,10 @@ graphAgent, err := graphagent.New(
 使用会话摘要的注意事项：
 
 - `WithAddSessionSummary(true)` 仅在 `Session.Summaries` 中已有对应 `FilterKey` 的摘要时生效。摘要通常由 SessionService + SessionSummarizer 生成，Runner 在落库事件后会自动触发 `EnqueueSummaryJob`。
+- 默认会把摘要合并到第一条 system 消息；如果希望摘要单独作为
+  system 消息（插在第一条 system 消息之后），使用
+  `graphagent.WithSummaryAsSeparateSystemMessage(true)`（仅在
+  `WithAddSessionSummary(true)` 时生效）。
 - GraphAgent 只读取摘要，不生成摘要。如果绕过 Runner，需在写入事件后自行调用 `sessionService.CreateSessionSummary` 或 `EnqueueSummaryJob`。
 - 摘要仅在 `TimelineFilterAll` 下生效。
 
@@ -673,18 +679,21 @@ graphAgent, err := graphagent.New(
 
 - 自定义 CheckpointSaver / Cache 必须具备并发安全能力  
   `CheckpointSaver` 与 `Cache` 接口本身是存储无关、线程无状态的抽象，同一个 `Executor` / `GraphAgent` 实例在并发执行多次时，会从多个 goroutine 调用它们的方法。如果你提供自定义实现，需要确保：
+
   - `CheckpointSaver` 的 `Get` / `GetTuple` / `List` / `Put` / `PutWrites` / `PutFull` / `DeleteLineage` 等方法在并发场景下是安全的；
   - `Cache` 的 `Get` / `Set` / `Clear` 等方法在并发场景下是安全的；
   - 内部使用的 map、连接池、内存缓冲区等都经过适当加锁或使用其它并发原语保护。
 
 - NodeFunc / 工具 / 回调应把传入状态视为“本次调用本节点的局部数据”  
   每个节点在执行时会拿到一份针对当前任务的状态副本，这份副本在当前 goroutine 内修改是安全的，但是不建议：
+
   - 将该副本（或其中的 map / slice）保存到全局变量，再由其它 goroutine 后续修改；
   - 从状态中取出 `StateKeyExecContext`（`*graph.ExecutionContext`）后，绕过内部锁直接读写 `execCtx.State` 或 `execCtx.pendingTasks` 等字段。
-  如果确实需要跨节点或跨调用共享可变数据，请使用你自己的同步手段（例如 `sync.Mutex` / `sync.RWMutex`），或者使用外部服务（数据库、缓存等）承载共享状态。
+    如果确实需要跨节点或跨调用共享可变数据，请使用你自己的同步手段（例如 `sync.Mutex` / `sync.RWMutex`），或者使用外部服务（数据库、缓存等）承载共享状态。
 
 - 不要在多个 goroutine 中复用同一个 *agent.Invocation  
-  框架设计假定每次调用 `Run`（无论是 GraphAgent、Runner 还是其它 Agent 实现）都使用独立的 `*agent.Invocation` 实例。如果在多个 goroutine 中复用同一个 `*agent.Invocation` 并并行调用 `Run`，会在 `Branch`、`RunOptions`、回调状态等字段上产生数据竞争。推荐的做法是：
+  框架设计假定每次调用 `Run`（无论是 GraphAgent、Runner 还是其它 Agent 实现）都使用独立的 `*agent.Invocation`实例。如果在多个 goroutine 中复用同一个`\*agent.Invocation`并并行调用`Run`，会在 `Branch`、`RunOptions`、回调状态等字段上产生数据竞争。推荐的做法是：
+
   - 每个请求构造一份新的 `*agent.Invocation`，或者
   - 在需要保持关联时使用 `invocation.Clone(...)` 从父调用上克隆一份新的 Invocation。
 
@@ -692,7 +701,7 @@ graphAgent, err := graphagent.New(
   当某个 Tools 节点使用 `WithEnableParallelTools(true)` 配置为“并行工具执行”时，在同一轮 step 内该节点会为每个工具调用起一个 goroutine 并行执行：
   - 框架保证 `tools` 映射在执行期间只读访问；
   - 框架也保证传入工具的图状态在工具内部只读使用，状态更新由节点返回的 `State` 合并完成。
-  但每个具体的 `tool.Tool` 实现以及对应的 `tool.Callbacks` 可能会被多个 goroutine 同时调用，因此需要确保：
+    但每个具体的 `tool.Tool` 实现以及对应的 `tool.Callbacks` 可能会被多个 goroutine 同时调用，因此需要确保：
   - 工具实现不会在没有加锁的情况下修改共享的全局变量或共享数据结构；
   - 工具内部使用的缓存、HTTP 客户端、连接池等组件本身支持并发访问。
 
@@ -1767,26 +1776,30 @@ sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 和 branch2 会并行执行
 常量名：`graph.Start == "__start__"`，`graph.End == "__end__"`。
 
 ### 消息可见性选项
-当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
-在与model交互时仅将可见的内容输入给模型。 
+
+当前 Agent 可在需要时根据不同场景控制其对其他 Agent 生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
+在与 model 交互时仅将可见的内容输入给模型。
 
 TIPS:
- - 不同sessionID的消息在任何场景下都是互不可见的，以下管控策略均针对同一个sessionID的消息
- - Invocation.Message在任何场景下均可见
- - 相关配置仅控制State[graph.StateKeyMessages]的初始值
- - Agent node生成的消息filterKey为subAgent name, 因此使用`IsolatedRequest`或`IsolatedInvocation`过滤时对当前graphAgent不可见
- - 未配置选项时，默认值为FullContext
+
+- 不同 sessionID 的消息在任何场景下都是互不可见的，以下管控策略均针对同一个 sessionID 的消息
+- Invocation.Message 在任何场景下均可见
+- 相关配置仅控制 State[graph.StateKeyMessages]的初始值
+- Agent node 生成的消息 filterKey 为 subAgent name, 因此使用`IsolatedRequest`或`IsolatedInvocation`过滤时对当前 graphAgent 不可见
+- 未配置选项时，默认值为 FullContext
 
 配置:
+
 - `graphagent.WithMessageFilterMode(MessageFilterMode)`:
-  - `FullContext`: 所有能通过filterKey做前缀匹配的消息
-  - `RequestContext`: 仅包含当前请求周期内通过filterKey前缀匹配的消息
-  - `IsolatedRequest`: 仅包含当前请求周期内通过filterKey完全匹配的消息
-  - `IsolatedInvocation`: 仅包含当前invocation周期内通过filterKey完全匹配的消息
+  - `FullContext`: 所有能通过 filterKey 做前缀匹配的消息
+  - `RequestContext`: 仅包含当前请求周期内通过 filterKey 前缀匹配的消息
+  - `IsolatedRequest`: 仅包含当前请求周期内通过 filterKey 完全匹配的消息
+  - `IsolatedInvocation`: 仅包含当前 invocation 周期内通过 filterKey 完全匹配的消息
 
-推荐用法示例（该用法仅基于高阶用法基础之上做了配置简化）: 
+推荐用法示例（该用法仅基于高阶用法基础之上做了配置简化）:
 
-案例1: 对graphAgent消息可见性控制
+案例 1: 对 graphAgent 消息可见性控制
+
 ```go
 subgraphAgentA := graphagent.New(
     "subgraphA", subgraph,
@@ -1843,7 +1856,8 @@ parentAgent := graphagent.New(
 )
 ```
 
-案例2: 对节点Agent消息可见性控制
+案例 2: 对节点 Agent 消息可见性控制
+
 ```go
 taskagentA := llmagent.New(
   "taskagentA",
@@ -1902,19 +1916,20 @@ sg.AddNode("taskB", func(ctx context.Context, state graph.State) (any, error){
 ```
 
 高阶用法示例：
-可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`控制当前agent对历史消息与其他agent生成的消息可见性。
-当前agent在与模型交互时，最终将同时满足两个条件的消息输入给模型。
+可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`控制当前 agent 对历史消息与其他 agent 生成的消息可见性。
+当前 agent 在与模型交互时，最终将同时满足两个条件的消息输入给模型。
 
 `配置:`
+
 - `WithMessageTimelineFilterMode`: 时间维度可见性控制
   - `TimelineFilterAll`: 包含历史消息以及当前请求中所生成的消息
-  - `TimelineFilterCurrentRequest`: 仅包含当前请求(一次runner.Run为一次请求)中所生成的消息
-  - `TimelineFilterCurrentInvocation`: 仅包含当前invocation上下文中生成的消息
-- `WithMessageBranchFilterMode`: 分支维度可见性控制（用于控制对其他agent生成消息的可见性）
-  - `BranchFilterModePrefix`: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配
-  - `BranchFilterModeAll`: 所有agent的均消息
+  - `TimelineFilterCurrentRequest`: 仅包含当前请求(一次 runner.Run 为一次请求)中所生成的消息
+  - `TimelineFilterCurrentInvocation`: 仅包含当前 invocation 上下文中生成的消息
+- `WithMessageBranchFilterMode`: 分支维度可见性控制（用于控制对其他 agent 生成消息的可见性）
+  - `BranchFilterModePrefix`: 通过 Event.FilterKey 与 Invocation.eventFilterKey 做前缀匹配
+  - `BranchFilterModeAll`: 所有 agent 的均消息
   - `BranchFilterModeExact`: 仅自己生成的消息可见
-  
+
 ```go
 llmAgent := llmagent.New(
     "demo-agent",                      // Agent 名称
@@ -2435,7 +2450,7 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 - `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
 - LLM 节点可用 `graph.WithGenerationConfig`、`graph.WithModelCallbacks`
 - 工具相关：`graph.WithToolCallbacks`、`graph.WithToolSets`（除 `tools []tool.Tool` 外，再额外提供 ToolSet`）、
-  `graph.WithRefreshToolSetsOnRun`（在每次运行时从 ToolSet 重新构造工具列表，适合 MCP 等动态工具源）
+`graph.WithRefreshToolSetsOnRun`（在每次运行时从 ToolSet 重新构造工具列表，适合 MCP 等动态工具源）
 - Agent 节点可用 `graph.WithAgentNodeEventCallback`
 
 #### Graph 中的 ToolSet 与 Agent 的区别
@@ -3079,6 +3094,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 - `AddToolsConditionalEdges` 内部检查 `state[StateKeyMessages].([]model.Message)` 来判断是否有工具调用。
 - 如果 Schema 中没有 `StateKeyMessages` 字段，`MessageReducer` 不会被应用，LLM 节点返回的是 `[]graph.MessageOp` 类型而非 `[]model.Message`，导致类型断言失败，永远路由到 `fallbackNode`。
 - **解决方案**：将 `graph.NewStateSchema()` 改为 `graph.MessagesStateSchema()`，然后在其基础上添加业务字段：
+
   ```go
   // 错误写法
   schema := graph.NewStateSchema()
@@ -3108,6 +3124,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 - **LLM 决定是否调用工具**：LLM 根据 tools 声明和用户输入，决定是否在响应中返回 `tool_calls`。
 - **tools 不会自动执行**：`AddLLMNode` 只负责声明工具、发送请求给 LLM，不会执行工具。
 - **工具执行需要配合 AddToolsNode + AddToolsConditionalEdges**：
+
   ```go
   // 1. LLM 节点声明工具（告诉 LLM 有哪些工具可用）
   sg.AddLLMNode("ask", model, systemPrompt, tools)
@@ -3118,6 +3135,7 @@ graphAgent, _ := graphagent.New("workflow", g,
   // 3. 条件边根据 LLM 响应路由（有 tool_calls 则路由到工具节点）
   sg.AddToolsConditionalEdges("ask", "tools", "fallback")
   ```
+
 - **调用时机**：当 `AddToolsConditionalEdges` 检测到 LLM 响应中包含 `tool_calls` 时，会路由到 `AddToolsNode`，由工具节点执行实际调用。
 
 **Q9: 多个 LLM 节点串联时，req.Messages 中消息被重复追加**
