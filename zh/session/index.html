@@ -4920,7 +4920,7 @@
 <ul>
 <li><strong><code>WithMaxSummaryWords(maxWords int)</code></strong>：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：<code>WithMaxSummaryWords(150)</code> 请求在 150 字以内的摘要。</li>
 <li><strong><code>WithPrompt(prompt string)</code></strong>：提供自定义摘要提示词。提示词必须包含占位符 <code>{conversation_text}</code>，它会被对话内容替换。可选包含 <code>{max_summary_words}</code> 用于字数限制指令。</li>
-<li><strong><code>WithSkipRecentEvents(count int)</code></strong>：在摘要生成时跳过最近的事件。这些事件会被排除在摘要输入之外，但仍保留在会话中。适用于避免对最近的、可能不完整的对话进行摘要。值 &lt;= 0 表示不跳过任何事件。示例：<code>WithSkipRecentEvents(2)</code> 跳过最后 2 个事件。</li>
+<li><strong><code>WithSkipRecent(skipFunc SkipRecentFunc)</code></strong>：通过自定义函数在摘要时跳过<strong>最近</strong>事件。函数接收所有事件并返回应跳过的尾部事件数量，返回 0 表示不跳过。适合避免总结最近、可能不完整的对话，或实现基于时间/内容的跳过策略。</li>
 </ul>
 <p><strong>自定义提示词示例：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1"> 1</a></span>
@@ -4938,7 +4938,49 @@
 <span class="normal"><a href="#__codelineno-39-13">13</a></span>
 <span class="normal"><a href="#__codelineno-39-14">14</a></span>
 <span class="normal"><a href="#__codelineno-39-15">15</a></span>
-<span class="normal"><a href="#__codelineno-39-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="nx">customPrompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`分析以下对话并提供简洁的摘要，重点关注关键决策、行动项和重要上下文。</span>
+<span class="normal"><a href="#__codelineno-39-16">16</a></span>
+<span class="normal"><a href="#__codelineno-39-17">17</a></span>
+<span class="normal"><a href="#__codelineno-39-18">18</a></span>
+<span class="normal"><a href="#__codelineno-39-19">19</a></span>
+<span class="normal"><a href="#__codelineno-39-20">20</a></span>
+<span class="normal"><a href="#__codelineno-39-21">21</a></span>
+<span class="normal"><a href="#__codelineno-39-22">22</a></span>
+<span class="normal"><a href="#__codelineno-39-23">23</a></span>
+<span class="normal"><a href="#__codelineno-39-24">24</a></span>
+<span class="normal"><a href="#__codelineno-39-25">25</a></span>
+<span class="normal"><a href="#__codelineno-39-26">26</a></span>
+<span class="normal"><a href="#__codelineno-39-27">27</a></span>
+<span class="normal"><a href="#__codelineno-39-28">28</a></span>
+<span class="normal"><a href="#__codelineno-39-29">29</a></span>
+<span class="normal"><a href="#__codelineno-39-30">30</a></span>
+<span class="normal"><a href="#__codelineno-39-31">31</a></span>
+<span class="normal"><a href="#__codelineno-39-32">32</a></span>
+<span class="normal"><a href="#__codelineno-39-33">33</a></span>
+<span class="normal"><a href="#__codelineno-39-34">34</a></span>
+<span class="normal"><a href="#__codelineno-39-35">35</a></span>
+<span class="normal"><a href="#__codelineno-39-36">36</a></span>
+<span class="normal"><a href="#__codelineno-39-37">37</a></span>
+<span class="normal"><a href="#__codelineno-39-38">38</a></span>
+<span class="normal"><a href="#__codelineno-39-39">39</a></span>
+<span class="normal"><a href="#__codelineno-39-40">40</a></span>
+<span class="normal"><a href="#__codelineno-39-41">41</a></span>
+<span class="normal"><a href="#__codelineno-39-42">42</a></span>
+<span class="normal"><a href="#__codelineno-39-43">43</a></span>
+<span class="normal"><a href="#__codelineno-39-44">44</a></span>
+<span class="normal"><a href="#__codelineno-39-45">45</a></span>
+<span class="normal"><a href="#__codelineno-39-46">46</a></span>
+<span class="normal"><a href="#__codelineno-39-47">47</a></span>
+<span class="normal"><a href="#__codelineno-39-48">48</a></span>
+<span class="normal"><a href="#__codelineno-39-49">49</a></span>
+<span class="normal"><a href="#__codelineno-39-50">50</a></span>
+<span class="normal"><a href="#__codelineno-39-51">51</a></span>
+<span class="normal"><a href="#__codelineno-39-52">52</a></span>
+<span class="normal"><a href="#__codelineno-39-53">53</a></span>
+<span class="normal"><a href="#__codelineno-39-54">54</a></span>
+<span class="normal"><a href="#__codelineno-39-55">55</a></span>
+<span class="normal"><a href="#__codelineno-39-56">56</a></span>
+<span class="normal"><a href="#__codelineno-39-57">57</a></span>
+<span class="normal"><a href="#__codelineno-39-58">58</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="nx">customPrompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`分析以下对话并提供简洁的摘要，重点关注关键决策、行动项和重要上下文。</span>
 </span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="s">请控制在 {max_summary_words} 字以内。</span>
 </span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a>
 </span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="s">&lt;conversation&gt;</span>
@@ -4951,9 +4993,51 @@
 </span><span id="__span-39-11"><a id="__codelineno-39-11" name="__codelineno-39-11"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
 </span><span id="__span-39-12"><a id="__codelineno-39-12" name="__codelineno-39-12"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithPrompt</span><span class="p">(</span><span class="nx">customPrompt</span><span class="p">),</span><span class="w"> </span><span class="c1">// 自定义 Prompt</span>
 </span><span id="__span-39-13"><a id="__codelineno-39-13" name="__codelineno-39-13"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span><span class="w"> </span><span class="c1">// 注入 Prompt 里面的 {max_summary_words}</span>
-</span><span id="__span-39-14"><a id="__codelineno-39-14" name="__codelineno-39-14"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecentEvents</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w">  </span><span class="c1">// 跳过最后 2 个事件</span>
-</span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">15</span><span class="p">),</span>
-</span><span id="__span-39-16"><a id="__codelineno-39-16" name="__codelineno-39-16"></a><span class="p">)</span>
+</span><span id="__span-39-14"><a id="__codelineno-39-14" name="__codelineno-39-14"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">15</span><span class="p">),</span>
+</span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15"></a><span class="p">)</span>
+</span><span id="__span-39-16"><a id="__codelineno-39-16" name="__codelineno-39-16"></a>
+</span><span id="__span-39-17"><a id="__codelineno-39-17" name="__codelineno-39-17"></a><span class="c1">// 跳过固定数量（兼容旧用法）</span>
+</span><span id="__span-39-18"><a id="__codelineno-39-18" name="__codelineno-39-18"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-39-19"><a id="__codelineno-39-19" name="__codelineno-39-19"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-39-20"><a id="__codelineno-39-20" name="__codelineno-39-20"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="p">}),</span><span class="w"> </span><span class="c1">// 跳过最后 2 条</span>
+</span><span id="__span-39-21"><a id="__codelineno-39-21" name="__codelineno-39-21"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-39-22"><a id="__codelineno-39-22" name="__codelineno-39-22"></a><span class="p">)</span>
+</span><span id="__span-39-23"><a id="__codelineno-39-23" name="__codelineno-39-23"></a>
+</span><span id="__span-39-24"><a id="__codelineno-39-24" name="__codelineno-39-24"></a><span class="c1">// 跳过最近 5 分钟内的消息（时间窗口）</span>
+</span><span id="__span-39-25"><a id="__codelineno-39-25" name="__codelineno-39-25"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-39-26"><a id="__codelineno-39-26" name="__codelineno-39-26"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-39-27"><a id="__codelineno-39-27" name="__codelineno-39-27"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">events</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-28"><a id="__codelineno-39-28" name="__codelineno-39-28"></a><span class="w">        </span><span class="nx">cutoff</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">Add</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
+</span><span id="__span-39-29"><a id="__codelineno-39-29" name="__codelineno-39-29"></a><span class="w">        </span><span class="nx">skip</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-39-30"><a id="__codelineno-39-30" name="__codelineno-39-30"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-31"><a id="__codelineno-39-31" name="__codelineno-39-31"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Timestamp</span><span class="p">.</span><span class="nx">After</span><span class="p">(</span><span class="nx">cutoff</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-32"><a id="__codelineno-39-32" name="__codelineno-39-32"></a><span class="w">                </span><span class="nx">skip</span><span class="o">++</span>
+</span><span id="__span-39-33"><a id="__codelineno-39-33" name="__codelineno-39-33"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-34"><a id="__codelineno-39-34" name="__codelineno-39-34"></a><span class="w">                </span><span class="k">break</span>
+</span><span id="__span-39-35"><a id="__codelineno-39-35" name="__codelineno-39-35"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-39-36"><a id="__codelineno-39-36" name="__codelineno-39-36"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-39-37"><a id="__codelineno-39-37" name="__codelineno-39-37"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skip</span>
+</span><span id="__span-39-38"><a id="__codelineno-39-38" name="__codelineno-39-38"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-39-39"><a id="__codelineno-39-39" name="__codelineno-39-39"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-39-40"><a id="__codelineno-39-40" name="__codelineno-39-40"></a><span class="p">)</span>
+</span><span id="__span-39-41"><a id="__codelineno-39-41" name="__codelineno-39-41"></a>
+</span><span id="__span-39-42"><a id="__codelineno-39-42" name="__codelineno-39-42"></a><span class="c1">// 仅跳过末尾的工具调用消息</span>
+</span><span id="__span-39-43"><a id="__codelineno-39-43" name="__codelineno-39-43"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-39-44"><a id="__codelineno-39-44" name="__codelineno-39-44"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-39-45"><a id="__codelineno-39-45" name="__codelineno-39-45"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">events</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-46"><a id="__codelineno-39-46" name="__codelineno-39-46"></a><span class="w">        </span><span class="nx">skip</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-39-47"><a id="__codelineno-39-47" name="__codelineno-39-47"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-48"><a id="__codelineno-39-48" name="__codelineno-39-48"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+</span><span id="__span-39-49"><a id="__codelineno-39-49" name="__codelineno-39-49"></a><span class="w">                </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Role</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleTool</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-50"><a id="__codelineno-39-50" name="__codelineno-39-50"></a><span class="w">                </span><span class="nx">skip</span><span class="o">++</span>
+</span><span id="__span-39-51"><a id="__codelineno-39-51" name="__codelineno-39-51"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-52"><a id="__codelineno-39-52" name="__codelineno-39-52"></a><span class="w">                </span><span class="k">break</span>
+</span><span id="__span-39-53"><a id="__codelineno-39-53" name="__codelineno-39-53"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-39-54"><a id="__codelineno-39-54" name="__codelineno-39-54"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-39-55"><a id="__codelineno-39-55" name="__codelineno-39-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skip</span>
+</span><span id="__span-39-56"><a id="__codelineno-39-56" name="__codelineno-39-56"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-39-57"><a id="__codelineno-39-57" name="__codelineno-39-57"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-39-58"><a id="__codelineno-39-58" name="__codelineno-39-58"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="_41">会话服务选项</h4>
 <p>在会话服务中配置异步摘要处理：</p>
@@ -5326,7 +5410,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月9日 13:54:24 UTC">2025-12-09 13:54:24</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年12月10日 11:17:18 UTC">2025-12-10 11:17:18</span>
   </span>
 
     

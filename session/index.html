@@ -4574,7 +4574,7 @@
 <ul>
 <li><strong><code>WithMaxSummaryWords(maxWords int)</code></strong>: Limit the summary to a maximum word count. The limit is included in the prompt to guide the model's generation. Example: <code>WithMaxSummaryWords(150)</code> requests summaries within 150 words.</li>
 <li><strong><code>WithPrompt(prompt string)</code></strong>: Provide a custom summarization prompt. The prompt must include the placeholder <code>{conversation_text}</code>, which will be replaced with the conversation content. Optionally include <code>{max_summary_words}</code> for word limit instructions.</li>
-<li><strong><code>WithSkipRecentEvents(count int)</code></strong>: Skip the most recent events during summarization. These events will be excluded from the summary input but remain in the session. Useful for avoiding summarization of very recent, potentially incomplete conversations. A value &lt;= 0 means no events are skipped. Example: <code>WithSkipRecentEvents(2)</code> skips the last 2 events.</li>
+<li><strong><code>WithSkipRecent(skipFunc SkipRecentFunc)</code></strong>: Skip the <em>most recent</em> events during summarization using a custom function. The function receives all events and returns how many tail events to skip. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete conversations, or applying time/content-based skipping strategies.</li>
 </ul>
 <p><strong>Example with custom prompt:</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1"> 1</a></span>
@@ -4593,7 +4593,49 @@
 <span class="normal"><a href="#__codelineno-35-14">14</a></span>
 <span class="normal"><a href="#__codelineno-35-15">15</a></span>
 <span class="normal"><a href="#__codelineno-35-16">16</a></span>
-<span class="normal"><a href="#__codelineno-35-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1"></a><span class="nx">customPrompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`Analyze the following conversation and provide a concise summary</span>
+<span class="normal"><a href="#__codelineno-35-17">17</a></span>
+<span class="normal"><a href="#__codelineno-35-18">18</a></span>
+<span class="normal"><a href="#__codelineno-35-19">19</a></span>
+<span class="normal"><a href="#__codelineno-35-20">20</a></span>
+<span class="normal"><a href="#__codelineno-35-21">21</a></span>
+<span class="normal"><a href="#__codelineno-35-22">22</a></span>
+<span class="normal"><a href="#__codelineno-35-23">23</a></span>
+<span class="normal"><a href="#__codelineno-35-24">24</a></span>
+<span class="normal"><a href="#__codelineno-35-25">25</a></span>
+<span class="normal"><a href="#__codelineno-35-26">26</a></span>
+<span class="normal"><a href="#__codelineno-35-27">27</a></span>
+<span class="normal"><a href="#__codelineno-35-28">28</a></span>
+<span class="normal"><a href="#__codelineno-35-29">29</a></span>
+<span class="normal"><a href="#__codelineno-35-30">30</a></span>
+<span class="normal"><a href="#__codelineno-35-31">31</a></span>
+<span class="normal"><a href="#__codelineno-35-32">32</a></span>
+<span class="normal"><a href="#__codelineno-35-33">33</a></span>
+<span class="normal"><a href="#__codelineno-35-34">34</a></span>
+<span class="normal"><a href="#__codelineno-35-35">35</a></span>
+<span class="normal"><a href="#__codelineno-35-36">36</a></span>
+<span class="normal"><a href="#__codelineno-35-37">37</a></span>
+<span class="normal"><a href="#__codelineno-35-38">38</a></span>
+<span class="normal"><a href="#__codelineno-35-39">39</a></span>
+<span class="normal"><a href="#__codelineno-35-40">40</a></span>
+<span class="normal"><a href="#__codelineno-35-41">41</a></span>
+<span class="normal"><a href="#__codelineno-35-42">42</a></span>
+<span class="normal"><a href="#__codelineno-35-43">43</a></span>
+<span class="normal"><a href="#__codelineno-35-44">44</a></span>
+<span class="normal"><a href="#__codelineno-35-45">45</a></span>
+<span class="normal"><a href="#__codelineno-35-46">46</a></span>
+<span class="normal"><a href="#__codelineno-35-47">47</a></span>
+<span class="normal"><a href="#__codelineno-35-48">48</a></span>
+<span class="normal"><a href="#__codelineno-35-49">49</a></span>
+<span class="normal"><a href="#__codelineno-35-50">50</a></span>
+<span class="normal"><a href="#__codelineno-35-51">51</a></span>
+<span class="normal"><a href="#__codelineno-35-52">52</a></span>
+<span class="normal"><a href="#__codelineno-35-53">53</a></span>
+<span class="normal"><a href="#__codelineno-35-54">54</a></span>
+<span class="normal"><a href="#__codelineno-35-55">55</a></span>
+<span class="normal"><a href="#__codelineno-35-56">56</a></span>
+<span class="normal"><a href="#__codelineno-35-57">57</a></span>
+<span class="normal"><a href="#__codelineno-35-58">58</a></span>
+<span class="normal"><a href="#__codelineno-35-59">59</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1"></a><span class="nx">customPrompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`Analyze the following conversation and provide a concise summary</span>
 </span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2"></a><span class="s">focusing on key decisions, action items, and important context.</span>
 </span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3"></a><span class="s">Keep it within {max_summary_words} words.</span>
 </span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4"></a>
@@ -4607,9 +4649,51 @@
 </span><span id="__span-35-12"><a id="__codelineno-35-12" name="__codelineno-35-12"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
 </span><span id="__span-35-13"><a id="__codelineno-35-13" name="__codelineno-35-13"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithPrompt</span><span class="p">(</span><span class="nx">customPrompt</span><span class="p">),</span><span class="w"> </span><span class="c1">// Custom Prompt</span>
 </span><span id="__span-35-14"><a id="__codelineno-35-14" name="__codelineno-35-14"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span><span class="w"> </span><span class="c1">// Inject into {max_summary_words}</span>
-</span><span id="__span-35-15"><a id="__codelineno-35-15" name="__codelineno-35-15"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecentEvents</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w">  </span><span class="c1">// Skip the last 2 events</span>
-</span><span id="__span-35-16"><a id="__codelineno-35-16" name="__codelineno-35-16"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">15</span><span class="p">),</span>
-</span><span id="__span-35-17"><a id="__codelineno-35-17" name="__codelineno-35-17"></a><span class="p">)</span>
+</span><span id="__span-35-15"><a id="__codelineno-35-15" name="__codelineno-35-15"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">15</span><span class="p">),</span>
+</span><span id="__span-35-16"><a id="__codelineno-35-16" name="__codelineno-35-16"></a><span class="p">)</span>
+</span><span id="__span-35-17"><a id="__codelineno-35-17" name="__codelineno-35-17"></a>
+</span><span id="__span-35-18"><a id="__codelineno-35-18" name="__codelineno-35-18"></a><span class="c1">// Skip a fixed number of recent events (compatible with old behavior)</span>
+</span><span id="__span-35-19"><a id="__codelineno-35-19" name="__codelineno-35-19"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-35-20"><a id="__codelineno-35-20" name="__codelineno-35-20"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-35-21"><a id="__codelineno-35-21" name="__codelineno-35-21"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="p">}),</span><span class="w"> </span><span class="c1">// skip last 2 events</span>
+</span><span id="__span-35-22"><a id="__codelineno-35-22" name="__codelineno-35-22"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-35-23"><a id="__codelineno-35-23" name="__codelineno-35-23"></a><span class="p">)</span>
+</span><span id="__span-35-24"><a id="__codelineno-35-24" name="__codelineno-35-24"></a>
+</span><span id="__span-35-25"><a id="__codelineno-35-25" name="__codelineno-35-25"></a><span class="c1">// Skip events from the last 5 minutes (time window)</span>
+</span><span id="__span-35-26"><a id="__codelineno-35-26" name="__codelineno-35-26"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-35-27"><a id="__codelineno-35-27" name="__codelineno-35-27"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-35-28"><a id="__codelineno-35-28" name="__codelineno-35-28"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">events</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-29"><a id="__codelineno-35-29" name="__codelineno-35-29"></a><span class="w">        </span><span class="nx">cutoff</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">Add</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
+</span><span id="__span-35-30"><a id="__codelineno-35-30" name="__codelineno-35-30"></a><span class="w">        </span><span class="nx">skip</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-35-31"><a id="__codelineno-35-31" name="__codelineno-35-31"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-32"><a id="__codelineno-35-32" name="__codelineno-35-32"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Timestamp</span><span class="p">.</span><span class="nx">After</span><span class="p">(</span><span class="nx">cutoff</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-33"><a id="__codelineno-35-33" name="__codelineno-35-33"></a><span class="w">                </span><span class="nx">skip</span><span class="o">++</span>
+</span><span id="__span-35-34"><a id="__codelineno-35-34" name="__codelineno-35-34"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-35"><a id="__codelineno-35-35" name="__codelineno-35-35"></a><span class="w">                </span><span class="k">break</span>
+</span><span id="__span-35-36"><a id="__codelineno-35-36" name="__codelineno-35-36"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-35-37"><a id="__codelineno-35-37" name="__codelineno-35-37"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-35-38"><a id="__codelineno-35-38" name="__codelineno-35-38"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skip</span>
+</span><span id="__span-35-39"><a id="__codelineno-35-39" name="__codelineno-35-39"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-35-40"><a id="__codelineno-35-40" name="__codelineno-35-40"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-35-41"><a id="__codelineno-35-41" name="__codelineno-35-41"></a><span class="p">)</span>
+</span><span id="__span-35-42"><a id="__codelineno-35-42" name="__codelineno-35-42"></a>
+</span><span id="__span-35-43"><a id="__codelineno-35-43" name="__codelineno-35-43"></a><span class="c1">// Skip trailing tool-call messages only</span>
+</span><span id="__span-35-44"><a id="__codelineno-35-44" name="__codelineno-35-44"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-35-45"><a id="__codelineno-35-45" name="__codelineno-35-45"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-35-46"><a id="__codelineno-35-46" name="__codelineno-35-46"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">events</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-47"><a id="__codelineno-35-47" name="__codelineno-35-47"></a><span class="w">        </span><span class="nx">skip</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-35-48"><a id="__codelineno-35-48" name="__codelineno-35-48"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-49"><a id="__codelineno-35-49" name="__codelineno-35-49"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+</span><span id="__span-35-50"><a id="__codelineno-35-50" name="__codelineno-35-50"></a><span class="w">                </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Role</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleTool</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-51"><a id="__codelineno-35-51" name="__codelineno-35-51"></a><span class="w">                </span><span class="nx">skip</span><span class="o">++</span>
+</span><span id="__span-35-52"><a id="__codelineno-35-52" name="__codelineno-35-52"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-53"><a id="__codelineno-35-53" name="__codelineno-35-53"></a><span class="w">                </span><span class="k">break</span>
+</span><span id="__span-35-54"><a id="__codelineno-35-54" name="__codelineno-35-54"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-35-55"><a id="__codelineno-35-55" name="__codelineno-35-55"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-35-56"><a id="__codelineno-35-56" name="__codelineno-35-56"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skip</span>
+</span><span id="__span-35-57"><a id="__codelineno-35-57" name="__codelineno-35-57"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-35-58"><a id="__codelineno-35-58" name="__codelineno-35-58"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-35-59"><a id="__codelineno-35-59" name="__codelineno-35-59"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="session-service-options">Session Service Options</h4>
 <p>Configure async summary processing in session services:</p>
@@ -5069,7 +5153,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 9, 2025 13:54:24 UTC">2025-12-09 13:54:24</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 10, 2025 11:17:18 UTC">2025-12-10 11:17:18</span>
   </span>
 
     
