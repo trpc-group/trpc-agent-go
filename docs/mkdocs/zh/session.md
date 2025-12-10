@@ -4,6 +4,12 @@
 
 tRPC-Agent-Go 框架提供了强大的会话（Session）管理功能，用于维护 Agent 与用户交互过程中的对话历史和上下文信息。通过自动持久化对话记录、智能摘要压缩和灵活的存储后端，会话管理为构建有状态的智能 Agent 提供了完整的基础设施。
 
+### 定位
+
+Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID, SessionID>`，保存这一段对话里的用户消息、Agent 回复、工具调用结果以及基于这些内容生成的简要摘要，用于支撑多轮问答场景。
+
+在同一条对话中，它让多轮问答之间能够自然承接，避免用户在每一轮都重新描述同一个问题或提供相同参数。
+
 ### 🎯 核心特性
 
 - **上下文管理**：自动加载历史对话，实现真正的多轮对话
@@ -223,6 +229,30 @@ r := runner.NewRunner("my-agent", llmAgent,
     runner.WithSessionService(sessionService))
 ```
 
+#### 摘要前后置 Hook
+
+可以通过 Hook 调整摘要输入或输出：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPreSummaryHook(func(ctx *summary.PreSummaryHookContext) error {
+        // 可在摘要前修改 ctx.Text 或 ctx.Events
+        return nil
+    }),
+    summary.WithPostSummaryHook(func(ctx *summary.PostSummaryHookContext) error {
+        // 可在摘要返回前修改 ctx.Summary
+        return nil
+    }),
+    summary.WithSummaryHookAbortOnError(true), // Hook 报错时中断（可选）。
+)
+```
+
+说明：
+
+- Pre-hook 主要修改 `ctx.Text`，也可调整 `ctx.Events`；Post-hook 可修改 `ctx.Summary`。
+- 默认忽略 Hook 错误，需中断时使用 `WithSummaryHookAbortOnError(true)`。
+
 **上下文注入机制：**
 
 启用摘要后，框架会将摘要作为系统消息前置到 LLM 输入，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
@@ -327,7 +357,6 @@ tRPC-Agent-Go 提供四种会话存储后端，满足不同场景需求：
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
 
 ### 基础配置示例
@@ -657,7 +686,7 @@ sessionService, err := postgres.NewService(
 
 | 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
 | ------------------ | ------------------------------- | ------------------------- | -------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复   |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
 | `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
 
 **TTL 自动清理：**
@@ -674,7 +703,7 @@ sessionService, err := postgres.NewService(
 // 清理行为：
 // - softDelete=true：过期数据标记为 deleted_at = NOW()
 // - softDelete=false：过期数据被物理删除
-// - 查询时始终过滤 deleted_at IS NULL
+// - 查询时始终附加 `WHERE deleted_at IS NULL`，仅返回未软删除数据
 ```
 
 ### 配合摘要使用
@@ -919,7 +948,7 @@ sessionService, err := mysql.NewService(
 
 | 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
 | ------------------ | ------------------------------- | ------------------------- | -------- |
-| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 过滤 `deleted_at IS NULL` | 可恢复   |
+| `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
 | `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
 
 **TTL 自动清理：**
@@ -936,7 +965,7 @@ sessionService, err := mysql.NewService(
 // 清理行为：
 // - softDelete=true：过期数据标记为 deleted_at = NOW()
 // - softDelete=false：过期数据被物理删除
-// - 查询时始终过滤 deleted_at IS NULL
+// - 查询时始终附加 `WHERE deleted_at IS NULL`，仅返回未软删除数据
 ```
 
 ### 配合摘要使用
@@ -1036,6 +1065,14 @@ CREATE TABLE user_states (
 - MySQL 使用 `ON DUPLICATE KEY UPDATE` 语法实现 UPSERT
 
 ## 高级用法
+
+### Hook 能力（Append/Get）
+
+- **AppendEventHook**：事件写入前的拦截/修改/终止。可用于内容安全、审计打标（如写入 `violation=<word>`），或直接阻断存储。关于 filterKey 的赋值请见下文“会话摘要 / FilterKey 与 AppendEventHook”。
+- **GetSessionHook**：会话读取后的拦截/修改/过滤。可用来剔除带特定标签的事件，或动态补充返回的 Session 状态。
+- **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
+- **跨后端一致**：内存、Redis、MySQL、PostgreSQL 实现已统一接入 Hook，构造服务时注入 Hook 切片即可。
+- **示例**：见 `examples/session/hook`（[代码](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)）
 
 ### 直接使用 Session Service API
 
@@ -1510,6 +1547,80 @@ if found {
 5. **平衡字数限制**：设置 `WithMaxSummaryWords` 以在保留上下文和减少 token 使用之间取得平衡。典型值范围为 100-300 字。
 
 6. **测试触发条件**：尝试不同的 `WithChecksAny` 和 `WithChecksAll` 组合，找到摘要频率和成本之间的最佳平衡。
+
+### 按事件类型生成摘要
+
+在实际应用中，你可能希望为不同类型的事件生成独立的摘要。例如：
+
+- **用户消息摘要**：总结用户的需求和问题
+- **工具调用摘要**：记录使用了哪些工具和结果
+- **系统事件摘要**：跟踪系统状态变化
+
+要实现这个功能，需要为事件设置 `FilterKey` 字段来标识事件类型。
+
+#### 使用 AppendEventHook 设置 FilterKey
+
+推荐使用 `AppendEventHook` 在事件写入前自动设置 `FilterKey`：
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+        // 根据事件作者自动分类
+        prefix := "my-app/"  // 必须添加 appName 前缀
+        switch ctx.Event.Author {
+        case "user":
+            ctx.Event.FilterKey = prefix + "user-messages"
+        case "tool":
+            ctx.Event.FilterKey = prefix + "tool-calls"
+        default:
+            ctx.Event.FilterKey = prefix + "misc"
+        }
+        return next()
+    }),
+)
+```
+
+设置好 FilterKey 后，就可以为不同类型的事件生成独立摘要：
+
+```go
+// 为用户消息生成摘要
+err := sessionService.CreateSessionSummary(ctx, sess, "my-app/user-messages", false)
+
+// 为工具调用生成摘要
+err := sessionService.CreateSessionSummary(ctx, sess, "my-app/tool-calls", false)
+
+// 获取特定类型的摘要
+userSummary, found := sessionService.GetSessionSummaryText(
+    ctx, sess, session.WithSummaryFilterKey("my-app/user-messages"))
+```
+
+#### FilterKey 前缀规范
+
+**⚠️ 重要：FilterKey 必须添加 `appName + "/"` 前缀。**
+
+**原因：** Runner 在过滤事件时使用 `appName + "/"` 作为过滤前缀，如果 FilterKey 没有这个前缀，事件会被过滤掉，导致：
+
+- LLM 看不到历史对话，可能重复触发工具调用
+- 摘要内容不完整，丢失重要上下文
+
+**示例：**
+
+```go
+// ✅ 正确：带 appName 前缀
+evt.FilterKey = "my-app/user-messages"
+
+// ❌ 错误：没有前缀，事件会被过滤
+evt.FilterKey = "user-messages"
+```
+
+**技术细节：** 框架使用前缀匹配机制（`strings.HasPrefix`）来判断事件是否应该被包含在上下文中。详见 `ContentRequestProcessor` 的过滤逻辑。
+
+#### 完整示例
+
+参考以下示例查看完整的 FilterKey 使用场景：
+
+- [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook 基础用法
+- [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - 按 FilterKey 生成摘要
 
 ### 性能考虑
 

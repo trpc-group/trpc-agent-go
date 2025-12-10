@@ -146,9 +146,9 @@ func TestServiceOptsIntegration(t *testing.T) {
 
 	require.NotNil(t, service)
 	assert.Equal(t, 500, service.opts.sessionEventLimit)
-	assert.Equal(t, 30*time.Minute, service.sessionTTL)
-	assert.Equal(t, time.Hour, service.appStateTTL)
-	assert.Equal(t, 2*time.Hour, service.userStateTTL)
+	assert.Equal(t, 30*time.Minute, service.opts.sessionTTL)
+	assert.Equal(t, time.Hour, service.opts.appStateTTL)
+	assert.Equal(t, 2*time.Hour, service.opts.userStateTTL)
 	assert.Equal(t, true, service.opts.enableAsyncPersist)
 	assert.Equal(t, 5, service.opts.asyncPersisterNum)
 	assert.Equal(t, s, service.opts.summarizer)

@@ -333,7 +333,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	r.handleEventPersistence(ctx, loop.sess, agentEvent)
 
 	// Capture graph-level completion snapshot for final event.
-	if agentEvent.Done && agentEvent.Object == graph.ObjectTypeGraphExecution {
+	if agentEvent.Response != nil && agentEvent.Done && agentEvent.Object == graph.ObjectTypeGraphExecution {
 		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
 	}
 
@@ -389,7 +389,16 @@ func (r *runner) handleEventPersistence(
 		return
 	}
 
-	// Trigger summarization immediately after appending a qualifying event.
+	// Trigger summarization only after final assistant responses.
+	// Skip user messages, tool calls, and tool results to ensure summary
+	// always contains complete Q&A pairs (including tool call round-trips).
+	if agentEvent.IsUserMessage() ||
+		agentEvent.IsToolCallResponse() ||
+		agentEvent.IsToolResultResponse() ||
+		!agentEvent.IsValidContent() {
+		return
+	}
+
 	// Use EnqueueSummaryJob for true asynchronous processing.
 	// Prefer filter-specific summarization to avoid scanning all filters.
 	if err := r.sessionService.EnqueueSummaryJob(

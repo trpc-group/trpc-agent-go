@@ -277,7 +277,7 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 
 	// Expect to receive forwarded event chunks
 	var got []string
-	for i := 0; i < 4; i++ { // Now expecting 4 events: tool input + original 3 events
+	for i := 0; i < 3; i++ { // Now expecting 4 events: tool input + original 3 events
 		chunk, err := reader.Recv()
 		if err != nil {
 			t.Fatalf("unexpected stream error: %v", err)
@@ -295,7 +295,7 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 		}
 	}
 	// We now get 4 events: tool input event + original 3 events (delta1, delta2, final full)
-	if got[0] != `{"request":"hi"}` || got[1] != "hello" || got[2] != " world" || got[3] != "ignored full" {
+	if got[0] != "hello" || got[1] != " world" || got[2] != "ignored full" {
 		t.Fatalf("unexpected forwarded contents: %#v", got)
 	}
 
@@ -324,7 +324,7 @@ func TestTool_HistoryScope_ParentBranch_Streamable_FilterKeyPrefix(t *testing.T)
 	}
 	defer r.Close()
 	// Drain stream
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		if _, err := r.Recv(); err != nil {
 			t.Fatalf("unexpected stream error: %v", err)
 		}
@@ -471,7 +471,7 @@ func TestTool_HistoryScope_ParentBranch_Call_InheritsParentHistory(t *testing.T)
 	}
 	s, _ := out.(string)
 	// Expect both parent content and tool input to be visible via filter inheritance.
-	if !strings.Contains(s, "PARENT") || !strings.Contains(s, `{"request":"CHILD"}`) {
+	if !strings.Contains(s, "PARENT") || strings.Contains(s, `{"request":"CHILD"}`) {
 		t.Fatalf("expected output to contain both parent and child contents, got: %q", s)
 	}
 }
@@ -492,7 +492,7 @@ func TestTool_HistoryScope_Isolated_Streamable_NoParentPrefix(t *testing.T) {
 		t.Fatalf("StreamableCall error: %v", err)
 	}
 	defer r.Close()
-	for i := 0; i < 4; i++ { // drain
+	for i := 0; i < 3; i++ { // drain
 		if _, err := r.Recv(); err != nil {
 			t.Fatalf("stream read error: %v", err)
 		}

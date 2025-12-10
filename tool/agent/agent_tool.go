@@ -272,6 +272,7 @@ func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
 	return childKey
 }
 
+<<<<<<< HEAD
 // injectToolInputEvent appends the tool input message as an event into the
 // session, making it visible to the child content processor.
 func (at *Tool) injectToolInputEvent(
@@ -292,6 +293,8 @@ func (at *Tool) injectToolInputEvent(
 	}
 }
 
+=======
+>>>>>>> main
 // collectResponse collects and concatenates assistant messages from the event
 // channel, returning the complete response text.
 func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
@@ -338,6 +341,7 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
 				agent.WithInvocationEventFilterKey(childKey),
 			)
+<<<<<<< HEAD
 			subInv.Session = parentInv.Session
 			// Store tool input as Event via sub-agent's event channel (safe concurrency).
 			// This ensures the tool input is available throughout all LLM calls within this AgentTool invocation.
@@ -351,6 +355,8 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				agent.InjectIntoEvent(subInv, evt) // This will set the uniqueFilterKey.
 				at.appendEventToSession(subInv.Session, evt)
 			}
+=======
+>>>>>>> main
 
 			subCtx := agent.NewInvocationContext(ctx, subInv)
 			evCh, err := at.agent.Run(subCtx, subInv)
