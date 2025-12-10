@@ -1269,3 +1269,46 @@ done:
 	}
 	require.True(t, hasGraphExec)
 }
+
+func TestGraphAgent_RunWithBarrierEmitError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	schema := graph.NewStateSchema().
+		AddField("done", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("finish", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"done": "ok"}, nil
+		}).
+		SetEntryPoint("finish").
+		SetFinishPoint("finish").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New("barrier-error", g)
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		AgentName:    "barrier-error",
+		InvocationID: "inv-barrier-error",
+		// noticeMu left nil to force AddNoticeChannel to fail.
+	}
+	barrier.Enable(inv)
+
+	out := make(chan *event.Event, 1)
+	go ga.runWithBarrier(ctx, inv, out)
+
+	var events []*event.Event
+	for evt := range out {
+		events = append(events, evt)
+	}
+
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].Response)
+	require.NotNil(t, events[0].Response.Error)
+	require.Equal(t, model.ErrorTypeFlowError, events[0].Response.Error.Type)
+	require.Contains(t, events[0].Response.Error.Message, "add notice channel")
+}

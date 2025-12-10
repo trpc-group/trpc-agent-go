@@ -251,6 +251,23 @@ func (m *completionWaitAgent) Info() agent.Info {
 func (m *completionWaitAgent) SubAgents() []agent.Agent        { return nil }
 func (m *completionWaitAgent) FindSubAgent(string) agent.Agent { return nil }
 
+type filterKeyAgent struct {
+	name string
+	seen string
+}
+
+func (m *filterKeyAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	m.seen = inv.GetEventFilterKey()
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage(m.seen)}}}}
+	close(ch)
+	return ch, nil
+}
+func (m *filterKeyAgent) Tools() []tool.Tool              { return nil }
+func (m *filterKeyAgent) Info() agent.Info                { return agent.Info{Name: m.name, Description: "fk"} }
+func (m *filterKeyAgent) SubAgents() []agent.Agent        { return nil }
+func (m *filterKeyAgent) FindSubAgent(string) agent.Agent { return nil }
+
 func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	sa := &streamingMockAgent{name: "stream-agent"}
 	at := NewTool(sa, WithStreamInner(true))
@@ -792,6 +809,108 @@ func TestTool_Call_WithParentInvocation_NoSession(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatalf("Expected non-nil result")
+	}
+}
+
+func TestTool_callWithParentInvocation_NoSessionFallback(t *testing.T) {
+	at := NewTool(&mockAgent{name: "test", description: "test"})
+	parent := agent.NewInvocation()
+
+	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"))
+	require.NoError(t, err)
+	require.Equal(t, "Hello from mock agent!", res)
+}
+
+func TestTool_Call_WithParentInvocation_FlushError(t *testing.T) {
+	at := NewTool(&mockAgent{name: "test-agent", description: "desc"})
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	flush.Attach(context.Background(), parent, make(chan *flush.FlushRequest))
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := agent.NewInvocationContext(baseCtx, parent)
+
+	result, err := at.Call(ctx, []byte(`{"request":"hello"}`))
+	require.Error(t, err)
+	require.Empty(t, result)
+	require.Contains(t, err.Error(), "flush parent invocation session")
+}
+
+func TestTool_Call_WithParentInvocation_RunError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	flushCh := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushCh)
+
+	flushed := make(chan struct{}, 1)
+	go func() {
+		select {
+		case req := <-flushCh:
+			if req != nil && req.ACK != nil {
+				close(req.ACK)
+			}
+			flushed <- struct{}{}
+		case <-ctx.Done():
+		}
+	}()
+
+	at := NewTool(&errorMockAgent{name: "err-agent"})
+	_, err := at.Call(agent.NewInvocationContext(ctx, parent), []byte(`{"request":"x"}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to run agent")
+
+	select {
+	case <-flushed:
+	default:
+		t.Fatalf("expected flush to be triggered")
+	}
+}
+
+func TestTool_Call_WithParentInvocation_FlushesAndCompletes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	flushCh := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushCh)
+
+	flushed := make(chan struct{}, 1)
+	go func() {
+		select {
+		case req := <-flushCh:
+			if req != nil && req.ACK != nil {
+				close(req.ACK)
+			}
+			flushed <- struct{}{}
+		case <-ctx.Done():
+		}
+	}()
+
+	a := &filterKeyAgent{name: "child-agent"}
+	at := NewTool(a, WithHistoryScope(HistoryScopeParentBranch))
+	res, err := at.Call(agent.NewInvocationContext(ctx, parent), []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	resStr, ok := res.(string)
+	require.True(t, ok)
+	require.True(t, strings.HasPrefix(resStr, "parent-agent/"+a.name+"-"))
+	require.Equal(t, a.seen, resStr)
+
+	select {
+	case <-flushed:
+	default:
+		t.Fatalf("expected flush to be triggered")
 	}
 }
 

@@ -1025,3 +1025,148 @@ func TestRunner_Close_SessionServiceError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, errorSessionService.closeCalled, "Close should only be called once")
 }
+
+func TestHandleFlushRequest_ProcessesEventAndClosesAck(t *testing.T) {
+	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(sessioninmemory.NewSessionService())).(*runner)
+	ctx := context.Background()
+
+	agentCh := make(chan *event.Event, 1)
+	agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}}
+
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       agent.NewInvocation(),
+		agentEventCh:     agentCh,
+		processedEventCh: make(chan *event.Event, 1),
+	}
+	req := &flush.FlushRequest{ACK: make(chan struct{})}
+
+	err := r.handleFlushRequest(ctx, loop, req)
+	require.NoError(t, err)
+
+	select {
+	case ev := <-loop.processedEventCh:
+		require.NotNil(t, ev)
+	default:
+		require.Fail(t, "expected processed event")
+	}
+	_, ok := <-req.ACK
+	require.False(t, ok)
+}
+
+func TestHandleFlushRequest_AgentChannelClosed(t *testing.T) {
+	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(sessioninmemory.NewSessionService())).(*runner)
+	agentCh := make(chan *event.Event)
+	close(agentCh)
+
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       agent.NewInvocation(),
+		agentEventCh:     agentCh,
+		processedEventCh: make(chan *event.Event, 1),
+	}
+	req := &flush.FlushRequest{ACK: make(chan struct{})}
+
+	err := r.handleFlushRequest(context.Background(), loop, req)
+	require.NoError(t, err)
+	_, ok := <-req.ACK
+	require.False(t, ok)
+}
+
+func TestHandleFlushRequest_ContextCancelled(t *testing.T) {
+	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(sessioninmemory.NewSessionService())).(*runner)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       agent.NewInvocation(),
+		agentEventCh:     nil,
+		processedEventCh: make(chan *event.Event, 1),
+	}
+	req := &flush.FlushRequest{ACK: make(chan struct{})}
+
+	err := r.handleFlushRequest(ctx, loop, req)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	_, ok := <-req.ACK
+	require.False(t, ok)
+}
+
+func TestHandleFlushRequest_ProcessSingleAgentEventError(t *testing.T) {
+	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(sessioninmemory.NewSessionService())).(*runner)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	agentCh := make(chan *event.Event, 1)
+	agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("err")}}}}
+	close(agentCh)
+
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       agent.NewInvocation(),
+		agentEventCh:     agentCh,
+		processedEventCh: make(chan *event.Event),
+	}
+	req := &flush.FlushRequest{ACK: make(chan struct{})}
+
+	time.AfterFunc(10*time.Millisecond, cancel)
+	err := r.handleFlushRequest(ctx, loop, req)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	_, ok := <-req.ACK
+	require.False(t, ok)
+}
+
+func TestRunEventLoop_FlushNilAndChannelClosed(t *testing.T) {
+	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(sessioninmemory.NewSessionService())).(*runner)
+
+	flushCh := make(chan *flush.FlushRequest, 1)
+	agentCh := make(chan *event.Event)
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       agent.NewInvocation(),
+		agentEventCh:     agentCh,
+		flushChan:        flushCh,
+		processedEventCh: make(chan *event.Event, 1),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		r.runEventLoop(context.Background(), loop)
+		close(done)
+	}()
+
+	flushCh <- nil
+	close(flushCh)
+	time.Sleep(20 * time.Millisecond)
+	close(agentCh)
+	<-done
+}
+
+func TestRunEventLoop_HandleFlushRequestError(t *testing.T) {
+	r := NewRunner("app", &noOpAgent{name: "a"}, WithSessionService(sessioninmemory.NewSessionService())).(*runner)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	agentCh := make(chan *event.Event, 1)
+	agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}
+	close(agentCh)
+
+	loop := &eventLoopContext{
+		sess:             session.NewSession("app", "u", "s"),
+		invocation:       agent.NewInvocation(),
+		agentEventCh:     agentCh,
+		flushChan:        make(chan *flush.FlushRequest, 1),
+		processedEventCh: make(chan *event.Event),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		r.runEventLoop(ctx, loop)
+		close(done)
+	}()
+
+	time.AfterFunc(20*time.Millisecond, cancel)
+	loop.flushChan <- &flush.FlushRequest{ACK: make(chan struct{})}
+
+	<-done
+}

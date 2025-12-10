@@ -137,6 +137,14 @@ func TestInvokeNilInvocation(t *testing.T) {
 	require.NoError(t, Invoke(context.Background(), nil))
 }
 
+func TestInvokeNilFlusherInHolder(t *testing.T) {
+	inv := agent.NewInvocation()
+	// Inject holder without flusher to cover fn == nil early return.
+	inv.SetState(StateKeyFlushSession, &flusherHolder{})
+
+	require.NoError(t, Invoke(context.Background(), inv))
+}
+
 func TestInvokeConcurrentClear(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -158,6 +166,24 @@ func TestInvokeConcurrentClear(t *testing.T) {
 	require.NoError(t, <-errCh)
 	// After Clear, Invoke should no-op.
 	require.NoError(t, Invoke(ctx, inv))
+}
+
+func TestInvokeContextCancelBeforeEnqueue(t *testing.T) {
+	inv := agent.NewInvocation()
+	ch := make(chan *FlushRequest)
+	Attach(context.Background(), inv, ch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := Invoke(ctx, inv)
+	require.ErrorIs(t, err, context.Canceled)
+
+	select {
+	case req := <-ch:
+		t.Fatalf("unexpected flush request: %+v", req)
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 func TestIsAttached(t *testing.T) {
