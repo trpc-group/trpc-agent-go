@@ -359,11 +359,6 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 			}
 			wrapped := at.wrapWithCompletion(subCtx, subInv, evCh)
 
-			if evt != nil {
-				if stream.Writer.Send(tool.StreamChunk{Content: evt}, nil) {
-					return
-				}
-			}
 			for ev := range wrapped {
 				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {
 					return
