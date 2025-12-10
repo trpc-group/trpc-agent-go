@@ -150,3 +150,18 @@ func TestInvokeConcurrentClear(t *testing.T) {
 	// After Clear, Invoke should no-op.
 	require.NoError(t, Invoke(ctx, inv))
 }
+
+func TestIsAttached(t *testing.T) {
+	inv := agent.NewInvocation()
+	require.False(t, IsAttached(inv))
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	ch := make(chan *FlushRequest, 1)
+	Attach(ctx, inv, ch)
+	require.True(t, IsAttached(inv))
+
+	Clear(inv)
+	require.False(t, IsAttached(inv))
+}

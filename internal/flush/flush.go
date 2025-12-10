@@ -58,6 +58,15 @@ func (h *flusherHolder) clear() {
 	h.fn = nil
 }
 
+// IsAttached reports whether a flush function has been attached to the invocation.
+func IsAttached(inv *agent.Invocation) bool {
+	holder, ok := agent.GetStateValue[*flusherHolder](inv, stateKeyFlushSession)
+	if !ok || holder == nil {
+		return false
+	}
+	return holder.get() != nil
+}
+
 // Attach binds a flush function to the given invocation and wires it to the provided flush channel.
 // When Invoke is called, the function will enqueue a FlushRequest on ch and wait for ACK to be closed by the runner.
 func Attach(ctx context.Context, inv *agent.Invocation, ch chan *FlushRequest) {
