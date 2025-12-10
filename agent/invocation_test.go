@@ -68,7 +68,7 @@ func TestInvocation_Clone(t *testing.T) {
 	require.NotEqual(t, "test-invocation", subInv.InvocationID)
 	require.Equal(t, "test-agent", subInv.AgentName)
 	require.Equal(t, "Hello", subInv.Message.Content)
-	require.Equal(t, inv.noticeChanMap, subInv.noticeChanMap)
+	require.Equal(t, inv.noticeChannels, subInv.noticeChannels)
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
 }
 
@@ -79,15 +79,15 @@ func TestInvocation_AddNoticeChannel(t *testing.T) {
 	ch := inv.AddNoticeChannel(ctx, "test-channel")
 
 	require.NotNil(t, ch)
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 	// Adding the same channel again should return the existing channel
 	ch2 := inv.AddNoticeChannel(ctx, "test-channel")
 	require.Equal(t, ch, ch2)
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 
 	err := inv.NotifyCompletion(ctx, "test-channel")
 	require.NoError(t, err)
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 }
 
 func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
@@ -216,7 +216,7 @@ func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 
 			// Verify channel cleanup
 			if tt.errType == 0 {
-				require.Equal(t, 1, len(inv.noticeChanMap), "notice channel should be cleaned up")
+				require.Equal(t, 1, len(inv.noticeChannels), "notice channel should be cleaned up")
 			}
 
 			// Verify main execution time
@@ -266,32 +266,32 @@ func TestInvocation_AddNoticeChannelAndWait_before_notify(t *testing.T) {
 
 func TestInvocation_NotifyCompletion(t *testing.T) {
 	inv := NewInvocation()
-	inv.noticeChanMap = nil
+	inv.noticeChannels = nil
 	defer inv.CleanupNotice(context.Background())
 	noticeKey := "test-channel-1"
 	err := inv.NotifyCompletion(context.Background(), noticeKey)
 	require.NoError(t, err)
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 
 	inv.AddNoticeChannel(context.Background(), "test-channel-1")
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 	err = inv.NotifyCompletion(context.Background(), noticeKey)
 	require.NoError(t, err)
 }
 
 func TestInvocation_CleanupNotice(t *testing.T) {
 	inv := NewInvocation()
-	inv.noticeChanMap = nil
+	inv.noticeChannels = nil
 	ch := inv.AddNoticeChannel(context.Background(), "test-channel-1")
-	require.Equal(t, 1, len(inv.noticeChanMap))
+	require.Equal(t, 1, len(inv.noticeChannels))
 
 	ch2 := inv.AddNoticeChannel(context.Background(), "test-channel-2")
-	require.Equal(t, 2, len(inv.noticeChanMap))
+	require.Equal(t, 2, len(inv.noticeChannels))
 	require.NotNil(t, ch2)
 	inv.NotifyCompletion(context.Background(), "test-channel-2")
 
 	ch3 := inv.AddNoticeChannel(context.Background(), "test-channel-3")
-	require.Equal(t, 3, len(inv.noticeChanMap))
+	require.Equal(t, 3, len(inv.noticeChannels))
 	require.NotNil(t, ch3)
 
 	go func() {
@@ -306,7 +306,7 @@ func TestInvocation_CleanupNotice(t *testing.T) {
 	// Cleanup notice channel
 	inv.CleanupNotice(context.Background())
 	<-ch
-	require.Equal(t, 0, len(inv.noticeChanMap))
+	require.Equal(t, 0, len(inv.noticeChannels))
 }
 
 func TestInvocation_AddNoticeChannel_Panic(t *testing.T) {

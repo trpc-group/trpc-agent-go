@@ -85,9 +85,9 @@ type Invocation struct {
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
-	// noticeChanMap is used to signal when events are written to the session.
-	noticeChanMap map[string]chan any
-	noticeMu      *sync.Mutex
+	// noticeChannels is used to signal when events are written to the session.
+	noticeChannels map[string]chan any
+	noticeMu       *sync.Mutex
 
 	// eventFilterKey is used to filter events for flow or agent
 	eventFilterKey string
@@ -424,9 +424,9 @@ type RunOptions struct {
 // NewInvocation create a new invocation
 func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 	inv := &Invocation{
-		InvocationID:  uuid.NewString(),
-		noticeMu:      &sync.Mutex{},
-		noticeChanMap: make(map[string]chan any),
+		InvocationID:   uuid.NewString(),
+		noticeMu:       &sync.Mutex{},
+		noticeChannels: make(map[string]chan any),
 	}
 
 	for _, opt := range invocationOpts {
@@ -457,7 +457,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
 		noticeMu:        inv.noticeMu,
-		noticeChanMap:   inv.noticeChanMap,
+		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
 	}
@@ -680,15 +680,15 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	if ch, ok := inv.noticeChanMap[key]; ok {
+	if ch, ok := inv.noticeChannels[key]; ok {
 		return ch
 	}
 
 	ch := make(chan any)
-	if inv.noticeChanMap == nil {
-		inv.noticeChanMap = make(map[string]chan any)
+	if inv.noticeChannels == nil {
+		inv.noticeChannels = make(map[string]chan any)
 	}
-	inv.noticeChanMap[key] = ch
+	inv.noticeChannels[key] = ch
 
 	return ch
 }
@@ -702,15 +702,15 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	ch, ok := inv.noticeChanMap[key]
+	ch, ok := inv.noticeChannels[key]
 	// channel not found, create a new one and close it.
 	// May involve notification followed by waiting.
 	if !ok {
 		ch = make(chan any)
-		if inv.noticeChanMap == nil {
-			inv.noticeChanMap = make(map[string]chan any)
+		if inv.noticeChannels == nil {
+			inv.noticeChannels = make(map[string]chan any)
 		}
-		inv.noticeChanMap[key] = ch
+		inv.noticeChannels[key] = ch
 		close(ch)
 		return nil
 	}
@@ -739,7 +739,7 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	for _, ch := range inv.noticeChanMap {
+	for _, ch := range inv.noticeChannels {
 		select {
 		case _, isOpen := <-ch:
 			if isOpen {
@@ -749,7 +749,7 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 			close(ch)
 		}
 	}
-	inv.noticeChanMap = nil
+	inv.noticeChannels = nil
 }
 
 // GetCustomAgentConfig retrieves configuration for a specific custom agent type.
