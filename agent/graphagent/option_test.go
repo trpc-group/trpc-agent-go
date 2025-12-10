@@ -11,6 +11,8 @@ package graphagent
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestWithChannelBufferSize(t *testing.T) {
@@ -123,4 +125,22 @@ func TestWithMessageFilterMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithAddSessionSummary(t *testing.T) {
+	opts := &Options{}
+	WithAddSessionSummary(true)(opts)
+	require.True(t, opts.AddSessionSummary)
+
+	WithAddSessionSummary(false)(opts)
+	require.False(t, opts.AddSessionSummary)
+}
+
+func TestWithMaxHistoryRuns(t *testing.T) {
+	opts := &Options{}
+	WithMaxHistoryRuns(5)(opts)
+	require.Equal(t, 5, opts.MaxHistoryRuns)
+
+	WithMaxHistoryRuns(0)(opts)
+	require.Equal(t, 0, opts.MaxHistoryRuns)
 }
