@@ -176,7 +176,7 @@ func (at *Tool) callWithParentInvocation(
 	}
 	// Flush all events emitted before this tool call so that the snapshot sees all events.
 	if err := flush.Invoke(ctx, parentInv); err != nil {
-		log.Errorf("AgentTool: flush parent invocation session failed: %v.", err)
+		return "", fmt.Errorf("flush parent invocation session: %w", err)
 	}
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(parentInv)
@@ -307,7 +307,9 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 
 		if ok && parentInv != nil && parentInv.Session != nil {
 			if err := flush.Invoke(ctx, parentInv); err != nil {
-				log.Errorf("AgentTool: flush parent invocation session failed: %v.", err)
+				err := fmt.Errorf("flush parent invocation session failed: %w", err)
+				stream.Writer.Send(tool.StreamChunk{Content: err.Error()}, err)
+				return
 			}
 			childKey := at.buildChildFilterKey(parentInv)
 			subInv := parentInv.Clone(
