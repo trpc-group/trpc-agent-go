@@ -14,11 +14,81 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+type mockSummarizerWithTs struct {
+	last time.Time
+}
+
+func (m *mockSummarizerWithTs) ShouldSummarize(_ *session.Session) bool { return true }
+
+func (m *mockSummarizerWithTs) Summarize(
+	_ context.Context, sess *session.Session,
+) (string, error) {
+	if m.last.IsZero() && len(sess.Events) > 0 {
+		m.last = sess.Events[len(sess.Events)-1].Timestamp
+	}
+	if sess.State == nil {
+		sess.State = make(session.StateMap)
+	}
+	sess.State[lastIncludedTsKey] = []byte(m.last.UTC().Format(time.RFC3339Nano))
+	return "ok", nil
+}
+
+func (m *mockSummarizerWithTs) FilterEventsForSummary(
+	events []event.Event,
+) []event.Event {
+	return events
+}
+
+func (m *mockSummarizerWithTs) Metadata() map[string]any { return nil }
+
+func TestSummarizeSession_UsesLastIncludedTimestamp(t *testing.T) {
+	t1 := time.Date(2023, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2023, 1, 1, 11, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		ID: "s1",
+		Events: []event.Event{
+			{Author: "user", Timestamp: t1, Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "e1"}}}}},
+			{Author: "user", Timestamp: t2, Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "e2"}}}}},
+		},
+	}
+
+	ms := &mockSummarizerWithTs{}
+	updated, err := SummarizeSession(context.Background(), ms, sess, "", false)
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	sess.SummariesMu.RLock()
+	sum := sess.Summaries[""]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, sum)
+	assert.True(t, sum.UpdatedAt.Equal(t2.UTC()))
+}
+
+func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
+	prev := time.Date(2023, 1, 2, 9, 0, 0, 0, time.UTC)
+	latest := time.Date(2023, 1, 2, 10, 0, 0, 0, time.UTC)
+
+	t.Run("no delta keeps prev", func(t *testing.T) {
+		got := selectUpdatedAt(nil, prev, latest, false)
+		assert.True(t, got.Equal(prev.UTC()))
+	})
+
+	t.Run("invalid ts falls back to latest", func(t *testing.T) {
+		tmp := &session.Session{State: session.StateMap{
+			lastIncludedTsKey: []byte("bad-ts"),
+		}}
+		got := selectUpdatedAt(tmp, prev, latest, true)
+		assert.True(t, got.Equal(latest.UTC()))
+	})
+}
 
 type fakeSummarizer struct {
 	allow bool

@@ -554,6 +554,56 @@ func TestSessionSummarizer_SummarizeWithSkipRecent(t *testing.T) {
 	})
 }
 
+func TestSessionSummarizer_RecordLastIncludedTimestamp(t *testing.T) {
+	now := time.Now().UTC()
+	keepTs := now.Add(-2 * time.Minute)
+	sess := &session.Session{
+		ID: "ts-session",
+		Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: keepTs,
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleUser, Content: "keep"},
+				}}},
+			},
+			{
+				Author:    "user",
+				Timestamp: now.Add(-time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleUser, Content: "skip"},
+				}}},
+			},
+		},
+	}
+
+	s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 1 }))
+	_, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+
+	require.NotNil(t, sess.State)
+	raw := sess.State[lastIncludedTsKey]
+	require.NotEmpty(t, raw)
+
+	got, err := time.Parse(time.RFC3339Nano, string(raw))
+	require.NoError(t, err)
+	assert.True(t, got.Equal(keepTs))
+}
+
+func TestSessionSummarizer_RecordLastIncludedTimestamp_NoStateOrEvents(t *testing.T) {
+	s := &sessionSummarizer{}
+
+	t.Run("nil session", func(t *testing.T) {
+		s.recordLastIncludedTimestamp(nil, nil)
+	})
+
+	t.Run("empty events does nothing", func(t *testing.T) {
+		sess := &session.Session{}
+		s.recordLastIncludedTimestamp(sess, []event.Event{})
+		assert.Nil(t, sess.State)
+	})
+}
+
 func TestSessionSummarizer_Metadata_IncludesSkipRecent(t *testing.T) {
 	s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 3 }))
 	metadata := s.Metadata()
