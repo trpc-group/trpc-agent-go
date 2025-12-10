@@ -8,6 +8,14 @@ the memory service, session management, and memory tools, the Memory system
 helps Agents remember user information, maintain conversation context, and
 offer personalized responses across multi-turn dialogs.
 
+### Positioning
+
+Memory is used to manage long-term user-related information, with isolation dimensions of `<appName, userID>`. It can be understood as a "personal profile" gradually accumulated around a single user.
+
+In cross-session scenarios, Memory allows the system to retain key information about the current user, avoiding the need to repeatedly retrieve user information from scratch for each session.
+
+It is suitable for recording stable, reusable facts, such as "user name is Zhang San," "occupation is backend engineer," "prefers short answers," and "favorite language is English," and directly using this information in subsequent interactions.
+
 ## ⚠️ Breaking Changes Notice
 
 **Important**: The memory integration approach has been updated to provide better separation of concerns and explicit control. This is a **breaking change** that affects how memory services are integrated with Agents.

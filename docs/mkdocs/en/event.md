@@ -232,6 +232,15 @@ This typically appears as a handoff notice: "Transferring control to agent: <nam
 
  Tags are appended using a semicolon delimiter (`;`). Use `event.WithTag(tag)` when creating custom events; multiple tags are stored as `tag1;tag2;...`.
 
+### Code Execution Event Tags
+
+For code execution related events, use `Event.Tag` to distinguish between code and execution results:
+
+- **Code Execution Event**: `Response.Object == "postprocessing.code_execution"` and `Event.ContainsTag(event.TagCodeExecution)`
+- **Execution Result Event**: `Response.Object == "postprocessing.code_execution"` and `Event.ContainsTag(event.TagCodeExecutionResult)`
+
+The related constants are defined in the `trpc.group/trpc-go/trpc-agent-go/event` package.
+
 #### Helper: Detect Runner Completion
 
 Use the convenience method to detect when the whole run has finished regardless of Agent type:

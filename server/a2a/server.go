@@ -209,22 +209,9 @@ func isFinalStreamingEvent(evt *event.Event) bool {
 		return false
 	}
 
-	rsp := evt.Response
-	if !rsp.Done {
-		return false
-	}
-
-	if rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
-		return false
-	}
-
-	for _, choice := range rsp.Choices {
-		if choice.Message.Role == model.RoleTool || len(choice.Message.ToolCalls) > 0 || choice.Message.ToolID != "" {
-			return false
-		}
-	}
-
-	return true
+	// The only truly final event is runner.completion
+	// This ensures we don't miss postprocessing events (code execution, etc.)
+	return evt.IsRunnerCompletion()
 }
 
 // handleDefaultError provides a fallback error handling mechanism
@@ -665,8 +652,8 @@ func (m *messageProcessor) processMessage(
 		return m.handleError(ctx, a2aMsg, false, err)
 	}
 
-	// Collect and convert events to A2A message
-	var allParts []protocol.Part
+	// Collect converted A2A messages
+	var messages []protocol.Message
 	var eventCount int
 
 	for agentEvent := range agentMsgChan {
@@ -729,11 +716,16 @@ func (m *messageProcessor) processMessage(
 
 		if convertedResult != nil {
 			if msg, ok := convertedResult.(*protocol.Message); ok {
-				allParts = append(allParts, msg.Parts...)
+				messages = append(messages, *msg)
 			}
 			if task, ok := convertedResult.(*protocol.Task); ok {
+				// Extract messages from task artifacts.
 				for _, artifact := range task.Artifacts {
-					allParts = append(allParts, artifact.Parts...)
+					artifactMsg := protocol.NewMessage(
+						protocol.MessageRoleAgent,
+						artifact.Parts,
+					)
+					messages = append(messages, artifactMsg)
 				}
 			}
 		}
@@ -741,28 +733,61 @@ func (m *messageProcessor) processMessage(
 
 	log.DebugfContext(
 		ctx,
-		"processed %d events, collected %d parts",
+		"processed %d events, collected %d messages",
 		eventCount,
-		len(allParts),
+		len(messages),
 	)
 
-	var responseMsg *protocol.Message
-	if len(allParts) == 0 {
+	if len(messages) == 0 {
 		log.WarnfContext(
 			ctx,
-			"no response parts from agent after processing %d events "+
-				"for message %s",
+			"no response messages from agent after processing %d "+
+				"events for message %s",
 			eventCount,
 			a2aMsg.MessageID,
 		)
-		return m.handleError(ctx, a2aMsg, false, errors.New("no response parts from agent after processing events"))
+		return m.handleError(
+			ctx,
+			a2aMsg,
+			false,
+			errors.New(
+				"no response messages from agent after processing "+
+					"events",
+			),
+		)
 	}
 
-	// only support message return in non-streaming processing
-	msg := protocol.NewMessage(protocol.MessageRoleAgent, allParts)
-	responseMsg = &msg
+	// If only one message, return it directly
+	// If multiple messages, return a Task with history
+	if len(messages) == 1 {
+		return &taskmanager.MessageProcessingResult{
+			Result: &messages[0],
+		}, nil
+	}
+
+	// Multiple messages: return Task with history containing intermediate messages
+	// and final message in artifacts
+	taskID := fmt.Sprintf("task-%s-%d", a2aMsg.MessageID, time.Now().UnixNano())
+	task := protocol.NewTask(taskID, ctxID)
+	task.Status = protocol.TaskStatus{
+		State:     protocol.TaskStateCompleted,
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+
+	// Put all messages except the last one in history
+	if len(messages) > 1 {
+		task.History = messages[:len(messages)-1]
+	}
+
+	// Put the last message in artifacts
+	lastMsg := messages[len(messages)-1]
+	task.Artifacts = []protocol.Artifact{{
+		ArtifactID: lastMsg.MessageID,
+		Parts:      lastMsg.Parts,
+	}}
+
 	return &taskmanager.MessageProcessingResult{
-		Result: responseMsg,
+		Result: task,
 	}, nil
 }
 

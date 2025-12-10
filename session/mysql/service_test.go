@@ -101,9 +101,6 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 	return &Service{
 		opts:                  serviceOpts,
 		mysqlClient:           &mockMySQLClient{db: db},
-		sessionTTL:            serviceOpts.sessionTTL,
-		appStateTTL:           serviceOpts.appStateTTL,
-		userStateTTL:          serviceOpts.userStateTTL,
 		tableSessionStates:    "session_states",
 		tableSessionEvents:    "session_events",
 		tableSessionSummaries: "session_summaries",
@@ -1585,7 +1582,7 @@ func TestNewService_WithDSN_Success(t *testing.T) {
 	require.NotNil(t, svc)
 
 	// Verify service configuration
-	assert.Equal(t, 1*time.Hour, svc.sessionTTL)
+	assert.Equal(t, 1*time.Hour, svc.opts.sessionTTL)
 	assert.Equal(t, defaultSessionEventLimit, svc.opts.sessionEventLimit)
 	assert.Equal(t, defaultAsyncPersisterNum, svc.opts.asyncPersisterNum)
 	assert.True(t, svc.opts.softDelete)
@@ -1864,9 +1861,9 @@ func TestNewService_WithAllOptions(t *testing.T) {
 
 	// Verify all options
 	assert.Equal(t, 500, svc.opts.sessionEventLimit)
-	assert.Equal(t, 1*time.Hour, svc.sessionTTL)
-	assert.Equal(t, 2*time.Hour, svc.appStateTTL)
-	assert.Equal(t, 3*time.Hour, svc.userStateTTL)
+	assert.Equal(t, 1*time.Hour, svc.opts.sessionTTL)
+	assert.Equal(t, 2*time.Hour, svc.opts.appStateTTL)
+	assert.Equal(t, 3*time.Hour, svc.opts.userStateTTL)
 	assert.True(t, svc.opts.enableAsyncPersist)
 	assert.Equal(t, 3, svc.opts.asyncPersisterNum)
 	assert.Equal(t, 2, svc.opts.asyncSummaryNum)
@@ -1932,4 +1929,400 @@ func TestCreateSession_InvalidAppName(t *testing.T) {
 
 	_, err = s.CreateSession(ctx, key, session.StateMap{})
 	assert.Error(t, err)
+}
+
+func TestAppendEventHook(t *testing.T) {
+	t.Run("hook modifies event before storage (skip db)", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		hookCalled := false
+		s := createTestService(t, db,
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				hookCalled = true
+				ctx.Event.Tag = "hook_processed"
+				return nil // abort before DB
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hello"}}},
+		}
+
+		err = s.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+		assert.True(t, hookCalled)
+		assert.Equal(t, "hook_processed", evt.Tag)
+	})
+
+	t.Run("hook can abort event storage", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db,
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				return nil // skip next()
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hello"}}},
+		}
+
+		// No DB expectations - hook aborts before DB call
+		err = s.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+	})
+
+	t.Run("multiple hooks execute in order", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		order := []string{}
+		s := createTestService(t, db,
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				order = append(order, "hook1_before")
+				err := next()
+				order = append(order, "hook1_after")
+				return err
+			}),
+			WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+				order = append(order, "hook2_before")
+				err := next()
+				order = append(order, "hook2_after")
+				return err
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+		evt := event.New("inv1", "assistant")
+		evt.Response = &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Hello"}}},
+		}
+
+		// Hook2 aborts, so no DB call
+		_ = s.AppendEvent(ctx, sess, evt)
+		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
+	})
+}
+
+func TestGetSessionHook(t *testing.T) {
+	t.Run("hook returns custom session without db", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		hookCalled := false
+		s := createTestService(t, db,
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				hookCalled = true
+				custom := session.NewSession(ctx.Key.AppName, ctx.Key.UserID, ctx.Key.SessionID)
+				custom.State["hook_added"] = []byte("true")
+				return custom, nil
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+		sess, err := s.GetSession(ctx, key)
+		require.NoError(t, err)
+		assert.True(t, hookCalled)
+		require.NotNil(t, sess)
+		assert.Equal(t, []byte("true"), sess.State["hook_added"])
+	})
+
+	t.Run("hook can return nil session", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db,
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				return nil, nil // skip next()
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+		// No DB expectations - hook aborts before DB call
+		sess, err := s.GetSession(ctx, key)
+		require.NoError(t, err)
+		assert.Nil(t, sess)
+	})
+
+	t.Run("multiple hooks execute in order", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		order := []string{}
+		s := createTestService(t, db,
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				order = append(order, "hook1_before")
+				sess, err := next()
+				order = append(order, "hook1_after")
+				return sess, err
+			}),
+			WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+				order = append(order, "hook2_before")
+				sess, err := next()
+				order = append(order, "hook2_after")
+				return sess, err
+			}),
+		)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+		// Hook2 returns nil, so no DB call
+		s.opts.getSessionHooks[1] = func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+			order = append(order, "hook2_before")
+			order = append(order, "hook2_after")
+			return nil, nil
+		}
+
+		_, _ = s.GetSession(ctx, key)
+		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
+	})
+}
+
+func TestUpdateSessionState_DisallowPrefixedKeys(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	stateWithAppPrefix := session.StateMap{
+		session.StateAppPrefix + "foo": []byte("bar"),
+	}
+	err = s.UpdateSessionState(ctx, key, stateWithAppPrefix)
+	require.Error(t, err)
+
+	stateWithUserPrefix := session.StateMap{
+		session.StateUserPrefix + "foo": []byte("bar"),
+	}
+	err = s.UpdateSessionState(ctx, key, stateWithUserPrefix)
+	require.Error(t, err)
+}
+
+func TestUpdateSessionState_SessionNotFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT state FROM session_states"),
+	).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnError(sql.ErrNoRows)
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "session not found")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	currentState := session.StateMap{
+		"existing": []byte(`"old"`),
+	}
+	currentBytes, err := json.Marshal(currentState)
+	require.NoError(t, err)
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT state FROM session_states"),
+	).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"state"}).AddRow(currentBytes),
+		)
+
+	mock.ExpectExec(
+		regexp.QuoteMeta("UPDATE session_states SET state = ?, "+
+			"updated_at = ?, expires_at = ?"),
+	).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"newKey": []byte(`"newValue"`),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT state FROM session_states"),
+	).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnError(fmt.Errorf("query failed"))
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "query failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateSessionState_UnmarshalError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT state FROM session_states"),
+	).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"state"}).AddRow([]byte("not-json")),
+		)
+
+	err = s.UpdateSessionState(ctx, key, session.StateMap{
+		"key1": []byte("value1"),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal state")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAppendEventInternal_AsyncPersistEnqueue(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithEnableAsyncPersist(true))
+	s.eventPairChans = []chan *sessionEventPair{
+		make(chan *sessionEventPair, 1),
+	}
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Hash = 0
+
+	evt := event.New("inv-1", "author")
+
+	err = s.appendEventInternal(ctx, sess, evt, key)
+	require.NoError(t, err)
+
+	select {
+	case pair := <-s.eventPairChans[0]:
+		require.NotNil(t, pair)
+		assert.Equal(t, key, pair.key)
+		assert.Equal(t, evt, pair.event)
+	default:
+		t.Fatal("expected event to be enqueued")
+	}
+}
+
+func TestAppendEventInternal_SendOnClosedChannel(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithEnableAsyncPersist(true))
+	s.eventPairChans = []chan *sessionEventPair{
+		make(chan *sessionEventPair, 1),
+	}
+	close(s.eventPairChans[0])
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Hash = 0
+
+	evt := event.New("inv-1", "author")
+
+	// Should not panic even though channel is closed.
+	err = s.appendEventInternal(ctx, sess, evt, key)
+	require.NoError(t, err)
 }
