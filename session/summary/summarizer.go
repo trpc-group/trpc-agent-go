@@ -183,6 +183,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	return summaryText, nil
 }
 
+// recordLastIncludedTimestamp records the last included timestamp in the session state.
 func (s *sessionSummarizer) recordLastIncludedTimestamp(sess *session.Session, events []event.Event) {
 	if sess == nil || len(events) == 0 {
 		return
