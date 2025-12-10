@@ -285,7 +285,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
 		// Agent event stream completed.
-		r.emitRunnerCompletion(ctx, loop)
+		r.safeEmitRunnerCompletion(ctx, loop)
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		close(loop.processedEventCh)
@@ -349,6 +349,16 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	}
 
 	return nil
+}
+
+// safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
+func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
+	defer func() {
+		if rr := recover(); rr != nil {
+			log.Errorf("panic emitting runner completion: %v\n%s", rr, string(debug.Stack()))
+		}
+	}()
+	r.emitRunnerCompletion(ctx, loop)
 }
 
 // handleFlushRequest drains buffered agent events when a flush request arrives and closes the request's ACK channel
