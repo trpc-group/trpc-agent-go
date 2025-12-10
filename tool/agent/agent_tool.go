@@ -188,9 +188,6 @@ func (at *Tool) callWithParentInvocation(
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationEventFilterKey(childKey),
 	)
-	// Ensure current tool input is visible to the child content processor by
-	// appending it into the cloned session snapsho.
-	at.injectToolInputEvent(subInv, message)
 
 	// Run the agent and collect response.
 	evCh, err := at.agent.Run(agent.NewInvocationContext(ctx, subInv), subInv)
@@ -272,26 +269,6 @@ func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
 	return childKey
 }
 
-// injectToolInputEvent appends the tool input message as an event into the
-// session, making it visible to the child content processor.
-func (at *Tool) injectToolInputEvent(
-	subInv *agent.Invocation,
-	message model.Message,
-) {
-	if subInv.Session != nil && message.Content != "" {
-		evt := event.NewResponseEvent(
-			subInv.InvocationID,
-			"user",
-			&model.Response{
-				Done:    false,
-				Choices: []model.Choice{{Index: 0, Message: message}},
-			},
-		)
-		agent.InjectIntoEvent(subInv, evt)
-		at.appendEventToSession(subInv.Session, evt)
-	}
-}
-
 // collectResponse collects and concatenates assistant messages from the event
 // channel, returning the complete response text.
 func (at *Tool) collectResponse(evCh <-chan *event.Event) (string, error) {
@@ -338,18 +315,6 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
 				agent.WithInvocationEventFilterKey(childKey),
 			)
-			// Store tool input as Event via sub-agent's event channel (safe concurrency).
-			// This ensures the tool input is available throughout all LLM calls within this AgentTool invocation.
-			var evt *event.Event
-			if message.Content != "" {
-				evt = event.NewResponseEvent(
-					subInv.InvocationID,
-					"user", // Use "user" as author like Runner does for user messages.
-					&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
-				)
-				agent.InjectIntoEvent(subInv, evt) // This will set the uniqueFilterKey.
-				at.appendEventToSession(subInv.Session, evt)
-			}
 
 			subCtx := agent.NewInvocationContext(ctx, subInv)
 			evCh, err := at.agent.Run(subCtx, subInv)

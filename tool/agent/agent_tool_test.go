@@ -366,10 +366,16 @@ func TestTool_StreamableCall_FlushesParentSession(t *testing.T) {
 	require.NoError(t, err)
 	defer reader.Close()
 
-	for i := 0; i < 4; i++ {
+	recvCount := 0
+	for {
 		_, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
 		require.NoError(t, recvErr)
+		recvCount++
 	}
+	require.Equal(t, 3, recvCount)
 
 	select {
 	case <-acked:
@@ -472,7 +478,7 @@ func TestTool_HistoryScope_ParentBranch_Call_InheritsParentHistory(t *testing.T)
 	s, _ := out.(string)
 	// Expect both parent content and tool input to be visible via filter inheritance.
 	if !strings.Contains(s, "PARENT") || strings.Contains(s, `{"request":"CHILD"}`) {
-		t.Fatalf("expected output to contain both parent and child contents, got: %q", s)
+		t.Fatalf("expected output to contain parent content (not raw child request), got: %q", s)
 	}
 }
 
