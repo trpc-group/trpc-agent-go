@@ -407,10 +407,7 @@ func appendRequiredField(
 			field.Type, field.Tag, fieldSchema,
 		)
 		if err != nil {
-			log.Errorf(
-				"parseJSONSchemaTag error for field %s: %v",
-				fieldName, err,
-			)
+			log.Errorf("parseJSONSchemaTag error for field %s: %v", fieldName, err)
 		}
 
 		if (field.Type.Kind() != reflect.Ptr && !isOmitEmpty) ||

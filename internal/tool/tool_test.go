@@ -556,3 +556,47 @@ func TestGenerateJSONSchema_NonRecursiveNestedStructInline(t *testing.T) {
 	require.True(required["home"], "expected home to be required")
 	require.False(required["office"], "office should not be required")
 }
+
+func TestGenerateJSONSchema_MapRecursiveValueUsesDefs(t *testing.T) {
+	type Node struct {
+		Next *Node `json:"next,omitempty"`
+	}
+
+	schema := itool.GenerateJSONSchema(reflect.TypeOf(map[string]Node{}))
+
+	require.Equal(t, "object", schema.Type)
+	propSchema, ok := schema.AdditionalProperties.(*tool.Schema)
+	require.True(t, ok, "additionalProperties should be *tool.Schema")
+	require.Equal(t, "#/$defs/node", propSchema.Ref)
+	require.NotEmpty(t, schema.Defs, "expected defs for recursive value")
+	require.Contains(t, schema.Defs, "node")
+}
+
+func TestGenerateJSONSchema_SliceRecursionUsesDefs(t *testing.T) {
+	type Tree struct {
+		Children []Tree `json:"children"`
+	}
+
+	schema := itool.GenerateJSONSchema(reflect.TypeOf(Tree{}))
+
+	require.Contains(t, schema.Defs, "tree")
+	children := schema.Properties["children"]
+	require.NotNil(t, children)
+	require.Equal(t, "array", children.Type)
+	require.NotNil(t, children.Items)
+	require.Equal(t, "#/$defs/tree", children.Items.Ref)
+	require.Contains(t, schema.Required, "children")
+}
+
+func TestGenerateJSONSchema_UntaggedAndIgnoredFields(t *testing.T) {
+	type Sample struct {
+		Untagged int
+		Ignored  string `json:"-"`
+	}
+
+	schema := itool.GenerateJSONSchema(reflect.TypeOf(Sample{}))
+
+	require.Contains(t, schema.Properties, "Untagged")
+	require.NotContains(t, schema.Properties, "Ignored")
+	require.Contains(t, schema.Required, "Untagged")
+}
