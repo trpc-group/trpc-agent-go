@@ -308,7 +308,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 		require.NotEmpty(t, decl.Name)
 		require.Equal(t, "knowledge_search_with_agentic_filter", decl.Name)
 		require.NotEmpty(t, decl.Description)
-		require.Contains(t, decl.Description, "Available metadata filters")
+		require.Contains(t, decl.Description, "Available filters:")
 		require.Contains(t, decl.Description, "category")
 		require.Contains(t, decl.Description, "protocol")
 		require.Contains(t, decl.Description, "level")
@@ -483,7 +483,7 @@ func TestGenerateAgenticFilterPrompt(t *testing.T) {
 		prompt := generateAgenticFilterPrompt(filterInfo)
 
 		// Check for new prompt structure
-		require.Contains(t, prompt, "Available metadata filters")
+		require.Contains(t, prompt, "Available filters:")
 		require.Contains(t, prompt, "category")
 		require.Contains(t, prompt, "protocol")
 		require.Contains(t, prompt, "empty")
