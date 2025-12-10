@@ -2183,6 +2183,30 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "timestamp equal since when not zero time",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "123",
+					InvocationID: "123",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp: sinceTime,
+				}
+				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
+				return p, evt, inv, "", false, sinceTime
+			},
+			expected: false,
+		},
+		{
 			name: "TimelineFilterCurrentRequest with different request ID",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{
