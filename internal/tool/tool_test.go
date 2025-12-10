@@ -640,3 +640,67 @@ func TestGenerateJSONSchema_PointerRequiredByTag(t *testing.T) {
 	require.Contains(t, schema.Required, "ptr")
 	require.Equal(t, "string", schema.Properties["ptr"].Type)
 }
+
+func TestGenerateJSONSchema_JSONSchemaTag_InvalidFloatAndBool(t *testing.T) {
+	type BadTags struct {
+		Rate    float64 `json:"rate" jsonschema:"enum=not_a_float"`
+		Enabled bool    `json:"enabled" jsonschema:"enum=not_bool"`
+	}
+
+	schema := itool.GenerateJSONSchema(reflect.TypeOf(BadTags{}))
+
+	require.Equal(t, "number", schema.Properties["rate"].Type)
+	require.Equal(t, "boolean", schema.Properties["enabled"].Type)
+	require.ElementsMatch(t, []string{"rate", "enabled"}, schema.Required)
+}
+
+func TestCheckRecursionSliceArrayPtr(t *testing.T) {
+	t.Parallel()
+
+	type item struct{}
+	type wrapper struct {
+		Inner *item
+	}
+	type container struct {
+		V item
+	}
+
+	target := reflect.TypeOf(item{})
+
+	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf([]item{})))
+	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf([1]item{})))
+	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf([]*item{})))
+	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf([]container{})))
+	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf(&item{})))
+	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf(&wrapper{})))
+}
+
+func TestGenerateDefNameAnonymous(t *testing.T) {
+	t.Parallel()
+
+	anon := struct{ X int }{}
+	require.Equal(t, "anonymousStruct", itool.HelperGenerateDefName(reflect.TypeOf(anon)))
+}
+
+func TestHandlePrimitiveTypeDefault(t *testing.T) {
+	t.Parallel()
+
+	ch := make(chan int)
+	schema := itool.HelperHandlePrimitiveType(reflect.TypeOf(ch))
+
+	require.Equal(t, "object", schema.Type)
+}
+
+func TestAppendRequiredFieldRefNonPtr(t *testing.T) {
+	t.Parallel()
+
+	field, ok := reflect.TypeOf(struct {
+		Child int `json:"child"`
+	}{}).FieldByName("Child")
+	require.True(t, ok)
+
+	required := itool.HelperAppendRequiredField(
+		nil, field, &tool.Schema{Ref: "#/$defs/child"}, "child", false,
+	)
+	require.Equal(t, []string{"child"}, required)
+}
