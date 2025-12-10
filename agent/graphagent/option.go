@@ -73,6 +73,13 @@ type Options struct {
 	// CheckpointSaver is the checkpoint saver for the executor.
 	CheckpointSaver graph.CheckpointSaver
 
+	// AddSessionSummary controls whether to prepend the current branch summary
+	// as a system message when available.
+	AddSessionSummary bool
+	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+	// When 0 (default), no limit is applied.
+	MaxHistoryRuns int
+
 	// MessageTimelineFilterMode is the message timeline filter mode.
 	messageTimelineFilterMode string
 	// MessageBranchFilterMode is the message branch filter mode.
@@ -125,6 +132,22 @@ func WithSubAgents(subAgents []agent.Agent) Option {
 func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
 	return func(opts *Options) {
 		opts.CheckpointSaver = saver
+	}
+}
+
+// WithAddSessionSummary controls whether to prepend the current-branch summary
+// as a system message when available (default: false).
+func WithAddSessionSummary(addSummary bool) Option {
+	return func(opts *Options) {
+		opts.AddSessionSummary = addSummary
+	}
+}
+
+// WithMaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+// When 0 (default), no limit is applied.
+func WithMaxHistoryRuns(maxRuns int) Option {
+	return func(opts *Options) {
+		opts.MaxHistoryRuns = maxRuns
 	}
 }
 
