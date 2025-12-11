@@ -314,6 +314,14 @@ type Invocation struct {
     // Invocation-scoped state (lazy-init, thread-safe via stateMu).
     state   map[string]any
     stateMu sync.RWMutex
+
+    // Internal counters used for optional per-run limits (advanced).
+    // These limits are configured via RunOptions and are evaluated per
+    // Invocation. When creating child invocations via Clone (for example
+    // in transfer_to_agent or AgentTool), RunOptions are copied but the
+    // counters start from zero in each child invocation.
+    llmCallCount       int
+    toolIterationCount int
 }
 ```
 
