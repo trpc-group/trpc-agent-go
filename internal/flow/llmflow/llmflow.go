@@ -533,6 +533,13 @@ func (f *Flow) callLLM(
 		invocation.AgentName,
 	)
 
+	// Enforce optional per-invocation LLM call limit. When the limit is not
+	// configured (<= 0), this is a no-op and preserves existing behavior.
+	if err := invocation.IncLLMCallCount(); err != nil {
+		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
+		return nil, err
+	}
+
 	// Run before model callbacks if they exist.
 	if f.modelCallbacks != nil {
 		result, err := f.modelCallbacks.RunBeforeModel(ctx, &model.BeforeModelArgs{
