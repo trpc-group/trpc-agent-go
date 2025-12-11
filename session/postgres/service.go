@@ -129,17 +129,24 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	builderOpts := []storage.ClientBuilderOpt{
-		storage.WithClientConnString(buildConnString(opts)),
 		storage.WithExtraOptions(opts.extraOptions...),
 	}
-	// Priority: direct connection settings > instance name
-	// If direct connection settings are provided, use them
-	if opts.host == "" && opts.instanceName != "" {
-		// Otherwise, use instance name if provided
+	// Priority: DSN > direct connection settings > instance name
+	if opts.dsn != "" {
+		// Use DSN directly if provided.
+		builderOpts = append(builderOpts, storage.WithClientConnString(opts.dsn))
+	} else if opts.host != "" {
+		// Use direct connection settings if provided.
+		builderOpts = append(builderOpts, storage.WithClientConnString(buildConnString(opts)))
+	} else if opts.instanceName != "" {
+		// Otherwise, use instance name if provided.
 		var ok bool
 		if builderOpts, ok = storage.GetPostgresInstance(opts.instanceName); !ok {
 			return nil, fmt.Errorf("postgres instance %s not found", opts.instanceName)
 		}
+	} else {
+		// Fallback to default connection string.
+		builderOpts = append(builderOpts, storage.WithClientConnString(buildConnString(opts)))
 	}
 	pgClient, err := storage.GetClientBuilder()(context.Background(), builderOpts...)
 	if err != nil {
