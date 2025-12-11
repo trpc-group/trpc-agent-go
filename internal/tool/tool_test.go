@@ -704,3 +704,27 @@ func TestAppendRequiredFieldRefNonPtr(t *testing.T) {
 	)
 	require.Equal(t, []string{"child"}, required)
 }
+
+func TestGenerateJSONSchema_DefSchemaIsolation(t *testing.T) {
+	t.Parallel()
+
+	type Node struct {
+		Value int   `json:"value"`
+		Next  *Node `json:"next,omitempty"`
+	}
+
+	schema := GenerateJSONSchema(reflect.TypeOf(Node{}))
+
+	defNode, ok := schema.Defs["node"]
+	require.True(t, ok)
+	require.Equal(t, "#/$defs/node", defNode.Properties["next"].Ref)
+	require.Contains(t, defNode.Required, "value")
+	require.Equal(t, "integer", defNode.Properties["value"].Type)
+
+	// Mutate returned root schema and ensure defs stay unchanged.
+	schema.Properties["next"] = &tool.Schema{Type: "string"}
+	schema.Required = nil
+
+	require.Equal(t, "#/$defs/node", defNode.Properties["next"].Ref)
+	require.Contains(t, defNode.Required, "value")
+}

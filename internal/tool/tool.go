@@ -51,6 +51,26 @@ func schemaRef(defName string) *tool.Schema {
 	return &tool.Schema{Ref: defsRefPrefix + defName}
 }
 
+func cloneProperties(props map[string]*tool.Schema) map[string]*tool.Schema {
+	if len(props) == 0 {
+		return nil
+	}
+	out := make(map[string]*tool.Schema, len(props))
+	for k, v := range props {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneRequired(required []string) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	out := make([]string, len(required))
+	copy(out, required)
+	return out
+}
+
 // generateJSONSchema generates a JSON schema with recursion handling
 func generateJSONSchema(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
 	// Handle different kinds of types.
@@ -360,15 +380,15 @@ func handleStructType(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Sch
 	nestedSchema := buildStructSchema(t, ctx)
 	defSchema := &tool.Schema{
 		Type:       nestedSchema.Type,
-		Properties: nestedSchema.Properties,
-		Required:   nestedSchema.Required,
+		Properties: cloneProperties(nestedSchema.Properties),
+		Required:   cloneRequired(nestedSchema.Required),
 	}
 	ctx.defs[defName] = defSchema
 	if isRoot {
 		return &tool.Schema{
 			Type:       nestedSchema.Type,
-			Properties: nestedSchema.Properties,
-			Required:   nestedSchema.Required,
+			Properties: cloneProperties(nestedSchema.Properties),
+			Required:   cloneRequired(nestedSchema.Required),
 		}
 	}
 
