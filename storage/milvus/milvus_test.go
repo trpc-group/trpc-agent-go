@@ -10,11 +10,11 @@ package milvus
 
 import (
 	"context"
-	"google.golang.org/grpc"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 // TestSetGetClientBuilder tests setting and getting a custom client builder
