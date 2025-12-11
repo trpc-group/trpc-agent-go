@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sync"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -29,7 +30,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
-	"sync"
 )
 
 // mockModel implements model.Model for testing
