@@ -7,7 +7,7 @@
 //
 //
 
-package tool_test
+package tool
 
 import (
 	"context"
@@ -16,7 +16,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -72,9 +71,9 @@ func (f *fakeToolSet) Name() string                      { return f.name }
 
 func TestNamedToolSet_Idempotent(t *testing.T) {
 	ts := &fakeToolSet{name: "fs"}
-	nts := itool.NewNamedToolSet(ts)
+	nts := NewNamedToolSet(ts)
 	// Calling again with an already wrapped toolset should return the same instance.
-	nts2 := itool.NewNamedToolSet(nts)
+	nts2 := NewNamedToolSet(nts)
 	require.Same(t, nts, nts2, "idempotent wrapper should be same instance")
 }
 
@@ -84,26 +83,26 @@ func TestNamedToolSet_Tools_PrefixingAndPassthrough(t *testing.T) {
 		name:  "fs",
 		tools: []tool.Tool{&simpleTool{name: "read", desc: "read file"}},
 	}
-	nts := itool.NewNamedToolSet(base)
+	nts := NewNamedToolSet(base)
 	got := nts.Tools(context.Background())
 	require.Len(t, got, 1)
 	require.Equal(t, "fs_read", got[0].Declaration().Name)
 
 	// Without a name, names should be unchanged.
 	base2 := &fakeToolSet{name: "", tools: []tool.Tool{&simpleTool{name: "write", desc: "write file"}}}
-	nts2 := itool.NewNamedToolSet(base2)
+	nts2 := NewNamedToolSet(base2)
 	got2 := nts2.Tools(context.Background())
 	require.Equal(t, "write", got2[0].Declaration().Name)
 }
 
 func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {
 	base := &fakeToolSet{name: "fs"}
-	nts := itool.NewNamedToolSet(base)
+	nts := NewNamedToolSet(base)
 	// Wrap a single tool.
 	t1 := &simpleTool{name: "copy", desc: "copy file"}
 	base.tools = []tool.Tool{t1}
 	got := nts.Tools(context.Background())
-	nt, ok := got[0].(*itool.NamedTool)
+	nt, ok := got[0].(*NamedTool)
 	require.True(t, ok, "expected NamedTool, got %T", got[0])
 	require.Equal(t, t1, nt.Original())
 	require.Equal(t, "fs", nts.Name())
@@ -114,9 +113,9 @@ func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {
 func TestNamedTool_CallAndStreamableCall(t *testing.T) {
 	// Positive path via NamedToolSet wrapper.
 	f := &fakeTool{decl: &tool.Declaration{Name: "sum"}, callResult: 42}
-	nts := itool.NewNamedToolSet(&fakeToolSet{name: "math", tools: []tool.Tool{f}})
+	nts := NewNamedToolSet(&fakeToolSet{name: "math", tools: []tool.Tool{f}})
 	ts := nts.Tools(context.Background())
-	nt, ok := ts[0].(*itool.NamedTool)
+	nt, ok := ts[0].(*NamedTool)
 	require.True(t, ok, "expected NamedTool, got %T", ts[0])
 	v, err := nt.Call(context.Background(), nil)
 	require.NoError(t, err)
@@ -134,8 +133,8 @@ func TestNamedTool_CallAndStreamableCall(t *testing.T) {
 
 func TestNamedTool_CallFailures(t *testing.T) {
 	// Negative path through wrapper (not callable or streamable).
-	nts := itool.NewNamedToolSet(&fakeToolSet{name: "fs", tools: []tool.Tool{&simpleTool{name: "noop"}}})
-	nt := nts.Tools(context.Background())[0].(*itool.NamedTool)
+	nts := NewNamedToolSet(&fakeToolSet{name: "fs", tools: []tool.Tool{&simpleTool{name: "noop"}}})
+	nt := nts.Tools(context.Background())[0].(*NamedTool)
 	_, err := nt.Call(context.Background(), nil)
 	require.EqualError(t, err, "tool is not callable")
 
@@ -145,18 +144,18 @@ func TestNamedTool_CallFailures(t *testing.T) {
 
 func TestNamedTool_SkipSummarizationDelegation(t *testing.T) {
 	// Wrap with NamedToolSet so we can obtain a *NamedTool instance.
-	nts := itool.NewNamedToolSet(&fakeToolSet{
+	nts := NewNamedToolSet(&fakeToolSet{
 		name:  "fs",
 		tools: []tool.Tool{&skipperTool{name: "raw", skip: true}},
 	})
-	t1 := nts.Tools(context.Background())[0].(*itool.NamedTool)
+	t1 := nts.Tools(context.Background())[0].(*NamedTool)
 	require.True(t, t1.SkipSummarization())
 
-	nts2 := itool.NewNamedToolSet(&fakeToolSet{
+	nts2 := NewNamedToolSet(&fakeToolSet{
 		name:  "fs",
 		tools: []tool.Tool{&skipperTool{name: "raw", skip: false}},
 	})
-	t2 := nts2.Tools(context.Background())[0].(*itool.NamedTool)
+	t2 := nts2.Tools(context.Background())[0].(*NamedTool)
 	require.False(t, t2.SkipSummarization())
 }
 
@@ -190,7 +189,7 @@ func TestGenerateJSONSchema_Primitives(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := itool.GenerateJSONSchema(reflect.TypeOf(tc.input))
+			result := GenerateJSONSchema(reflect.TypeOf(tc.input))
 			require.Equal(t, tc.expected.Type, result.Type)
 		})
 	}
@@ -199,7 +198,7 @@ func TestGenerateJSONSchema_Primitives(t *testing.T) {
 func TestGenerateJSONSchema_ComplexTypes(t *testing.T) {
 	t.Run("array type", func(t *testing.T) {
 		input := []string{}
-		result := itool.GenerateJSONSchema(reflect.TypeOf(input))
+		result := GenerateJSONSchema(reflect.TypeOf(input))
 
 		require.Equal(t, "array", result.Type)
 		require.NotNil(t, result.Items)
@@ -208,7 +207,7 @@ func TestGenerateJSONSchema_ComplexTypes(t *testing.T) {
 
 	t.Run("map type", func(t *testing.T) {
 		input := map[string]int{}
-		result := itool.GenerateJSONSchema(reflect.TypeOf(input))
+		result := GenerateJSONSchema(reflect.TypeOf(input))
 
 		require.Equal(t, "object", result.Type)
 		require.NotNil(t, result.AdditionalProperties)
@@ -219,7 +218,7 @@ func TestGenerateJSONSchema_ComplexTypes(t *testing.T) {
 
 	t.Run("pointer type", func(t *testing.T) {
 		var input *string
-		result := itool.GenerateJSONSchema(reflect.TypeOf(input))
+		result := GenerateJSONSchema(reflect.TypeOf(input))
 
 		require.Equal(t, "string", result.Type)
 	})
@@ -235,7 +234,7 @@ func TestGenerateJSONSchema_StructTypes(t *testing.T) {
 	}
 
 	t.Run("struct with fields", func(t *testing.T) {
-		result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+		result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 		require.Equal(t, "object", result.Type)
 
@@ -270,7 +269,7 @@ func TestGenerateJSONSchema_Nested(t *testing.T) {
 		Tags    []string `json:"tags"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(Person{}))
+	result := GenerateJSONSchema(reflect.TypeOf(Person{}))
 
 	require.NotNil(t, result.Properties["address"], "expected address property")
 
@@ -297,7 +296,7 @@ func TestGenerateJSONSchema_PointerTypeFix(t *testing.T) {
 	}
 
 	var input *TestRequest
-	result := itool.GenerateJSONSchema(reflect.TypeOf(input))
+	result := GenerateJSONSchema(reflect.TypeOf(input))
 
 	// Should generate "object" instead of "object,null"
 	require.Equal(t, "object", result.Type)
@@ -319,7 +318,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_Description(t *testing.T) {
 		Age  int    `json:"age" jsonschema:"description=User's age in years"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Check description for name field
 	require.Equal(t, "User's full name", result.Properties["name"].Description)
@@ -333,7 +332,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_StringEnum(t *testing.T) {
 		Status string `json:"status" jsonschema:"enum=active,enum=inactive,enum=pending"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	statusSchema := result.Properties["status"]
 	require.Len(t, statusSchema.Enum, 3)
@@ -349,7 +348,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_IntEnum(t *testing.T) {
 		Priority int `json:"priority" jsonschema:"enum=1,enum=2,enum=3"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	prioritySchema := result.Properties["priority"]
 	require.Len(t, prioritySchema.Enum, 3)
@@ -365,7 +364,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_FloatEnum(t *testing.T) {
 		Rate float64 `json:"rate" jsonschema:"enum=1.5,enum=2.0,enum=3.5"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	rateSchema := result.Properties["rate"]
 	require.Len(t, rateSchema.Enum, 3)
@@ -381,7 +380,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_BoolEnum(t *testing.T) {
 		Enabled bool `json:"enabled" jsonschema:"enum=true,enum=false"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	enabledSchema := result.Properties["enabled"]
 	require.Len(t, enabledSchema.Enum, 2)
@@ -399,7 +398,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_Required(t *testing.T) {
 		NonOptionalField string `json:"non_optional_field"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Check required fields
 	expectedRequired := []string{"required_field", "non_optional_field"}
@@ -416,7 +415,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_Combined(t *testing.T) {
 		Count  int    `json:"count,omitempty" jsonschema:"description=Item count,enum=10,enum=20,enum=30"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Check status field
 	statusSchema := result.Properties["status"]
@@ -439,7 +438,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_InvalidEnum(t *testing.T) {
 	}
 
 	// This should continue processing despite the invalid enum error
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Should return a struct schema with properties despite the error
 	require.Equal(t, "object", result.Type)
@@ -458,7 +457,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_EdgeCases(t *testing.T) {
 		NoEquals    string `json:"no_equals" jsonschema:"description"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Check that description is set correctly without trimming
 	require.Equal(t, "Test Description", result.Properties["simple"].Description)
@@ -478,7 +477,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_UnsupportedEnumType(t *testing.T) {
 	}
 
 	// This should continue processing despite the unsupported enum type error
-	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
 
 	// Should return a struct schema with properties despite the error
 	require.Equal(t, "object", result.Type)
@@ -496,7 +495,7 @@ func TestGenerateJSONSchema_RecursiveStructUsesDefs(t *testing.T) {
 		Next  *Node  `json:"next,omitempty"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(Node{}))
+	result := GenerateJSONSchema(reflect.TypeOf(Node{}))
 
 	require.NotEmpty(
 		result.Defs,
@@ -532,7 +531,7 @@ func TestGenerateJSONSchema_NonRecursiveNestedStructInline(t *testing.T) {
 		Office *Address `json:"office,omitempty"`
 	}
 
-	result := itool.GenerateJSONSchema(reflect.TypeOf(Person{}))
+	result := GenerateJSONSchema(reflect.TypeOf(Person{}))
 
 	require.Empty(
 		result.Defs,
@@ -562,7 +561,7 @@ func TestGenerateJSONSchema_MapRecursiveValueUsesDefs(t *testing.T) {
 		Next *Node `json:"next,omitempty"`
 	}
 
-	schema := itool.GenerateJSONSchema(reflect.TypeOf(map[string]Node{}))
+	schema := GenerateJSONSchema(reflect.TypeOf(map[string]Node{}))
 
 	require.Equal(t, "object", schema.Type)
 	propSchema, ok := schema.AdditionalProperties.(*tool.Schema)
@@ -577,7 +576,7 @@ func TestGenerateJSONSchema_SliceRecursionUsesDefs(t *testing.T) {
 		Children []Tree `json:"children"`
 	}
 
-	schema := itool.GenerateJSONSchema(reflect.TypeOf(Tree{}))
+	schema := GenerateJSONSchema(reflect.TypeOf(Tree{}))
 
 	require.Contains(t, schema.Defs, "tree")
 	children := schema.Properties["children"]
@@ -594,7 +593,7 @@ func TestGenerateJSONSchema_UntaggedAndIgnoredFields(t *testing.T) {
 		Ignored  string `json:"-"`
 	}
 
-	schema := itool.GenerateJSONSchema(reflect.TypeOf(Sample{}))
+	schema := GenerateJSONSchema(reflect.TypeOf(Sample{}))
 
 	require.Contains(t, schema.Properties, "Untagged")
 	require.NotContains(t, schema.Properties, "Ignored")
@@ -603,13 +602,13 @@ func TestGenerateJSONSchema_UntaggedAndIgnoredFields(t *testing.T) {
 
 func TestGenerateJSONSchema_PrimitiveDefaultFallback(t *testing.T) {
 	ifaceType := reflect.TypeOf((*any)(nil)).Elem()
-	schema := itool.GenerateJSONSchema(ifaceType)
+	schema := GenerateJSONSchema(ifaceType)
 
 	require.Equal(t, "object", schema.Type)
 }
 
 func TestGenerateJSONSchema_MapWithoutDefs(t *testing.T) {
-	schema := itool.GenerateJSONSchema(reflect.TypeOf(map[string]string{}))
+	schema := GenerateJSONSchema(reflect.TypeOf(map[string]string{}))
 
 	require.Equal(t, "object", schema.Type)
 	require.Nil(t, schema.Defs)
@@ -623,7 +622,7 @@ func TestGenerateJSONSchema_ParseJSONSchemaTagError(t *testing.T) {
 		Priority int `json:"priority" jsonschema:"enum=not_a_number"`
 	}
 
-	schema := itool.GenerateJSONSchema(reflect.TypeOf(BadEnum{}))
+	schema := GenerateJSONSchema(reflect.TypeOf(BadEnum{}))
 
 	require.NotNil(t, schema.Properties["priority"])
 	require.Equal(t, "integer", schema.Properties["priority"].Type)
@@ -635,7 +634,7 @@ func TestGenerateJSONSchema_PointerRequiredByTag(t *testing.T) {
 		Ptr *string `json:"ptr" jsonschema:"required"`
 	}
 
-	schema := itool.GenerateJSONSchema(reflect.TypeOf(WithPointer{}))
+	schema := GenerateJSONSchema(reflect.TypeOf(WithPointer{}))
 
 	require.Contains(t, schema.Required, "ptr")
 	require.Equal(t, "string", schema.Properties["ptr"].Type)
@@ -647,7 +646,7 @@ func TestGenerateJSONSchema_JSONSchemaTag_InvalidFloatAndBool(t *testing.T) {
 		Enabled bool    `json:"enabled" jsonschema:"enum=not_bool"`
 	}
 
-	schema := itool.GenerateJSONSchema(reflect.TypeOf(BadTags{}))
+	schema := GenerateJSONSchema(reflect.TypeOf(BadTags{}))
 
 	require.Equal(t, "number", schema.Properties["rate"].Type)
 	require.Equal(t, "boolean", schema.Properties["enabled"].Type)
@@ -667,26 +666,27 @@ func TestCheckRecursionSliceArrayPtr(t *testing.T) {
 
 	target := reflect.TypeOf(item{})
 
-	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf([]item{})))
-	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf([1]item{})))
-	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf([]*item{})))
-	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf([]container{})))
-	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf(&item{})))
-	require.True(t, itool.HelperCheckRecursion(target, reflect.TypeOf(&wrapper{})))
+	visited := make(map[reflect.Type]bool)
+	require.True(t, checkRecursion(target, reflect.TypeOf([]item{}), visited))
+	require.True(t, checkRecursion(target, reflect.TypeOf([1]item{}), visited))
+	require.True(t, checkRecursion(target, reflect.TypeOf([]*item{}), visited))
+	require.True(t, checkRecursion(target, reflect.TypeOf([]container{}), visited))
+	require.True(t, checkRecursion(target, reflect.TypeOf(&item{}), visited))
+	require.True(t, checkRecursion(target, reflect.TypeOf(&wrapper{}), visited))
 }
 
 func TestGenerateDefNameAnonymous(t *testing.T) {
 	t.Parallel()
 
 	anon := struct{ X int }{}
-	require.Equal(t, "anonymousStruct", itool.HelperGenerateDefName(reflect.TypeOf(anon)))
+	require.Equal(t, "anonymousStruct", generateDefName(reflect.TypeOf(anon)))
 }
 
 func TestHandlePrimitiveTypeDefault(t *testing.T) {
 	t.Parallel()
 
 	ch := make(chan int)
-	schema := itool.HelperHandlePrimitiveType(reflect.TypeOf(ch))
+	schema := handlePrimitiveType(reflect.TypeOf(ch))
 
 	require.Equal(t, "object", schema.Type)
 }
@@ -699,7 +699,7 @@ func TestAppendRequiredFieldRefNonPtr(t *testing.T) {
 	}{}).FieldByName("Child")
 	require.True(t, ok)
 
-	required := itool.HelperAppendRequiredField(
+	required := appendRequiredField(
 		nil, field, &tool.Schema{Ref: "#/$defs/child"}, "child", false,
 	)
 	require.Equal(t, []string{"child"}, required)
