@@ -809,15 +809,22 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 		storage.SetClientBuilder(originalBuilder)
 	})
 
-	// Check if skipDBInit is set in opts
+	// Check if skipDBInit is set in opts and get schema
 	skipDBInit := false
+	schema := ""
 	for _, opt := range opts {
 		testOpts := &ServiceOpts{}
 		opt(testOpts)
 		if testOpts.skipDBInit {
 			skipDBInit = true
-			break
 		}
+		if testOpts.schema != "" {
+			schema = testOpts.schema
+		}
+	}
+	// Default schema is empty (public)
+	if schema == "" {
+		schema = "public"
 	}
 
 	if !skipDBInit {
@@ -834,14 +841,14 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 			SELECT FROM information_schema.tables
 			WHERE table_schema = \$1
 			AND table_name = \$2
-		\)`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		\)`).WithArgs(schema, "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 		// Mock columns query - match expected schema
 		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
 			FROM information_schema.columns
 			WHERE table_schema = \$1
 			AND table_name = \$2
-			ORDER BY ordinal_position`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+			ORDER BY ordinal_position`).WithArgs(schema, "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
 			AddRow("memory_id", "text", "NO").
 			AddRow("app_name", "text", "NO").
 			AddRow("user_id", "text", "NO").
@@ -854,7 +861,7 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 		mock.ExpectQuery(`SELECT indexname
 			FROM pg_indexes
 			WHERE schemaname = \$1
-			AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
+			AND tablename = \$2`).WithArgs(schema, "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
 			AddRow("memories_app_user").
 			AddRow("memories_updated_at").
 			AddRow("memories_deleted_at"))
@@ -928,6 +935,37 @@ func TestNewService_WithHost(t *testing.T) {
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock schema verification queries for public schema
+	// Mock table exists query
+	mock.ExpectQuery(`SELECT EXISTS \(
+		SELECT FROM information_schema.tables
+		WHERE table_schema = \$1
+		AND table_name = \$2
+	\)`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	// Mock columns query - match expected schema
+	mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = \$1
+		AND table_name = \$2
+		ORDER BY ordinal_position`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+		AddRow("memory_id", "text", "NO").
+		AddRow("app_name", "text", "NO").
+		AddRow("user_id", "text", "NO").
+		AddRow("memory_data", "jsonb", "NO").
+		AddRow("created_at", "timestamp without time zone", "NO").
+		AddRow("updated_at", "timestamp without time zone", "NO").
+		AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+	// Mock indexes query - match expected indexes
+	mock.ExpectQuery(`SELECT indexname
+		FROM pg_indexes
+		WHERE schemaname = \$1
+		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
+		AddRow("memories_app_user").
+		AddRow("memories_updated_at").
+		AddRow("memories_deleted_at"))
 
 	service, err := NewService(WithHost("localhost"), WithPort(5432), WithDatabase("testdb"))
 	require.NoError(t, err)
@@ -1447,6 +1485,37 @@ func TestNewService_ConnectionSettingsPriority(t *testing.T) {
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
+	// Mock schema verification queries for public schema
+	// Mock table exists query
+	mock.ExpectQuery(`SELECT EXISTS \(
+		SELECT FROM information_schema.tables
+		WHERE table_schema = \$1
+		AND table_name = \$2
+	\)`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	// Mock columns query - match expected schema
+	mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = \$1
+		AND table_name = \$2
+		ORDER BY ordinal_position`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+		AddRow("memory_id", "text", "NO").
+		AddRow("app_name", "text", "NO").
+		AddRow("user_id", "text", "NO").
+		AddRow("memory_data", "jsonb", "NO").
+		AddRow("created_at", "timestamp without time zone", "NO").
+		AddRow("updated_at", "timestamp without time zone", "NO").
+		AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+	// Mock indexes query - match expected indexes
+	mock.ExpectQuery(`SELECT indexname
+		FROM pg_indexes
+		WHERE schemaname = \$1
+		AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
+		AddRow("memories_app_user").
+		AddRow("memories_updated_at").
+		AddRow("memories_deleted_at"))
+
 	service, err := NewService(
 		WithHost("customhost"),
 		WithPort(5433),
@@ -1864,6 +1933,37 @@ func TestNewService_WithSchema(t *testing.T) {
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 
+	// Mock schema verification queries for test_schema
+	// Mock table exists query
+	mock.ExpectQuery(`SELECT EXISTS \(
+		SELECT FROM information_schema.tables
+		WHERE table_schema = \$1
+		AND table_name = \$2
+	\)`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	// Mock columns query - match expected schema
+	mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = \$1
+		AND table_name = \$2
+		ORDER BY ordinal_position`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+		AddRow("memory_id", "text", "NO").
+		AddRow("app_name", "text", "NO").
+		AddRow("user_id", "text", "NO").
+		AddRow("memory_data", "jsonb", "NO").
+		AddRow("created_at", "timestamp without time zone", "NO").
+		AddRow("updated_at", "timestamp without time zone", "NO").
+		AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+	// Mock indexes query - match expected indexes
+	mock.ExpectQuery(`SELECT indexname
+		FROM pg_indexes
+		WHERE schemaname = \$1
+		AND tablename = \$2`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
+		AddRow("memories_app_user").
+		AddRow("memories_updated_at").
+		AddRow("memories_deleted_at"))
+
 	service, err := NewService(
 		WithHost("localhost"),
 		WithPort(5432),
@@ -1923,6 +2023,37 @@ func TestService_WithSchema(t *testing.T) {
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// Mock schema verification queries for test_schema
+	// Mock table exists query
+	mock.ExpectQuery(`SELECT EXISTS \(
+		SELECT FROM information_schema.tables
+		WHERE table_schema = \$1
+		AND table_name = \$2
+	\)`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	// Mock columns query - match expected schema
+	mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = \$1
+		AND table_name = \$2
+		ORDER BY ordinal_position`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+		AddRow("memory_id", "text", "NO").
+		AddRow("app_name", "text", "NO").
+		AddRow("user_id", "text", "NO").
+		AddRow("memory_data", "jsonb", "NO").
+		AddRow("created_at", "timestamp without time zone", "NO").
+		AddRow("updated_at", "timestamp without time zone", "NO").
+		AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+	// Mock indexes query - match expected indexes
+	mock.ExpectQuery(`SELECT indexname
+		FROM pg_indexes
+		WHERE schemaname = \$1
+		AND tablename = \$2`).WithArgs("test_schema", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
+		AddRow("memories_app_user").
+		AddRow("memories_updated_at").
+		AddRow("memories_deleted_at"))
 
 	service, err := NewService(
 		WithHost("localhost"),
