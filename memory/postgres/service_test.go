@@ -827,6 +827,37 @@ func setupMockService(t *testing.T, db *sql.DB, mock sqlmock.Sqlmock, opts ...Se
 		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		// Mock schema verification queries
+		// Mock table exists query
+		mock.ExpectQuery(`SELECT EXISTS \(
+			SELECT FROM information_schema.tables
+			WHERE table_schema = \$1
+			AND table_name = \$2
+		\)`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		// Mock columns query - match expected schema
+		mock.ExpectQuery(`SELECT column_name, data_type, is_nullable
+			FROM information_schema.columns
+			WHERE table_schema = \$1
+			AND table_name = \$2
+			ORDER BY ordinal_position`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"}).
+			AddRow("memory_id", "text", "NO").
+			AddRow("app_name", "text", "NO").
+			AddRow("user_id", "text", "NO").
+			AddRow("memory_data", "jsonb", "NO").
+			AddRow("created_at", "timestamp without time zone", "NO").
+			AddRow("updated_at", "timestamp without time zone", "NO").
+			AddRow("deleted_at", "timestamp without time zone", "YES"))
+
+		// Mock indexes query - match expected indexes
+		mock.ExpectQuery(`SELECT indexname
+			FROM pg_indexes
+			WHERE schemaname = \$1
+			AND tablename = \$2`).WithArgs("public", "memories").WillReturnRows(sqlmock.NewRows([]string{"indexname"}).
+			AddRow("memories_app_user").
+			AddRow("memories_updated_at").
+			AddRow("memories_deleted_at"))
 	}
 
 	// Ensure host is set if not already set
@@ -1934,4 +1965,41 @@ func TestGenerateMemoryID_DifferentTopics(t *testing.T) {
 	id2 := generateMemoryID(mem2)
 
 	assert.NotEqual(t, id1, id2, "Different topics should generate different IDs")
+}
+
+// Test parseTableName
+func TestParseTableName(t *testing.T) {
+	tests := []struct {
+		name           string
+		fullTableName  string
+		expectedSchema string
+		expectedTable  string
+	}{
+		{
+			name:           "simple table name",
+			fullTableName:  "memories",
+			expectedSchema: "public",
+			expectedTable:  "memories",
+		},
+		{
+			name:           "schema qualified table name",
+			fullTableName:  "myschema.memories",
+			expectedSchema: "myschema",
+			expectedTable:  "memories",
+		},
+		{
+			name:           "empty string",
+			fullTableName:  "",
+			expectedSchema: "public",
+			expectedTable:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema, table := parseTableName(tt.fullTableName)
+			assert.Equal(t, tt.expectedSchema, schema)
+			assert.Equal(t, tt.expectedTable, table)
+		})
+	}
 }
