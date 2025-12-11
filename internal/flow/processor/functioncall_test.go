@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
+	"sync"
 )
 
 // mockModel implements model.Model for testing
@@ -294,6 +295,82 @@ func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithMultipleMessages
 
 	assert.Equal(t, model.RoleUser, choices[1].Message.Role)
 	assert.Equal(t, "second-message", choices[1].Message.Content)
+}
+
+func TestExecuteToolCall_ToolResultMessagesCallback_Error(t *testing.T) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"error-tool": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "error-tool", Description: "error-tool"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+		return nil, fmt.Errorf("callback failure")
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{AgentName: "error-agent"}
+
+	tc := model.ToolCall{
+		ID: "call-error",
+		Function: model.FunctionDefinitionParam{
+			Name:      "error-tool",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnore, err := p.executeToolCall(ctx, inv, tc, tools, 0, nil)
+	require.Error(t, err)
+	require.True(t, shouldIgnore)
+	require.Nil(t, choices)
+	assert.Contains(t, err.Error(), "tool callback error")
+}
+
+func TestExecuteToolCall_ToolResultMessagesCallback_UnsupportedReturnType(t *testing.T) {
+	ctx := context.Background()
+
+	resultValue := map[string]any{"value": 1}
+	tools := map[string]tool.Tool{
+		"echo": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return resultValue, nil
+			},
+		},
+	}
+
+	callbacks := tool.NewCallbacks()
+	// Return a type that applyToolResultMessagesCallback does not understand.
+	callbacks.RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+		return struct{ Unsupported string }{Unsupported: "value"}, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{AgentName: "echo-agent"}
+
+	tc := model.ToolCall{
+		ID: "call-unsupported",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnore, err := p.executeToolCall(ctx, inv, tc, tools, 0, nil)
+	require.NoError(t, err)
+	require.True(t, shouldIgnore)
+	require.Len(t, choices, 1)
+
+	wantBytes, err := json.Marshal(resultValue)
+	require.NoError(t, err)
+	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
+	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
 }
 
 func TestExecuteToolCallsInParallel(t *testing.T) {
@@ -652,6 +729,28 @@ func (m *mockLongRunningTool) LongRunning() bool {
 	return m.isLongRunning
 }
 
+// mockNilLongRunningTool is a long-running tool that returns nil result.
+// This is used to exercise the branch in runParallelToolCall where
+// executeToolCall returns no choices (len(choices) == 0).
+type mockNilLongRunningTool struct {
+	name string
+}
+
+func (m *mockNilLongRunningTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        m.name,
+		Description: "Mock nil long-running tool",
+	}
+}
+
+func (m *mockNilLongRunningTool) Call(ctx context.Context, args []byte) (any, error) {
+	return nil, nil
+}
+
+func (m *mockNilLongRunningTool) LongRunning() bool {
+	return true
+}
+
 // TestFlow_ParallelToolExecution_Unified replaces multiple individual parallel tests
 // This unified test covers all the scenarios in a more maintainable way
 func TestFlow_ParallelToolExecution_Unified(t *testing.T) {
@@ -717,6 +816,50 @@ func TestFlow_ParallelToolExecution_Unified(t *testing.T) {
 			runParallelToolTest(t, tc)
 		})
 	}
+}
+
+func TestRunParallelToolCall_LongRunningToolNoImmediateResult(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(true, nil)
+
+	tools := map[string]tool.Tool{
+		"long": &mockNilLongRunningTool{name: "long"},
+	}
+
+	tc := model.ToolCall{
+		ID: "call-long",
+		Function: model.FunctionDefinitionParam{
+			Name:      "long",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	inv := &agent.Invocation{AgentName: "long-agent"}
+	llmResp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					tc,
+				},
+			},
+		}},
+	}
+
+	resultChan := make(chan toolResult, 1)
+	eventChan := make(chan *event.Event, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	p.runParallelToolCall(ctx, &wg, inv, llmResp, tools, eventChan, resultChan, 0, tc)
+	wg.Wait()
+	close(resultChan)
+
+	res, ok := <-resultChan
+	require.True(t, ok)
+	assert.Equal(t, 0, res.index)
+	assert.Nil(t, res.event)
+	assert.NoError(t, res.err)
 }
 
 func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
