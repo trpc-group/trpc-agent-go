@@ -168,6 +168,73 @@ func TestTrackerReuseEnsuredSession(t *testing.T) {
 	require.Len(t, trackEvents.Events, 2)
 }
 
+func TestTrackerAppendEventAggregateError(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc, WithAggregatorFactory(func(context.Context, ...aggregator.Option) aggregator.Aggregator {
+		return &errorAggregator{}
+	}))
+	require.NoError(t, err)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	err = tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run"))
+	require.ErrorContains(t, err, "aggregate event: agg boom")
+}
+
+func TestTrackerSessionUnavailableWhenCreateReturnsNil(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	var getCalls, createCalls int
+	svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+		getCalls++
+		return nil, nil
+	}
+	svc.createSessionFn = func(context.Context, session.Key, session.StateMap, ...session.Option) (*session.Session, error) {
+		createCalls++
+		return nil, nil
+	}
+	svc.appendTrackFn = func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error {
+		return errors.New("should not be called")
+	}
+
+	tracker, err := New(svc)
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+	err = tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run"))
+	require.ErrorContains(t, err, "session unavailable")
+	require.Equal(t, 1, getCalls)
+	require.Equal(t, 1, createCalls)
+}
+
+func TestTrackerEnsureSessionUsesExisting(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	sess := session.NewSession("app", "user", "thread")
+	var createCalls int
+	svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+		return sess, nil
+	}
+	svc.createSessionFn = func(context.Context, session.Key, session.StateMap, ...session.Option) (*session.Session, error) {
+		createCalls++
+		return nil, errors.New("should not create")
+	}
+	svc.appendTrackFn = func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error {
+		return nil
+	}
+
+	trk, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+	require.NoError(t, trk.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+	require.Equal(t, 0, createCalls)
+
+	internal := trk.(*tracker)
+	state := internal.getSessionState(ctx, key)
+	require.Equal(t, sess, state.session)
+}
+
 func TestTrackerGetEventsErrors(t *testing.T) {
 	ctx := context.Background()
 	validKey := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
@@ -517,4 +584,14 @@ func (f *failingEvent) ToJSON() ([]byte, error) {
 
 func (f *failingEvent) GetBaseEvent() *aguievents.BaseEvent {
 	return &f.base
+}
+
+type errorAggregator struct{}
+
+func (e *errorAggregator) Append(context.Context, aguievents.Event) ([]aguievents.Event, error) {
+	return nil, errors.New("agg boom")
+}
+
+func (e *errorAggregator) Flush(context.Context) ([]aguievents.Event, error) {
+	return nil, nil
 }
