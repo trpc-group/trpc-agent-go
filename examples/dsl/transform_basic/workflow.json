@@ -40,7 +40,7 @@
       "node_type": "builtin.end",
       "config": {
         "expr": {
-          "expression": "{ \"message\": \"Transform node has written its result into state.result\", \"result\": state.result }",
+          "expression": "{ \"message\": \"Transform node has produced a structured object\", \"result\": nodes.transform.output_parsed }",
           "format": "cel"
         },
         "output_schema": {
@@ -51,8 +51,8 @@
               "description": "Human-readable summary of the transform step"
             },
             "result": {
-              "type": "string",
-              "description": "Stringified view of the transform result stored in state.result"
+              "type": "object",
+              "description": "Structured object produced by the transform node"
             }
           },
           "additionalProperties": false

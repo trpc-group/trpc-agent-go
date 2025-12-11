@@ -143,7 +143,7 @@
       "node_type": "builtin.end",
       "config": {
         "expr": {
-          "expression": "{ \"message\": \"Graph timeline demo completed\", \"transform_result\": state.result, \"agent_reply\": state.last_response }",
+          "expression": "{ \"message\": \"Graph timeline demo completed\", \"transform_result\": nodes.transform.output_parsed, \"agent_reply\": state.last_response }",
           "format": "cel"
         },
         "output_schema": {
@@ -155,7 +155,7 @@
             },
             "transform_result": {
               "type": "object",
-              "description": "Structured object produced by the transform node and stored in state.result"
+              "description": "Structured object produced by the transform node"
             },
             "agent_reply": {
               "type": "string",

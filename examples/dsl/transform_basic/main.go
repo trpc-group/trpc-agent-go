@@ -103,11 +103,17 @@ func executeGraph(ctx context.Context, appRunner runner.Runner, userID, sessionI
 		}
 
 		if ev.StateDelta != nil {
-			// Read transform result from state.result
-			if raw, ok := ev.StateDelta["result"]; ok {
-				var v any
-				if err := json.Unmarshal(raw, &v); err == nil {
-					transformResult = v
+			// Read transform result from node_structured.transform.output_parsed.
+			if raw, ok := ev.StateDelta["node_structured"]; ok {
+				var ns map[string]any
+				if err := json.Unmarshal(raw, &ns); err == nil {
+					if nodeRaw, ok := ns["transform"]; ok {
+						if nodeMap, ok := nodeRaw.(map[string]any); ok {
+							if parsed, ok := nodeMap["output_parsed"]; ok {
+								transformResult = parsed
+							}
+						}
+					}
 				}
 			}
 
@@ -129,7 +135,7 @@ func executeGraph(ctx context.Context, appRunner runner.Runner, userID, sessionI
 		}
 	}
 
-	fmt.Println("📊 Transform Result (state.result)")
+	fmt.Println("📊 Transform Result (nodes.transform.output_parsed)")
 	fmt.Println("==================================================")
 	if transformResult != nil {
 		b, _ := json.MarshalIndent(transformResult, "", "  ")

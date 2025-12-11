@@ -1,6 +1,10 @@
 package cel
 
-import "testing"
+import (
+	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+)
 
 // TestEvalBool_SimpleScalars verifies EvalBool on basic boolean expressions.
 func TestEvalBool_SimpleScalars(t *testing.T) {
@@ -96,7 +100,7 @@ func TestEval_ObjectAndArrayResult(t *testing.T) {
 // TestEval_NodesView verifies that the special "nodes" variable mirrors
 // state["node_structured"] in CEL expressions.
 func TestEval_NodesView(t *testing.T) {
-	state := map[string]any{
+	rawState := map[string]any{
 		"node_structured": map[string]any{
 			"classifier": map[string]any{
 				"output_parsed": map[string]any{
@@ -108,13 +112,26 @@ func TestEval_NodesView(t *testing.T) {
 	}
 
 	expr := `nodes.classifier.output_parsed.classification == "http" && nodes.classifier.output_parsed.score > 0.5`
-	ok, err := EvalBool(expr, state, nil)
-	if err != nil {
-		t.Fatalf("EvalBool(%q) returned error: %v", expr, err)
-	}
-	if !ok {
-		t.Fatalf("EvalBool(%q) = false, want true", expr)
-	}
+	t.Run("with map state", func(t *testing.T) {
+		ok, err := EvalBool(expr, rawState, nil)
+		if err != nil {
+			t.Fatalf("EvalBool(%q) returned error: %v", expr, err)
+		}
+		if !ok {
+			t.Fatalf("EvalBool(%q) = false, want true", expr)
+		}
+	})
+
+	t.Run("with graph.State", func(t *testing.T) {
+		state := graph.State(rawState)
+		ok, err := EvalBool(expr, state, nil)
+		if err != nil {
+			t.Fatalf("EvalBool(%q) returned error: %v", expr, err)
+		}
+		if !ok {
+			t.Fatalf("EvalBool(%q) = false, want true", expr)
+		}
+	})
 }
 
 // TestEval_ErrorCases ensures obvious error conditions surface as Go errors.

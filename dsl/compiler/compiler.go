@@ -32,6 +32,12 @@ type Compiler struct {
 	reducerRegistry *registry.ReducerRegistry
 	agentRegistry   *registry.AgentRegistry
 	schemaInference *dsl.SchemaInference
+
+	// mcpInputSource records, for each builtin.mcp node ID, the ID of its
+	// primary upstream node. This is used to construct the "input" view in
+	// MCP parameter expressions so that input.* refers to the immediate
+	// predecessor's structured output, not a global state field.
+	mcpInputSource map[string]string
 }
 
 // whileBodyConfig describes the nested subgraph that forms the body of a
@@ -179,6 +185,9 @@ func (c *Compiler) Compile(graphDef *dsl.Graph) (*graph.Graph, error) {
 		return nil, fmt.Errorf("graph is nil")
 	}
 
+	// Ensure per-compile transient maps are reset.
+	c.mcpInputSource = nil
+
 	// Step 0: Expand structural builtin.while nodes. While is represented as
 	// a nested subgraph in the engine DSL but compiled into a flat set of
 	// nodes/edges plus a conditional back-edge in the underlying StateGraph.
@@ -211,6 +220,32 @@ func (c *Compiler) Compile(graphDef *dsl.Graph) (*graph.Graph, error) {
 
 	// Step 2: Create StateGraph
 	stateGraph := graph.NewStateGraph(schema)
+
+	// Build a quick index from node ID to node for later lookups.
+	nodeByID := make(map[string]dsl.Node, len(graphDef.Nodes))
+	for _, n := range graphDef.Nodes {
+		nodeByID[n.ID] = n
+	}
+
+	// Pre-compute the primary input source for builtin.mcp nodes so that
+	// parameter expressions can treat input.* as the immediate upstream
+	// structured output, mirroring the semantics used by builtin
+	// conditions and while.
+	mcpInputSource := make(map[string]string)
+	for _, edge := range graphDef.Edges {
+		targetNode, ok := nodeByID[edge.Target]
+		if !ok {
+			continue
+		}
+		if targetNode.EngineNode.NodeType != "builtin.mcp" {
+			continue
+		}
+		if existing, exists := mcpInputSource[edge.Target]; exists && existing != edge.Source {
+			return nil, fmt.Errorf("builtin.mcp node %s has multiple incoming edges (%s, %s); it must have a single upstream node for input.* semantics", edge.Target, existing, edge.Source)
+		}
+		mcpInputSource[edge.Target] = edge.Source
+	}
+	c.mcpInputSource = mcpInputSource
 
 	// Step 3: Add all nodes
 	for _, node := range graphDef.Nodes {
@@ -684,6 +719,16 @@ func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 		params = p
 	}
 
+	// Resolve the primary upstream node for this MCP node, if any, so that
+	// we can build a stable input.* view from the immediate predecessor's
+	// structured output (mirroring condition/while semantics).
+	fromNodeID := ""
+	if c.mcpInputSource != nil {
+		if src, ok := c.mcpInputSource[node.ID]; ok {
+			fromNodeID = src
+		}
+	}
+
 	return func(ctx context.Context, state graph.State) (interface{}, error) {
 		// Resolve the MCP tool from the toolset.
 		var selected tool.Tool
@@ -702,6 +747,15 @@ func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 			return nil, fmt.Errorf("MCP tool %q is not callable", toolName)
 		}
 
+		// Build the input view for MCP param expressions from the immediate
+		// upstream node's structured output. This keeps input.* scoped to
+		// the local edge (like builtin conditions / while) instead of a
+		// global state field.
+		var input any
+		if fromNodeID != "" {
+			input = buildNodeInputView(state, fromNodeID)
+		}
+
 		// Build arguments object by evaluating params expressions (if configured).
 		args := make(map[string]any)
 		for name, raw := range params {
@@ -714,7 +768,7 @@ func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 				continue
 			}
 
-			value, err := dslcel.Eval(exprStr, state, nil)
+			value, err := dslcel.Eval(exprStr, state, input)
 			if err != nil {
 				return nil, fmt.Errorf("failed to evaluate MCP param %q: %w", name, err)
 			}
@@ -735,15 +789,76 @@ func (c *Compiler) createMCPNodeFunc(node dsl.Node) (graph.NodeFunc, error) {
 			return nil, nil
 		}
 
-		// Attach the MCP result under node_structured[nodeID].results so that
-		// downstream nodes can consume it via nodes.<id>.results or
-		// state.node_structured.<id>.results.
+		// Normalize MCP content into a JSON-friendly slice and aggregate text.
+		normalized := make([]map[string]any, 0)
+		var textBuf []string
+
+		if b, err := json.Marshal(result); err == nil {
+			var tmp []map[string]any
+			if err := json.Unmarshal(b, &tmp); err == nil {
+				normalized = tmp
+			}
+		}
+
+		for _, item := range normalized {
+			if t, ok := item["type"].(string); ok && t == "text" {
+				if txt, ok := item["text"].(string); ok {
+					if strings.TrimSpace(txt) != "" {
+						textBuf = append(textBuf, txt)
+					}
+				}
+			}
+		}
+
+		resultsText := strings.Join(textBuf, "\n")
+
+		// Best-effort JSON extraction from the aggregated text. This mirrors the
+		// LLMAgent structured output behavior and gives downstream Transform /
+		// End nodes a structured object when the MCP tool returns JSON.
+		var parsed any
+		hasParsed := false
+		if strings.TrimSpace(resultsText) != "" {
+			if jsonText, ok := extractFirstJSONObjectFromText(resultsText); ok {
+				var v any
+				if err := json.Unmarshal([]byte(jsonText), &v); err == nil {
+					parsed = v
+					hasParsed = true
+				}
+			}
+		}
+
+		if len(normalized) == 0 && resultsText == "" {
+			// No recognizable structure; do not emit node_structured to avoid
+			// surprising callers.
+			return nil, nil
+		}
+
+		// Merge with existing node_structured cache (if any) to avoid clobbering
+		// structured outputs from other nodes.
+		nodeStructured := map[string]any{}
+		if existingRaw, ok := state["node_structured"]; ok {
+			if existingMap, ok := existingRaw.(map[string]any); ok && existingMap != nil {
+				for k, v := range existingMap {
+					nodeStructured[k] = v
+				}
+			}
+		}
+
+		entry := map[string]any{}
+		if len(normalized) > 0 {
+			entry["results"] = normalized
+		}
+		if resultsText != "" {
+			entry["results_text"] = resultsText
+		}
+		if hasParsed {
+			entry["output_parsed"] = parsed
+		}
+
+		nodeStructured[node.ID] = entry
+
 		return graph.State{
-			"node_structured": map[string]any{
-				node.ID: map[string]any{
-					"results": result,
-				},
-			},
+			"node_structured": nodeStructured,
 		}, nil
 	}, nil
 }

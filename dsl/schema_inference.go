@@ -282,8 +282,12 @@ func (si *SchemaInference) buildParameterMap(graphDef *Graph) (map[string]*param
 		component, exists := si.registry.Get(engine.NodeType)
 		if !exists {
 			// For builtin components not present in the registry, fall back to
-			// processing DSL-level outputs only.
-			if engine.NodeType == "builtin.llm" || engine.NodeType == "builtin.tools" {
+			// processing DSL-level outputs only. builtin.mcp currently does not
+			// contribute additional state fields, but we still treat it as a
+			// known builtin so schema inference does not fail.
+			if engine.NodeType == "builtin.llm" ||
+				engine.NodeType == "builtin.tools" ||
+				engine.NodeType == "builtin.mcp" {
 				if err := si.addDSLOutputs(node, params); err != nil {
 					return nil, fmt.Errorf("node %s: %w", node.ID, err)
 				}

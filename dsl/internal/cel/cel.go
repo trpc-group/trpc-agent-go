@@ -126,8 +126,13 @@ func (p *BoolProgram) Eval(state any, input any) (bool, error) {
 
 	// Best-effort extraction of nodes view from state for convenience.
 	nodes := any(nil)
-	if m, ok := state.(map[string]any); ok {
-		if ns, ok := m["node_structured"]; ok {
+	switch s := state.(type) {
+	case map[string]any:
+		if ns, ok := s["node_structured"]; ok {
+			nodes = ns
+		}
+	case graph.State:
+		if ns, ok := s["node_structured"]; ok {
 			nodes = ns
 		}
 	}
@@ -194,8 +199,13 @@ func Eval(expr string, state any, input any) (any, error) {
 
 	// Best-effort extraction of nodes view from state for convenience.
 	nodes := any(nil)
-	if m, ok := state.(map[string]any); ok {
-		if ns, ok := m["node_structured"]; ok {
+	switch s := state.(type) {
+	case map[string]any:
+		if ns, ok := s["node_structured"]; ok {
+			nodes = ns
+		}
+	case graph.State:
+		if ns, ok := s["node_structured"]; ok {
 			nodes = ns
 		}
 	}

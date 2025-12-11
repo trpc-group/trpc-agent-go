@@ -16,6 +16,7 @@ import (
 	dslcel "trpc.group/trpc-go/trpc-agent-go/dsl/internal/cel"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 func init() {
@@ -25,8 +26,9 @@ func init() {
 }
 
 // TransformComponent is a data reshaping component. It evaluates an expression
-// into a new structured object and writes it into state as a regular output
-// field so downstream nodes can consume it.
+// into a new structured object and exposes it via the per-node structured
+// output cache so downstream nodes can consume it (typically through
+// input.output_parsed.* or nodes.<id>.output_parsed.* in CEL expressions).
 //
 // The expression is a CEL expression evaluated in an environment that
 // exposes:
@@ -46,20 +48,8 @@ func (c *TransformComponent) Metadata() registry.ComponentMetadata {
 		Category:    "Data",
 		Version:     "1.0.0",
 
-		Inputs: []registry.ParameterSchema{},
-
-		Outputs: []registry.ParameterSchema{
-			{
-				Name:        "result",
-				DisplayName: "Transform Result",
-				Description: "Structured object produced by this Transform node",
-				Type:        "map[string]any",
-				TypeID:      "transform.output",
-				Kind:        "object",
-				GoType:      mapStringAnyType,
-				Required:    false,
-			},
-		},
+		Inputs:  []registry.ParameterSchema{},
+		Outputs: []registry.ParameterSchema{},
 
 		ConfigSchema: []registry.ParameterSchema{
 			{
@@ -87,9 +77,18 @@ func (c *TransformComponent) Metadata() registry.ComponentMetadata {
 }
 
 // Execute evaluates the configured expression into a structured object and
-// returns it under the "result" key in the state. If no expression is
-// configured, the state is left unchanged.
+// stores it in the per-node structured output cache:
+//   state["node_structured"][<node_id>].output_parsed = <expr result>
+// If no expression is configured, the state is left unchanged.
 func (c *TransformComponent) Execute(ctx context.Context, config registry.ComponentConfig, state graph.State) (any, error) {
+	// Best-effort extraction of current node ID for debugging/logging.
+	var nodeID string
+	if nodeIDData, exists := state[graph.StateKeyCurrentNodeID]; exists {
+		if id, ok := nodeIDData.(string); ok {
+			nodeID = id
+		}
+	}
+
 	rawExpr := config.Get("expr")
 	if rawExpr == nil {
 		// No transform configured; leave state unchanged.
@@ -108,17 +107,39 @@ func (c *TransformComponent) Execute(ctx context.Context, config registry.Compon
 		return graph.State{}, nil
 	}
 
+	log.Infof("builtin.transform[%s]: evaluating CEL expr=%q", nodeID, exprStr)
+
 	// Evaluate the expression using CEL with the current graph.State bound
 	// to the "state" variable. For builtin.transform we do not currently
 	// provide a structured "input" object, so it is nil.
 	value, err := dslcel.Eval(exprStr, state, nil)
 	if err != nil {
+		log.Warnf("builtin.transform[%s]: CEL evaluation failed for expr=%q: %v", nodeID, exprStr, err)
 		// Be tolerant on errors: skip the transform but do not fail the
 		// entire node execution.
 		return graph.State{}, nil
 	}
 
-	return graph.State{
-		"result": value,
-	}, nil
+	log.Infof("builtin.transform[%s]: CEL evaluation succeeded; writing node_structured output_parsed", nodeID)
+
+	// Merge with existing node_structured cache to avoid clobbering other
+	// nodes' structured outputs.
+	out := graph.State{}
+	if nodeID != "" {
+		nodeStructured := map[string]any{}
+		if existingRaw, ok := state["node_structured"]; ok {
+			if existingMap, ok := existingRaw.(map[string]any); ok && existingMap != nil {
+				for k, v := range existingMap {
+					nodeStructured[k] = v
+				}
+			}
+		}
+
+		nodeStructured[nodeID] = map[string]any{
+			"output_parsed": value,
+		}
+		out["node_structured"] = nodeStructured
+	}
+
+	return out, nil
 }

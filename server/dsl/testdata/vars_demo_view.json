@@ -98,7 +98,7 @@
           "node_type": "builtin.end",
           "config": {
             "expr": {
-              "expression": "{ \"message\": \"vars_demo finished\", \"echo\": state.result }",
+              "expression": "{ \"message\": \"vars_demo finished\", \"echo\": nodes.transform.output_parsed }",
               "format": "cel"
             },
             "output_schema": {
