@@ -206,24 +206,30 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	defer span.End()
 	startTime := time.Now()
-	ctx, choice, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
+	ctx, choices, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
 		ctx, invocation, toolCall, tools, index, eventChan,
 	)
 	if err != nil {
 		if shouldIgnoreError {
 			// Create error choice for ignorable errors
-			choice = p.createErrorChoice(index, toolCall.ID, err.Error())
+			choice := p.createErrorChoice(index, toolCall.ID, err.Error())
+			choices = []model.Choice{*choice}
 		} else {
 			// Return critical errors (e.g., stop errors) immediately
 			return nil, err
 		}
 	}
-	if choice == nil {
+	if len(choices) == 0 {
 		return nil, nil
 	}
-	choice.Message.ToolName = toolCall.Function.Name
+	// Annotate only tool messages with ToolName for observability.
+	for i := range choices {
+		if choices[i].Message.Role == model.RoleTool && choices[i].Message.ToolName == "" {
+			choices[i].Message.ToolName = toolCall.Function.Name
+		}
+	}
 	toolEvent := newToolCallResponseEvent(
-		invocation, llmResponse, []model.Choice{*choice},
+		invocation, llmResponse, choices,
 	)
 	if toolCall.Function.Name == transfer.TransferToolName {
 		toolEvent.Tag = event.TransferTag
@@ -240,7 +246,8 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	)
 	// Attach state delta if the tool provides it.
 	if tl, ok := tools[toolCall.Function.Name]; ok {
-		p.attachStateDelta(tl, modifiedArgs, choice, toolEvent)
+		// Use the first choice as the canonical tool result for state delta.
+		p.attachStateDelta(tl, modifiedArgs, &choices[0], toolEvent)
 	}
 
 	if invocation != nil {
@@ -343,7 +350,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	defer span.End()
 	startTime := time.Now()
 	// Execute the tool (streamable or callable) with callbacks.
-	ctx, choice, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
+	ctx, choices, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
 		ctx, invocation, tc, tools, index, eventChan,
 	)
 	// Handle errors based on whether they are ignorable or critical.
@@ -370,15 +377,22 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: returnErr})
 		return
 	}
-	// Long-running tools may return nil to indicate no immediate event.
-	if choice == nil {
+
+	// No error and at least one choice means we have tool result messages.
+	if len(choices) == 0 {
 		p.sendToolResult(ctx, resultChan, toolResult{index: index})
 		return
 	}
 
-	choice.Message.ToolName = tc.Function.Name
+	// Annotate only tool messages with ToolName for observability.
+	for i := range choices {
+		if choices[i].Message.Role == model.RoleTool && choices[i].Message.ToolName == "" {
+			choices[i].Message.ToolName = tc.Function.Name
+		}
+	}
+
 	toolCallResponseEvent := newToolCallResponseEvent(
-		invocation, llmResponse, []model.Choice{*choice},
+		invocation, llmResponse, choices,
 	)
 	if tc.Function.Name == transfer.TransferToolName {
 		toolCallResponseEvent.Tag = event.TransferTag
@@ -408,7 +422,8 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}
 	// Attach state delta if the tool provides it.
 	if tl, ok := tools[tc.Function.Name]; ok {
-		p.attachStateDelta(tl, modifiedArgs, choice, toolCallResponseEvent)
+		// Use the first choice as the canonical tool result for state delta.
+		p.attachStateDelta(tl, modifiedArgs, &choices[0], toolCallResponseEvent)
 	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
@@ -564,7 +579,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	tools map[string]tool.Tool,
 	index int,
 	eventChan chan<- *event.Event,
-) (context.Context, *model.Choice, []byte, bool, error) {
+) (context.Context, []model.Choice, []byte, bool, error) {
 	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
@@ -603,7 +618,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		}
 	}
 
-	// Marshal the result to JSON.
+	// Marshal the result to JSON for the default tool message.
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		// Marshal failures (for example, NaN in floats) do not
@@ -615,16 +630,84 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
 
+	defaultMsg := model.Message{
+		Role:    model.RoleTool,
+		Content: string(resultBytes),
+		ToolID:  toolCall.ID,
+	}
+
+	choices := []model.Choice{{Index: index, Message: defaultMsg}}
+
+	if p.toolCallbacks != nil && p.toolCallbacks.ToolResultMessages != nil {
+		customChoices, overridden, cbErr := p.applyToolResultMessagesCallback(
+			ctx, toolCall, tl, result, modifiedArgs, index, defaultMsg,
+		)
+		if cbErr != nil {
+			return ctx, nil, modifiedArgs, true, cbErr
+		}
+		if overridden {
+			choices = customChoices
+		}
+	}
+
 	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
 
-	return ctx, &model.Choice{
-		Index: index,
-		Message: model.Message{
-			Role:    model.RoleTool,
-			Content: string(resultBytes),
-			ToolID:  toolCall.ID,
-		},
-	}, modifiedArgs, true, nil
+	return ctx, choices, modifiedArgs, true, nil
+}
+
+// applyToolResultMessagesCallback invokes the optional ToolResultMessages callback and
+// converts its return value into choices. It returns:
+//   - customChoices: the choices derived from callback output
+//   - overridden: whether the default tool message should be replaced
+//   - err: non-nil when the callback itself fails
+func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	tl tool.Tool,
+	result any,
+	modifiedArgs []byte,
+	index int,
+	defaultMsg model.Message,
+) ([]model.Choice, bool, error) {
+	raw, cbErr := p.toolCallbacks.ToolResultMessages(ctx, &tool.ToolResultMessagesInput{
+		ToolName:          toolCall.Function.Name,
+		Declaration:       tl.Declaration(),
+		Arguments:         modifiedArgs,
+		Result:            result,
+		ToolCallID:        toolCall.ID,
+		DefaultToolMessage: defaultMsg,
+	})
+	if cbErr != nil {
+		log.Errorf("ToolResultMessages callback failed for %s: %v", toolCall.Function.Name, cbErr)
+		return nil, false, fmt.Errorf("tool callback error: %w", cbErr)
+	}
+
+	var msgs []model.Message
+	switch v := raw.(type) {
+	case nil:
+		// No override.
+	case model.Message:
+		msgs = []model.Message{v}
+	case []model.Message:
+		msgs = v
+	default:
+		log.Warnf("ToolResultMessages callback for %s returned unsupported type %T; expected model.Message or []model.Message", toolCall.Function.Name, v)
+	}
+
+	if len(msgs) == 0 {
+		return nil, false, nil
+	}
+
+	customChoices := make([]model.Choice, 0, len(msgs))
+	for _, msg := range msgs {
+		customChoices = append(customChoices, model.Choice{
+			Index:   index,
+			Message: msg,
+		})
+	}
+	// When a callback is provided and returns non-empty messages,
+	// the framework defers entirely to the callback for correctness.
+	return customChoices, true, nil
 }
 
 // createErrorChoice creates an error choice for tool execution failures.

@@ -112,9 +112,10 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 		},
 	}
 
-	_, choice, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	require.NoError(t, err)
-	require.NotNil(t, choice)
+	require.NotNil(t, choices)
+	require.NotEmpty(t, choices)
 
 	// The tool name should have been mapped to transfer_to_agent by the time execution happens.
 	// Returned Tool choice stores content only; we verify the captured args passed to our mock tool.
@@ -153,11 +154,146 @@ func TestExecuteToolCall(t *testing.T) {
 		},
 	}
 
-	_, choice, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	res, _ := json.Marshal("Tokyo'weather is good")
 	require.NoError(t, err)
-	require.NotNil(t, choice)
-	assert.Equal(t, string(res), choice.Message.Content)
+	require.Len(t, choices, 1)
+	assert.Equal(t, string(res), choices[0].Message.Content)
+}
+
+func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T) {
+	ctx := context.Background()
+
+	resultValue := map[string]any{"value": 42}
+	tools := map[string]tool.Tool{
+		"echo": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return resultValue, nil
+			},
+		},
+	}
+
+	callbacks := tool.NewCallbacks()
+	var called bool
+	callbacks.RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+		called = true
+		return nil, nil // explicit "no override"
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{AgentName: "echo-agent"}
+
+	pc := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	require.NoError(t, err)
+	require.True(t, called, "ToolResultMessages callback should be invoked")
+	require.Len(t, choices, 1)
+
+	wantBytes, err := json.Marshal(resultValue)
+	require.NoError(t, err)
+	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
+	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
+	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
+}
+
+func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithSingleMessage(t *testing.T) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"echo": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return "unused", nil
+			},
+		},
+	}
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+		return model.Message{
+			Role:    model.RoleUser,
+			Content: "from-callback",
+			ToolID:  in.ToolCallID,
+		}, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{AgentName: "echo-agent"}
+
+	pc := model.ToolCall{
+		ID: "call-2",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+
+	msg := choices[0].Message
+	assert.Equal(t, model.RoleUser, msg.Role)
+	assert.Equal(t, "from-callback", msg.Content)
+	assert.Equal(t, pc.ID, msg.ToolID)
+}
+
+func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithMultipleMessages(t *testing.T) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"echo": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return "unused", nil
+			},
+		},
+	}
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+		return []model.Message{
+			{
+				Role:    model.RoleTool,
+				Content: `{"ok":true}`,
+				ToolID:  in.ToolCallID,
+			},
+			{
+				Role:    model.RoleUser,
+				Content: "second-message",
+			},
+		}, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{AgentName: "echo-agent"}
+
+	pc := model.ToolCall{
+		ID: "call-3",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, choices, 2)
+
+	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
+	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
+	assert.Equal(t, `{"ok":true}`, choices[0].Message.Content)
+
+	assert.Equal(t, model.RoleUser, choices[1].Message.Role)
+	assert.Equal(t, "second-message", choices[1].Message.Content)
 }
 
 func TestExecuteToolCallsInParallel(t *testing.T) {
@@ -602,10 +738,10 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 		},
 	}
 
-	_, choice, _, shouldIgnoreError, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
+	_, choices, _, shouldIgnoreError, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
 	require.True(t, shouldIgnoreError)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
-	require.Nil(t, choice)
+	require.Nil(t, choices)
 }
 
 func TestFindCompatibleTool(t *testing.T) {
@@ -836,12 +972,12 @@ func TestExecuteToolCall_MarshalError_IsIgnorable(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"bad": &badResultTool{dec: &tool.Declaration{Name: "bad"}},
 	}
-	_, choice, _, ignorable, err := p.executeToolCall(
+	_, choices, _, ignorable, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
 	require.Error(t, err)
 	require.True(t, ignorable)
-	require.Nil(t, choice)
+	require.Nil(t, choices)
 	require.Contains(t, err.Error(), ErrorMarshalResult)
 }
 
@@ -1055,12 +1191,12 @@ func TestExecuteToolCall_MarshalErrorIgnored(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
-	_, choice, _, ign, err := p.executeToolCall(
+	_, choices, _, ign, err := p.executeToolCall(
 		ctx, inv, tc, tools, 0, nil,
 	)
 	require.True(t, ign)
 	require.Error(t, err)
-	require.Nil(t, choice)
+	require.Nil(t, choices)
 	require.Contains(t, err.Error(), ErrorMarshalResult)
 }
 
