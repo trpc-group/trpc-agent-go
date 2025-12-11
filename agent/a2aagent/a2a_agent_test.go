@@ -557,6 +557,35 @@ func TestA2AAgent_Run_ErrorCases(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "error when streaming event converter is nil",
+			agent: &A2AAgent{
+				name:             "test-agent",
+				eventConverter:   nil, // force runStreaming to fail immediately
+				streamingBufSize: defaultStreamingChannelSize,
+				enableStreaming:  boolPtr(true),
+				a2aClient:        &client.A2AClient{}, // non-nil so Run() proceeds to runStreaming
+			},
+			invocation: &agent.Invocation{
+				InvocationID: "test-inv",
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "test message",
+				},
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, eventChan <-chan *event.Event, err error) {
+				if err == nil {
+					t.Fatal("expected error when event converter is nil in streaming mode")
+				}
+				if !strings.Contains(err.Error(), "event converter not set") {
+					t.Errorf("unexpected error message: %v", err)
+				}
+				if eventChan != nil {
+					t.Error("expected event channel to be nil on error")
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
