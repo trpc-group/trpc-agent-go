@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
+	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan"
 	"trpc.group/trpc-go/trpc-agent-go/model/ollama"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -27,6 +28,7 @@ func init() {
 	Register("anthropic", anthropicProvider)
 	Register("gemini", geminiProvider)
 	Register("ollama", ollamaProvider)
+	Register("hunyuan", hunyuanProvider)
 }
 
 // Provider builds a model.Model instance.
@@ -266,4 +268,46 @@ func ollamaProvider(opts *Options) (model.Model, error) {
 	}
 	res = append(res, opts.OllamaOption...)
 	return ollama.New(opts.ModelName, res...), nil
+}
+
+// hunyuanProvider builds a Hunyuan-compatible model instance using the resolved options.
+func hunyuanProvider(opts *Options) (model.Model, error) {
+	var res []hunyuan.Option
+	if opts.BaseURL != "" {
+		res = append(res, hunyuan.WithHost(opts.BaseURL))
+	}
+	if opts.ChannelBufferSize != nil {
+		res = append(res, hunyuan.WithChannelBufferSize(*opts.ChannelBufferSize))
+	}
+	if cb := opts.Callbacks; cb != nil {
+		if cb.HunyuanChatRequest != nil {
+			res = append(res, hunyuan.WithChatRequestCallback(cb.HunyuanChatRequest))
+		}
+		if cb.HunyuanChatResponse != nil {
+			res = append(res, hunyuan.WithChatResponseCallback(cb.HunyuanChatResponse))
+		}
+		if cb.HunyuanChatChunk != nil {
+			res = append(res, hunyuan.WithChatChunkCallback(cb.HunyuanChatChunk))
+		}
+		if cb.HunyuanStreamComplete != nil {
+			res = append(res, hunyuan.WithChatStreamCompleteCallback(cb.HunyuanStreamComplete))
+		}
+	}
+	if opts.EnableTokenTailoring != nil {
+		res = append(res, hunyuan.WithEnableTokenTailoring(*opts.EnableTokenTailoring))
+	}
+	if opts.MaxInputTokens != nil {
+		res = append(res, hunyuan.WithMaxInputTokens(*opts.MaxInputTokens))
+	}
+	if opts.TokenCounter != nil {
+		res = append(res, hunyuan.WithTokenCounter(opts.TokenCounter))
+	}
+	if opts.TailoringStrategy != nil {
+		res = append(res, hunyuan.WithTailoringStrategy(opts.TailoringStrategy))
+	}
+	if opts.TokenTailoringConfig != nil {
+		res = append(res, hunyuan.WithTokenTailoringConfig(opts.TokenTailoringConfig))
+	}
+	res = append(res, opts.HunyuanOption...)
+	return hunyuan.New(opts.ModelName, res...), nil
 }
