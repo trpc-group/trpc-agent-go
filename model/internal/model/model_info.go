@@ -180,6 +180,15 @@ var ModelContextWindows = map[string]int{
 
 	// Cohere
 	"command-text": 4000,
+
+	// Tencent Hunyuan
+	// ref: https://hunyuan.cloud.tencent.com/#/app/modelSquare
+	"hunyuan-translation":  8192,
+	"hunyuan-2.0-instruct": 147456,
+	"hunyuan-2.0-thinking": 196608,
+	"hunyuan-t1":           65536,
+	"hunyuan-turbos":       32768,
+	"hunyuan-a13b":         229376,
 }
 
 // ResolveContextWindow returns the context window size for a given model name.

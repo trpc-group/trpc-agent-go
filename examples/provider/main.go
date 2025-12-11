@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -32,11 +33,13 @@ import (
 )
 
 var (
-	providerName        = flag.String("provider", "openai", "Name of the provider to use, openai/anthropic/ollama")
+	providerName        = flag.String("provider", "openai", "Name of the provider to use, openai/anthropic/ollama/hunyuan")
 	modelName           = flag.String("model", "deepseek-chat", "Name of the model to use")
 	isStream            = flag.Bool("stream", true, "Whether to stream the response")
 	apiKey              = flag.String("api-key", "", "Override the provider API key")
 	baseURL             = flag.String("base-url", "", "Override the provider base URL")
+	secretID            = flag.String("secret-id", "", "Set secret id for hunyuan")
+	secretKey           = flag.String("secret-key", "", "Set secret key for hunyuan")
 	channelBufferSize   = flag.Int("channel-buffer", 0, "Override provider channel buffer size")
 	enableTokenTailor   = flag.Bool("token-tailor", false, "Enable provider token tailoring")
 	maxTailorInputToken = flag.Int("max-input-tokens", 0, "Maximum input tokens when token tailoring is enabled")
@@ -113,6 +116,7 @@ func (c *providerChat) setup(_ context.Context) error {
 		provider.WithChannelBufferSize(c.channelBufferSize),
 		provider.WithEnableTokenTailoring(c.tokenTailoring),
 		provider.WithMaxInputTokens(c.maxInputTokens),
+		provider.WithHunyuanOption(hunyuan.WithSecretId(*secretID), hunyuan.WithSecretKey(*secretKey)),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create model: %w", err)

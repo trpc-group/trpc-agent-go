@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
 	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
+	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan"
 	"trpc.group/trpc-go/trpc-agent-go/model/ollama"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -422,6 +423,24 @@ func TestModelWithAllOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, modelInstance)
 	assert.Equal(t, "llama3.2:latest", modelInstance.Info().Name)
+
+	modelInstance, err = Model(
+		"hunyuan",
+		"hunyuan-t1-latest",
+		WithBaseURL("https://test.example.com"),
+		WithChannelBufferSize(128),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(2048),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+		WithTokenTailoringConfig(config),
+		WithHunyuanOption(hunyuan.WithSecretId("test-secret-id"),
+			hunyuan.WithSecretKey("test-secret-key")),
+	)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, modelInstance)
+	assert.Equal(t, "hunyuan-t1-latest", modelInstance.Info().Name)
 }
 
 func readStringField(obj any, name string) string {
