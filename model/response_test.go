@@ -386,6 +386,17 @@ func TestResponse_IsToolResultResponse(t *testing.T) {
 			},
 			expected: true,
 		},
+		{
+			name: "choices with non-empty ToolID in delta",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Delta: Message{ToolID: "tool123"},
+					},
+				},
+			},
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -422,6 +433,22 @@ func TestResponse_GetToolCallIDs(t *testing.T) {
 				Choices: []Choice{
 					{
 						Message: Message{
+							ToolCalls: []ToolCall{
+								{ID: "tool1"},
+								{ID: "tool2"},
+							},
+						},
+					},
+				},
+			},
+			expected: []string{"tool1", "tool2"},
+		},
+		{
+			name: "with tool calls in delta",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Delta: Message{
 							ToolCalls: []ToolCall{
 								{ID: "tool1"},
 								{ID: "tool2"},
@@ -484,6 +511,24 @@ func TestResponse_GetToolResultIDs(t *testing.T) {
 					},
 					{
 						Message: Message{
+							ToolID: "tool2",
+						},
+					},
+				},
+			},
+			expected: []string{"tool1", "tool2"},
+		},
+		{
+			name: "with tool IDs in delta",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Delta: Message{
+							ToolID: "tool1",
+						},
+					},
+					{
+						Delta: Message{
 							ToolID: "tool2",
 						},
 					},
@@ -821,6 +866,21 @@ func TestResponse_IsToolCallResponse(t *testing.T) {
 				Choices: []Choice{
 					{
 						Message: Message{
+							ToolCalls: []ToolCall{
+								{ID: "tool1"},
+							},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "choices with tool calls in delta",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Delta: Message{
 							ToolCalls: []ToolCall{
 								{ID: "tool1"},
 							},
