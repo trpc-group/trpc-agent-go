@@ -17,22 +17,25 @@
         "model_id": "deepseek-chat",
         "instruction": "Classify the user’s intent into one of the following categories: \"return_item\", \"cancel_subscription\", or \"get_information\".\n\n1. Any device-related return requests should route to return_item.\n2. Any retention or cancellation risk, including any request for discounts should route to cancel_subscription.\n3. Any other requests should go to get_information.",
         "description": "Intent classification agent",
-        "structured_output": {
-          "type": "object",
-          "properties": {
-            "classification": {
-              "type": "string",
-              "enum": [
-                "return_item",
-                "cancel_subscription",
-                "get_information"
-              ],
-              "description": "Classification of user intent"
-            }
-          },
-          "required": [
-            "classification"
-          ]
+        "output_format": {
+          "type": "json",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "classification": {
+                "type": "string",
+                "enum": [
+                  "return_item",
+                  "cancel_subscription",
+                  "get_information"
+                ],
+                "description": "Classification of user intent"
+              }
+            },
+            "required": [
+              "classification"
+            ]
+          }
         },
         "temperature": 0.7
       }

@@ -149,9 +149,24 @@ func newLLMAgentNodeFuncFromConfig(
 		}
 	}
 
+	// Structured output configuration via output_format. When
+	// output_format.type == "json", we treat output_format.schema as the
+	// JSON Schema for structured output and expose it via
+	// node_structured[<id>].output_parsed.
 	var structuredOutput map[string]any
-	if so, ok := cfg["structured_output"].(map[string]any); ok {
-		structuredOutput = so
+	if ofmtRaw, ok := cfg["output_format"]; ok {
+		if ofmt, ok := ofmtRaw.(map[string]any); ok {
+			formatType, _ := ofmt["type"].(string)
+			formatType = strings.TrimSpace(formatType)
+			if formatType == "" {
+				formatType = "text"
+			}
+			if formatType == "json" {
+				if schema, ok := ofmt["schema"].(map[string]any); ok {
+					structuredOutput = schema
+				}
+			}
+		}
 	}
 
 	var genConfig model.GenerationConfig

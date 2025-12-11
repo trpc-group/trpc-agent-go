@@ -11,8 +11,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/dsl"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
-	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Register builtin components
+	dslvalidator "trpc.group/trpc-go/trpc-agent-go/dsl/validator"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"

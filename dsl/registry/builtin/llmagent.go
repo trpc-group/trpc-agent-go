@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -31,7 +32,7 @@ func init() {
 //   - model_id: Logical model ID resolved by ModelProvider/ModelRegistry
 //   - instruction: System prompt/instruction
 //   - tools: List of tool names (from ToolRegistry)
-//   - structured_output: JSON schema for structured output
+//   - output_format: Output configuration { type: text|json, schema } for structured output
 //   - temperature, max_tokens, top_p: Generation parameters
 //
 // Example DSL:
@@ -128,9 +129,9 @@ func (c *LLMAgentComponent) Metadata() registry.ComponentMetadata {
 				Required:    false,
 			},
 			{
-				Name:        "structured_output",
-				DisplayName: "Structured Output Schema",
-				Description: "JSON schema for structured output (when set, agent cannot use tools)",
+				Name:        "output_format",
+				DisplayName: "Output Format",
+				Description: "Controls how the agent returns its response. When type == \"json\", schema contains the JSON Schema for structured output and the agent writes parsed JSON to node_structured[<id>].output_parsed.",
 				Type:        "map[string]any",
 				TypeID:      "object",
 				Kind:        "object",
@@ -299,10 +300,28 @@ func (c *LLMAgentComponent) Validate(config registry.ComponentConfig) error {
 		}
 	}
 
-	// Validate structured_output if present
-	if structuredOutput, ok := config["structured_output"]; ok {
-		if _, ok := structuredOutput.(map[string]any); !ok {
-			return fmt.Errorf("structured_output must be an object")
+	// Validate output_format if present
+	if outputFormat, ok := config["output_format"]; ok {
+		ofMap, ok := outputFormat.(map[string]any)
+		if !ok {
+			return fmt.Errorf("output_format must be an object")
+		}
+
+		if t, ok := ofMap["type"]; ok {
+			typeStr, ok := t.(string)
+			if !ok {
+				return fmt.Errorf("output_format.type must be a string when present")
+			}
+			typeStr = strings.TrimSpace(typeStr)
+			if typeStr != "" && typeStr != "text" && typeStr != "json" {
+				return fmt.Errorf("output_format.type must be one of: text, json")
+			}
+		}
+
+		if schema, ok := ofMap["schema"]; ok {
+			if _, ok := schema.(map[string]any); !ok {
+				return fmt.Errorf("output_format.schema must be an object when present")
+			}
 		}
 	}
 

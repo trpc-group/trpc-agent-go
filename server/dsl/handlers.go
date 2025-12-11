@@ -447,7 +447,7 @@ func (s *Server) computeVariableGroups(engineGraph *dsl.Graph, nodeID string) ([
 
 		// For now we special-case builtin.llmagent so editors can use
 		// input.output_text / input.output_parsed with a schema that
-		// mirrors the structured_output config.
+		// mirrors output_format.schema when output_format.type == "json".
 		if engine.NodeType == "builtin.llmagent" {
 			// Text view.
 			vars = append(vars, graphVar{
@@ -462,8 +462,17 @@ func (s *Server) computeVariableGroups(engineGraph *dsl.Graph, nodeID string) ([
 				Origin:   "node_output",
 				Kind:     "object",
 			}
-			if rawSchema, ok := engine.Config["structured_output"].(map[string]any); ok {
-				gv.JSONSchema = rawSchema
+			if ofmt, ok := engine.Config["output_format"].(map[string]any); ok {
+				formatType, _ := ofmt["type"].(string)
+				formatType = strings.TrimSpace(formatType)
+				if formatType == "" {
+					formatType = "text"
+				}
+				if formatType == "json" {
+					if schema, ok := ofmt["schema"].(map[string]any); ok {
+						gv.JSONSchema = schema
+					}
+				}
 			}
 			vars = append(vars, gv)
 		}

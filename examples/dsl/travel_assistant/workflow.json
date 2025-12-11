@@ -14,28 +14,31 @@
       "node_type": "builtin.llmagent",
       "config": {
         "model_id": "deepseek-chat",
-        "instruction": "You are a travel intent classifier.\nAnalyze the user's request and decide if they are asking about:\n- flight_info: Flight bookings, flight status, airline information, schedules, or prices\n- itinerary: Planning a trip, creating an itinerary, destination suggestions, what to do, number of days, etc.\n\nClassification rules (IMPORTANT):\n- If the user asks to plan a trip, mentions an itinerary, or mentions a number of days (e.g. \"5-day trip\"), ALWAYS classify as \"itinerary\".\n- Only classify as \"flight_info\" when the focus is clearly on one or more specific flights (booking, status, schedule, price).\n- If you are unsure, prefer \"itinerary\".\n\nReturn your decision strictly via the structured_output schema.",
+        "instruction": "You are a travel intent classifier.\nAnalyze the user's request and decide if they are asking about:\n- flight_info: Flight bookings, flight status, airline information, schedules, or prices\n- itinerary: Planning a trip, creating an itinerary, destination suggestions, what to do, number of days, etc.\n\nClassification rules (IMPORTANT):\n- If the user asks to plan a trip, mentions an itinerary, or mentions a number of days (e.g. \"5-day trip\"), ALWAYS classify as \"itinerary\".\n- Only classify as \"flight_info\" when the focus is clearly on one or more specific flights (booking, status, schedule, price).\n- If you are unsure, prefer \"itinerary\".\n\nReturn your decision strictly via the output_format.schema.",
         "description": "Travel intent classification agent",
-        "structured_output": {
-          "type": "object",
-          "properties": {
-            "classification": {
-              "type": "string",
-              "enum": ["flight_info", "itinerary"],
-              "description": "The classified intent category"
+        "output_format": {
+          "type": "json",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "classification": {
+                "type": "string",
+                "enum": ["flight_info", "itinerary"],
+                "description": "The classified intent category"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Confidence score between 0 and 1"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Brief explanation of the classification"
+              }
             },
-            "confidence": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Confidence score between 0 and 1"
-            },
-            "reasoning": {
-              "type": "string",
-              "description": "Brief explanation of the classification"
-            }
-          },
-          "required": ["classification", "confidence", "reasoning"]
+            "required": ["classification", "confidence", "reasoning"]
+          }
         },
         "temperature": 0.1
       }

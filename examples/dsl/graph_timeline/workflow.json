@@ -17,21 +17,24 @@
         "model_id": "deepseek-chat",
         "instruction": "You are a helpful assistant.\n\nRead the user input and do two things:\n1. Classify how complex the user's request is using one of these labels:\n   - \"short\" for very simple questions that need only a brief answer.\n   - \"detailed\" for questions that would benefit from a longer, more detailed answer.\n2. Provide a short natural-language summary of what the user is asking for.\n\nYou MUST respond strictly as JSON that matches the provided schema.",
         "description": "LLM agent that classifies the request as short or detailed and summarizes it.",
-        "structured_output": {
-          "type": "object",
-          "properties": {
-            "classification": {
-              "type": "string",
-              "enum": ["short", "detailed"],
-              "description": "How complex the answer should be (short or detailed)."
+        "output_format": {
+          "type": "json",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "classification": {
+                "type": "string",
+                "enum": ["short", "detailed"],
+                "description": "How complex the answer should be (short or detailed)."
+              },
+              "summary": {
+                "type": "string",
+                "description": "Short natural-language summary of the user request."
+              }
             },
-            "summary": {
-              "type": "string",
-              "description": "Short natural-language summary of the user request."
-            }
-          },
-          "required": ["classification", "summary"],
-          "additionalProperties": false
+            "required": ["classification", "summary"],
+            "additionalProperties": false
+          }
         },
         "temperature": 0.7,
         "max_tokens": 256

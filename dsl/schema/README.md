@@ -136,7 +136,7 @@ Built‑in components are implemented under `dsl/registry/builtin`. Each compone
   - `outputs`:
     - `last_response` / `messages` as above.
   - `config_schema`:
-    - `model_id`, `instruction`, `tools`, `tool_sets`, `mcp_tools`, `structured_output` (JSON Schema), sampling parameters, etc.
+    - `model_id`, `instruction`, `tools`, `tool_sets`, `mcp_tools`, `output_format` (object with `type: "text" | "json"` and `schema` containing the JSON Schema for structured output when `type == "json"`), sampling parameters, etc.
 
 - **`builtin.agent`**
   - `inputs`:
