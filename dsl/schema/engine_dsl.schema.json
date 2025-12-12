@@ -421,6 +421,16 @@
             "type": "string"
           }
         },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema snapshot of the MCP tool input, used for edge validation and editor hints. Typically populated by the backend when the tool is selected.",
+          "additionalProperties": true
+        },
+        "output_schema": {
+          "type": "object",
+          "description": "JSON Schema for the normalized MCP tool result exposed via node_structured[<id>].output_parsed. Typically derived from the MCP tool's output schema (when available).",
+          "additionalProperties": true
+        },
         "params": {
           "type": "object",
           "description": "Optional per-parameter expressions mapping from the node input object to MCP tool arguments. Keys are parameter names; values are CEL expressions evaluated in the MCP node input context (e.g., input.repoName).",

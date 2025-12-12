@@ -54,6 +54,29 @@
         "server_url": "http://localhost:3000/mcp",
         "transport": "streamable_http",
         "tool": "get_weather",
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "Location that was actually used in the weather query"
+            },
+            "temperature": {
+              "type": "number",
+              "description": "Current temperature at the location"
+            },
+            "units": {
+              "type": "string",
+              "description": "Temperature units (e.g., celsius/fahrenheit)"
+            },
+            "condition": {
+              "type": "string",
+              "description": "High-level weather condition (e.g., sunny, rainy)"
+            }
+          },
+          "required": ["location", "temperature", "units"],
+          "additionalProperties": true
+        },
         "params": {
           "location": {
             "expression": "input.output_parsed.location",

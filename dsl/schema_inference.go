@@ -10,6 +10,7 @@ package dsl
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
@@ -202,6 +203,217 @@ func (si *SchemaInference) InferSchemaAndUsage(graphDef *Graph) (*graph.StateSch
 	si.addDeclaredStateVariables(schema, graphDef, usage)
 
 	return schema, usage, nil
+}
+
+// GraphVar describes a single variable available in a graph context. It
+// matches the GraphVar schema defined in dsl/schema/engine_api.openapi.json
+// and is intended for editor-facing variable pickers.
+type GraphVar struct {
+	Variable   string         `json:"variable"`
+	Origin     string         `json:"origin,omitempty"`
+	Kind       string         `json:"kind,omitempty"`
+	JSONSchema map[string]any `json:"json_schema,omitempty"`
+}
+
+// VariableGroup groups variables by logical source (previous node outputs,
+// state fields, workflow input). It matches the VariableGroup schema in
+// dsl/schema/engine_api.openapi.json.
+type VariableGroup struct {
+	Type  string     `json:"type"`            // "node_output", "state", "graph_input"
+	ID    string     `json:"id"`              // node ID or fixed identifier ("state", "graph_input")
+	Title string     `json:"title,omitempty"` // Human-readable title for editors
+	Vars  []GraphVar `json:"vars"`            // Variables in this group
+}
+
+// ComputeVariableGroups builds the grouped variable view for a single node in
+// a compiled engine graph. It returns three kinds of groups:
+//   - node_output: outputs from direct upstream nodes (e.g., input.output_text)
+//   - state: graph state variables (typically declared via Start/SetState)
+//   - graph_input: workflow input variables (e.g., state.user_input)
+//
+// This function is intentionally implemented in the DSL package so that
+// different frontends (HTTP server, CLI tools, editors) can share the same
+// semantics for variable discovery.
+func (si *SchemaInference) ComputeVariableGroups(graphDef *Graph, nodeID string) ([]VariableGroup, error) {
+	if graphDef == nil || nodeID == "" {
+		return nil, nil
+	}
+
+	// Index nodes by ID for quick lookup.
+	nodeByID := make(map[string]Node, len(graphDef.Nodes))
+	for _, n := range graphDef.Nodes {
+		nodeByID[n.ID] = n
+	}
+
+	if _, ok := nodeByID[nodeID]; !ok {
+		return nil, fmt.Errorf("node %q not found in graph", nodeID)
+	}
+
+	// Collect direct upstream node IDs (static edges only for now).
+	upstreamIDs := make(map[string]struct{})
+	for _, e := range graphDef.Edges {
+		if e.Target == nodeID {
+			upstreamIDs[e.Source] = struct{}{}
+		}
+	}
+
+	// Infer schema + usage once so that variable kinds and JSON schemas are
+	// consistent with /graphs/schema and other schema-based APIs.
+	_, usage, err := si.InferSchemaAndUsage(graphDef)
+	if err != nil {
+		return nil, err
+	}
+
+	// Split usage into state fields and workflow input (user_input). Hide
+	// framework-internal fields that are not meant for direct authoring.
+	var (
+		stateFields []FieldUsage
+		userInput   *FieldUsage
+	)
+	for _, u := range usage {
+		switch u.Name {
+		case "node_structured", "output_parsed",
+			"messages", "last_response", "node_responses",
+			"end_structured_output":
+			// Internal / graph-output fields; not exposed directly in state group for editors.
+			continue
+		case "user_input":
+			// Treat user_input as workflow input group.
+			tmp := u
+			userInput = &tmp
+			continue
+		default:
+			// All other fields are considered state variables.
+			stateFields = append(stateFields, u)
+		}
+	}
+
+	sort.Slice(stateFields, func(i, j int) bool {
+		return stateFields[i].Name < stateFields[j].Name
+	})
+
+	var groups []VariableGroup
+
+	// 1) Node output groups (direct upstream nodes).
+	for upstreamID := range upstreamIDs {
+		upNode, ok := nodeByID[upstreamID]
+		if !ok {
+			continue
+		}
+		engine := upNode.EngineNode
+
+		var vars []GraphVar
+
+		// For now we special-case builtin.llmagent and builtin.mcp so editors
+		// can use input.output_text / input.output_parsed with schemas that
+		// mirror node config (output_format.schema / MCPConfig.output_schema).
+		if engine.NodeType == "builtin.llmagent" {
+			// Text view.
+			vars = append(vars, GraphVar{
+				Variable: "input.output_text",
+				Origin:   "node_output",
+				Kind:     "string",
+			})
+
+			// Structured output view (if available).
+			gv := GraphVar{
+				Variable: "input.output_parsed",
+				Origin:   "node_output",
+				Kind:     "object",
+			}
+			if ofmt, ok := engine.Config["output_format"].(map[string]any); ok {
+				formatType, _ := ofmt["type"].(string)
+				formatType = strings.TrimSpace(formatType)
+				if formatType == "" {
+					formatType = "text"
+				}
+				if formatType == "json" {
+					if schema, ok := ofmt["schema"].(map[string]any); ok {
+						gv.JSONSchema = schema
+					}
+				}
+			}
+			vars = append(vars, gv)
+		} else if engine.NodeType == "builtin.mcp" {
+			// MCP node structured result view. MCP nodes do not produce a
+			// streaming text output in the same way as LLMAgent, so we only
+			// expose output_parsed here. The schema is taken from
+			// MCPConfig.output_schema when available.
+			gv := GraphVar{
+				Variable: "input.output_parsed",
+				Origin:   "node_output",
+				Kind:     "object",
+			}
+			if schema, ok := engine.Config["output_schema"].(map[string]any); ok {
+				gv.JSONSchema = schema
+			}
+			vars = append(vars, gv)
+		}
+
+		if len(vars) == 0 {
+			continue
+		}
+
+		title := engine.Label
+		if title == "" {
+			title = upNode.ID
+		}
+
+		groups = append(groups, VariableGroup{
+			Type:  "node_output",
+			ID:    upNode.ID,
+			Title: title,
+			Vars:  vars,
+		})
+	}
+
+	// 2) State variables group.
+	if len(stateFields) > 0 {
+		stateVars := make([]GraphVar, 0, len(stateFields))
+		for _, f := range stateFields {
+			// Extra safety: ensure end_structured_output never leaks into the
+			// state group even if usage is enriched elsewhere.
+			if f.Name == "end_structured_output" {
+				continue
+			}
+			stateVars = append(stateVars, GraphVar{
+				Variable:   "state." + f.Name,
+				Origin:     "state",
+				Kind:       f.Kind,
+				JSONSchema: f.JSONSchema,
+			})
+		}
+		if len(stateVars) > 0 {
+			groups = append(groups, VariableGroup{
+				Type:  "state",
+				ID:    "state",
+				Title: "State",
+				Vars:  stateVars,
+			})
+		}
+	}
+
+	// 3) Workflow input group (user_input). Always expose it, even if it did
+	// not appear in usage, so editors can reference the original text input.
+	graphInputVar := GraphVar{
+		Variable: "state.user_input",
+		Origin:   "graph_input",
+		Kind:     "string",
+	}
+	if userInput != nil && userInput.Kind != "" {
+		graphInputVar.Kind = userInput.Kind
+	}
+	if userInput != nil && userInput.JSONSchema != nil {
+		graphInputVar.JSONSchema = userInput.JSONSchema
+	}
+	groups = append(groups, VariableGroup{
+		Type:  "graph_input",
+		ID:    "graph_input",
+		Title: "Workflow input",
+		Vars:  []GraphVar{graphInputVar},
+	})
+
+	return groups, nil
 }
 
 // buildSchemaFromParams constructs a StateSchema from a collected parameter map.

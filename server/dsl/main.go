@@ -19,7 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/dsl"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/compiler"
 	"trpc.group/trpc-go/trpc-agent-go/dsl/registry"
 	_ "trpc.group/trpc-go/trpc-agent-go/dsl/registry/builtin" // Register builtin components
@@ -171,6 +170,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/graphs/vars", methodHandler("POST", s.handleGraphVars))
 	// Single-node variable view for editors (current node only)
 	mux.HandleFunc("/api/v1/graphs/vars/node", methodHandler("POST", s.handleGraphNodeVars))
+	// Edge inspection for editors (connection-level schema comparison)
+	mux.HandleFunc("/api/v1/graphs/edges/inspect", methodHandler("POST", s.handleInspectEdge))
 
 	// Execution
 	mux.HandleFunc("/api/v1/graphs/{id}/execute", methodHandler("POST", s.handleExecuteGraph))
