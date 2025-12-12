@@ -3029,7 +3029,7 @@ func TestProcessEventCmd_SkipMalformed(t *testing.T) {
 	cmd.SetVal([]string{malformed, string(validBytes)})
 
 	// Call the helper under test.
-	events, err := processEventCmd(cmd)
+	events, err := processEventCmd(context.Background(), cmd)
 	require.NoError(t, err)
 
 	// Only the valid one should be returned.
@@ -3225,6 +3225,61 @@ func TestAppendEventHook(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
+	})
+}
+
+func TestAppendEvent_AsyncRecover(t *testing.T) {
+	ch := make(chan *sessionEventPair, 1)
+	close(ch)
+
+	service := &Service{
+		opts: ServiceOpts{
+			enableAsyncPersist: true,
+		},
+		eventPairChans: []chan *sessionEventPair{ch},
+	}
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		State:   make(session.StateMap),
+	}
+	evt := &event.Event{Response: &model.Response{}}
+
+	assert.NotPanics(t, func() {
+		err := service.AppendEvent(context.Background(), sess, evt)
+		require.NoError(t, err)
+	})
+}
+
+func TestAppendTrackEvent_AsyncRecover(t *testing.T) {
+	ch := make(chan *trackEventPair, 1)
+	close(ch)
+
+	service := &Service{
+		opts: ServiceOpts{
+			enableAsyncPersist: true,
+		},
+		trackEventChans: []chan *trackEventPair{ch},
+	}
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		State:   make(session.StateMap),
+	}
+	trackEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Timestamp: time.Now(),
+	}
+
+	assert.NotPanics(t, func() {
+		err := service.AppendTrackEvent(
+			context.Background(),
+			sess,
+			trackEvent,
+		)
+		require.NoError(t, err)
 	})
 }
 
