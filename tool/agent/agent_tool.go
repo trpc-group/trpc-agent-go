@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -169,9 +170,16 @@ func (at *Tool) callWithParentInvocation(
 	parentInv *agent.Invocation,
 	message model.Message,
 ) (string, error) {
+	// If the parent invocation does not have a session, fall back to isolated mode.
+	if parentInv.Session == nil {
+		return at.callWithIsolatedRunner(ctx, message)
+	}
+	// Flush all events emitted before this tool call so that the snapshot sees all events.
+	if err := flush.Invoke(ctx, parentInv); err != nil {
+		return "", fmt.Errorf("flush parent invocation session: %w", err)
+	}
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(parentInv)
-
 	// Clone parent invocation with child-specific settings.
 	subInv := parentInv.Clone(
 		agent.WithInvocationAgent(at.agent),
@@ -184,7 +192,29 @@ func (at *Tool) callWithParentInvocation(
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	return at.collectResponse(evCh)
+	childCtx := agent.NewInvocationContext(ctx, subInv)
+	return at.collectResponse(at.wrapWithCompletion(childCtx, subInv, evCh))
+}
+
+// wrapWithCompletion consumes events, notifies completion when required, and forwards to a new channel.
+func (at *Tool) wrapWithCompletion(ctx context.Context, inv *agent.Invocation, src <-chan *event.Event) <-chan *event.Event {
+	if inv == nil {
+		return src
+	}
+	out := make(chan *event.Event)
+	go func() {
+		defer close(out)
+		for evt := range src {
+			if evt != nil && evt.RequiresCompletion {
+				completionID := agent.GetAppendEventNoticeKey(evt.ID)
+				if err := inv.NotifyCompletion(ctx, completionID); err != nil {
+					log.Errorf("AgentTool: notify completion failed: %v", err)
+				}
+			}
+			out <- evt
+		}
+	}()
+	return out
 }
 
 // callWithIsolatedRunner executes the agent in an isolated environment using
@@ -251,21 +281,19 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 		message := model.NewUserMessage(string(jsonArgs))
 
 		if ok && parentInv != nil && parentInv.Session != nil {
-			// Build child filter key based on history scope.
-			uniqueFilterKey := at.agent.Info().Name + "-" + uuid.NewString()
-			if at.historyScope == HistoryScopeParentBranch {
-				if pk := parentInv.GetEventFilterKey(); pk != "" {
-					uniqueFilterKey = pk + agent.EventFilterKeyDelimiter + uniqueFilterKey
-				}
+			if err := flush.Invoke(ctx, parentInv); err != nil {
+				err := fmt.Errorf("flush parent invocation session failed: %w", err)
+				stream.Writer.Send(tool.StreamChunk{Content: err.Error()}, err)
+				return
 			}
-
+			childKey := at.buildChildFilterKey(parentInv)
 			subInv := parentInv.Clone(
 				agent.WithInvocationAgent(at.agent),
 				agent.WithInvocationMessage(message),
 				// Reset event filter key to the sub-agent name so that content
 				// processors fetch session messages belonging to the sub-agent,
 				// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
-				agent.WithInvocationEventFilterKey(uniqueFilterKey),
+				agent.WithInvocationEventFilterKey(childKey),
 			)
 
 			subCtx := agent.NewInvocationContext(ctx, subInv)
@@ -274,7 +302,9 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
 				return
 			}
-			for ev := range evCh {
+			wrapped := at.wrapWithCompletion(subCtx, subInv, evCh)
+
+			for ev := range wrapped {
 				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {
 					return
 				}

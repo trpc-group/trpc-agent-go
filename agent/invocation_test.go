@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -335,6 +336,34 @@ func TestInvocation_AddNoticeChannelAndWait_nil(t *testing.T) {
 
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
+}
+
+func TestInvocation_cloneState(t *testing.T) {
+	t.Run("nil invocation", func(t *testing.T) {
+		var inv *Invocation
+		require.Nil(t, inv.cloneState())
+	})
+
+	t.Run("nil state map", func(t *testing.T) {
+		inv := &Invocation{}
+		require.Nil(t, inv.cloneState())
+	})
+
+	t.Run("copies allowed keys only", func(t *testing.T) {
+		inv := &Invocation{
+			state: map[string]any{
+				flusherStateKey: "flush-holder",
+				barrierStateKey: "barrier-holder",
+				"other":         "skip",
+			},
+		}
+		cloned := inv.cloneState()
+		require.NotNil(t, cloned)
+		require.Len(t, cloned, 2)
+		require.Equal(t, "flush-holder", cloned[flusherStateKey])
+		require.Equal(t, "barrier-holder", cloned[barrierStateKey])
+		assert.NotContains(t, cloned, "other")
+	})
 }
 
 func TestInvocation_GetEventFilterKey(t *testing.T) {

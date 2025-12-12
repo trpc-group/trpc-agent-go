@@ -195,6 +195,9 @@ func (a *CycleAgent) runSubAgent(
 		if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 			return true
 		}
+		if subEvent != nil && subEvent.Error != nil {
+			return true
+		}
 
 		// Check if this event indicates escalation.
 		if a.shouldEscalate(subEvent) {
