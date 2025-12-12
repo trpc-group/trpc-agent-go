@@ -103,15 +103,12 @@ const (
 	// Index creation SQL (MySQL syntax)
 	// Note: MySQL doesn't support IF NOT EXISTS for indexes until MySQL 8.0.13+
 	// We'll handle duplicate index errors in the creation logic
-	// Note: For utf8mb4, each character takes 4 bytes. VARCHAR(255) = 1020 bytes
-	// MySQL InnoDB index key length limit is 3072 bytes (767 bytes for older versions)
-	// We use prefix indexes to stay within limits: 191 chars * 4 bytes = 764 bytes per field
 
 	// session_states: unique index on (app_name, user_id, session_id, deleted_at)
 	// MySQL doesn't support partial indexes like PostgreSQL, so we include deleted_at in the index
 	sqlCreateSessionStatesUniqueIndex = `
 		CREATE UNIQUE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name(191), user_id(191), session_id(191), deleted_at)`
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, deleted_at)`
 
 	// session_states: TTL index on (expires_at)
 	sqlCreateSessionStatesExpiresIndex = `
@@ -121,7 +118,7 @@ const (
 	// session_events: lookup index on (app_name, user_id, session_id, created_at)
 	sqlCreateSessionEventsIndex = `
 		CREATE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name(191), user_id(191), session_id(191), created_at)`
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, created_at)`
 
 	// session_events: TTL index on (expires_at)
 	sqlCreateSessionEventsExpiresIndex = `
@@ -131,7 +128,7 @@ const (
 	// session_track_events: lookup index on (app_name, user_id, session_id, track, created_at)
 	sqlCreateSessionTracksIndex = `
 		CREATE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name(191), user_id(191), session_id(191), track(191), created_at)`
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, created_at)`
 
 	// session_track_events: TTL index on (expires_at)
 	sqlCreateSessionTracksExpiresIndex = `
@@ -141,7 +138,7 @@ const (
 	// session_summaries: unique index on (app_name, user_id, session_id, filter_key, deleted_at)
 	sqlCreateSessionSummariesUniqueIndex = `
 		CREATE UNIQUE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name(191), user_id(191), session_id(191), filter_key(191), deleted_at)`
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, deleted_at)`
 
 	// session_summaries: TTL index on (expires_at)
 	sqlCreateSessionSummariesExpiresIndex = `
@@ -151,7 +148,7 @@ const (
 	// app_states: unique index on (app_name, key, deleted_at)
 	sqlCreateAppStatesUniqueIndex = `
 		CREATE UNIQUE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name(191), ` + "`key`" + `(191), deleted_at)`
+		ON {{TABLE_NAME}}(app_name, ` + "`key`" + `, deleted_at)`
 
 	// app_states: TTL index on (expires_at)
 	sqlCreateAppStatesExpiresIndex = `
@@ -161,7 +158,7 @@ const (
 	// user_states: unique index on (app_name, user_id, key, deleted_at)
 	sqlCreateUserStatesUniqueIndex = `
 		CREATE UNIQUE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name(191), user_id(191), ` + "`key`" + `(191), deleted_at)`
+		ON {{TABLE_NAME}}(app_name, user_id, ` + "`key`" + `, deleted_at)`
 
 	// user_states: TTL index on (expires_at)
 	sqlCreateUserStatesExpiresIndex = `

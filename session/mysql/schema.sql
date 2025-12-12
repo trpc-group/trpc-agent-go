@@ -95,9 +95,9 @@ CREATE TABLE IF NOT EXISTS session_summaries (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Session summaries table';
 
--- Unique index on (app_name, user_id, session_id, filter_key, deleted_at)
+-- Unique index on (app_name, user_id, session_id, deleted_at)
 CREATE UNIQUE INDEX idx_session_summaries_unique_active
-ON session_summaries(app_name, user_id, session_id, filter_key, deleted_at);
+ON session_summaries(app_name, user_id, session_id, deleted_at);
 
 -- TTL cleanup index
 CREATE INDEX idx_session_summaries_expires
