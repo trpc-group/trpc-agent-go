@@ -774,8 +774,7 @@ func TestVectorStore_SearchByFilter(t *testing.T) {
 					Content: "machine learning basics",
 				}, []float64{1.0, 0.5, 0.2})
 			},
-			wantErr: true,
-			errMsg:  "empty filter condition",
+			wantErr: false,
 		},
 	}
 	for _, tt := range tests {

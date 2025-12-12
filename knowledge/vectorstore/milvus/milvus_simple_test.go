@@ -387,7 +387,8 @@ func (m *mockClient) buildResultSet(docs []*mockDocument) client.ResultSet {
 }
 
 func TestNew(t *testing.T) {
-	ctx, _ := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	cli, err := New(ctx, WithAddress("invalid"),
 		WithUsername("invalid"),
 		WithPassword("invalid"),
