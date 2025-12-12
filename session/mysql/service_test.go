@@ -527,6 +527,10 @@ func (m *mockSummarizer) ShouldSummarize(sess *session.Session) bool {
 	return true
 }
 
+func (m *mockSummarizer) SetPrompt(prompt string) {}
+
+func (m *mockSummarizer) SetModel(mdl model.Model) {}
+
 func (m *mockSummarizer) Metadata() map[string]any {
 	return map[string]any{"type": "mock"}
 }

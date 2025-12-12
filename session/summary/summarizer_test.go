@@ -610,3 +610,263 @@ func TestSessionSummarizer_Metadata_IncludesSkipRecent(t *testing.T) {
 
 	assert.Equal(t, true, metadata[metadataKeySkipRecentEnabled])
 }
+
+func TestSessionSummarizer_SetPrompt(t *testing.T) {
+	t.Run("updates prompt successfully", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+		originalPrompt := s.(*sessionSummarizer).prompt
+
+		newPrompt := "Custom prompt with {conversation_text} and {max_summary_words} words."
+		s.(*sessionSummarizer).SetPrompt(newPrompt)
+
+		assert.NotEqual(t, originalPrompt, s.(*sessionSummarizer).prompt)
+		assert.Equal(t, newPrompt, s.(*sessionSummarizer).prompt)
+	})
+
+	t.Run("ignores empty prompt", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+		originalPrompt := s.(*sessionSummarizer).prompt
+
+		s.(*sessionSummarizer).SetPrompt("")
+
+		assert.Equal(t, originalPrompt, s.(*sessionSummarizer).prompt)
+	})
+
+	t.Run("updated prompt is used in summarization", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+
+		// Set a custom prompt that includes specific markers.
+		customPrompt := "Test custom prompt: {conversation_text}"
+		s.(*sessionSummarizer).SetPrompt(customPrompt)
+
+		sess := &session.Session{
+			ID: "test",
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "Hello world"},
+						}},
+					},
+					Timestamp: time.Now(),
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text)
+
+		// fakeModel returns the prompt as part of the summary,
+		// so we can verify the custom prompt was used.
+		assert.Contains(t, text, "Test custom prompt")
+	})
+
+	t.Run("SetPrompt with placeholder replacement", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(50))
+
+		// Set a custom prompt with both placeholders.
+		customPrompt := "Summarize in {max_summary_words} words: {conversation_text}"
+		s.(*sessionSummarizer).SetPrompt(customPrompt)
+
+		sess := &session.Session{
+			ID: "test",
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "Test content"},
+						}},
+					},
+					Timestamp: time.Now(),
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text)
+
+		// Verify placeholder was replaced with actual number.
+		assert.Contains(t, text, "50")
+		assert.Contains(t, text, "Summarize in")
+	})
+
+	t.Run("multiple SetPrompt calls", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{})
+
+		firstPrompt := "First prompt: {conversation_text}"
+		s.(*sessionSummarizer).SetPrompt(firstPrompt)
+		assert.Equal(t, firstPrompt, s.(*sessionSummarizer).prompt)
+
+		secondPrompt := "Second prompt: {conversation_text}"
+		s.(*sessionSummarizer).SetPrompt(secondPrompt)
+		assert.Equal(t, secondPrompt, s.(*sessionSummarizer).prompt)
+
+		// Empty prompt should not change.
+		s.(*sessionSummarizer).SetPrompt("")
+		assert.Equal(t, secondPrompt, s.(*sessionSummarizer).prompt)
+	})
+
+	t.Run("SetPrompt on nil summarizer", func(t *testing.T) {
+		var s *sessionSummarizer
+		// Should not panic
+		assert.NotPanics(t, func() {
+			if s != nil {
+				s.SetPrompt("test")
+			}
+		})
+	})
+}
+
+func TestSessionSummarizer_SetModel(t *testing.T) {
+	t.Run("updates model successfully", func(t *testing.T) {
+		originalModel := &fakeModel{}
+		s := NewSummarizer(originalModel)
+		assert.Same(t, originalModel, s.(*sessionSummarizer).model)
+
+		newModel := &customOutputModel{output: "new"}
+		s.(*sessionSummarizer).SetModel(newModel)
+
+		assert.Same(t, newModel, s.(*sessionSummarizer).model)
+		assert.NotSame(t, originalModel, s.(*sessionSummarizer).model)
+	})
+
+	t.Run("ignores nil model", func(t *testing.T) {
+		originalModel := &fakeModel{}
+		s := NewSummarizer(originalModel)
+
+		s.(*sessionSummarizer).SetModel(nil)
+
+		assert.Equal(t, originalModel, s.(*sessionSummarizer).model)
+	})
+
+	t.Run("updated model is used in summarization", func(t *testing.T) {
+		originalModel := &fakeModel{}
+		s := NewSummarizer(originalModel)
+
+		sess := &session.Session{
+			ID: "test",
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "Hello world"},
+						}},
+					},
+					Timestamp: time.Now(),
+				},
+			},
+		}
+
+		// Use original model
+		text1, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text1)
+
+		// Switch to a different model that returns different output
+		newModel := &customOutputModel{output: "Custom model summary"}
+		s.(*sessionSummarizer).SetModel(newModel)
+
+		text2, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text2)
+		assert.Contains(t, text2, "Custom model summary")
+	})
+
+	t.Run("model metadata updates after SetModel", func(t *testing.T) {
+		model1 := &fakeModel{}
+		s := NewSummarizer(model1)
+
+		metadata1 := s.Metadata()
+		assert.Equal(t, "fake", metadata1[metadataKeyModelName])
+
+		// Switch to a different model
+		model2 := &customOutputModel{output: "test"}
+		s.(*sessionSummarizer).SetModel(model2)
+
+		metadata2 := s.Metadata()
+		assert.Equal(t, "custom-output", metadata2[metadataKeyModelName])
+		assert.NotEqual(t, metadata1[metadataKeyModelName], metadata2[metadataKeyModelName])
+	})
+
+	t.Run("multiple SetModel calls", func(t *testing.T) {
+		model1 := &fakeModel{}
+		s := NewSummarizer(model1)
+		assert.Equal(t, model1, s.(*sessionSummarizer).model)
+
+		model2 := &customOutputModel{output: "test"}
+		s.(*sessionSummarizer).SetModel(model2)
+		assert.Equal(t, model2, s.(*sessionSummarizer).model)
+
+		model3 := &fakeModel{}
+		s.(*sessionSummarizer).SetModel(model3)
+		assert.Equal(t, model3, s.(*sessionSummarizer).model)
+
+		// Nil model should not change
+		s.(*sessionSummarizer).SetModel(nil)
+		assert.Equal(t, model3, s.(*sessionSummarizer).model)
+	})
+
+	t.Run("SetModel with error model", func(t *testing.T) {
+		originalModel := &fakeModel{}
+		s := NewSummarizer(originalModel)
+
+		sess := &session.Session{
+			ID: "test",
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "Hello"},
+						}},
+					},
+					Timestamp: time.Now(),
+				},
+			},
+		}
+
+		// Original model should work
+		_, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+
+		// Switch to error model
+		errorModel := &errorModel{}
+		s.(*sessionSummarizer).SetModel(errorModel)
+
+		_, err = s.Summarize(context.Background(), sess)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "model error")
+	})
+
+	t.Run("SetModel on nil summarizer", func(t *testing.T) {
+		var s *sessionSummarizer
+		// Should not panic
+		assert.NotPanics(t, func() {
+			if s != nil {
+				s.SetModel(&fakeModel{})
+			}
+		})
+	})
+}
+
+// customOutputModel returns a custom output for testing.
+type customOutputModel struct {
+	output string
+}
+
+func (c *customOutputModel) Info() model.Info {
+	return model.Info{Name: "custom-output"}
+}
+
+func (c *customOutputModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{Content: c.output}},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
