@@ -37,6 +37,18 @@ const (
 	observationPromptName          = "langfuse.observation.prompt.name"
 	observationPromptVersion       = "langfuse.observation.prompt.version"
 
+	// Langfuse-observation types (see https://langfuse.com/docs/observability/features/observation-types)
+	observationTypeEvent      = "event"
+	observationTypeSpan       = "span"
+	observationTypeGeneration = "generation"
+	observationTypeAgent      = "agent"
+	observationTypeTool       = "tool"
+	observationTypeChain      = "chain"
+	observationTypeRetriever  = "retriever"
+	observationTypeEvaluator  = "evaluator"
+	observationTypeEmbedding  = "embedding"
+	observationTypeGuardrail  = "guardrail"
+
 	// General
 	environment = "langfuse.environment"
 	release     = "langfuse.release"
