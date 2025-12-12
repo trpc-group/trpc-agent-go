@@ -1234,6 +1234,51 @@ func TestProcessAgentStreamingEvents_SendFailure(t *testing.T) {
 	assert.True(t, cleaned)
 }
 
+func TestProcessAgentStreamingEvents_FinalSendFailureAndCleanFailure(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 2 || sendCount == 3 {
+				return fmt.Errorf("send fail")
+			}
+			return nil
+		},
+	}
+
+	var cleaned bool
+	handler := &mockTaskHandler{
+		cleanTaskFunc: func(taskID *string) error {
+			cleaned = true
+			return fmt.Errorf("clean fail")
+		},
+	}
+
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(
+			ctx,
+			"task",
+			"user1",
+			"session1",
+			msg,
+			events,
+			sub,
+			handler,
+		)
+	})
+	assert.True(t, cleaned)
+}
+
 func TestProcessAgentStreamingEvents_ConverterError(t *testing.T) {
 	ctx := context.Background()
 	ctxID := "ctx"

@@ -124,6 +124,10 @@ func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, 
 // Note: This method assumes channels are already initialized. Callers should check
 // len(s.summaryJobChans) > 0 before calling this method.
 func (s *Service) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
 	// Select a channel using hash distribution.
 	index := job.session.Hash % len(s.summaryJobChans)
 

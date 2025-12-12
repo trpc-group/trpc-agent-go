@@ -1199,7 +1199,9 @@ func TestUpdateSessionState_InvalidPrefix(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestUpdateSessionState_SessionNotFound(t *testing.T) {
+func TestUpdateSessionState_SessionNotFound_ErrNoRows(
+	t *testing.T,
+) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -1219,7 +1221,9 @@ func TestUpdateSessionState_SessionNotFound(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestUpdateSessionState_QueryError(t *testing.T) {
+func TestUpdateSessionState_QueryError_Propagates(
+	t *testing.T,
+) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -2622,7 +2626,9 @@ func TestUpdateSessionState_QueryError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestUpdateSessionState_UnmarshalError(t *testing.T) {
+func TestUpdateSessionState_UnmarshalError_InvalidJSON(
+	t *testing.T,
+) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()

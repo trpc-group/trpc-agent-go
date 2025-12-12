@@ -612,6 +612,36 @@ func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
 	assert.False(t, service.tryEnqueueJob(cancelledCtx, job2))
 }
 
+func TestMemoryService_TryEnqueueJob_ClosedChannel(t *testing.T) {
+	service := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	idx := sess.Hash % len(service.summaryJobChans)
+	closedChan := service.summaryJobChans[idx]
+	close(closedChan)
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+	assert.False(t, service.tryEnqueueJob(ctx, job))
+
+	service.summaryJobChans[idx] = make(chan *summaryJob)
+	service.Close()
+}
+
 func TestMemoryService_AppendEvent_Errors(t *testing.T) {
 	service := NewSessionService()
 	defer service.Close()

@@ -75,6 +75,65 @@ func TestExecutor_Resume_RestoreSchemaValues(t *testing.T) {
 	}
 }
 
+func TestExecutor_Resume_AppliesPendingWrites(t *testing.T) {
+	const (
+		lineageID = "ln-pending"
+		namespace = "ns"
+		checkID   = "ck-pending"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("noop",
+			func(ctx context.Context, state State) (any, error) {
+				return nil, nil
+			},
+		).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	ck := NewCheckpoint(
+		map[string]any{},
+		map[string]int64{},
+		nil,
+	)
+	ck.ID = checkID
+	cfg := CreateCheckpointConfig(lineageID, checkID, namespace)
+	key := lineageID + ":" + namespace + ":" + checkID
+	saver.byID[key] = &CheckpointTuple{
+		Config:     cfg,
+		Checkpoint: ck,
+		Metadata:   NewCheckpointMetadata(CheckpointSourceLoop, 0),
+		PendingWrites: []PendingWrite{
+			{
+				TaskID:   "t1",
+				Channel:  ChannelInputPrefix + "x",
+				Value:    1,
+				Sequence: 1,
+			},
+		},
+	}
+
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	init := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointNS: namespace,
+		CfgKeyCheckpointID: checkID,
+	}
+	ch, err := exec.Execute(
+		context.Background(),
+		init,
+		&agent.Invocation{InvocationID: "inv-pending"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+}
+
 // Interrupt test to cover handleInterrupt path
 func TestExecutor_HandleInterrupt(t *testing.T) {
 	g, err := NewStateGraph(NewStateSchema()).

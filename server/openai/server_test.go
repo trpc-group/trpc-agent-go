@@ -895,6 +895,33 @@ func TestServer_handleNonStreaming_RunnerError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
+func TestServer_handleNonStreaming_InvalidRole(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	reqBody := openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{
+				Role:    "invalid",
+				Content: "Hello",
+			},
+		},
+		Stream: false,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(bodyBytes),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestServer_handleNonStreaming_EmptyEvents(t *testing.T) {
 	emptyCh := make(chan *event.Event)
 	close(emptyCh)
