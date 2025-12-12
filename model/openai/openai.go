@@ -63,6 +63,27 @@ const (
 	VariantQwen Variant = "qwen"
 )
 
+// thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
+type thinkingValueConvertor func(enabled bool) any
+
+// defaultThinkingValueConvertor returns the bool value as-is.
+var defaultThinkingValueConvertor = func(enabled bool) any {
+	return enabled
+}
+
+// deepSeekThinkingValueConvertor converts to DeepSeek 3.2 format: {"type": "enabled"/"disabled"}.
+var deepSeekThinkingValueConvertor = func(enabled bool) any {
+	const (
+		thinkingTypeEnabled  = "enabled"
+		thinkingTypeDisabled = "disabled"
+	)
+	thinkingType := thinkingTypeDisabled
+	if enabled {
+		thinkingType = thinkingTypeEnabled
+	}
+	return map[string]string{"type": thinkingType}
+}
+
 // variantConfig holds configuration for different variants.
 type variantConfig struct {
 	// Default file upload path for this variant.
@@ -83,6 +104,8 @@ type variantConfig struct {
 	apiKeyName string
 	// Thinking key for this variant.
 	thinkingEnabledKey string
+	// thinkingValueConvertor converts ThinkingEnabled to variant-specific format.
+	thinkingValueConvertor thinkingValueConvertor
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -102,6 +125,7 @@ var variantConfigs = map[Variant]variantConfig{
 		skipFileTypeInContent:     false,
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		thinkingEnabledKey:        model.ThinkingEnabledKey,
+		thinkingValueConvertor:    defaultThinkingValueConvertor,
 	},
 	VariantDeepSeek: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -111,7 +135,9 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
-		thinkingEnabledKey:        model.ThinkingEnabledKey,
+		// DeepSeek 3.2 uses {"thinking": {"type": "enabled"}} format.
+		thinkingEnabledKey:     "thinking",
+		thinkingValueConvertor: deepSeekThinkingValueConvertor,
 	},
 	VariantHunyuan: {
 		fileUploadPath:        "/openapi/v1/files/uploads",
@@ -159,7 +185,8 @@ var variantConfigs = map[Variant]variantConfig{
 			r.ContentLength = int64(body.Len())
 			return r, nil
 		},
-		thinkingEnabledKey: model.ThinkingEnabledKey,
+		thinkingEnabledKey:     model.ThinkingEnabledKey,
+		thinkingValueConvertor: defaultThinkingValueConvertor,
 	},
 	VariantQwen: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -170,7 +197,8 @@ var variantConfigs = map[Variant]variantConfig{
 		apiKeyName:                qwenAPIKeyName,
 		defaultBaseURL:            defaultQwenBaseURL,
 		// refer:https://help.aliyun.com/zh/model-studio/deep-thinking
-		thinkingEnabledKey: model.EnabledThinkingKey,
+		thinkingEnabledKey:     model.EnabledThinkingKey,
+		thinkingValueConvertor: defaultThinkingValueConvertor,
 	},
 }
 
@@ -453,7 +481,7 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 	return chatRequest, opts
 }
 
-// buildThinkingOption converts our Request to OpenAI request RequestOption
+// buildThinkingOption converts our Request to OpenAI request RequestOption.
 func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestOption {
 	var opts []openaiopt.RequestOption
 	if request.ThinkingTokens != nil {
@@ -462,13 +490,17 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 	if request.ThinkingEnabled == nil {
 		return opts
 	}
-	// Set default API key and base URL if not specified.
-	cfg, ok := variantConfigs[m.variant]
-	if !ok || cfg.thinkingEnabledKey == "" {
-		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
-		return opts
+	// Use variant-specific key and value convertor.
+	cfg := m.variantConfig
+	key := cfg.thinkingEnabledKey
+	if key == "" {
+		key = model.ThinkingEnabledKey
 	}
-	opts = append(opts, openaiopt.WithJSONSet(cfg.thinkingEnabledKey, *request.ThinkingEnabled))
+	convertor := cfg.thinkingValueConvertor
+	if convertor == nil {
+		convertor = defaultThinkingValueConvertor
+	}
+	opts = append(opts, openaiopt.WithJSONSet(key, convertor(*request.ThinkingEnabled)))
 	return opts
 }
 
