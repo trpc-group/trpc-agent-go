@@ -504,6 +504,68 @@ func TestMemoryService_ProcessSummaryJob_Panic(t *testing.T) {
 	})
 }
 
+type panicSummarizer struct{}
+
+func (p *panicSummarizer) ShouldSummarize(
+	sess *session.Session,
+) bool {
+	return true
+}
+
+func (p *panicSummarizer) Summarize(
+	ctx context.Context,
+	sess *session.Session,
+) (string, error) {
+	panic("summarizer panic")
+}
+
+func (p *panicSummarizer) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestMemoryService_ProcessSummaryJob_RecoversFromPanic(t *testing.T) {
+	s := NewSessionService(
+		WithSummarizer(&panicSummarizer{}),
+	)
+	defer s.Close()
+
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sid",
+	}
+	sess, err := s.CreateSession(
+		context.Background(),
+		key,
+		session.StateMap{},
+	)
+	require.NoError(t, err)
+
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "hello",
+				},
+			},
+		},
+	}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+
+	require.NotPanics(t, func() {
+		s.processSummaryJob(job)
+	})
+}
+
 func TestMemoryService_TryEnqueueJob_ContextCancelled(t *testing.T) {
 	// Use blocking summarizer to ensure queue stays full.
 	service := NewSessionService(

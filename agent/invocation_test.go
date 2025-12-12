@@ -260,6 +260,26 @@ func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestInvocation_AddNoticeChannelAndWait_NoTimeoutUsesContext(t *testing.T) {
+	inv := NewInvocation()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- inv.AddNoticeChannelAndWait(
+			ctx,
+			"test-key",
+			WaitNoticeWithoutTimeout,
+		)
+	}()
+
+	cancel()
+
+	err := <-done
+	require.Error(t, err)
+}
+
 func TestInvocation_AddNoticeChannel_nil(t *testing.T) {
 	var inv *Invocation
 
@@ -272,6 +292,14 @@ func TestInvocation_AddNoticeChannelAndWait_nil(t *testing.T) {
 
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
+}
+
+func TestInvocation_CleanupNotice_NilInvocation(t *testing.T) {
+	var inv *Invocation
+
+	require.NotPanics(t, func() {
+		inv.CleanupNotice(context.Background())
+	})
 }
 
 func TestInvocation_GetEventFilterKey(t *testing.T) {
