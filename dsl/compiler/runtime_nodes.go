@@ -336,9 +336,15 @@ func newLLMAgentNodeFuncFromConfig(
 			}
 
 			if ev.RequiresCompletion {
-				completionID := agent.GetAppendEventNoticeKey(ev.ID)
-				if err := invocation.NotifyCompletion(subCtx, completionID); err != nil {
-					log.Warnf("builtin.llmagent: failed to notify completion for %s: %v", completionID, err)
+				// In graph execution, events are forwarded to the parent event channel
+				// and the runner will handle persistence and completion notification.
+				// Only self‑notify when there's no parent channel (standalone agent run),
+				// otherwise we risk double notifications and spurious WARN logs.
+				if parentEventChan == nil {
+					completionID := agent.GetAppendEventNoticeKey(ev.ID)
+					if err := invocation.NotifyCompletion(subCtx, completionID); err != nil {
+						log.Warnf("builtin.llmagent: failed to notify completion for %s: %v", completionID, err)
+					}
 				}
 			}
 
