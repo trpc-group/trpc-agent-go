@@ -1,0 +1,66 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package rubicknowledgerecall
+
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator/average"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
+	knmessages "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/rubicknowledgerecall"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
+	rresponsescorer "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/rubicresponse"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/samplesaggregator/majorityvote"
+)
+
+type options struct {
+	messagesConstructor   messagesconstructor.MessagesConstructor
+	responsescorer        responsescorer.ResponseScorer
+	samplesAggregator     samplesaggregator.SamplesAggregator
+	invocationsAggregator invocationsaggregator.InvocationsAggregator
+}
+
+func newOptions(opt ...Option) *options {
+	opts := &options{
+		messagesConstructor:   knmessages.New(),
+		responsescorer:        rresponsescorer.New(),
+		samplesAggregator:     majorityvote.New(),
+		invocationsAggregator: average.New(),
+	}
+	for _, o := range opt {
+		o(opts)
+	}
+	return opts
+}
+
+type Option func(*options)
+
+func WithMessagesConstructor(mc messagesconstructor.MessagesConstructor) Option {
+	return func(o *options) {
+		o.messagesConstructor = mc
+	}
+}
+
+func WithResponsescorer(rs responsescorer.ResponseScorer) Option {
+	return func(o *options) {
+		o.responsescorer = rs
+	}
+}
+
+func WithSamplesAggregator(sa samplesaggregator.SamplesAggregator) Option {
+	return func(o *options) {
+		o.samplesAggregator = sa
+	}
+}
+
+func WithInvocationsAggregator(ia invocationsaggregator.InvocationsAggregator) Option {
+	return func(o *options) {
+		o.invocationsAggregator = ia
+	}
+}

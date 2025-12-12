@@ -1,0 +1,26 @@
+{
+  "evalSetId": "final-response-basic",
+  "name": "final-response-basic",
+  "evalCases": [
+    {
+      "evalId": "qa_paris",
+      "conversation": [
+        {
+          "invocationId": "qa_paris-1",
+          "userContent": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "hackerli是谁？"
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "final-response-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
