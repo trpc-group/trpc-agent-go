@@ -135,6 +135,7 @@ func transformInvokeAgent(span *tracepb.Span) {
 					},
 				})
 			}
+			// Skip this attribute (delete it)
 		case itelemetry.KeyGenAIOutputMessages:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
@@ -144,6 +145,7 @@ func transformInvokeAgent(span *tracepb.Span) {
 					},
 				})
 			}
+			// Skip this attribute (delete it)
 		default:
 			newAttributes = append(newAttributes, attr)
 		}
