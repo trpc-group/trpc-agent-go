@@ -124,13 +124,22 @@ func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, 
 // Note: This method assumes channels are already initialized. Callers should check
 // len(s.summaryJobChans) > 0 before calling this method.
 func (s *Service) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
 	// Select a channel using hash distribution.
 	index := job.session.Hash % len(s.summaryJobChans)
 
 	// Use a defer-recover pattern to handle potential panic from sending to closed channel.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Warnf("summary job channel may be closed, falling back to synchronous processing: %v", r)
+			log.WarnfContext(
+				ctx,
+				"summary job channel may be closed, falling back to "+
+					"synchronous processing: %v",
+				r,
+			)
 		}
 	}()
 
@@ -138,11 +147,20 @@ func (s *Service) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
 	case s.summaryJobChans[index] <- job:
 		return true // Successfully enqueued.
 	case <-ctx.Done():
-		log.Debugf("summary job channel context cancelled, falling back to synchronous processing, error: %v", ctx.Err())
+		log.DebugfContext(
+			ctx,
+			"summary job channel context cancelled, falling back to "+
+				"synchronous processing, error: %v",
+			ctx.Err(),
+		)
 		return false // Context cancelled.
 	default:
 		// Queue is full, fall back to synchronous processing.
-		log.Warnf("summary job queue is full, falling back to synchronous processing")
+		log.WarnfContext(
+			ctx,
+			"summary job queue is full, falling back to synchronous "+
+				"sprocessing",
+		)
 		return false
 	}
 }
@@ -175,7 +193,11 @@ func (s *Service) startAsyncSummaryWorker() {
 func (s *Service) processSummaryJob(job *summaryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("panic in summary worker: %v", r)
+			log.ErrorfContext(
+				context.Background(),
+				"panic in summary worker: %v",
+				r,
+			)
 		}
 	}()
 
@@ -188,7 +210,11 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 	}
 
 	if err := s.CreateSessionSummary(ctx, job.session, job.filterKey, job.force); err != nil {
-		log.Warnf("summary worker failed to create session summary: %v", err)
+		log.WarnfContext(
+			ctx,
+			"summary worker failed to create session summary: %v",
+			err,
+		)
 	}
 }
 

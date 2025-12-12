@@ -46,6 +46,107 @@ func TestExecutor_WithSaver_CreatesInitialCheckpoint(t *testing.T) {
 	}
 }
 
+type failingPutFullSaver struct {
+	*mockSaver
+}
+
+func (f *failingPutFullSaver) PutFull(
+	ctx context.Context,
+	req PutFullRequest,
+) (map[string]any, error) {
+	const errPutFull = "putfull failed"
+	return nil, errors.New(errPutFull)
+}
+
+type panicGetTupleSaver struct {
+	*mockSaver
+}
+
+func (p *panicGetTupleSaver) GetTuple(
+	ctx context.Context,
+	config map[string]any,
+) (*CheckpointTuple, error) {
+	panic("gettuple panic")
+}
+
+func TestExecutor_CheckpointSaveError_DoesNotStopRun(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	baseSaver := newMockSaver()
+	saver := &failingPutFullSaver{mockSaver: baseSaver}
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: "inv-save-fail"},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+}
+
+func TestExecutor_PanicInSaver_IsRecovered(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	baseSaver := newMockSaver()
+	saver := &panicGetTupleSaver{mockSaver: baseSaver}
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	// Empty invocation id triggers lineage generation before panic.
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{},
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+}
+
+func TestExecutor_CreateTask_LogsStepCountAndFinalNode(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("final", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("final").
+		SetFinishPoint("final").
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	state := State{
+		StateFieldCounter:   1,
+		StateFieldStepCount: 2,
+	}
+	task := exec.createTask("final", state, 0)
+	require.NotNil(t, task)
+}
+
 // Test resuming from a checkpoint converts values by schema (restoreCheckpointValueWithSchema)
 func TestExecutor_Resume_RestoreSchemaValues(t *testing.T) {
 	// schema with tags []string
@@ -72,6 +173,65 @@ func TestExecutor_Resume_RestoreSchemaValues(t *testing.T) {
 	ch, err := exec.Execute(context.Background(), init, &agent.Invocation{InvocationID: "inv-resume"})
 	require.NoError(t, err)
 	for range ch { /* drain */
+	}
+}
+
+func TestExecutor_Resume_AppliesPendingWrites(t *testing.T) {
+	const (
+		lineageID = "ln-pending"
+		namespace = "ns"
+		checkID   = "ck-pending"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("noop",
+			func(ctx context.Context, state State) (any, error) {
+				return nil, nil
+			},
+		).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	ck := NewCheckpoint(
+		map[string]any{},
+		map[string]int64{},
+		nil,
+	)
+	ck.ID = checkID
+	cfg := CreateCheckpointConfig(lineageID, checkID, namespace)
+	key := lineageID + ":" + namespace + ":" + checkID
+	saver.byID[key] = &CheckpointTuple{
+		Config:     cfg,
+		Checkpoint: ck,
+		Metadata:   NewCheckpointMetadata(CheckpointSourceLoop, 0),
+		PendingWrites: []PendingWrite{
+			{
+				TaskID:   "t1",
+				Channel:  ChannelInputPrefix + "x",
+				Value:    1,
+				Sequence: 1,
+			},
+		},
+	}
+
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	init := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointNS: namespace,
+		CfgKeyCheckpointID: checkID,
+	}
+	ch, err := exec.Execute(
+		context.Background(),
+		init,
+		&agent.Invocation{InvocationID: "inv-pending"},
+	)
+	require.NoError(t, err)
+	for range ch {
 	}
 }
 

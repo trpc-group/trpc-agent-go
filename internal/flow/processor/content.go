@@ -161,7 +161,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	ch chan<- *event.Event,
 ) {
 	if req == nil {
-		log.Errorf("Content request processor: request is nil")
+		log.ErrorfContext(
+			ctx,
+			"Content request processor: request is nil",
+		)
 		return
 	}
 
@@ -211,8 +214,12 @@ func (p *ContentRequestProcessor) ProcessRequest(
 
 	if invocation.Message.Content != "" && needToAddInvocationMessage {
 		req.Messages = append(req.Messages, invocation.Message)
-		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
-			invocation.Message.Role)
+		log.DebugfContext(
+			ctx,
+			"Content request processor: added invocation message with "+
+				"role %s (no session or empty session)",
+			invocation.Message.Role,
+		)
 	}
 
 	// Send a preprocessing event.

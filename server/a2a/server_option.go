@@ -42,7 +42,10 @@ func UserIDFromContext(ctx context.Context) (string, bool) {
 // NewContextWithUserID returns a new context with the user ID.
 func NewContextWithUserID(ctx context.Context, userID string) context.Context {
 	if ctx == nil {
-		log.Warnf("NewContextWithUserID: ctx is nil, do nothing")
+		log.WarnfContext(
+			ctx,
+			"NewContextWithUserID: ctx is nil, do nothing",
+		)
 		return ctx
 	}
 	return context.WithValue(ctx, auth.AuthUserKey, &auth.User{ID: userID})
@@ -67,9 +70,14 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 	}
 	userID := r.Header.Get(d.userIDHeader)
 	if userID == "" {
-		log.Debugf("UserID(Header %s) not set, will be generated from context ID. "+
-			"You can use WithUserIDHeader in A2AAgent and A2AServer to specify the header that transfers user info.",
-			d.userIDHeader)
+		log.DebugfContext(
+			r.Context(),
+			"UserID(Header %s) not set, will be generated from "+
+				"context ID. You can use WithUserIDHeader in "+
+				"A2AAgent and A2AServer to specify the header "+
+				"that transfers user info.",
+			d.userIDHeader,
+		)
 	}
 	return &auth.User{ID: userID}, nil
 }

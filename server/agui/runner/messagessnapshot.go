@@ -78,7 +78,14 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 
 	messagesSnapshotEvent, err := r.getMessagesSnapshotEvent(ctx, input.key)
 	if err != nil {
-		log.Errorf("agui messages snapshot: threadID: %s, runID: %s, load history: %v", threadID, runID, err)
+		log.ErrorfContext(
+			ctx,
+			"agui messages snapshot: threadID: %s, runID: %s, "+
+				"load history: %v",
+			threadID,
+			runID,
+			err,
+		)
 		if messagesSnapshotEvent == nil {
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("load history: %v", err),
 				aguievents.WithRunID(runID)), input)

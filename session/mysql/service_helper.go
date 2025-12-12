@@ -47,7 +47,14 @@ func (s *Service) getSession(
 		}
 		sessState.CreatedAt = createdAt
 		sessState.UpdatedAt = updatedAt
-		log.Debugf("getSession found session state: app=%s, user=%s, session=%s", key.AppName, key.UserID, key.SessionID)
+		log.DebugfContext(
+			ctx,
+			"getSession found session state: app=%s, user=%s, "+
+				"session=%s",
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
 		return nil
 	}, stateQuery, stateArgs...)
 
@@ -55,7 +62,13 @@ func (s *Service) getSession(
 		return nil, fmt.Errorf("get session state failed: %w", err)
 	}
 	if sessState == nil {
-		log.Debugf("getSession found no session: app=%s, user=%s, session=%s", key.AppName, key.UserID, key.SessionID)
+		log.DebugfContext(
+			ctx,
+			"getSession found no session: app=%s, user=%s, session=%s",
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
 		return nil, nil
 	}
 
@@ -225,8 +238,14 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 	// Check if session is expired
 	if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
-		log.Infof("appending event to expired session (app=%s, user=%s, session=%s), will extend expires_at",
-			key.AppName, key.UserID, key.SessionID)
+		log.InfofContext(
+			ctx,
+			"appending event to expired session (app=%s, user=%s, "+
+				"session=%s), will extend expires_at",
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
 	}
 
 	sessState.UpdatedAt = now

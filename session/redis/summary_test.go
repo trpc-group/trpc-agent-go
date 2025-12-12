@@ -997,6 +997,63 @@ func TestTryEnqueueJob(t *testing.T) {
 	}
 }
 
+func TestTryEnqueueJob_ContextCancelledBranch(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	sess := session.NewSession("app", "user", "sid")
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   sess,
+	}
+	idx := sess.Hash % len(service.summaryJobChans)
+	service.summaryJobChans[idx] <- job
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := service.tryEnqueueJob(ctx, job)
+	assert.False(t, result)
+}
+
+func TestProcessSummaryJob_NilJob_Recovers(t *testing.T) {
+	service := &Service{
+		opts: ServiceOpts{
+			summarizer: &fakeSummarizer{allow: true, out: "test"},
+		},
+	}
+
+	require.NotPanics(t, func() {
+		service.processSummaryJob(nil)
+	})
+}
+
+func TestProcessSummaryJob_NilSession_LogsWarning(t *testing.T) {
+	service := &Service{
+		opts: ServiceOpts{
+			summarizer: &fakeSummarizer{allow: true, out: "test"},
+		},
+	}
+
+	job := &summaryJob{
+		filterKey: "",
+		force:     false,
+		session:   nil,
+	}
+	require.NotPanics(t, func() {
+		service.processSummaryJob(job)
+	})
+}
+
 func TestStartAsyncSummaryWorker_Initialization(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()

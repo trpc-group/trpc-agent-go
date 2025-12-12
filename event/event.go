@@ -277,7 +277,11 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	// the send and the ctx.Done() cases are ready, which could otherwise
 	// result in emitting an event after cancellation.
 	if err := ctx.Err(); err != nil {
-		log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
+		log.WarnfContext(
+			ctx,
+			"EmitEventWithTimeout: context cancelled, event: %+v",
+			*e,
+		)
 		return err
 	}
 
@@ -289,7 +293,11 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		case ch <- e:
 			log.Tracef("EmitEventWithTimeout: event sent, event: %+v", *e)
 		case <-ctx.Done():
-			log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
+			log.WarnfContext(
+				ctx,
+				"EmitEventWithTimeout: context cancelled, event: %+v",
+				*e,
+			)
 			return ctx.Err()
 		}
 		return nil
@@ -299,10 +307,18 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	case ch <- e:
 		log.Tracef("EmitEventWithTimeout: event sent, event: %+v", *e)
 	case <-ctx.Done():
-		log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
+		log.WarnfContext(
+			ctx,
+			"EmitEventWithTimeout: context cancelled, event: %+v",
+			*e,
+		)
 		return ctx.Err()
 	case <-time.After(timeout):
-		log.Warnf("EmitEventWithTimeout: timeout, event: %+v", *e)
+		log.WarnfContext(
+			ctx,
+			"EmitEventWithTimeout: timeout, event: %+v",
+			*e,
+		)
 		return DefaultEmitTimeoutErr
 	}
 	return nil

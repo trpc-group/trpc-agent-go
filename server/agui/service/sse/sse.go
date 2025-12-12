@@ -58,9 +58,15 @@ func (s *sse) Handler() http.Handler {
 
 // handle handles an AG-UI run request.
 func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
-	log.Debugf("agui handle: path: %s, method: %s", s.path, r.Method)
+	ctx := r.Context()
+	log.DebugfContext(
+		ctx,
+		"agui handle: path: %s, method: %s",
+		s.path,
+		r.Method,
+	)
 	if r.Method == http.MethodOptions {
-		log.Debug("agui handle: options request")
+		log.DebugContext(ctx, "agui handle: options request")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", http.MethodPost)
 		if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
@@ -70,26 +76,42 @@ func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost {
-		log.Debugf("agui handle: method not allowed, method: %s", r.Method)
+		log.DebugfContext(
+			ctx,
+			"agui handle: method not allowed, method: %s",
+			r.Method,
+		)
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if s.runner == nil {
-		log.Errorf("agui handle: runner not configured")
+		log.ErrorfContext(
+			ctx,
+			"agui handle: runner not configured",
+		)
 		http.Error(w, "runner not configured", http.StatusInternalServerError)
 		return
 	}
 	runAgentInput, err := runAgentInputFromReader(r.Body)
 	if err != nil {
-		log.Warnf("agui handle: parse run agent input: %v", err)
+		log.WarnfContext(
+			ctx,
+			"agui handle: parse run agent input: %v",
+			err,
+		)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	eventsCh, err := s.runner.Run(r.Context(), runAgentInput)
+	eventsCh, err := s.runner.Run(ctx, runAgentInput)
 	if err != nil {
-		log.Errorf("agui handle: threadID: %s, runID: %s, run agent: %v",
-			runAgentInput.ThreadID, runAgentInput.RunID, err)
+		log.ErrorfContext(
+			ctx,
+			"agui handle: threadID: %s, runID: %s, run agent: %v",
+			runAgentInput.ThreadID,
+			runAgentInput.RunID,
+			err,
+		)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -98,9 +120,14 @@ func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	for event := range eventsCh {
-		if err := s.writer.WriteEvent(r.Context(), w, event); err != nil {
-			log.Errorf("agui handle: threadID: %s, runID: %s, write event: %v",
-				runAgentInput.ThreadID, runAgentInput.RunID, err)
+		if err := s.writer.WriteEvent(ctx, w, event); err != nil {
+			log.ErrorfContext(
+				ctx,
+				"agui handle: threadID: %s, runID: %s, write event: %v",
+				runAgentInput.ThreadID,
+				runAgentInput.RunID,
+				err,
+			)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -109,9 +136,18 @@ func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 
 // handleMessagesSnapshot streams a synthetic snapshot run to the client.
 func (s *sse) handleMessagesSnapshot(w http.ResponseWriter, r *http.Request) {
-	log.Debugf("agui handle messages snapshot: path: %s, method: %s", s.messagesSnapshotPath, r.Method)
+	ctx := r.Context()
+	log.DebugfContext(
+		ctx,
+		"agui handle messages snapshot: path: %s, method: %s",
+		s.messagesSnapshotPath,
+		r.Method,
+	)
 	if r.Method == http.MethodOptions {
-		log.Debug("agui handle messages snapshot: options request")
+		log.DebugContext(
+			ctx,
+			"agui handle messages snapshot: options request",
+		)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", http.MethodPost)
 		if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
@@ -121,32 +157,55 @@ func (s *sse) handleMessagesSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost {
-		log.Debugf("agui handle messages snapshot: method not allowed, method: %s", r.Method)
+		log.DebugfContext(
+			ctx,
+			"agui handle messages snapshot: method not allowed, "+
+				"method: %s",
+			r.Method,
+		)
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if s.runner == nil {
-		log.Errorf("agui handle messages snapshot: runner not configured")
+		log.ErrorfContext(
+			ctx,
+			"agui handle messages snapshot: runner not configured",
+		)
 		http.Error(w, "runner not configured", http.StatusInternalServerError)
 		return
 	}
 	runAgentInput, err := runAgentInputFromReader(r.Body)
 	if err != nil {
-		log.Warnf("agui handle messages snapshot: parse run agent input: %v", err)
+		log.WarnfContext(
+			ctx,
+			"agui handle messages snapshot: parse run agent "+
+				"input: %v",
+			err,
+		)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	provider, ok := s.runner.(aguirunner.MessagesSnapshotProvider)
 	if !ok {
-		log.Errorf("agui handle messages snapshot: runner does not support messages snapshot")
+		log.ErrorfContext(
+			ctx,
+			"agui handle messages snapshot: runner does not "+
+				"support messages snapshot",
+		)
 		http.Error(w, "runner does not support messages snapshot", http.StatusNotImplemented)
 		return
 	}
-	eventsCh, err := provider.MessagesSnapshot(r.Context(), runAgentInput)
+	eventsCh, err := provider.MessagesSnapshot(ctx, runAgentInput)
 	if err != nil {
-		log.Errorf("agui handle messages snapshot: threadID: %s, runID: %s, messages snapshot: %v",
-			runAgentInput.ThreadID, runAgentInput.RunID, err)
+		log.ErrorfContext(
+			ctx,
+			"agui handle messages snapshot: threadID: %s, runID: "+
+				"%s, messages snapshot: %v",
+			runAgentInput.ThreadID,
+			runAgentInput.RunID,
+			err,
+		)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -155,9 +214,15 @@ func (s *sse) handleMessagesSnapshot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	for event := range eventsCh {
-		if err := s.writer.WriteEvent(r.Context(), w, event); err != nil {
-			log.Errorf("agui handle messages snapshot: threadID: %s, runID: %s, write event: %v",
-				runAgentInput.ThreadID, runAgentInput.RunID, err)
+		if err := s.writer.WriteEvent(ctx, w, event); err != nil {
+			log.ErrorfContext(
+				ctx,
+				"agui handle messages snapshot: threadID: %s, "+
+					"runID: %s, write event: %v",
+				runAgentInput.ThreadID,
+				runAgentInput.RunID,
+				err,
+			)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

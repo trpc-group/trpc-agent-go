@@ -60,7 +60,10 @@ func (p *BasicRequestProcessor) ProcessRequest(
 	ch chan<- *event.Event,
 ) {
 	if req == nil {
-		log.Errorf("Basic request processor: request is nil")
+		log.ErrorfContext(
+			ctx,
+			"Basic request processor: request is nil",
+		)
 		return
 	}
 
@@ -68,7 +71,11 @@ func (p *BasicRequestProcessor) ProcessRequest(
 		return
 	}
 
-	log.Debugf("Basic request processor: processing request for agent %s", invocation.AgentName)
+	log.DebugfContext(
+		ctx,
+		"Basic request processor: processing request for agent %s",
+		invocation.AgentName,
+	)
 
 	// Set generation configuration.
 	req.GenerationConfig = p.GenerationConfig
@@ -78,14 +85,14 @@ func (p *BasicRequestProcessor) ProcessRequest(
 		req.StructuredOutput = invocation.StructuredOutput
 	}
 
-	log.Debugf("Basic request processor: sent preprocessing event")
+	log.DebugContext(ctx, "Basic request processor: sent preprocessing event")
 	// Send a preprocessing event.
 	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingBasic),
 	)); err != nil {
-		log.Debugf("Basic request processor: context cancelled")
+		log.DebugContext(ctx, "Basic request processor: context cancelled")
 	}
 
 }

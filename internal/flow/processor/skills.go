@@ -66,7 +66,12 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	for _, name := range loaded {
 		sk, err := p.repo.Get(name)
 		if err != nil || sk == nil {
-			log.Warnf("skills: get %s failed: %v", name, err)
+			log.WarnfContext(
+				ctx,
+				"skills: get %s failed: %v",
+				name,
+				err,
+			)
 			continue
 		}
 		if sk.Body != "" {
