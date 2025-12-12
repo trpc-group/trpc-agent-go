@@ -173,6 +173,38 @@ func TestBuildRequestProcessors_AddSessionSummaryWiring(t *testing.T) {
 	require.False(t, crp.AddSessionSummary)
 }
 
+// Test that buildRequestProcessors wires StandaloneSessionSummary
+// into ContentRequestProcessor correctly.
+func TestBuildRequestProcessors_StandaloneSessionSummaryWiring(
+	t *testing.T,
+) {
+	optsStandalone := &Options{}
+	WithStandaloneSessionSummary(true)(optsStandalone)
+	procs := buildRequestProcessors("test-agent", optsStandalone)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.StandaloneSessionSummary)
+	require.True(t, crp.AddSessionSummary) // Should be automatically enabled
+
+	optsNormal := &Options{}
+	WithAddSessionSummary(true)(optsNormal)
+	procs = buildRequestProcessors("test-agent", optsNormal)
+	crp = nil
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.AddSessionSummary)
+	require.False(t, crp.StandaloneSessionSummary)
+}
+
 // Test that buildRequestProcessors wires MaxHistoryRuns into
 // ContentRequestProcessor correctly.
 func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {

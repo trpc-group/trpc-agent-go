@@ -76,7 +76,9 @@ func main() {
         "my-agent",
         llmagent.WithModel(llm),
         llmagent.WithInstruction("你是一个智能助手"),
-        llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文
+        llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文 (合并到第一条 system 消息)
+        // 或：将摘要作为独立的 system 消息
+        // llmagent.WithStandaloneSessionSummary(true), // 自动启用 AddSessionSummary
         // 注意：WithAddSessionSummary(true) 时会忽略 WithMaxHistoryRuns 配置
         // 摘要会包含所有历史，增量事件会完整保留
     )
@@ -272,6 +274,11 @@ summarizer := summary.NewSummarizer(
 ```
 
 **重要提示：** 启用 `WithAddSessionSummary(true)` 时，`WithMaxHistoryRuns` 参数将被忽略，摘要后的所有事件都会完整保留。
+
+**摘要注入选项：**
+
+- `WithAddSessionSummary(true)`：将摘要合并到第一条 system 消息中（默认行为）
+- `WithStandaloneSessionSummary(true)`：将摘要作为独立的 system 消息插入到第一条 system 消息之后
 
 详细配置和高级用法请参见 [会话摘要](#会话摘要) 章节。
 
@@ -684,10 +691,10 @@ sessionService, err := postgres.NewService(
 
 **删除行为对比：**
 
-| 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
-| ------------------ | ------------------------------- | ------------------------- | -------- |
+| 配置               | 删除操作                        | 查询行为                                                | 数据恢复 |
+| ------------------ | ------------------------------- | ------------------------------------------------------- | -------- |
 | `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
-| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
+| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录                                            | 不可恢复 |
 
 **TTL 自动清理：**
 
@@ -946,10 +953,10 @@ sessionService, err := mysql.NewService(
 
 **删除行为对比：**
 
-| 配置               | 删除操作                        | 查询行为                  | 数据恢复 |
-| ------------------ | ------------------------------- | ------------------------- | -------- |
+| 配置               | 删除操作                        | 查询行为                                                | 数据恢复 |
+| ------------------ | ------------------------------- | ------------------------------------------------------- | -------- |
 | `softDelete=true`  | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL`，仅返回未软删除数据 | 可恢复   |
-| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录              | 不可恢复 |
+| `softDelete=false` | `DELETE FROM ...`               | 查询所有记录                                            | 不可恢复 |
 
 **TTL 自动清理：**
 

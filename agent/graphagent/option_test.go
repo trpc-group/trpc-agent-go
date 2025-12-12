@@ -136,6 +136,16 @@ func TestWithAddSessionSummary(t *testing.T) {
 	require.False(t, opts.AddSessionSummary)
 }
 
+func TestWithStandaloneSessionSummary(t *testing.T) {
+	opts := &Options{}
+	WithStandaloneSessionSummary(true)(opts)
+	require.True(t, opts.StandaloneSessionSummary)
+	require.True(t, opts.AddSessionSummary) // Should be automatically enabled
+
+	WithStandaloneSessionSummary(false)(opts)
+	require.False(t, opts.StandaloneSessionSummary)
+}
+
 func TestWithMaxHistoryRuns(t *testing.T) {
 	opts := &Options{}
 	WithMaxHistoryRuns(5)(opts)
