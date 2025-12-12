@@ -1,0 +1,176 @@
+{
+  "evalSetResultId": "final-response-app_final-response-basic_bd9a8fad-3701-4c87-973b-9a7541d197eb",
+  "evalSetResultName": "final-response-app_final-response-basic_bd9a8fad-3701-4c87-973b-9a7541d197eb",
+  "evalSetId": "final-response-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "final-response-basic",
+      "evalId": "qa_paris",
+      "finalEvalStatus": 1,
+      "overallEvalMetricResults": [
+        {
+          "metricName": "llm_rubic_knowledge_recall",
+          "score": 1,
+          "evalStatus": 1,
+          "threshold": 0.9,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "1",
+                  "content": {
+                    "text": "Evaluate the relevance of the knowledge recall. A knowledge recall can be considered relevant if it enhances or clarifies the response, adding value to the user's comprehension of the topic in question. Relevance is determined by the extent to which the provided information addresses the specific question asked, staying focused on the subject without straying into unrelated areas or providing extraneous details."
+                  },
+                  "description": "The knowledge recall is relevant to the user's prompt.",
+                  "type": "KNOWLEDGE_RELEVANCE"
+                }
+              ],
+              "judgeModel": {
+                "providerName": "openai",
+                "modelName": "deepseek-chat",
+                "numSamples": 3,
+                "generationConfig": {
+                  "max_tokens": 512,
+                  "temperature": 1,
+                  "stream": false
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1,
+            "rubricScores": [
+              {
+                "ID": "1",
+                "Reason": "The user prompt asks \"What is trpc-agent-go?\". The retrieved knowledge directly answers this question by defining it as a Go framework for building intelligent agent/AI applications. This information is highly relevant, focused, and adds value by clarifying the topic. The other documents are irrelevant or unreadable, but the presence of relevant evidence is sufficient.",
+                "Score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "8030612f-2496-4c6f-b209-99f24c1976ef",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "What is trpc-agent-go?"
+                }
+              ],
+              "role": "user"
+            },
+            "finalResponse": {
+              "parts": [
+                {
+                  "text": "Based on the search results, **tRPC-Agent-Go** is a powerful Go framework for building intelligent agent systems. It transforms how developers create AI applications by enabling the creation of autonomous agents that can:\n\n- **Think** - Process information and make decisions\n- **Remember** - Maintain state and context across interactions  \n- **Collaborate** - Work together with other agents or systems\n- **Act** - Execute tasks and perform actions\n\nThe framework is designed to make building AI applications with autonomous agent capabilities easier and more efficient. It appears to be part of the tRPC ecosystem (likely related to Tencent's RPC framework) but specifically focused on AI agent development in Go.\n\nThe framework seems to be positioned as a tool for developers who want to create sophisticated AI-powered applications with agent capabilities without having to build all the underlying infrastructure from scratch."
+                }
+              ],
+              "role": "assistant"
+            },
+            "intermediateData": {
+              "toolUses": [
+                {
+                  "id": "call_00_e9XnwW9fSmaj5m0yb4ngm0a8",
+                  "args": {
+                    "query": "trpc-agent-go"
+                  },
+                  "name": "knowledge_search"
+                }
+              ],
+              "toolResponses": [
+                {
+                  "id": "call_00_e9XnwW9fSmaj5m0yb4ngm0a8",
+                  "name": "knowledge_search",
+                  "response": {
+                    "documents": [
+                      {
+                        "metadata": {
+                          "fileId": 6594643
+                        },
+                        "score": 0.9047545194625854,
+                        "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
+                      },
+                      {
+                        "metadata": {
+                          "fileId": 6594634
+                        },
+                        "score": 0.9047545194625854,
+                        "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
+                      },
+                      {
+                        "metadata": {
+                          "fileId": 6594635
+                        },
+                        "score": 0.9047545194625854,
+                        "text": "tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease."
+                      }
+                    ],
+                    "message": "Found 3 relevant document(s)"
+                  }
+                }
+              ]
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "qa_paris-1",
+            "userContent": {
+              "parts": [
+                {
+                  "text": "What is trpc-agent-go?"
+                }
+              ],
+              "role": "user"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "llm_rubic_knowledge_recall",
+              "score": 1,
+              "evalStatus": 1,
+              "threshold": 0.9,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "1",
+                      "content": {
+                        "text": "Evaluate the relevance of the knowledge recall. A knowledge recall can be considered relevant if it enhances or clarifies the response, adding value to the user's comprehension of the topic in question. Relevance is determined by the extent to which the provided information addresses the specific question asked, staying focused on the subject without straying into unrelated areas or providing extraneous details."
+                      },
+                      "description": "The knowledge recall is relevant to the user's prompt.",
+                      "type": "KNOWLEDGE_RELEVANCE"
+                    }
+                  ],
+                  "judgeModel": {
+                    "providerName": "openai",
+                    "modelName": "deepseek-chat",
+                    "numSamples": 3,
+                    "generationConfig": {
+                      "max_tokens": 512,
+                      "temperature": 1,
+                      "stream": false
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "ID": "1",
+                    "Reason": "The user prompt asks \"What is trpc-agent-go?\". The retrieved knowledge directly answers this question by defining it as a Go framework for building intelligent agent/AI applications. This information is highly relevant, focused, and adds value by clarifying the topic. The other documents are irrelevant or unreadable, but the presence of relevant evidence is sufficient.",
+                    "Score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "6462a347-bc35-42aa-8b1d-0cd0e675d248",
+      "userId": "demo-user"
+    }
+  ],
+  "creationTimestamp": 1765506094.0231059
+}
