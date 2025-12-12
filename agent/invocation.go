@@ -41,6 +41,11 @@ const (
 
 	// EventFilterKeyDelimiter is the delimiter for event filter key
 	EventFilterKeyDelimiter = "/"
+
+	// flusherStateKey is the invocation state key used by flush.Attach.
+	flusherStateKey = "__flush_session__"
+	// barrierStateKey is the invocation state key used by internal barrier flag.
+	barrierStateKey = "__graph_barrier__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -460,6 +465,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
+		state:           inv.cloneState(),
 	}
 
 	for _, opt := range invocationOpts {
@@ -481,6 +487,22 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	}
 
 	return newInv
+}
+
+func (inv *Invocation) cloneState() map[string]any {
+	if inv == nil || inv.state == nil {
+		return nil
+	}
+	inv.stateMu.RLock()
+	defer inv.stateMu.RUnlock()
+	copied := make(map[string]any)
+	if holder, ok := inv.state[flusherStateKey]; ok {
+		copied[flusherStateKey] = holder
+	}
+	if barrier, ok := inv.state[barrierStateKey]; ok {
+		copied[barrierStateKey] = barrier
+	}
+	return copied
 }
 
 // GetEventFilterKey get event filter key.

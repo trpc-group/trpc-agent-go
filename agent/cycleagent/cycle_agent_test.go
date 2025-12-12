@@ -213,6 +213,40 @@ func TestCycleAgent_Run_WithEscalation(t *testing.T) {
 	require.NotNil(t, lastEvent.Error)
 }
 
+func TestCycleAgent_ErrorEventStopsFollowingAgents(t *testing.T) {
+	agent1Count := 0
+	agent2Count := 0
+
+	subAgent1 := &mockAgent{name: "agent-1", eventCount: 1, shouldTriggerError: true, executionCount: &agent1Count}
+	subAgent2 := &mockAgent{name: "agent-2", eventCount: 1, executionCount: &agent2Count}
+
+	cycleAgent := newFromLegacy(legacyOptions{
+		Name:      "test-cycle",
+		SubAgents: []agent.Agent{subAgent1, subAgent2},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	invocation := &agent.Invocation{
+		AgentName:    "test-cycle",
+		InvocationID: "inv-error-event",
+	}
+
+	ch, err := cycleAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for evt := range ch {
+		events = append(events, evt)
+	}
+
+	require.Equal(t, 1, agent1Count)
+	require.Equal(t, 0, agent2Count)
+	require.NotEmpty(t, events)
+	require.NotNil(t, events[len(events)-1].Error)
+}
+
 func TestCycleAgent_Run_NoMaxIterations(t *testing.T) {
 	// Track execution counts.
 	agent1Count := 0
