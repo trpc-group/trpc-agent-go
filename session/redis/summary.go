@@ -220,8 +220,12 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 	}()
 
 	// Use the detached context from job which preserves values (e.g., trace ID).
-	// Apply timeout if configured.
+	// Fallback to background context if job.ctx is nil for defensive programming.
 	ctx := job.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Apply timeout if configured.
 	if s.opts.summaryJobTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.opts.summaryJobTimeout)
